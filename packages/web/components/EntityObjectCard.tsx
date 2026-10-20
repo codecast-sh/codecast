@@ -12,6 +12,7 @@ import {
   Network,
   Phone,
   Film,
+  Rocket,
   Signpost,
   Radio,
   Target,
@@ -64,6 +65,7 @@ import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "
 import { ReplayMomentEmbed } from "./ops/ReplayMomentEmbed";
 import { DecisionCompactCard } from "./decisions/DecisionCompactCard";
 import { replayFacts } from "./ops/opsModel";
+import { deployFacts } from "../lib/line/deployWords";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -91,6 +93,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   commit: GitCommitHorizontal,
   call: Phone,
   replay: Film,
+  deploy: Rocket,
   source: Radio,
   role: Hexagon,
   person: UserRound,
@@ -242,6 +245,8 @@ export function CardMetaLine({ type, entity }: { type: EntityType; entity: any }
       "provider",
     );
     sourceFacts(entity).forEach((fact, i) => push(<span className="whitespace-nowrap">{fact}</span>, `fact${i}`));
+  } else if (type === "deploy") {
+    deployFacts(entity).forEach((fact, i) => push(<span className="whitespace-nowrap">{fact}</span>, `fact${i}`, i === 0));
   } else if (type === "replay") {
     replayFacts(entity).forEach((fact, i) => push(<span className={i === 0 ? "truncate" : "whitespace-nowrap"}>{fact}</span>, `fact${i}`, i === 0));
   } else {

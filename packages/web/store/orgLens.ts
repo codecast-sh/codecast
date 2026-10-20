@@ -1,7 +1,7 @@
 // The inbox's org lenses, split out of inboxStore. Pure grouping over the
 // store's rows; inboxStore re-exports every name here.
 import type { InboxSession, InboxViewMode, PlanItem, ProjectItem, TaskItem } from "./inboxStore";
-import { byActivity, groupSessionsBy, resolveInboxViewMode } from "./inboxStore";
+import { byPinThenActivity, groupSessionsBy, resolveInboxViewMode } from "./inboxStore";
 import { makeCollectionSig } from "./wakeSig";
 
 // The org lenses: "By project", "By goal" and "By reports" regroup the same
@@ -160,7 +160,7 @@ export function groupSessionsForOrgLens(
           const roleId = String(role._id);
           if (ofRole(roleId) !== roleId) return [];
           const leadId = role.standing?.conversation_id;
-          const rest = (byKey.get(roleId) ?? []).filter((x) => x._id !== leadId).sort(byActivity);
+          const rest = (byKey.get(roleId) ?? []).filter((x) => x._id !== leadId).sort(byPinThenActivity);
           const lead = (leadId && byKey.get(roleId)?.find((x) => x._id === leadId)) || (leadId ? src.sessions[leadId] : undefined);
           const leadRow = lead && !lead.is_pinned && !lead.inbox_killed_at ? [lead] : [];
           const list = [...leadRow, ...rest];
@@ -169,7 +169,7 @@ export function groupSessionsForOrgLens(
         ...src.people.flatMap((p): OrgLensGroup[] => {
           const key = personReportKey(String(p.user_id));
           const list = p.reports_to_user_id === src.meId ? byKey.get(key) : undefined;
-          return list?.length ? [{ key, label: p.name, items: list.sort(byActivity), userId: String(p.user_id), image: p.image }] : [];
+          return list?.length ? [{ key, label: p.name, items: list.sort(byPinThenActivity), userId: String(p.user_id), image: p.image }] : [];
         }),
       ],
     );
@@ -188,7 +188,7 @@ export function groupSessionsForOrgLens(
       const groups = Array.from(byKey.entries()).map(([key, list]): OrgLensGroup => {
         const [kind, id] = key.split(":");
         const label = kind === "goal" ? src.initiatives[id].title : src.projects[id].title;
-        return { key, label, items: list.sort(byActivity) };
+        return { key, label, items: list.sort(byPinThenActivity) };
       });
       // Goals lead (highest priority first), then projects that serve none.
       const rankOf = (g: OrgLensGroup) => g.key.startsWith("goal:") ? GOAL_PRIORITY_RANK[src.initiatives[g.key.slice(5)].priority ?? ""] ?? 9 : 10;

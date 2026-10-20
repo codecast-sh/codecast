@@ -17,9 +17,12 @@ import { FinderPage } from "../views/finder/FinderPage";
 import { dayWords } from "../../widgets";
 import type { LineViewProps } from "../views/types";
 import { Back, DayStrip, Section, StageHead, Version } from "./parts";
+import { AgentReviews } from "./AgentReviews";
 
-type JudgeTab = "findings" | "prompt" | "runs" | "versions";
+type JudgeTab = "findings" | "reviews" | "prompt" | "runs" | "versions";
 const TABS: Array<[JudgeTab, string]> = [["findings", "Findings"], ["prompt", "Prompt"], ["runs", "Runs"], ["versions", "Versions"]];
+/** An agent judge's page adds its reviews: the queue and every session, whole. */
+const tabsOf = (j: LineJudgeRow): Array<[JudgeTab, string]> => (j.agent ? [TABS[0]!, ["reviews", "Reviews"], ...TABS.slice(1)] : TABS);
 
 export function JudgesStage(props: LineViewProps & { projectId: string | null }) {
   const { workspace: ws, selection, select, href, projectId } = props;
@@ -89,7 +92,8 @@ export function JudgesStage(props: LineViewProps & { projectId: string | null })
 function JudgePage({ j, finder, wrong, ...props }: LineViewProps & { projectId: string | null; j: LineJudgeRow; finder: string | null; wrong: { wrong: number | null; week: number } | null }) {
   const { workspace: ws, selection, select, href, projectId } = props;
   // The open tab rides the address (`steptab`), so a link opens on it and a re-render never resets it.
-  const tab: JudgeTab = TABS.some(([k]) => k === selection.tab) ? (selection.tab as JudgeTab) : "findings";
+  const tabs = tabsOf(j);
+  const tab: JudgeTab = tabs.some(([k]) => k === selection.tab) ? (selection.tab as JudgeTab) : "findings";
   const setTab = (t: JudgeTab) => select({ tab: t === "findings" ? null : t }, undefined, { replace: true });
   const now = ws.now;
   // Marks a person made wrong on this judge's findings: the cases "Improve this judge" starts from.
@@ -99,7 +103,7 @@ function JudgePage({ j, finder, wrong, ...props }: LineViewProps & { projectId: 
       <Back label="Judges" onBack={() => select({ item: null, finding: null, tab: null })} href={href({ item: null, finding: null, tab: null })} />
       <StageHead
         title={<>{j.name}<Version v={j.version} current /><span className="sd-pill" data-tone={j.mode === "live" ? "live" : "dim"}>{j.removed_at ? "removed" : j.mode}</span></>}
-        sub={`Reads ${j.moment_kind} moments · ${j.model} · ${j.source}`}
+        sub={`Reads ${j.moment_kind} moments · ${j.model}${j.agent ? " · an agent session" : ""} · ${j.source}`}
         figures={[
           { label: "Reads /wk", n: `${j.week.runs}${j.week_capped ? "+" : ""}` },
           { label: "Filed /wk", n: j.week.filed },
@@ -111,7 +115,7 @@ function JudgePage({ j, finder, wrong, ...props }: LineViewProps & { projectId: 
       >
         <div className="sd-acts">
           <div className="lw-seg" role="tablist" aria-label="Judge">
-            {TABS.map(([k, l]) => <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} data-line-judge-tab={k}>{l}</button>)}
+            {tabs.map(([k, l]) => <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} data-line-judge-tab={k}>{l}</button>)}
           </div>
           <span className="sd-spacer" />
           {projectId && (
@@ -124,6 +128,7 @@ function JudgePage({ j, finder, wrong, ...props }: LineViewProps & { projectId: 
       {tab === "findings" && (finder
         ? <div className="sd-finder"><FinderPage {...props} selection={{ ...selection, source: finder }} /></div>
         : <div className="lw-empty"><b>No findings filed</b>{j.name} has filed nothing the line holds.</div>)}
+      {tab === "reviews" && <AgentReviews projectId={projectId} judge={j.name} now={now} openMoment={(m) => select({ stage: "moments", item: m })} />}
       {tab === "prompt" && <Prompt j={j} />}
       {tab === "runs" && <Runs j={j} now={now} select={select} href={href} />}
       {tab === "versions" && <Versions j={j} projectId={projectId} />}
@@ -136,8 +141,18 @@ function Prompt({ j }: { j: LineJudgeRow }) {
     <Section title="Prompt" aside={<span className="lw-mono sd-dim">{j.path}</span>}>
       <dl className="sd-facts">
         <div><dt>Model</dt><dd>{j.model}</dd></div>
-        <div><dt>Max tokens</dt><dd className="lw-num">{j.max_tokens.toLocaleString("en-US")}</dd></div>
-        <div><dt>Grades</dt><dd title={j.parts?.join(", ")}>{j.parts?.length ? j.parts.join(", ") : "every part"}</dd></div>
+        {j.agent ? (
+          <>
+            <div><dt>Tools</dt><dd>{j.agent.tools.join(", ")}</dd></div>
+            <div><dt>Works in</dt><dd className="lw-mono">{j.agent.cwd}, read only</dd></div>
+            <div><dt>Turns</dt><dd className="lw-num">up to {j.agent.max_turns} · {Math.round(j.agent.timeout_ms / 60_000)} min</dd></div>
+          </>
+        ) : (
+          <>
+            <div><dt>Max tokens</dt><dd className="lw-num">{j.max_tokens.toLocaleString("en-US")}</dd></div>
+            <div><dt>Grades</dt><dd title={j.parts?.join(", ")}>{j.parts?.length ? j.parts.join(", ") : "every part"}</dd></div>
+          </>
+        )}
         <div><dt>Published</dt><dd>{dayWords(j.published_at)}</dd></div>
       </dl>
       <pre className="sd-prompt" data-line-judge-prompt>{j.prompt}</pre>

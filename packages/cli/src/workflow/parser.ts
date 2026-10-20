@@ -352,7 +352,9 @@ export function parseWorkflowFile(filePath: string, opts: ParseOptions = {}): Wo
  *   - graph attributes and a node's attributes override the base's, one by one;
  *   - a node marked `removed` leaves, and an edge into it must be re-routed here;
  *   - a node this file routes (any edge out of it) has exactly the edges
- *     written here, so a node's routing is always read in one file.
+ *     written here, so a node's routing is always read in one file;
+ *   - `serves` (the finding sources a line version runs) is this file's own,
+ *     never the base's.
  *
  * A prompt or script read from a file takes in a shared part at a line that is
  * only `@include <file>` (relative to the including file).
@@ -421,7 +423,10 @@ function inherit(base: RawGraph, child: RawGraph, baseFile: string, here: string
   const nodes = new Map<string, Record<string, Attr>>();
   for (const [id, a] of base.nodes) if (!removed.has(id)) nodes.set(id, a);
   for (const [id, a] of child.nodes) if (!removed.has(id)) nodes.set(id, { ...nodes.get(id), ...a });
-  const { extends: _extends, ...attrs } = { ...base.attrs, ...child.attrs };
+  // `serves` names the sources this file's own version runs, so a version never claims its base's.
+  const { extends: _extends, serves: _baseServes, ...baseAttrs } = base.attrs;
+  const { extends: _childExtends, ...childAttrs } = child.attrs;
+  const attrs = { ...baseAttrs, ...childAttrs };
   return {
     name: child.name,
     attrs,
@@ -441,6 +446,7 @@ function buildGraph(raw: RawGraph): WorkflowGraph {
   if (a.join_policy) graph.join_policy = a.join_policy as string;
   if (a.stack) graph.stack = String(a.stack);
   if (a.on_failure === "stop") graph.on_failure = "stop";
+  if (a.serves) graph.serves = [...new Set(String(a.serves).split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))];
   for (const [id, attrs] of raw.nodes) graph.nodes.set(id, Parser.buildNode(id, attrs));
   // Ensure nodes referenced in edges exist (as placeholder agent nodes)
   for (const e of raw.edges) for (const id of [e.from, e.to]) if (!graph.nodes.has(id)) graph.nodes.set(id, Parser.buildNode(id, {}));

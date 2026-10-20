@@ -23,12 +23,18 @@
 // takes keys.
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUpRight, ChevronLeft, ChevronRight, Layers, Rows3, Shapes, SquareStack, UserRound, Users, X } from "lucide-react";
 import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../../store/inboxStore";
 import { ageShort } from "../../../../lib/lineFlow";
 import { processName } from "../../../../lib/line/lineGraphs";
-import { isPractice, needForRef, needGroups, needOrder, needsOfLine, type LineNeed } from "../../../../lib/line/lineNeeds";
+import { needForRef, needsOfLine, type LineNeed } from "../../../../lib/line/lineNeeds";
+import { arrangeInbox, inboxView, INBOX_GROUP_LABEL, INBOX_GROUPS, INBOX_ORDER_LABEL, INBOX_ORDERS, type InboxView } from "../../../../lib/line/decisionInbox";
+import { DECISION_CHANGE_LABEL, DECISION_CHANGES, severityBand } from "../../../../lib/line/decisionFacts";
+import { FilterDropdown, type FilterOption } from "../../../FilterDropdown";
+import { useTeamRosterIdentity } from "../../../../hooks/useTeamRoster";
+import { useRolesAndPeopleOptions, type AssigneeOption } from "../../../../hooks/useRolesAndPeopleOptions";
+import { AssignDecision } from "./AssignDecision";
 import { problemHeadName, problemListName } from "../../../../lib/line/problemTable";
 import { leftWhy } from "../../../../lib/line/leftList";
 import { lineRefHref } from "../../../../lib/line/lineWorkspaceUrl";
@@ -52,8 +58,6 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
   const line = selection.process;
   const lineProject = line ? selection.project : null;
   const needs = useMemo(() => needsOfLine(workspace.needs.filter((n) => n.counted), line, lineProject), [workspace.needs, line, lineProject]);
-  const groups = useMemo(() => needGroups(needs), [needs]);
-  const order = useMemo(() => needOrder(groups), [groups]);
   const processTitle = useMemo(() => new Map(workspace.processes.map((g) => [g.key, processName(g.key, g.title).title])), [workspace.processes]);
   // A row's product by name. For you lists decisions from every workspace, and the page's projects are its own
   // workspace's: another's are named from the store.
@@ -64,6 +68,23 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
     storeTitles.split("\u0001").forEach((t, i) => { if (t && !m.get(projectIds[i])) m.set(projectIds[i], t); });
     return m;
   }, [workspace.projects, storeTitles, projectIds]);
+
+  // The team's inbox: every open decision of the team's lines, filtered, ordered and grouped as the address says.
+  // Pinned to one product, the list groups by kind unless the address says otherwise: every row is that product's.
+  const view = useMemo(() => {
+    const v = inboxView(selection);
+    return pinned && v.group === "area" ? { ...v, group: "kind" as const } : v;
+  }, [selection.who, selection.kind, selection.area, selection.order, selection.group, pinned]); // eslint-disable-line react-hooks/exhaustive-deps
+  const viewer = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  const roster = useTeamRosterIdentity();
+  const { people } = useRolesAndPeopleOptions(roster);
+  const personName = useMemo(() => {
+    const m = new Map(people.map((p) => [p.key, p.label]));
+    return (id: string) => m.get(id) ?? workspace.names.get(id) ?? "Someone";
+  }, [people, workspace.names]);
+  const arranged = useMemo(() => arrangeInbox(needs, view, { viewer, areaName: (p) => (p ? projectTitle.get(p) ?? "Another product" : "No product"), personName }), [needs, view, viewer, projectTitle, personName]);
+  const order = arranged.order;
+  const pick = (patch: Partial<Record<"who" | "kind" | "area" | "order" | "group", string | null>>) => select(patch, undefined, { replace: true });
 
   // The open item: the one the address names (an older link names its decision or card), else the first.
   const asked = selection.need ?? selection.decision ?? selection.card;
@@ -81,10 +102,7 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
   const current = named ?? (orphan || (selection.need && !gone) ? null : order[Math.min(lastAt.current, order.length - 1)] ?? null);
   const at = current ? order.indexOf(current) : -1;
   if (at >= 0) lastAt.current = at;
-  // A trial's practice answers are listed last and counted apart: the main "N of M" is the nav's count.
-  const practice = useMemo(() => order.filter(isPractice), [order]);
-  const real = order.length - practice.length;
-  const pos = !current ? null : isPractice(current) ? `Trial ${practice.indexOf(current) + 1} of ${practice.length}` : `${at + 1} of ${real}`;
+  const pos = at >= 0 ? `${at + 1} of ${order.length}` : null;
 
   // The address settles on `need`: an older link's key, or the item that took an answered one's place.
   // Landing with nothing named, the first item is named too, so the address is always the page as drawn.
@@ -160,7 +178,7 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
   });
 
   return (
-    <div className="fy" data-line-foryou={real} data-line-foryou-open={current?.ref ?? orphan ?? undefined} data-single={single ? "" : undefined}>
+    <div className="fy" data-line-foryou={order.length} data-line-foryou-open={current?.ref ?? orphan ?? undefined} data-single={single ? "" : undefined}>
       <LineDecisionPrefetch ids={prefetch} warm={warm} />
       <div className="fy-list" ref={list} role="navigation" aria-label="What waits on you" data-settling={ready ? undefined : ""}
         onKeyDown={(e) => {
@@ -173,22 +191,32 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
             {[processTitle.get(line) ?? line, lineProject ? projectTitle.get(lineProject) : null].filter(Boolean).join(" · ")}<X aria-hidden />
           </button>
         )}
-        {order.length === 0 && <p className="fy-none" data-line-foryou-empty>Nothing waits on you</p>}
-        {groups.filter((g) => g.needs.length > 0).map((g) => (
+        {needs.length > 0 && <InboxBar view={view} arranged={arranged} people={people} viewer={viewer} projectTitle={projectTitle} pinned={!!pinned} shown={order.length} onPick={pick} />}
+        {needs.length === 0 && <p className="fy-none" data-line-foryou-empty>No open decisions</p>}
+        {needs.length > 0 && order.length === 0 && <p className="fy-none" data-line-foryou-filtered>None match</p>}
+        {arranged.sections.map((g) => (
           <section key={g.key} className="fy-group" data-line-need-group={g.key}>
-            <h2 className="fy-group-h">{g.label}<span className="lw-num">{g.needs.length}</span></h2>
+            {view.group !== "none" && <h2 className="fy-group-h">{view.group === "who" && g.key !== "none" && <Face people={people} id={g.key} />}<span className="fy-group-name">{g.label}</span><span className="lw-num">{g.needs.length}</span></h2>}
             <ul className="fy-rows">
               {g.needs.map((n) => {
-                // The row is what is asked, as the reader opens on it; a need with no question of its own reads by the problem's name.
-                // Under it, the product it is about: which line runs it is the line's business, not the reader's.
-                const meta = [pinned ? null : n.projectId ? projectTitle.get(n.projectId) : null, n.dups?.length ? `also ${n.dups.map((d) => d.ref).filter(Boolean).join(", ")}` : n.dupOf?.ref ? `same as ${n.dupOf.ref}` : null, n.since ? `waiting ${ageShort(now - n.since)}` : null].filter(Boolean);
+                const band = severityBand(n.severity);
+                // The area is the group's name when grouped by it, the filter's when narrowed to one, and the page's when pinned.
+                const area = pinned || view.group === "area" || view.area ? null : n.projectId ? projectTitle.get(n.projectId) : null;
                 return (
-                  <li key={n.key}>
+                  <li key={n.key} className="fy-li">
                     <button type="button" className="fy-row" aria-current={n === current ? "true" : undefined} onClick={() => open(n)} onPointerEnter={() => setHovered(n.key)} data-need-key={n.key} data-line-need-row={n.kind} data-line-need-ref={n.ref} title={n.problemRef ?? undefined}>
                       <span className="fy-ask">{n.line && n.line !== n.title ? n.line : problemListName(n)}</span>
-                      {/* The ref is the row's hover and the page's search, never its words: a person reads the name. */}
-                      <span className="fy-meta">{meta.map((m, i) => <span key={i}>{m}</span>)}</span>
+                      <span className="fy-facts">
+                        {band && <span className="fy-sev lw-num" data-sev={band} title={`Worst finding: severity ${n.severity} of 10`}>{n.severity}</span>}
+                        {view.group !== "kind" && <span className="fy-kind" data-kind={n.change ?? "other"}>{DECISION_CHANGE_LABEL[n.change ?? "other"]}</span>}
+                        {!!n.reach && <span className="fy-n" title={`${n.reach} ${n.reach === 1 ? "person" : "people"} reached`}><Users aria-hidden /><span className="lw-num">{n.reach}</span></span>}
+                        {!!n.findings && <span className="fy-n" title={`${n.findings} ${n.findings === 1 ? "finding" : "findings"}`}><SquareStack aria-hidden /><span className="lw-num">{n.findings}</span></span>}
+                        {n.recommend && <span className="fy-rec" data-rec={recTone(n.recommend)} title="What the run recommends">{recWord(n.recommend)}</span>}
+                        {area && <span className="fy-area">{area}</span>}
+                        {n.since && <span className="fy-wait lw-num" title={`Waiting since ${new Date(n.since).toLocaleString()}`}>{ageShort(now - n.since)}</span>}
+                      </span>
                     </button>
+                    {n.decisionId && <AssignDecision decisionId={n.decisionId} assignee={n.assignee ?? null} people={people} compact />}
                   </li>
                 );
               })}
@@ -209,6 +237,7 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
                 {current.since && <span className="fy-age lw-num" title={`Waiting since ${new Date(current.since).toLocaleString()}`}>waiting {ageShort(now - current.since)}</span>}
                 {current.trial && <TrialTag projectId={current.projectId ?? null} card={current.cardRef ?? null} />}
               </span>
+              {current.decisionId && <AssignDecision key={current.decisionId} decisionId={current.decisionId} assignee={current.assignee ?? null} people={people} />}
               {/* A problem outside this line's view (its project runs no line here) opens by its ref, wherever it lives. */}
               {plainTask ? (
                 <Link className="fy-problem" href={`/tasks/${plainTask}`} title={problemHeadName(current)} data-line-foryou-task={plainTask}>Open the task<ArrowUpRight className="w-3.5 h-3.5" aria-hidden /></Link>
@@ -217,11 +246,11 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
                   Open the problem<ArrowUpRight className="w-3.5 h-3.5" aria-hidden />
                 </Link>
               )}
-              {order.length > 1 && <>
+              {order.length > 1 && <span className="fy-pager">
                 <span className="fy-pos lw-num">{pos}</span>
                 <button type="button" className="lw-iconbtn" disabled={at <= 0} onClick={() => move(-1, false)} aria-label="Previous"><ChevronLeft className="w-4 h-4" /></button>
-                <button type="button" className="lw-iconbtn" disabled={at >= order.length - 1} onClick={() => move(1, false)} aria-label="Next"><ChevronRight className="w-4 h-4" /></button>
-              </>}
+                <button type="button" className="lw-iconbtn" disabled={at < 0 || at >= order.length - 1} onClick={() => move(1, false)} aria-label="Next"><ChevronRight className="w-4 h-4" /></button>
+              </span>}
             </div>
             <div className="fy-reader-b">
               {current.kind === "decision" && current.decisionRef
@@ -296,4 +325,55 @@ function LeftItem({ left, next, onNext, problemHref, runHref }: {
 /** A trial row's tag: opens that project's trial on this row's own card, in the workspace it lives in. */
 function TrialTag({ projectId, card }: { projectId: string | null; card: string | null }) {
   return <Link className="fy-trial" href={useTrialHref(projectId, card)} title="A trial run: answering records what you would do and ships nothing" data-line-foryou-trial>Trial</Link>;
+}
+
+/** What a run recommends, as the tone its word is drawn in: go (ship it), change (build or revise first), stop (drop, wait or no measured gain). */
+function recTone(v: string): "go" | "change" | "stop" {
+  return /^(ship|better|apply|publish|keep)/i.test(v) ? "go" : /^(revise|build|narrow)/i.test(v) ? "change" : "stop";
+}
+/** The recommendation in a word or two: "not_separated" reads "no gain". */
+const recWord = (v: string): string => (v === "not_separated" ? "no gain" : v.replace(/_/g, " "));
+
+/** A teammate's face, from the picker's people. */
+function Face({ people, id }: { people: ReadonlyArray<AssigneeOption>; id: string }) {
+  const p = people.find((x) => x.key === id);
+  return p ? <span className="fy-face">{p.face}</span> : null;
+}
+
+/** The list's controls: who holds it, what it changes and its area narrow it; the order and the grouping arrange it.
+ *  Each filter's counts say what picking it would show. Every choice lives in the address. */
+function InboxBar({ view, arranged, people, viewer, projectTitle, pinned, shown, onPick }: {
+  view: InboxView;
+  arranged: ReturnType<typeof arrangeInbox<LineNeed>>;
+  people: ReadonlyArray<AssigneeOption>;
+  viewer: string | null;
+  projectTitle: Map<string, string>;
+  pinned: boolean;
+  shown: number;
+  onPick: (patch: Partial<Record<"who" | "kind" | "area" | "order" | "group", string | null>>) => void;
+}) {
+  const { who, kind, area } = arranged.counts;
+  const whoOptions: FilterOption[] = [
+    { key: "", label: "Everyone", count: who.get("all") ?? 0 },
+    ...(viewer ? [{ key: "me", label: "Mine", count: who.get("me") ?? 0 }] : []),
+    { key: "none", label: "Unassigned", count: who.get("none") ?? 0 },
+    ...people.filter((p) => p.key !== viewer).map((p) => ({ key: p.key, label: p.label, face: p.face, count: who.get(p.key) ?? 0, section: "People" })),
+  ];
+  const kindOptions: FilterOption[] = [{ key: "", label: "Every kind" }, ...DECISION_CHANGES.filter((k) => kind.get(k) || view.kind === k).map((k) => ({ key: k, label: DECISION_CHANGE_LABEL[k], count: kind.get(k) ?? 0 }))];
+  const areaOptions: FilterOption[] = [{ key: "", label: "Every area" }, ...[...area].sort((a, b) => b[1] - a[1]).map(([p, n]) => ({ key: p, label: projectTitle.get(p) ?? "Another product", count: n }))];
+  const orderOptions: FilterOption[] = INBOX_ORDERS.map((o) => ({ key: o === "impact" ? "" : o, label: INBOX_ORDER_LABEL[o] }));
+  // The default grouping is the empty key, so the pill reads as unset until another is picked.
+  const byDefault = pinned ? "kind" : "area";
+  const groupOptions: FilterOption[] = INBOX_GROUPS.filter((g) => !(pinned && g === "area")).map((g) => ({ key: g === byDefault ? "" : g, label: INBOX_GROUP_LABEL[g] }));
+  return (
+    <div className="fy-bar" data-line-foryou-bar="">
+      <span className="fy-shown lw-num" title={shown === arranged.total ? `${shown} open decisions` : `${shown} of ${arranged.total} open decisions`}>{shown}</span>
+      <FilterDropdown label="Everyone" icon={<UserRound className="w-3.5 h-3.5" />} value={view.who === "all" ? "" : view.who} options={whoOptions} onChange={(v) => onPick({ who: v || null })} />
+      <FilterDropdown label="Kind" icon={<Shapes className="w-3.5 h-3.5" />} value={view.kind ?? ""} options={kindOptions} onChange={(v) => onPick({ kind: v || null })} />
+      {!pinned && <FilterDropdown label="Area" icon={<Layers className="w-3.5 h-3.5" />} value={view.area ?? ""} options={areaOptions} onChange={(v) => onPick({ area: v || null })} />}
+      <span className="fy-bar-gap" />
+      <FilterDropdown label={INBOX_ORDER_LABEL.impact} icon={<ArrowDownWideNarrow className="w-3.5 h-3.5" />} value={view.order === "impact" ? "" : view.order} options={orderOptions} onChange={(v) => onPick({ order: v || null })} />
+      <FilterDropdown label={INBOX_GROUP_LABEL[byDefault]} icon={<Rows3 className="w-3.5 h-3.5" />} value={view.group === byDefault ? "" : view.group} options={groupOptions} onChange={(v) => onPick({ group: v || null })} />
+    </div>
+  );
 }
