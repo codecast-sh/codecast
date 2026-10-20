@@ -11,7 +11,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { causeName, startableCause, type LineCauseTask } from "../../lib/lineFlow";
 import { goalOfRefs, inStartOrder, type RankTask } from "../../lib/line/lineStartOrder";
 import { problemListName } from "../../lib/line/problemTable";
-import type { NotReady } from "../line/map/LineStartSwitch";
+import type { NotReady } from "./lineStartLedger";
 import { useLineAdmission } from "../line/map/useLineAdmission";
 import { ConsequentialSwitch, type SwitchTriggerProps } from "./ConsequentialSwitch";
 import { DEFAULT_DAY_CAP, dayCapOf, lineStartLedger } from "./lineStartLedger";

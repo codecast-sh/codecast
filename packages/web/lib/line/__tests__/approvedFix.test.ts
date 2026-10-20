@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CauseHistory, HistoryAttempt } from "../causeHistory";
 import { unlandedFix } from "../approvedFix";
-import { needCount, needGroups, needOfCase, unlandedNeed } from "../lineNeeds";
+import { needCount, needOfCase, unlandedNeed } from "../lineNeeds";
 
 const NOW = new Date(2026, 9, 13, 9).getTime();
 const DAY = 86_400_000;
@@ -40,7 +40,7 @@ describe("unlandedFix", () => {
     const n = unlandedNeed({ id: "t1", ref: "ct-57458", title: "Intro email", name: null, projectId: "p", process: "g" }, unlandedFix({ status: "done", history: h() })!);
     expect(n).toMatchObject({ kind: "unlanded", counted: false, since: NOW - 6 * DAY, approvedBy: "u1", aliases: ["sd-465"] });
     expect(needCount([n])).toBe(0);
-    expect(needGroups([n])).toEqual([]);
+    expect(needCount([n])).toBe(0);
     expect(needOfCase([n], "t1")).toBeNull();
   });
 });

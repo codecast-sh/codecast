@@ -17,18 +17,8 @@ type Admit = ReturnType<typeof useLineAdmission>;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** How many problems turning the line on starts at once: the waiting ones,
- *  bounded by the free places and today's sessions left. Null while the
- *  queue is unknown. */
-export function startsAtOnce(a: LineAdmission): number | null {
-  if (a.queued == null) return null;
-  const free = Math.max(0, a.slots - (a.busy ?? 0));
-  const handsLeft = a.hands != null && a.handsCap != null ? Math.max(0, a.handsCap - a.hands) : Infinity;
-  return Math.min(a.queued, free, handsLeft);
-}
-
-/** Why the waiting problems that are not ready are held (lineFlow notReadyReasons). */
-export type NotReady = ReadonlyArray<{ count: number; words: string }>;
+import { startsAtOnce, type NotReady } from "../../consequential/lineStartLedger";
+export { startsAtOnce, type NotReady };
 
 /** The switch's cost as short lines (LL6): what turning it on starts now and
  *  what each costs, the pace after that, and how many are not ready and why.

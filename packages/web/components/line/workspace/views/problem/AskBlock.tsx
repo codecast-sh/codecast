@@ -12,7 +12,7 @@ import { quoteSource, type ReaderSignal } from "../../../widgets/FindingReader";
 import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import { askAsQuestion, askParts } from "../../../../../lib/line/lineInbox";
 import type { LineAdmission } from "../../../../../lib/lineFlow";
-import { startsAtOnce } from "../../../map/LineStartSwitch";
+import { startsAtOnce } from "../../../../consequential/lineStartLedger";
 import { useLineAdmission } from "../../../map/useLineAdmission";
 import { askedAbout, askShape, evidenceLinkWords, findingBlocks, namesIn, wholeSentences } from "../../../../../lib/line/problemPage";
 import { HISTORY_ITEM, HISTORY_SEARCH, readHistoryHits, readHistoryItem, type HistoryHit } from "../../../../../lib/line/historyLookup";
