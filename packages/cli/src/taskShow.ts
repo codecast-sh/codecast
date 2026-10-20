@@ -1,10 +1,12 @@
 // The CLI reading surfaces of the line (docs/architecture/the-line.md L10):
-// what `cast task show` prints under a task (decisions, runs, evidence), the
-// `cast workflow runs` table, and the one row shape `cast org feed` prints for
-// every kind, run rows included. Everything here is a pure formatter over the
-// rows the server returns; index.ts fetches and prints.
+// what `cast task show` prints under a task (sessions, history, decisions,
+// runs, evidence), the `cast workflow runs` table, and the one row shape
+// `cast org feed` prints for every kind, run rows included. Everything here
+// is a pure formatter over the rows the server returns; index.ts fetches and
+// prints.
 import { c } from "./colors.js";
 import { decisionHandle, describeResolution, formatAge, type DecisionRow } from "./decideCommand.js";
+import { graphChange, graphChangeText } from "@codecast/shared/tasks";
 
 // One row of workflow_runs.listRuns (L8): the run plus the joins it ships.
 export interface RunRow {
@@ -143,6 +145,33 @@ export function formatTaskEvidence(ev: TaskEvidence | null, webUrl: string): str
     const v = ev.review_verdict;
     const color = v.verdict === "approve" ? c.green : v.verdict === "reject" ? c.red : c.yellow;
     lines.push(`  ${c.dim}Review:${c.reset} ${color}${v.verdict}${c.reset}${v.note ? ` ${c.dim}${head(v.note)}${c.reset}` : ""}`);
+  }
+  return lines;
+}
+
+// Linked sessions by short id — the handle `cast read` / `cast diff` take —
+// so a task's working session is one line away, not a regex over comments.
+export function formatTaskSessions(sessions: Array<{ short_id: string; title?: string }>): string[] {
+  if (sessions.length === 0) return [];
+  const lines = [`\n  ${c.bold}Sessions (${sessions.length})${c.reset} ${c.dim}newest last · cast read <id>${c.reset}`];
+  for (const sess of sessions) {
+    lines.push(`  ${c.cyan}${sess.short_id}${c.reset}  ${sess.title || c.dim + "(untitled)" + c.reset}`);
+  }
+  return lines;
+}
+
+export function formatTaskHistory(history: any[]): string[] {
+  if (history.length === 0) return [];
+  const lines = [`\n  ${c.bold}History (${history.length})${c.reset}`];
+  for (const h of history) {
+    // Graph changes in the web timeline's words (task-graph.md TG11).
+    const graph = graphChange(h);
+    const what = h.action === "created"
+      ? "created this task"
+      : graph ? graphChangeText(graph) : `${h.field}: ${h.old_value || "none"} to ${h.new_value || "none"}`;
+    const from = h.session ? ` ${c.dim}in ${h.session}${c.reset}` : "";
+    const actor = !h.actor || h.actor === "system" ? "codecast" : h.actor;
+    lines.push(`  ${c.dim}${new Date(h.created_at).toLocaleString()}${c.reset}  ${actor} ${what}${from}`);
   }
   return lines;
 }

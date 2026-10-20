@@ -77,7 +77,7 @@ export function RecentlyViewedMenu({ onSelectSession }: { onSelectSession: (id: 
   };
 
   return (
-    <div ref={menuRef} className="relative">
+    <div ref={menuRef} data-cc-recents className="relative">
       <ShortcutTooltip label="Recently viewed" action="recents.open">
         <TopbarButton
           onClick={(e) => { toggle(); tipActions.whisper("recents.open", e); }}

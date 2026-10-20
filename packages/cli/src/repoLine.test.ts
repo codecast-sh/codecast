@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chooseLineSource, findNodeStmt, planStationEdits, publishedRepoLine, repoLineFile, repoLineForRun, setNodeAttr, shippedRepoLineFiles } from "./repoLine";
+import { causeLineFor, chooseLineSource, findNodeStmt, openingSourceOf, planStationEdits, publishedRepoLine, repoLineFile, repoLineForRun, setNodeAttr, shippedRepoLineFiles } from "./repoLine";
 import { removeLineFile, runLineProfileEdit } from "./lineProfileEdit";
 import { publishFacts } from "./lineProfileCommand";
 import { loadLineProfile } from "./lineProfile";
@@ -216,6 +216,51 @@ describe("which line a run runs", () => {
     expect(repoLineForRun({ workflow_name: "feature", task_short_id: "ct-1" }, { slug: "feature" }, root)).toBeNull();
     expect(repoLineForRun({ workflow_name: "line" }, null, root)).toBeNull();
     expect(graphForDaemonRun({ workflow_name: "line" }, pushed, root)!.nodes.size).toBe(1);
+  });
+});
+
+describe("a problem runs its finder's line version", () => {
+  // A shared line and a version for errors that extends it and changes only where the evidence comes from.
+  const withVersions = () => {
+    const root = checkout();
+    apply(root, [
+      { rel: ".codecast/line.toml", content: [
+        '[line]', 'project = "Quality"', '',
+        '[[line.finders]]', 'id = "errors"', 'source = "sdk:app-errors"', 'kind = "bug"', 'fingerprint = "app:error:<fp>"', 'line = "lines/errors.cast"', '',
+        '[[line.finders]]', 'id = "desk"', 'source = "app.desk"', 'kind = "prompt_miss"', 'fingerprint = "app:desk:<step>"', '',
+      ].join("\n") },
+      { rel: "lines/shared.cast", content: 'digraph shared {\n  start [shape=Mdiamond]\n  prove [label="Prove", shape=parallelogram, script="echo shared"]\n  exit [shape=Msquare]\n  start -> prove\n  prove -> exit\n}\n' },
+      { rel: "lines/errors.cast", content: 'digraph errors {\n  graph [extends="shared.cast"]\n  prove [label="Prove", shape=parallelogram, script="echo from the stack"]\n}\n' },
+    ]);
+    apply(root, planStationEdits(root, [{ op: "set_station", station: "prove", timeout: 77 }]).writes);
+    return root;
+  };
+
+  test("the finder that filed the first finding picks the graph, and every other problem keeps the repo's line", () => {
+    const root = withVersions();
+    const errors = causeLineFor(path.join(root, "packages"), "SDK:app-errors")!;
+    expect(errors.label).toBe(path.join(root, "lines/errors.cast"));
+    expect(parseWorkflowSource(errors.source, errors.dir).nodes.get("prove")!.script).toBe("echo from the stack");
+    expect(causeLineFor(root, "app.desk")).toBeNull();
+    expect(causeLineFor(root, null)).toBeNull();
+    expect(chooseLineSource({ taskBound: true, cwd: root, causeLine: errors })).toMatchObject({ kind: "repo", resolved: { label: errors.label } });
+    expect(chooseLineSource({ taskBound: true, cwd: root, causeLine: null })).toMatchObject({ kind: "repo", resolved: { label: repoLineFile(root) } });
+    expect(chooseLineSource({ file: "feature", taskBound: true, cwd: root, causeLine: errors })).toEqual({ kind: "file", name: "feature" });
+    const graph = graphForDaemonRun({ workflow_name: "line", task_short_id: "ct-1", opening_source: "sdk:app-errors" }, null, root)!;
+    expect(graph.nodes.get("prove")!.script).toBe("echo from the stack");
+    expect(graphForDaemonRun({ workflow_name: "line", task_short_id: "ct-1", opening_source: "app.desk" }, null, root)!.nodes.get("prove")!.timeout).toBe(77);
+  });
+
+  test("a finder naming a graph the checkout lacks stops the run rather than running another line", () => {
+    const root = withVersions();
+    fs.rmSync(path.join(root, "lines/errors.cast"));
+    expect(() => causeLineFor(root, "sdk:app-errors")).toThrow(/no graph at lines\/errors.cast/);
+  });
+
+  test("the opening source is the oldest finding's", async () => {
+    const post = async () => ({ signals: [{ source: "person", created_at: 30 }, { source: "app.desk", created_at: 10 }, { source: "sdk:app-errors", created_at: 20 }] });
+    expect(await openingSourceOf("ct-1", post)).toBe("app.desk");
+    expect(await openingSourceOf("ct-1", async () => ({ signals: [] }))).toBeNull();
   });
 });
 

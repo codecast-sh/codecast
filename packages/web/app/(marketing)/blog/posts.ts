@@ -20,6 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "the-chart-in-the-reply",
+    title: "The chart in the reply",
+    dek: "Some findings are a shape: sixteen numbers where four stand out, five versions of one line of UI. In Codecast an agent can put that shape in its reply as a chart, a table or a mockup, drawn right in the conversation, so you see it before you read the paragraph explaining it.",
+    author: "the codecast team",
+    date: "2026-10-18",
+    dateLabel: "October 18, 2026",
+    readingMinutes: 5,
+    cover: { src: "/blog/the-chart-in-the-reply/per-core-canvas.png", alt: "An agent's reply in codecast with a bar chart of per-core load: four efficiency cores at 100 percent, twelve performance cores under half" },
+  },
+  {
     slug: "the-questions-your-agents-save-for-you",
     title: "The questions your agents save for you",
     dek: "Run several agents and each one will, sooner or later, need you to choose. Codecast lets an agent write that choice up as a card, put it in one queue with every other agent's, and wait. You answer the lot in one sitting, and each agent picks up from your answer.",

@@ -36,6 +36,11 @@ cards = 5
 auto = false
 method = "squash"
 
+[line.deploy]
+command = "./outreach/deploy.sh --actor $actor"
+target = "Production"
+trigger = "person"
+
 [[line.finders]]
 id = "invariants"
 source = "union.invariant"
@@ -67,6 +72,7 @@ describe("line profile (LP2)", () => {
       principles: ["outreach/docs/line/principles.md"],
       size_budget: 400,
       caps: { cards: 5 },
+      deploy: { command: "./outreach/deploy.sh --actor $actor", target: "production", trigger: "person" },
       finders: [{ id: "invariants", kind: ["regression"], project: "Infrastructure", runs: "backend job captureInvariantSnapshots" }],
     });
     expect(r.profile.commands.eval).toContain("reps.json");
@@ -85,6 +91,7 @@ describe("line profile (LP2)", () => {
       commands: { check: "cast ws check", prove: null, eval: null, ship: null },
       caps: { cards: 5 },
       merge: { auto: false, method: "squash" },
+      deploy: { command: null, target: null, trigger: "person" },
       finders: [],
     });
     expect(Object.values(r.sources).every((s) => s === "default")).toBe(true);
@@ -109,9 +116,19 @@ describe("line profile (LP2)", () => {
     expect(err(`[line.merge]\nmethod = "octopus"`)).toContain("squash, merge, rebase");
   });
 
+  test("[line.deploy] takes a command, a target and a known trigger", () => {
+    const err = (t: string) => { try { parseLineProfileText(t); } catch (e) { return (e as Error).message; } return null; };
+    expect(err(`[line.deploy]\ntrigger = "nightly"`)).toContain("person, role, schedule, count");
+    expect(err(`[line.deploy]\nwhen = "now"`)).toContain('unknown key "when"');
+    const r = resolveLineProfile(parseLineProfileText(`[line.deploy]\ncommand = "./deploy.sh"\n`).values);
+    expect(r.profile.deploy).toEqual({ command: "./deploy.sh", target: null, trigger: "person" });
+    expect(r.sources["deploy.command"]).toBe("file");
+    expect(r.sources["deploy.trigger"]).toBe("default");
+  });
+
   test("unknown keys are refused with where they are", () => {
     const err = (t: string) => { try { parseLineProfileText(t, ".codecast/line.toml"); } catch (e) { return e as Error; } return null; };
-    expect(err(`[line]\nprojet = "X"`)?.message).toBe('.codecast/line.toml: [line] has unknown key "projet" (known: team, project, principles, prompting, size_budget, watch_days, commands, caps, merge, finders)');
+    expect(err(`[line]\nprojet = "X"`)?.message).toBe('.codecast/line.toml: [line] has unknown key "projet" (known: team, project, principles, prompting, size_budget, watch_days, commands, caps, merge, deploy, finders)');
     expect(err(`[line.commands]\nverify = "x"`)?.message).toContain('[line.commands] has unknown key "verify"');
     expect(err(`[line.caps]\nhands = 3`)?.message).toContain('[line.caps] has unknown key "hands"');
     expect(err(`[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\nowner = "x"`)?.message).toContain('[[line.finders]] #1 has unknown key "owner"');

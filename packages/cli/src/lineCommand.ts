@@ -52,6 +52,61 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
       if (options.json) console.log(JSON.stringify(result, null, 2));
     });
 
+  // The deploy stage (deploys.md DP2): the shipped fixes waiting to go out, sent together in one deploy.
+  const deploy = line
+    .command("deploy")
+    .description("The line's deploy stage: the shipped fixes no live deploy has carried yet; --go sends them together through [line.deploy] command and records the deploy (dp-N)")
+    .option("--project <ref>", "The project (default: the repo profile's [line] project)")
+    .option("--go", "Ask for the deploy and run the deploy path here")
+    .option("--json", "Machine-readable output")
+    .action(async (options: any) => {
+      const { formatStage, runDeploy } = await import("./lineDeploy.js");
+      const { lineProjectFor, scopeFor } = await import("./lineScope.js");
+      const { loadLineProfile } = await import("./lineProfile.js");
+      const root = process.env.CODECAST_CWD || process.cwd();
+      const project = lineProjectFor(undefined, options.project);
+      if (!project) { console.error("No project: pass --project, or set [line] project in .codecast/line.toml"); process.exit(1); }
+      const scope: any = await scopeFor(deps, undefined, false, project);
+      const ref = { project_id: project, ...(scope.team_id ? { team_id: scope.team_id } : {}) };
+      const stage = await apiPost(deps, "/cli/line/deploy/stage", ref, { read: true });
+      if (!options.go) {
+        console.log(options.json ? JSON.stringify(stage, null, 2) : formatStage(stage));
+        return;
+      }
+      // The command that runs is this checkout's: the file is the authority, the published copy only a mirror of it.
+      const { profile, root: profileRoot } = loadLineProfile(root);
+      const command = profile.deploy?.command;
+      if (!command) { console.error("No [line.deploy] command in this checkout's .codecast/line.toml"); process.exit(1); }
+      const asked = await apiPost(deps, "/cli/line/deploy/request", { ...ref, here: true });
+      console.log(`${asked.short_id}: sending ${asked.carries} fix${asked.carries === 1 ? "" : "es"}`);
+      const result = await runDeploy({ root: profileRoot ?? root, deploy: asked.short_id, command, actor: process.env.USER ?? "cast", post: (path, body) => apiPost(deps, path, body) });
+      console.log(`${asked.short_id}: ${result.status}${result.sha ? ` at ${result.sha.slice(0, 10)}` : ""}`);
+      if (result.status !== "live") process.exit(1);
+    });
+  deploy
+    .command("run")
+    .description("Run a deploy the Line page asked for (dp-N) through this checkout's [line.deploy] command; the daemon's line_deploy runs this")
+    .argument("<deploy>", "The deploy (dp-N)")
+    .action(async (ref: string) => {
+      const { runDeploy } = await import("./lineDeploy.js");
+      const { loadLineProfile } = await import("./lineProfile.js");
+      const root = process.env.CODECAST_CWD || process.cwd();
+      const { profile, root: profileRoot } = loadLineProfile(root);
+      const command = profile.deploy?.command;
+      const post = (path: string, body: Record<string, unknown>) => apiPost(deps, path, body);
+      if (!command) {
+        await post("/cli/line/deploy/report", { deploy: ref, status: "failed", note: "No [line.deploy] command in the checkout that publishes this line" });
+        console.error("No [line.deploy] command in this checkout's .codecast/line.toml");
+        process.exit(1);
+      }
+      const d = await apiPost(deps, "/cli/deploys/get", { ref }, { read: true });
+      if (!d) { console.error(`No deploy ${ref}`); process.exit(1); }
+      if (d.status !== "requested") { console.log(`${ref} is ${d.status}; nothing to run`); return; }
+      const result = await runDeploy({ root: profileRoot ?? root, deploy: ref, command, actor: d.started_by?.name ?? "cast", post });
+      console.log(`${ref}: ${result.status}`);
+      if (result.status !== "live") process.exit(1);
+    });
+
   // A station measured on frozen past cases before an edit reaches a run (learning-loop.md LL14).
   line
     .command("replay")
