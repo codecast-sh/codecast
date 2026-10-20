@@ -348,8 +348,11 @@ describe("classifyLivePaneFor — grok's lying ❯ glyph", () => {
   ].join("\n");
 
   test("the claude-chrome path misreads the busy pane as idle (why grok must never route there)", () => {
-    // The live region crops the spinner/[stop] row away and keeps the ❯ line.
-    expect(classifyTmuxLiveState(extractTmuxLiveRegion(busyGrokPane))).toBe("idle");
+    // grok's rounded box rules are no separators, so the region is the last five rows: a
+    // two-row draft pushes the spinner/[stop] row out of them and keeps the ❯ line.
+    const busyWithDraft = busyGrokPane.replace(/^│ ❯.*$/m, (row) => `${row}\n│   and the tests${" ".repeat(W - 15)}│`);
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(busyWithDraft))).toBe("idle");
+    expect(classifyLivePaneFor("grok", busyWithDraft)).toBe("busy");
   });
 
   test("classifyLivePaneFor('grok') reads busy-first and can't be lied to", () => {

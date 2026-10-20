@@ -123,7 +123,7 @@ function LiveLine({ live }: { live: readonly LiveRow[] }) {
           <Tip key={l.surface} text={l.deploy ? `${tip} Opens ${l.deploy}.` : tip}>
             {/* A deploy opens its deploy object: what it carried and what happened after (deploys.md). */}
             {l.deploy ? (
-              <Link href={entityRoute("deploy", l.deploy) ?? "#"} className="tabular-nums hover:text-sol-green" data-deploy-ref={l.deploy}>
+              <Link href={entityRoute("deploy", l.deploy) ?? "#"} className="tabular-nums hover:text-[var(--sol-green)]" data-deploy-ref={l.deploy}>
                 {l.surface} <span className="text-sol-text/75">{label}</span>
                 {l.waiting > 0 && <span className="text-sol-text/40"> +{l.waiting}</span>}
               </Link>

@@ -37,6 +37,34 @@ const EXCLUDED = "packages/cli/src/daemonBuildId.ts";
  *  it. `.import(` is a method call, not the operator. */
 const SPECIFIER_POSITION_RE = /(?:^|[^\w$.])(from|import)\s*\(?\s*$/;
 
+/** A `/` opens a regex literal, not a division, after an operator, an opening
+ *  bracket, or a keyword that takes an expression. */
+const REGEX_POSITION_RE = /(?:^|[(,=:[!&|?{};+\-*%~^]|(?:^|[^\w$.])(?:return|typeof|case|in|of|void|yield|await|delete|throw|else|do))\s*$/;
+
+const opensRegex = (code: string): boolean => {
+  const tail = code.trimEnd();
+  return REGEX_POSITION_RE.test(tail.length > 32 ? " " + tail.slice(-32) : tail);
+};
+
+/** The index just past a regex literal opening at `start`, or -1 when the line
+ *  ends first and it was not one. Quotes inside it (`/["']/`) stay inside it. */
+function regexLiteralEnd(src: string, start: number): number {
+  let i = start + 1;
+  let inClass = false;
+  while (i < src.length && src[i] !== "\n") {
+    const c = src[i];
+    if (c === "\\") i += 2;
+    else if (c === "[") (inClass = true), i++;
+    else if (c === "]") (inClass = false), i++;
+    else if (c === "/" && !inClass) {
+      i++;
+      while (i < src.length && /[a-z]/.test(src[i])) i++;
+      return i;
+    } else i++;
+  }
+  return -1;
+}
+
 /**
  * Reduce a source file to the part a specifier scan may read: comments gone,
  * and every string literal emptied except the ones an import or export names.
@@ -83,6 +111,14 @@ export function codeForSpecifiers(src: string): string {
       while (i < n && !(src[i] === "*" && src[i + 1] === "/")) i++;
       i += 2;
       continue;
+    }
+    if (c === "/" && opensRegex(out)) {
+      const end = regexLiteralEnd(src, i);
+      if (end > 0) {
+        out += "/./";
+        i = end;
+        continue;
+      }
     }
     out += c;
     i++;

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { getConversationPages } from "./messages";
+import { list as conversationPages } from "./conversationPages";
 import { makeFakeDb } from "./testDb";
 
-describe("getConversationPages", () => {
+describe("conversationPages", () => {
   const setup = (viewer: string) => {
     const db = makeFakeDb({
       users: [{ _id: "owner" }, { _id: "stranger" }],
@@ -18,7 +18,7 @@ describe("getConversationPages", () => {
       ],
     });
     const ctx = { db, auth: { getUserIdentity: async () => ({ subject: `${viewer}|session` }) } };
-    return () => (getConversationPages as any)._handler(ctx, { conversation_id: "conversation" });
+    return () => (conversationPages as any)._handler(ctx, { conversation_id: "conversation" });
   };
 
   test("lists the pages this conversation published, oldest first, keyed by the conversation", async () => {

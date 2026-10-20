@@ -173,7 +173,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/workspace.ts:PERSISTABLE_KINDS": CONSTANT,
 
   // hooks/
-  "hooks/useSplitQuery.ts:caches": { shared: "split-query transport cache, filled only by React feeders and recovery polls; the sim mounts neither" },
+  "hooks/useSplitQuery.ts:held": { shared: "split-query transport cache, filled only by React feeders and recovery polls; the sim mounts neither" },
+  "hooks/useSplitQuery.ts:persistence": { shared: "the process's disk store for held split rows, set once at boot by the native app; web and the sim never set it" },
   "hooks/useSplitQuery.ts:unsupported": { shared: "split-query transport memory of a server that rejects the split form; set only by React feeders, which the sim does not mount" },
   "hooks/reconcileCrawl.ts:states": "window",
   "hooks/useBootstrapCollection.ts:done": "window",

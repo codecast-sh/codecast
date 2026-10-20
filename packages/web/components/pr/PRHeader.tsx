@@ -22,7 +22,7 @@ import { CommentAvatar } from "../comments/CommentAvatar";
 import { EntityIdPill } from "../EntityIdPill";
 import { PRLinked, PRReviewers } from "./PRLinked";
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
-import { withShortcut } from "../../shortcuts";
+import { withShortcut } from "../../shortcuts/registry";
 import {
   accentSoft,
   accentVar,

@@ -45,6 +45,13 @@ import { join } from "node:path";
 // baseline of 2026-10-15 re-pinned every file and PIN to the committed sizes
 // of that day (HEAD 5f038e1ec). The same terms hold: the growth is split work
 // owed (daemon.ts +1700, index.ts +800, workflow/runner.ts +700 lead it).
+//
+// A third reset, same cause. main was red from 2026-10-16 (8a7982b5f) to
+// 2026-10-20, and 25 listed files grew past their pins meanwhile. The baseline
+// of 2026-10-20 re-pinned those 25 to the committed sizes at 574ed955e. The one
+// file newly over the cap (judgeRetire.ts) was split rather than listed. The
+// growth is split work owed: sessionDecisions.ts +200, signals.ts +200,
+// ingest.ts +100 and schema.ts +100 lead it.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -61,7 +68,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 261;
+const PIN = 259;
 
 const result = checkRatchet({
   name: "max lines",

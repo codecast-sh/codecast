@@ -6,8 +6,7 @@
 // asks for the deploy and runs it here; `cast line deploy run dp-N` runs a
 // deploy the Line page asked for (the daemon's line_deploy command).
 
-import { spawn } from "node:child_process";
-import { spawnSync } from "./proc.js";
+import { spawn, spawnSync } from "./proc.js";
 
 export type DeployStageReply = {
   project: { _id: string; short_id: string | null; title: string | null };
