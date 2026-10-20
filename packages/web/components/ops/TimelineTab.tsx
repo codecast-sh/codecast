@@ -2,6 +2,7 @@
 // time axis, one lane per source, with deploys drawn across all lanes so a
 // regression reads against the release that brought it. Under it, the same
 // transitions as rows, rendered by the one external event row.
+import { entityRoute } from "@codecast/shared/entities";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -121,7 +122,10 @@ export function TimelineTab({ source }: { source: string | null }) {
           <div className="ops-tl-overlay">
             {layout.releases.map(({ event, x }) => (
               <div key={event._id} className="ops-tl-release" data-edge={x > 0.85 ? "end" : undefined} style={{ left: `${x * 100}%` }} title={markTitle(event)}>
-                <span className="ops-mono">{event.data?.release ?? "deploy"}</span>
+                {/* A deploy marker opens the deploy it recorded: what it carried and what happened after. */}
+                {event.meta?.deploy
+                  ? <Link href={entityRoute("deploy", event.meta.deploy) ?? "#"} className="ops-mono" data-deploy-ref={event.meta.deploy}>{event.meta.deploy}</Link>
+                  : <span className="ops-mono">{event.data?.release ?? "deploy"}</span>}
               </div>
             ))}
             <div className="ops-tl-now" />

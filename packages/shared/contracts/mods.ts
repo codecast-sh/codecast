@@ -102,7 +102,7 @@ export type ModObjectKind = {
 export const OBJECT_PREFIX_RE = /^[a-z]{2,8}$/;
 /** Prefixes codecast already reads as something else; a kind may not claim them. */
 export const RESERVED_OBJECT_PREFIXES: ReadonlySet<string> = new Set([
-  "ct", "pl", "tr", "in", "op", "sd", "cl", "ds", "or", "sg", "pr", "jx", "doc", "msg", "obj", "date", "label", "mod", "http", "https",
+  "ct", "pl", "tr", "in", "op", "sd", "cl", "ds", "or", "sg", "pr", "dp", "jx", "doc", "msg", "obj", "date", "label", "mod", "http", "https",
 ]);
 /** Text payload an object reference rides in through markdown, like `doc:` and `msg:`. */
 export const OBJECT_REF_PREFIX = "obj:";

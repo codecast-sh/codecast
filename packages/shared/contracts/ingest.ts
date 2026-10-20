@@ -370,7 +370,11 @@ export type IngestItem =
   | { type: "job_failed"; job: string; error: string; attempt?: number; job_id?: string; at: number }
   | { type: "check"; id: string; ok: boolean; title?: string; detail?: string; at: number }
   | { type: "event"; name: string; props?: Record<string, unknown>; at: number }
-  | { type: "deploy"; version: string; sha?: string; environment?: string; at: number }
+  | {
+      type: "deploy"; version: string; sha?: string; environment?: string; at: number;
+      /** The deploy's own page (a CI run), who started it, and the range it carried (deploys.md DP1). */
+      url?: string; actor?: string; previous_sha?: string; commits?: Array<{ sha: string; subject: string; author?: string }>;
+    }
   | {
       type: "replay";
       replay_id: string;
@@ -442,6 +446,21 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** A bounded JSON object, or a note saying it was too large. Never throws on cycles. */
+/** A deploy item's commit range, bounded: at most 200 commits, each a sha and its subject. */
+function deployCommits(raw: unknown): Array<{ sha: string; subject: string; author?: string }> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: Array<{ sha: string; subject: string; author?: string }> = [];
+  for (const c of raw.slice(0, 200)) {
+    if (!c || typeof c !== "object") continue;
+    const sha = typeof (c as any).sha === "string" ? (c as any).sha.trim().slice(0, 64) : "";
+    const subject = typeof (c as any).subject === "string" ? (c as any).subject.trim().slice(0, 300) : "";
+    if (!/^[0-9a-f]{7,64}$/i.test(sha)) continue;
+    const author = typeof (c as any).author === "string" ? (c as any).author.trim().slice(0, 120) : "";
+    out.push({ sha: sha.toLowerCase(), subject, ...(author ? { author } : {}) });
+  }
+  return out.length ? out : undefined;
+}
+
 function boundedObject(value: unknown): Record<string, unknown> | undefined {
   if (!isPlainObject(value)) return undefined;
   const keys = Object.keys(value).slice(0, INGEST_LIMITS.object_keys);
@@ -565,6 +584,10 @@ function validateItem(raw: unknown, now: number): IngestItem | string {
         version,
         sha: str(raw.sha, L.name_chars),
         environment: str(raw.environment, L.name_chars),
+        url: str(raw.url, L.url_chars),
+        actor: str(raw.actor, L.name_chars),
+        previous_sha: str(raw.previous_sha, L.name_chars),
+        commits: deployCommits(raw.commits),
         at,
       };
     }

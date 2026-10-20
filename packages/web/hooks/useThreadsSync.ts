@@ -27,7 +27,8 @@ import { isConvexId } from "../lib/entityLinks";
 import { ingestTaskDetail } from "./useSyncTasks";
 import { questionCards } from "../lib/threadCards";
 import { GLOBAL_THREAD_KEY, fileThreadKey, parseCommentThreadRootKey, webThreadKeyFromAnchor, type Comment } from "../lib/commentThread";
-import { messagesSig, reactionsSig, useChatMembers, useChatRail, useMessageViews } from "./useChatSync";
+import { useChatMembers, useChatRail, useMessageViews } from "./useChatSync";
+import { messagesSig, reactionsSig } from "../store/chatWakeSigs";
 import type { ChatMessageView } from "../components/chat/chatTypes";
 
 const api = _api as any;
@@ -314,7 +315,7 @@ export function useQuestionThreadCards(): import("../lib/threadCards").ThreadCar
       let sig = "";
       for (const id in s.sessionDecisions) {
         const d = s.sessionDecisions[id];
-        if (d?.status === "pending") sig += `${d._id}|${d.created_at}|${d.updated_at ?? 0};`;
+        if (d?.status === "pending" && d.in_queue !== false) sig += `${d._id}|${d.created_at}|${d.updated_at ?? 0};`;
       }
       return sig;
     },
@@ -323,7 +324,7 @@ export function useQuestionThreadCards(): import("../lib/threadCards").ThreadCar
     let out = "";
     for (const id in (s as any).sessionDecisions) {
       const d = (s as any).sessionDecisions[id];
-      if (d?.status === "pending") out += `${d._id}|${d.created_at}|${d.updated_at ?? 0};`;
+      if (d?.status === "pending" && d.in_queue !== false) out += `${d._id}|${d.created_at}|${d.updated_at ?? 0};`;
     }
     return out;
   })();

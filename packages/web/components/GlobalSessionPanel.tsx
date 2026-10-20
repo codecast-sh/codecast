@@ -75,7 +75,7 @@ import { soundKill } from "../lib/sounds";
 import { latestSessionCommand, requestAccountSwitchCommand, requestSessionRestart, switchPending } from "../lib/sessionCommands";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, ArrowUpRight, Zap, ZapOff, Copy, ArrowUp, ArrowDown } from "lucide-react";
-import { InboxViewMenu } from "./InboxViewMenu";
+import { InboxViewTabs } from "./InboxViewTabs";
 import { SessionCard, hostedRowTitle } from "./inbox/SessionCard";
 import { SectionHeader } from "./inbox/SectionHeader";
 import { AssistantScopeSwitch, MoreInEverything } from "./AssistantScopeSwitch";
@@ -1154,7 +1154,7 @@ function primaryTriggerRow(rows: TriggerRow[]): TriggerRow {
 function RunningBadge({ label }: { label: string }) {
   return (
     <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${RUNNING_BADGE_TONE}`}>
-      <LivePulseDot />
+      <LivePulseDot still />
       {label}
     </span>
   );
@@ -1947,7 +1947,7 @@ function selectionTargets(session: InboxSession): InboxSession[] {
 
 // Structural signature for the decision rows the Questions section branches on.
 const decisionsSectionSig = makeCollectionSig((d: any) =>
-  d.status === "pending" ? `${d._id}|${d.conversation_id}|${d.updated_at ?? 0}` : "");
+  d.status === "pending" && d.in_queue !== false ? `${d._id}|${d.conversation_id}|${d.updated_at ?? 0}` : "");
 
 // Inbox-clearing prompt: when more than this many active sessions haven't been
 // touched in over a month, offer to bulk-dismiss them out of the working set.
@@ -2874,21 +2874,25 @@ function SessionListPanelImpl({
     [sortedSessions],
   );
 
-  // "By label" view: every active non-pinned top-level session grouped by its
-  // manual label; unlabeled sessions group by PROJECT — projects are a specific
-  // kind of label, auto-derived from the directory. Pinned stays its own top
-  // section — pin is urgency, not theme. The grouping fn is shared with the
-  // store's visualOrder so Ctrl+J/K walks exactly this layout.
+  // Every lens (label, plan, project, goal, reports) groups the same active
+  // set, pinned rows included: each leads its own group (byPinThenActivity)
+  // and wears its pin there. A Pinned section above the groups would look the
+  // same in every lens, so switching lenses would seem to do nothing. The
+  // store's visualOrder groups the same set, so Ctrl+J/K walks this layout.
+  // Absorbed-filtered lists: the lens views render the TRIGGERS section too,
+  // so sessions resting behind a schedule row must not double-render in groups.
+  const lensRows = useMemo(
+    () => [...filteredPinned, ...filteredNew, ...lensSettled, ...filteredWorking],
+    [filteredPinned, filteredNew, lensSettled, filteredWorking],
+  );
+
+  // "By label" view: sessions grouped by their manual label; unlabeled
+  // sessions group by PROJECT — projects are a specific kind of label,
+  // auto-derived from the directory.
   const bucketView = useMemo(() => {
     if (viewMode !== "bucket") return null;
-    // Absorbed-filtered lists: the label view renders the TRIGGERS section too,
-    // so sessions resting behind a schedule row must not double-render in groups.
-    return groupSessionsForLabelView(
-      [...filteredNew, ...lensSettled, ...filteredWorking],
-      s.buckets,
-      bucketByConv,
-    );
-  }, [viewMode, filteredNew, lensSettled, filteredWorking, bucketByConv, s.buckets]);
+    return groupSessionsForLabelView(lensRows, s.buckets, bucketByConv);
+  }, [viewMode, lensRows, bucketByConv, s.buckets]);
 
   // "By plan" lens — same active set as the bucket view (status buckets dissolved
   // back to flat), regrouped by plan instead of label. Every plan shows, even a
@@ -2897,10 +2901,8 @@ function SessionListPanelImpl({
   // its status bucket.
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
-    return groupSessionsByPlan(
-      [...filteredNew, ...lensSettled, ...filteredWorking],
-    );
-  }, [viewMode, filteredNew, lensSettled, filteredWorking]);
+    return groupSessionsByPlan(lensRows);
+  }, [viewMode, lensRows]);
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -2912,8 +2914,8 @@ function SessionListPanelImpl({
   const lensSources = useMemo(() => orgLensSourcesOf(s), [lensSig, s.sessions]);
   const orgLensView = useMemo(() => {
     if (!isOrgLensMode(viewMode)) return null;
-    return { mode: viewMode, ...groupSessionsForOrgLens(viewMode, [...filteredNew, ...lensSettled, ...filteredWorking], lensSources) };
-  }, [viewMode, filteredNew, lensSettled, filteredWorking, lensSources]);
+    return { mode: viewMode, ...groupSessionsForOrgLens(viewMode, lensRows, lensSources) };
+  }, [viewMode, lensRows, lensSources]);
   const orgLenses = useMemo(
     () => ORG_LENS_MODES.filter((m) => orgLensAvailable(m, activeSessions, lensSources)),
     [activeSessions, lensSources],
@@ -3136,6 +3138,12 @@ function SessionListPanelImpl({
     killManyWithNotice(ids);
   }, [killAllArmed, filteredStashed, killManyWithNotice]);
 
+  // A new grouping is a new list: it opens at its first group, not at the
+  // scroll offset the old layout happened to have.
+  useWatchEffect(() => {
+    scrollContainerRef.current?.scrollTo({ top: 0 });
+  }, [viewMode]);
+
   // Auto-scroll to active session, retrying when sessions load and revealing hidden sections
   useWatchEffect(() => {
     if (!activeSessionId || !scrollContainerRef.current) {
@@ -3162,19 +3170,16 @@ function SessionListPanelImpl({
       ? [[flatList, "all"]]
       : viewMode === "bucket" && bucketView
         ? [
-            [filteredPinned, "pinned"],
             ...bucketView.labelGroups.map(({ bucket, items }) => [items, `bucket_${bucket._id}`] as [InboxSession[], string]),
             ...bucketView.projectGroups.map(({ name, items }) => [items, `bucketproj_${name}`] as [InboxSession[], string]),
           ]
         : viewMode === "plan" && planView
         ? [
-            [filteredPinned, "pinned"],
             ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
             ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
           ]
         : orgLensView
         ? [
-            [filteredPinned, "pinned"],
             ...orgLensView.groups.map(({ key, items }) => [items, `${orgLensView.mode}_${key}`] as [InboxSession[], string]),
             ...orgLensView.projectGroups.map(({ name, items }) => [items, `${orgLensView.mode}proj_${name}`] as [InboxSession[], string]),
           ]
@@ -3665,13 +3670,13 @@ function SessionListPanelImpl({
           projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
           dropSessionOnLabel={dropSessionOnLabel}
         />}
-        {/* One pill: a view-mode dropdown (trigger shows the current mode's
-            icon), the independent show/hide toggles (subagents, old), then at
-            the far end the favorites mode toggle. Even spacing throughout, no
-            rules between groups — the icons read as one row of controls.
-            Ctrl+, still cycles view modes. In favorites view the view controls
-            hide (favorites is always project-grouped) and the pill collapses
-            to just the amber star, which stays put. */}
+        {/* One pill: the independent show/hide toggles (team, subagents,
+            bars, old), then at the far end the favorites mode toggle. Even
+            spacing throughout, no rules between groups — the icons read as
+            one row of controls. The grouping has its own tab row under this
+            header (InboxViewTabs). In favorites view the toggles hide
+            (favorites is always project-grouped) and the pill collapses to
+            just the amber star, which stays put. */}
         <div data-sv-head-tools className="flex items-center flex-shrink-0 ml-auto gap-1.5">
           {/* Permanent trigger for the blocked-fleet actions: visible whenever
               ANY session is parked on a limit/login banner, no matter how the
@@ -3708,14 +3713,6 @@ function SessionListPanelImpl({
               {inboxScope === "team" && <span className="text-[10px] font-semibold leading-none">Team</span>}
             </button>
           </ShortcutTooltip>}
-          <InboxViewMenu
-            value={viewMode}
-            onChange={s.setInboxViewMode}
-            hasLabels={visibleBuckets.length > 0}
-            hasPlans={hasPlanSessions}
-            orgLenses={orgLenses}
-            hasTriggers={scheduleRowsView.length > 0}
-          />
           {rowInternals && totalSubagentCount > 0 && (
             <button
               onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}
@@ -3795,6 +3792,16 @@ function SessionListPanelImpl({
         </div>}
         </div>
       </div>
+      {(!hostedMode || !assistantOnly) && !favoritesView && (
+        <InboxViewTabs
+          value={viewMode}
+          onChange={s.setInboxViewMode}
+          hasLabels={visibleBuckets.length > 0}
+          hasPlans={hasPlanSessions}
+          orgLenses={orgLenses}
+          hasTriggers={scheduleRowsView.length > 0}
+        />
+      )}
       {/* Relative wrapper so the out-of-view beacon can float over the list
           edges without joining the scroll flow. */}
       <div className="relative flex-1 min-h-0">
@@ -3904,9 +3911,6 @@ function SessionListPanelImpl({
           renderSection("All", flatList, "text-sol-cyan", undefined, true, { reorderable: viewMode === "time" })
         ) : viewMode === "bucket" && bucketView ? (
         <>
-        {/* An exclude chip is a near-global view ("everything but X") — the
-            failed/blocked banner must not vanish behind it. */}
-        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {bucketView.labelGroups.map(({ bucket, items }) => (
           <div key={bucket._id}>
             {renderSection(bucket.name, items, getLabelColor(bucket.name).text, undefined, undefined, { key: `bucket_${bucket._id}`, onDropSession: (ids) => labelSessions(ids, bucket._id) })}
@@ -3922,9 +3926,6 @@ function SessionListPanelImpl({
         </>
         ) : viewMode === "plan" && planView ? (
         <>
-        {/* An exclude chip is a near-global view ("everything but X") — the
-            failed/blocked banner must not vanish behind it. */}
-        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {planView.planGroups.map(({ key, label, items }) => (
           <div key={key}>
             {renderSection(label, items, "text-teal-400", undefined, undefined, { key: `plan_${key}`, monoLabel: true })}
@@ -3940,7 +3941,6 @@ function SessionListPanelImpl({
         </>
         ) : orgLensView ? (
         <>
-        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {orgLensView.groups.map(({ key, label, items, roleId, userId, image }) => {
           const role = roleId ? rolesById.get(roleId) : undefined;
           return (
