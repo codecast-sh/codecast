@@ -58,6 +58,7 @@ import { resolveTeamForPath } from "./privacy";
 import { watchUntilFor } from "./lib/lineWatch";
 import { isLineRun } from "@codecast/shared/contracts/changeCard";
 import { cancelCore } from "./workflow_runs";
+import { withdrawClosedProblemAsks } from "./sessionDecisions";
 import { webBaseUrl } from "./slack";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
@@ -545,6 +546,10 @@ export async function afterStatusMove(
   if (task.plan_id) await recalcPlanProgress(ctx, task.plan_id, task._id, next);
   await notifyTaskStatus(ctx, actorUserId, task, next, conversationId);
   await afterStatusEdges(ctx, task, next, { actorUserId, conversationId });
+  if (task.cause && isTerminalTaskStatus(next)) {
+    const closed = await ctx.db.get(task._id);
+    await withdrawClosedProblemAsks(ctx, task, closed?.cause?.dissolved?.note ?? `the problem was ${next === "done" ? "closed as done" : next}`, Date.now());
+  }
   if (!conversationId && isTerminalTaskStatus(next)) {
     const run = await liveLineRun(ctx, task);
     if (run && !(await closesItself(ctx, run))) await cancelCore(ctx, run, Date.now(), `Stopped: the problem was ${next === "dropped" ? "dropped" : "closed"} by a person`);
