@@ -398,6 +398,10 @@ crons.interval(
 // it), within its slots. Always registered; a line that is off starts nothing.
 crons.interval("start the line for scoped tasks", { minutes: 2 }, (internal as any).orgLine.sweep, {});
 
+// Promotions a source's hourly cap held back (ingest.promoteDue): filed as the
+// window has room, so a burst of new groups reaches the line late, never not at all.
+crons.interval("file held-back promotions", { minutes: 10 }, (internal as any).ingest.promoteDue, {});
+
 // A trial project that dispatches (lineTrial.dispatch) starts its own runs:
 // the problems with the most live findings first, three at a time at most,
 // under its spend cap. One empty index read when no trial dispatches.

@@ -151,7 +151,10 @@ export async function runBackfillPage(
   const worker = async () => {
     while (!halt && next < todo.length && clock.now() - startedAt < REPLAY_BACKFILL_PAGE.budget_ms) {
       const id = todo[next++];
-      const r = await vendor.importOne(id);
+      // An import action that dies (past an action's memory on one huge
+      // recording) throws here rather than answering: that recording failed,
+      // the page goes on, so one recording can never stop the import.
+      const r = await vendor.importOne(id).catch((e): { ok: false } & VendorFailure => ({ ok: false, error: `the import died: ${e instanceof Error ? e.message : String(e)}` }));
       if (r.ok) {
         seen.add(id);
         state.imported++;

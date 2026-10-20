@@ -544,6 +544,8 @@ export const sourceForKey = internalQuery({
 export type GroupPlan = Extract<ItemPlan, { type: "group" }>;
 
 const HOUR_MS = 3600_000;
+// Held-back promotions filed per cron pass (promoteDue).
+const PROMOTE_DUE_BATCH = 100;
 
 /**
  * What one source may cost per hour, whoever holds its key (X2). The browser
@@ -1217,15 +1219,55 @@ async function announceTransition(ctx: any, source: Doc<"event_sources">, a: Ann
   const kind = transitionSignalKind(a.transition);
   if (kind && source.promote.includes(a.transition)) {
     const { granted } = await takeFromWindow(ctx.db, `ingest-promote:${source._id}`, SOURCE_CAPS.promotions_per_hour, HOUR_MS, 1);
-    if (!granted) return;
-    await ctx.scheduler.runAfter(0, internal.ingest.promote, {
-      group_id: a.group_id,
-      transition: a.transition,
-      fingerprint: a.signal_fingerprint,
-      external_event_id: eventId,
-    });
+    // Over the cap the promotion waits on the group rather than being dropped:
+    // a group that promoted nothing on its "new" transition would otherwise
+    // never reach the line unless it regressed (promoteDue files it later).
+    const due = { transition: a.transition, fingerprint: a.signal_fingerprint, external_event_id: eventId };
+    if (!granted) {
+      await ctx.db.patch(a.group_id, { promotion_due: { ...due, at: Date.now() } });
+      return;
+    }
+    await schedulePromotion(ctx, a.group_id, due);
   }
 }
+
+async function schedulePromotion(ctx: any, groupId: Id<"event_groups">, due: { transition: Transition; fingerprint: string; external_event_id?: Id<"external_events"> }) {
+  const group = await ctx.db.get(groupId);
+  if (group?.promotion_due) await ctx.db.patch(groupId, { promotion_due: undefined });
+  await ctx.scheduler.runAfter(0, internal.ingest.promote, {
+    group_id: groupId,
+    transition: due.transition,
+    fingerprint: due.fingerprint,
+    ...(due.external_event_id ? { external_event_id: due.external_event_id } : {}),
+  });
+}
+
+/**
+ * Promotions the hourly cap held back, oldest first, each as its source's
+ * window has room; one whose source no longer promotes that transition, or is
+ * gone, is let go. Runs every ten minutes (crons.ts).
+ */
+export const promoteDue = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const due = await ctx.db.query("event_groups").withIndex("by_promotion_due", (q: any) => q.gt("promotion_due.at", 0)).take(PROMOTE_DUE_BATCH);
+    let filed = 0;
+    for (const group of due) {
+      const d = group.promotion_due!;
+      const source = await ctx.db.get(group.source_id);
+      if (!source || !source.promote.includes(d.transition)) {
+        await ctx.db.patch(group._id, { promotion_due: undefined });
+        continue;
+      }
+      if (source.status !== "active") continue;
+      const { granted } = await takeFromWindow(ctx.db, `ingest-promote:${source._id}`, SOURCE_CAPS.promotions_per_hour, HOUR_MS, 1);
+      if (!granted) continue;
+      await schedulePromotion(ctx, group._id, d);
+      filed++;
+    }
+    return { due: due.length, filed };
+  },
+});
 
 /** A source's deploy item as a deploy object's marker (deploys.md DP1). */
 function deployMarkerOf(source: Doc<"event_sources">, d: Extract<ItemPlan, { type: "deploy" }>, eventId: Id<"external_events">): DeployMarker {

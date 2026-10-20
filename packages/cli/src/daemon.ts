@@ -10495,6 +10495,12 @@ async function observeCodexOwnership(sessionId: string, rollout: string, home: s
   return ownership;
 }
 
+/** A Codex rollout was seen under this id, and none is there now: it was
+ *  deleted, moved or cannot be read, so the process it named may still be
+ *  borrowed. Neither path may read its absence as ownership. */
+const codexRolloutRemembered = (sessionId: string, home: string): boolean =>
+  !!codexRolloutIndex?.has(sessionId) || sessionOwnershipCache.get(sessionId)?.home === home;
+
 export async function acquireSessionProcessOwnership(sessionId: string, signal?: AbortSignal): Promise<ProcessOwnership> {
   const home = process.env.HOME || "";
   if (!home || signal?.aborted) return "unknown";
@@ -10512,7 +10518,7 @@ export async function acquireSessionProcessOwnership(sessionId: string, signal?:
       const rollouts = await codexRolloutsNow(home);
       if (signal?.aborted || home !== (process.env.HOME || "")) return "unknown";
       const paths = rollouts.get(sessionId);
-      if (!paths) return "owned";
+      if (!paths) return codexRolloutRemembered(sessionId, home) ? "unknown" : "owned";
       if (paths.length !== 1) return "unknown";
       const ownership = await observeCodexOwnership(sessionId, paths[0], home);
       return signal?.aborted ? "unknown" : ownership;
@@ -10530,7 +10536,7 @@ export async function acquireSessionProcessOwnership(sessionId: string, signal?:
       const ownership = await observeCodexOwnership(sessionId, paths[0], home);
       return current() ? ownership : "unknown";
     }
-    if (codexRolloutIndex?.has(sessionId) || sessionOwnershipCache.get(sessionId)?.home === home) return "unknown";
+    if (codexRolloutRemembered(sessionId, home)) return "unknown";
     const file = sessionFileIndex?.get(sessionId) ?? await freshSessionObservation(sessionId, false);
     if (!file || file.agentType === "codex") return "unknown";
     await fs.promises.access(file.path, fs.constants.R_OK);
