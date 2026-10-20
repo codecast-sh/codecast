@@ -39,6 +39,17 @@ describe("shouldMarkSessionCompleted", () => {
     ).toBe(false);
   });
 
+  // A machine restart ends every agent process. Waiting out the 30min threshold
+  // held ct-59998's dead Implement hand past its run (2026-10-16).
+  test("a dead session whose status predates this boot has exited at any age", () => {
+    expect(
+      shouldMarkSessionCompleted({ status: "working", ageMs: 2 * 60 * 1000, hasLiveAgentProcess: false, predatesBoot: true }),
+    ).toBe(true);
+    expect(
+      shouldMarkSessionCompleted({ status: "working", ageMs: 2 * 60 * 1000, hasLiveAgentProcess: true, predatesBoot: true }),
+    ).toBe(false);
+  });
+
   test("active (working/thinking) sessions use the longer 30min threshold", () => {
     // A working status that's been stale 11min is past the idle bar but not the
     // active one — don't reap yet.

@@ -140,6 +140,13 @@ export const CODECAST_EVENTS = defineCatalog({
     payload_v: COUNT,
     client_v: COUNT,
   },
+
+  // A huddle's media dropping under a person who never pressed End, and what
+  // became of it. `reason` is LiveKit's DisconnectReason name; `ms` is how
+  // long the person sat without the room.
+  call_media_lost: { reason: { type: "string", max: 32 }, rejoin: { type: "boolean" } },
+  call_rejoined: { attempts: COUNT, ms: COUNT },
+  call_rejoin_failed: { attempts: COUNT, ms: COUNT },
 });
 
 export type CodecastEventName = EventName<typeof CODECAST_EVENTS>;

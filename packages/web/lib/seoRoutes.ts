@@ -34,9 +34,9 @@ export type SeoEntry = {
 
 export const SITE_URL = "https://codecast.sh";
 
-export const DEFAULT_TITLE = "Codecast: the workspace for teams and their AI coding agents";
+export const DEFAULT_TITLE = "Codecast: all your coding agents in one workspace";
 export const DEFAULT_DESCRIPTION =
-  "Chat, calls, tasks, docs, pull requests and decisions, with Claude Code, Codex, Cursor and Gemini working as teammates in every one, and everything linked back to the session that did it.";
+  "Every session you run with Claude Code, Codex, Cursor, OpenCode and pi, on any machine, in one place: searchable, steerable from your phone, and linked to the code it wrote. Bring your team in when you want, with chat, calls, tasks and docs your agents work in too.";
 
 const STATIC_ENTRIES: SeoEntry[] = [
   {
@@ -115,7 +115,7 @@ export const SEO_ROUTES: SeoEntry[] = [
     path: "/compare",
     title: "Codecast vs the alternatives",
     description:
-      "Honest side-by-side comparisons of Codecast with other coding agent tools — T3 Code, Delta, Conductor, Vibe Kanban, ResumeContext, Happy, opcode — and when each is the better choice.",
+      "Honest side-by-side comparisons of Codecast with other coding agent tools — T3 Code, Entire, Delta, Conductor, Vibe Kanban, ResumeContext, Happy, opcode — and when each is the better choice.",
   },
   ...COMPARISONS.map((c) => ({
     path: compareHref(c.slug),

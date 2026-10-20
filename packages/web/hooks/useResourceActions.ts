@@ -113,6 +113,7 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
       start({ ...intent, client_batch_id: clientBatchId(), selections });
     },
     onCancel: (batchId) => { useInboxStore.getState().cancelResourceOffload(batchId).catch(report("resources.cancel")); },
+    onSetBackground: (deviceId, sessionId, background) => { useInboxStore.getState().setSessionBackground(deviceId, sessionId, background).catch(report("resources.background")); },
   };
 
   const checkedPlans = useMemo(() => plans.map((p) => applyPreflight(p, preflight[p.deviceId], now)), [plans, preflight, now]);

@@ -17,6 +17,8 @@
 // compare numerically when both sides are numbers (`1.0 = 1`), else as text. A lone operand is true when it names a
 // context value that is non-empty and not "false" or "0".
 
+import { lastJsonBlock } from "@codecast/shared/contracts";
+
 type Token =
   | { kind: "op"; value: string }
   | { kind: "lparen" }
@@ -210,7 +212,7 @@ export function conditionError(condition: string): string | null {
 }
 
 // A node's output as JSON: the whole text when it parses, else the last
-// fenced ```json block in it. Only objects and arrays count.
+// fenced ```json block in it (lastJsonBlock). Only objects and arrays count.
 export function extractJsonOutput(text: string): unknown | undefined {
   const tryParse = (s: string) => {
     try {
@@ -222,17 +224,6 @@ export function extractJsonOutput(text: string): unknown | undefined {
   };
   const whole = tryParse(text.trim());
   if (whole !== undefined) return whole;
-  // A json block can quote code fences inside its strings (a proposal quoting a
-  // prompt), so a block ends at the first closing fence after which it parses.
-  // The last block that parses is the result.
-  const opens = [...text.matchAll(/```json[^\S\n]*\n/g)].map((m) => m.index! + m[0].length);
-  for (let i = opens.length - 1; i >= 0; i--) {
-    const start = opens[i];
-    const end = i + 1 < opens.length ? opens[i + 1] : text.length;
-    for (let close = text.indexOf("```", start); close !== -1 && close < end; close = text.indexOf("```", close + 3)) {
-      const v = tryParse(text.slice(start, close).trim());
-      if (v !== undefined) return v;
-    }
-  }
-  return undefined;
+  const block = lastJsonBlock(text);
+  return block === null ? undefined : tryParse(block);
 }

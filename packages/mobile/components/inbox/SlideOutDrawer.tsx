@@ -15,22 +15,19 @@ const FLICK = 500;
  *  drag or a tap on the uncovered edge of the content closes it. The owner
  *  holds the open state, so its own controls can open it too: the inbox's
  *  menu button opens its filters, and a conversation uncovers the inbox.
- *  The drawer's contents mount on first open, so a closed panel costs nothing.
- *  `startOpen` mounts it uncovered and slides it shut, for a screen that
- *  replaces one whose panel was open (picking a conversation in the panel). */
-export function SlideOutDrawer({ enabled, open, setOpen, startOpen = false, drawer, children }: {
+ *  The drawer's contents mount on first open, so a closed panel costs nothing. */
+export function SlideOutDrawer({ enabled, open, setOpen, drawer, children }: {
   enabled: boolean;
   open: boolean;
   setOpen: (open: boolean) => void;
-  startOpen?: boolean;
   drawer: ReactNode;
   children: ReactNode;
 }) {
   const Theme = useTheme();
   const { width } = useWindowDimensions();
   const panelWidth = Math.min(Math.round(width * 0.84), 360);
-  const [mounted, setMounted] = useState(startOpen);
-  const progress = useSharedValue(startOpen ? 1 : 0);
+  const [mounted, setMounted] = useState(false);
+  const progress = useSharedValue(0);
   const start = useSharedValue(0);
   const openRef = useRef(open);
   openRef.current = open;

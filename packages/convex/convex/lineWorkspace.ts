@@ -314,6 +314,8 @@ async function projectDeploys(ctx: any, project: any, repositories: ReadonlyArra
 /** Causes and cards per cause one project's card read covers. */
 const CARDS_CAUSES_CAP = 400;
 const CARDS_PER_CAUSE = 20;
+/** The words of a card's question the history keeps: a row's worth. */
+const QUESTION_MAX_CHARS = 400;
 
 /** A line card as the history reads it: the answer and the card's own words, never its examples or proof. */
 const shapeCard = (d: any, projectId: string) => {
@@ -326,8 +328,15 @@ const shapeCard = (d: any, projectId: string) => {
     workflow_run_id: String(d.workflow_run_id),
     ...(d.short_id ? { short_id: d.short_id } : {}),
     status: d.status,
-    // Who it was asked of: who holds an open question the viewer does not (a plan gate Jason holds, ct-59571).
-    ...(d.asked_user_ids?.length ? { asked_user_ids: d.asked_user_ids.map(String) } : {}),
+    // Who it was asked of: who holds an open question the viewer does not (a plan gate Jason holds, ct-59571). A trial
+    // owner's practice question (a trial decision no role's line routed) is asked of nobody's queue, so of nobody here.
+    ...(d.asked_user_ids?.length && !(d.trial && !d.hops?.length && !d.passed_to) ? { asked_user_ids: d.asked_user_ids.map(String) } : {}),
+    // The teammate a person gave it to (passCore): the team inbox's assignee.
+    ...(d.passed_to ? { passed_to: { kind: d.passed_to.kind, id: String(d.passed_to.id) } } : {}),
+    ...(d.trial ? { trial: true } : {}),
+    ...(d.blocking ? { blocking: true } : {}),
+    // What is asked, for the team inbox's row; the whole decision is read on its own page.
+    ...(d.question ? { question: String(d.question).slice(0, QUESTION_MAX_CHARS) } : {}),
     ...(d.gate_node_id ? { gate_node_id: d.gate_node_id } : {}),
     options: (d.options ?? []).map((o: any) => ({ label: o.label })),
     ...(typeof d.answer_index === "number" ? { answer_index: d.answer_index } : {}),
