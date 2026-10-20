@@ -31,6 +31,7 @@ import {
 import { loadArmedTriggerHomes, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 import { displayNotificationActor, rewriteNotificationMessage } from "./lib/notificationActor";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
+import { clearPushTokenIfCurrent, reportPushFailures } from "./pushReceipts";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -91,21 +92,28 @@ export const sendPushNotification = internalAction({
       });
 
       const responseData = await response.json();
-      // Deliverability hygiene: a DeviceNotRegistered ticket means this token
-      // is dead (app removed, token rotated). Clearing it stops the outbox
-      // from queueing pushes nobody can receive — and lets the next app launch
-      // register a fresh one cleanly.
+      // A ticket only says Expo took the message. A dead token clears now
+      // (DeviceNotRegistered); an accepted ticket waits for its receipt
+      // (pushReceipts.ts), where a broken credential shows; any other
+      // refusal is reported straight away.
       const ticket = responseData?.data;
       const single = Array.isArray(ticket) ? ticket[0] : ticket;
-      if (
-        args.user_id &&
-        single?.status === 'error' &&
-        single?.details?.error === 'DeviceNotRegistered'
-      ) {
-        await ctx.runMutation(internal.notifications.clearDeadPushToken, {
-          user_id: args.user_id,
+      const code = single?.status === 'error' ? single?.details?.error ?? 'Unknown' : null;
+      if (single?.status === 'ok' && single.id) {
+        await ctx.runMutation(internal.pushReceipts.recordTicket, {
+          ticket_id: single.id,
           push_token: args.push_token,
+          ...(args.user_id ? { user_id: args.user_id } : {}),
         });
+      } else if (code === 'DeviceNotRegistered') {
+        if (args.user_id) {
+          await ctx.runMutation(internal.notifications.clearDeadPushToken, {
+            user_id: args.user_id,
+            push_token: args.push_token,
+          });
+        }
+      } else if (code) {
+        await reportPushFailures(ctx, [{ code, count: 1, sample: single?.message ?? code }]);
       }
       return responseData;
     } catch (error) {
@@ -120,10 +128,7 @@ export const sendPushNotification = internalAction({
 export const clearDeadPushToken = internalMutation({
   args: { user_id: v.id('users'), push_token: v.string() },
   handler: async (ctx, args) => {
-    const user = await ctx.db.get(args.user_id);
-    if (user?.push_token === args.push_token) {
-      await ctx.db.patch(args.user_id, { push_token: undefined });
-    }
+    await clearPushTokenIfCurrent(ctx, args.user_id, args.push_token);
   },
 });
 
