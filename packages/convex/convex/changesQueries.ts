@@ -204,6 +204,8 @@ export type LiveRow = {
   sha: string;
   at: number;
   kind: ShipEvent["kind"];
+  /** The deploy object behind a deploy (dp-N), which the strip opens. */
+  deploy?: string;
   /** Default-branch stories in this surface's areas that landed after the ship. */
   waiting: number;
   /** False when the count stopped at WAITING_SCAN stories and is a floor. */
@@ -274,6 +276,7 @@ export const liveStatus = query({
         sha: ship.sha,
         at: ship.at,
         kind: ship.kind,
+        ...(ship.deploy ? { deploy: ship.deploy } : {}),
         waiting: waitingStories(stories, ship).length,
         // Every day after the one the scan stopped in was read whole.
         waiting_exact: !capped || localDate(ship.at, zone) > reached,

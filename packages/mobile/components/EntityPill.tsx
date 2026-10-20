@@ -39,6 +39,7 @@ const TYPE_LABEL: Record<EntityType, string> = {
   call: 'Call',
   source: 'Source',
   replay: 'Replay',
+  deploy: 'Deploy',
   role: 'Role',
   person: 'Person',
 };
@@ -60,6 +61,7 @@ const TYPE_COLOR: Record<EntityType, string> = {
   call: Theme.red,
   source: Theme.orange,
   replay: Theme.magenta,
+  deploy: Theme.green,
   role: Theme.violet,
   person: Theme.green,
 };
@@ -79,6 +81,7 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   call: 'phone',
   source: 'radio',
   replay: 'film',
+  deploy: 'upload-cloud',
   role: 'hexagon',
   person: 'user',
 };
@@ -181,7 +184,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
     shortId: entity?.short_id,
     rawId,
     typeLabel: TYPE_LABEL[type],
-  }) +callRefLabelSuffix(callRef) + (entity ? replayRefLabelSuffix(replayRef) : '') + proposalChangeLabelSuffix(type === 'proposal' && entity ? parseProposalChangeRef(rawId) : null);
+  }) + (entity ? callRefLabelSuffix(callRef) + replayRefLabelSuffix(replayRef) : '') + proposalChangeLabelSuffix(type === 'proposal' && entity ? parseProposalChangeRef(rawId) : null);
   // A session that wears a character or a role is named as that person, the
   // same rule as the web pill: its face in place of the glyph, its name as the
   // label. A session nobody personified reads exactly as it did before.
@@ -201,7 +204,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   const route = targetId ? mobileEntityRoute(type, targetId) : null;
   // A replay has no screen on the phone: it opens the web replay page, at the
   // moment it names, in the in-app browser (the player needs a real page).
-  const webPage = !route && type === 'replay' && entity ? entityRoute('replay', rawId) : null;
+  // A deploy (`dp-N`) has none either: it opens the web Line app's Deploys view on it.
+  const webPage = !route && type === 'replay' && entity ? entityRoute('replay', rawId) : !route && type === 'deploy' ? entityRoute('deploy', rawId) : null;
 
   return (
     <RNText
@@ -226,7 +230,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
 
 const styles = StyleSheet.create({
   pill: {
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontSize: 11,
     fontWeight: '600',
     paddingHorizontal: 5,

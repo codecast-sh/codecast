@@ -48,6 +48,7 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { HandoffPicker, useOwnersFromStore } from "./OwnersBadge";
 import { usePendingMessageStatus } from "../hooks/useSyncPendingPermissions";
 import { useInboxStore, isConvexId, convHasPendingSend, type OptimisticImage } from "../store/inboxStore";
+import { useChangedState } from "../hooks/useChangedState";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
@@ -396,29 +397,34 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   type AcItem = Omit<MentionItem, "id"> & { id?: string; description?: string };
   const [acTrigger, setAcTrigger] = useState<AutocompleteTrigger>(null);
   const [acIndex, setAcIndex] = useState(0);
-  const acRef = useRef<HTMLDivElement>(null);
-  // Chat mode anchors the popup at the @ itself. The zero-height div right
-  // above the form is the positioning context; this is the popup's left within
-  // it, measured from the @'s pixel position inside the textarea. A composer
-  // narrower than the popup (a reply thread) caps it at the composer's width.
-  const acAnchorRef = useRef<HTMLDivElement>(null);
-  const [acCaretLeft, setAcCaretLeft] = useState(0);
-  // The popup grows upward from the anchor, so a composer near the top of the
-  // viewport (the palette's send step) caps it at the room above, or its top
-  // rows render offscreen.
-  const [acRoomAbove, setAcRoomAbove] = useState<number | undefined>(undefined);
+  // The popup floats in a portal, fixed just above the composer's box and
+  // capped at the room up to the top of the window. Composers sit inside
+  // frames that clip (the new-session dialog, the dock, the palette's send
+  // step), and a popup inside such a frame either loses its top rows or, in
+  // the flow, pushes the box itself out of the frame. Chat anchors it at the
+  // @ itself, measured from the @'s pixel position inside the textarea, and
+  // keeps it within the box (a reply thread narrower than the popup caps it).
+  const [acBox, setAcBox] = useState<{ left: number; width: number; bottom: number; maxHeight: number } | null>(null);
   useLayoutEffect(() => {
-    if (!chatMentionMode || !acTrigger) return;
     const ta = textareaRef.current;
-    const host = acAnchorRef.current;
-    if (!ta || !host) return;
-    setAcRoomAbove(Math.max(160, host.getBoundingClientRect().top - 18));
-    if (acTrigger.type === "/") return;
-    const caret = textareaCaretRect(ta, acTrigger.startPos);
-    const taRect = ta.getBoundingClientRect();
-    const hostRect = host.getBoundingClientRect();
-    const raw = taRect.left - hostRect.left + caret.left - ta.scrollLeft;
-    setAcCaretLeft(Math.max(0, Math.min(raw, Math.max(0, hostRect.width - CHAT_AC_WIDTH))));
+    const field = ta?.closest("form")?.firstElementChild;
+    if (!acTrigger || !ta || !field) return;
+    const place = () => {
+      const box = field.getBoundingClientRect();
+      let left = box.left;
+      let width = box.width;
+      if (chatMentionMode) {
+        width = Math.min(CHAT_AC_WIDTH, box.width);
+        if (acTrigger.type !== "/") {
+          const caret = textareaCaretRect(ta, acTrigger.startPos);
+          left = Math.max(box.left, Math.min(ta.getBoundingClientRect().left + caret.left - ta.scrollLeft, box.right - width));
+        }
+      }
+      setAcBox({ left, width, bottom: window.innerHeight - box.top + 6, maxHeight: Math.max(160, box.top - 18) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
   }, [chatMentionMode, acTrigger]);
   const filePathsRef = useRef(filePaths);
   filePathsRef.current = filePaths;
@@ -469,6 +475,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const mentionState = useInboxStore.getState();
   const localMentionItems = effectiveMentionItemsRef.current;
   const mentionRoles = chatMentionMode ? mentionState.orgTree?.roles : undefined;
+  const mentionAnchors = chatMentionMode ? mentionState.orgTree?.anchors : undefined;
   const recentMentionVisits = mentionState.recentVisits;
   const lastMentionViews = mentionState._lastViewedAt;
   const acCandidates = useMemo(() => {
@@ -479,11 +486,21 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         id: String(r._id), type: "role", label: r.name, sublabel: `@${r.handle}`,
         handle: r.handle, shortId: r.short_id, updatedAt: r.updated_at,
       }));
+    // A role's standing agent is also a team member (a bot named after the
+    // role). The role is what the room addresses, so its bot is not offered
+    // beside it as a second "person" with a different handle.
+    const offered = new Set(roleItems.map((r) => r.id));
+    const roleBots = new Set((mentionAnchors ?? [])
+      .filter((a: any) => a.org_role_id && offered.has(String(a.org_role_id)))
+      .map((a: any) => String(a.bot_user_id)));
+    const people = roleBots.size
+      ? (localMentionItems ?? []).filter((m) => !(m.type === "person" && roleBots.has(m.id)))
+      : localMentionItems ?? [];
     return mergeMentionSuggestions(
-      [...roleItems, ...(localMentionItems ?? [])], acServerItems,
+      [...roleItems, ...people], acServerItems,
       mentionViewTimes({ recentVisits: recentMentionVisits, _lastViewedAt: lastMentionViews }), Infinity, "", false, acContext,
     );
-  }, [acTrigger?.type, mentionRoles, localMentionItems, acServerItems, recentMentionVisits, lastMentionViews, acContext]);
+  }, [acTrigger?.type, mentionRoles, mentionAnchors, localMentionItems, acServerItems, recentMentionVisits, lastMentionViews, acContext]);
 
   const acItems: AcItem[] = useMemo(() => {
     if (!acTrigger) return [];
@@ -1257,7 +1274,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [composeMode, setMessage]);
 
-  const [isMultiline, setIsMultiline] = useState(false);
+  // Measured after every keystroke (the Safari height fallback, the resize
+  // observer): set only on a change.
+  const [isMultiline, setIsMultiline] = useChangedState(false);
   useWatchEffect(() => {
     const el = textareaRef.current;
     if (!FIELD_SIZING_SUPPORTED || !el) return;
@@ -1280,7 +1299,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // (an unparsed font, say) only leaves the text wrapping beside the controls
   // as before; it can never oscillate.
   const controlsRowRef = useRef<HTMLDivElement>(null);
-  const [fitsBesideControls, setFitsBesideControls] = useState(true);
+  // Measured from a layout effect after every keystroke: set only on a change.
+  const [fitsBesideControls, setFitsBesideControls] = useChangedState(true);
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const measureFitsBesideControls = useCallback(() => {
     const ta = textareaRef.current;
@@ -2609,16 +2629,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           {composerNode}
           {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
             const chatKey = parseChatDraftKey(conversationId);
-            const dropdown = (
+            if (!acBox) return null;
+            return createPortal(
               <div
-                ref={acRef}
-                className={chatMentionMode
-                  ? "absolute bottom-0 mb-1.5 z-30"
-                  : `mx-auto mb-1.5 ${colClass}`}
-                style={chatMentionMode ? { left: acCaretLeft, width: CHAT_AC_WIDTH, maxWidth: "min(100%, calc(100vw - 24px))" } : undefined}
+                className="fixed z-[10050]"
+                style={{ left: acBox.left, width: acBox.width, bottom: acBox.bottom }}
               >
                 <MentionMenu
-                  style={chatMentionMode ? { maxHeight: acRoomAbove } : undefined}
+                  style={{ maxHeight: acBox.maxHeight }}
                   items={acItems}
                   selectedIndex={clampedAcIndex}
                   onHover={setAcIndex}
@@ -2628,12 +2646,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   heading={acTrigger.type === "/" ? "Commands" : undefined}
                   contextTitle={chatKey ? (chatKey.threadRootId ? "In this thread" : "In this channel") : "In this conversation"}
                 />
-              </div>
+              </div>,
+              document.body,
             );
-            if (!chatMentionMode) return dropdown;
-            // Zero height on purpose: it contributes no layout, only the
-            // positioning context the caret-anchored popup hangs from.
-            return <div ref={acAnchorRef} className="relative h-0">{dropdown}</div>;
           })()}
       </>}
       fieldTop={<>

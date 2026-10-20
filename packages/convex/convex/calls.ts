@@ -184,6 +184,23 @@ export const getRoomOccupancy = query({
 // Everything the ring pipeline needs about ME: invites ringing at me, my own
 // outbound ring, and my current room membership. One subscription, mounted
 // app-wide (useCallSync).
+// Is this ring still ringing? Read by the phone's CallKit bridge while the
+// system ring is up, so it can end the ring the moment the call is answered,
+// declined or cancelled anywhere else. Deliberately needs no sign-in: a VoIP
+// push wakes a killed app on a LOCKED phone, where the keychain holding the
+// session is unreadable, and a check gated on auth never ran there, so the
+// phone rang its full TTL after a desktop answer. The invite id is the
+// capability (it arrived in the push), and the answer is one boolean.
+export const ringLive = query({
+  args: { invite_id: v.string() },
+  handler: async (ctx, args) => {
+    const id = ctx.db.normalizeId("call_invites", args.invite_id);
+    if (!id) return false;
+    const inv = await ctx.db.get(id);
+    return inv?.status === "ringing";
+  },
+});
+
 export const getMyCalls = query({
   args: {},
   handler: async (ctx) => {
