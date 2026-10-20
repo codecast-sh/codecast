@@ -122,12 +122,14 @@ describe("SharedDraftSession", () => {
     const { server, snaps } = fakeServer();
     const a = box(server, "ann~1");
     await a.s.join(() => "", { seed: true, othersLive: () => false });
+    // The fake server answers on microtasks, which setImmediate drains with no
+    // timer clamp; 220 setTimeout turns cost seconds on a loaded CI runner.
+    const drain = () => new Promise((r) => setImmediate(r));
     let t = "";
     for (let i = 0; i < 110; i++) {
       t += "x";
       a.s.edit(t);
-      await settle();
-      await settle();
+      await drain();
     }
     expect(snaps.length).toBeGreaterThan(0);
     const late = box(server, "cam~1");

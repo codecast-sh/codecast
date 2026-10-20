@@ -255,7 +255,7 @@ describe("Linux split bundle transfer", () => {
     const target = localRemote(sourceVersion);
     fs.writeFileSync(path.join(target.install, "index.js"), "existing entry");
     fakeBuild();
-    expect(installLinuxCast(host)).toEqual({ version: sourceVersion });
+    expect(installLinuxCast(host, () => {}, "checkout")).toEqual({ version: sourceVersion });
     expect(fs.readFileSync(path.join(target.install, "main-chunk.js"), "utf8")).toContain(sourceVersion);
     expect(fs.readFileSync(path.join(`${target.install}.previous`, "index.js"), "utf8")).toBe("existing entry");
     expect(fs.readFileSync(path.join(target.install, "idle-probe.py"), "utf8")).toBe("preserve probe");
@@ -269,7 +269,7 @@ describe("Linux split bundle transfer", () => {
     const target = localRemote(answer);
     fs.writeFileSync(path.join(target.install, "index.js"), "existing entry");
     fakeBuild();
-    expect(() => installLinuxCast(host)).toThrow("previous bundle is back in place");
+    expect(() => installLinuxCast(host, () => {}, "checkout")).toThrow("previous bundle is back in place");
     // The host is exactly as it was: the old entry, the adjacent files, and no
     // leftover copy, so nothing about the failed attempt survives it.
     expect(fs.readFileSync(path.join(target.install, "index.js"), "utf8")).toBe("existing entry");
@@ -283,7 +283,7 @@ describe("Linux split bundle transfer", () => {
     fs.writeFileSync(path.join(target.install, "index.js"), "existing entry");
     target.copy.mockImplementation(() => { throw new Error("upload interrupted"); });
     fakeBuild();
-    expect(() => installLinuxCast(host)).toThrow("upload interrupted");
+    expect(() => installLinuxCast(host, () => {}, "checkout")).toThrow("upload interrupted");
     expect(fs.readFileSync(path.join(target.install, "index.js"), "utf8")).toBe("existing entry");
   }, 60_000);
 
