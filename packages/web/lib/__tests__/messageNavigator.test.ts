@@ -8,6 +8,7 @@ import {
   activeTickIndex,
   isStickyEligible,
   stickyPromptContent,
+  stickyEligibleIds,
   pickStickyFallback,
   resolveStickyPrompt,
   mergeNavigatorSources,
@@ -19,6 +20,7 @@ import {
   matchSnippet,
   navigatorRowBody,
 } from "../messageNavigator";
+import { stickyCommand } from "../../components/conversation/classify";
 import { NAV_ROW_SNIPPET_CHARS } from "@codecast/convex/convex/userMessagesFilter";
 import { formatSessionMessage } from "../../components/sessionMessage";
 import { MID_WORK_REVIVE_MESSAGE } from "@codecast/shared/contracts";
@@ -545,5 +547,46 @@ describe("stickyPromptContent: client commands", () => {
   it("keeps an ask that opens with a pasted path", () => {
     const ask = "/Users/ashot/shot.png look at this";
     expect(stickyPromptContent(ask)).toBe(ask);
+  });
+});
+
+// A custom command ("/deploy") lands as its invocation plus, in the same batch,
+// the command file's body with no markers. The body read as a typed prompt and
+// headed the sticky with the command's instructions.
+describe("slash command with an expanded body", () => {
+  const invocation = "<command-message>deploy</command-message>\n<command-name>/deploy</command-name>\n<command-args>web only</command-args>";
+  const body = "Ship the main checkout as it stands: every uncommitted change in it is committed to main, pushed, and deployed everywhere the repo deploys. ".repeat(3);
+  const msgs = [
+    { _id: "p1", role: "user", content: "fix the login bug", timestamp: 100 },
+    { _id: "cmd", role: "user", content: invocation, timestamp: 1000 },
+    { _id: "body", role: "user", content: body, timestamp: 1000 },
+  ];
+
+  it("makes the invocation sticky and never the body", () => {
+    const ids = stickyEligibleIds(msgs);
+    expect([...ids].sort()).toEqual(["cmd", "p1"]);
+    expect(pickStickyFallback(msgs, new Set(), Infinity)?.id).toBe("cmd");
+  });
+
+  it("pairs them when the cached list holds the body first", () => {
+    const bodyFirst = [msgs[0], msgs[2], msgs[1]];
+    expect([...stickyEligibleIds(bodyFirst)].sort()).toEqual(["cmd", "p1"]);
+    expect(buildNavigatorRows(bodyFirst).map((r) => r._id)).toEqual(["p1", "cmd"]);
+  });
+
+  it("keeps a long prompt typed well after a command", () => {
+    const later = [msgs[1], { _id: "typed", role: "user", content: body, timestamp: 60_000 }];
+    expect(stickyEligibleIds(later).has("typed")).toBe(true);
+    expect(stickyEligibleIds(later).has("cmd")).toBe(false);
+  });
+
+  it("lists the command once in the navigator, with its args", () => {
+    const rows = buildNavigatorRows(msgs);
+    expect(rows.map((r) => [r._id, r.display])).toEqual([["p1", "fix the login bug"], ["cmd", "/deploy web only"]]);
+  });
+
+  it("names the command for the sticky body", () => {
+    expect(stickyCommand(invocation)).toEqual({ cmdName: "deploy", args: "web only" });
+    expect(stickyCommand("fix the login bug")).toBeNull();
   });
 });

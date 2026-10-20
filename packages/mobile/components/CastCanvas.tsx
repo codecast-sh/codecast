@@ -237,7 +237,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingVertical: 10,
   },
   sourceText: {
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontSize: 11,
     lineHeight: 16,
     color: Theme.textSecondary,

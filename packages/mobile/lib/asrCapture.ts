@@ -43,7 +43,7 @@ export async function startAsrCapture(opts: {
   clock: () => number;
   events?: AsrCaptureEvents;
 }): Promise<AsrCapture | null> {
-  if (!callsNativeAvailable) return null;
+  if (!callsNativeAvailable()) return null;
   let webrtc: typeof import("@livekit/react-native-webrtc");
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires

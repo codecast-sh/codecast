@@ -181,7 +181,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
     shortId: entity?.short_id,
     rawId,
     typeLabel: TYPE_LABEL[type],
-  }) +callRefLabelSuffix(callRef) + (entity ? replayRefLabelSuffix(replayRef) : '') + proposalChangeLabelSuffix(type === 'proposal' && entity ? parseProposalChangeRef(rawId) : null);
+  }) + (entity ? callRefLabelSuffix(callRef) + replayRefLabelSuffix(replayRef) : '') + proposalChangeLabelSuffix(type === 'proposal' && entity ? parseProposalChangeRef(rawId) : null);
   // A session that wears a character or a role is named as that person, the
   // same rule as the web pill: its face in place of the glyph, its name as the
   // label. A session nobody personified reads exactly as it did before.
@@ -226,7 +226,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
 
 const styles = StyleSheet.create({
   pill: {
-    fontFamily: 'SpaceMono',
+    fontFamily: 'JetBrainsMono-Regular',
     fontSize: 11,
     fontWeight: '600',
     paddingHorizontal: 5,
