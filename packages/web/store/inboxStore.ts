@@ -72,7 +72,7 @@ const TABLE_TO_STORE_KEYS: Record<string, string[]> = {};
 for (const [storeKey, cfg] of Object.entries(DISPATCH_TABLE_MAP)) {
   (TABLE_TO_STORE_KEYS[cfg.table] ??= []).push(storeKey);
 }
-import { createInterner, makeCollectionSig } from "./wakeSig";
+import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
@@ -1588,8 +1588,6 @@ const sessionUnreadMaps = new WeakMap<
   Record<string, InboxSession>,
   WeakMap<Record<string, SessionReadItem>, WeakMap<Record<string, number>, Record<string, boolean>>>
 >();
-const sessionUnreadSignatures = new WeakMap<Record<string, boolean>, string>();
-const internSessionUnreadSignature = createInterner();
 // One row's verdict, kept while the row ref, its winning mark and its local
 // viewed time hold: a heartbeat hands back a new sessions map in which every
 // other row keeps its ref, so the rebuild re-judges only the rows that moved.
@@ -1655,19 +1653,11 @@ export function sessionUnreadWakeSig(state: {
   sessionReads: Record<string, SessionReadItem>;
   _lastViewedAt: Record<string, number>;
 }): string {
-  const unread = sessionUnreadMap(state);
-  let signature = sessionUnreadSignatures.get(unread);
-  if (signature === undefined) {
-    // In the sessions map's own order, which a rebuild keeps: sorting thousands
-    // of ids on every heartbeat cost more than the map. A reorder of the same
-    // set only wakes a subscriber once more.
-    signature = Object.keys(unread).join(",");
-    // Interned, so subscribers compare pointers, not every id (createInterner).
-    signature = internSessionUnreadSignature(signature);
-    sessionUnreadSignatures.set(unread, signature);
-  }
-  return signature;
+  return unreadSetSig(sessionUnreadMap(state));
 }
+// A digest of the lit set (makeCollectionSig over the unread map), so the
+// signature is short whatever the number of unread sessions.
+const unreadSetSig = makeCollectionSig<boolean>(() => "");
 
 // Close the open subtree under a parent in the draft — the optimistic mirror
 // of the server's cascadeClose, so a "close subtasks too" choice renders
@@ -1924,6 +1914,10 @@ export type ClientUI = {
   // route, and never shown again. Stamped LWW: sold once, on one device, is
   // sold once everywhere.
   org_upsell_seen?: boolean;
+  // The color themes introduction (ThemeIntroAnywhere): the corner card with
+  // a swatch per theme. Answered either way, or a theme chosen in settings,
+  // and it never rises again. Stamped LWW: met on one device, met everywhere.
+  theme_intro_seen?: boolean;
   // The review "Propose an org now" started on the org page: when, in which
   // workspace, and the session doing it (its stub id first, the real id once
   // the server names it). Kept here, not in component state, so a reload or
@@ -2313,8 +2307,13 @@ function workingSetRowOf(s: InboxSession): WorkingSetRow {
 // ride their parent; a plan handoff (parent pointer + parent message) is a
 // member like any other — the server stamps it, so the replica must select
 // it too. Nesting under a present parent is presentation only.
+// Per row ref: placement asks this of every cached row several times a pass,
+// and a row's answer can only change with the row.
+const memberCandidateByRow = new WeakMap<InboxSession, boolean>();
 function isMemberCandidate(s: InboxSession): boolean {
-  return isConvexId(s._id) && !isOrphanOrSubagent(s);
+  let v = memberCandidateByRow.get(s);
+  if (v === undefined) memberCandidateByRow.set(s, (v = isConvexId(s._id) && !isOrphanOrSubagent(s)));
+  return v;
 }
 
 // Memoized by (collection signature, minute-quantized activity, epoch): the
@@ -2439,8 +2438,18 @@ export function partitionWorkingSet(
 // A row is "mine" if I authored it and still own it (or nobody does), if it is
 // routed to me to steer, if it is an optimistic stub, or if it is a thin row
 // with no known author.
+// Per row ref and viewer: the scope filter and the asking pass both ask it of
+// every cached row on each placement.
+const foreignByRow = new WeakMap<InboxSession, { meId: string; foreign: boolean }>();
 export function isForeignRow(s: InboxSession, meId: string | null | undefined): boolean {
   if (!meId) return false; // unknown viewer → don't hide anything
+  const hit = foreignByRow.get(s);
+  if (hit && hit.meId === meId) return hit.foreign;
+  const foreign = isForeignRowUncached(s, meId);
+  foreignByRow.set(s, { meId, foreign });
+  return foreign;
+}
+function isForeignRowUncached(s: InboxSession, meId: string): boolean {
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
   if (isAssignedAwayFromViewer(s, meId)) return true;
   if (!s.user_id) return false; // thin/legacy row with no author → keep
@@ -2678,9 +2687,11 @@ const SYNC_ACTIVITY_FIELDS: ReadonlySet<string> = new Set(["sessions", "sessionD
 // Team scope stays server-gated (teamInboxIds): the replica lacks the
 // visibility inputs to select a team working set (C4), so the board renders
 // exactly what the team subscription reported, unpartitioned.
-let _visibleKey: unknown[] | null = null;
 type InboxVisible = { visibleSessions: Record<string, InboxSession>; oldCount: number; membership: InboxMembership | null; scoped: Record<string, InboxSession> };
-let _visibleVal: InboxVisible | null = null;
+// One memo per scope and focused row, like placeInboxRows' slots: the badges
+// ask for "mine" with no focus while the panel asks with the open row, and a
+// single shared slot made each evict the other and rescan every session.
+const _visibleMemo = new Map<string, { key: unknown[]; val: InboxVisible }>();
 export function computeInboxVisible(
   state: {
     sessions: Record<string, InboxSession>;
@@ -2712,8 +2723,10 @@ export function computeInboxVisible(
   // computeInboxMembership.
   const deps = opts?.deps ?? keepOverlayDeps(state.sessions, focusedId, state.pendingSessionCreates);
   const key = [state.sessions, scope, showOld, meId, teamInboxIds, focusedId, epoch, [...deps.pendingCreateIds].sort().join(",")];
-  if (_visibleKey && _visibleVal && key.length === _visibleKey.length && key.every((v, i) => Object.is(v, _visibleKey![i]))) {
-    return _visibleVal;
+  const slot = `${scope}\x1f${focusedId ?? ""}`;
+  const memo = _visibleMemo.get(slot);
+  if (memo && key.length === memo.key.length && key.every((v, i) => Object.is(v, memo.key[i]))) {
+    return memo.val;
   }
   const scoped = filterInboxScope(state.sessions, scope, meId, teamInboxIds, focusedId);
   let result: InboxVisible;
@@ -2723,8 +2736,8 @@ export function computeInboxVisible(
     const membership = computeInboxMembership(scoped, epoch);
     result = { ...partitionWorkingSet(scoped, membership, { showOld, deps }), membership, scoped };
   }
-  _visibleKey = key;
-  _visibleVal = result;
+  _visibleMemo.set(slot, { key, val: result });
+  if (_visibleMemo.size > PLACED_MEMO_CAP) _visibleMemo.delete(_visibleMemo.keys().next().value!);
   return result;
 }
 
@@ -3728,8 +3741,7 @@ export function __resetInboxPlacementCacheForTests(): void {
   _placementDeadlineMemo = null;
   _membershipKey = null;
   _membershipVal = null;
-  _visibleKey = null;
-  _visibleVal = null;
+  _visibleMemo.clear();
 }
 // Dev-only parity throttle (assertPlacementParity below).
 let _lastParityCheckAt = 0;
@@ -4505,16 +4517,18 @@ export function computeReorderUpdates(
   return result.map((b, i) => ({ id: b._id, sort_order: (i + 1) * SORT_GAP }));
 }
 
-// Newest-activity-first, the within-group order shared by every grouping below.
-// NB: keyed on updated_at, which the inbox's wake signature deliberately omits —
+// The within-group order shared by every grouping below: pinned rows lead
+// (a pin is the user's "keep this on top", in whichever group it lands), then
+// newest activity first. NB: keyed on updated_at, which the inbox's wake signature deliberately omits —
 // so a re-sort here rides the panel's coarse clock (useCoarseNow), not a sig flip.
-export const byActivity = (a: InboxSession, b: InboxSession) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
+export const byPinThenActivity = (a: InboxSession, b: InboxSession) =>
+  Number(!!b.is_pinned) - Number(!!a.is_pinned) || (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
 // Project-fallback groups, biggest first with "other" last — the auto-derived
 // label tier every view falls back to for items that carry no primary key.
 function buildProjectGroups(byProject: Map<string, InboxSession[]>): Array<{ name: string; items: InboxSession[] }> {
   return Array.from(byProject.entries())
-    .map(([name, list]) => ({ name, items: list.sort(byActivity) }))
+    .map(([name, list]) => ({ name, items: list.sort(byPinThenActivity) }))
     .sort((a, b) =>
       (a.name === "other" ? 1 : 0) - (b.name === "other" ? 1 : 0) || b.items.length - a.items.length);
 }
@@ -4572,7 +4586,7 @@ export function groupSessionsForLabelView(
     },
     // Label groups follow the explicit label sort order, empties dropped.
     (byBucket) => sortLabels(buckets)
-      .map((bucket) => ({ bucket, items: (byBucket.get(bucket._id) ?? []).sort(byActivity) }))
+      .map((bucket) => ({ bucket, items: (byBucket.get(bucket._id) ?? []).sort(byPinThenActivity) }))
       .filter((g) => g.items.length > 0),
   );
   return { labelGroups: primaryGroups, projectGroups };
@@ -4596,13 +4610,14 @@ export function groupSessionsByPlan(
     (sess) => sess.active_plan?.short_id ?? null,
     // All members of a plan share its label; derive it once from the first.
     (byPlan) => Array.from(byPlan.entries())
-      .map(([key, list]) => ({ key, label: orchestrationGroupLabelOf(list[0])!, items: list.sort(byActivity) }))
+      .map(([key, list]) => ({ key, label: orchestrationGroupLabelOf(list[0])!, items: list.sort(byPinThenActivity) }))
       .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label)),
   );
   return { planGroups: primaryGroups, projectGroups };
 }
 
 export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, sessionProjectId, type OrgLensGroup, type OrgLensMode, type OrgLensSources } from "./orgLens";
+import { inboxViewModes } from "./inboxViewModes";
 import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailable, orgLensSourcesOf, type OrgLensMode, type OrgLensSources, type OrgLensState } from "./orgLens";
 
 // Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
@@ -5218,8 +5233,9 @@ export function computeVisualOrder(state: {
     // placement), so "your move" is the same membership walked in flat order.
     return flat.filter(yourMoveOf(placed));
   }
-  // Grouped/bucket: the placed status sections over the SAME visible set. The
-  // bucket branch below splits pinned out and regroups the rest by label/project.
+  // Grouped and the lenses: the placed status sections over the SAME visible
+  // set; the lens branches below regroup all of it, pinned rows included (each
+  // leads its own group: byPinThenActivity), by label, plan or org.
   const base = visualOrderSessions(placed, chipProjectFilters(state), {
     bucketFilters: chipBucketFilters(state),
     bucketByConv,
@@ -5235,31 +5251,22 @@ export function computeVisualOrder(state: {
     })(),
   });
   if (mode === "bucket") {
-    const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
-    const rest = base.filter((s) => !s.is_pinned);
-    const { labelGroups, projectGroups } = groupSessionsForLabelView(rest, state.buckets, bucketByConv);
+    const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);
     return [
-      ...pinned,
       ...labelGroups.flatMap((g) => (collapsed[`bucket_${g.bucket._id}`] ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`bucketproj_${g.name}`] ? [] : g.items)),
     ];
   }
   if (mode === "plan") {
-    const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
-    const rest = base.filter((s) => !s.is_pinned);
-    const { planGroups, projectGroups } = groupSessionsByPlan(rest);
+    const { planGroups, projectGroups } = groupSessionsByPlan(base);
     return [
-      ...pinned,
       ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
     ];
   }
   if (isOrgLensMode(mode)) {
-    const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
-    const rest = base.filter((s) => !s.is_pinned);
-    const { groups, projectGroups } = groupSessionsForOrgLens(mode, rest, orgLensSourcesOf(state));
+    const { groups, projectGroups } = groupSessionsForOrgLens(mode, base, orgLensSourcesOf(state));
     return [
-      ...pinned,
       ...groups.flatMap((g) => (collapsed[`${mode}_${g.key}`] ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`${mode}proj_${g.name}`] ? [] : g.items)),
     ];
@@ -5841,6 +5848,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   sendEscape: (convId: string) => Promise<any>;
   startResourceOffload: (args: ResourceOffloadIntent) => Promise<any>;
   cancelResourceOffload: (batchId: string) => Promise<any>;
+  setSessionBackground: (deviceId: string, sessionId: string, background: boolean) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
   // Daemon commands tracked as sessionCommands rows keyed by requestId (see
   // lib/sessionCommands): the row paints on the call and the echo settles it.
@@ -6712,6 +6720,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
      *  always a grant this app holds itself; the codecast computer grants have
      *  no part in a call. */
     errorFix: AppPermissionKind | null;
+    /** The media is gone and coming back under a seat that never moved:
+     *  LiveKit retrying its own connection, or the call manager joining the
+     *  room again after LiveKit gave up. `phase` stays "connected" through it
+     *  (a drop is not the call ending); this is what the surfaces show. */
+    reconnecting?: boolean;
     /** The room this window last hung up on, and when. The server's seat and
      *  rings for it outlive the press by a round trip; the face row reads
      *  them as gone from here (lib/faces/faceRow `leftRoom`). */
@@ -9777,13 +9790,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const hasTriggers = (state.scheduleNavSets?.triggerOrder?.length ?? 0) > 0;
     const lensSrc = orgLensSourcesOf(state);
     const lensRows = Object.values(state.sessions) as InboxSession[];
-    const cycle: Array<InboxViewMode> = [
-      "grouped", "recent", "time",
-      ...(hasBuckets ? ["bucket" as const] : []),
-      ...(hasPlans ? ["plan" as const] : []),
-      ...ORG_LENS_MODES.filter((m) => orgLensAvailable(m, lensRows, lensSrc)),
-      ...(hasTriggers ? ["trigger" as const] : []),
-    ];
+    const cycle = inboxViewModes({
+      hasLabels: hasBuckets,
+      hasPlans,
+      orgLenses: ORG_LENS_MODES.filter((m) => orgLensAvailable(m, lensRows, lensSrc)),
+      hasTriggers,
+    });
     state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
   },
   setSessionManualOrder: (id: string, key: number) => get().setSessionManualOrders({ [id]: key }),
@@ -10878,6 +10890,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const batch = this.migrationBatches?.find(b => b.batch_id === batchId);
     if (batch) cancelResourceBatch(batch, requested_at);
     return { requested_at };
+  }),
+
+  setSessionBackground: asyncAction(function (this: Draft, deviceId: string, sessionId: string, background: boolean) {
+    const row = Object.values(this.machineResources ?? {}).find((r: any) => r.device_id === deviceId) as any;
+    if (!row) return;
+    const rest = (row.background_sessions ?? []).filter((id: string) => id !== sessionId);
+    row.background_sessions = background ? [...rest, sessionId] : rest;
   }),
 
   hibernateSession: asyncAction(function (this: Draft, requestId: string, convId: string, _sessionId: string, _ownerDeviceId: string) {
@@ -15459,12 +15478,12 @@ if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
 export const __createInboxStoreForTests = createInboxStore;
 const windowBindings = () => ({
   _heldOverlayFacts, recentlyRequestedPendingMessages, resolvedSessionPreparations, recentThawTimer, _userMsgsProbed, _idbHydrating, hydrationEpoch, _lastParityCheckAt, deferredDeletedSessions,
-  _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
+  _membershipKey, _membershipVal, _visibleMemo, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
 });
 /** The live per-window bindings (collections by reference), and set() for the ones a window swaps by value. */
 export const __inboxStoreWindowBindings = {
   get: windowBindings,
   set(s: ReturnType<typeof windowBindings>): void {
-    ({ _heldOverlayFacts, recentThawTimer, hydrationEpoch, _lastParityCheckAt, _membershipKey, _membershipVal, _visibleKey, _visibleVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo } = s);
+    ({ _heldOverlayFacts, recentThawTimer, hydrationEpoch, _lastParityCheckAt, _membershipKey, _membershipVal, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo } = s);
   },
 };

@@ -5,6 +5,9 @@ const crons = cronJobs();
 
 crons.interval("recover pending sync delivery", { minutes: 1 }, (internal as any).syncOutbox.recover, {});
 
+// Read Expo push receipts, where a revoked APNs key shows (pushReceipts.ts).
+crons.interval("check push receipts", { minutes: 30 }, (internal as any).pushReceipts.sweep, {});
+
 // The session lifecycle trail keeps 60 days (conversationEvents.ts).
 crons.interval("prune conversation events", { hours: 6 }, (internal as any).conversationEvents.prune, {});
 

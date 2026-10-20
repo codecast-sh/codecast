@@ -6,7 +6,7 @@ import type { ThreadRow } from "./roomThreadModel";
 import "./arrival.css";
 
 /** How long a peek stays when nobody touches it, and after the pointer leaves. */
-const SHOW_MS = 7000;
+const SHOW_MS = 15000;
 const LINGER_MS = 2500;
 const LEAVE_MS = 160;
 

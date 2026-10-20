@@ -1,8 +1,8 @@
 import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage } from "@codecast/shared/contracts";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import type { SentFileData } from "../tools/SentFileBlock";
+import type { SentFileData } from "@codecast/shared/files";
 import type { ChatWakePrompt, HuddleSummaryTag } from "../sessionMessage";
-import type { ExternalEventRecord } from "../../lib/externalEvents";
+import type { ExternalEventRecord } from "../../lib/externalEventRecord";
 import type { SessionHandoffPrompt } from "../../lib/sessionHandoff";
 
 // View density for the conversation. The first three render the message feed
