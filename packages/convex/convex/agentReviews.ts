@@ -750,3 +750,35 @@ export const correctDoubledCosts = internalMutation({
     return { fixed, cursor: page.isDone ? null : page.continueCursor };
   },
 });
+
+/** An agent judge's filing so far, counted page by page (run with packages/convex/run.sh): live findings, the problems they sit in, held ones, keys filed twice. */
+export const filingCounts = internalAction({
+  args: { workspace: v.string(), judge: v.string() },
+  handler: async (ctx, args) => {
+    const tasks = new Set<string>();
+    const keys = new Map<string, number>();
+    let live = 0, held = 0, retired = 0;
+    let cursor: string | null = null;
+    for (;;) {
+      const page: { rows: Array<{ task: string | null; key: string; retired: boolean }>; cursor: string | null } = await ctx.runQuery(internal.agentReviews.filingPage, { workspace: args.workspace, judge: args.judge, cursor });
+      for (const r of page.rows) {
+        if (r.retired) { retired++; continue; }
+        live++;
+        if (r.task) tasks.add(r.task); else held++;
+        keys.set(r.key, (keys.get(r.key) ?? 0) + 1);
+      }
+      if (!page.cursor) break;
+      cursor = page.cursor;
+    }
+    return { live, problems: tasks.size, held, retired, doubled: [...keys.values()].filter((n) => n > 1).length };
+  },
+});
+
+export const filingPage = internalQuery({
+  args: { workspace: v.string(), judge: v.string(), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("signals").withIndex("by_workspace_subject", (q: any) => q.eq("workspace", args.workspace).eq("subject", args.judge)).paginate({ cursor: args.cursor, numItems: 400 });
+    const rows = (page.page as Doc<"signals">[]).filter((r) => r.source === `judge:${args.judge}`).map((r) => ({ task: r.task_id ? String(r.task_id) : null, key: r.fingerprint, retired: !!r.retired || !!r.merged_into }));
+    return { rows, cursor: page.isDone ? null : page.continueCursor };
+  },
+});
