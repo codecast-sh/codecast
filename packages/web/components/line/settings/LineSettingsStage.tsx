@@ -11,6 +11,8 @@ import { lineFilterParam } from "../../../lib/line/lineWorkspaceUrl";
 import type { LineProject, RollupRow } from "../../../lib/lineFlow";
 import { NO_PROJECT } from "../../../lib/lineFlow";
 import { LineSettingsPage } from "./LineSettingsPage";
+import { LineStarts } from "./LineStarts";
+import { useSearchParams } from "next/navigation";
 
 /** The projects whose problems a line works, read off the same process index the header's picker uses. */
 export function projectsOfLine(line: string | null, rollups: ReadonlyArray<RollupRow>, processOf: (projectId: string) => string): string[] {
@@ -31,7 +33,10 @@ export function LineSettingsStage({ projectId, line, lines, projects, rollups, p
   /** The settings address for a project (and the line it runs). */
   href: (patch: { project?: string | null; graph?: string | null }) => string;
 }) {
+  // Who starts work on every line (?section=starts): its own page, whatever line the header draws.
+  const section = useSearchParams()?.get("section");
   const running = projectsOfLine(line, rollups, processOf);
+  if (section === "starts") return <LineStarts projects={projects} rollups={rollups} />;
   const pick = projectId ?? (running.length === 1 ? running[0] : null);
   const project = pick ? projects.find((p) => p._id === pick) ?? null : null;
   if (project) {
@@ -67,6 +72,7 @@ export function LineSettingsStage({ projectId, line, lines, projects, rollups, p
     <div className="lw-stage-fill lset-pick" data-lset-pick="line">
       <div className="lset-head"><h2 className="lset-head-t">Settings</h2><span className="lset-dim">{rows.length ? "pick a line" : "no line has run here yet"}</span></div>
       <ul className="lset-pick-list" role="list">
+        <li><Link href="/line/settings?section=starts" className="lset-pick-row" data-lset-pick-row="starts"><span>Who starts work</span><span className="lset-dim">every line's switch and limits</span></Link></li>
         {rows.map(({ g, projects: ps }) => (
           <li key={g.key}>
             <Link href={href(ps.length === 1 ? { project: param(ps[0]), graph: g.key } : { graph: g.key })} className="lset-pick-row" data-lset-pick-row={g.key}>
