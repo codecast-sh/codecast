@@ -217,6 +217,7 @@ import type * as lib_eventFilterValidator from "../lib/eventFilterValidator.js";
 import type * as lib_expectationsApply from "../lib/expectationsApply.js";
 import type * as lib_externalAuthor from "../lib/externalAuthor.js";
 import type * as lib_fileChangeBody from "../lib/fileChangeBody.js";
+import type * as lib_findingStanding from "../lib/findingStanding.js";
 import type * as lib_followView from "../lib/followView.js";
 import type * as lib_gateChoices from "../lib/gateChoices.js";
 import type * as lib_gitRefs from "../lib/gitRefs.js";
@@ -722,6 +723,7 @@ declare const fullApi: ApiFromModules<{
   "lib/expectationsApply": typeof lib_expectationsApply;
   "lib/externalAuthor": typeof lib_externalAuthor;
   "lib/fileChangeBody": typeof lib_fileChangeBody;
+  "lib/findingStanding": typeof lib_findingStanding;
   "lib/followView": typeof lib_followView;
   "lib/gateChoices": typeof lib_gateChoices;
   "lib/gitRefs": typeof lib_gitRefs;

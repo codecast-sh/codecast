@@ -33,9 +33,12 @@ const restoreGlobals = replaceGlobals({
   Element: dom.window.Element,
   Node: dom.window.Node,
   MutationObserver: dom.window.MutationObserver,
+  ResizeObserver: class { observe() {} disconnect() {} },
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   IS_REACT_ACT_ENVIRONMENT: true,
 });
+// jsdom lays nothing out, so it has no element scrolling.
+dom.window.HTMLElement.prototype.scrollTo = () => {};
 afterAll(() => {
   closeDomWindow(dom);
   restoreGlobals();

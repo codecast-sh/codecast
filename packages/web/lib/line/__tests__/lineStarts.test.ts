@@ -1,7 +1,7 @@
-// Who starts work (LineStarts): each role that leads a project with a line is one row, with its projects and their
+// Who starts work (lib/line/lineStarts): each role that leads a project with a line is one row, with its projects and their
 // waiting and ready problems summed; the review of a change of limits names only what changes and what it starts.
 import { describe, expect, test } from "bun:test";
-import { limitsLedger, roleLines } from "../LineStarts";
+import { limitsLedger, roleLines } from "../lineStarts";
 
 const role = (id: string, handle: string, projects: string[], over: Record<string, unknown> = {}) => ({
   _id: id, short_id: `or-${id}`, scope_type: "team", host_user_id: "u", name: `${handle} lead`, handle, status: "active",

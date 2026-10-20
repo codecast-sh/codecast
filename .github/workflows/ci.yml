@@ -551,6 +551,7 @@ jobs:
           src/daemon.watchdog-supervision.test.ts
           src/desktopUpdate.test.ts
           src/disclaim.test.ts
+          src/heicImage.test.ts
           src/remote/device.async.test.ts
           src/resourceMonitor.parseEtime.test.ts
           src/resourceMonitor.test.ts

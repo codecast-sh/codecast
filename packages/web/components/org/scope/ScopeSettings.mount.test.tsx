@@ -29,7 +29,8 @@ async function verify() {
   const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
   mock.module("../../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
   mock.module("../../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: undefined }) }));
-  mock.module("../../../hooks/useSyncWorkflows", () => ({ useWorkflows: () => ({ workflows: [] }) }));
+  const realSyncWorkflows = { ...(await import("../../../hooks/useSyncWorkflows")) };
+  mock.module("../../../hooks/useSyncWorkflows", () => ({ ...realSyncWorkflows, useWorkflows: () => ({ workflows: [] }) }));
   mock.module("../../../hooks/useCoarseNow", () => ({ useCoarseNow: () => Date.now(), useNowWhen: () => Date.now() }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   // Keep the module's other exports: mock.module is process wide in a bun run.

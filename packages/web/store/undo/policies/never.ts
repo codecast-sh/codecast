@@ -263,6 +263,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   stopLineRun: never("machine control: it ends a run on its machine; a new run is the way back"),
   landLineRun: never("machine control: it picks a run up at Rebase on its machine and lands the fix; a revert is the way back"),
   resumeLineRun: never("machine control: it restarts a run's runner on its machine; the run itself is the way back"),
+  deployLine: never("ships code: it starts a deploy on the target; a new deploy of the previous sha is the way back"),
   removeTaskStub: never("internal: takes back a create the server refused, which never landed"),
   askLineAgent: never("machine control: it files the cause and starts its run in one write; cancelling the run is the way back"),
   tryLineStep: never("machine control: the graph's machine runs each chosen case at once; the try's rows are its record"),
