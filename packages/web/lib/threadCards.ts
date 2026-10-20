@@ -302,7 +302,7 @@ export function sessionCards(sessions: InboxSession[]): ThreadCardModel[] {
 export function questionCards(decisions: SessionDecisionItem[]): ThreadCardModel[] {
   const out: ThreadCardModel[] = [];
   for (const d of decisions) {
-    if (d.status !== "pending") continue;
+    if (d.status !== "pending" || d.in_queue === false) continue;
     out.push({
       id: `question:${d._id}`,
       kind: "question",

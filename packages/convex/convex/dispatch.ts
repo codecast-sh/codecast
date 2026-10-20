@@ -1,4 +1,5 @@
 import { internalMutation, mutation, syncAckPositions, syncAckReceipts } from "./functions";
+import { requestDeployCore } from "./deploys";
 import { noteWriteCause } from "./lifecycleEvents";
 import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
@@ -6,7 +7,7 @@ import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
 import { relateCore } from "./taskLinks";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
-import { guardClientResolution, hostedAnswerRefusal, passCore, type PassTarget, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
+import { guardClientResolution, hostedAnswerRefusal, passCore, type PassTarget, unassignCore, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { discussCore } from "./decisionDiscussion";
 import { sendLineChatCore } from "./lineChat";
@@ -704,6 +705,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   reopenDecision: async (ctx, userId, [decisionId]: [string]) => reopenCore(ctx, userId, decisionId as Id<"session_decisions">),
   // A person hands an open question to a teammate or a role; refused by return.
   passDecision: async (ctx, userId, [decisionId, to]: [string, PassTarget]) => passCore(ctx, userId, decisionId, to),
+  // A person takes a pass back: the decision is routed as its session would route it now.
+  unassignDecision: async (ctx, userId, [decisionId]: [string]) => unassignCore(ctx, userId, decisionId),
   // A person's words to the session that owns a decision (decisionDiscussion.ts).
   // A refusal is returned, not thrown: the outbox would redrive a throw forever.
   discussDecision: async (ctx, userId, [decisionId, text, clientId]: [string, string, string]) =>
@@ -1797,6 +1800,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   landLineRun: async (ctx, userId, [runId]: [string]) => {
     if (!isServerId(runId)) throw new ConvexError("The run is still being created");
     return await landAgainCore(ctx, userId, runId as Id<"workflow_runs">);
+  },
+  // "Deploy" on the Line page's Deploys view (deploys.md DP2): one deploy sending the project's waiting fixes, run on the machine that publishes its line.
+  deployLine: async (ctx, userId, [clientKey, projectId]: [string, string]) => {
+    if (!isServerId(projectId)) throw new ConvexError("The project is still being created");
+    return await requestDeployCore(ctx, userId as Id<"users">, projectId, { clientKey });
   },
   // "Stop the run" on a run far past its usual time: it ends as a person's cancel, and its task says so.
   stopLineRun: async (ctx, userId, [runId]: [string]) => {
@@ -3060,6 +3068,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   cancelResourceOffload: async (ctx, _userId, [batch_id], result) => {
     return ctx.runMutation!(api.sessionMigrations.cancelBatch, { batch_id, requested_at: result.requested_at });
+  },
+  setSessionBackground: async (ctx, _userId, [device_id, session_id, background]: [string, string, boolean]) => {
+    return ctx.runMutation!(api.machineResources.setSessionBackground, { device_id, session_id, background });
   },
   hibernateSession: async (ctx, _userId, [requestId, convId, sessionId, ownerDeviceId]: [string, string, string, string]) => {
     return await ctx.runMutation!((api as any).sessionCommands.hibernate, {

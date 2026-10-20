@@ -26,12 +26,12 @@ export function lineFrom(path: string | null | undefined): string | null {
   return path && /^\/line(?:[/?#]|$)/.test(path) ? path : null;
 }
 
-const LINE_VIEW_NAME: Record<string, string> = { foryou: "For you", inbox: "For you", problems: "Problems", runs: "Problems", timeline: "Problems", line: "Line", sources: "Line", process: "Line", graph: "Line", notebook: "Line", chat: "Line" };
+const LINE_VIEW_NAME: Record<string, string> = { foryou: "Decisions", inbox: "Decisions", problems: "Problems", runs: "Problems", timeline: "Problems", line: "Line", sources: "Line", process: "Line", graph: "Line", notebook: "Line", chat: "Line" };
 
-/** The back link's words: the /line view it returns to, by the nav's own name (For you without a view). */
+/** The back link's words: the /line view it returns to, by the nav's own name (Decisions without a view). */
 export function lineFromName(from: string): string {
   const view = new URLSearchParams(from.split("?")[1] ?? "").get("view");
-  return (view && LINE_VIEW_NAME[view]) || "For you";
+  return (view && LINE_VIEW_NAME[view]) || "Decisions";
 }
 
 /** The `ws` an address names, when it is a workspace the viewer is in (their own, or a team they belong to); else

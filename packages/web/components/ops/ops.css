@@ -109,12 +109,15 @@
   display: flex; align-items: center; font-size: 10.5px; color: var(--sol-text-dim);
   border-right: 1px solid var(--sol-border);
 }
-.ops-tl-release span {
+.ops-tl-release span, .ops-tl-release a {
   position: absolute; bottom: 3px; left: 3px; font-size: 9.5px; padding: 0 4px; border-radius: 3px; white-space: nowrap;
   color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 12%, var(--sol-bg-alt));
 }
 /* A deploy near the right edge labels to its left, so the label stays whole. */
-.ops-tl-release[data-edge="end"] span { left: auto; right: 3px; }
+.ops-tl-release[data-edge="end"] span, .ops-tl-release[data-edge="end"] a { left: auto; right: 3px; }
+/* A deploy's label opens it: the overlay passes pointers through, the label takes them. */
+.ops-tl-release a { pointer-events: auto; text-decoration: none; }
+.ops-tl-release a:hover { background: color-mix(in srgb, var(--sol-green) 24%, var(--sol-bg-alt)); }
 .ops-tl-now { position: absolute; top: 0; bottom: 0; right: 0; border-right: 2px solid color-mix(in srgb, var(--sol-red) 60%, transparent); }
 
 .ops-seg { display: inline-flex; border: 1px solid var(--sol-border); border-radius: 6px; overflow: hidden; }

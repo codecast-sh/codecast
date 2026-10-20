@@ -12,6 +12,7 @@ import { recordHandStart } from "./spawn";
 import { insertTaskComment } from "./tasks";
 import { createRunCore, LIVE_RUN_STATUSES, queueRunOnDaemon } from "./workflow_runs";
 import { lineSlugOf } from "./orgRoles";
+import { isLineRunSlug, lineVersionFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
 import { allRolesInBoundary, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
@@ -292,7 +293,8 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
   const standing = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
   const place = seatPlace(role, standing);
   const hostId: Id<"users"> = place.runner_user_id;
-  const workflow = await ctx.db
+  // A line run on a problem takes the version that serves its scenario (workflows.lineVersionFor).
+  const workflow = (isLineRunSlug(slug) ? await lineVersionFor(ctx, hostId, task) : null) ?? await ctx.db
     .query("workflows")
     .withIndex("by_user_slug", (q: any) => q.eq("user_id", hostId).eq("slug", slug))
     .first();
@@ -313,7 +315,7 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
     now,
   });
 
-  await queueRunOnDaemon(ctx, hostId, runId, { slug, now });
+  await queueRunOnDaemon(ctx, hostId, runId, { slug: workflow?.slug ?? slug, now });
 
   // The run's primary session is a hand of the role: it counts against
   // caps.hands_per_day and carries org_role_id, the same as a spawn.

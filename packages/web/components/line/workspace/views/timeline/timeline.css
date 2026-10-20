@@ -111,6 +111,9 @@ span.lwt-now { display: inline-flex; align-items: center; gap: 4px; }
 .lwt-close:hover line { stroke-dasharray: none; }
 
 .lwt-deploy { cursor: pointer; }
+.lwt-other-deploy { cursor: pointer; }
+.lwt-other-deploy line { stroke: color-mix(in srgb, var(--lwt-live) 38%, transparent); stroke-width: 1; }
+.lwt-other-deploy:hover line { stroke: var(--lwt-live); stroke-width: 1.5; }
 .lwt-deploy line { stroke: var(--lwt-live); stroke-width: 1.5; stroke-dasharray: 4 3; }
 .lwt-deploy path { fill: var(--lwt-live); }
 .lwt-deploy text { font-size: 10px; font-weight: 700; fill: var(--lw-on-accent); pointer-events: none; }

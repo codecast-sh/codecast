@@ -5,7 +5,7 @@ const q = (s: string) => new URLSearchParams(s);
 
 describe("the line app's selection in the URL", () => {
   test("reads every key; no view is For you, an unknown one too; no project is every project", () => {
-    expect(readLineSelection(q("project=pr-1&view=problems&graph=agentwatch&step=prove&run=r1&case=t1&need=sd-6"))).toEqual({ view: "problems", mode: "table", project: "pr-1", graph: "agentwatch", step: "prove", tab: null, run: "r1", case: "t1", source: null, finding: null, row: null, ask: false, card: null, decision: null, need: "sd-6", status: null, process: null, quiet: false, found: null, q: null, sort: null, win: null, show: null, stage: null, item: null });
+    expect(readLineSelection(q("project=pr-1&view=problems&graph=agentwatch&step=prove&run=r1&case=t1&need=sd-6"))).toEqual({ view: "problems", mode: "table", project: "pr-1", graph: "agentwatch", step: "prove", tab: null, run: "r1", case: "t1", source: null, finding: null, row: null, ask: false, card: null, decision: null, need: "sd-6", status: null, process: null, quiet: false, found: null, q: null, sort: null, win: null, show: null, stage: null, item: null, who: null, kind: null, area: null, order: null, group: null, deploy: null });
     expect(readLineSelection(q("step=dissolve&steptab=try")).tab).toBe("try");
     expect(readLineSelection(q("step=dissolve&tab=try")).tab).toBe("try");
     expect(readLineSelection(q("tab=line&step=dissolve")).tab).toBeNull();
@@ -270,5 +270,16 @@ describe("a leading stage open over the Map", () => {
   });
   test("a view's home closes the stage", () => {
     expect(lineSelectionSearch(new URLSearchParams("view=line&mode=map&stage=judges&item=comms"), lineViewHome("line"))).toBe("?view=line&mode=map");
+  });
+});
+
+describe("For you's list in the address", () => {
+  test("who, kind, area, order and group ride with For you and leave with it", () => {
+    const on = lineSelectionSearch(q(""), { who: "me", kind: "judge", area: "p1", order: "age", group: "who" });
+    expect(readLineSelection(q(on))).toMatchObject({ who: "me", kind: "judge", area: "p1", order: "age", group: "who" });
+    const next = lineSelectionSearch(q(on), { need: "sd-4" });
+    expect(readLineSelection(q(next))).toMatchObject({ who: "me", order: "age", need: "sd-4" });
+    const away = lineSelectionSearch(q(next), { view: "problems" });
+    expect(readLineSelection(q(away))).toMatchObject({ who: null, kind: null, area: null, order: null, group: null });
   });
 });

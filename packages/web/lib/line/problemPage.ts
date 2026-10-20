@@ -89,7 +89,7 @@ export type ProblemBand =
   | { kind: "stalled"; stage: string; step: string | null; node: string | null; silentMs: number; last: string | null; runId: string | null }
   | { kind: "running"; stage: string; doing: string; step: string; ms: number; runId: string | null; /** The live step's session, when it has one. */ sessionId?: string | null }
   | { kind: "merged"; mergedAt: number; link: string | null; sha: string | null; recorded: "known" | "none" | "unread"; /** The project's newest recorded production deploy, when any is. */ lastDeploy: { at: number; url: string | null } | null }
-  | { kind: "production"; mergedAt: number | null; link: string | null; sha: string | null; liveAt: number; target: string | null; deployUrl: string | null; watchEnd: number | null; watch: "watching" | "quiet" | "reopened" | null; since: number; sinceOff: number;
+  | { kind: "production"; mergedAt: number | null; link: string | null; sha: string | null; liveAt: number; target: string | null; deployUrl: string | null; deployRef: string | null; watchEnd: number | null; watch: "watching" | "quiet" | "reopened" | null; since: number; sinceOff: number;
       /** The line's own runs that failed on the fault this problem is about after it went live (lineFaults): it is not quiet. */
       faults: LineFault[] }
   /** Approved and the run went on to ship, but no merge is recorded: the fix sits on its branch. `mergeOff`: the ship
@@ -387,7 +387,7 @@ export function problemBand(i: BandInput): ProblemBand {
       const d = ship.deploys[0];
       const watch = shownWatches(h).find((w) => w.runId === ship.runId) ?? null;
       const back = h.regressions.find((r) => r.afterRunId === ship.runId);
-      return { kind: "production", mergedAt: merge?.at ?? null, link: merge?.prUrl ?? null, sha: merge?.sha || null, liveAt: d.at, target: d.target, deployUrl: d.url, watchEnd: watch?.end ?? null, watch: watch && watch.state !== "unknown" ? watch.state : null, since: back?.count ?? 0, sinceOff: i.offTopic ?? 0, faults: faultsAfter(issue, d.at) };
+      return { kind: "production", mergedAt: merge?.at ?? null, link: merge?.prUrl ?? null, sha: merge?.sha || null, liveAt: d.at, target: d.target, deployUrl: d.url, deployRef: d.ref ?? null, watchEnd: watch?.end ?? null, watch: watch && watch.state !== "unknown" ? watch.state : null, since: back?.count ?? 0, sinceOff: i.offTopic ?? 0, faults: faultsAfter(issue, d.at) };
     }
     if (merge && !reopenedSince) return { kind: "merged", mergedAt: merge.at, link: merge.prUrl, sha: merge.sha || null, recorded: h.coverage.state, lastDeploy: lastDeployOf(h) };
   }

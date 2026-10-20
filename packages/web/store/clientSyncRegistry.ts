@@ -270,8 +270,13 @@ export const CLIENT_SYNC_REGISTRY = {
   // flips status on the draft and the resolution fields ride the generic
   // patch rail to the session_decisions table. Everything structural
   // (question, options, context) is server-owned and stays undispatchable.
+  // The one home of every decision row: the viewer's queue (listForUser) and
+  // the team's open line decisions the Line page reads (listOpenForLines),
+  // each feed pruning only its own rows (hooks/useSyncSessionDecisions);
+  // `in_queue` marks the viewer's own, which the queue surfaces read.
   sessionDecisions: {
     writtenBy: ["sessionDecisions"],
+    feeds: ["sessionDecisions.listForUser", "sessionDecisions.listOpenForLines"],
     persistence: { kind: "collection", key: "sessionDecisions" },
     hydration: { phase: "deferred" },
     localFirst: true,
@@ -425,6 +430,14 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     sync: { isDelta: true, deepFields: ["pass", "room", "last"] },
     feeds: ["lineStages.dispatch"],
+  },
+  // An agent judge's reviews (lineStages.reviews): the queue by status, what
+  // runs where, the newest finished. Fed only while the judge's page is open.
+  lineReviews: {
+    persistence: { kind: "collection", key: "lineReviews" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["counts", "running", "recent", "failed", "averages"] },
+    feeds: ["lineStages.reviews"],
   },
   // Saved views: the sidebar rail and its pinned rows. A pin lives in client
   // UI state and renders offline, but its click resolves the view row from
@@ -844,10 +857,10 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["observed", "reopened", "sources"] },
     feeds: ["lineWorkspace.occurrences"],
   },
-  // Every line card on a project's causes, answered by anyone (the card's
-  // words and answer, never its body): what each attempt proposed. The
-  // viewer's own queue (sessionDecisions) is a card's live home; these fill
-  // in the cards it does not hold. Per project, so delta.
+  // Every settled line card on a project's causes, answered by anyone (the
+  // card's words and answer, never its body): what each attempt proposed. An
+  // open card lives in sessionDecisions, fed the team's open line decisions.
+  // Per project, so delta.
   lineCards: {
     persistence: { kind: "collection", key: "lineCards" },
     hydration: { phase: "deferred" },
@@ -855,11 +868,14 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["card", "options"] },
     feeds: ["lineWorkspace.cards"],
   },
+  // Deploy objects (deploys.md): one row per project a deploy belongs to.
+  // Deploy on the Deploys view paints a stub keyed by client_key, which the
+  // server row supersedes.
   lineDeploys: {
     persistence: { kind: "collection", key: "lineDeploys" },
     hydration: { phase: "deferred" },
     indexes: "_id, project_id",
-    sync: { isDelta: true },
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["carries", "after", "commits"] },
     feeds: ["lineWorkspace.deploys"],
   },
   // The viewer's chat with a project's line (convex lineChat.thread): who
@@ -1002,6 +1018,16 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "pageEmbeds" },
     sync: { isDelta: true },
     feeds: ["artifacts.embedInfo"],
+  },
+  // The pages a conversation published (messages.getConversationPages), one
+  // row per conversation viewed, keyed by its Convex id: `pages` is the slugs
+  // and when each joined. The pages themselves live in pageEmbeds. Delta:
+  // each open conversation feeds its own row.
+  conversationPages: {
+    persistence: { kind: "collection", key: "conversationPages" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["pages"] },
+    feeds: ["messages.getConversationPages"],
   },
   // The anchor space, one row per scope key ("user" | "team:<id>"), keyed by
   // it. Delta so the scopes coexist; each push replaces its own row.
@@ -1287,10 +1313,11 @@ export const CLIENT_SYNC_REGISTRY = {
   // (getConversationPendingMessage). One row keyed by conversation id;
   // transient — never persisted (a reload re-derives it).
   pendingMessageStatus: {
-    // inflight (every waiting row, the shared queue) changes while the
-    // primary row's scalars stay put: a new queued message, a reorder, a
-    // merge. The engine skips nested arrays unless asked to compare them.
-    sync: { isDelta: true, deepFields: ["inflight"] },
+    // inflight (every waiting row, the shared queue) and delivered (rows
+    // whose echo may still be on its way) change while the primary row's
+    // scalars stay put: a new queued message, a reorder, a merge, a delivery.
+    // The engine skips nested arrays unless asked to compare them.
+    sync: { isDelta: true, deepFields: ["inflight", "delivered"] },
     feeds: ["pendingMessages.getConversationPendingMessage"],
   },
   // The message feed (getMessageFeed): the viewer's and teammates' user
@@ -1847,6 +1874,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   trialSpend: "shared",
   lineStages: "shared",
   lineDispatch: "shared",
+  lineReviews: "shared",
   shipTargets: "shared",
   savedViews: "shared",
   mods: "shared",
@@ -1902,6 +1930,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   opsAppCalls: "shared",
   artifacts: "shared",
   pageEmbeds: "shared",
+  conversationPages: "shared",
   anchorSpaces: "shared",
   anchors: "shared",
   sessionThreads: "shared",

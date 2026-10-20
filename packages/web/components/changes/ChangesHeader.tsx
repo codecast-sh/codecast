@@ -4,6 +4,8 @@
 // still in progress. Every filter writes the URL.
 import { ChevronDown, ListFilter } from "lucide-react";
 import { useState, type ReactNode, type RefObject } from "react";
+import Link from "next/link";
+import { entityRoute } from "../../lib/entityLinks";
 import type { LiveRow, WorksRow } from "../../hooks/useSyncChanges";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatDateSmart } from "../../lib/utils";
@@ -118,11 +120,19 @@ function LiveLine({ live }: { live: readonly LiveRow[] }) {
         const label = l.version ?? l.sha.slice(0, 7);
         const tip = `${l.surface} ${label}, ${l.kind === "deploy" ? "deployed" : "shipped"} ${formatDateSmart(l.at)}${l.waiting ? `. ${plural(l.waiting, "story", "stories")} landed since.` : ""}`;
         return (
-          <Tip key={l.surface} text={tip}>
-            <span className="tabular-nums">
-              {l.surface} <span className="text-sol-text/75">{label}</span>
-              {l.waiting > 0 && <span className="text-sol-text/40"> +{l.waiting}</span>}
-            </span>
+          <Tip key={l.surface} text={l.deploy ? `${tip} Opens ${l.deploy}.` : tip}>
+            {/* A deploy opens its deploy object: what it carried and what happened after (deploys.md). */}
+            {l.deploy ? (
+              <Link href={entityRoute("deploy", l.deploy) ?? "#"} className="tabular-nums hover:text-sol-green" data-deploy-ref={l.deploy}>
+                {l.surface} <span className="text-sol-text/75">{label}</span>
+                {l.waiting > 0 && <span className="text-sol-text/40"> +{l.waiting}</span>}
+              </Link>
+            ) : (
+              <span className="tabular-nums">
+                {l.surface} <span className="text-sol-text/75">{label}</span>
+                {l.waiting > 0 && <span className="text-sol-text/40"> +{l.waiting}</span>}
+              </span>
+            )}
           </Tip>
         );
       })}
