@@ -20,8 +20,9 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { agentStatusAt } from "../../lib/liveness";
 import { describeRoomLive } from "../../lib/calls/roomLabels";
 import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
+import { teamHasFeature } from "../../lib/teamFeatures";
 import { characterFor, identitySig } from "../../lib/sessionIdentity";
-import type { PalettePickTarget, PalettePickResult } from "../../lib/palettePick";
+import type { PalettePick, PalettePickTarget, PalettePickResult } from "../../lib/palettePick";
 
 // The two gestures that connect a huddle's words to the rest of the product:
 //
@@ -56,6 +57,7 @@ export function openFeedTargetPicker(opts: {
   // Also offer teammates and roles (the call's one "add" list): a role joins
   // as its standing agent's session, a teammate goes to `onPerson`.
   who?: { exclude: string[]; onPerson: (id: string) => void };
+  toggle?: PalettePick["toggle"];
   onPick: (t: FeedTarget, note?: string) => void;
 }) {
   const feed = opts.gesture === "feed";
@@ -66,6 +68,7 @@ export function openFeedTargetPicker(opts: {
       exclude: opts.who?.exclude,
       notePlaceholder: opts.withNote ? "Tell the agent what to do with it (optional)" : undefined,
       confirmLabel: feed ? "Add" : "Send",
+      toggle: opts.toggle,
       extras: [
         {
           key: "new-session",
@@ -283,9 +286,10 @@ export function useAddLiveFeed(opts: {
   const { roomKey, liveTranscriptId, routes, teamId, getRoom } = opts;
 
   return useCallback(
-    async (target: FeedTarget) => {
+    async (target: FeedTarget, opts?: { face?: boolean }) => {
       if (!roomKey) return;
       let route: { kind: "session" | "doc" | "slack"; target: string } | null = null;
+      const face = opts?.face === false ? { face: false } : {};
       if (target.kind === "session") route = { kind: "session", target: target.id };
       else if (target.kind === "doc") route = { kind: "doc", target: target.id };
       else if (target.kind === "slack") route = { kind: "slack", target: target.id };
@@ -336,6 +340,7 @@ export function useAddLiveFeed(opts: {
               kind: route.kind,
               target: route.target,
               mode: "live",
+              ...face,
             });
             return;
           } catch (err) {
@@ -357,7 +362,7 @@ export function useAddLiveFeed(opts: {
                 : "Join the huddle to start its transcription",
           );
         }
-        if (!(await startTranscribing(roomKey, [{ ...route, mode: "live" }]))) {
+        if (!(await startTranscribing(roomKey, [{ ...route, mode: "live", ...face }]))) {
           throw new Error("Could not start transcribing. Somebody else may be the scribe already; pick the feed again once their words show here.");
         }
       };
@@ -448,6 +453,20 @@ export function useAgentsInRoom(routes: Array<{ kind: string; target: string; ad
 // role joins as its standing agent; a session, a new agent or a Slack
 // channel joins as a live feed of the room's words. Whoever is already in
 // the room, already ringing, or already routed is left out of the list.
+const AGENT_FACE_PREF = "codecast:call-agent-face";
+function readAgentFacePref(): boolean {
+  try {
+    return localStorage.getItem(AGENT_FACE_PREF) !== "off";
+  } catch {
+    return true;
+  }
+}
+function writeAgentFacePref(on: boolean) {
+  try {
+    localStorage.setItem(AGENT_FACE_PREF, on ? "on" : "off");
+  } catch {}
+}
+
 export function useAddToCall(opts: {
   roomKey: string;
   liveTranscriptId: string | null;
@@ -471,11 +490,11 @@ export function useAddToCall(opts: {
     const { anchorTitle } = describeRoomLive(roomKey, useInboxStore.getState() as any);
     void ringInto(roomKey, [id], anchorTitle);
   };
-  const feed = (t: FeedTarget) => {
+  const feed = (t: FeedTarget, face?: boolean) => {
     setAdding(t);
     // addRoute/startScribe can refuse (room authorization, ended transcript);
     // a silent close-and-nothing is the one wrong outcome.
-    void addFeed(t)
+    void addFeed(t, { face })
       .catch((err: any) =>
         toast.error(
           err instanceof SessionCreatePendingError
@@ -494,7 +513,20 @@ export function useAddToCall(opts: {
         .map((o: any) => String(o.to_user)),
       ...routes.map((r) => r.target),
     ];
-    openFeedTargetPicker({ title: "Add to the call", gesture: "feed", showSlack: true, who: { exclude, onPerson: ring }, onPick: feed });
+    // Where the team has agent faces, the agent may come with its video
+    // avatar or as itself in the chat; the last choice is the next default.
+    let face = readAgentFacePref();
+    const facesOn = teamHasFeature(st.teams, teamId ?? st.clientState?.ui?.active_team_id, "agent_faces");
+    openFeedTargetPicker({
+      title: "Add to the call",
+      gesture: "feed",
+      showSlack: true,
+      who: { exclude, onPerson: ring },
+      toggle: facesOn
+        ? { label: "Video avatar", value: face, onChange: (v) => { face = v; writeAgentFacePref(v); } }
+        : undefined,
+      onPick: (t) => feed(t, facesOn ? face : undefined),
+    });
   };
   return { open, adding };
 }

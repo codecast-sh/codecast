@@ -100,9 +100,10 @@ describe("one daemon pass", () => {
       { moment: "mo-t_81", status: "ready" },
       { moment: "mo-boom", status: "waiting", error: "the extractor exited 3: no such thread" },
     ]);
-    const completes = posts.filter((p) => p.route === "/cli/moments/complete");
-    expect(completes[0].body).toMatchObject({ device_id: "dev-1", moment: "mo-t_81" });
-    expect(JSON.parse(completes[0].body.output).blocks).toHaveLength(1);
+    // Extractors run side by side, so the hand backs arrive in either order.
+    const complete = posts.find((p) => p.route === "/cli/moments/complete" && p.body.moment === "mo-t_81")!;
+    expect(complete.body).toMatchObject({ device_id: "dev-1", moment: "mo-t_81" });
+    expect(JSON.parse(complete.body.output).blocks).toHaveLength(1);
     const kept = path.join(shadowDir(), "product-app", "mo-t_81.json");
     expect(shadowDir().startsWith(data)).toBe(true);
     expect(JSON.parse(fs.readFileSync(kept, "utf8")).output.refs[0].id).toBe("t_81");

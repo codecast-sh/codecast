@@ -242,7 +242,7 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor, shareTeamI
           </span>
           {isActive && (
             <span className="flex items-center gap-1 shrink-0">
-              <LivePulseDot className="w-1.5 h-1.5" />
+              <LivePulseDot className="w-1.5 h-1.5" still />
               <span className="text-[8px] font-medium uppercase tracking-wider text-sol-green/70">live</span>
             </span>
           )}

@@ -145,7 +145,8 @@ export type ReplayBackfillStatus = (typeof REPLAY_BACKFILL_STATUSES)[number];
  * A source's one bulk import, as stored on its event_sources row. `started_at`
  * names the run: a page scheduled by an earlier run finds another value and
  * stops. `until` pins the list's end at the start, so pages walk a set that
- * new recordings do not shift; those are read on open, as always.
+ * new recordings do not shift; those come over in the run that follows a
+ * finished one (convex sources/replayBackfill.ts tendImport).
  */
 export interface ReplayBackfill {
   status: ReplayBackfillStatus;

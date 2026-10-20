@@ -44,7 +44,9 @@ export class LRUCache<K, V> {
     return this.cache.size;
   }
 
+  // A string key is its own identity; stringifying it would copy and escape
+  // every character on each lookup (message bodies run to kilobytes).
   private serialize(key: K): string {
-    return JSON.stringify(key);
+    return typeof key === "string" ? key : JSON.stringify(key);
   }
 }

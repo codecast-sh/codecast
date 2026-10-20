@@ -270,3 +270,13 @@ a.sd-row:hover { background: var(--lw-paper-2); }
 /* Fixed slots so times and verdicts line up down the list. */
 .sd-moment > .sd-dim.lw-num { min-width: 112px; text-align: right; }
 .sd-moment > .sd-verdict, .sd-moment > .sd-pill { min-width: 150px; }
+
+/* An agent review's transcript (AgentReviews.tsx): what the agent wrote reads as text; what it ran, read and thought folds to one line. */
+.rt-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rt-text { white-space: pre-wrap; font-size: var(--lw-fs-sm); line-height: 1.5; color: var(--lw-ink); padding: 8px 10px; background: var(--lw-card); border: 1px solid var(--lw-rule-2); border-radius: var(--lw-r); }
+.rt-fold summary { display: flex; gap: 8px; align-items: baseline; cursor: pointer; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); padding: 2px 10px; min-width: 0; }
+.rt-fold summary b { flex: none; font-weight: 600; color: var(--lw-ink-2); }
+.rt-fold summary span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-fold[data-kind="tool_use"] summary b { color: var(--lw-plum); }
+.rt-fold[data-error] summary b { color: var(--lw-bad); }
+.rt-fold pre { margin: 4px 10px 6px; padding: 8px 10px; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: var(--lw-fs-2xs); background: var(--lw-card-2); border: 1px solid var(--lw-rule-2); border-radius: var(--lw-r); }

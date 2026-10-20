@@ -28,7 +28,7 @@ describe("lane boot head", () => {
 
   test("its inline script flags <html data-lane> and drops the marketing title on a lane path only", async () => {
     const script = String((await headTags()).find((t) => t.tag === "script")?.children);
-    const marketing = "Codecast: the workspace for teams and their AI coding agents";
+    const marketing = "Codecast: all your coding agents in one workspace";
     const run = (pathname: string) => {
       const attrs: Record<string, string> = {};
       const document = { title: marketing, documentElement: { setAttribute: (k: string, v: string) => { attrs[k] = v; } } };
