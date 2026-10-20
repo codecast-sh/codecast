@@ -13,6 +13,7 @@ import { hookRefreshPlugin } from "./plugins/hookRefresh";
 import { contentOnlyHmrPlugin } from "./plugins/contentOnlyHmr";
 import { handoffBootPlugin } from "./plugins/handoffBoot";
 import { laneBootPlugin } from "./plugins/laneBoot";
+import { colorThemeBootPlugin } from "./plugins/colorThemeBoot";
 import { depsCacheGuardPlugin } from "./plugins/depsCacheGuard";
 import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
 import { tailwindInWorker } from "./plugins/tailwindWorker";
@@ -67,6 +68,9 @@ export default defineConfig(({ mode, command }) => ({
     // Puts the family token sheet and the lane flag into <head>, so a cold
     // load of a simple lane page opens on the lane's paper, not the app's splash.
     laneBootPlugin(),
+    // The default color theme's variables in <head>, so a device with no
+    // cached theme opens on the default palette, not on the stylesheet's.
+    colorThemeBootPlugin(),
     // codecast.sh/a/<slug> is a redirect to the branded artifact document the
     // Convex HTTP action serves (production: Hono route in server/index.ts).
     // Same behavior in dev so the path never falls through to the SPA shell.

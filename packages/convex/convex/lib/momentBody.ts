@@ -11,6 +11,11 @@ import { replaysBucketFromEnv, r2Presign } from "./r2";
  *  may hand it back already decoded: it is unzipped only when it still starts with gzip's magic bytes. Null when the
  *  bucket is not configured or the object is gone. */
 export async function readKeptBody(key: string | null): Promise<MomentRecord | null> {
+  return await readKeptJson<MomentRecord>(key);
+}
+
+/** Any JSON object kept in the replays bucket gzipped (a moment body, an agent review's transcript), read as readKeptBody reads a body. */
+export async function readKeptJson<T>(key: string | null): Promise<T | null> {
   const bucket = replaysBucketFromEnv();
   if (!key || !bucket) return null;
   const res = await fetch(await r2Presign(bucket, "GET", key, 300));

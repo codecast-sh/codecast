@@ -31,6 +31,7 @@ import { PHASE_ORDER, guessPhase } from "@codecast/shared/contracts/linePhases";
 import { stepLabel, type FailCause, type StepAdvice } from "./runReport";
 import { STAGE_WORDS } from "./stageTrack";
 import { askLine, type InboxGroup, type InboxKind, type InboxRow } from "./lineInbox";
+import type { DecisionChange } from "./decisionFacts";
 
 export type NeedKind = "decision" | "question" | "confirm" | "lapsed" | "stopped" | "review" | "unlanded" | "fixed" | "assigned" | "reask" | "duplicate";
 
@@ -88,6 +89,15 @@ export type LineNeed = {
   dups?: NeedDup[];
   /** For a duplicate: the older problem it is the same as, which it merges into. */
   dupOf?: { ref: string | null; caseId: string } | null;
+  /** For a decision: its row id (assigning names it), what answering it changes, who holds it, the people its
+   *  problem reached and the worst finding's severity (lib/line/decisionFacts). */
+  decisionId?: string | null;
+  change?: DecisionChange;
+  assignee?: string | null;
+  reach?: number | null;
+  severity?: number | null;
+  /** For a decision: what its run recommends (ship, revise, drop, ...), when its card says. */
+  recommend?: string | null;
 };
 
 /** A run whose step finished its work and had no next step (runReport finishedAtDeadEnd, the cause's `deadend:` key):
@@ -200,6 +210,7 @@ export function lineNeeds(groups: ReadonlyArray<InboxGroup>, of?: ProcessOf): Li
       title: r.title, name: r.name ?? null, problemRef: r.ref, caseId: r.caseId, projectId: r.projectId, process: of?.row(r) ?? null, since: r.at, runId: r.runId,
       decisionRef, cardRef, trial: !!r.trial, ...(r.publishes ? { publishes: true } : {}), note: r.note ?? null, fail: kind === "stopped" || kind === "review" ? r.fail ?? null : null, why: kind === "reask" ? r.hold ?? null : null, findings: r.findings ?? null, sha: kind === "fixed" ? r.sha ?? null : null,
       aliases: [r.cardId, r.cardRef, r.decisionRef].filter((x): x is string => !!x && x !== ref),
+      ...(kind === "decision" ? { decisionId: r.decisionId ?? null, change: r.change ?? "other", assignee: r.assignee ?? null, reach: r.reach ?? null, severity: r.severity ?? null, recommend: r.recommend ?? null } : {}),
     });
   }
   return out;
@@ -254,30 +265,9 @@ export const isPractice = (n: Pick<LineNeed, "kind" | "trial" | "publishes">): b
 export const needsOfLine = <N extends Pick<LineNeed, "process" | "projectId">>(needs: ReadonlyArray<N>, process: string | null | undefined, project?: string | null): N[] =>
   !process ? [...needs] : needs.filter((n) => n.process === process && (!project || n.projectId === project));
 
-/** "For you": the fixes the viewer is asked to decide that change the product (a trial's practice answers are not
- *  among them). The one count: the nav entry's, the reader's "N of M" and Problems' "Waiting on you". */
-export const needCount = (needs: ReadonlyArray<LineNeed>): number => needs.reduce((n, x) => n + (x.counted && !isPractice(x) ? 1 : 0), 0);
-
-export type NeedGroupKey = "decision" | "judging" | "practice";
-export type NeedGroup = { key: NeedGroupKey; label: string; needs: LineNeed[] };
-
-/** Each group named for what the person is asked, in their words. */
-export const NEED_GROUP_LABELS: Record<NeedGroupKey, string> = { decision: "Ship these fixes?", judging: "Change how we judge?", practice: "Trial: what would you do?" };
-
-/** The counted needs as For you lists them: the fixes to decide, then a trial's changes to its judging (an
- *  expectation or a judge fix, live once answered), then its practice answers apart; inside a group, oldest first.
- *  An uncounted need is never listed. */
-export function needGroups(needs: ReadonlyArray<LineNeed>): NeedGroup[] {
-  const oldest = (a: LineNeed, b: LineNeed) => (a.since ?? Infinity) - (b.since ?? Infinity);
-  const counted = needs.filter((n) => n.counted);
-  const groupOf = (n: LineNeed): NeedGroupKey => (isPractice(n) ? "practice" : n.trial && n.publishes ? "judging" : "decision");
-  return (["decision", "judging", "practice"] as const).map((key) => ({
-    key, label: NEED_GROUP_LABELS[key], needs: counted.filter((n) => groupOf(n) === key).sort(oldest),
-  })).filter((g) => g.needs.length > 0);
-}
-
-/** The needs in list order: what the reader's previous and next walk. */
-export const needOrder = (groups: ReadonlyArray<NeedGroup>): LineNeed[] => groups.flatMap((g) => g.needs);
+/** "For you": every open decision of the team's lines, a trial's included (the team's decision inbox lists them all).
+ *  The one count: the nav entry's, the list's and Problems' "Waiting on you". */
+export const needCount = (needs: ReadonlyArray<LineNeed>): number => needs.reduce((n, x) => n + (x.counted ? 1 : 0), 0);
 
 /** The need a ref names: the URL's `need`, or an older link's decision (sd-N or its row id), trial card or problem. */
 export function needForRef(needs: ReadonlyArray<LineNeed>, ref: string | null | undefined): LineNeed | null {

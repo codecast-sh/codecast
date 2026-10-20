@@ -66,6 +66,10 @@ export type PalettePick = {
   notePlaceholder?: string;
   // Label for the confirm button in the two-step flow. Defaults to "Send".
   confirmLabel?: string;
+  // One on/off choice that rides along with the pick, shown as a switch beside
+  // the title (e.g. an agent joining a call with or without its video avatar).
+  // The caller holds the value; the switch reports each change.
+  toggle?: { label: string; value: boolean; onChange: (value: boolean) => void };
   onPick: (target: PalettePickTarget, result: PalettePickResult) => void;
 };
 

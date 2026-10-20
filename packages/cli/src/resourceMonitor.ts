@@ -31,6 +31,10 @@ export interface ProcessInfo {
  *  unless the new one moves further than sampling error ever could; a real
  *  restart moves it by minutes. */
 export const AGENT_START_JITTER_MS = 5_000;
+/** Two readings of a process's start time name the same process: within sampling
+ *  jitter, or either unknown. A pid reused by a new process starts minutes apart. */
+export const sameStartedAt = (a: number | undefined, b: number | undefined): boolean =>
+  a === undefined || b === undefined || Math.abs(a - b) <= AGENT_START_JITTER_MS;
 export function stableAgentStartedAt(cur: number | undefined, prev: number | undefined): number | undefined {
   // No reading this tick: claim nothing rather than re-assert a stale start.
   if (cur === undefined) return undefined;

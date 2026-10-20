@@ -8,6 +8,7 @@
 import { CHEAP_MODEL } from "./modelOptions";
 import { MOMENT_KIND, UNDER_JUDGMENT, durationWords, renderMoment, stripMomentMarkup, type MomentBlock, type MomentRecord } from "./moments";
 import { MODEL_CALL_LIMITS, parseJsonBlock, type ModelCallSpec } from "./modelCall";
+import { AGENT_HEADER_FIELDS, parseAgentFields, type AgentJudgeSpec } from "./agentJudges";
 
 export const JUDGE_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
 
@@ -31,6 +32,8 @@ export interface JudgeSpec {
   parts?: string[];
   mode: JudgeMode;
   prompt: string;
+  /** Set for an agent judge (`runner: agent`, agentJudges.ts): a Claude Code session on a machine reviews the moment instead of one call. */
+  agent?: AgentJudgeSpec;
 }
 
 export const JUDGE_DEFAULT_MAX_TOKENS = 2_000;
@@ -40,6 +43,8 @@ export const JUDGE_DEFAULT_MAX_TOKENS = 2_000;
  * `---` lines: `moment`, `projects` (comma separated) are required; `model`,
  * `max_tokens` and `mode` have defaults (the cheap model, 2000, shadow), and
  * `parts` (comma separated) narrows the expectations to those parts.
+ * `runner: agent` and its fields make it an agent judge (agentJudges.ts),
+ * whose `projects` are where its findings file.
  */
 export function parseJudgeSpec(name: string, source: string): JudgeSpec | { error: string } {
   if (!JUDGE_NAME.test(name)) return { error: `"${name}" is not a judge name: lowercase letters, digits, - and _, starting with a letter` };
@@ -50,9 +55,11 @@ export function parseJudgeSpec(name: string, source: string): JudgeSpec | { erro
     const kv = line.match(/^\s*([a-z_]+)\s*:\s*(.*?)\s*$/i);
     if (kv) fields[kv[1].toLowerCase()] = kv[2].replace(/^["']|["']$/g, "");
   }
-  const known = new Set(["moment", "model", "max_tokens", "projects", "parts", "mode"]);
+  const known = new Set<string>(["moment", "model", "max_tokens", "projects", "parts", "mode", ...AGENT_HEADER_FIELDS]);
   const unknown = Object.keys(fields).filter((k) => !known.has(k));
-  if (unknown.length) return { error: `${name}: unknown header field ${unknown.join(", ")} (moment, model, max_tokens, projects, parts, mode)` };
+  if (unknown.length) return { error: `${name}: unknown header field ${unknown.join(", ")} (moment, model, max_tokens, projects, parts, mode, ${AGENT_HEADER_FIELDS.join(", ")})` };
+  const agent = parseAgentFields(name, fields);
+  if (agent && "error" in agent) return agent;
   const moment = (fields.moment ?? "").toLowerCase();
   if (!MOMENT_KIND.test(moment)) return { error: `${name}: moment names the moment kind it reads (its extractor's file name)` };
   const projects = (fields.projects ?? "").split(",").map((p) => p.trim()).filter(Boolean);
@@ -64,7 +71,7 @@ export function parseJudgeSpec(name: string, source: string): JudgeSpec | { erro
   const prompt = m[2].trim();
   if (!prompt) return { error: `${name}: the prompt follows the header` };
   const parts = (fields.parts ?? "").split(",").map((p) => p.trim()).filter(Boolean);
-  return { name, moment, model: fields.model || CHEAP_MODEL, max_tokens: maxTokens, projects, ...(parts.length ? { parts } : {}), mode: mode as JudgeMode, prompt };
+  return { name, moment, model: fields.model || CHEAP_MODEL, max_tokens: maxTokens, projects, ...(parts.length ? { parts } : {}), mode: mode as JudgeMode, prompt, ...(agent ? { agent } : {}) };
 }
 
 /** One project's expectations at the version the judge grades against. */

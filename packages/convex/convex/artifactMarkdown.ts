@@ -56,17 +56,23 @@ function createMarked(): Marked {
         return `<pre${label}><code${cls}>${html}\n</code></pre>\n`;
       },
       table(token: Tokens.Table) {
-        const head = `<tr>${token.header.map((c) => cell.call(this, c, "th")).join("")}</tr>`;
-        const body = token.rows.map((r) => `<tr>${r.map((c) => cell.call(this, c, "td")).join("")}</tr>`).join("");
+        // A column holding sentences keeps a readable width; a narrow screen
+        // scrolls the table rather than wrapping it one word to a line.
+        const prose = token.header.map((_, i) => token.rows.some((r) => (r[i]?.text.length ?? 0) > PROSE_CELL_CHARS));
+        const head = `<tr>${token.header.map((c, i) => cell.call(this, c, "th", prose[i])).join("")}</tr>`;
+        const body = token.rows.map((r) => `<tr>${r.map((c, i) => cell.call(this, c, "td", prose[i])).join("")}</tr>`).join("");
         return `<div class="tbl"><table><thead>${head}</thead><tbody>${body}</tbody></table></div>\n`;
       },
     },
   });
 }
 
-function cell(this: { parser: { parseInline(t: Tokens.Generic[]): string } }, c: Tokens.TableCell, tag: "th" | "td"): string {
+const PROSE_CELL_CHARS = 32;
+
+function cell(this: { parser: { parseInline(t: Tokens.Generic[]): string } }, c: Tokens.TableCell, tag: "th" | "td", prose = false): string {
   const align = c.align ? ` style="text-align:${c.align}"` : "";
-  return `<${tag}${align}>${this.parser.parseInline(c.tokens)}</${tag}>`;
+  const cls = prose ? ` class="prose"` : "";
+  return `<${tag}${cls}${align}>${this.parser.parseInline(c.tokens)}</${tag}>`;
 }
 
 /** Rendered body HTML (no document shell). */
@@ -187,9 +193,22 @@ export const MD_THEME_CSS = `
 .md p > img:only-child { margin: .2em auto; }
 .md figure { margin: 1.5em 0; }
 .md figcaption { text-align: center; color: var(--md-mut); font: 400 .78em/1.5 ${MONO}; margin-top: .7em; }
-.md .tbl { margin: 1.5em 0; overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--md-line); border-radius: 10px; }
+.md .tbl { margin: 1.5em 0; overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--md-line); border-radius: 10px;
+  /* Scroll shadows: an edge with columns hidden past it darkens; the local
+     layers cover each shadow once that edge is scrolled to. */
+  background:
+    linear-gradient(to right, var(--md-bg) 40%, transparent) left / 28px 100% no-repeat local,
+    linear-gradient(to left, var(--md-bg) 40%, transparent) right / 28px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--md-ink) 22%, transparent), transparent) left / 12px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--md-ink) 22%, transparent), transparent) right / 12px 100% no-repeat scroll,
+    var(--md-bg); }
+/* A scrollbar that stays visible where the platform would hide it until scrolled. */
+.md .tbl::-webkit-scrollbar { height: 8px; }
+.md .tbl::-webkit-scrollbar-track { background: transparent; }
+.md .tbl::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--md-mut) 45%, transparent); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
 .md table { border-collapse: collapse; width: 100%; font-size: .92em; line-height: 1.5; font-variant-numeric: tabular-nums lining-nums; }
 .md th, .md td { text-align: left; padding: .55em .85em; border-bottom: 1px solid var(--md-line); vertical-align: top; }
+.md td.prose { min-width: 15em; }
 .md th { font: 600 .8em/1.4 ${MONO}; color: var(--md-head); background: var(--md-card); white-space: nowrap; }
 .md tbody tr:last-child td { border-bottom: 0; }
 .md tbody tr:hover td { background: color-mix(in srgb, var(--md-card) 60%, transparent); }
@@ -314,6 +333,9 @@ ${MD_THEME_BOOT}
   main { max-width: 42rem; margin: 0 auto;
     padding: clamp(32px, 8vh, 80px) calc(24px + env(safe-area-inset-right)) calc(112px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left));
     animation: md-rise .6s cubic-bezier(.2,.7,.2,1) both; }
+  /* A table wider than the text column spreads past it, centred, up to the viewport. */
+  main.md .tbl { width: max-content; min-width: 100%; max-width: min(calc(100vw - 64px), 72rem);
+    margin-left: 50%; transform: translateX(-50%); }
   @keyframes md-rise { from { opacity: 0; transform: translateY(8px); } }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
   .md-theme { all: unset; position: fixed; right: calc(18px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom));
@@ -343,6 +365,7 @@ ${MD_THEME_BOOT}
     main { max-width: none; padding: 0; animation: none; }
     .md .anchor, .md .copy, .md-theme { display: none !important; }
     .md pre, .md blockquote, .md .tbl, .md img { break-inside: avoid; }
+    main.md .tbl { width: auto; max-width: none; margin-left: 0; transform: none; }
     .md a { color: inherit; text-decoration: none; }
   }
 </style>
