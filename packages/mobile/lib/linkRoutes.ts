@@ -89,6 +89,9 @@ export function mobileEntityRoute(type: EntityType, id: string): string | null {
 const PAGE_ROUTES: Record<string, string> = {
   '/inbox': '/(tabs)/inbox',
   '/questions': '/decisions',
+  '/calls': '/calls',
+  '/plans': '/(tabs)/tasks?segment=plans',
+  '/docs': '/(tabs)/tasks?segment=docs',
   '/triggers': '/(tabs)/tasks?segment=routines',
   [settingsPathFor('plan')]: '/settings/plan',
   [settingsPathFor('integrations')]: '/settings/mail',
@@ -149,9 +152,9 @@ export function mobileRouteForUrl(url: string): string | null {
   const page = PAGE_ROUTES[path.length > 1 ? path.replace(/\/+$/, '') : path];
   if (page) return page;
   // Team invites are completed on the web; the Chat tab (where the team
-  // lives on the phone) is the nearest screen. The web's chat and calls
-  // pages land there too.
-  if (path.startsWith('/join/') || path === '/chat' || path.startsWith('/chat/') || path === '/calls') {
+  // lives on the phone) is the nearest screen. The web's chat pages land
+  // there too.
+  if (path.startsWith('/join/') || path === '/chat' || path.startsWith('/chat/')) {
     return '/(tabs)/chat';
   }
   return null;
