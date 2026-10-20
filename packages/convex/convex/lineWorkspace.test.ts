@@ -8,6 +8,7 @@ import { anyApi } from "convex/server";
 import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { stationSaid } from "./lineWorkspace";
+import { markerOfEvent, recordDeployMarker } from "./deploys";
 
 const api = anyApi as any;
 // convex-test loads the schema and modules on first use, slow on a busy machine.
@@ -161,6 +162,12 @@ describe("a cause's history", () => {
         team_id: s.team, workspace: `team:${s.team}`, source: "sdk", kind: "deploy", title: "Deployed 1.2.0 to prod", sha: "abc1234", source_id: source,
         data: { transition: "deploy", source_name: "union", provider: "sdk", release: "1.2.0", environment: "prod" }, dedupe_key: "ingest-deploy", created_at: now - 5 * DAY,
       } as any);
+      // Each marker is a deploy object, the way its write path records one (deploys.md DP1).
+      for (const e of await ctx.db.query("external_events").collect()) {
+        if (e.kind !== "deploy") continue;
+        const m = await markerOfEvent(ctx, e);
+        if (m) await recordDeployMarker(ctx, m);
+      }
       return { task: task._id };
     });
     return { ...s, ...extra };
@@ -305,5 +312,23 @@ describe("a project's line cards", () => {
     expect(rows[0].card).toEqual({ headline: "Pin the sender", change: "Pin it per thread", wrong: "It re-rolled", recommend: { verdict: "ship", why: "Holds" }, diff: { files: 2, added: 9, removed: 1 } });
     expect(rows[0].options).toEqual([{ label: "[S] Ship" }, { label: "[R] Revise" }]);
     expect(await as(String(eve)).query(api.lineWorkspace.cards, { project_id: project })).toEqual([]);
+  });
+
+  test("an open card carries what the team's inbox lists: its question, whether a trial asked it, and who holds it", async () => {
+    const { t, ana, bo, project, run, as } = await seed();
+    await t.run(async (ctx) => {
+      const task = (await ctx.db.query("tasks").first())!;
+      await ctx.db.patch(task._id, { cause: { signal_count: 1, first_seen: 1, last_seen: 2, fingerprints: [] } } as any);
+      const base = { user_id: ana, task_id: task._id, workflow_run_id: run, gate_node_id: "decide", status: "pending", options: [], created_at: 4 };
+      // A trial owner's practice question, asked of nobody's queue: of nobody here.
+      await ctx.db.insert("session_decisions", { ...base, short_id: "sd-8", question: "Practice?", trial: true, asked_user_ids: [ana], hops: [] } as any);
+      // Given to a teammate: theirs.
+      await ctx.db.insert("session_decisions", { ...base, short_id: "sd-9", question: "Ship it?", blocking: true, asked_user_ids: [bo], passed_to: { kind: "user", id: String(bo), by: ana, at: 5 } } as any);
+    });
+    const rows = await as(String(bo)).query(api.lineWorkspace.cards, { project_id: project });
+    const by = new Map(rows.map((r: any) => [r.short_id, r]));
+    expect(by.get("sd-8")).toMatchObject({ question: "Practice?", trial: true });
+    expect(by.get("sd-8").asked_user_ids).toBeUndefined();
+    expect(by.get("sd-9")).toMatchObject({ question: "Ship it?", blocking: true, asked_user_ids: [String(bo)], passed_to: { kind: "user", id: String(bo) } });
   });
 });

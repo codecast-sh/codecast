@@ -364,21 +364,42 @@ export async function reroutePendingDecisionsForConversation(
   for (const row of openRows) {
     // A person handed this one to somebody; ownership moves do not take it back.
     if (row.passed_to) continue;
-    const task = row.task_id ? await ctx.db.get(row.task_id) : null;
-    // A proposal's decision asked by another session keeps routing as the station that proposed it.
-    const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
-    const asStation = proposal?.conversation_id && String(proposal.conversation_id) !== String(conversationId) ? await ctx.db.get(proposal.conversation_id) : undefined;
-    const { people, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
-    // A row asked with no ladder takes the one it now climbs, and its first
-    // role hears; a row that has one keeps it and the recommendations on it.
-    const climbs = !row.hops?.length && ladder.hops.length > 0;
-    await ctx.db.patch(row._id, { asked_user_ids: people, ...(climbs ? { hops: ladder.hops } : {}) });
-    const woken = climbs ? await tellHearingRole(ctx, hears, row, now) : [];
-    await syncDecisionInbox(ctx, row._id, people, now, trial !== "owner" && (!hears || (climbs && woken.length === 0)));
-    const updated = await ctx.db.get(row._id);
-    if (updated) await refreshHolder(ctx, updated, now);
+    await rerouteRow(ctx, conversation, row, now);
   }
   return { moved: openRows.length };
+}
+
+/** One open decision routed again from its asking session: its people, inbox rows, ladder and holder. */
+async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
+  const task = row.task_id ? await ctx.db.get(row.task_id) : null;
+  // A proposal's decision asked by another session keeps routing as the station that proposed it.
+  const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
+  const asStation = proposal?.conversation_id && String(proposal.conversation_id) !== String(conversation._id) ? await ctx.db.get(proposal.conversation_id) : undefined;
+  const { people, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
+  // A row asked with no ladder takes the one it now climbs, and its first
+  // role hears; a row that has one keeps it and the recommendations on it.
+  const climbs = !row.hops?.length && ladder.hops.length > 0;
+  await ctx.db.patch(row._id, { asked_user_ids: people, ...(climbs ? { hops: ladder.hops } : {}) });
+  const woken = climbs ? await tellHearingRole(ctx, hears, row, now) : [];
+  await syncDecisionInbox(ctx, row._id, people, now, trial !== "owner" && (!hears || (climbs && woken.length === 0)));
+  const updated = await ctx.db.get(row._id);
+  if (updated) await refreshHolder(ctx, updated, now);
+}
+
+// A person takes back a pass (passCore): the decision is nobody's in
+// particular again, routed as its asking session would route it now.
+export async function unassignCore(ctx: Ctx, userId: Id<"users">, decisionId: string): Promise<{ unassigned: true } | { error: string }> {
+  const row = await findDecision(ctx, decisionId);
+  if (!row) return { error: "Decision not found" };
+  if (row.status !== "pending") return { error: `Decision is already ${row.status}` };
+  if (!(await userMayRead(ctx, userId, row))) return { error: "Unauthorized: not your decision" };
+  if (!row.passed_to) return { unassigned: true };
+  const conversation = await ctx.db.get(row.conversation_id);
+  if (!conversation) return { error: "The session that asked is gone" };
+  await ctx.db.patch(row._id, { passed_to: undefined, updated_at: Date.now() });
+  const fresh = await ctx.db.get(row._id);
+  if (fresh) await rerouteRow(ctx, conversation, fresh, Date.now());
+  return { unassigned: true };
 }
 
 // Repair for questions asked before routing knew an agent account is nobody's
@@ -1110,6 +1131,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     ? { ...routed, ladder: { ...routed.ladder, activeRoles: [], hops: [] }, people: addressed.people, hears: null }
     : routed;
   if (existing) {
+    // A question a person gave to a teammate (passCore) stays theirs when it is asked again.
+    const given = existing.passed_to?.kind === "user" ? [existing.passed_to.id as Id<"users">] : null;
     // The re-ask lands on the open row: text, category and task move with it,
     // a --stack appends it (once), and the holder is recomputed because the
     // category or the stack's delegate may have changed who may answer.
@@ -1125,7 +1148,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       category,
       category_proposed: args.category,
       form: args.form,
-      asked_user_ids: people,
+      asked_user_ids: given ?? people,
       ...(docId ? { doc_id: docId } : {}),
       ...(task ? { task_id: task._id, station: args.station ?? task.status_id ?? task.status } : {}),
       ...(args.workflow_run_id ? { workflow_run_id: args.workflow_run_id, gate_node_id: args.gate_node_id } : {}),
@@ -1136,7 +1159,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       session_title: conversation.title,
       project_path: conversation.project_path,
     });
-    await syncDecisionInbox(ctx, existing._id, people, now, !hears && routed.trial !== "owner");
+    await syncDecisionInbox(ctx, existing._id, given ?? people, now, !!given || (!hears && routed.trial !== "owner"));
     const updated = await ctx.db.get(existing._id);
     if (updated) await refreshHolder(ctx, updated, now);
     return {
@@ -1418,8 +1441,8 @@ export const withdraw = mutation({
 // The one withdraw for every path (`cast decide cancel`, workflow_runs.cancel
 // taking back its open gate). A gate decision (the-line.md L4) fails its run
 // with "gate withdrawn" unless the run is already past it.
-export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?: Id<"conversations">) {
-  await ctx.db.patch(row._id, { status: "withdrawn", resolved_at: now });
+export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?: Id<"conversations">, reason?: string) {
+  await ctx.db.patch(row._id, { status: "withdrawn", resolved_at: now, ...(reason ? { withdrawn_reason: reason.slice(0, 2000) } : {}) });
   if (row.workflow_run_id) {
     const run = await ctx.db.get(row.workflow_run_id);
     if (run && run.status === "paused" && String(run.gate_decision_id ?? "") === String(row._id)) {
@@ -1433,6 +1456,22 @@ export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?
   // `via`: the session withdrawing, so a task it parked on this is not woken by its own act.
   await settleResolution(ctx, row, { status: "withdrawn" }, { kind: "user", id: String(row.user_id), user_id: row.user_id, ...(via ? { via } : {}) }, now);
   return { id: row._id, short_id: row.short_id, status: "withdrawn" };
+}
+
+/**
+ * A problem that closes (done, dropped, merged) asks nothing more: each of its
+ * questions still pending is withdrawn with the close's reason, and each trial
+ * card still waiting on one closes. Called from tasks.afterStatusMove on every
+ * close, whoever closes it.
+ */
+export async function withdrawClosedProblemAsks(ctx: Ctx, task: { _id: Id<"tasks"> }, reason: string, now: number): Promise<string[]> {
+  const pending: DecisionRow[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", task._id).eq("status", "pending")).collect();
+  for (const row of pending) {
+    await withdrawCore(ctx, row, now, undefined, reason);
+    const cards = await ctx.db.query("trial_cards").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).collect();
+    for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
+  }
+  return pending.map((r) => r.short_id ?? String(r._id));
 }
 
 // The CLI's row shape for `cast decide ls` and the ladder listings.
@@ -1817,13 +1856,16 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
   if (!row) return { error: "Decision not found" };
   if (row.status !== "pending") return { error: `Decision is already ${row.status}` };
   if (!(await userMayRead(ctx, userId, row))) return { error: "Unauthorized: not your decision" };
-  if (row.trial) return { error: "A trial run's question stays with its trial" };
+  // A trial's question may be given to a teammate (the team's decision inbox assigns it); it never climbs a role's line.
+  if (row.trial && to.kind === "role") return { error: "A trial run's question stays with its trial" };
   const conversation = await ctx.db.get(row.conversation_id);
   if (conversation && isHostedAgentType(conversation.agent_type)) return { error: HOSTED_ANSWER_REFUSED };
   if (row.holder?.kind === to.kind && row.holder.id === to.id && (to.kind === "role" || row.asked_user_ids?.length === 1)) {
     return { error: "It is already theirs" };
   }
-  const teamId = conversation?.team_id;
+  // A line decision's team is its problem's when the session that asked is nobody's team's (a station run on a host).
+  const task = !conversation?.team_id && row.task_id ? await ctx.db.get(row.task_id) : null;
+  const teamId = conversation?.team_id ?? task?.team_id;
   const now = Date.now();
   const passed_to = { ...to, by: userId, at: now };
   if (to.kind === "user") {

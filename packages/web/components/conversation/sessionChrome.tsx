@@ -16,7 +16,9 @@ import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { DropdownMenuItem, DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { OwnerAvatar, type HandoffInfo } from "../OwnersBadge";
 import { copyToClipboard } from "../../lib/utils";
-import { useImageGallery, type GalleryImage } from "../ImageGallery";
+import { useImageGallery } from "../ImageGallery";
+import { PageFavicon } from "../PublishedPageEmbed";
+import { isGalleryPage, type GalleryItem } from "../../lib/galleryItems";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, Check, KeyRound, ExternalLink, Loader2, ArrowRightLeft } from "lucide-react";
 import { useDevices, useDeviceMoveStatus } from "../DeviceBadge";
@@ -67,27 +69,54 @@ export function SqueezedHeaderActions({ rowRef, children }: { rowRef: React.RefO
   return <>{children}</>;
 }
 
-// Header entry to the session gallery: every image in the transcript, opened
-// over the lightbox's explicit-list channel (openList) — the register() channel
-// only knows images the virtualized feed has actually mounted. Rendered inside
+// Header entries to the session gallery: one pill for the images in the
+// transcript, one for the pages the session published, each opening the
+// lightbox over its own explicit list (openList) — the register() channel only
+// knows images the virtualized feed has actually mounted. Rendered inside
 // ImageGalleryProvider (a child, not the ConversationView body, which sits
-// outside the provider). It stays a magenta pill, unlike the dim icon actions
-// beside it: the images in a session are one of its most important artifacts,
-// and the header should make them easy to spot.
-export function SessionGalleryButton({ images }: { images: GalleryImage[] }) {
-  const gallery = useImageGallery();
-  if (images.length === 0) return null;
+// outside the provider). They stay colored pills, unlike the dim icon actions
+// beside them: what a session produced is one of its most important artifacts,
+// and the header should make it easy to spot.
+export function SessionGalleryButton({ items }: { items: GalleryItem[] }) {
+  const pages = useMemo(() => items.filter(isGalleryPage), [items]);
+  const images = useMemo(() => items.filter(item => !isGalleryPage(item)), [items]);
   return (
-    <ShortcutTooltip label={`View ${images.length === 1 ? "image" : `${images.length} images`}`} side="bottom">
+    <>
+      {images.length > 0 && (
+        <GalleryPill
+          items={images}
+          label={images.length === 1 ? "1 image" : `${images.length} images`}
+          className="bg-sol-magenta/10 text-sol-magenta border-sol-magenta/30 hover:bg-sol-magenta/20"
+          icon={
+            <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          }
+        />
+      )}
+      {pages.length > 0 && (
+        <GalleryPill
+          items={pages}
+          label={pages.length === 1 ? "1 published page" : `${pages.length} published pages`}
+          className="bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
+          icon={<PageFavicon className="h-3 w-3" />}
+        />
+      )}
+    </>
+  );
+}
+
+function GalleryPill({ items, label, className, icon }: { items: GalleryItem[]; label: string; className: string; icon: ReactNode }) {
+  const gallery = useImageGallery();
+  return (
+    <ShortcutTooltip label={`View ${label}`} side="bottom">
       <button
-        onClick={() => gallery?.openList(images, images.length - 1)}
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/30 hover:bg-sol-magenta/20 transition-colors"
-        aria-label={`View ${images.length} images`}
+        onClick={() => gallery?.openList(items, items.length - 1)}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 border transition-colors ${className}`}
+        aria-label={`View ${label}`}
       >
-        <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
-        <span className="tabular-nums">{images.length}</span>
+        {icon}
+        <span className="tabular-nums">{items.length}</span>
       </button>
     </ShortcutTooltip>
   );

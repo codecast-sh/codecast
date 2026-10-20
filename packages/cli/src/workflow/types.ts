@@ -106,6 +106,10 @@ export interface WorkflowGraph {
   // open, a blocker comment saying why) instead of queueing a decision, so
   // the graph's own gates are the only questions it puts to a person.
   on_failure?: "stop";
+  // The finding sources whose problems this line version runs (`serves`, one
+  // graph per scenario): a line run started for a problem takes the version
+  // that serves the source of its oldest finding (workflows.lineVersionFor).
+  serves?: string[];
   nodes: Map<string, WorkflowNode>;
   edges: WorkflowEdge[];
   /** The files the graph was read from: its own file and every @file it inlined (parser.ts). */

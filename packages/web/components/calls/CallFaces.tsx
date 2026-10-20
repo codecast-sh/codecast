@@ -102,6 +102,7 @@ export function CallFaces({
     (st: any) => st.call.phase,
     (st: any) => st.call.muted,
     (st: any) => st.call.speaking,
+    (st: any) => !!st.call.reconnecting,
     (st: any) => st.currentUser?._id,
   ]);
   const call = s.call;
@@ -180,11 +181,17 @@ export function CallFaces({
 
   return (
     <div ref={rootRef} className={`dark faces-window${hovered ? " faces-window--hover" : ""}`}>
-      <div data-face-tier={tier} className={`faces-row faces-row--${mode}`} style={mode === "speaker" ? { width: diameter, height: diameter } : undefined}>
+      <div data-face-tier={tier} data-reconnecting={call.reconnecting || undefined} className={`faces-row faces-row--${mode}`} style={mode === "speaker" ? { width: diameter, height: diameter } : undefined}>
         {faces.length === 0 && (
           <div className="face" data-face-hit style={{ width: diameter, height: diameter }} onPointerDown={startDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
             <span className="face-waiting">joining</span>
           </div>
+        )}
+        {call.reconnecting && (
+          <span className="faces-reconnecting" title="Lost the connection; rejoining">
+            <span className="faces-reconnecting-dot" />
+            <span>reconnecting</span>
+          </span>
         )}
         {recording && (
           <span className="faces-rec">

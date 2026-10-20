@@ -65,4 +65,15 @@ describe('LRUCache', () => {
     expect(cache.get({ id: 1, name: 'foo' })).toBe('value1');
     expect(cache.get({ id: 2, name: 'bar' })).toBe('value2');
   });
+
+  it('keys long strings by their text and keeps null answers', () => {
+    const cache = new LRUCache<string, string | null>(2);
+    const body = 'x'.repeat(10_000);
+    cache.set(body, null);
+    cache.set('"quoted"', 'q');
+
+    expect(cache.get('x'.repeat(10_000))).toBeNull();
+    expect(cache.get('"quoted"')).toBe('q');
+    expect(cache.get('quoted')).toBeUndefined();
+  });
 });

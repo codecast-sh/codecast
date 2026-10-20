@@ -5,12 +5,13 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chooseLineSource, findNodeStmt, planStationEdits, publishedRepoLine, repoLineFile, repoLineForRun, setNodeAttr, shippedRepoLineFiles } from "./repoLine";
+import { chooseLineSource, findNodeStmt, lineVersionFile, planStationEdits, publishedRepoLine, repoLineFile, repoLineForRun, setNodeAttr, shippedRepoLineFiles } from "./repoLine";
 import { removeLineFile, runLineProfileEdit } from "./lineProfileEdit";
 import { publishFacts } from "./lineProfileCommand";
 import { loadLineProfile } from "./lineProfile";
 import { graphForDaemonRun } from "./workflow/daemonGraph";
 import { graphHash, parseWorkflowSource } from "./workflow/parser";
+import { graphToPushPayload } from "./workflow/runner";
 import { BUILTIN_WORKFLOW_TEMPLATES, LINE_TEMPLATE_FILES } from "./workflow/templates";
 import { isTrackedLineProfile, fenceTargetOf } from "./configFence";
 
@@ -216,6 +217,45 @@ describe("which line a run runs", () => {
     expect(repoLineForRun({ workflow_name: "feature", task_short_id: "ct-1" }, { slug: "feature" }, root)).toBeNull();
     expect(repoLineForRun({ workflow_name: "line" }, null, root)).toBeNull();
     expect(graphForDaemonRun({ workflow_name: "line" }, pushed, root)!.nodes.size).toBe(1);
+  });
+});
+
+describe("a problem runs its scenario's line version", () => {
+  // A shared line and a version for errors that extends it and changes only where the evidence comes from.
+  const withVersions = () => {
+    const root = checkout();
+    apply(root, [
+      { rel: "lines/shared.cast", content: 'digraph shared {\n  graph [serves="app.desk person"]\n  start [shape=Mdiamond]\n  prove [label="Prove", shape=parallelogram, script="echo shared"]\n  exit [shape=Msquare]\n  start -> prove\n  prove -> exit\n}\n' },
+      { rel: "lines/errors.cast", content: 'digraph errors {\n  graph [extends="shared.cast", serves="SDK:app-errors, app.eval"]\n  prove [label="Prove", shape=parallelogram, script="echo from the stack"]\n}\n' },
+      { rel: "lines/plain.cast", content: 'digraph plain {\n  graph [extends="shared.cast"]\n}\n' },
+    ]);
+    apply(root, planStationEdits(root, [{ op: "set_station", station: "prove", timeout: 77 }]).writes);
+    return root;
+  };
+  const parse = (root: string, rel: string) => parseWorkflowSource(fs.readFileSync(path.join(root, rel), "utf8"), path.dirname(path.join(root, rel)));
+
+  test("a version names the sources it serves, and never inherits its base's", () => {
+    const root = withVersions();
+    expect(parse(root, "lines/shared.cast").serves).toEqual(["app.desk", "person"]);
+    const errors = parse(root, "lines/errors.cast");
+    expect(errors.serves).toEqual(["sdk:app-errors", "app.eval"]);
+    expect(errors.nodes.get("prove")!.script).toBe("echo from the stack");
+    expect(parse(root, "lines/plain.cast").serves).toBeUndefined();
+    expect(graphToPushPayload(errors).serves).toEqual(["sdk:app-errors", "app.eval"]);
+    expect("serves" in graphToPushPayload(parse(root, "lines/plain.cast"))).toBe(false);
+  });
+
+  test("the version runs from its file on the machine that pushed it, ahead of the repo's line", () => {
+    const root = withVersions();
+    const version = { origin: { device_id: "dev-a", root, file: "lines/errors.cast" } };
+    const here = lineVersionFile(version, "dev-a")!;
+    expect(here.label).toBe(path.join(root, "lines/errors.cast"));
+    expect(lineVersionFile(version, "dev-b")).toBeNull();
+    expect(lineVersionFile(null, "dev-a")).toBeNull();
+    expect(lineVersionFile({ origin: { ...version.origin, file: "lines/gone.cast" } }, "dev-a")).toBeNull();
+    expect(chooseLineSource({ taskBound: true, cwd: root, causeLine: here })).toMatchObject({ kind: "repo", resolved: { label: here.label } });
+    expect(chooseLineSource({ taskBound: true, cwd: root, causeLine: null })).toMatchObject({ kind: "repo", resolved: { label: repoLineFile(root) } });
+    expect(chooseLineSource({ file: "feature", taskBound: true, cwd: root, causeLine: here })).toEqual({ kind: "file", name: "feature" });
   });
 });
 

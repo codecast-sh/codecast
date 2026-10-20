@@ -36,7 +36,7 @@ test("resource report to authenticated read uses real schema and isolates machin
   expect(rows[0].snapshot.sample.memoryTotal).toBe(1000);
   expect(rows[0].history).toHaveLength(1);
   await expect(t.run(ctx => storeResourceSnapshot(ctx, other, sample(now), now))).rejects.toThrow("not registered");
-  expect(await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now), now + 100))).toEqual({ accepted: false });
+  expect(await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now), now + 100))).toEqual({ accepted: false, background_sessions: [] });
   await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now + 30_000), now + 30_000));
   expect((await t.withIdentity({ subject: owner }).query(listMine, {}))[0].history).toHaveLength(2);
 });
@@ -71,8 +71,33 @@ test("daemon bearer report reaches the authenticated dashboard and rejects inval
   });
   const report = makeFunctionReference<"mutation">("machineResources:report");
   await expect(t.mutation(report, { api_token: "invalid", snapshot: sample(now) })).rejects.toThrow("Authentication");
-  expect(await t.mutation(report, { api_token: token, snapshot: sample(now) })).toEqual({ accepted: true });
+  expect(await t.mutation(report, { api_token: token, snapshot: sample(now) })).toEqual({ accepted: true, background_sessions: [] });
   expect((await t.withIdentity({ subject: user }).query(listMine, {}))[0].snapshot).toEqual(sample(now));
+});
+
+// The press is stored on the machine's row and answered to its daemon on the
+// next report, throttled or not, so a render it cannot move gives way within a tick.
+test("a session put at background priority reaches its machine's daemon in the next report answer, and comes back out", async () => {
+  const t = convexTest(schema, modules);
+  const now = Date.now();
+  const token = "resource-bg-token";
+  const user = await t.run(async ctx => {
+    const id = await ctx.db.insert("users", {});
+    await ctx.db.insert("devices", { user_id: id, device_id: "mac", label: "Mac", platform: "darwin", last_seen: now });
+    await ctx.db.insert("api_tokens", { user_id: id, token_hash: await hashToken(token), name: "test", created_at: now, last_used_at: now });
+    return id;
+  });
+  const report = makeFunctionReference<"mutation">("machineResources:report");
+  const setBackground = makeFunctionReference<"mutation">("machineResources:setSessionBackground");
+  const as = t.withIdentity({ subject: user });
+  await expect(as.mutation(setBackground, { device_id: "mac", session_id: "s1", background: true })).rejects.toThrow("not reported");
+  await t.mutation(report, { api_token: token, snapshot: sample(now) });
+  await as.mutation(setBackground, { device_id: "mac", session_id: "s1", background: true });
+  await as.mutation(setBackground, { device_id: "mac", session_id: "s1", background: true });
+  expect(await t.mutation(report, { api_token: token, snapshot: sample(now + 1) })).toEqual({ accepted: false, background_sessions: ["s1"] });
+  await expect(t.withIdentity({ subject: "someone-else" as any }).mutation(setBackground, { device_id: "mac", session_id: "s2", background: true })).rejects.toThrow();
+  await as.mutation(setBackground, { device_id: "mac", session_id: "s1", background: false });
+  expect((await as.query(listMine, {}))[0].background_sessions).toEqual([]);
 });
 
 test("an overload incident rings once when it starts, again only when it turns critical or after a quiet spell", () => {

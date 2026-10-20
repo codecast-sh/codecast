@@ -17,6 +17,7 @@ import { CARD_GATE_NODE_ID, isLineRun, passedUnansweredCard } from "@codecast/sh
 import { causeHistory, closedAtStep, earlierFixes, failedAtStation, historyBrief, reportArgument, reportFieldWords, runEnd, saidSlot, signalQuotes, type AttemptOutcome, type OccurrenceRow, type RunSaid } from "@codecast/shared/contracts/causeHistory";
 import { guessPhase, halfOfPhase, phaseOfStation } from "@codecast/shared/contracts/linePhases";
 import { verifyApiToken } from "./apiTokens";
+import { projectDeployViews } from "./deploys";
 import { labelFinding } from "./judgeReview";
 
 /** How much of a station's brief the workspace shows; the session holds the rest. */
@@ -245,29 +246,12 @@ export async function projectRepositories(ctx: any, project: any, named: Readonl
   return [...out].slice(0, 8);
 }
 
-/** A deploy marker as the timeline reads it. */
-const shapeDeploy = (e: any, projectId: string, via: "repository" | "source") => ({
-  _id: String(e._id),
-  project_id: projectId,
-  at: e.created_at,
-  sha: e.sha ?? null,
-  repository: e.repository ?? null,
-  // A codecast marker names a surface (cast ship mark); a source's deploy names an environment.
-  surface: e.meta?.surface ?? null,
-  environment: e.data?.environment ?? null,
-  version: e.meta?.version ?? e.data?.release ?? null,
-  source: e.data?.source_name ?? e.source,
-  via,
-  title: e.title,
-  url: e.url ?? null,
-});
-
 /**
- * The deploys codecast knows of for a project: `cast ship mark` markers on
- * the project's repositories (packages/convex/deploy.sh posts one per backend
- * deploy), and the deploys its workspace's sources report (an SDK's release,
- * Union's backend). A deploy nobody records is not here, and the timeline
- * says so rather than guess.
+ * The deploys codecast knows of for a project (deploys.md): the deploy
+ * objects its line asked for and the ones its deploy markers recorded (`cast
+ * ship mark` on its repositories, its workspace's sources), each with what it
+ * carried and what happened after. A deploy nobody records is not here, and
+ * the timeline says so rather than guess.
  */
 export const deploys = query({
   args: { project_id: v.id("projects"), repositories: v.optional(v.array(v.string())) },
@@ -278,42 +262,16 @@ export const deploys = query({
   },
 });
 
-/** A project's recorded deploys over the history window, newest first: the deploys query and a cause's history read the same list. */
-async function projectDeploys(ctx: any, project: any, repositories: ReadonlyArray<string>): Promise<Array<ReturnType<typeof shapeDeploy>>> {
-  const since = Date.now() - HISTORY_WINDOW_MS;
-  const projectId = String(project._id);
-  const out = new Map<string, ReturnType<typeof shapeDeploy>>();
-
-  if (project.team_id) {
-    for (const repository of await projectRepositories(ctx, project, repositories)) {
-      const events = await ctx.db
-        .query("external_events")
-        .withIndex("by_repository_created", (q: any) => q.eq("repository", repository).gte("created_at", since))
-        .order("desc")
-        .take(DEPLOY_SCAN);
-      for (const e of events) {
-        if (e.kind === "deploy" && String(e.team_id) === String(project.team_id)) out.set(String(e._id), shapeDeploy(e, projectId, "repository"));
-      }
-    }
-  }
-
-  const workspace = project.workspace ?? (await resolveWorkspaceKey(ctx, project));
-  const sources = await ctx.db.query("event_sources").withIndex("by_workspace_name", (q: any) => q.eq("workspace", workspace)).take(50);
-  for (const source of sources) {
-    if (source.project_id && String(source.project_id) !== projectId) continue;
-    const events = await ctx.db
-      .query("external_events")
-      .withIndex("by_source_created", (q: any) => q.eq("source_id", source._id).gte("created_at", since))
-      .order("desc")
-      .take(DEPLOY_SCAN);
-    for (const e of events) if (e.kind === "deploy") out.set(String(e._id), shapeDeploy(e, projectId, "source"));
-  }
-  return [...out.values()].sort((a, b) => b.at - a.at);
+/** A project's deploys over the history window, newest first: the deploys query and a cause's history read the same list. */
+async function projectDeploys(ctx: any, project: any, repositories: ReadonlyArray<string>) {
+  return await projectDeployViews(ctx, project, await projectRepositories(ctx, project, repositories), Date.now() - HISTORY_WINDOW_MS);
 }
 
 /** Causes and cards per cause one project's card read covers. */
 const CARDS_CAUSES_CAP = 400;
 const CARDS_PER_CAUSE = 20;
+/** The words of a card's question the history keeps: a row's worth. */
+const QUESTION_MAX_CHARS = 400;
 
 /** A line card as the history reads it: the answer and the card's own words, never its examples or proof. */
 const shapeCard = (d: any, projectId: string) => {
@@ -326,8 +284,15 @@ const shapeCard = (d: any, projectId: string) => {
     workflow_run_id: String(d.workflow_run_id),
     ...(d.short_id ? { short_id: d.short_id } : {}),
     status: d.status,
-    // Who it was asked of: who holds an open question the viewer does not (a plan gate Jason holds, ct-59571).
-    ...(d.asked_user_ids?.length ? { asked_user_ids: d.asked_user_ids.map(String) } : {}),
+    // Who it was asked of: who holds an open question the viewer does not (a plan gate Jason holds, ct-59571). A trial
+    // owner's practice question (a trial decision no role's line routed) is asked of nobody's queue, so of nobody here.
+    ...(d.asked_user_ids?.length && !(d.trial && !d.hops?.length && !d.passed_to) ? { asked_user_ids: d.asked_user_ids.map(String) } : {}),
+    // The teammate a person gave it to (passCore): the team inbox's assignee.
+    ...(d.passed_to ? { passed_to: { kind: d.passed_to.kind, id: String(d.passed_to.id) } } : {}),
+    ...(d.trial ? { trial: true } : {}),
+    ...(d.blocking ? { blocking: true } : {}),
+    // What is asked, for the team inbox's row; the whole decision is read on its own page.
+    ...(d.question ? { question: String(d.question).slice(0, QUESTION_MAX_CHARS) } : {}),
     ...(d.gate_node_id ? { gate_node_id: d.gate_node_id } : {}),
     options: (d.options ?? []).map((o: any) => ({ label: o.label })),
     ...(typeof d.answer_index === "number" ? { answer_index: d.answer_index } : {}),
@@ -505,7 +470,8 @@ export async function causeHistoryForTask(ctx: any, task: any, exceptRunId?: str
     .map((d: any) => shapeCard(d, String(task.project_id ?? "")));
   const project = task.project_id ? await ctx.db.get(task.project_id) : null;
   const named = runs.map((r) => parsePrRef(r.merge?.pr_url)?.repository).filter((x): x is string => !!x);
-  const deploys = project ? await projectDeploys(ctx, project, named) : [];
+  // Only a deploy that went live carried anything.
+  const deploys = project ? (await projectDeploys(ctx, project, named)).filter((d) => d.status === "live") : [];
   const saidById = new Map(runs.map((r) => [String(r._id), runSaid(r)]));
   const endedId = String(rows.find((r: any) => !isLiveRunStatus(r.status))?._id ?? "");
   const { quotes, ...occurrences } = await causeOccurrences(ctx, task);
