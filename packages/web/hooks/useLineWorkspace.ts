@@ -55,8 +55,8 @@ export { LINE_VIEWS, DEFAULT_LINE_VIEW } from "../lib/line/lineWorkspaceUrl";
 
 const labelSig = (l: LineLabelRow) => `${l.key}|${l.verdict}|${l.note ?? ""}|${l.at}`;
 const occurrenceSig = (o: OccurrenceRow) => `${o.task_id}|${o.observed.length}|${o.observed[o.observed.length - 1] ?? 0}|${o.reopened.length}|${o.capped ? 1 : 0}`;
-const deploySig = (d: DeployRow) => {
-  const o = d as LineDeploy;
+const deploySig = (o: LineDeploy) => {
+  const d = o;
   return `${d.at}|${d.sha ?? ""}|${d.surface ?? d.environment ?? ""}|${o.short_id ?? ""}|${o.status ?? ""}|${o.url ?? ""}|${o.carries?.length ?? 0}|${o.after ? `${o.after.to}:${o.after.regressions}:${o.after.reopened}:${o.after.errors.length}` : ""}|${o.commits?.length ?? 0}`;
 };
 const cardSig = (d: MapDecision) => `${(d as { asked_user_ids?: string[] }).asked_user_ids?.join(",") ?? ""}|${(d as { passed_to?: { id: string } | null }).passed_to?.id ?? ""}|${d.status}|${d.answer_index ?? ""}|${d.answer_text ?? ""}|${d.resolved_at ?? 0}|${d.card?.headline ?? ""}|${d.card?.change ?? ""}`;
@@ -103,7 +103,10 @@ function mergeCards(home: ReadonlyArray<MapDecision>, line: ReadonlyArray<MapDec
 export type LineScopedRows = ReturnType<typeof useLineFloor>["lineRows"];
 
 /** A deploy as the line reads it (convex deploys projectDeployViews): the history's row and the object. */
-export type LineDeploy = DeployRow & Omit<DeployView, "project_id"> & { project_id: string; deploy_id?: string; after: DeployAfter | null };
+export type LineDeploy = Omit<DeployRow, "project_id"> & DeployView & { workspace: string; deploy_id?: string; after: DeployAfter | null };
+
+/** Whether a deploy is on a project's line: the project's own, or one that ships the workspace's code (no project). */
+const deployIn = (d: Pick<LineDeploy, "project_id">, project: string | null) => !project || !d.project_id || d.project_id === project;
 
 export type LineWorkspace = {
   model: LineModel | null;
@@ -253,19 +256,11 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   // whatever the filter; a row is narrowed to the filter at read time.
   const anyProject = useCallback((r: { project_id?: string }) => !!r.project_id, []);
   const allOccurrences = useCollectionRows<OccurrenceRow & { project_id?: string }>("lineOccurrences", { where: anyProject, sig: occurrenceSig });
-  // A deploy object (deploys.md) has a status; a row the marker-only feed left in the cache before it does not.
-  const deployRow = useCallback((r: { project_id?: string; status?: string }) => !!r.project_id && !!r.status, []);
-  const allDeploys = useCollectionRows<LineDeploy>("lineDeploys", { where: deployRow, sig: deploySig });
-  // The deploys in view, one per deploy (a deploy several projects share is a row per project), newest first.
-  const deploys = useMemo(() => {
-    const one = new Map<string, LineDeploy>();
-    for (const d of allDeploys) {
-      if (projectId && d.project_id !== projectId) continue;
-      const key = d.deploy_id ?? d._id;
-      if (!one.has(key)) one.set(key, d);
-    }
-    return [...one.values()].sort((a, b) => b.at - a.at);
-  }, [allDeploys, projectId]);
+  // A deploy object (deploys.md) has a status and its own id; rows an earlier feed shape left in the cache have neither.
+  const workspaceDeploys = useWorkspaceCollection<LineDeploy>("lineDeploys", deploySig, workspace);
+  const allDeploys = useMemo(() => workspaceDeploys.filter((d) => !!d.status && !d._id.includes(":")), [workspaceDeploys]);
+  // The deploys in view, newest first: a project's own, and those that ship the whole workspace's code.
+  const deploys = useMemo(() => allDeploys.filter((d) => deployIn(d, projectId)).sort((a, b) => b.at - a.at), [allDeploys, projectId]);
   const allLineCards = useCollectionRows<MapDecision & { project_id?: string }>("lineCards", { where: anyProject, sig: cardSig });
   const ownCardWhere = useMemo(() => (d: SessionDecisionItem) => !!d.task_id && everyTaskProject.has(d.task_id) && !!d.workflow_run_id, [everyTaskProject]);
   const ownCards = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: ownCardWhere, sig: cardSig as unknown as (d: SessionDecisionItem) => string });
@@ -339,7 +334,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const modelOf = useCallback((rows: { runs: unknown[]; tasks: LineModelRows["tasks"]; signals: unknown[] }, project: string | null, forYou: Map<string, string>, deploysRead: boolean, key: string = lg.graphKey) => {
     const mine = (r: { project_id?: string }) => !project || r.project_id === project;
     // Only a deploy that went live carried anything.
-    const deploys = allDeploys.filter((d) => mine(d) && d.status === "live");
+    const deploys = allDeploys.filter((d) => deployIn(d, project) && d.status === "live");
     return buildLineModel({
       runs: rows.runs as MapRun[],
       tasks: rows.tasks,

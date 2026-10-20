@@ -208,6 +208,8 @@ export const momentsTables = {
     turns: v.optional(v.number()),
     usage: v.optional(v.object({ input: v.number(), output: v.number(), cache_read: v.number(), cache_write: v.number() })),
     notional_usd: v.optional(v.number()),
+    /** Of notional_usd, what the second turn (listing the findings) cost. */
+    findings_turn_usd: v.optional(v.number()),
     findings: v.optional(v.number()),
     filed: v.optional(v.number()),
     run_id: v.optional(v.id("judge_runs")),

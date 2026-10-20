@@ -68,6 +68,10 @@ const SHORT_MAX = 500;
 const JUDGE_CANDIDATES = 5;
 /** The recent signals whose causes are candidates for the judge. */
 const CANDIDATE_WINDOW = 500;
+// Open problems read by status for the judge's candidates, beyond those the
+// recent findings name (nearestCauses).
+const OPEN_CAUSE_POOL = 400;
+const LIVE_CAUSE_STATUSES = ["open", "in_progress", "in_review", "backlog"] as const;
 /** A cause keeps at most this many distinct fingerprints on its row. */
 const FINGERPRINTS_MAX = 50;
 /** How many held signals under one key a new cause gathers. */
@@ -344,10 +348,27 @@ export async function nearestCauses(ctx: any, workspace: string, signal: Pick<Si
     if (row.subject) set.add(row.subject);
     subjectsOf.set(key, set);
   }
+  // Every open problem competes, not only those holding a recent finding: a
+  // problem whose findings all predate the window (a slow one, or one a
+  // backfill opened from old findings) is otherwise never a candidate, and
+  // the same failure opens a problem each time it comes back. It competes on
+  // its title; the window above adds the subjects of the problems it names.
+  const loaded = new Map<string, Doc<"tasks">>();
+  for (const status of LIVE_CAUSE_STATUSES) {
+    const open: Doc<"tasks">[] = await ctx.db
+      .query("tasks")
+      .withIndex("by_workspace_source_status", (q: any) => q.eq("workspace", workspace).eq("source", "signal").eq("status", status))
+      .order("desc")
+      .take(OPEN_CAUSE_POOL);
+    for (const task of open) {
+      loaded.set(String(task._id), task);
+      if (!subjectsOf.has(String(task._id))) subjectsOf.set(String(task._id), new Set<string>());
+    }
+  }
   const needle = [signal.title, signal.subject].filter(Boolean).join(" ");
   const scored: Array<{ score: number; candidate: CauseCandidate }> = [];
   for (const [key, subjects] of subjectsOf) {
-    const task: Doc<"tasks"> | null = await ctx.db.get(key as Id<"tasks">);
+    const task: Doc<"tasks"> | null = loaded.get(key) ?? await ctx.db.get(key as Id<"tasks">);
     if (!task || task.workspace !== workspace || !inProject(task, projectId) || !isOpenCause(task)) continue;
     const haystack = [task.title, ...subjects].join(" ");
     const score = titleSimilarity(needle, haystack);
@@ -2208,5 +2229,53 @@ export const placeHeld = internalAction({
     const tally: Record<string, number> = {};
     for (const o of out) tally[o.decision] = (tally[o.decision] ?? 0) + 1;
     return { keys: keys.length, tally, placed: out };
+  },
+});
+
+/**
+ * Problems opened one per finding before their siblings could be candidates
+ * (a backfill, the window nearestCauses used to read) judged again: each
+ * named problem holding exactly one finding is put to the attach judge
+ * against the other open problems, and folds into the one it names as the
+ * same problem under another id. `dry_run` reports only.
+ */
+export const singleInputs = internalQuery({
+  args: { task: v.string() },
+  handler: async (ctx, { task: ref }) => {
+    const task: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
+    if (!task?.cause || !isOpenCause(task)) return null;
+    const rows: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).take(2);
+    if (rows.length !== 1) return null;
+    const signal = heldAsSignal(rows[0]);
+    const candidates = (await nearestCauses(ctx, task.workspace, signal, task.project_id ?? null)).filter((c) => String(c.task_id) !== String(task._id));
+    return { signal, candidates, user_id: rows[0].user_id };
+  },
+});
+
+export const foldSingle = internalMutation({
+  args: { task: v.string(), into: v.id("tasks"), user_id: v.id("users"), dry_run: v.boolean() },
+  handler: async (ctx, args) => {
+    const into: Doc<"tasks"> | null = await ctx.db.get(args.into);
+    if (!into?.short_id) return { into: null };
+    if (args.dry_run) return { into: into.short_id };
+    await mergeProblemCore(ctx, args.user_id, args.task, into.short_id);
+    return { into: into.short_id };
+  },
+});
+
+export const regroupSingles = internalAction({
+  args: { tasks: v.array(v.string()), dry_run: v.boolean() },
+  handler: async (ctx, args) => {
+    const out: Array<{ task: string; into: string | null }> = [];
+    for (const ref of args.tasks) {
+      const inputs: { signal: SignalInput; candidates: CauseCandidate[]; user_id: Id<"users"> } | null = await ctx.runQuery(internal.signals.singleInputs, { task: ref });
+      if (!inputs || !inputs.candidates.length) { out.push({ task: ref, into: null }); continue; }
+      const reply = await callModel({ ...attachJudgeRequest(inputs.signal, inputs.candidates), label: "Signal attach", timeout_ms: 20_000 });
+      const judged = parseAttachJudgeReply(reply?.text, inputs.candidates);
+      if (!judged) { out.push({ task: ref, into: null }); continue; }
+      const r: { into: string | null } = await ctx.runMutation(internal.signals.foldSingle, { task: ref, into: judged, user_id: inputs.user_id, dry_run: args.dry_run });
+      out.push({ task: ref, into: r.into });
+    }
+    return { folded: out.filter((o) => o.into).length, out };
   },
 });

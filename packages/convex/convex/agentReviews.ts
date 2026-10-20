@@ -267,10 +267,11 @@ export const doneForCli = action({
     turns: v.optional(v.number()),
     usage: v.optional(usageArg),
     notional_usd: v.optional(v.number()),
+    findings_turn_usd: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<{ review: string; status: string; findings?: number; filed?: number; error?: string }> => {
     const h: { review: Doc<"agent_reviews">; judge: Doc<"judges">; moment: Doc<"moments">; source: Doc<"event_sources"> } = await ctx.runQuery(internal.agentReviews.handing, { api_token: args.api_token, device_id: args.device_id, review: args.review });
-    const spent = { ...(args.account ? { account: args.account } : {}), ...(args.took_ms !== undefined ? { took_ms: args.took_ms } : {}), ...(args.turns !== undefined ? { turns: args.turns } : {}), ...(args.usage ? { usage: args.usage } : {}), ...(args.notional_usd !== undefined ? { notional_usd: args.notional_usd } : {}) };
+    const spent = { ...(args.account ? { account: args.account } : {}), ...(args.took_ms !== undefined ? { took_ms: args.took_ms } : {}), ...(args.turns !== undefined ? { turns: args.turns } : {}), ...(args.usage ? { usage: args.usage } : {}), ...(args.notional_usd !== undefined ? { notional_usd: args.notional_usd } : {}), ...(args.findings_turn_usd !== undefined ? { findings_turn_usd: args.findings_turn_usd } : {}) };
     let transcriptKey: string | undefined;
     let transcriptBytes: number | undefined;
     if (args.transcript_gz) {
@@ -388,6 +389,7 @@ export const settle = internalMutation({
     turns: v.optional(v.number()),
     usage: v.optional(usageArg),
     notional_usd: v.optional(v.number()),
+    findings_turn_usd: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<boolean> => {
     const r = await ctx.db.get(args.review_id);
@@ -688,11 +690,10 @@ export const groupingProbe = internalAction({
     const out: Record<string, unknown> = { findings: items.length };
     for (const [name, text] of Object.entries(variants)) {
       const vecs = new Map<string, number[]>();
-      for (let i = 0; i < items.length; i += 10) {
-        await Promise.all(items.slice(i, i + 10).map(async (it) => {
-          const e = await embedFinding(ctx, scope, text(it.f));
-          if (e) vecs.set(it.id, e.vector);
-        }));
+      // One at a time: each settles the team's budget row, and side by side they conflict on it.
+      for (const it of items) {
+        const e = await embedFinding(ctx, scope, text(it.f));
+        if (e) vecs.set(it.id, e.vector);
       }
       const cos = (a: number[], b: number[]) => a.reduce((s, x, i) => s + x * b[i]!, 0) / Math.sqrt(a.reduce((s, x) => s + x * x, 0) * b.reduce((s, x) => s + x * x, 0));
       const pairs = args.pairs.flatMap(([a, b]) => {

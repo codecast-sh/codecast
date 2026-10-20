@@ -21,6 +21,8 @@ function judgeStub() {
     install() {
       process.env.ANTHROPIC_API_KEY = "test-key";
       state.calls.length = 0;
+      // Each test starts from the judge saying none: a reply one test set never answers for the next.
+      state.reply = '{"answer":"none"}';
       globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
         state.calls.push(JSON.parse(init.body));
         return new Response(JSON.stringify({
@@ -149,6 +151,39 @@ describe("signals.ingest", () => {
     expect(summary!.cause).toMatchObject({ signal_count: 2, first_seen: T0 + 1, last_seen: T0 + 2, fingerprints: ["desk:call.summary"] });
     // Placed once: a second pass finds nothing held.
     expect((await t.action(internal.signals.placeHeld, { workspace, sources: ["union.desk"], since_days: 100_000, dry_run: false })).keys).toBe(0);
+  });
+
+  test("judge candidates: an open problem holding no recent finding still competes on its title", async () => {
+    const { add, t, userId } = await setup();
+    // A problem with no finding in the recent window (one a backfill opened from old findings, or a slow one).
+    const quiet = await t.run(async (ctx) => await ctx.db.insert("tasks", {
+      user_id: userId, workspace: `user:${userId}`, short_id: "ct-900", title: "Unhandled API error: /api/calls/<id>/transcripts: invalid input syntax for type uuid",
+      status: "open", priority: "medium", blocks: [], source: "signal", task_type: "bug", triage_status: "suggested",
+      attempt_count: 0, retry_count: 0, max_retries: 3, created_at: T0, updated_at: T0,
+      cause: { signal_count: 1, first_seen: T0, last_seen: T0, fingerprints: ["err-old"] },
+    } as any));
+    stub.state.reply = '{"answer": "ct-900"}';
+    const out = await add({ fingerprint: "err-new", title: "Unhandled API error: /api/calls/41ff78fc/transcripts: invalid input syntax for type uuid" });
+    expect(stub.state.calls).toHaveLength(1);
+    expect(stub.state.calls[0].messages[0].content).toContain('<cause id="ct-900">');
+    expect(out).toMatchObject({ attach: "judge", task_id: quiet });
+  });
+
+  test("regrouping singles: a problem holding one finding folds into the problem the judge names", async () => {
+    const { add, t } = await setup();
+    const a = await add({ fingerprint: "err-a", title: "Linq reconciler failed: Linq 502", observed_at: T0 });
+    const b = await add({ fingerprint: "err-b", title: "Linq reconciler failed: Linq 503", observed_at: T0 + 1 });
+    expect(b.attach).toBe("new");
+    const aTask = await t.run(async (ctx) => await ctx.db.get(a.task_id as any)) as any;
+    const bTask = await t.run(async (ctx) => await ctx.db.get(b.task_id as any)) as any;
+    stub.state.reply = `{"answer": "${aTask.short_id}"}`;
+    const dry = await t.action(internal.signals.regroupSingles, { tasks: [bTask.short_id], dry_run: true });
+    expect(dry.folded).toBe(1);
+    expect((await t.run(async (ctx) => await ctx.db.get(b.signal_id)))!.task_id).toBe(b.task_id);
+    const real = await t.action(internal.signals.regroupSingles, { tasks: [bTask.short_id], dry_run: false });
+    expect(real.out).toEqual([{ task: bTask.short_id, into: aTask.short_id }]);
+    expect((await t.run(async (ctx) => await ctx.db.get(b.signal_id)))!.task_id).toBe(a.task_id);
+    expect(((await t.run(async (ctx) => await ctx.db.get(b.task_id as any))) as any).status).toBe("dropped");
   });
 
   test("placing held findings again: a held key the judge names joins that problem", async () => {
