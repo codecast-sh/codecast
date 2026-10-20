@@ -227,15 +227,17 @@ describe("answering a gate resumes the run (the-line.md L4)", () => {
     expect(r.error).toBe("Not found");
   });
 
-  test("a teammate who can read the run cannot answer or cancel a gate that was not asked of them", async () => {
+  test("a teammate who can read the run's task answers its gate but cannot cancel the run", async () => {
     const { ctx, tables } = await seed();
     await pause(ctx);
-    await expect((respondToGate as any)._handler(asUser(ctx, MATE), { id: RUN, response: "A" })).rejects.toThrow(/not your decision/);
-    await expect((cancel as any)._handler(asUser(ctx, MATE), { id: RUN })).rejects.toThrow(/not your run/);
-    expect(tables.session_decisions[0].status).toBe("pending");
-    expect(tables.workflow_runs[0].status).toBe("paused");
     // Reading stays workspace wide (L8).
     expect((await listRunsCore(ctx, MATE, { task_id: "ct-7" })).map((r: any) => r._id)).toEqual([RUN]);
+    await expect((cancel as any)._handler(asUser(ctx, MATE), { id: RUN })).rejects.toThrow(/not your run/);
+    expect(tables.workflow_runs[0].status).toBe("paused");
+    // A run's decision on a task is the task's: whoever reads the task answers it.
+    await (respondToGate as any)._handler(asUser(ctx, MATE), { id: RUN, response: "A" });
+    expect(tables.session_decisions[0].status).toBe("answered");
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "running", gate_response: "A" });
   });
 
   test("the web dispatch path (settleClientResolution) consumes an open gate without delivering to the asker", async () => {

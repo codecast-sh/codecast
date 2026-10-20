@@ -300,7 +300,6 @@ export function RoomThread({
   // (AddPeople.tsx): teammates, roles and agents.
   const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes, teamId: call?.team_id });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
-  const setAgentFace = useMutation(api.transcripts.setAgentFace);
   const facesOn = useInboxStore((st) => teamHasFeature(st.teams, call?.team_id, "agent_faces"));
   // What an agent did is in the past once the call ended or nothing is live
   // (the stage after the switch went off): "was in the room", and none of
@@ -579,7 +578,7 @@ export function RoomThread({
                     on={r.face !== false}
                     name={agent.name}
                     onChange={(face) =>
-                      void setAgentFace({ transcript_id: liveTranscriptId as Id<"transcripts">, target: r.target, face }).catch((e) =>
+                      void useInboxStore.getState().setCallAgentFace(liveTranscriptId, r.target, face).catch((e) =>
                         toast.error(humanizeConvexError(e, "Could not change the video avatar")),
                       )
                     }

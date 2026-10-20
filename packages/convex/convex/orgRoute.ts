@@ -13,6 +13,7 @@ import { requireWorkspaceCaller } from "./org";
 import { liveRoleByHandle, resolveRoleRef, rolesInBoundary } from "./lib/orgAccess";
 import { resolveScopeRef } from "./orgRoles";
 import { findTaskByRef } from "./taskEvidence";
+import { reachableRole } from "./pendingMessages";
 import { taskWork } from "./lib/orgOwnership";
 import { callModel } from "./lib/anthropic";
 import { parseRouterReply, routerDecision, routerRequest, type RouterRoster } from "./lib/orgRouter";
@@ -86,6 +87,12 @@ export type Prepared = {
 // Everything the action needs, read once: the caller, the boundary, the
 // target and anchors resolved, the rule applied, and the roster when the
 // router will be asked.
+// The standing session a routed task's notice reaches, for the reply's "woken in".
+export const standingOf = internalQuery({
+  args: { role_id: v.id("org_roles") },
+  handler: async (ctx, { role_id }) => (await reachableRole(ctx, role_id))?.standing.short_id ?? null,
+});
+
 export const prepare = internalQuery({
   args: {
     api_token: v.string(),
@@ -200,6 +207,8 @@ export const route = action({
     const [firstLine, ...rest] = request.split("\n");
     const title = firstLine.trim().slice(0, TITLE_MAX) || request.slice(0, TITLE_MAX);
     const description = [rest.join("\n").trim(), `Routed by cast route (line ${p.landing.line}: ${why}).`].filter(Boolean).join("\n\n");
+    // Assigning a role tells its standing session (announceAssignment); the
+    // routing note rides on that one notice rather than a second wake.
     const created: { id: string; short_id: string } = await ctx.runMutation(api.tasks.create, {
       api_token: args.api_token,
       title,
@@ -210,22 +219,18 @@ export const route = action({
       ...(p.anchor.plan_id ? { plan_id: String(p.anchor.plan_id) } : {}),
       ...(args.team_id ? { workspace: "team" as const, team_id: args.team_id } : { workspace: "personal" as const }),
       promoted: owner.kind === "user" ? true : undefined,
+      ...(owner.kind === "role" && args.from_session ? { assignment_from: args.from_session } : {}),
+      ...(owner.kind === "role"
+        ? { assignment_note: `It was routed to you (line ${p.landing.line}: ${why}). Read it, start it if you start work on your own, otherwise say in one line that it needs starting and recommend it.` }
+        : {}),
     });
     const task = { id: String(created.id), short_id: created.short_id };
     let woke: RouteResult["woke"] = null;
     let not_woken: string | undefined;
     if (owner.kind === "role") {
-      try {
-        const sent: any = await ctx.runMutation(api.orgRoles.wake, {
-          api_token: args.api_token,
-          role_id: String(owner.role._id),
-          message: `A request was routed to you (line ${p.landing.line}: ${why}). It is ${task.short_id}: ${title}. Read it with \`cast task show ${task.short_id}\`, start it if you start work on your own, otherwise say in one line that it needs starting and recommend it.`,
-          ...(args.from_session ? { from_session: args.from_session } : {}),
-        });
-        woke = sent?.short_id ? { short_id: sent.short_id } : null;
-      } catch (e: any) {
-        not_woken = String(e?.message ?? e);
-      }
+      const standing: string | null = await ctx.runQuery(internal.orgRoute.standingOf, { role_id: owner.role._id });
+      if (standing) woke = { short_id: standing };
+      else not_woken = "This role has no standing session to tell";
     }
     return { ...base, task, woke, ...(not_woken ? { not_woken } : {}) };
   },

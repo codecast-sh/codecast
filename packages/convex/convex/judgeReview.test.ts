@@ -20,6 +20,7 @@ async function setup(o: { lineOn?: boolean } = {}) {
     "./signals.ts": () => import("./signals"),
     "./judgeReview.ts": () => import("./judgeReview"),
     "./judgeRetire.ts": () => import("./judgeRetire"),
+    "./modelCalls.ts": () => import("./modelCalls"),
     "./notificationRouter.ts": () => import("./notificationRouter"),
   });
   const ids = await t.run(async (ctx) => {
