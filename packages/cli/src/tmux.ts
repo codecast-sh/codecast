@@ -188,14 +188,63 @@ export function sessionServerPlan(session: string, args: string[], env: TmuxEnv)
   };
 }
 
-/** Why a session could not be created in the server already on its socket: none is behind it ("stale"), it is too busy to accept, or the command itself failed. */
+const socketServerPids = (procs: ProcRow[], socket: string): number[] =>
+  procs.filter((p) => p.command.includes(` -L ${socket} `)).map((p) => p.pid);
+
+/**
+ * Why a session could not be created in the server already on its socket:
+ * none is behind it ("stale"), it is too busy to accept, or the command itself
+ * failed. tmux says "no server running" for a busy server too, so a server
+ * process on the socket means busy, never stale: replacing its socket would
+ * strand it. A server can also be alive with its socket gone (an earlier
+ * attempt replaced it), and then it refuses forever: the runner panes of four
+ * runs did on 2026-10-17, and every resume of those runs failed busy. SIGUSR1
+ * makes a tmux server recreate its socket, so each one on this socket is
+ * asked to, and the next attempt reaches it; a server that only was busy
+ * rebinds the same path.
+ */
 function existingServerFailure(err: unknown, socket: string, procs: () => ProcRow[]): "stale" | Error {
   const failure = tmuxNoStartFailure(stderrOf(err));
   if (failure === "other" || failure === "unsupported") return err as Error;
-  // tmux says "no server running" for a busy server too, so a server process
-  // on the socket means busy, never stale: replacing its socket would strand it.
-  if (procs().some((p) => p.command.includes(` -L ${socket} `))) return new TmuxServerBusyError();
-  return "stale";
+  const servers = socketServerPids(procs(), socket);
+  if (!servers.length) return "stale";
+  for (const pid of servers) try { process.kill(pid, "SIGUSR1"); } catch {}
+  return new TmuxServerBusyError();
+}
+
+/**
+ * Before a start over a missing socket: a server can be alive with its socket
+ * file gone, and starting another beside it leaves it holding the session's
+ * name with nothing able to reach it (two such servers per runner socket on
+ * 2026-10-17). Ask every server on the socket to recreate it, and give them a
+ * moment; when one does, the start goes to that server like any existing one.
+ */
+const ORPHAN_REBIND_MS = 2_000;
+function orphanServers(plan: SessionServerPlan, procs: ProcRow[]): number[] {
+  if (fs.existsSync(plan.socketPath)) return [];
+  const servers = socketServerPids(procs, plan.socket);
+  for (const pid of servers) try { process.kill(pid, "SIGUSR1"); } catch {}
+  return servers;
+}
+function reclaimOrphanSync(plan: SessionServerPlan): void {
+  if (!orphanServers(plan, snapshotProcessTable()).length) return;
+  for (const until = Date.now() + ORPHAN_REBIND_MS; Date.now() < until && !fs.existsSync(plan.socketPath);) sleepSync(100);
+}
+async function reclaimOrphan(plan: SessionServerPlan): Promise<void> {
+  if (fs.existsSync(plan.socketPath) || !orphanServers(plan, await snapshotProcessTableAsync()).length) return;
+  for (const until = Date.now() + ORPHAN_REBIND_MS; Date.now() < until && !fs.existsSync(plan.socketPath);) await new Promise((r) => setTimeout(r, 100));
+}
+
+/**
+ * A start that timed out leaves the server it launched, which may answer
+ * later on a socket the next attempt replaces: an orphan that holds the
+ * socket's name and refuses everything after. A start runs only where no
+ * server was behind the socket, so every server on it now is this start's.
+ */
+function abandonSessionServer(plan: SessionServerPlan, procs: ProcRow[]): void {
+  finishSessionServer(plan, false);
+  for (const pid of socketServerPids(procs, plan.socket)) try { process.kill(pid, "SIGKILL"); } catch {}
+  fs.rmSync(plan.socketPath, { force: true });
 }
 
 function startFailure(plan: SessionServerPlan): Error | null {
@@ -217,6 +266,7 @@ const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuf
 export function startSessionServerSync(session: string, args: string[], env: TmuxEnv, exec: (argv: string[]) => unknown): void {
   const plan = sessionServerPlan(session, args, env);
   const L = ["-L", plan.socket];
+  reclaimOrphanSync(plan);
   if (fs.existsSync(plan.socketPath)) {
     try {
       exec([...L, "-N", ...withoutGlobals(args)]);
@@ -241,7 +291,7 @@ export function startSessionServerSync(session: string, args: string[], env: Tmu
     } catch {}
     const failure = startFailure(plan);
     if (failure || Date.now() > deadline) {
-      finishSessionServer(plan, false);
+      abandonSessionServer(plan, snapshotProcessTable());
       throw failure ?? new Error(`tmux server for ${plan.socket} did not start within ${SESSION_SERVER_START_MS / 1000}s`);
     }
     sleepSync(100);
@@ -253,6 +303,7 @@ export function startSessionServerSync(session: string, args: string[], env: Tmu
 export async function startSessionServer(session: string, args: string[], env: TmuxEnv, exec: (argv: string[]) => Promise<unknown>): Promise<void> {
   const plan = sessionServerPlan(session, args, env);
   const L = ["-L", plan.socket];
+  await reclaimOrphan(plan);
   if (fs.existsSync(plan.socketPath)) {
     try {
       await exec([...L, "-N", ...withoutGlobals(args)]);
@@ -278,7 +329,7 @@ export async function startSessionServer(session: string, args: string[], env: T
     } catch {}
     const failure = startFailure(plan);
     if (failure || Date.now() > deadline) {
-      finishSessionServer(plan, false);
+      abandonSessionServer(plan, await snapshotProcessTableAsync());
       throw failure ?? new Error(`tmux server for ${plan.socket} did not start within ${SESSION_SERVER_START_MS / 1000}s`);
     }
     await new Promise((r) => setTimeout(r, 100));
