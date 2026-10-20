@@ -6,6 +6,7 @@ import { isConvexId } from "../lib/entityLinks";
 import { composeDocId } from "../lib/composerPresence";
 import { SharedDraftSession, sharedClientId, type SharedDraftServer } from "../lib/sharedDraft";
 import { usePresenceRows, type PresenceRow } from "./useDocPresence";
+import { useChangedState } from "./useChangedState";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -97,7 +98,8 @@ export function useSharedDraft(opts: {
   const [version, setVersion] = useState<number | null>(null);
   const [joined, setJoined] = useState(false);
   const [editors, setEditors] = useState<Record<string, number>>({});
-  const [caret, setCaret] = useState<number | null>(null);
+  // Read after every keystroke: set only on a change.
+  const [caret, setCaret] = useChangedState<number | null>(null);
 
   // Show the draft in the box, keeping my caret where it was among the words.
   const show = (next: string, map?: (pos: number) => number) => {
