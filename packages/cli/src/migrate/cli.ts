@@ -4,6 +4,9 @@
  *
  *   cast migrate start --to <device> <session…>   create a batch (the web's
  *                                                 Settings → Migration does the same)
+ *   cast migrate move <session> --to <device>     re-home one session onto another
+ *                                                 laptop that has the checkout (the
+ *                                                 web's Run on this device)
  *   cast migrate ls                               recent batches
  *   cast migrate show <batch>                     one batch, row by row
  *   cast migrate cancel <batch>                   cancel its queued rows
@@ -17,6 +20,7 @@ import { commandGroup } from "../commandGroups.js";
 import { deviceId as localDeviceId } from "../remote/device.js";
 import { convexClient } from "../remote/cli.js";
 import { createRunnerIo } from "./io.js";
+import { matchDevices } from "./pickDevice.js";
 import { runBatch } from "./runner.js";
 
 function ago(ts: number): string {
@@ -32,6 +36,15 @@ function deviceName(devices: any[], id: string | null | undefined): string {
   if (!id) return "unknown";
   const d = devices.find((x) => x.device_id === id);
   return d ? `${d.label ?? d.hostname ?? id.slice(0, 8)}${d.is_remote ? " (cloud)" : ""}` : id.slice(0, 8);
+}
+
+/** The one device `needle` names; otherwise say why not, list the candidates, and exit. */
+function pickDevice(devices: any[], needle: string, what: string): any {
+  const matches = matchDevices(devices, needle);
+  if (matches.length === 1) return matches[0];
+  console.error(matches.length === 0 ? `no device matches ${what} "${needle}"` : `${what} "${needle}" matches ${matches.length} devices; be more specific:`);
+  for (const d of matches.length ? matches : devices) console.error(`  ${d.device_id.slice(0, 8)}  ${d.label ?? d.hostname ?? ""}${d.is_remote ? " (cloud)" : ""}${d.online ? "" : "  offline"}`);
+  process.exit(1);
 }
 
 function printBatch(b: any, devices: any[]): void {
@@ -63,20 +76,8 @@ export function registerMigrateCommand(program: Command): void {
     .action(async (sessions: string[], opts: { to: string; label?: string; from?: string; project?: string; all?: boolean; dryRun?: boolean; wait: string; concurrency: string; json?: boolean }) => {
       const { client, token, api } = await convexClient();
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
-      const pickDevice = (needle: string, what: string): any => {
-        const n = needle.toLowerCase();
-        const matches = devices.filter((d) =>
-          d.device_id.toLowerCase().startsWith(n) ||
-          String(d.label ?? "").toLowerCase().includes(n) ||
-          String(d.hostname ?? "").toLowerCase().includes(n) ||
-          (n === "cloud" && d.is_remote));
-        if (matches.length === 1) return matches[0];
-        console.error(matches.length === 0 ? `no device matches ${what} "${needle}"` : `${what} "${needle}" matches ${matches.length} devices; be more specific:`);
-        for (const d of matches.length ? matches : devices) console.error(`  ${d.device_id.slice(0, 8)}  ${d.label ?? d.hostname ?? ""}${d.is_remote ? " (cloud)" : ""}${d.online ? "" : "  offline"}`);
-        process.exit(1);
-      };
-      const to = pickDevice(opts.to, "--to");
-      const from = opts.from ? pickDevice(opts.from, "--from") : undefined;
+      const to = pickDevice(devices, opts.to, "--to");
+      const from = opts.from ? pickDevice(devices, opts.from, "--from") : undefined;
       const selector = (opts.label || from || opts.project || opts.all)
         ? { ...(opts.label ? { label: opts.label } : {}), ...(from ? { from_device_id: from.device_id } : {}), ...(opts.project ? { project: opts.project } : {}), ...(opts.all ? { all: true } : {}) }
         : undefined;
@@ -104,6 +105,24 @@ export function registerMigrateCommand(program: Command): void {
       if (!res.batch_id) { console.error("nothing to migrate"); process.exit(1); }
       console.log(`batch ${res.batch_id}: ${res.rows.length} session(s) → ${deviceName(devices, to.device_id)}`);
       console.log(`  watch: cast migrate show ${res.batch_id}`);
+    });
+
+  migrate
+    .command("move <session>")
+    .description("Re-home one session onto another laptop that already has the checkout, and resume it there (the web's Run on this device). Interrupts a turn in progress; for a cloud host use `start`")
+    .requiredOption("--to <device>", "Destination: a device id (prefix) or label substring")
+    .option("--json", "Machine-readable")
+    .action(async (session: string, opts: { to: string; json?: boolean }) => {
+      const { client, token, api } = await convexClient();
+      const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
+      const to = pickDevice(devices, opts.to, "--to");
+      if (to.is_remote) {
+        console.error(`${deviceName(devices, to.device_id)} is a cloud host: its files must be transferred, so use \`cast migrate start --to ${opts.to} ${session}\``);
+        process.exit(1);
+      }
+      const r = await client.mutation(api.devices.reassignToDevice, { api_token: token, conversation_id: session, device_id: to.device_id });
+      if (opts.json) { console.log(JSON.stringify(r, null, 2)); return; }
+      console.log(`${session} → ${deviceName(devices, to.device_id)}${to.online ? "" : " (offline)"}`);
     });
 
   migrate
