@@ -63,8 +63,10 @@ export function registerReviewsCommands(line: Command, deps: PublishDeps): void 
     .option("--accounts <names>", "Only these saved profiles, comma separated (default: every profile with a setup token)")
     .option("--max-percent <n>", "A profile above this share of its worst limit window takes no new review")
     .option("--per-account <n>", "Reviews one profile runs at once")
+    .option("--slots-when-busy <n>", "Fill no more than this many while the CPU is idle less than --busy-idle-percent (default 15) of the time")
+    .option("--busy-idle-percent <n>", "The CPU idle share under which the machine counts as busy")
     .option("--root <source=path>", "Where the judge's repo is on this machine, when not where it was published", (v: string, acc: string[] = []) => [...acc, v], [] as string[])
-    .action((options: { slots?: string; accounts?: string; maxPercent?: string; perAccount?: string; root: string[] }) => {
+    .action((options: { slots?: string; accounts?: string; maxPercent?: string; perAccount?: string; slotsWhenBusy?: string; busyIdlePercent?: string; root: string[] }) => {
       const before = readReviewsConfig();
       const roots = { ...(before.roots ?? {}) };
       for (const r of options.root) {
@@ -77,6 +79,8 @@ export function registerReviewsCommands(line: Command, deps: PublishDeps): void 
         ...(options.accounts !== undefined ? { accounts: options.accounts.split(",").map((a) => a.trim()).filter(Boolean) } : {}),
         ...(options.maxPercent !== undefined ? { max_percent: Number(options.maxPercent) || REVIEWS_DEFAULTS.max_percent } : {}),
         ...(options.perAccount !== undefined ? { per_account: Math.max(1, Number(options.perAccount) || 1) } : {}),
+        ...(options.slotsWhenBusy !== undefined ? { slots_when_busy: Math.max(0, Number(options.slotsWhenBusy) || 0) } : {}),
+        ...(options.busyIdlePercent !== undefined ? { busy_idle_percent: Number(options.busyIdlePercent) || 15 } : {}),
         roots,
       });
       if (!harnessScript()) console.log(fmt.warning("This build carries no dry-run harness (scripts/prompt-dry-run.ts); this machine cannot run reviews."));
@@ -176,5 +180,5 @@ function printMachine(cfg: ReturnType<typeof readReviewsConfig>) {
   const busy = new Map<string, number>();
   for (const r of held.filter((h) => h.alive)) busy.set(r.account, (busy.get(r.account) ?? 0) + 1);
   const ready = pickAccounts(cfg, busy, new Map());
-  console.log(`This machine: ${cfg.slots ? `${cfg.slots} slot${cfg.slots === 1 ? "" : "s"}` : "off"}, ${held.filter((h) => h.alive).length} running here · profiles with room: ${ready.length ? ready.join(", ") : "none"} (under ${cfg.max_percent}%, ${cfg.per_account} each) · ${reviewsConfigFile()}`);
+  console.log(`This machine: ${cfg.slots ? `${cfg.slots} slot${cfg.slots === 1 ? "" : "s"}${cfg.slots_when_busy != null ? ` (${cfg.slots_when_busy} while CPU idle is under ${cfg.busy_idle_percent ?? 15}%)` : ""}` : "off"}, ${held.filter((h) => h.alive).length} running here · profiles with room: ${ready.length ? ready.join(", ") : "none"} (under ${cfg.max_percent}%, ${cfg.per_account} each) · ${reviewsConfigFile()}`);
 }

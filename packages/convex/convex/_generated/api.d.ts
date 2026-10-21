@@ -402,6 +402,7 @@ import type * as presencePolicy from "../presencePolicy.js";
 import type * as presenceState from "../presenceState.js";
 import type * as principalViewRevisions from "../principalViewRevisions.js";
 import type * as privacy from "../privacy.js";
+import type * as problemMerge from "../problemMerge.js";
 import type * as progressEvents from "../progressEvents.js";
 import type * as projectPaths from "../projectPaths.js";
 import type * as projectUpdates from "../projectUpdates.js";
@@ -910,6 +911,7 @@ declare const fullApi: ApiFromModules<{
   presenceState: typeof presenceState;
   principalViewRevisions: typeof principalViewRevisions;
   privacy: typeof privacy;
+  problemMerge: typeof problemMerge;
   progressEvents: typeof progressEvents;
   projectPaths: typeof projectPaths;
   projectUpdates: typeof projectUpdates;
