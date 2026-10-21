@@ -48,9 +48,28 @@ export type ReviewsConfig = {
   per_account: number;
   /** Where the judge's repo sits on this machine, by source, when not where it was published. */
   roots?: Record<string, string>;
+  /** While the machine's CPU is idle less than busy_idle_percent of the time, no more than this many run. */
+  slots_when_busy?: number;
+  busy_idle_percent?: number;
 };
 
-export const REVIEWS_DEFAULTS: ReviewsConfig = { slots: 0, max_percent: 85, per_account: 3 };
+export const REVIEWS_DEFAULTS: ReviewsConfig = { slots: 0, max_percent: 85, per_account: 3, busy_idle_percent: 15 };
+
+/** CPU idle share since the previous reading, from the kernel's per-core counters; null on the first reading. */
+let cpuBefore: { idle: number; total: number } | null = null;
+export function cpuIdleShare(): number | null {
+  const now = os.cpus().reduce((a, c) => ({ idle: a.idle + c.times.idle, total: a.total + c.times.idle + c.times.user + c.times.sys + c.times.nice + c.times.irq }), { idle: 0, total: 0 });
+  const before = cpuBefore;
+  cpuBefore = now;
+  if (!before || now.total <= before.total) return null;
+  return (now.idle - before.idle) / (now.total - before.total);
+}
+
+/** The slots a pass fills: the configured ones, or fewer while the machine is busy (other work shares its CPU, and a starved review only runs longer). */
+export function slotsNow(cfg: ReviewsConfig, idle: number | null): number {
+  if (cfg.slots_when_busy == null || idle == null) return cfg.slots;
+  return idle * 100 < (cfg.busy_idle_percent ?? 15) ? Math.min(cfg.slots, cfg.slots_when_busy) : cfg.slots;
+}
 export const REVIEWS_TICK_MS = 30_000;
 
 export const reviewsConfigFile = () => codecastPath("agent-reviews.json");
@@ -368,7 +387,10 @@ export async function tickReviews(deps: ReviewsTickDeps): Promise<{ handed: numb
     }
     held = held.filter((r) => !lost.includes(r.claim.review));
   }
-  const free = Math.max(0, cfg.slots - held.length);
+  const idle = cpuIdleShare();
+  const slots = slotsNow(cfg, idle);
+  if (slots < cfg.slots) deps.log(`[REVIEWS] CPU ${Math.round((idle ?? 0) * 100)}% idle: filling ${slots} of ${cfg.slots} slots`);
+  const free = Math.max(0, slots - held.length);
   const harness = harnessScript();
   const castDir = realCastDir();
   if (!free || !harness) return { handed, started: 0, running: held.length };
