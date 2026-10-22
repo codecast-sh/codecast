@@ -60,7 +60,7 @@ digraph review {
 - `kind`: `line` or `segment`. Declaring a kind is what puts a graph in the
   pool: any other graph (a probe, a trial's copy, an old template) can still
   be run by name, and is offered to nobody. The shipped `line` is in the pool
-  without one, and so is every file in the repo's `.codecast/flows/`.
+  without one, and so is every `.codecast/flows/<slug>.cast` in the repo.
 - `label`, `description`: the name and the one line a picker shows.
 - `takes`: what the flow needs from the change. `task` (a task with a goal and
   criteria), `branch` (a branch or worktree holding the change), or both.

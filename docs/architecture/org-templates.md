@@ -111,7 +111,7 @@ A role's job is more than its words. The CMO queries Google Ads through a script
 
 ```json
 "tools": [
-  { "id": "gads", "kind": "command", "path": "scripts/gads.mjs", "run": "bun", "summary": "Google Ads API: query with GAQL, validate and apply mutations", "needs": ["bun"] },
+  { "id": "gads", "kind": "command", "path": "bin/gads.mjs", "run": "bun", "summary": "Google Ads API: query with GAQL, validate and apply mutations", "needs": ["bun"] },
   { "id": "ads-daily", "kind": "skill", "path": "skills/ads-daily" }
 ]
 ```
