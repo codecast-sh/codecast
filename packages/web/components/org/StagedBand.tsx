@@ -10,10 +10,9 @@ import { TakeoverEdit } from "./TakeoverEdit";
 import { LedgerWord, type SubjectAnswer } from "./ProposalSubjectCard";
 
 /** The band's words: the first word in the verdict's ink, the rest quiet. */
-export function stagedWords(answer: SubjectAnswer, retry = false): [string, string] {
+export function stagedWords(answer: SubjectAnswer): [string, string] {
   if (answer.verdict === "reject") return ["Rejected.", "Sent when you send."];
   if (answer.verdict === "note") return ["Adjust.", "Your words go back when you send."];
-  if (retry) return ["Retry.", "Runs again when you send."];
   if (answer.leave_sessions) return ["Accepted,", "and the sessions stay where they are. Applies when you send."];
   return ["Accepted.", "Applies when you send."];
 }
@@ -31,10 +30,8 @@ const INK: Record<SubjectAnswer["verdict"], string> = {
   note: "text-[color:var(--sol-text)]",
 };
 
-export function StagedBand({ answer, retry, onUndo, field, you, takeover, joined, className }: {
+export function StagedBand({ answer, onUndo, field, you, takeover, joined, className }: {
   answer: SubjectAnswer;
-  /** The approval retries a failed entry. */
-  retry?: boolean;
   onUndo: () => void;
   /** The reply field while it is open; drawn under the first line. */
   field?: React.ReactNode;
@@ -46,7 +43,7 @@ export function StagedBand({ answer, retry, onUndo, field, you, takeover, joined
   joined?: boolean;
   className?: string;
 }) {
-  const [first, rest] = stagedWords(answer, retry);
+  const [first, rest] = stagedWords(answer);
   const Icon = answer.verdict === "approve" ? Check : answer.verdict === "reject" ? X : null;
   return (
     <div
