@@ -29,6 +29,8 @@ import { displayName } from "./lib/displayNames";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { isConvexId } from "@codecast/shared/entities";
 import {
+  cleanSecretList,
+  cleanSecretSites,
   envNameProblem,
   formatVaultReady,
   isHostedAgentType,
@@ -209,8 +211,6 @@ function metaProblem(fields: { name?: string; env?: string[]; note?: string; sit
   return null;
 }
 
-const cleanList = (xs?: string[]) => (xs ? [...new Set(xs.map((x) => x.trim()).filter(Boolean))] : undefined);
-const cleanSites = (xs?: string[]) => cleanList(xs?.map((s) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")));
 
 function valueFields(kind: SecretKind, payload: SecretPayload) {
   return {
@@ -381,8 +381,8 @@ export const create = action({
     const userId = await ctx.runQuery(internal.secrets.callerOf, { api_token: args.api_token });
     if (!userId) return { error: "Unauthorized: sign in, or run `cast auth` on this machine" };
     const name = args.name.trim();
-    const env = cleanList(args.env);
-    const sites = cleanSites(args.sites);
+    const env = cleanSecretList(args.env);
+    const sites = cleanSecretSites(args.sites);
     const note = args.note?.trim() || undefined;
     const problem = metaProblem({ name, env, sites, note });
     if (problem) return { error: problem };
@@ -533,8 +533,8 @@ export const updateMeta = mutation({
     const patch: Partial<SecretRow> = {};
     if (args.name !== undefined) patch.name = args.name.trim();
     if (args.note !== undefined) patch.note = args.note.trim() || undefined;
-    if (args.env !== undefined) patch.env = cleanList(args.env)?.length ? cleanList(args.env) : undefined;
-    if (args.sites !== undefined) patch.sites = cleanSites(args.sites)?.length ? cleanSites(args.sites) : undefined;
+    if (args.env !== undefined) patch.env = cleanSecretList(args.env)?.length ? cleanSecretList(args.env) : undefined;
+    if (args.sites !== undefined) patch.sites = cleanSecretSites(args.sites)?.length ? cleanSecretSites(args.sites) : undefined;
     const problem = metaProblem({ name: patch.name, env: patch.env, sites: patch.sites, note: patch.note });
     if (problem) return { error: problem };
     if (patch.name && patch.name !== row.name) {
@@ -581,8 +581,8 @@ export const request = mutation({
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const name = args.name.trim();
-    const env = cleanList(args.env);
-    const sites = cleanSites(args.sites);
+    const env = cleanSecretList(args.env);
+    const sites = cleanSecretSites(args.sites);
     const why = args.why?.trim() || undefined;
     const problem = metaProblem({ name, env, sites, note: why });
     if (problem) return { error: problem };

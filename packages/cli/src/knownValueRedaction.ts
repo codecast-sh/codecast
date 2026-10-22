@@ -6,8 +6,9 @@
 // module closes that gap the way Delta does: the daemon collects the real
 // secret values present on this machine (its environment, codecast's own
 // config, the standard credential files, and the .env files of live sessions'
-// working directories) and replaces every exact occurrence before a transcript
-// syncs.
+// working directories), plus every Vault value its user can read
+// (secrets/redactionSource.ts), and replaces every exact occurrence before a
+// transcript syncs.
 //
 // Rules:
 //  - Values live only in memory. Nothing here logs, persists or sends a value;
@@ -295,6 +296,8 @@ export type KnownValueSources = {
   cwds?: () => Iterable<string>;
   /** Decrypted codecast credentials (config.json's auth_token is encrypted at rest). */
   codecastSecrets?: () => Array<string | undefined>;
+  /** Named values held in memory and refreshed off the network: the Vault (secrets/redactionSource.ts). */
+  vault?: { values: () => KnownValue[]; refresh: () => Promise<boolean> };
   log?: (line: string) => void;
 };
 
@@ -360,7 +363,11 @@ export class KnownValueStore {
   }
 
   collect(): KnownValue[] {
-    const values = collectFromEnv(this.src.env());
+    // Vault values first: the first name wins, so a value also held in an env
+    // var or a .env file still reads as the secret's Vault name.
+    const values: KnownValue[] = [];
+    for (const { value, name } of this.src.vault?.values() ?? []) add(values, value, name);
+    values.push(...collectFromEnv(this.src.env()));
     for (const secret of this.src.codecastSecrets?.() ?? []) add(values, secret, "codecast");
     const seen = new Set<string>();
     for (const { file, collect } of this.files()) {
@@ -389,7 +396,7 @@ export class KnownValueStore {
     }
     const before = active?.size ?? -1;
     active = matcher;
-    if (matcher.size !== before) this.src.log?.(`[KNOWN-VALUES] ${matcher.size} values from env, credential files and ${this.cwds.size} session dirs`);
+    if (matcher.size !== before) this.src.log?.(`[KNOWN-VALUES] ${matcher.size} values from env, credential files, the Vault and ${this.cwds.size} session dirs`);
     this.watchFiles();
     return matcher;
   }
@@ -403,11 +410,22 @@ export class KnownValueStore {
 
   start(intervalMs = 60_000): void {
     this.rebuild();
+    this.refreshVault();
     this.timer = setInterval(() => {
       for (const cwd of this.src.cwds?.() ?? []) if (cwd) this.cwds.add(cwd);
       this.rebuild();
+      this.refreshVault();
     }, intervalMs);
     (this.timer as any).unref?.();
+  }
+
+  /** Poll the Vault source and rebuild once its values arrive or change. */
+  refreshVault(): Promise<void> {
+    if (!this.src.vault) return Promise.resolve();
+    return this.src.vault.refresh().then(
+      (changed) => { if (changed) this.rebuild(); },
+      (e) => this.src.log?.(`[KNOWN-VALUES] vault refresh failed: ${(e as Error)?.message ?? e}`),
+    );
   }
 
   stop(): void {
