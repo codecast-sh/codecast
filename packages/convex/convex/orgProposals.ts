@@ -27,6 +27,7 @@ import {
   editedOrgChange,
   proposalReplyText,
   isOrgChangeDecidable,
+  isOrgChangeApprovable,
   isOrgQuietChange,
   orderOrgChanges,
   orgChangeError,
@@ -52,6 +53,7 @@ import {
   ORG_SESSION_KINDS,
 } from "@codecast/shared/contracts/orgProposal";
 import { orgAppliedDiff } from "@codecast/shared/contracts/orgChange";
+import { humanizeConvexError } from "@codecast/shared/contracts/convexErrors";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): a set of changes
 // to the chart with a rationale each, authored by an agent or a person and
@@ -377,6 +379,7 @@ export async function listProposals(ctx: Ctx, userId: Id<"users">, args: { team_
 // it, and the proposal (and its queue card) waits for that. The set is the
 // shared contract's, so the web's guards and this file cannot disagree.
 const decidable = (c: ChangeRow) => isOrgChangeDecidable(c.status);
+const approvable = (c: ChangeRow) => isOrgChangeApprovable(c.status);
 async function resolveIfDone(ctx: Ctx, proposal: ProposalRow, now: number): Promise<boolean> {
   const open = (await changesOf(ctx, proposal._id)).some((c) => decidable(c) || c.status === "accepted");
   if (open) return false;
@@ -434,12 +437,9 @@ async function acceptOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, c
   // The log hands over the rows this apply writes, from here on: an accept
   // all runs several changes on one ctx and shares one batch between them.
   takeOrgRows(ctx);
-  let result: ApplyResult;
-  try {
-    result = await applyOrgChange(ctx, userId, boundaryOf(proposal), merged, { provision, human_decision: `proposal:${String(change._id)}`, awaiting_adopt: awaitingAdopt, evidence: change.evidence });
-  } catch (err) {
-    throw new Error(`${proposal.short_id}#${change.seq} (${describeOrgChange(merged)}): ${err instanceof Error ? err.message : String(err)}`);
-  }
+  // A refusal leaves as the core wrote it: the failed row stores it, and the
+  // card, `cast org proposal` and the log show it to the person as is.
+  const result: ApplyResult = await applyOrgChange(ctx, userId, boundaryOf(proposal), merged, { provision, human_decision: `proposal:${String(change._id)}`, awaiting_adopt: awaitingAdopt, evidence: change.evidence });
   const ok = result.status === "applied";
   const note = result.status === "applied" || result.status === "skipped" ? result.note : result.status === "error" ? result.error : "not applied";
   // The stamp (S39): what this accept moved, so the decided card still shows
@@ -488,13 +488,17 @@ export async function performDecideChange(
   await requireAdmin(ctx, userId, proposal);
   if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   if (!decidable(change)) throw new Error(`${proposal.short_id}#${change.seq} is already ${change.status}`);
+  // A failed change applies once it changes: the person's edits here, or its author's revise.
+  if (args.verdict === "accept" && !approvable(change) && args.edits == null) throw new Error(`${proposal.short_id}#${change.seq} failed: ${change.applied_note ?? "the apply was refused"}. It applies once it changes (accept it with edits, or its author revises it); skip it to close it.`);
   // An amend keeps the row's id and replaces what it says (S18), so the id
   // alone does not say which content the person read.
   refuseIfRevised(proposal, await changesOf(ctx, proposal._id), args.seen);
   const now = Date.now();
   const out = args.verdict === "skip"
     ? await skipOne(ctx, userId, proposal, change, now, args.provision ?? true)
-    : await acceptOne(ctx, userId, proposal, change, args.edits, now, args.provision ?? true);
+    : await acceptOne(ctx, userId, proposal, change, args.edits, now, args.provision ?? true).catch((err) => {
+      throw new Error(`${proposal.short_id}#${change.seq} (${describeOrgChange(change.change)}): ${humanizeConvexError(err)}`);
+    });
   await ctx.db.patch(proposal._id, { updated_at: now });
   const resolved = await resolveIfDone(ctx, proposal, now);
   return { ...out, proposal: proposal.short_id, resolved };
@@ -554,7 +558,7 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   // The person's own call says what it read; a continuation and an ask's
   // accept were checked by the call that started them.
   if (!args.continuation) refuseIfRevised(proposal, rows, args.seen);
-  const all = orderForApply(rows.filter(decidable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !seqs || seqs.has(c.seq)).filter((c) => !triedSet.has(String(c._id))));
+  const all = orderForApply(rows.filter(approvable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !seqs || seqs.has(c.seq)).filter((c) => !triedSet.has(String(c._id))));
   // One call applies one chunk and hands the rest to its own transaction
   // (acceptAllContinue): a hundred records, each plan close cascading over its
   // tasks, do not fit one read and write budget, and a late failure must not
@@ -575,14 +579,16 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
         ? await ctx.runMutation(internal.orgProposals.acceptOneInTransaction, { user_id: userId, proposal_id: proposal._id, change_id: change._id, now, provision, log_head: logHead, ...(edits ? { leave_sessions: true } : {}) })
         : await acceptOne(ctx, userId, proposal, change, edits, now, provision));
     } catch (err) {
-      const note = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+      // The refusal's own sentence: a throw that crossed runMutation carries
+      // the runtime's "Uncaught Error:" lead and a stack frame.
+      const note = humanizeConvexError(err, "The apply was refused").slice(0, 500);
       await ctx.db.patch(change._id, { status: "failed", applied_note: note, applied_at: now, decided_by: userId, decided_at: now });
       results.push({ change_id: change._id, seq: change.seq, status: "failed", note, line: describeOrgChange(change.change) });
     }
   }
   await ctx.db.patch(proposal._id, { updated_at: now });
-  // Failed rows stay decidable, so the continuation names what it has already
-  // tried: a refusal is reported once, never retried in a loop.
+  // The continuation names what it has already tried, so a row is applied or
+  // refused once per accept, never twice.
   const tried = [...(args.tried ?? []), ...pending.map((c) => String(c._id))];
   if (remaining > 0 && (ctx as any).scheduler) {
     await (ctx as any).scheduler.runAfter(0, internal.orgProposals.acceptAllContinue, { user_id: userId, proposal_id: proposal._id, kinds: args.kinds, seqs: args.seqs, provision, tried, log_head: logHead, ...(args.leave_sessions ? { leave_sessions: true } : {}), ...(args.lead ? { lead: true } : {}) });
@@ -888,16 +894,27 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
     if (other !== undefined && other !== seq) throw new Error(`${verb}: ${describeOrgChange(change)} repeats #${other}: one change per subject`);
     keys.set(k, seq);
   };
+  // A failed change is the author's to fix too: the person approved it and
+  // the org's rules refused it as written, so only a revise can make it apply.
   const undecided = (seq: number, verb: string): ChangeRow => {
     const c = bySeq.get(seq);
     if (!c) throw new Error(`${verb}: ${proposal.short_id}#${seq} does not exist`);
-    if (c.status !== "proposed") throw new Error(`${verb}: ${proposal.short_id}#${seq} (${describeOrgChange(c.change)}) is already ${c.status}; a revise never touches a change a person decided`);
+    if (c.status !== "proposed" && c.status !== "failed") throw new Error(`${verb}: ${proposal.short_id}#${seq} (${describeOrgChange(c.change)}) is already ${c.status}; a revise never touches a change a person decided`);
     return c;
   };
   let nextSeq = rows.reduce((m, c) => Math.max(m, c.seq), 0) + 1;
+  const answered: number[] = [];
 
   for (const op of ops) {
-    if (op.op === "remove") {
+    if (op.op === "answer") {
+      // An answer is words, not a revision: it changes nothing the person
+      // decides on, so it goes on any change still on the proposal.
+      const c = bySeq.get(op.seq);
+      if (!c || c.status === "removed") throw new Error(`answer: ${proposal.short_id}#${op.seq} does not exist`);
+      const answer = { text: op.text.trim(), at: now };
+      answered.push(c.seq);
+      writes.push(() => ctx.db.patch(c._id, { answer }));
+    } else if (op.op === "remove") {
       const c = undecided(op.seq, "remove");
       release(c.change, c.seq);
       const line = describeOrgChange(c.change);
@@ -913,7 +930,9 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
       const was = describeOrgChange(c.change);
       const line = describeOrgChange(merged);
       const revision: OrgChangeRevision = { kind: "amended", note: op.note ?? (line === was ? "rationale rewritten" : `was: ${was}`), at: now, before: c.revision?.before ?? c.change };
-      const patch = { change: merged, revision, ...(op.rationale ? { rationale: op.rationale } : {}) };
+      // An amended failed change is a new change to decide: its refusal was about the old one.
+      const reopen = c.status === "failed" ? { status: "proposed" as const, applied_note: undefined, applied_at: undefined, decided_by: undefined, decided_at: undefined } : {};
+      const patch = { change: merged, revision, ...(op.rationale ? { rationale: op.rationale } : {}), ...reopen };
       bySeq.set(c.seq, { ...c, ...patch });
       journal.push({ op: "amended", seq: c.seq, at: now, by, line, was, ...(op.note ? { note: op.note } : {}) });
       writes.push(() => ctx.db.patch(c._id, patch));
@@ -938,6 +957,7 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
     proposal: proposal.short_id,
     status: "open",
     revisions: journal,
+    ...(answered.length ? { answered } : {}),
     changes: after.map((c) => ({ id: c._id, seq: c.seq, change: c.change, status: c.status, revision: c.revision, line: describeOrgChange(c.change), depends: depends[c.seq] })),
     counts: countsOf(after),
     link: PROPOSAL_LINK(proposal.short_id),
@@ -960,7 +980,7 @@ export const PROPOSAL_MESSAGE_TAG = "proposal-message";
 export function formatProposalMessage(o: { short_id: string; title: string; change: { seq: number; line: string } | null; ask?: { index: number; title: string } | null; from: string; body: string }): string {
   const q = (x: string) => x.replace(/"/g, "'");
   const inner = o.change ? withAboutChange(o.body, o.short_id, o.change.seq, o.change.line) : o.ask ? withAboutAsk(o.body, o.short_id, o.ask.index, o.ask.title) : `About ${o.short_id} ("${q(o.title)}"):\n\n${o.body}`;
-  const tail = `(Reply here; the org page shows this thread beside ${o.short_id}. To change the proposal run \`cast org revise ${o.short_id} --remove <n>\`, \`--amend <n> --edits '{...}'\` or \`--add change.json\`. Applying stays the person's.)`;
+  const tail = `(Reply here; the org page shows this thread beside ${o.short_id}. To change the proposal run \`cast org revise ${o.short_id} --remove <n>\`, \`--amend <n> --edits '{...}'\` or \`--add change.json\`; to answer a question on a change so its card shows it, \`--answer <n> --text "..."\`. Applying stays the person's.)`;
   const attrs = `proposal="${o.short_id}"${o.change ? ` change="${o.change.seq}"` : ""}${o.ask ? ` ask="${o.ask.index}"` : ""} from="${q(o.from)}"`;
   return `<${PROPOSAL_MESSAGE_TAG} ${attrs}>\n${inner}\n\n${tail}\n</${PROPOSAL_MESSAGE_TAG}>`;
 }
@@ -1108,6 +1128,7 @@ export async function performReply(
         continue;
       }
       if (!decidable(row)) continue;
+      if (item.verdict === "approve" && !approvable(row)) continue;
       if (item.verdict === "reject") {
         await ctx.db.patch(row._id, { reply: stamp(item.text, "reject") });
         results.push(await skipOne(ctx, userId, proposal, row, now, provision));
