@@ -17,7 +17,7 @@ Snippets:
   visual        Inline HTML visuals from agents (cast-canvas)
   publish       Shareable published pages (cast publish)
   state         A pinned, agent-maintained status per thread (cast state)
-  chat          Post to and read team channels (cast chat)
+  chat          Team channels and direct messages to people (cast chat)
   calls         Read transcribed team calls (cast calls)
   browser       Use your Chrome through the Cast extension
   computer      Drive a native macOS app (cast computer)

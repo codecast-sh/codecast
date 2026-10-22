@@ -70,6 +70,10 @@ The left nav opens six views, on keys 1 to 6:
   weight by how often runs took them, a run's path lit with step numbers;
   Essence and All steps). Notebook reads it as one calm document, a step at a
   time: its job, where it sends work, its runs, its prompt, improve it.
+- **Flows**: the team's pool of flows a change can run through, lines and
+  segments, each with its path and its runs; one opens drawn, with what it is
+  made of, what it is part of, and the changes that ran through it
+  (docs/architecture/flows.md FL6).
 - **Chat**: a conversation with the line. Replies carry live widgets, not
   walls of text.
 

@@ -177,15 +177,16 @@ describe("org intents", () => {
     // The card showed seqs 1 to 3; seq 3 is applied already and stays.
     st = run(st, "replyOnOrgProposal", "p-1", [{ verdict: "approve", change_ids: ["ch-1", "ch-2", "ch-3"], seqs: [1, 2, 3] }], { revised_at: 0, seqs: [1, 2, 3] });
     expect(st.orgProposalChanges["ch-1"].status).toBe("accepted");
-    expect(st.orgProposalChanges["ch-2"].status).toBe("accepted");
+    // A failed row is not approved again: it waits on its author's revise.
+    expect(st.orgProposalChanges["ch-2"].status).toBe("failed");
     expect(st.orgProposalChanges["ch-3"].status).toBe("applied");
     expect(st.orgProposalChanges["ch-9"].status).toBe("proposed");
-    expect(st.orgIntents.map((i) => i.kind === "decideChange" && i.change_id)).toEqual(["ch-1", "ch-2"]);
+    expect(st.orgIntents.map((i) => i.kind === "decideChange" && i.change_id)).toEqual(["ch-1"]);
     // The server refused it as revised: the transport wraps the line in "Uncaught Error:" and a stack.
     const error = new Error("[Request ID: abc] Server Error\nUncaught Error: op-1 was revised after this page read it; a verdict never lands on a change the person has not seen\n    at refuseIfRevised (../convex/orgProposals.ts:430:24)");
     const reverted: string[] = [];
     const notices = dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "replyOnOrgProposal", ["p-1", [], { revised_at: 0, seqs: [1, 2, 3] }], error);
-    expect(reverted).toHaveLength(2);
+    expect(reverted).toHaveLength(1);
     expect(notices).toEqual(["op-1 was revised after this page read it; a verdict never lands on a change the person has not seen. Nothing was applied; the revised list is on the page."]);
     for (const id of reverted) st = run(st, "revertOrgIntent", id);
     expect(st.orgProposalChanges["ch-1"].status).toBe("proposed");
@@ -195,7 +196,7 @@ describe("org intents", () => {
     st = run(staffing(), "replyOnOrgProposal", "p-1", [{ verdict: "approve", change_ids: ["ch-1", "ch-2"], seqs: [1, 2] }], { revised_at: 0, seqs: [1, 2] });
     expect(dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: () => {} }, "replyOnOrgProposal", ["p-2", [], { revised_at: 0 }], error)).toEqual([]);
     const plain = dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: () => {} }, "replyOnOrgProposal", ["p-1", [], { revised_at: 0 }], new Error("Uncaught Error: op-1 is resolved"));
-    expect(plain).toHaveLength(2);
+    expect(plain).toHaveLength(1);
     expect(plain[0]).toMatch(/^Approving "retire @ops" was refused; the change is back to proposed\.$/);
     expect(orgVerdictRevisedNotice(new Error("Uncaught Error: op-1 is resolved"))).toBeNull();
   });
