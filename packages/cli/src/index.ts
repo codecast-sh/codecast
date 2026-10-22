@@ -106,7 +106,6 @@ import { registerOrgInitCommands } from "./orgInit.js";
 import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import { registerRouteCommand } from "./routeCommand.js";
-import { registerFlowCommands } from "./flowCommand.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -168,7 +167,7 @@ import { parseSessionFile, extractSlug, extractCwd } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import type { DoctorDeps } from "./doctor.js";
-import { CHECK_CONFIG_REL_PATH, checkProject, gitLines, listWatchers, projectsTouching, repoRoot, resolveProjects, runWatcher, watchDir } from "./check.js";
+import { CHECK_CONFIG_REL_PATH } from "./checkConfigPath.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import { agentBinaryFromPsRow } from "./sessionProcessMatcher.js";
 import {
@@ -2905,7 +2904,18 @@ registerGroupStubs(program);
  *  callers — the group argv names, and `cast agent-context` loading all of them
  *  — must hand over the same thing. ct-49547. */
 function groupDeps(): GroupDeps {
-  return { getCliEndpoint, detectCurrentSessionId, resolveProjectId };
+  return {
+    getCliEndpoint, detectCurrentSessionId, resolveProjectId,
+    flow: {
+      cliPost, callingSession, realCwd: getRealCwd,
+      // The flows published to the workspace this shell reads (flows.md FL2).
+      fetchPool: async (team?: string) => {
+        const ws = await readWorkspace(team);
+        const r = await cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
+        return r?.flows ?? [];
+      },
+    },
+  };
 }
 
 program
@@ -5442,6 +5452,7 @@ program
   .option("--changed-since <ref>", "Only the projects whose program holds a file changed since <ref> (committed or not)")
   .option("--json", "Machine-readable: { project, errors, diagnostics } per project")
   .action(async (projects: string[], o: { fresh?: boolean; json?: boolean; changedSince?: string }) => {
+    const { checkProject, gitLines, projectsTouching, repoRoot, resolveProjects, watchDir } = await import("./check.js");
     const root = repoRoot();
     let wanted;
     try {
@@ -5491,6 +5502,7 @@ program
   .command("check-watch <root> <project> <tsconfig>", { hidden: true })
   .description("Run one typecheck watcher in the foreground (internal; `cast check` starts these detached)")
   .action(async (root: string, project: string, tsconfig: string) => {
+    const { runWatcher } = await import("./check.js");
     await runWatcher(root, project, tsconfig);
   });
 
@@ -5507,7 +5519,8 @@ program
   .command("check-status")
   .description("The typecheck watchers on this machine: tree, project, pid, last pass")
   .option("--stop", "Stop every watcher")
-  .action((o: { stop?: boolean }) => {
+  .action(async (o: { stop?: boolean }) => {
+    const { listWatchers } = await import("./check.js");
     const all = listWatchers();
     if (!all.length) return console.log("no typecheck watchers running");
     for (const w of all) {
@@ -14241,15 +14254,6 @@ registerOrgInitCommands(program, orgDeps);
 registerOrgTemplateCommands(program, orgDeps);
 registerOrgRoleOpsCommands(program, { ...orgDeps, resolveRoleId });
 registerRouteCommand(program, orgDeps);
-registerFlowCommands(program, {
-  cliPost, callingSession, realCwd: getRealCwd,
-  // The flows published to the workspace this shell reads (flows.md FL2).
-  fetchPool: async (team?: string) => {
-    const ws = await readWorkspace(team);
-    const r = await cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
-    return r?.flows ?? [];
-  },
-});
 
 // ── Team chat ────────────────────────────────────────────────────────────────
 // Channels, flat threads and the anchor answering in one. `cast chat reply` is

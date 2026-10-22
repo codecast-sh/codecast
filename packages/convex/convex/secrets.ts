@@ -29,9 +29,8 @@ import { displayName } from "./lib/displayNames";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { isConvexId } from "@codecast/shared/entities";
 import {
+  envFor,
   envNameProblem,
-  formatVaultReady,
-  isHostedAgentType,
   payloadFingerprint,
   redactionValuesOf,
   secretNameProblem,
@@ -42,7 +41,8 @@ import {
   type SecretMeta,
   type SecretPayload,
   type SigninPayload,
-} from "@codecast/shared/contracts";
+} from "@codecast/shared/contracts/secrets";
+import { formatVaultReady, isHostedAgentType } from "@codecast/shared/contracts";
 
 type SecretRow = Doc<"secrets">;
 
@@ -465,7 +465,7 @@ async function deliverReady(ctx: any, row: SecretRow, fulfiller: Id<"users">, ha
   if (!conversation) return false;
   if (isHostedAgentType(conversation.agent_type) && String(fulfiller) !== String(conversation.user_id)) return false;
   await enqueuePendingMessage(ctx, conversation, fulfiller, {
-    content: formatVaultReady({ short_id: row.short_id, name: row.name, kind: row.kind, env: row.env, sites: row.sites, has_otp: hasOtp }),
+    content: formatVaultReady({ short_id: row.short_id, name: row.name, kind: row.kind, vars: envFor(row).map((b) => b.var), sites: row.sites, has_otp: hasOtp }),
     client_id: `vault-ready:${String(row._id)}`,
     human: true,
     wake_cause: "approval",

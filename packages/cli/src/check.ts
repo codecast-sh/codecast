@@ -38,6 +38,7 @@
  */
 
 import { codecastPath } from "./codecastDir.js";
+import { CHECK_CONFIG_REL_PATH } from "./checkConfigPath.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -56,7 +57,6 @@ export interface CheckProject {
   tsconfig: string;
 }
 
-export const CHECK_CONFIG_REL_PATH = ".codecast/check.toml";
 
 /** The `[projects]` table of `.codecast/check.toml`, or null when the tree has none. */
 export function readCheckConfig(root: string): CheckProject[] | null {

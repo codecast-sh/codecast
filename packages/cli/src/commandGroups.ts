@@ -39,6 +39,7 @@
 
 import type { Command } from "commander";
 import type { PublishDeps } from "./castApi.js";
+import type { FlowDeps } from "./flowCommand.js";
 
 /** Everything any group's register function asks for: the backend deps every
  *  command needs, plus the one lookup `cast integrations` adds. A register
@@ -46,6 +47,8 @@ import type { PublishDeps } from "./castApi.js";
  *  Type-only imports, so this stays a leaf at runtime. */
 export interface GroupDeps extends PublishDeps {
   resolveProjectId: (ref: string) => Promise<string>;
+  /** What `cast flow` reads beyond the backend: the caller's session, its cwd and the team's pool. */
+  flow: FlowDeps;
 }
 
 export interface CommandGroup {
@@ -113,6 +116,11 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     hasOptions: true,
     description: `Git credential helper: a GitHub App installation token for this cloud host`,
     load: () => import("./cloud/gitCredential.js").then((m) => m.registerGitCredentialCommand),
+  },
+  {
+    token: "flow",
+    description: "The pool of structured flows a change runs through: whole lines and segments (check, review, eval, decide, ship)",
+    load: () => import("./flowCommand.js").then((m) => (program: Command, deps: GroupDeps) => m.registerFlowCommands(program, deps.flow)),
   },
   {
     token: "migrate",

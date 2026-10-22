@@ -4,6 +4,7 @@
 // shows one flow, runs a change through one, and turns a Claude Code
 // workflow script into a flow of the pool.
 import type { Command } from "commander";
+import { commandGroup } from "./commandGroups.js";
 import { spawnSync } from "./proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -31,7 +32,7 @@ async function cast(args: string[], cwd: string): Promise<{ code: number; out: s
 export function registerFlowCommands(program: Command, deps: FlowDeps): void {
   const flow = program
     .command("flow")
-    .description("The pool of structured flows a change runs through: whole lines and segments (check, review, eval, decide, ship)")
+    .description(commandGroup("flow").description)
     .showHelpAfterError(true);
 
   flow

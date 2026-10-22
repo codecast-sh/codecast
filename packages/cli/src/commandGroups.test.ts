@@ -16,6 +16,7 @@ const deps: GroupDeps = {
   getCliEndpoint: () => ({ siteUrl: "https://example.invalid", apiToken: "t" }),
   detectCurrentSessionId: () => null,
   resolveProjectId: async () => "p",
+  flow: { cliPost: async () => null, callingSession: () => undefined, realCwd: () => process.cwd(), fetchPool: async () => [] },
 };
 
 function freshProgram(): Command {
