@@ -14,7 +14,8 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { callModel, parseJsonBlock, STRONG_MODEL, type SurfaceRequest } from "./lib/anthropic";
+import { parseJsonBlock, STRONG_MODEL, type SurfaceRequest } from "./lib/anthropic";
+import { runModelCall, type CallScope } from "./modelCalls";
 import { patchTask } from "./lib/taskWrite";
 import { insertTaskComment } from "./tasks";
 import { causeBrief } from "./goals";
@@ -79,7 +80,8 @@ export async function groundInput(ctx: { db: any }, task: Doc<"tasks">): Promise
   };
 }
 
-type GroundJob = { task_id: Id<"tasks">; cause: GroundCauseInput; brief: GoalsBrief };
+/** One cause to ground, and where its call is charged: its workspace's budget and its project. */
+type GroundJob = { task_id: Id<"tasks">; scope: CallScope; cause: GroundCauseInput; brief: GoalsBrief };
 
 export const inputs = internalQuery({
   args: { limit: v.number() },
@@ -87,7 +89,8 @@ export const inputs = internalQuery({
     const jobs: GroundJob[] = [];
     for (const task of await ungroundedCauses(ctx, limit)) {
       if (!task.workspace) continue;
-      jobs.push({ task_id: task._id, cause: await groundInput(ctx, task), brief: await causeBrief(ctx, task) });
+      const scope: CallScope = { workspace: task.workspace, ...(task.team_id ? { team_id: task.team_id } : {}), ...(task.project_id ? { project_id: task.project_id } : {}) };
+      jobs.push({ task_id: task._id, scope, cause: await groundInput(ctx, task), brief: await causeBrief(ctx, task) });
     }
     return jobs;
   },
@@ -148,30 +151,33 @@ export const record = internalMutation({
   handler: async (ctx, args) => recordGroundCore(ctx, args.task_id, args.fields ? { fields: args.fields } : { error: args.error ?? "no answer" }, Date.now()),
 });
 
-export type GroundSweepResult = { grounded: number; unreadable: number; unanswered: number; skipped?: string };
+export type GroundSweepResult = { grounded: number; unreadable: number; unanswered: number; unbudgeted: number; skipped?: string };
 
 /**
  * One pass: ground up to GROUND_BATCH of the oldest ungrounded causes. A call
  * that gets no reply at all (no key, a timeout, an outage) leaves its cause
- * untouched for the next pass; that is no answer, not a wrong one. Call this
- * from crons.ts.
+ * untouched for the next pass; that is no answer, not a wrong one. Each call
+ * goes through the workspace's model budget (modelCalls.runModelCall), so its
+ * spend is capped and counted with the line's other calls, and a cap with no
+ * room leaves the cause for a later pass. Call this from crons.ts.
  */
 export const sweep = internalAction({
   args: {},
   handler: async (ctx): Promise<GroundSweepResult> => {
-    if (!process.env.ANTHROPIC_API_KEY) return { grounded: 0, unreadable: 0, unanswered: 0, skipped: "no model key" };
+    if (!process.env.ANTHROPIC_API_KEY) return { grounded: 0, unreadable: 0, unanswered: 0, unbudgeted: 0, skipped: "no model key" };
     const jobs: GroundJob[] = await ctx.runQuery(internal.lineGround.inputs, { limit: GROUND_BATCH });
     const now = Date.now();
-    const result: GroundSweepResult = { grounded: 0, unreadable: 0, unanswered: 0 };
+    const result: GroundSweepResult = { grounded: 0, unreadable: 0, unanswered: 0, unbudgeted: 0 };
     await Promise.all(jobs.map(async (job) => {
-      const reply = await callModel({ ...groundRequest(job.cause, job.brief, now), label: "Line ground", timeout_ms: 60_000 });
-      if (!reply?.text) { result.unanswered++; return; }
+      const req = groundRequest(job.cause, job.brief, now);
+      const reply = await runModelCall(ctx, job.scope, "grouping", { model: req.model, system: req.system, prompt: req.prompt, max_tokens: req.max_tokens, output: "text" }, "Line ground", 60_000);
+      if (!reply.ok) { if (reply.reason === "budget") result.unbudgeted++; else result.unanswered++; return; }
       const outcome = parseGroundReply(parseJsonBlock(reply.text), briefGoalRefs(job.brief));
       const status: string = await ctx.runMutation(internal.lineGround.record, "fields" in outcome ? { task_id: job.task_id, fields: outcome.fields } : { task_id: job.task_id, error: outcome.error });
       if (status === "grounded") result.grounded++;
       else if (status === "unreadable") result.unreadable++;
     }));
-    if (jobs.length === GROUND_BATCH && result.unanswered === 0) await ctx.scheduler.runAfter(0, internal.lineGround.sweep, {});
+    if (jobs.length === GROUND_BATCH && result.unanswered === 0 && result.unbudgeted === 0) await ctx.scheduler.runAfter(0, internal.lineGround.sweep, {});
     return result;
   },
 });
