@@ -22,6 +22,13 @@ import lineRebase from "./templates/line/rebase.sh" with { type: "text" };
 import lineDiagnose from "./templates/line/diagnose.md" with { type: "text" };
 import judgeReviewCast from "./templates/judge-review.cast" with { type: "text" };
 import lineUnproven from "./templates/line/unproven.sh" with { type: "text" };
+import checkCast from "./templates/check.cast" with { type: "text" };
+import reviewCast from "./templates/review.cast" with { type: "text" };
+import evalCast from "./templates/eval.cast" with { type: "text" };
+import decideCast from "./templates/decide.cast" with { type: "text" };
+import shipCast from "./templates/ship.cast" with { type: "text" };
+import proveImplementCast from "./templates/prove-implement.cast" with { type: "text" };
+import changeCast from "./templates/change.cast" with { type: "text" };
 import featureCast from "../../workflows/feature/workflow.cast" with { type: "text" };
 import planAutopilotCast from "../../workflows/plan-autopilot/workflow.cast" with { type: "text" };
 import { JUDGE_REVIEW_GRAPH } from "@codecast/shared/contracts/judgeReview";
@@ -68,6 +75,15 @@ export function inlineTemplateFiles(source: string, files: Readonly<Record<strin
 export const BUILTIN_WORKFLOW_TEMPLATES: Readonly<Record<string, string>> = {
   line: inlineTemplateFiles(lineCast, LINE_TEMPLATE_FILES),
   [JUDGE_REVIEW_GRAPH]: inlineTemplateFiles(judgeReviewCast, LINE_TEMPLATE_FILES),
+  // The pool's starter flows (flows.md FL2): segments cut from the line's own
+  // stations, and the change line that strings them together.
+  check: inlineTemplateFiles(checkCast, LINE_TEMPLATE_FILES),
+  review: inlineTemplateFiles(reviewCast, LINE_TEMPLATE_FILES),
+  eval: inlineTemplateFiles(evalCast, LINE_TEMPLATE_FILES),
+  decide: decideCast,
+  ship: inlineTemplateFiles(shipCast, LINE_TEMPLATE_FILES),
+  "prove-implement": inlineTemplateFiles(proveImplementCast, LINE_TEMPLATE_FILES),
+  change: changeCast,
   feature: featureCast,
   "plan-autopilot": planAutopilotCast,
 };

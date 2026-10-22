@@ -1860,7 +1860,12 @@ export async function canReadCall(
       (await teamHasFeature(ctx, t.team_id, "calls"))
     );
   }
-  return (await authorizeRoomNoGrant(ctx, userId, t.room_key)).ok;
+  if ((await authorizeRoomNoGrant(ctx, userId, t.room_key)).ok) return true;
+  // The huddle running now reads like the huddle: whoever its door admits
+  // (the open door, a ring) may read the words being said in it, the way they
+  // could walk in and hear them. That is this run only. Once it ends, the
+  // doors above decide, so a walk-in who never spoke loses it as before.
+  return t.status === "live" && (await authorizeRoom(ctx, userId, t.room_key)).ok;
 }
 
 function shapeCallRow(t: Doc<"transcripts">) {

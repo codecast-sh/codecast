@@ -1,0 +1,13 @@
+// A segment (docs/architecture/flows.md FL2): the project's check command on
+// the change, in the change's worktree. The same command the line's Verify runs.
+digraph check {
+  graph [kind="segment", label="Check", description="The project's check command on the change", takes="branch"]
+  start [shape=Mdiamond]
+  verify [label="Verify", shape=parallelogram, timeout=3600,
+    script="cd \"$(cast ws path $worktree)\" && bash -c $line.commands.check"]
+  passed [shape=Msquare, label="Passed"]
+  failed [shape=Msquare, label="Checks failed", stop="The project's check failed on the change."]
+  start -> verify
+  verify -> passed [condition="outcome = success"]
+  verify -> failed [condition="outcome = failure"]
+}
