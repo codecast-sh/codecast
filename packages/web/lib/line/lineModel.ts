@@ -834,6 +834,48 @@ function sourceFromIds(ids: string[]): LineGraphSource {
   return src;
 }
 
+/** One problem's issue as a build read it: every input it read, in order, and the answers it asked for by id. */
+type IssueRead = { deps: unknown[]; asked: Array<["said" | "fold", string, unknown]>; issue: LineIssue };
+/** Each process's issues as its last builds read them. Two per problem, so the line over every project and one
+ *  project's line, built in turn, each keep theirs. */
+const issueReads = new Map<string, Map<string, IssueRead[]>>();
+const ISSUE_READS_KEPT = 2;
+
+type RowsIndex = {
+  graphs: ProjectGraph[];
+  taskById: Map<string, LineModelRows["tasks"][number]>;
+  taskByRef: Map<string, LineModelRows["tasks"][number]>;
+  anyRunByTask: Map<string, MapRun[]>;
+  signalsByTask: Map<string, MapSignal[]>;
+  /** The problems no run has taken, under the process their project runs (processIndex), never under every one. */
+  unrunByProcess: Map<string, string[]>;
+};
+/** The indexes every build over the same rows reads, made once for them: one rebuild draws each process over one row set. */
+const rowsIndexes = new WeakMap<object, { runs: object; signals: object; index: RowsIndex }>();
+
+function rowsIndex(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], signals: ReadonlyArray<MapSignal>): RowsIndex {
+  const hit = rowsIndexes.get(tasks);
+  if (hit && hit.runs === runs && hit.signals === signals) return hit.index;
+  const group = <T,>(rows: ReadonlyArray<T>, keyOf: (r: T) => string | null | undefined) => {
+    const by = new Map<string, T[]>();
+    for (const r of rows) { const k = keyOf(r); if (!k) continue; const at = by.get(k); if (at) at.push(r); else by.set(k, [r]); }
+    return by;
+  };
+  const taskById = new Map(tasks.map((t) => [t._id, t]));
+  const anyRunByTask = group(runs, (r) => r.task_id);
+  const process = processIndex(runs as ReadonlyArray<GraphRun>, (id) => (taskById.get(id) as { project_id?: string | null } | undefined)?.project_id);
+  const index: RowsIndex = {
+    graphs: projectGraphs(runs as ReadonlyArray<GraphRun>, signals as ReadonlyArray<{ task_id: string; source: string }>),
+    taskById,
+    taskByRef: new Map(tasks.flatMap((t) => (t.short_id ? [[t.short_id, t] as const] : []))),
+    anyRunByTask,
+    signalsByTask: group(signals, (s) => s.task_id),
+    unrunByProcess: new Map([...group(tasks.filter((t) => t.cause && !anyRunByTask.has(t._id)), (t) => process.task(t._id))].map(([k, ts]) => [k, ts.map((t) => t._id)])),
+  };
+  rowsIndexes.set(tasks, { runs, signals, index });
+  return index;
+}
+
 /**
  * One project's line as every view reads it. `rows` are the project's rows
  * (its runs of any graph, its causes and signals, its labels); `graphKey`
@@ -842,7 +884,8 @@ function sourceFromIds(ids: string[]): LineGraphSource {
  */
 export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel {
   const signals = rows.signals ?? [];
-  const graphs = projectGraphs(rows.runs as ReadonlyArray<GraphRun>, signals as ReadonlyArray<{ task_id: string; source: string }>);
+  const index = rowsIndex(rows.runs, rows.tasks, signals);
+  const { graphs, taskById, anyRunByTask, signalsByTask, taskByRef } = index;
   const key = graphKey || graphs[0]?.key || CODECAST_LINE;
   const isLine = isCodecastLine(key);
   const runs = rows.runs.filter((r) => graphKeyOf(r as GraphRun) === key).sort((a, b) => b.created_at - a.created_at);
@@ -871,7 +914,6 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
   const g: GraphCtx = { graph, kindOf, labelOf, words, edgeOf: new Map(src.edges.map((e) => [`${e.from}->${e.to}`, e])) };
 
   // ── every run, read once ──
-  const taskById = new Map(rows.tasks.map((t) => [t._id, t]));
   const decisionsByRun = new Map<string, MapDecision[]>();
   for (const d of rows.decisions ?? []) {
     if (!d.workflow_run_id) continue;
@@ -1065,24 +1107,57 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
   const now = rows.now ?? Date.now();
   const runsByTask = new Map<string, LineRunModel[]>();
   for (const r of runModels) if (r.caseId) runsByTask.set(r.caseId, [...(runsByTask.get(r.caseId) ?? []), r]);
-  const anyRunByTask = new Map<string, MapRun[]>();
-  for (const r of rows.runs) if (r.task_id) anyRunByTask.set(r.task_id, [...(anyRunByTask.get(r.task_id) ?? []), r]);
-  const signalsByTask = new Map<string, MapSignal[]>();
-  for (const s of signals) if (s.task_id) signalsByTask.set(s.task_id, [...(signalsByTask.get(s.task_id) ?? []), s]);
   const occurrencesByTask = new Map((rows.occurrences ?? []).map((o) => [o.task_id, o]));
   const readById = new Map(reads.map((r) => [r.run._id, r.read]));
+  const runById = new Map(reads.map((r) => [r.run._id, r.run]));
   const said = (runId: string) => saidOf(readById.get(runId)?.visits ?? [], steps);
   // A close that folded its problem into a codecast cause ("ct-4681") counts what comes after once that cause was resolved; a cause named only in the product's own words ("C1") reads as not shipped.
-  const taskByRef = new Map(rows.tasks.flatMap((t) => (t.short_id ? [[t.short_id, t] as const] : [])));
   const foldFixAt = (into: string) => { const t = taskByRef.get(into); return t && /^(done|closed)$/.test(t.status) ? t.resolved_at ?? null : null; };
-  // A problem no run has taken yet waits under the process its project runs (processIndex), never under every one.
-  const process = processIndex(rows.runs as ReadonlyArray<GraphRun>, (id) => (taskById.get(id) as { project_id?: string | null } | undefined)?.project_id);
-  const causeIds = [...runsByTask.keys(), ...rows.tasks.filter((t) => t.cause && !anyRunByTask.has(t._id) && process.task(t._id) === key).map((t) => t._id)];
+  const causeIds = [...runsByTask.keys(), ...(index.unrunByProcess.get(key) ?? [])];
+  // A problem's decisions: those naming it, and those any of its runs asked, in the order the rows hold them.
+  const allDecisions = rows.decisions ?? [];
+  const decisionAt = { task: new Map<string, number[]>(), run: new Map<string, number[]>() };
+  allDecisions.forEach((d, n) => {
+    for (const [by, k] of [[decisionAt.task, d.task_id], [decisionAt.run, d.workflow_run_id]] as const) if (k) { const at = by.get(k); if (at) at.push(n); else by.set(k, [n]); }
+  });
+  const decisionsOf = (taskId: string, taskRuns: ReadonlyArray<MapRun>) => {
+    const at = new Set(decisionAt.task.get(taskId));
+    for (const r of taskRuns) for (const n of decisionAt.run.get(r._id) ?? []) at.add(n);
+    return [...at].sort((a, b) => a - b).map((n) => allDecisions[n]);
+  };
   const issues: LineIssue[] = [];
   // The line's own machine faults: a problem that names the same identifier is happening again each time one fails.
   const faults = stepFaults(steps);
+  // A push moves a few rows: a problem whose every input is the same row, value or answer as the last build's keeps
+  // its issue, and only the problems that moved are read again (issueReads).
+  const reads0 = issueReads.get(key) ?? new Map<string, IssueRead[]>();
+  const kept = new Map<string, IssueRead[]>();
+  const shared = [
+    rows.deploys ? rows.deploys.length : -1, ...(rows.deploys ?? []), rows.watchDays ?? null, now, rows.forYou ? 1 : 0,
+    order.map((id) => `${id}:${steps[id].kind}:${steps[id].stage}:${steps[id].half}`).join(","),
+    faults.map((f) => `${f.runId}|${f.caseId}|${f.caseRef}|${f.step}|${f.stepLabel}|${f.words}|${f.at}`).join("\n"),
+  ];
+  const answers = (asked: IssueRead["asked"]) => asked.every(([kind, arg, was]) => (kind === "said" ? readById.get(arg)?.visits : foldFixAt(arg)) === was);
   for (const taskId of causeIds) {
     const task = taskById.get(taskId);
+    const project = (task as { project_id?: string | null } | undefined)?.project_id ?? null;
+    const deps: unknown[] = [...shared, task, occurrencesByTask.get(taskId), rows.holdOf?.(project) ?? null, rows.forYou?.get(taskId) ?? null, rows.handMerges?.get(taskId) ?? null];
+    for (const r of runsByTask.get(taskId) ?? []) deps.push(runById.get(r.id));
+    deps.push("|");
+    for (const r of anyRunByTask.get(taskId) ?? []) deps.push(r);
+    deps.push("|");
+    for (const sg of signalsByTask.get(taskId) ?? []) deps.push(sg);
+    deps.push("|");
+    for (const d of decisionsOf(taskId, anyRunByTask.get(taskId) ?? [])) deps.push(d);
+    const hit = reads0.get(taskId)?.find((x) => x.deps.length === deps.length && x.deps.every((d, n) => d === deps[n]) && answers(x.asked));
+    if (hit) {
+      kept.set(taskId, [hit, ...(reads0.get(taskId) ?? []).filter((x) => x !== hit)].slice(0, ISSUE_READS_KEPT));
+      issues.push(hit.issue);
+      continue;
+    }
+    const asked: IssueRead["asked"] = [];
+    const saidHere = (runId: string) => { asked.push(["said", runId, readById.get(runId)?.visits]); return said(runId); };
+    const foldHere = (into: string) => { const at = foldFixAt(into); asked.push(["fold", into, at]); return at; };
     const taskRuns = runsByTask.get(taskId) ?? [];
     // A finding filed twice word for word is one occurrence, and one that says nothing is none: both stay out of the
     // series, the counts and the trend.
@@ -1096,7 +1171,7 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
     const newest = taskRuns[0] ? runs.find((r) => r._id === taskRuns[0].id) ?? null : null;
     const reopened = own.some((s) => s.reopened);
     const allRuns = (anyRunByTask.get(taskId) ?? []).slice().sort((a, b) => b.created_at - a.created_at);
-    issues.push({
+    const issue: LineIssue = {
       id: taskId, ref: task?.short_id ?? taskRuns[0]?.caseRef ?? null, title: task?.title ?? taskRuns[0]?.caseTitle ?? "A problem", status: task?.status ?? "open",
       name: causeName(task),
       findings: task?.cause?.signal_count != null ? Math.max(0, task.cause.signal_count - empty.length) : own.length, quotes: quotesOf(own), runs: taskRuns.map((r) => r.id), lastRunAt: taskRuns[0]?.at ?? 0,
@@ -1107,11 +1182,14 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
       ...(rows.forYou ? { forYou: rows.forYou.get(taskId) ?? null } : {}),
       lineFaults: faultsNaming(`${task?.title ?? ""}\n${(task as { description?: string | null } | undefined)?.description ?? ""}`, faults),
       history: causeHistory({
-        task, runs: allRuns, decisions: (rows.decisions ?? []).filter((d) => d.task_id === taskId || (!!d.workflow_run_id && allRuns.some((r) => r._id === d.workflow_run_id))),
-        signals: own, occurrences, deploys: rows.deploys, said, foldFixAt, handMerge: rows.handMerges?.get(taskId) ?? null, watchDays: rows.watchDays ?? null, now,
+        task, runs: allRuns, decisions: decisionsOf(taskId, allRuns),
+        signals: own, occurrences, deploys: rows.deploys, said: saidHere, foldFixAt: foldHere, handMerge: rows.handMerges?.get(taskId) ?? null, watchDays: rows.watchDays ?? null, now,
       }),
-    });
+    };
+    kept.set(taskId, [{ deps, asked, issue }, ...(reads0.get(taskId) ?? [])].slice(0, ISSUE_READS_KEPT));
+    issues.push(issue);
   }
+  issueReads.set(key, kept);
   issues.sort((a, b) => b.history.lastActivity - a.history.lastActivity);
   // A run that built a fix reads by its fix, the same words its problem's history says.
   const attemptOf = new Map(issues.flatMap((i) => i.history.attempts.map((a) => [a.runId, { a, h: i.history }] as const)));

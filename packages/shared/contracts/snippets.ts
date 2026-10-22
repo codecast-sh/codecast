@@ -947,12 +947,14 @@ export const CHAT_SNIPPET_END = "<!-- /codecast-chat -->";
 export const CHAT_SNIPPET = `
 ## Team chat
 
-\`cast chat\` is the team's shared channels: where the humans talk, and where your posts get seen. Use it when the team should see something, and \`cast send\` for one session.
+\`cast chat\` is the team's shared channels and direct messages: where the humans talk, and where your posts get seen. Use a channel when the team should see something, a direct message when one person must read or act, and \`cast send\` for one session.
 
 \`\`\`bash
 cast chat channels                                         # the team's channels, with unread counts
-cast chat read --channel <id> [--since 2h]
-cast chat send --channel <id> [--thread <root_id>] "<text>"
+cast teams members                                         # the team's people and their @handles
+cast chat dm @handle "<text>"                              # message a person directly (@a,@b for a group)
+cast chat read --channel <#name|@handle|id> [--since 2h]
+cast chat send --channel <#name|id> [--thread <root_id>] "<text>"
 cast chat search "<query>"
 \`\`\`
 
@@ -1348,10 +1350,10 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     aliases: ["channels", "channel"],
     name: "Team chat",
     category: "together",
-    desc: "Post to and read team channels (cast chat)",
+    desc: "Team channels and direct messages to people (cast chat)",
     detail:
       "Adds `cast chat` so agents can talk where the team talks: post progress to a channel " +
-      "(a release channel agents report into is one command), read and search the history, " +
+      "(a release channel agents report into is one command), message a person directly, read and search the history, " +
       "and answer when someone @mentions the team's agent in a thread. Sends from a managed " +
       "session are stamped as agent-written, so they can never wake another person's machine.",
     writesTo: "CLAUDE.md — a ## Team chat section with the command reference",

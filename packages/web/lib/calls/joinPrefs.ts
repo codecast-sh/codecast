@@ -7,9 +7,10 @@
 // default and make that sticky as well as their mic setting". Three kinds of
 // fact live in those sentences, and they belong in three different places:
 //
-//   WHICH DEVICE is a fact about the MACHINE. The headset plugged into the
-//   laptop has an id that means nothing on the desktop, so these keys stay
-//   unstamped in the client prefs bag — per device, like `people_view`.
+//   WHICH DEVICE is a ranking of devices by name (lib/calls/deviceRank),
+//   resolved against what is plugged in at the moment of asking. The same
+//   headphones are the same headphones on every machine, so it is stamped and
+//   follows the person; a device one machine lacks never matches there.
 //   WHETHER THE CAMERA IS ON and WHETHER THE MIC IS ON are facts about the
 //   PERSON. Somebody who joins with video joins with video wherever they are,
 //   so both are stamped LWW and follow them.
@@ -24,6 +25,7 @@
 // engine's own opens and closes (a walkie burst, a snooze, a join applying
 // these very prefs) pass `remember: false` and leave the choice alone.
 import { useInboxStore } from "../../store/inboxStore";
+import { DEVICE_RANK_KEY, knownDevices, rankAfterPick, resolveDevice, type DeviceKind } from "./deviceRank";
 
 export type JoinPrefs = {
   /** The microphone to open. Undefined means "whatever the browser picks". */
@@ -49,28 +51,45 @@ function ui(): any {
 export function readJoinPrefs(): JoinPrefs {
   const u = ui();
   return {
-    micDeviceId: u.call_mic_device_id || undefined,
-    cameraDeviceId: u.call_camera_device_id || undefined,
-    speakerDeviceId: u.call_speaker_device_id || undefined,
+    micDeviceId: chosenDevice("audioinput"),
+    cameraDeviceId: chosenDevice("videoinput"),
+    speakerDeviceId: chosenDevice("audiooutput"),
     cameraOn: u.call_camera_on !== false,
     micOn: u.call_mic_on !== false,
     micAutoOpen: u.call_mic_auto_open !== false,
   };
 }
 
-/** The person picked a device in a picker. Remember it for the next join —
- *  that is the whole of "devices remembered". */
-export const DEVICE_PREF_KEY = {
+// The single device id a machine remembered before rankings existed. Read
+// only as the fallback for a kind the person has not ranked yet.
+const LEGACY_DEVICE_KEY = {
   audioinput: "call_mic_device_id",
   audiooutput: "call_speaker_device_id",
   videoinput: "call_camera_device_id",
 } as const;
 
-export function rememberDevice(kind: keyof typeof DEVICE_PREF_KEY, deviceId: string): void {
+/** The device of this kind a join opens now: the best-ranked one plugged in.
+ *  Undefined until the browser has listed devices, which means "whatever the
+ *  browser picks". */
+export function chosenDevice(kind: DeviceKind, devices = knownDevices(kind)): string | undefined {
+  const u = ui();
+  const legacy = u[LEGACY_DEVICE_KEY[kind]] || undefined;
+  if (!devices?.length) return legacy;
+  return resolveDevice(u[DEVICE_RANK_KEY[kind]], devices, legacy) || undefined;
+}
+
+/** The person picked a device in a picker: it now outranks every device that
+ *  was there to be picked. */
+export function rememberDevice(kind: DeviceKind, deviceId: string): void {
   if (!deviceId) return;
-  const key = DEVICE_PREF_KEY[kind];
-  if (ui()[key] === deviceId) return;
-  useInboxStore.getState().updateClientUI({ [key]: deviceId } as any);
+  const present = knownDevices(kind) ?? [];
+  const picked = present.find((d) => d.deviceId === deviceId);
+  if (!picked) return;
+  const key = DEVICE_RANK_KEY[kind];
+  const rank: string[] = ui()[key] ?? [];
+  const next = rankAfterPick(rank, picked, present);
+  if (next.length === rank.length && next.every((k, i) => k === rank[i])) return;
+  useInboxStore.getState().updateClientUI({ [key]: next } as any);
 }
 
 /** The camera went on or off by the person's hand. The NEXT deliberate join

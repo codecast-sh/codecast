@@ -150,6 +150,49 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
   context(template.command("upgrade <instance> <folder>").description("Preview a release change; --apply advances this instance only"))
     .option("--apply", "Apply the reviewed release change, preserving role and external trigger state")
     .action(async (instance: string, folder: string, options: any) => output(await (await import("./orgTemplateRun.js")).upgradeTemplate(deps, instance, folder, options)));
+  // The tools a template ships (org-templates.md "Tools a template ships").
+  template.command("tools <instance>").description("The tools this instance's release ships: each one's line, how to use it, and programs this host lacks for it")
+    .option("--dir <path>", "Existing project checkout", process.cwd()).option("--json", "Machine-readable output")
+    .action(async (instance: string, options: any) => {
+      const listed = (await import("./orgTemplateTools.js")).listTools(instance, options);
+      if (options.json) { output(listed); return; }
+      if (!listed.tools.length) { console.log(`${listed.release} ships no tools.`); return; }
+      console.log(`${listed.release}${listed.draft ? ` (draft at ${listed.draft})` : ""}`);
+      for (const t of listed.tools) console.log(`\n${t.id} (${t.kind}): ${t.summary}\n  ${t.use}${t.missing.length ? `\n  missing on this host: ${t.missing.join(", ")}` : ""}`);
+    });
+  template.command("run <instance> <tool> [args...]").description("Run a command tool from the instance's pinned release, in the project checkout; put the tool's own flags after --")
+    .option("--dir <path>", "Existing project checkout", process.cwd()).option("--draft", "Run it from the instance's draft instead, to try an edit")
+    .action(async (instance: string, tool: string, args: string[], options: any) => {
+      process.exitCode = (await import("./orgTemplateTools.js")).runTool(instance, tool, args ?? [], options);
+    });
+  template.command("edit <instance>").description("Start a draft of this instance's release: a writable copy to change its tools, prompts or charter in")
+    .option("--dir <path>", "Existing project checkout", process.cwd()).option("--reset", "Throw the draft away and copy the pinned release again").option("--json", "Machine-readable output")
+    .action(async (instance: string, options: any) => {
+      const draft = (await import("./orgTemplateTools.js")).editTemplate(instance, options);
+      if (options.json) output(draft);
+      else console.log(`${draft.created ? "Draft of" : "Draft already open for"} ${draft.from}: ${draft.draft}\n${draft.next}`);
+    });
+  template.command("diff <instance>").description("What the draft changes against the pinned release: files, the release class, the version it will carry")
+    .option("--dir <path>", "Existing project checkout", process.cwd()).option("--patch", "Include the unified diff").option("--json", "Machine-readable output")
+    .action(async (instance: string, options: any) => {
+      const diff = (await import("./orgTemplateTools.js")).diffTemplate(instance, options);
+      if (options.json) { output(diff); return; }
+      if (!diff.class) { console.log(`The draft is the same as ${diff.from}.`); return; }
+      for (const [mark, files] of [["+", diff.added], ["~", diff.changed], ["-", diff.removed]] as const) for (const f of files) console.log(`${mark} ${f}`);
+      console.log(`\nA ${diff.class} change from ${diff.from}: releases as ${diff.version}${diff.class === "authority" ? ", which a person publishes" : ""}. ${diff.why.join("; ")}`);
+      if (diff.patch) console.log(`\n${diff.patch}`);
+    });
+  context(template.command("release <instance>").description("Publish the draft as the template's next version (in this workspace's own copy) and move this instance onto it; a person publishes changes to what the role may do"))
+    .option("--changelog <text>", "What changed and why; '-' reads stdin")
+    .option("--codecast", "Release into Codecast's library (its admins only)")
+    .action(async (instance: string, options: any) => {
+      const changelog = options.changelog === "-" ? readStdinBody() : options.changelog;
+      const result = await (await import("./orgTemplateTools.js")).releaseDraft(deps, instance, { ...options, changelog });
+      if (options.json) { output(result); return; }
+      console.log(`${result.from} -> ${result.to}, a ${result.class} release in ${result.workspace === "codecast" ? "Codecast's library" : "this workspace's copy"}; ${instance} now runs it.`);
+      if (result.lesson) console.log("Filed upstream as a lesson on Codecast's template.");
+      if (result.lesson_error) console.log(`Not filed upstream: ${result.lesson_error}`);
+    });
   context(template.command("instructions <instance> <routine>").description("Return verified runtime instructions (routine may be charter, or setup:<id> for a setup step's guide filled in for this instance)"))
     .action(async (instance: string, routine: string, options: any) => console.log(await (await import("./orgTemplateRun.js")).templateInstructions(deps, instance, routine, options)));
 }
