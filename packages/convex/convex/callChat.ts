@@ -21,10 +21,10 @@
 // sessions and never "mine".
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { huddleChatLineHeader, isHuddlePass, isRecRoomKey, isRoomTalkDelivery, isToolResultCarrier } from "@codecast/shared/contracts";
+import { huddleChatLineHeader, isHuddlePass, isRecRoomKey, isRoomTalkDelivery, isToolResultCarrier, reportedWorkIds } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
@@ -47,6 +47,8 @@ const MIRROR_SCAN = 200;
 // How long an ask stays open: what the session posts for it in that time is
 // said aloud. Past it the room has moved on, and the reply is in the chat.
 const ASKED_TELL_MS = 10 * 60_000;
+// How far back a worker's result looks for the turn that started it.
+const ORIGIN_SCAN = 200;
 
 export const list = query({
   args: {
@@ -342,6 +344,31 @@ export function turnReplies<M extends { role: string; content?: string; is_encry
  *  turn that passed, posts nothing. The huddle may
  *  have ended between the settle and now; then the feed row is already gone
  *  and there is nothing to do. */
+/** Did the room ask for the turn this prompt opened? Room talk nobody
+ *  addressed to the agent was not asked for. A background worker's result is
+ *  judged by the turn that started the worker, found by the tool result that
+ *  printed its id: a page begun on room talk comes back to the chat, never
+ *  to the room's ears, and so does a result whose start is out of reach. */
+async function turnWasAsked(ctx: MutationCtx, conversationId: Id<"conversations">, prompt: Doc<"messages"> | null): Promise<boolean> {
+  if (!prompt) return true;
+  for (let hop = 0; hop < 3; hop++) {
+    const ids = reportedWorkIds(prompt.content);
+    if (ids.length === 0) return !isRoomTalkDelivery(prompt.content);
+    const earlier = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_role_timestamp", (q) =>
+        q.eq("conversation_id", conversationId).eq("role", "user").lt("timestamp", prompt!.timestamp),
+      )
+      .order("desc")
+      .take(ORIGIN_SCAN);
+    const start = earlier.findIndex((m) => m.tool_results?.some((r) => ids.some((id) => r.content.includes(id))));
+    const origin = start < 0 ? undefined : earlier.slice(start + 1).find((m) => !isToolResultCarrier(m));
+    if (!origin) return false;
+    prompt = origin;
+  }
+  return false;
+}
+
 export const mirrorAgentTurn = internalMutation({
   args: { conversation_id: v.id("conversations"), attempt: v.optional(v.number()) },
   handler: async (ctx, args) => {
@@ -408,12 +435,14 @@ export const mirrorAgentTurn = internalMutation({
     await ctx.db.patch(feed._id, { last_mirrored_message_id: replies[replies.length - 1]._id });
     if (posted.length === 0) return { mirrored: false, reason: "passed" };
     // Its voice says only what answers someone who asked (callFace.ts tell):
-    // while an ask is open, every reply but one to room talk nobody addressed
-    // to it. A first "on it" line and the result that follows both count.
-    const askOpen = (feed.addressed_at ?? 0) > Date.now() - ASKED_TELL_MS;
-    const spoken = askOpen
-      ? turns.filter((t) => !isHuddlePass(t.reply.content) && !isRoomTalkDelivery(t.prompt?.content)).map((t) => t.reply.content ?? "")
-      : [];
+    // while an ask is open, every reply to a turn the room asked for. A first
+    // "on it" line and the worker result that follows both count.
+    const spoken: string[] = [];
+    if ((feed.addressed_at ?? 0) > Date.now() - ASKED_TELL_MS) {
+      for (const t of turns) {
+        if (!isHuddlePass(t.reply.content) && (await turnWasAsked(ctx, args.conversation_id, t.prompt))) spoken.push(t.reply.content ?? "");
+      }
+    }
     if (spoken.length) await scheduleFaceTell(ctx, feed, spoken);
     return { mirrored: true };
   },

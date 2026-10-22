@@ -149,6 +149,16 @@ describe("an agent added without its video avatar", () => {
   });
 });
 
+// The turn that starts a background worker: its launch call, and the tool
+// result that prints the worker's id.
+function workerStart(id: string, at: number) {
+  return [
+    { _id: `launch-${id}`, conversation_id: "conv1", role: "assistant", content: "", tool_calls: [{ id: `t-${id}`, name: "Agent", input: "{}" }], timestamp: at },
+    { _id: `started-${id}`, conversation_id: "conv1", role: "user", tool_results: [{ tool_use_id: `t-${id}`, content: `Async agent launched. agentId: ${id}` }], timestamp: at + 0.5 },
+  ];
+}
+const taskNotification = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n</task-notification>`;
+
 describe("a voice's lifetime is its feed row", () => {
   test("a feed removed or ended takes the voice out of the room", async () => {
     const ctx = ctxWith({ transcripts: [], conversations: [conversation], call_agent_feeds: [feed()], messages: [] });
@@ -204,17 +214,47 @@ describe("a voice's lifetime is its feed row", () => {
       messages: [
         { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
         { _id: "u1", conversation_id: "conv1", role: "user", content: `${huddleVoiceAskHeader("Ember", "Ada")}\n\nWhy does refresh race?`, timestamp: 2 },
-        { _id: "m2", conversation_id: "conv1", role: "assistant", content: "Looking into it; a page is coming.", timestamp: 3 },
+        ...workerStart("a6d86171", 3),
+        { _id: "m2", conversation_id: "conv1", role: "assistant", content: "Looking into it; a page is coming.", timestamp: 4 },
       ],
       call_chat_messages: [],
     });
     await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
     ctx.db._tables.messages.push(
-      { _id: "u2", conversation_id: "conv1", role: "user", content: "<task-notification>worker done</task-notification>", timestamp: 4 },
-      { _id: "m3", conversation_id: "conv1", role: "assistant", content: "Refresh races on the token write.", timestamp: 5 },
+      { _id: "u2", conversation_id: "conv1", role: "user", content: taskNotification("a6d86171"), timestamp: 5 },
+      { _id: "m3", conversation_id: "conv1", role: "assistant", content: "Refresh races on the token write.", timestamp: 6 },
     );
     await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
     expect(faceCalls(ctx).map((c) => c.args.text)).toEqual(["Looking into it; a page is coming.", "Refresh races on the token write."]);
+  });
+
+  // The session starts pages on room talk nobody addressed to it. Someone
+  // naming the agent meanwhile opens an ask, but the page's result answers
+  // the room talk, so it stays in the chat.
+  test("a worker started on room talk has its result kept in the chat, even while an ask is open", async () => {
+    const roomTalk = `${ownRoomChunkHeader({ name: "Ember", lane: "context", held: false, full: true })}\n\nAda: how does refresh even work?`;
+    const reports = [
+      { id: "a6d86171", text: taskNotification("a6d86171") },
+      { id: "jx7a838", text: `<scheduled-task title="Worker jx7a838 finished">\n<worker-report id="jx7a838" title="Refresh page" why="done" since="1">Page published</worker-report>\n</scheduled-task>` },
+    ];
+    for (const { id, text } of reports) {
+      const ctx = ctxWith({
+        call_agent_feeds: [feed({ addressed_at: Date.now() })],
+        transcripts: [transcript()],
+        messages: [
+          { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
+          { _id: "u1", conversation_id: "conv1", role: "user", content: roomTalk, timestamp: 2 },
+          ...workerStart(id, 3),
+          { _id: "m2", conversation_id: "conv1", role: "assistant", content: "Building a page on how refresh works.", timestamp: 4 },
+          { _id: "u2", conversation_id: "conv1", role: "user", content: text, timestamp: 5 },
+          { _id: "m3", conversation_id: "conv1", role: "assistant", content: "Refresh page is up.", timestamp: 6 },
+        ],
+        call_chat_messages: [],
+      });
+      await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+      expect(ctx.db._tables.call_chat_messages).toHaveLength(2);
+      expect(faceCalls(ctx)).toEqual([]);
+    }
   });
 
   test("while an ask is open, a reply to room talk nobody addressed to it stays in the chat", async () => {

@@ -535,6 +535,17 @@ export function isTaskNotificationMessage(rawContent: string | null | undefined)
   return !!rawContent && stripInjectionNoise(rawContent).startsWith("<task-notification>");
 }
 
+/** The ids of the background work a turn reports back on: a harness
+ *  <task-notification>'s task id, or the spawned workers a <scheduled-task>
+ *  wake names. Empty for a turn that reports on no work. */
+export function reportedWorkIds(rawContent: string | null | undefined): string[] {
+  if (isTaskNotificationMessage(rawContent)) {
+    const id = stripInjectionNoise(rawContent!).match(/<task-id>([^<]+)<\/task-id>/)?.[1].trim();
+    return id ? [id] : [];
+  }
+  return (parseScheduledTask(rawContent)?.workers ?? []).map((w) => w.short_id).filter(Boolean);
+}
+
 // A `cast send --raw` report from another session: the body was injected as a
 // user-role turn WITHOUT the <session-message> wrapper (the flag exists for
 // slash commands like `/model opus`). The receiving transcript then paints it
