@@ -318,3 +318,32 @@ export function killSessionsLedger(r: { total: number; working: string[] }): Swi
     keep: "Keep running",
   };
 }
+
+/** A session's change sent through a flow of the pool (docs/architecture/flows.md FL4): the session freezes its own
+ *  edits, binds them to a task, and its machine runs each step; an agent step starts a session of its own, a check runs
+ *  a command, and a person's step is a question in their queue. */
+export function flowRunLedger(r: { flow: string; session: string; stations: ReadonlyArray<{ label: string; kind: string }>; asks: ReadonlyArray<string>; ends: ReadonlyArray<string> }): SwitchLedger {
+  const by = (kind: string) => r.stations.filter((s) => s.kind === kind).map((s) => s.label);
+  const agents = by("agent");
+  const checks = by("script");
+  return {
+    name: `Run through ${r.flow}`,
+    subject: r.session,
+    shift: null,
+    figures: [
+      { value: String(r.stations.length), label: r.stations.length === 1 ? "step" : "steps" },
+      { value: String(agents.length), label: agents.length === 1 ? "agent session starts" : "agent sessions start", ...(agents.length ? { tone: "warn" as const } : {}) },
+      { value: String(r.asks.length), label: r.asks.length === 1 ? "question for you" : "questions for you" },
+    ],
+    rows: [
+      { k: "Change", v: "This session's own edits" },
+      ...(agents.length ? [{ k: "An agent", v: agents.join(", ") }] : []),
+      ...(checks.length ? [{ k: "A check", v: checks.join(", ") }] : []),
+      ...r.asks.map((q) => ({ k: "You", v: q })),
+      { k: "Can end", v: `${r.ends.length} ways`, list: [...r.ends] },
+    ],
+    stop: "Stop on its card",
+    confirm: `Run through ${r.flow}`,
+    keep: "Not now",
+  };
+}
