@@ -206,6 +206,9 @@ describe("the loader charter of a web hire (org-hire.md H3)", () => {
     expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${loader}`);
     await performWriteLoaderCharter(terminal, ME, write);
     expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${loader}`);
+    // A host step rerun from another folder before the claim moves the loader, never stacks a second one.
+    await performWriteLoaderCharter(terminal, ME, { ...write, dir: "/src/acme/site" });
+    expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${templateLoaderPrompt("/src/acme/site", "acme-growth", "charter")}`);
     // Once the host claims the row, the charter is the person's again.
     await performUpsertInstance(ctx(db), ME, { instance_key: "receipt-uuid", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: D1, project_id: P as any, role_id: "role-1" as any, host: { machine: "mbp", dir: "/src/acme" }, phase: "ready" });
     await expect(performWriteLoaderCharter(terminal, ME, { ...write, dir: "/elsewhere" })).rejects.toThrow(/awaiting its host step/);
