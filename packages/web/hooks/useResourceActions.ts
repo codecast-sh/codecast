@@ -20,6 +20,9 @@ const api = _api as any;
 type Check = { session_id: string; destination_id: string; blockers: string[]; pending: string[]; passed: string[]; unconfirmed: string[] };
 type Preflight = { at: number; checks: Check[] };
 
+/** The most sessions resourceOffload.start checks in one call. */
+const PREFLIGHT_CHUNK = 50;
+
 /** A dry run is evidence for a few minutes; after that the planner's view stands alone. */
 const PREFLIGHT_TTL_MS = 5 * 60_000;
 const union = (a: string[], b: string[]) => [...new Set([...a, ...b])];
@@ -102,12 +105,18 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
     onPreflight: (sel) => {
       const source = sourceOf(sel);
       if (!source) return;
-      dryRun({ source_device_id: source, selections: toServer(sel), wait_for_idle_ms: 10 * 60_000, dry_run: true })
-        .then((res: { checks: Check[] }) => setPreflight((m) => ({ ...m, [source]: { at: Date.now(), checks: res.checks } })))
+      // The server checks at most PREFLIGHT_CHUNK sessions a call; a busy machine offers more.
+      const all = toServer(sel);
+      const chunks = Array.from({ length: Math.ceil(all.length / PREFLIGHT_CHUNK) }, (_, i) => all.slice(i * PREFLIGHT_CHUNK, (i + 1) * PREFLIGHT_CHUNK));
+      Promise.all(chunks.map((selections) => dryRun({ source_device_id: source, selections, wait_for_idle_ms: 10 * 60_000, dry_run: true })))
+        .then((res: Array<{ checks: Check[] }>) => setPreflight((m) => ({ ...m, [source]: { at: Date.now(), checks: res.flatMap((r) => r.checks) } })))
         .catch(report("resources.preflight"));
-      // The machine holding the sessions rehearses each move; its answers arrive through the store.
+    },
+    // The machine holding the sessions rehearses each move; its answers arrive through the store.
+    onRehearse: (sel) => {
+      const source = sourceOf(sel);
       const asked = toServer(sel).map(({ conversation_id, session_id, destination_id }) => ({ conversation_id, session_id, destination_id }));
-      if (asked.length) rehearse({ request_id: rehearsalRequestId(), source_device_id: source, selections: asked }).catch(report("resources.rehearse"));
+      if (source && asked.length) rehearse({ request_id: rehearsalRequestId(), source_device_id: source, selections: asked }).catch(report("resources.rehearse"));
     },
     onStartOffload: (sel, { waitForTurnMs }) => {
       const source = sourceOf(sel);
