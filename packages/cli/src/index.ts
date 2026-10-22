@@ -21515,10 +21515,13 @@ messaging
     }
   });
 
-// Check for updates in background (non-blocking). The SessionStart hook and
-// git's credential helper are output protocols: a cached notice would become
-// part of Claude's prompt in the first case and the credential git reads in
-// the second, so neither enters this lifecycle. Their fast paths claim them
+// Check for updates in background (non-blocking). Everything this lifecycle
+// prints goes to stderr: it runs inside whatever command was typed, and that
+// command's stdout may be read by a program (a line station's
+// `cd "$(cast ws path $worktree)"` failed on every box behind a release). The
+// SessionStart hook and git's credential helper are output protocols too: a
+// cached notice would become part of Claude's prompt in the first case and the
+// credential git reads in the second, so neither enters this lifecycle. Their fast paths claim them
 // before index.ts loads; the guard here is for a wrapper script that still
 // starts at index.ts, which reaches runFastPath only after this line.
 // CODECAST_NO_AUTO_UPDATE is set on the `_build-id` child an update spawns:
@@ -21553,7 +21556,7 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
   // if the new executable carries different daemon code.
   const daemonWasRunning = getDaemonPid() !== null;
 
-  console.log(`\nAuto-updating to v${available}...`);
+  console.error(`\nAuto-updating to v${available}...`);
   autoUpdateInstalling = true;
   const { success } = await performUpdate();
   if (success) {
