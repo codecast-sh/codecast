@@ -34,7 +34,7 @@ import {
   planProjectsOf,
   resolveScopeRef,
   rolesInBoundary, performSetAuthority, performSetProjectLead } from "./orgRoles";
-import { performAcceptUpgrade, performCatalog, performUpsertInstance, templateLine } from "./orgTemplates";
+import { performAcceptUpgrade, performCatalog, performUpsertInstance, hiredRowKey, templateLine } from "./orgTemplates";
 import { capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
 import { autonomyChangeWords } from "@codecast/shared/contracts/roleAutonomy";
 import { findDecision } from "./sessionDecisions";
@@ -1431,7 +1431,7 @@ export async function applyHire(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   if (!project) throw new Error(`No project "${p.project}" in this workspace`);
   if (!(role.scope?.project_ids ?? []).some((id: any) => String(id) === String(project._id))) throw new Error(`@${role.handle} does not look after ${project.title}; the role change of this hire names the project`);
   const row = await performUpsertInstance(ctx, userId, {
-    instance_key: `pending:${String(project._id)}:${p.instance}`, instance: p.instance, template_id: p.template, version: p.version, digest: p.digest,
+    instance_key: hiredRowKey(String(project._id), p.instance), instance: p.instance, template_id: p.template, version: p.version, digest: p.digest,
     project_id: project._id, role_id: role._id, phase: "awaiting_host", update_policy: p.update_policy ?? "manual", config: p.config ?? {},
   });
   // The hire is recorded on the role (org-staffing.md S21); its way back is the host step, so the row carries the instance and no snapshot of it.

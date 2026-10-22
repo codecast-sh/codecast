@@ -15,12 +15,13 @@ one target. Short id `dp-N`.
 |---|---|
 | `target` | the surface or environment it went to: `backend`, `production` |
 | `status` | `requested` (asked for, no machine has started it), `running`, `live`, `failed`, `cancelled` |
-| `trigger` | `person` (Deploy on the Line page, `cast line deploy --go`), `role` / `schedule` / `count` (reserved, DP4), `outside` (the team's own path, recorded from its marker) |
+| `trigger` | `person` (Deploy on the Line page, `cast line deploy --go`), `role` (the profile's role, DP4), `schedule` / `count` (reserved), `outside` (the team's own path, recorded from its marker) |
 | `started_by` | who or what started it: a person, the CLI, a source |
 | `source` | who reported it: `cast ship mark`, a source's name, `line` |
 | `sha`, `previous_sha`, `version`, `url`, `commits` | what went out, when the reporter knows |
 | `carries` | the fixes it carried: problem, run, the card that shipped it, the merge, and how it is known (`sent`, `same commit`, `deployed after the merge`) |
 | `event_ids` | the markers that reported it |
+| `run_id` | the line-deploy run that carries it through its steps (DP8); each step's state is that run's station, read from the run |
 
 A deploy marker stays an `external_events` row of kind `deploy` (the team's
 event stream, triggers, the Changes page); its `meta.deploy` names the deploy
@@ -53,25 +54,34 @@ The line's last stage is not per problem. It gathers the project's shipped
 fixes that no live deploy has carried and sends them out together, through the team's own
 deploy path, as one deploy.
 
-- The path is the profile's `[line.deploy]` (line-profile.md):
-  `command` (run from the repository root; `$sha`, `$deploy` and `$actor`
-  expand, and `CAST_DEPLOY_SHA`, `CAST_DEPLOY_ID`, `CAST_DEPLOY_ACTOR` are
+- The path is the profile's `[line.deploy]` (line-profile.md LP2):
+  `command` (the send step, run from the repository root; `$sha`, `$deploy`
+  and `$actor` expand, and `CAST_DEPLOY_SHA`, `CAST_DEPLOY_ID`,
+  `CAST_DEPLOY_ACTOR` and, once the send named one, `CAST_DEPLOY_URL` are
   set), `target` (what its markers name, so a marker finds the deploy it
-  finishes), `trigger`. No command, no stage: the line stops at Ship.
+  finishes), `trigger` and `role` (DP4), and a command for each other step
+  (`ci`, `gate`, `rollout`, `live`, DP8). No command, no stage: the line
+  stops at Ship. The role and step keys ride the published profile only when
+  set, so a profile that names none publishes the shape an older backend
+  accepts.
 - `deploys.stage` reads the waiting fixes and the deploy already going out.
   `deploys.request` (and `requestDeployCore`, which the web's `deployLine`
   dispatch rides) writes one `requested` deploy whose `carries` are the
   waiting fixes (`how: sent`), refusing while another is going out or nothing
   waits.
-- From the web, the request queues `line_deploy` on the machine that publishes
-  the profile, which runs `cast line deploy run dp-N` in that checkout. From a
-  terminal, `cast line deploy` shows the stage and `--go` asks and runs here.
-- `lineDeploy.runDeploy` reports `running` (with the sha of the default
-  branch's head on origin), runs the command with no model or cloud keys in
-  its environment, then reports `live` or `failed` with the output's tail. A
-  GitHub Actions run url the path prints becomes the deploy's url. A marker
-  from the path itself may finish the deploy first; a report never moves a
-  deploy backwards.
+- From the web, or from the role (DP4), the request queues `line_deploy` on
+  the machine that publishes the profile, which runs `cast line deploy run
+  dp-N` in that checkout (the daemon gives it ten hours: CI and an eval gate
+  take hours). From a terminal, `cast line deploy` shows the stage and `--go`
+  asks and runs here.
+- Either way the deploy's steps run as the stations of the line-deploy
+  graph (DP8). The first step reports `running` with the sha of the default
+  branch's head on origin and the run's id; every later step reads that sha
+  back. Steps run with no model or cloud keys in their environment. A GitHub
+  Actions run url the send prints becomes the deploy's url. The watch
+  station reports `live`; Returned reports `failed` with the step's words
+  (DP9). A marker from the path itself may finish the deploy first; a report
+  never moves a deploy backwards.
 
 ## DP3. Which deploy carried a fix
 
@@ -90,17 +100,46 @@ band's "In production" and the deploy's own page all read the same rows.
 
 ## DP4. What starts the stage
 
-Today only a person: the Deploy button on the Line page's Deploys view, or
-`cast line deploy --go`. That is how Union deploys now (merging to main never
-deploys; a person presses Deploy on the admin page or runs
-`outreach/deploy.sh`). `[line.deploy] trigger` already accepts `role`,
-`schedule` and `count`, so the other triggers slot in without a schema
-change; which one a line uses is a person's choice.
+Two things start it, side by side.
+
+- **A person**: the Deploy button on the Line page's Deploys view (through
+  the shared confirm flow), or `cast line deploy --go`. Always available,
+  whatever the trigger, and counted against nothing.
+- **The line's role**, when the profile says `trigger = "role"` and
+  `role = "<handle>"` (Union's Release Captain, `@release`). Every ten minutes
+  `deploys.autoDeploy` (crons.ts) reads the roles that hold a live deploy
+  grant and their teams' projects whose profile names them. For each, the
+  role asks for a deploy (`trigger: role`, `started_by` the role) when fixes
+  wait, nothing is going out, the newest waiting fix merged at least 30
+  minutes ago (`DEPLOY_SETTLE_MS`, so a burst of merges goes out as one
+  deploy), and the line's last deploy did not fail on the same fixes (after a
+  failure the role waits for a newer fix, or a person presses Deploy, so a
+  red gate cannot spend the day's limit retrying). The ask increments the
+  role's `counters.deploys` and tells the role one line in its standing
+  session. It runs on the machine that publishes the profile, as that
+  profile's publisher.
+
+What lets the role deploy is a person's act: the role's `deploy` authority
+grant (org-hire.md H4: id `deploy`, kind `publish`, a `per_day` limit and an
+expiry), written through `cast role authority` or the role page like any
+grant, human only. `deployAllowance` (shared/contracts/lineDeploy.ts) reads
+it from the role row alone: the role active and starting work on its own,
+the grant live, a daily limit set, and room under it today. A grant with no
+`per_day` allows nothing. The trigger, the stage (`deploys.stage` returns
+`auto`: the role, whether it may deploy now, why not, today's count) and the
+Deploys view all read this one answer. Revoking the grant stops the role;
+the button stays.
+
+The eval gate is the team's, not codecast's: Union's runs inside its own
+deploy path (deploy.yml's `gate` and `evals` jobs, on the deploy sha, with
+production's secrets), and the line's Gate station reads its verdict (DP8).
+A role never skips it: the role's send is the profile's command as written.
 
 A profile key a CLI does not know stops every line run that CLI loads the
 profile for (`lineProfile.ts` refuses unknown keys), so a `[line.deploy]`
 table goes into a repository's profile only once every machine that runs its
-line has a CLI that reads it.
+line has a CLI that reads it, and the role and step keys only once that CLI
+has them too.
 
 ## DP5. What happened after
 
@@ -125,13 +164,77 @@ through `packages/convex/run.sh`.
 - `dp-N` is a reference everywhere (entity type `deploy`): a pill with its
   state, opening `/line?view=deploys&deploy=dp-N`.
 - The Line app's Deploys view: what waits to go out per project with its
-  Deploy press (through the shared confirm flow), every deploy with its state,
+  Deploy press (through the shared confirm flow) and, on a role-trigger line,
+  the role that sends it with today's deploys against its limit or why it
+  waits, on a link to the role; every deploy with its state,
   findings per day with each deploy marked (the picked deploy's carried
-  problems drawn on their own), and one deploy whole: when, who, what it
-  carried with each problem's findings the week before and after, errors in
-  its window, commits.
+  problems drawn on their own), and one deploy whole: when, who, its steps
+  as its run's stations stand (DP8), what it carried with each problem's
+  findings the week before and after, errors in its window, commits.
 - A problem's timeline: a deploy flag opens its deploy; the band's
   "In production" names it.
 - A decision page: a line card answered Ship says which deploy it went out in.
 - The Changes page's live strip and the Ops timeline: a deploy opens its
   deploy object.
+
+## DP8. A deploy's steps are stations
+
+A deploy runs on the shipped `line-deploy` graph
+(cli workflow/templates/line-deploy.cast), a workflow run of its own with
+the deploy (dp-N) as its goal, so the runner keeps each step's state, its
+timeout and its resume, and the deploy's page shows them.
+
+| Station | Runs | When it is left out |
+|---|---|---|
+| CI | `[line.deploy] ci`, before anything goes out | passes with a note |
+| Send | `[line.deploy] command`, the team's deploy path | (the stage needs it) |
+| Gate | `[line.deploy] gate`, the eval gate's verdict | passes with a note |
+| Roll out | `[line.deploy] rollout` | passes with a note |
+| Live | `[line.deploy] live`, production answering with `$sha` | passes with a note |
+| Watch | `cast line deploy watch`: the deploy is live, and every carried fix that shipped is watched for the profile's `watch_days` from now, never shortened (LE12) | |
+
+Each step station is `cast line deploy step <step> dp-N`. A team whose path
+does everything in one command names only `command`, and the graph is the
+old stage. A team whose path is one CI run with its own jobs (Union's
+deploy.yml: `ci-verdict`, `gate`, `evals`, `deploy`) sends it without waiting
+(`deploy.sh --no-watch`) and names helpers for the steps after:
+
+- `cast line deploy ci [--workflow ci.yml]` waits for CI's verdict on the
+  deploy sha: the named workflow's newest finished run on the commit (a rerun
+  in flight waits), or with none named, every check run on it.
+- `cast line deploy follow --jobs gate,evals` waits for those jobs of the run
+  the send named (`CAST_DEPLOY_URL`) and passes when every one succeeded; a
+  failed, cancelled or skipped job fails the step with its failed log's tail.
+
+Union's profile, when its machines can read it:
+
+```toml
+[line.deploy]
+command = "outreach/deploy.sh --sha $sha --actor $actor --no-watch"
+target = "production"
+trigger = "role"
+role = "release"
+ci = "cast line deploy ci --workflow ci.yml"
+gate = "cast line deploy follow --jobs gate,evals"
+rollout = "cast line deploy follow --jobs deploy"
+live = "live=$(curl -sf --max-time 10 https://outreach-api.fly.dev/health | jq -r '.gitSha // empty'); if [ -n \"$live\" ] && case $sha in \"$live\"*) true;; *) false;; esac; then echo production runs $live; else echo production runs ${live:-nothing}, not $sha; exit 1; fi"
+```
+
+`deploys.shapeView` reads the run's stations into the deploy's `steps`
+(derived at read, never stored), so the Deploys view and `cast line deploy
+show` draw them from the one home.
+
+## DP9. A failed step comes back to the line
+
+Every step station's failure routes to Returned (`cast line deploy return
+dp-N`), which reads the failed station from the run, reports the deploy
+`failed` ("Stopped at Gate." and the step's words), and files one finding:
+source `deploy`, kind `regression`, and an issue key per project, target and
+step (`deploy:<project>:<target>:<step>`). `deploy` is a source whose finding
+opens a problem (signals.ts `CAUSE_OPENING_SOURCES`), so the first failure
+of a step opens a problem on the project's line, and every later failure of
+the same step joins it, whichever deploy it was. The finding carries the
+deploy, its sha, the run's url, the fixes it carried, and what the step
+said. The carried fixes stay shipped and wait for the next deploy; the
+problem runs on the line like any other.
+
