@@ -6,9 +6,11 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
+import { templateLoaderPrompt } from "@codecast/shared/contracts/orgTemplateManifest";
 import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
-import { bindTemplate, catalogTemplates, cutoverTemplate, evidenceTemplate, installTemplate, learnPass, lessonTemplate, listLessons, publishTemplate, publishTemplates, reportTemplate, retireTemplate, yankRelease, setLessonStatus, setupTemplate, templateLearning, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
+import { diffTemplate, draftRoot, editTemplate, listTools, releaseDraft, runTool } from "./orgTemplateTools";
+import { bindTemplate, catalogTemplates, cutoverTemplate, evidenceTemplate, installTemplate, learnPass, loaderPrompt, lessonTemplate, listLessons, publishTemplate, publishTemplates, reportTemplate, retireTemplate, yankRelease, setLessonStatus, setupTemplate, templateLearning, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
 import type { OrgInitDeps } from "./orgInit";
 
 const dirs: string[] = [];
@@ -56,6 +58,8 @@ class Server {
   /** An apply path that ignores the proposal's line (line-profile.md LP7). */
   dropsLine = false;
   dropsTrust = false;
+  /** Whose row `get` answers with: Codecast's library, or a workspace's own copy. */
+  templateWorkspace = "codecast";
   constructor(readonly dir: string) { this.project = { _id: "project-1", short_id: "pr-1", title: "Product", project_path: dir, workspace: "team:team-1" }; }
   deps: OrgInitDeps = {
     readWorkspace: async (team) => ({ kind: "team", teamId: team || "unrelated-active-team" }),
@@ -108,10 +112,18 @@ class Server {
         this.roles.push(role); decision.applied_at = Date.now(); decision.applied_note = `created @${role.handle} (${role.short_id})`;
         return { status: "applied", role: { id: role._id, short_id: role.short_id }, note: decision.applied_note };
       }
+      // As the server: a charter is human only from a terminal; a web hire's
+      // loader is written by the template path on the row the accept wrote.
       case "/cli/role/update": {
-        const role = this.roles.find((r) => r._id === body.role_id);
-        if (role && body.charter !== undefined) role.charter = body.charter;
-        return role;
+        if (body.charter !== undefined) throw new Error("Charter changes are human only: make them from the role page in the browser");
+        return this.roles.find((r) => r._id === body.role_id);
+      }
+      case "/cli/org/template/charter": {
+        const row = this.instances.find((r) => r.instance_key === `pending:${body.project_id}:${body.instance}` && r.phase === "awaiting_host");
+        if (!row) throw new Error(`No hire of ${body.instance} on this project is awaiting its host step`);
+        if (row.role_id !== body.role_id) throw new Error(`The hire ${body.instance} is for another role`);
+        this.roles.find((r) => r._id === body.role_id)!.charter = templateLoaderPrompt(body.dir, body.instance, "charter");
+        return { role_id: body.role_id };
       }
       case "/cli/role/provision": {
         this.roles[0].anchor_id = "anchor-1";
@@ -153,7 +165,7 @@ class Server {
       case "/cli/org/template/learning": return { workspace: `team:${body.team_id}`, enabled: this.learning, can_change: true };
       case "/cli/org/template/learning/set": { if (body.from_session) throw new Error("a person's choice"); this.learning = body.enabled; return { workspace: `team:${body.team_id}`, enabled: this.learning, can_change: true }; }
       case "/cli/org/template/learn/pass": { const part = this.passes.shift() ?? { template_id: body.template_id, read: 0, failed: 0, filed: [], refused: {}, remaining: 0 }; return part; }
-      case "/cli/org/template/get": return { template_id: body.template_id, releases: Object.entries(this.releases).map(([digest, r]) => ({ version: r.manifest.version, digest, status: "canary" })) };
+      case "/cli/org/template/get": return { template_id: body.template_id, workspace: this.templateWorkspace, releases: Object.entries(this.releases).map(([digest, r]) => ({ version: r.manifest.version, digest, status: "canary" })) };
       case "/cli/images/upload-url": return "https://upload.test/snapshot";
       case "/cli/org/template/yank": case "/cli/org/template/retire": return { endpoint, ...body };
       case "/cli/org/template/publish": {
@@ -281,7 +293,7 @@ describe("proposal and lifecycle fake API", () => {
   });
   test("changed scope, changed proposal and a changed proposal stop before apply", async () => {
     const f = fixture(); await f.install(); f.server.approve(1);
-    f.server.decisions[0].answer_text = '{"scope":{"projects":[]}}'; await expect(f.reconcile()).rejects.toThrow("Approved scope differs");
+    f.server.decisions[0].answer_text = '{"scope":{"projects":[]}}'; await expect(f.reconcile()).rejects.toThrow("Approved scope does not include the instance project");
     f.server.decisions[0].answer_text = ''; f.server.decisions[0].context_md = f.server.decisions[0].context_md.replace('"handle": "product-cmo"', '"handle": "other"');
     await expect(f.reconcile()).rejects.toThrow("Proposal changed"); expect(f.server.roles).toHaveLength(0);
   });
@@ -337,8 +349,11 @@ describe("proposal and lifecycle fake API", () => {
     await expect(f.reconcile()).rejects.toThrow("pinned project directory"); expect(f.server.triggers).toHaveLength(0);
     f.server.standingPath = f.dir; f.server.pauseWorks = false; f.server.honorsPausedCreate = false;
     await expect(f.reconcile()).rejects.toThrow("Pause verification failed"); expect(readReceipt(f.dir, "product").phase).toBe("provisioning"); expect(f.server.calls.filter((c) => c.endpoint === "/cli/tasks/pause")).toHaveLength(1);
-    f.server.pauseWorks = true; f.server.honorsPausedCreate = true; await f.reconcile(); f.server.roles[0].scope.project_ids = [];
-    await expect(f.reconcile()).rejects.toThrow("exactly the instance project");
+    f.server.pauseWorks = true; f.server.honorsPausedCreate = true; await f.reconcile();
+    const own = f.server.roles[0].scope.project_ids[0];
+    f.server.roles[0].scope.project_ids = [own, "pj-report-lead"]; await f.reconcile();
+    f.server.roles[0].scope.project_ids = [];
+    await expect(f.reconcile()).rejects.toThrow("include the instance project");
   });
   test("human charter changes are applied once and never overwritten", async () => {
     const f = fixture(); await f.install(); f.server.approve(1); f.server.decisions[0].answer_text = '{"charter":"Only report, never buy", "handle":"approved-cmo"}';
@@ -704,12 +719,24 @@ describe("manifest v2 hires", () => {
 });
 
 describe("the project's lead", () => {
-  test("a hire beside an existing lead is refused; hiring under the lead is proposed; face and tenure ride the proposal", async () => {
+  // Open by default (2026-10-22): a hire beside a lead is proposed with a
+  // warning; a lead that keeps its reports inside its area refuses it.
+  const leadServer = (keeps: boolean) => {
+    const server = new Server(tmp());
+    server.roles.push({ _id: "role-lead", short_id: "or-9", handle: "growth", name: "Growth lead", status: "paused", scope: { project_ids: ["project-1"], plan_ids: [] }, ...(keeps ? { keeps_reports_inside: true } : {}) }, { _id: "role-cos", short_id: "or-1", handle: "head-of-people", name: "Head of People", status: "active", scope: { project_ids: [], plan_ids: [] } }, { _id: "role-old", short_id: "or-2", handle: "old-lead", name: "Old", status: "retired", scope: { project_ids: ["project-1"], plan_ids: [] } });
+    return server;
+  };
+  test("open by default: a hire beside an existing lead is proposed, and the decision says it watches beside the lead", async () => {
+    const server = leadServer(false);
+    const receipt = await installTemplate(server.deps, folder(manifest()), "acme", { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1" });
+    expect(receipt.proposal).toMatchObject({ reports_to: "me" });
+    expect(receipt.warnings).toContain("Project pr-1 already has a lead, @growth; this role will watch it beside that lead.");
+  });
+  test("a hire beside a lead that keeps its reports inside is refused; hiring under the lead is proposed; face and tenure ride the proposal", async () => {
     const m: any = { ...manifest(), schemaVersion: 2, version: "2.0.0" };
     m.role.avatar = "fox"; m.role.tenure = { kind: "program", then: "review" };
     const source = folder(m);
-    const server = new Server(tmp());
-    server.roles.push({ _id: "role-lead", short_id: "or-9", handle: "growth", name: "Growth lead", status: "paused", scope: { project_ids: ["project-1"], plan_ids: [] } }, { _id: "role-cos", short_id: "or-1", handle: "head-of-people", name: "Head of People", status: "active", scope: { project_ids: [], plan_ids: [] } }, { _id: "role-old", short_id: "or-2", handle: "old-lead", name: "Old", status: "retired", scope: { project_ids: ["project-1"], plan_ids: [] } });
+    const server = leadServer(true);
     const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1", session: "sess-1" };
     await expect(installTemplate(server.deps, source, "acme", options)).rejects.toThrow(/already has a lead, @growth.*--reports-to @growth/);
     await expect(installTemplate(server.deps, source, "acme", { ...options, reportsTo: "@head-of-people" })).rejects.toThrow(/already has a lead, @growth/);
@@ -823,7 +850,7 @@ describe("instance record, readiness and the loader", () => {
 test("registers lazy org template commands and UI install flags", () => {
   const program = new Command(); program.command("org"); registerOrgTemplateCommands(program, new Server(tmp()).deps);
   const template = program.commands[0].commands[0]; expect(template.name()).toBe("template");
-  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "lessons", "lesson-status", "learning", "learn", "publish", "yank", "retire", "catalog", "activate", "cutover", "upgrade", "instructions"]);
+  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "lessons", "lesson-status", "learning", "learn", "publish", "yank", "retire", "catalog", "activate", "cutover", "upgrade", "tools", "run", "edit", "diff", "release", "instructions"]);
   expect(template.commands.find((c) => c.name() === "learn")!.commands.map((c) => c.name())).toEqual(["pass", "status", "due", "rollout"]);
   expect(template.commands.find((c) => c.name() === "install")!.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--instance", "--project", "--dir", "--team", "--personal", "--adopt"]));
 });
@@ -877,11 +904,13 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     // Seated and armed: the standing session was provisioned, the routines created and turned on.
     expect(server.calls.some((c) => c.endpoint === "/cli/role/provision")).toBe(true);
     // The role's charter is the loader for the pinned release, as a terminal install
-    // proposes it, set before the standing session is seated and briefed.
-    const charterAt = server.calls.findIndex((c) => c.endpoint === "/cli/role/update");
+    // proposes it, written by the server on the hire's accept before the standing
+    // session is seated and briefed: a terminal's own charter write is refused.
+    const charterAt = server.calls.findIndex((c) => c.endpoint === "/cli/org/template/charter");
     expect(charterAt).toBeGreaterThan(-1);
     expect(charterAt).toBeLessThan(server.calls.findIndex((c) => c.endpoint === "/cli/role/provision"));
-    expect(server.roles[0].charter).toContain("cast org template instructions 'acme-growth' 'charter'");
+    expect(server.calls[charterAt].body).toMatchObject({ project_id: "project-1", instance: "acme-growth", role_id: "role-1", dir: server.dir, team_id: "team-1" });
+    expect(server.roles[0].charter).toBe(loaderPrompt(bound, "charter"));
     expect(server.triggers.map((t: any) => [t.title, t.status])).toEqual([["CMO portfolio review", "scheduled"], ["Ads monitoring", "scheduled"]]);
     // The server row is the same row, taken over by the receipt's key, ready, with the secret by hash only.
     expect(server.instances).toHaveLength(1);
@@ -892,10 +921,10 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect(fs.readFileSync(path.join(server.dir, ".codecast/packs/growth.toml"), "utf8")).toContain(secret);
     // A rerun reads the receipt it wrote; nothing is provisioned or created twice.
     const provisions = server.calls.filter((c) => c.endpoint === "/cli/role/provision").length;
-    const charterSets = server.calls.filter((c) => c.endpoint === "/cli/role/update").length;
+    const charterSets = server.calls.filter((c) => c.endpoint === "/cli/org/template/charter").length;
     const again = await bindTemplate(server.deps, "acme-growth", options);
     expect(again.key).toBe(bound.key);
-    expect(server.calls.filter((c) => c.endpoint === "/cli/role/update").length).toBe(charterSets);
+    expect(server.calls.filter((c) => c.endpoint === "/cli/org/template/charter").length).toBe(charterSets);
     expect(server.calls.filter((c) => c.endpoint === "/cli/role/provision").length).toBe(provisions);
     expect(server.triggers).toHaveLength(2);
     // The receipt is a full one: status and instructions work on it.
@@ -987,5 +1016,110 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     await expect(bindTemplate(server.deps, "acme-growth", options)).rejects.toThrow(/Several projects have an instance named acme-growth; pass --project/);
     await expect(bindTemplate(server.deps, "acme-growth", { ...options, project: "project-1" })).rejects.toThrow(/published without its snapshot/);
     expect(fs.existsSync(receiptPath(server.dir, "acme-growth"))).toBe(false);
+  });
+});
+
+describe("tools a template ships", () => {
+  const tooled = (): any => ({ ...manifest(), schemaVersion: 2, version: "2.0.0", inputs: [{ key: "product.slug", label: "Short name", kind: "string", required: true }],
+    tools: [{ id: "hello", kind: "command", path: "scripts/hello.sh", run: "sh", summary: "Say which version ran", needs: ["sh"] }, { id: "kickoff", kind: "skill", path: "skills/kickoff" }] });
+  function tooledFolder(m = tooled()): string {
+    const root = folder(m);
+    fs.writeFileSync(path.join(root, "org/charter.md"), "Own {{project.name}}. Greet with {{tool.hello}} world. Start from {{tool.kickoff}}.");
+    fs.mkdirSync(path.join(root, "scripts")); fs.mkdirSync(path.join(root, "skills/kickoff"), { recursive: true });
+    // A tool file runs as published: braces in it are code, never tokens.
+    fs.writeFileSync(path.join(root, "scripts/hello.sh"), 'echo "v1 $CODECAST_TEMPLATE_INSTANCE $1 ${HOME:+x}" > "$CODECAST_PROJECT_DIR/out.txt"\n');
+    fs.writeFileSync(path.join(root, "skills/kickoff/SKILL.md"), "---\nname: kickoff\ndescription: Set up the project's growth instance\n---\nSteps.");
+    return root;
+  }
+  async function hiredWithTools() {
+    const source = tooledFolder();
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1" };
+    const first: any = await publishTemplate(server.deps, source, { codecast: true, status: "stable" });
+    server.roles.push({ _id: "role-1", short_id: "or-1", handle: "acme-cmo", name: "CMO", scope: { project_ids: ["project-1"], plan_ids: [] }, trust: "understand", status: "active" });
+    server.instances.push({ _id: "inst-1", instance_key: "pending:project-1:acme-growth", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: first.digest, project_id: "project-1", role_id: "role-1", phase: "awaiting_host", update_policy: "stable", config: { "product.slug": "acme" }, workspace: "team:team-1" });
+    await bindTemplate(server.deps, "acme-growth", options);
+    return { server, options, first };
+  }
+  test("inspect refuses a tool that is missing, misshapen or undeclared", () => {
+    expect(readArtifact(tooledFolder()).manifest.tools).toHaveLength(2);
+    const broken = (edit: (root: string, m: any) => void) => { const m = tooled(); const root = tooledFolder(m); edit(root, m); fs.writeFileSync(path.join(root, "org-template.json"), JSON.stringify(m)); return () => readArtifact(root); };
+    expect(broken((root) => fs.rmSync(path.join(root, "scripts/hello.sh")))).toThrow(/hello: scripts\/hello.sh is not a file/);
+    expect(broken((root) => fs.writeFileSync(path.join(root, "skills/kickoff/SKILL.md"), "no frontmatter"))).toThrow(/no description/);
+    expect(broken((_, m) => { delete m.tools[0].run; })).toThrow(/not executable/);
+    expect(broken((_, m) => { m.tools[0].run = "perl"; })).toThrow(/tool.run must be one of/);
+    expect(broken((_, m) => { m.tools[1].summary = "two homes"; })).toThrow(/SKILL.md description/);
+    expect(broken((_, m) => { m.tools.push({ ...m.tools[0] }); })).toThrow(/duplicate tool id/);
+    expect(broken((root) => fs.writeFileSync(path.join(root, "org/weekly.md"), "Use {{tool.missing}}"))).toThrow(/Unknown template token: tool.missing/);
+    expect(() => validateTemplate({ ...tooled(), schemaVersion: 1 })).toThrow("unknown fields");
+  });
+  test("the role reads its tools in every instructions answer and runs them from the pin", async () => {
+    const { server, options } = await hiredWithTools();
+    const charter = await templateInstructions(server.deps, "acme-growth", "charter", options);
+    const run = `cast org template run 'acme-growth' 'hello' --dir '${server.dir}' --`;
+    expect(charter).toContain("Tools this template ships.");
+    expect(charter).toContain(`- hello (command): Say which version ran\n  Run: ${run} <args>`);
+    expect(charter).toContain("- kickoff (skill): Set up the project's growth instance");
+    expect(charter).toContain(`Greet with ${run} world.`);
+    expect(charter).toMatch(/Start from \/.*\/releases\/growth\/2\.0\.0-[a-f0-9]{64}\/skills\/kickoff\/SKILL\.md\./);
+    expect(listTools("acme-growth", options).tools.map((t) => [t.id, t.kind, t.missing])).toEqual([["hello", "command", []], ["kickoff", "skill", []]]);
+    expect(runTool("acme-growth", "hello", ["world"], options)).toBe(0);
+    expect(fs.readFileSync(path.join(server.dir, "out.txt"), "utf8")).toBe("v1 acme-growth world x\n");
+    expect(() => runTool("acme-growth", "kickoff", [], options)).toThrow(/kickoff is a skill: read/);
+    expect(() => runTool("acme-growth", "nope", [], options)).toThrow(/ships no tool nope \(it ships: hello, kickoff\)/);
+  });
+  test("edit, try, diff and release: the instance runs the edited tool, the change goes upstream as a lesson", async () => {
+    const { server, options, first } = await hiredWithTools();
+    expect(() => diffTemplate("acme-growth", options)).toThrow(/No draft for acme-growth/);
+    const draft = editTemplate("acme-growth", options);
+    expect(draft).toMatchObject({ created: true, from: "growth@2.0.0", draft: draftRoot(server.dir, "acme-growth") });
+    expect(editTemplate("acme-growth", options).created).toBe(false);
+    expect(diffTemplate("acme-growth", options)).toMatchObject({ class: null });
+    fs.writeFileSync(path.join(draft.draft, "scripts/hello.sh"), 'echo "v2 $1" > "$CODECAST_PROJECT_DIR/out.txt"\n');
+    // The draft runs on request; the pin keeps running until a release moves it.
+    runTool("acme-growth", "hello", ["draft"], { ...options, draft: true });
+    expect(fs.readFileSync(path.join(server.dir, "out.txt"), "utf8")).toBe("v2 draft\n");
+    runTool("acme-growth", "hello", ["pin"], options);
+    expect(fs.readFileSync(path.join(server.dir, "out.txt"), "utf8")).toStartWith("v1 acme-growth pin");
+    const diff = diffTemplate("acme-growth", { ...options, patch: true });
+    expect(diff).toMatchObject({ from: "growth@2.0.0", added: [], changed: ["scripts/hello.sh"], removed: [], class: "content", version: "2.0.1" });
+    expect(diff.patch).toContain("+echo \"v2 $1\"");
+    await expect(releaseDraft(server.deps, "acme-growth", options)).rejects.toThrow(/--changelog/);
+    const released = await releaseDraft(server.deps, "acme-growth", { ...options, changelog: "Greets with the version that ran." });
+    expect(released).toMatchObject({ from: "growth@2.0.0", to: "growth@2.0.1", class: "content", workspace: "team:team-1" });
+    // Codecast's template, edited in a team: filed upstream before the instance left it, then published as the team's own copy.
+    expect(server.lessons).toHaveLength(1);
+    expect(server.lessons[0].body).toContain("Greets with the version that ran.");
+    expect(server.lessons[0].body).toContain("changed scripts/hello.sh");
+    expect(server.calls.filter((c) => c.endpoint === "/cli/org/template/publish").at(-1)!.body).toMatchObject({ team_id: "team-1", status: "canary" });
+    expect(readReceipt(server.dir, "acme-growth").template.version).toBe("2.0.1");
+    expect(readReceipt(server.dir, "acme-growth").template.hash).not.toBe(first.digest);
+    expect(server.instances[0]).toMatchObject({ version: "2.0.1" });
+    expect(fs.existsSync(draft.draft)).toBe(false);
+    const changelog = readArtifact(readReceipt(server.dir, "acme-growth").template.root).files.get("CHANGELOG.md")!.toString("utf8");
+    expect(changelog).toStartWith("## 2.0.1\n\nGreets with the version that ran.");
+    // The same call the role makes now runs the new version.
+    runTool("acme-growth", "hello", ["after"], options);
+    expect(fs.readFileSync(path.join(server.dir, "out.txt"), "utf8")).toBe("v2 after\n");
+  });
+  test("a declared tool is structure and needs a minor version; a widened authority is a person's to publish", async () => {
+    const { server, options } = await hiredWithTools();
+    server.templateWorkspace = "team:team-1";
+    const { draft } = editTemplate("acme-growth", options);
+    const m = JSON.parse(fs.readFileSync(path.join(draft, "org-template.json"), "utf8"));
+    fs.writeFileSync(path.join(draft, "scripts/bye.sh"), "echo bye\n");
+    m.tools.push({ id: "bye", kind: "command", path: "scripts/bye.sh", run: "sh", summary: "Say goodbye" });
+    fs.writeFileSync(path.join(draft, "org-template.json"), JSON.stringify(m));
+    expect(diffTemplate("acme-growth", options)).toMatchObject({ class: "structure", version: "2.1.0", added: ["scripts/bye.sh"], why: ["tool bye added"] });
+    m.authority = [{ id: "spend", kind: "spend", label: "Spend money" }];
+    fs.writeFileSync(path.join(draft, "org-template.json"), JSON.stringify(m));
+    await expect(releaseDraft(server.deps, "acme-growth", { ...options, changelog: "More power" })).rejects.toThrow(/A role never widens its own authority/);
+    delete m.authority;
+    fs.writeFileSync(path.join(draft, "org-template.json"), JSON.stringify(m));
+    const released = await releaseDraft(server.deps, "acme-growth", { ...options, changelog: "Adds bye." });
+    // The team's own template: no lesson upstream, just its next version.
+    expect(released).toMatchObject({ to: "growth@2.1.0", class: "structure" });
+    expect(server.lessons).toHaveLength(0);
+    expect(listTools("acme-growth", options).tools.map((t) => t.id)).toEqual(["hello", "kickoff", "bye"]);
   });
 });

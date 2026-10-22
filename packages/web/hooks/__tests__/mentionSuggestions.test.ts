@@ -58,18 +58,19 @@ describe("mention suggestions", () => {
       recentVisits: [{ kind: "page", key: "page:/tasks/t1", ts: 500 }],
     } as unknown as ReturnType<typeof useInboxStore.getState>;
     const result = buildMentionItems(state, { kind: "team", teamId: "team" });
-    expect(result.map((m) => m.id)).toEqual(["t1", "session1", "p1", "d1", "worker"]);
+    // session1 heartbeats now, so it is awake and leads the task viewed later.
+    expect(result.map((m) => m.id)).toEqual(["session1", "t1", "p1", "d1", "worker"]);
     expect(result[4].worker).toBe(true);
     expect(mentionItemMatches(result[4], "")).toBe(false);
     expect(mentionItemMatches(result[4], "worker")).toBe(true);
-    expect(result[0]).toMatchObject({ label: "Live task", status: "done", priority: "high", updatedAt: 100, viewedAt: 500 });
+    expect(result[1]).toMatchObject({ label: "Live task", status: "done", priority: "high", updatedAt: 100, viewedAt: 500 });
     // The status is the verdict, not the daemon's raw word: a "working" row
     // quiet past the trust TTL while its daemon heartbeats reads idle.
-    expect(result[1]).toMatchObject({ status: "idle", agentType: "codex", model: "gpt-6", messageCount: 8 });
+    expect(result[0]).toMatchObject({ status: "idle", awake: true, agentType: "codex", model: "gpt-6", messageCount: 8 });
     expect(result[3].label).toBe("Live doc");
     expect(mentionItemMatches(result[2], "launch release")).toBe(true);
-    expect(mentionItemMatches(result[1], "session")).toBe(true);
-    expect(mentionItemMatches(result[1], "missing words")).toBe(false);
+    expect(mentionItemMatches(result[0], "session")).toBe(true);
+    expect(mentionItemMatches(result[0], "missing words")).toBe(false);
   });
 
   test("a Slack-only person whose handle a teammate answers to is that teammate's row", () => {
@@ -165,5 +166,41 @@ describe("match strength leads once the reader has typed", () => {
     expect(offered("process")).toEqual(["s1", "s2", "t1", "d1"]);
     expect(offered("").filter((id) => id.startsWith("s"))).toEqual([]);
     expect(chatMentionOffers({ ...pool[0], contextAt: 1 }, "")).toBe(true);
+  });
+});
+
+// The bug this pins: from a union-mobile session (Union team), "@maple" found
+// nothing for the viewer's own "Line feedback pipeline" session, which wears
+// the name Maple and is filed under the Codecast team, and with nothing typed
+// a running session sat below every session merely viewed earlier.
+describe("the viewer's live sessions are reachable and lead", () => {
+  const now = Date.now();
+  const state = {
+    ...useInboxStore.getState(),
+    currentUser: { _id: "me" }, teamMembers: [], buckets: {}, bucketAssignments: {},
+    mentionIndex: { tasks: {}, docs: {}, plans: {} }, tasks: {}, docs: {}, plans: {},
+    sessions: {
+      maple: { _id: "maple", title: "Line feedback pipeline", character_name: "Maple", user_id: "me", team_id: "codecast", message_count: 11121, agent_status: "dormant", updated_at: now - 240_000, last_heartbeat: now - 10_000 },
+      theirs: { _id: "theirs", title: "Maple syrup notes", user_id: "teammate", team_id: "codecast", message_count: 4, updated_at: now },
+      viewed: { _id: "viewed", title: "Union outreach copy", user_id: "me", team_id: "union", message_count: 30, updated_at: now - 86_400_000 },
+    },
+    _lastViewedAt: { viewed: now - 3_600_000 },
+    recentVisits: [],
+  } as unknown as ReturnType<typeof useInboxStore.getState>;
+  const built = () => buildMentionItems(state, { kind: "team", teamId: "union" });
+
+  test("the viewer's own session in another team is offered, a teammate's is not", () => {
+    const ids = built().map((m) => m.id);
+    expect(ids).toContain("maple");
+    expect(ids).not.toContain("theirs");
+    const maple = built().find((m) => m.id === "maple")!;
+    expect(maple.awake).toBe(true);
+    expect(mentionItemMatches(maple, "maple")).toBe(true);
+  });
+
+  test("an awake session leads one that was only viewed, typed or not", () => {
+    expect(mergeMentionSuggestions(built(), [], new Map(), Infinity, "")[0].id).toBe("maple");
+    const typed = built().filter((m) => mentionItemMatches(m, "line"));
+    expect(mergeMentionSuggestions(typed, [], new Map(), Infinity, "line")[0].id).toBe("maple");
   });
 });

@@ -81,9 +81,19 @@ export async function patchPullRequest(
     patch.shepherd_state = state;
     patch.shepherd_state_at = Date.now();
   }
-  patch.updated_at = patch.updated_at ?? Date.now();
-
-  await ctx.db.patch(prId, patch);
+  // Write only what changed, and nothing when nothing did. A pull request row
+  // carries its files, commits and checks (about 110 KB), every patch stores a
+  // whole new version of it, and the merge-state poll and the CI drain mostly
+  // re-send what GitHub already told us: rewriting unchanged rows was 9 GB a
+  // day of Postgres growth on 2026-10-22 (ct-60898). The reads below still run,
+  // so a caller relying on their re-sync sees the same behavior either way.
+  for (const key of Object.keys(patch)) {
+    if (JSON.stringify(patch[key]) === JSON.stringify((before as any)[key])) delete patch[key];
+  }
+  if (Object.keys(patch).length > 0) {
+    patch.updated_at = patch.updated_at ?? Date.now();
+    await ctx.db.patch(prId, patch);
+  }
   const after = (await ctx.db.get(prId)) as PR;
   await syncPullRequestSessions(ctx, after);
 
@@ -789,7 +799,7 @@ export const applyMergeState = internalMutation({
     // commit to main wrote a pr_behind/pr_conflict pair into the timeline.
     // Each field is written only when it carries an answer, so an unknown
     // never overwrites what GitHub last told us.
-    const patch: Record<string, any> = { merge_state_checked_at: Date.now() };
+    const patch: Record<string, any> = {};
     if (args.mergeable === true || args.mergeable === false) patch.mergeable = args.mergeable;
     if (args.mergeable_state !== undefined && args.mergeable_state !== "unknown") {
       patch.mergeable_state = args.mergeable_state;
