@@ -104,7 +104,11 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
     },
     onStartOffload: (sel, { waitForTurnMs }) => {
       const source = sourceOf(sel);
-      if (source) start({ client_batch_id: clientBatchId(), source_device_id: source, selections: toServer(sel), wait_for_idle_ms: waitForTurnMs });
+      const selections = toServer(sel);
+      if (!source || !selections.length) { toast.error("These sessions are not reporting which machine they run on yet; try again in a moment"); return undefined; }
+      const id = clientBatchId();
+      start({ client_batch_id: id, source_device_id: source, selections, wait_for_idle_ms: waitForTurnMs });
+      return id;
     },
     onRetry: (batchId, sessionId) => {
       const intent = batches.find((b) => b.batch_id === batchId)?.resource_offload;

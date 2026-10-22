@@ -80,33 +80,31 @@ async function verifyHireFlow() {
   assert.deepEqual(cards, [["head-of-people", "true"], ["executive-assistant", "true"], ["eng-lead", "true"], ["growth", "true"], ["draft", "false"]]);
   assert.ok(document.querySelector('[data-template-card="eng-lead"] [data-template-card-leads]'), "the default lead is badged");
   assert.equal(document.querySelector('[data-template-card="growth"] [data-template-card-leads]'), null);
-  assert.match(document.querySelector<HTMLElement>('[data-template-card="growth"]')!.textContent!, /under the lead/);
   const growth = document.querySelector<HTMLElement>('[data-template-card="growth"]')!;
-  assert.match(growth.textContent!, /1 answer/);
-  assert.match(growth.textContent!, /1 secret kept on your machine/);
-  assert.match(growth.textContent!, /1 permission outside codecast/);
-  assert.match(growth.textContent!, /1 setup step only you can do/);
+  // What a hire costs, in counts on one line; what every card shares (the publisher, the lead rule) is not repeated on each.
+  assert.equal(growth.querySelector("[data-template-asks]")!.textContent, "Asks 1 answer · 1 secret · 1 permission · 1 setup step");
   assert.match(growth.textContent!, /Weekly\s*weekly/);
-  assert.match(growth.textContent!, /by Codecast/);
+  assert.doesNotMatch(growth.textContent!, /by Codecast|under the lead/);
   const draft = document.querySelector<HTMLElement>('[data-template-card="draft"]')!;
   assert.match(draft.querySelector("[data-template-card-reason]")!.textContent!, /Not ready to hire/);
   assert.equal(draft.querySelector("[data-template-card-hire]"), null);
   assert.equal(document.querySelector("[data-template-form]"), null, "no form before a card is picked");
+  // The learning switch (H12) is a workspace's choice: it meets the person once, under the gallery, off, with its one sentence; a flip is one write.
+  assert.equal(document.querySelector("[data-template-learning]")!.getAttribute("data-template-learning"), "false");
+  assert.match(document.querySelector("[data-template-learning]")!.textContent!, /generalized lessons about the template: never transcripts, quotes, names, customer data or code/);
+  await act(async () => document.querySelector<HTMLElement>('[data-template-learning] [role="switch"]')!.click());
+  assert.deepEqual(learningSet, [true]);
   await act(async () => growth.querySelector<HTMLButtonElement>("[data-template-card-hire]")!.click());
   assert.equal(document.querySelector("[data-hire-stage]")!.getAttribute("data-hire-stage"), "form");
   assert.ok(document.querySelector('[data-template-chosen="growth"]'));
   assert.equal(button("Propose the hire").disabled, true);
-  // The learning switch (H12) meets the person here too, off, with its one sentence; a flip is one write.
-  assert.equal(document.querySelector("[data-template-learning]")!.getAttribute("data-template-learning"), "false");
-  assert.match(document.querySelector("[data-template-learning]")!.textContent!, /generalized lessons about the template: never transcripts, quotes, names, customer data or code/);
-  await act(async () => document.querySelector<HTMLElement>('[data-template-form] [data-template-learning] [role="switch"]')!.click());
-  assert.deepEqual(learningSet, [true]);
+
   // Back to the gallery and forward again keeps nothing half typed.
   await act(async () => document.querySelector<HTMLButtonElement>("[data-template-back]")!.click());
   assert.ok(document.querySelector("[data-template-gallery]"));
   await act(async () => document.querySelector<HTMLButtonElement>('[data-template-card="growth"] [data-template-card-hire]')!.click());
-  assert.match(document.body.textContent!, /Secrets come last, and stay on its machine/);
-  assert.match(document.body.textContent!, /Ads credentials/);
+  assert.match(document.querySelector("[data-template-secrets]")!.textContent!, /^After you accept, on the role page, sealed to its machine: Ads credentials$/);
+  assert.equal(document.querySelector("[data-template-learning]"), null, "the workspace's learning switch stays on the gallery");
   // No lead on the project yet: the form says this role would lead it and offers the Engineering Lead first.
   assert.match(document.body.textContent!, /Product has no lead yet, so this role would lead it/);
   await act(async () => document.querySelector<HTMLButtonElement>("[data-template-hire-lead-first]")!.click());

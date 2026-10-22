@@ -106,6 +106,7 @@ import { registerOrgInitCommands } from "./orgInit.js";
 import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import { registerRouteCommand } from "./routeCommand.js";
+import { registerFlowCommands } from "./flowCommand.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -2844,6 +2845,17 @@ function failUnknownCommand(operands: string[]): never {
   process.exit(1);
 }
 
+// `cast <unknown> --help` never reaches the root action: commander answers the
+// help flag first, with the whole root help (a thousand lines) and exit 0, so
+// an agent guessing at a command reads that instead of "no such command".
+function failUnknownCommandBeforeHelp(argv: string[]): void {
+  const first = argv[2];
+  if (!first || first.startsWith("-") || first === "help") return;
+  if (!argv.slice(3).some((a) => a === "--help" || a === "-h")) return;
+  if (commandTree(program).some((node) => node.name === first || node.aliases?.includes(first))) return;
+  failUnknownCommand([first]);
+}
+
 // Groups never reach failUnknownCommand — commander answers their unknown
 // subcommands itself, and its built-in ranking is pure string similarity, so
 // `cast doc delta` was answered with "(Did you mean delete?)" and
@@ -3157,39 +3169,39 @@ keysCmd
     console.log(`${c.green}ok${c.reset} removed the ${spec?.label ?? id} key — reverts to system auth. Restart a running session to apply.`);
   });
 
-// ── cast vault ────────────────────────────────────────────────────────────────
+// ── cast files ────────────────────────────────────────────────────────────────
 // A vault is a local directory of markdown the browser can browse and edit over
 // the daemon's loopback bridge. Registering it here is what gives it an id; the
 // files never leave this machine.
 const vaultCmd = program
-  .command("vault")
-  .alias("vaults")
+  .command("files")
+  .alias("file")
   .description(
-    "Read and write local markdown vaults (the web app calls this Files)\n\n" +
+    "Read and write local markdown vaults, the folders the Files page shows\n\n" +
     "A vault is a directory of markdown you registered. The daemon serves it\n" +
     "to the web app's Files page over its local 127.0.0.1 bridge; these\n" +
     "commands read and write the same files directly, so a note you change\n" +
     "here shows up in an open browser tab within a second. Registration is\n" +
     "per-device and the files never leave this machine.\n\n" +
     "Managing the list of vaults:\n" +
-    "  cast vault add ~/notes\n" +
-    "  cast vault add ~/work/wiki --name Wiki\n" +
-    "  cast vault ls\n" +
-    "  cast vault mirror ~/notes --on   # let other devices read it\n" +
-    "  cast vault forget ~/notes        # unregister; the files stay\n\n" +
+    "  cast files add ~/notes\n" +
+    "  cast files add ~/work/wiki --name Wiki\n" +
+    "  cast files ls\n" +
+    "  cast files mirror ~/notes --on   # let other devices read it\n" +
+    "  cast files forget ~/notes        # unregister; the files stay\n\n" +
     "Working on notes — the loop an agent runs:\n" +
-    "  cast vault search 'tag:health sleep'      # find the note\n" +
-    "  cast vault cat Sleep                      # read it\n" +
-    "  cast vault grep 'bed at' --path 'Areas/**'  # find the exact line\n" +
-    "  cast vault edit Sleep --old 'bed at 11' --new 'bed at 10'\n" +
-    "  cast vault links Sleep                    # what points here\n" +
-    "  cast vault open Sleep                     # a link for the human\n\n" +
+    "  cast files search 'tag:health sleep'      # find the note\n" +
+    "  cast files cat Sleep                      # read it\n" +
+    "  cast files grep 'bed at' --path 'Areas/**'  # find the exact line\n" +
+    "  cast files edit Sleep --old 'bed at 11' --new 'bed at 10'\n" +
+    "  cast files links Sleep                    # what points here\n" +
+    "  cast files open Sleep                     # a link for the human\n\n" +
     "Paths: every command takes a vault-relative path OR the bare name a\n" +
     "[[wiki link]] would use, resolved by the same rules the app uses. A name\n" +
     "matching several notes errors and lists them.\n\n" +
     "Vaults: --vault <id|name|dir> picks one. Without it, commands use the\n" +
     "vault the current directory is inside — so inside a project you can just\n" +
-    "say `cast vault cat <note>`. With a single registered vault anywhere,\n" +
+    "say `cast files cat <note>`. With a single registered vault anywhere,\n" +
     "that one is used.\n\n" +
     "Machine-readable: every read command takes --json.\n\n" +
     "Exit codes: 0 ok · 1 not found · 2 ambiguous (name or vault matched\n" +
@@ -3219,16 +3231,16 @@ vaultCmd
   .description(
     "List the vaults this machine can open\n\n" +
     "Two kinds appear here. VAULTS are directories you registered with\n" +
-    "`cast vault add` — they are listed in full. PROJECTS are your own code\n" +
+    "`cast files add` — they are listed in full. PROJECTS are your own code\n" +
     "repositories, found automatically because they contain markdown; there\n" +
     "are usually hundreds, so only a few are shown unless you ask for --all.\n" +
     "Both open, scan and edit identically once you name one.\n\n" +
     "The row marked `← you are here` is the vault every other command uses\n" +
     "when you leave --vault off.\n\n" +
     "Examples:\n" +
-    "  cast vault ls\n" +
-    "  cast vault ls --all      # every discovered project too\n" +
-    "  cast vault ls --json     # always complete, for scripts"
+    "  cast files ls\n" +
+    "  cast files ls --all      # every discovered project too\n" +
+    "  cast files ls --json     # always complete, for scripts"
   )
   .option("--all", "List every discovered project, not just the first few")
   .option("--json", "Output as JSON")
@@ -3241,7 +3253,7 @@ vaultCmd
       return;
     }
     if (vaults.length === 0) {
-      console.log(`${c.dim}No vaults. Add one with: cast vault add ~/notes${c.reset}`);
+      console.log(`${c.dim}No vaults. Add one with: cast files add ~/notes${c.reset}`);
       return;
     }
 
@@ -3262,7 +3274,7 @@ vaultCmd
     };
 
     if (registered.length) {
-      console.log(`${c.bold}Vaults${c.reset} ${c.dim}— registered with cast vault add${c.reset}`);
+      console.log(`${c.bold}Vaults${c.reset} ${c.dim}— registered with cast files add${c.reset}`);
       registered.forEach(row);
     }
 
@@ -3283,7 +3295,7 @@ vaultCmd
       );
       shown.forEach(row);
       if (shown.length < projects.length) {
-        console.log(`  ${c.dim}… ${projects.length - shown.length} more — see: cast vault ls --all${c.reset}`);
+        console.log(`  ${c.dim}… ${projects.length - shown.length} more — see: cast files ls --all${c.reset}`);
       }
     }
 
@@ -3302,8 +3314,8 @@ vaultCmd
     "another device. The files stay here and stay canonical; the mirror is a\n" +
     "copy that follows them. Turning it off deletes the copy.\n\n" +
     "Examples:\n" +
-    "  cast vault mirror ~/notes --on\n" +
-    "  cast vault mirror ~/notes --off"
+    "  cast files mirror ~/notes --on\n" +
+    "  cast files mirror ~/notes --off"
   )
   .argument("<dirOrId>", "Vault directory or id")
   .option("--on", "Start mirroring this vault")
@@ -3315,7 +3327,7 @@ vaultCmd
     }
     const vault = setVaultMirroring(CONFIG_DIR, dirOrId, !!options.on);
     if (!vault) {
-      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast vault ls`);
+      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast files ls`);
       process.exit(1);
     }
     if (options.on) {
@@ -3340,13 +3352,13 @@ vaultCmd
   .action((dirOrId: string) => {
     const removed = removeVault(CONFIG_DIR, dirOrId);
     if (!removed) {
-      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast vault ls`);
+      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast files ls`);
       process.exit(1);
     }
     console.log(`${c.green}ok${c.reset} unregistered ${c.cyan}${removed.name}${c.reset} ${c.dim}${removed.root}${c.reset}`);
   });
 
-// ── cast vault: the notes themselves ─────────────────────────────────────────
+// ── cast files: the notes themselves ─────────────────────────────────────────
 // Everything above manages the LIST of vaults. Everything below reads and
 // writes what is inside one, because the caller these exist for is an agent in
 // a Claude Code session that needs a note the same way it needs a `cast doc` —
@@ -3366,7 +3378,7 @@ function failVault(err: unknown): never {
       console.error(`  ${c.dim}${candidate}${c.reset}`);
     }
     if (err.candidates.length > 10) {
-      console.error(`  ${c.dim}… ${err.candidates.length - 10} more — see: cast vault ls${c.reset}`);
+      console.error(`  ${c.dim}… ${err.candidates.length - 10} more — see: cast files ls${c.reset}`);
     }
     process.exit(err.exitCode);
   }
@@ -3404,9 +3416,9 @@ async function bodyFromOptions(options: any): Promise<string> {
 
 /** Deep link to a note in the web app.
  *
- *  Mints /files — the surface is called "Files" now. /vault stays routable in
- *  the web app forever: this function printed /vault?f=… links into sessions,
- *  notes and users' own markdown files for months, and those are on disk. */
+ *  Mints /files. This function used to print /vault?f=… links, which are on
+ *  disk in sessions and notes; the web app's /vault route (now the team Vault)
+ *  still redirects a Files query to /files. */
 function vaultNoteUrl(path: string, line?: number): string {
   const at = line ? `&l=${line}` : "";
   return `${WEB_URL}/files?f=${encodeURIComponent(path)}${at}`;
@@ -3422,11 +3434,11 @@ withVaultOption(
       "use — `Sleep`, `Health/Sleep`, `Areas/Health/Sleep.md` all find the same\n" +
       "note. A name matching several notes lists them and exits 2.\n\n" +
       "Examples:\n" +
-      "  cast vault cat Sleep                 # first page (200 lines)\n" +
-      "  cast vault cat Sleep 100:250         # an explicit line range\n" +
-      "  cast vault cat Sleep :50             # the first 50 lines\n" +
-      "  cast vault cat Sleep -p 2 -n         # next page, with line numbers\n" +
-      "  cast vault cat Sleep --full --json   # whole note, machine-readable"
+      "  cast files cat Sleep                 # first page (200 lines)\n" +
+      "  cast files cat Sleep 100:250         # an explicit line range\n" +
+      "  cast files cat Sleep :50             # the first 50 lines\n" +
+      "  cast files cat Sleep -p 2 -n         # next page, with line numbers\n" +
+      "  cast files cat Sleep --full --json   # whole note, machine-readable"
     )
     .argument("<path>", "Note path or name")
     .argument("[range]", "Line range (100:250, 100:, :50, 42) — overrides --page")
@@ -3473,7 +3485,7 @@ withVaultOption(
 
     if (view.start > 1 || view.end < lines.length) {
       const next = view.page < view.pages
-        ? `${c.dim} · next: ${c.reset}${c.cyan}cast vault cat ${ref.path} -p ${view.page + 1}${c.reset}`
+        ? `${c.dim} · next: ${c.reset}${c.cyan}cast files cat ${ref.path} -p ${view.page + 1}${c.reset}`
         : "";
       console.log(`\n${c.dim}─ lines ${view.start}-${view.end} of ${lines.length}${c.reset}${next}`);
     }
@@ -3489,9 +3501,9 @@ withVaultOption(
       "as `path` then `line  text`. The pattern is a regex; one that doesn't\n" +
       "compile is searched for literally.\n\n" +
       "Examples:\n" +
-      "  cast vault grep 'deadline'\n" +
-      "  cast vault grep 'TODO' --path 'Projects/**' -C 1\n" +
-      "  cast vault grep 'p0\\\\.' -i --json"
+      "  cast files grep 'deadline'\n" +
+      "  cast files grep 'TODO' --path 'Projects/**' -C 1\n" +
+      "  cast files grep 'p0\\\\.' -i --json"
     )
     .argument("<pattern>", "Text or regex to find")
     .option("--path <glob>", "Only notes whose path matches this glob")
@@ -3559,7 +3571,7 @@ withVaultOption(
     if (total > shown) {
       console.log(`\n${c.dim}… ${total - shown} more (raise --limit)${c.reset}`);
     }
-    console.log(`\n${c.dim}Read around a hit: ${c.reset}${c.cyan}cast vault cat <path> <start>:<end>${c.reset}`);
+    console.log(`\n${c.dim}Read around a hit: ${c.reset}${c.cyan}cast files cat <path> <start>:<end>${c.reset}`);
   }),
 );
 
@@ -3576,10 +3588,10 @@ withVaultOption(
       "  \"exact words\"   this phrase, contiguous\n" +
       "  -draft          drop notes mentioning this\n\n" +
       "Searches titles, tags and prose. To search line by line, use\n" +
-      "cast vault grep.\n\n" +
+      "cast files grep.\n\n" +
       "Examples:\n" +
-      "  cast vault search 'tag:health sleep'\n" +
-      "  cast vault search 'path:projects \"ship it\"' --json"
+      "  cast files search 'tag:health sleep'\n" +
+      "  cast files search 'path:projects \"ship it\"' --json"
     )
     .argument("<query...>", "Query, with optional operators")
     .option("-n, --limit <n>", "Max results", "20")
@@ -3618,9 +3630,9 @@ withVaultOption(
       "--force, so a create can never silently eat someone's writing. The body\n" +
       "comes from --content, --content-file, or standard input.\n\n" +
       "Examples:\n" +
-      "  cast vault write 'Inbox/Idea' -c '# Idea\\n\\nTry the thing.'\n" +
-      "  cast vault write Sleep --content-file draft.md --force\n" +
-      "  cast vault write 'Daily/2026-08-03' <<'EOF'\n" +
+      "  cast files write 'Inbox/Idea' -c '# Idea\\n\\nTry the thing.'\n" +
+      "  cast files write Sleep --content-file draft.md --force\n" +
+      "  cast files write 'Daily/2026-08-03' <<'EOF'\n" +
       "  # Today\n" +
       "  EOF"
     )
@@ -3635,7 +3647,7 @@ withVaultOption(
     const target = await targetNote(ctx, notePath);
     if (target.exists && !options.force) {
       throw new VaultCliError(
-        `${target.path} already exists. Pass --force to replace it, or use: cast vault edit ${target.path} --old … --new …`,
+        `${target.path} already exists. Pass --force to replace it, or use: cast files edit ${target.path} --old … --new …`,
       );
     }
     const body = await bodyFromOptions(options);
@@ -3665,9 +3677,9 @@ withVaultOption(
       "both without touching the file — include more surrounding text to make\n" +
       "the match unique rather than letting a guess corrupt the note.\n\n" +
       "Examples:\n" +
-      "  cast vault edit Sleep --old 'bed at 11' --new 'bed at 10'\n" +
-      "  cast vault edit Sleep --append '## Tonight\\n\\n- lights out early'\n" +
-      "  cast vault edit Sleep --prepend '> Reviewed 2026-08-03'"
+      "  cast files edit Sleep --old 'bed at 11' --new 'bed at 10'\n" +
+      "  cast files edit Sleep --append '## Tonight\\n\\n- lights out early'\n" +
+      "  cast files edit Sleep --prepend '> Reviewed 2026-08-03'"
     )
     .argument("<path>", "Note path or name")
     .option("--old <text>", stdinText("Text to find (must be unique in the note)"))
@@ -3720,18 +3732,18 @@ withVaultOption(
       "Move a note to the trash\n\n" +
       "The note goes to the OS trash (or the vault's own .trash when that is on\n" +
       "another volume), never an unlink — exactly what deleting from the app\n" +
-      "does. To unregister a whole vault instead, use: cast vault forget\n\n" +
+      "does. To unregister a whole vault instead, use: cast files forget\n\n" +
       "Examples:\n" +
-      "  cast vault rm 'Inbox/Old Idea'"
+      "  cast files rm 'Inbox/Old Idea'"
     )
     .argument("<path>", "Note path or name")
     .option("--json", "Output as JSON"),
 ).action(async (notePath: string, options: any) =>
   runVault(async () => {
-    // The old spelling of `cast vault forget`. Refuse rather than reinterpret:
+    // The old spelling of `cast files forget`. Refuse rather than reinterpret:
     // someone typing a vault root here meant to unregister, not to delete.
     if (findVault(CONFIG_DIR, notePath)) {
-      throw new VaultCliError(`"${notePath}" is a registered vault. To unregister it: cast vault forget ${notePath}`);
+      throw new VaultCliError(`"${notePath}" is a registered vault. To unregister it: cast files forget ${notePath}`);
     }
     const ctx = await openVault(CONFIG_DIR, options.vault);
     const ref = await resolveNote(ctx, notePath);
@@ -3755,8 +3767,8 @@ withVaultOption(
       "app's rename builds. A link whose text no longer matches the file on\n" +
       "disk is skipped rather than rewritten blind, and reported.\n\n" +
       "Examples:\n" +
-      "  cast vault mv Sleep 'Areas/Health/Sleep'\n" +
-      "  cast vault mv Sleep Rest --no-rewrite-links"
+      "  cast files mv Sleep 'Areas/Health/Sleep'\n" +
+      "  cast files mv Sleep Rest --no-rewrite-links"
     )
     .argument("<from>", "Note path or name")
     .argument("<to>", "New path or name")
@@ -3792,8 +3804,8 @@ withVaultOption(
       "this note lives in some other file, and nothing short of reading them\n" +
       "all can know which. A few thousand notes takes tens of milliseconds.\n\n" +
       "Examples:\n" +
-      "  cast vault links Sleep\n" +
-      "  cast vault links Sleep --json"
+      "  cast files links Sleep\n" +
+      "  cast files links Sleep --json"
     )
     .argument("<path>", "Note path or name")
     .option("--json", "Output as JSON"),
@@ -3858,8 +3870,8 @@ withVaultOption(
       "opens it in whichever vault the reader has open. With several vaults\n" +
       "registered, say which one alongside the link.\n\n" +
       "Examples:\n" +
-      "  cast vault open Sleep\n" +
-      "  cast vault open Sleep --line 42"
+      "  cast files open Sleep\n" +
+      "  cast files open Sleep --line 42"
     )
     .argument("<path>", "Note path or name")
     .option("--line <n>", "Anchor the link at a line")
@@ -6332,18 +6344,20 @@ program
 
 program
   .command("teams")
+  .alias("team")
   .description(
-    "Manage teams and directory mappings\n\n" +
+    "Your teams, their people, and which directories share with them\n\n" +
     "Examples:\n" +
     "  cast teams                      # List your teams\n" +
+    "  cast teams members [team]       # The team's people and their @handles (message one: cast chat dm)\n" +
     "  cast teams mappings             # Show directory-to-team mappings\n" +
     "  cast teams map <path> <team>    # Share a directory with a team (asks about past sessions)\n" +
     "  cast teams map <path> <team> --new-only   # Share sessions from today on\n" +
     "  cast teams lock <path>          # Never share: no rule can share the folder\n" +
     "  cast teams unmap <path>         # Remove a directory mapping or a lock"
   )
-  .argument("[action]", "Action: mappings, map, lock, unmap")
-  .argument("[path]", "Directory path (for map/unmap)")
+  .argument("[action]", "Action: members, mappings, map, lock, unmap")
+  .argument("[path]", "Directory path (for map/lock/unmap), or the team (for members)")
   .argument("[team]", "Team ID or name (for map)")
   .option("--include-past", "Share every session already in the directory (no prompt)")
   .option("--new-only", "Share only sessions started from now on (no prompt)")
@@ -6380,6 +6394,23 @@ program
         console.log(`\n${fmt.muted("No active team — team-scoped commands need --team, and new work is personal.")}`);
       }
       console.log(`\n${fmt.muted("Run 'cast teams mappings' to see which projects share with which teams.")}`);
+      return;
+    }
+
+    if (action === "members" || action === "people") {
+      const ws = await readWorkspace(pathArg);
+      if (ws.kind !== "team") {
+        console.error(`No active team. Name one: cast teams members <team> (${teams.map((t) => t.name).join(", ")})`);
+        process.exit(1);
+      }
+      const { people } = await cliPost("/cli/chat/people", workspaceArgs(ws));
+      console.log(`\n${c.bold}${workspaceLabel(ws)}${c.reset}\n`);
+      for (const p of people) {
+        const handle = p.handle ? `@${p.handle}` : fmt.muted("(no handle)");
+        const role = p.role === "admin" ? fmt.accent("admin") : fmt.muted("member");
+        console.log(`  ${fmt.value(handle.padEnd(20))} ${p.name.padEnd(24)} ${role}${p.is_you ? fmt.muted("  you") : ""}`);
+      }
+      console.log(`\n${fmt.muted("Message someone:")} cast chat dm @handle "<text>"`);
       return;
     }
 
@@ -6493,7 +6524,7 @@ program
     }
 
     console.error(`Unknown action: ${action}`);
-    console.error("Available actions: mappings, map, unmap");
+    console.error("Available actions: members, mappings, map, lock, unmap");
     process.exit(1);
   });
 
@@ -14210,6 +14241,15 @@ registerOrgInitCommands(program, orgDeps);
 registerOrgTemplateCommands(program, orgDeps);
 registerOrgRoleOpsCommands(program, { ...orgDeps, resolveRoleId });
 registerRouteCommand(program, orgDeps);
+registerFlowCommands(program, {
+  cliPost, callingSession, realCwd: getRealCwd,
+  // The flows published to the workspace this shell reads (flows.md FL2).
+  fetchPool: async () => {
+    const ws = await readWorkspace();
+    const r = await cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
+    return r?.flows ?? [];
+  },
+});
 
 // ── Team chat ────────────────────────────────────────────────────────────────
 // Channels, flat threads and the anchor answering in one. `cast chat reply` is
@@ -14218,7 +14258,7 @@ registerRouteCommand(program, orgDeps);
 // exist and every mention in chat ends at the ten-minute timeout.
 const chat = program
   .command("chat")
-  .description("Team chat: channels, threads, and the workspace agent's replies")
+  .description("Team chat: channels, direct messages, threads, and the workspace agent's replies")
   .showHelpAfterError(true);
 
 // A `cast` running inside an agent session is an AGENT typing, not the
@@ -14363,13 +14403,15 @@ chat
 
 chat
   .command("read")
-  .description("Read a channel, newest last")
-  .requiredOption("--channel <id>", "Channel id (from cast chat channels)")
+  .description("Read a channel or a direct message, newest last")
+  .requiredOption("--channel <ref>", "#name, @person for a direct message, or a channel id")
+  .option("--team <name|id>", "Team whose #names and people resolve (default: your active team)")
   .option("-n, --limit <n>", "How many messages (default 30)")
   .option("--cursor <cursor>", "Page further back, from a previous next_cursor")
   .option("--since <ts|duration>", "Only lines after this: a ms timestamp, an ISO date, or an age like 2h (compact, one line each)")
   .option("--json", "Machine-readable output")
   .action(async (options: any) => {
+    options.channel = await resolveChatChannelId(options.channel, workspaceArgs(await readWorkspace(options.team)).team_id);
     // The compact view a role's wake frame embeds: threads and replies alike,
     // oldest first, text cut to one short line.
     if (options.since) {
@@ -14415,6 +14457,7 @@ chat
     const authors = new Map<string, any>(
       (result.authors ?? []).map((a: any) => [String(a._id), a]),
     );
+    if (!result.messages?.length) console.log(`${c.dim}No messages yet${c.reset}`);
     for (const row of result.messages ?? []) printChatMessage(row, authors);
     if (result.has_more) {
       console.log(`${c.dim}  older above — cast chat read --channel ${options.channel} --cursor ${result.next_cursor}${c.reset}`);
@@ -14446,53 +14489,76 @@ chat
     for (const row of result.replies ?? []) printChatMessage(row, authors);
   });
 
+// Post one line and say what it reached: the mentions it woke, the session a
+// thread reply went back into, the workspace agent. `send` and `dm` both end here.
+async function sendChatLine(channelId: string, content: string, options: { thread?: string; json?: boolean }) {
+  if (!content.trim()) {
+    console.error("Message text is empty");
+    process.exit(1);
+  }
+  const result = await cliPost("/cli/chat/send", {
+    channel_id: channelId,
+    content,
+    thread_root_id: options.thread,
+    ...chatSendOrigin(),
+  });
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`${c.green}✓${c.reset} sent ${c.dim}${result.message_id}${c.reset}`);
+  // Roles and sessions the line named: woken, folded past a cap, or skipped.
+  const wakes = result.mention_wakes;
+  if (wakes && (wakes.roles || wakes.sessions || wakes.folded || wakes.skipped?.length)) {
+    const parts: string[] = [];
+    if (wakes.roles) parts.push(`woke ${wakes.roles} role${wakes.roles === 1 ? "" : "s"}`);
+    if (wakes.sessions) parts.push(`delivered to ${wakes.sessions} session${wakes.sessions === 1 ? "" : "s"}`);
+    if (wakes.folded) parts.push(`${wakes.folded} folded (over the hourly mention cap; read on next wake)`);
+    for (const reason of wakes.skipped ?? []) parts.push(`skipped: ${reason}`);
+    console.log(`${c.dim}  mentions: ${parts.join(" · ")}${c.reset}`);
+  }
+  // A reply on a thread a session started goes back into that session.
+  if (result.session_relay?.delivered) {
+    console.log(`${c.dim}  delivered into session ${result.session_relay.session_short_id} — it can answer in this thread${c.reset}`);
+  } else if (result.session_relay?.skipped && result.session_relay.skipped !== "agent_authored") {
+    console.log(`${c.yellow}•${c.reset} not relayed to the thread's session: ${result.session_relay.skipped}`);
+  }
+  if (result.anchor_thinking_message_id && result.anchor_listening) {
+    console.log(`${c.dim}  the workspace's agent follows this thread and is reading — it answers only if the line was for it${c.reset}`);
+  } else if (result.anchor_thinking_message_id) {
+    console.log(`${c.dim}  the workspace's agent is answering — placeholder ${result.anchor_thinking_message_id}${c.reset}`);
+  } else if (result.anchor_wake_skipped) {
+    console.log(`${c.yellow}•${c.reset} the workspace's agent was not woken: ${result.anchor_wake_skipped}`);
+  }
+}
+
 chat
   .command("send")
-  .description("Post to a channel, or reply on a thread")
+  .description("Post to a channel, reply on a thread, or message people directly")
   .argument("<text>", stdinText("Message text"))
-  .requiredOption("--channel <id>", "Channel id")
+  .requiredOption("--channel <ref>", "#name, @person (comma-separate for a group), or a channel id")
   .option("--thread <root_id>", "Reply on this thread instead of the channel")
+  .option("--team <name|id>", "Team whose #names and people resolve (default: your active team)")
   .option("--json", "Machine-readable output")
   .action(async (text: string, options: any) => {
-    const body = text ?? "";
-    if (!body.trim()) {
-      console.error("Message text is empty");
-      process.exit(1);
-    }
-    const result = await cliPost("/cli/chat/send", {
-      channel_id: options.channel,
-      content: body,
-      thread_root_id: options.thread,
-      ...chatSendOrigin(),
-    });
-    if (options.json) {
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
-    console.log(`${c.green}✓${c.reset} sent ${c.dim}${result.message_id}${c.reset}`);
-    // Roles and sessions the line named: woken, folded past a cap, or skipped.
-    const wakes = result.mention_wakes;
-    if (wakes && (wakes.roles || wakes.sessions || wakes.folded || wakes.skipped?.length)) {
-      const parts: string[] = [];
-      if (wakes.roles) parts.push(`woke ${wakes.roles} role${wakes.roles === 1 ? "" : "s"}`);
-      if (wakes.sessions) parts.push(`delivered to ${wakes.sessions} session${wakes.sessions === 1 ? "" : "s"}`);
-      if (wakes.folded) parts.push(`${wakes.folded} folded (over the hourly mention cap; read on next wake)`);
-      for (const reason of wakes.skipped ?? []) parts.push(`skipped: ${reason}`);
-      console.log(`${c.dim}  mentions: ${parts.join(" · ")}${c.reset}`);
-    }
-    // A reply on a thread a session started goes back into that session.
-    if (result.session_relay?.delivered) {
-      console.log(`${c.dim}  delivered into session ${result.session_relay.session_short_id} — it can answer in this thread${c.reset}`);
-    } else if (result.session_relay?.skipped && result.session_relay.skipped !== "agent_authored") {
-      console.log(`${c.yellow}•${c.reset} not relayed to the thread's session: ${result.session_relay.skipped}`);
-    }
-    if (result.anchor_thinking_message_id && result.anchor_listening) {
-      console.log(`${c.dim}  the workspace's agent follows this thread and is reading — it answers only if the line was for it${c.reset}`);
-    } else if (result.anchor_thinking_message_id) {
-      console.log(`${c.dim}  the workspace's agent is answering — placeholder ${result.anchor_thinking_message_id}${c.reset}`);
-    } else if (result.anchor_wake_skipped) {
-      console.log(`${c.yellow}•${c.reset} the workspace's agent was not woken: ${result.anchor_wake_skipped}`);
-    }
+    const channelId = await resolveChatChannelId(options.channel, workspaceArgs(await readWorkspace(options.team)).team_id);
+    await sendChatLine(channelId, text ?? "", options);
+  });
+
+chat
+  .command("dm")
+  .description("Message people directly: a 1:1 or group conversation, found or opened")
+  .argument("<people>", "@handle, or several comma-separated (cast teams members lists them)")
+  .argument("<text>", stdinText("Message text"))
+  .option("--thread <root_id>", "Reply on a thread in that conversation")
+  .option("--team <name|id>", "Team the people are in (default: your active team)")
+  .option("--json", "Machine-readable output")
+  .action(async (people: string, text: string, options: any) => {
+    const room = await openChatDm(people, workspaceArgs(await readWorkspace(options.team)).team_id);
+    if (!options.json) console.log(`${c.dim}to ${room.with.join(", ")}${c.reset}`);
+    await sendChatLine(room.channel_id, text ?? "", options);
+    const ref = people.split(",").map((h) => `@${h.trim().replace(/^@/, "")}`).join(",");
+    if (!options.json) console.log(`${c.dim}  their replies: cast chat read --channel ${ref}${c.reset}`);
   });
 
 chat
@@ -16012,7 +16078,17 @@ async function listChatChannels(teamId?: string): Promise<any[]> {
   return result?.channels ?? [];
 }
 
+// The direct message room with these people ("@a,@b" or "a,b"), found or
+// opened. Returns the room id and the names of the others in it.
+async function openChatDm(people: string, teamId?: string): Promise<{ channel_id: string; with: string[] }> {
+  const handles = people.split(",").map((h) => h.trim().replace(/^@/, "")).filter(Boolean);
+  return await cliPost("/cli/chat/open-dm", { team_id: teamId, handles });
+}
+
+// A channel by id, by #name, or a direct message by @person[,@person] (found
+// or opened: the room's identity is its member set).
 async function resolveChatChannelId(ref: string, teamId?: string): Promise<string> {
+  if (ref.startsWith("@")) return String((await openChatDm(ref, teamId)).channel_id);
   const name = ref.replace(/^#/, "").trim().toLowerCase();
   if (!ref.startsWith("#") && /^[a-z0-9]{20,}$/i.test(ref)) return ref;
   const match = (await listChatChannels(teamId)).find((ch: any) => String(ch.name).toLowerCase() === name);
@@ -21129,6 +21205,33 @@ workflow
   });
 
 workflow
+  .command("resume <task>")
+  .description("Try a failed line run again from a station of its graph, on its own branch, once what failed it is fixed. A resume is a new attempt: each station's visits count again. A trial problem resumes with cast line trial rerun <task> --at <station>")
+  .requiredOption("--at <station>", "The station to resume at (verify, to check and evaluate the branch again)")
+  .option("--onto-main", "First put the run's branch on the default branch as the remote has it, by the graph's rebase (a conflict resumes at the station the graph sends it to, where a hand resolves it). Run it on the machine that holds the run")
+  .option("--json", "Machine-readable output")
+  .action(async (task: string, options: { at: string; ontoMain?: boolean; json?: boolean }) => {
+    const fail = (message: string): never => { console.error(message); process.exit(2); };
+    const listed = await cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1 });
+    const row = Array.isArray(listed?.runs) ? listed.runs[0] : null;
+    if (!row) fail(`${task} has no run`);
+    // The server's refusals first (a closed or trial problem, a run that is not failed), so nothing is rebased for a run that will not move.
+    await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: options.at, check: true });
+    const { currentRunGraph } = await import("./workflow/reask.js");
+    const { resumeStation } = await import("./workflow/resumeFailed.js");
+    const { graph } = await currentRunGraph({ getCliEndpoint, detectCurrentSessionId }, row._id);
+    let plan: { at: string; note: string | null } = { at: options.at, note: null };
+    try {
+      plan = resumeStation(graph, options.at, { ontoMain: options.ontoMain, runId: row._id, projectPath: row.project_path || process.cwd(), here: row.runner_device === deviceId() });
+    } catch (e) {
+      fail(`${task}: ${(e as Error).message}`);
+    }
+    const r = await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: plan.at });
+    if (options.json) { printJson({ ...r, note: plan.note }); return; }
+    console.log(`${task}: resumes at ${r.resumed_at} as a new attempt${plan.note ? ` (${plan.note})` : ""} (run ${r.run_id}).`);
+  });
+
+workflow
   .command("validate <file>")
   .description("Validate a workflow file (or a shipped template by name) without running it")
   .action(async (file: string) => {
@@ -21271,7 +21374,9 @@ workflow
 workflow
   .command("push [file]")
   .description("Push a workflow to the web UI")
-  .action(async (file: string | undefined, _options: any) => {
+  .option("--publish", "Publish it to a workspace's pool of flows (cast flow publish runs this)")
+  .option("--team <name>", "With --publish: the team whose pool it joins (default: your active team; personal keeps it yours)")
+  .action(async (file: string | undefined, options: { publish?: boolean; team?: string }) => {
     const path = await import("path");
     const fs = await import("fs");
     const { parseWorkflowFile } = await import("./workflow/parser.js");
@@ -21308,6 +21413,8 @@ workflow
     const { nodes, edges, stack, serves } = graphToPushPayload(graph);
     // Where the graph lives, so the app can edit and try its steps here (line-workspace.md LW4).
     const origin = (await import("./lineGraphEdit.js")).graphOrigin(filePath, graph, deviceId());
+    // A write names its workspace outright, so the flow never lands in a pool nobody was looking at.
+    const publish = options.publish ? workspaceScope(await writeWorkspace(options.team)) : null;
 
     const response = await cliFetch(`${siteUrl}/cli/workflows/upsert`, {
       method: "POST",
@@ -21324,6 +21431,7 @@ workflow
         ...(serves ? { serves } : {}),
         model_stylesheet: graph.model_stylesheet,
         ...(origin ? { origin } : {}),
+        ...(publish ? { publish } : {}),
       }),
     });
 
@@ -21537,7 +21645,10 @@ if (runFastPath(process.argv)) {
   activateGroup(program, groupTokenInArgv(process.argv), groupDeps())
     // parseAsync, so an action's own refusal (a thrown Error) lands in the
     // catch below as one line instead of an unhandled rejection's source dump.
-    .then(() => program.parseAsync())
+    .then(() => {
+      failUnknownCommandBeforeHelp(process.argv);
+      return program.parseAsync();
+    })
     .catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);

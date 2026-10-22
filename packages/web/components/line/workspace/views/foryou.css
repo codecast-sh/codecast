@@ -197,3 +197,8 @@ a.fy-head:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person)
 .fy-scope:active { transform: scale(.97); }
 .fy-scope:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: 1px; }
 .fy-scope svg { width: 12px; height: 12px; }
+
+/* Where a decision's problem came from: the finder's name on the row, the trail to the raw thing atop the reader. */
+.fy-from { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lw-ink-2); font-weight: 550; }
+.fy-t-from { max-width: 12rem; }
+.fy-origin { margin-bottom: var(--lw-s3); padding-bottom: var(--lw-s3); border-bottom: 1px solid var(--lw-rule-2); }

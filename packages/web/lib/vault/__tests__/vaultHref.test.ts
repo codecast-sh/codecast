@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FILES_ROUTE, filesHref, isFilesPath } from "../vaultHref";
+import { FILES_ROUTE, filesHref, isFilesPath, legacyFilesHref } from "../vaultHref";
 
 describe("filesHref", () => {
   test("mints the canonical /files route, never the legacy one", () => {
@@ -27,19 +27,42 @@ describe("filesHref", () => {
 });
 
 describe("isFilesPath", () => {
-  test("recognises both routes — /vault links are already on users' disks", () => {
-    // `cast vault open` printed /vault?f=… into sessions and notes, and entity
-    // links write real codecast URLs into markdown files. Dropping this branch
-    // would break links that already exist.
+  test("claims /files and the old /vault Files links, never the bare Vault", () => {
+    // The CLI printed /vault?f=… into sessions and notes, and entity links
+    // write real codecast URLs into markdown files, so those stay Files. A
+    // bare /vault is the team Vault now.
     expect(isFilesPath("/vault?f=a.md")).toBe(true);
-    expect(isFilesPath("/vault")).toBe(true);
+    expect(isFilesPath("/vault?view=graph")).toBe(true);
     expect(isFilesPath("/files?f=a.md")).toBe(true);
     expect(isFilesPath("/files")).toBe(true);
+    expect(isFilesPath("/vault")).toBe(false);
+    expect(isFilesPath("/vault?s=sec-4")).toBe(false);
   });
 
   test("does not claim paths that merely start with the same letters", () => {
     expect(isFilesPath("/filesystem")).toBe(false);
     expect(isFilesPath("/vaults")).toBe(false);
+    expect(isFilesPath("/vaults?f=a.md")).toBe(false);
     expect(isFilesPath("/docs")).toBe(false);
+  });
+});
+
+describe("legacyFilesHref", () => {
+  test("sends every query filesHref mints to /files, unchanged", () => {
+    for (const href of [
+      filesHref({ path: "notes/Sleep.md" }),
+      filesHref({ path: "a.md", line: 42 }),
+      filesHref({ graph: true }),
+      filesHref({ localPath: "~/notes/Sleep.md" }),
+    ]) {
+      const query = href.slice(FILES_ROUTE.length);
+      expect(legacyFilesHref(`/vault${query}`)).toBe(href);
+    }
+  });
+
+  test("leaves the Vault's own URLs alone", () => {
+    expect(legacyFilesHref("/vault")).toBeNull();
+    expect(legacyFilesHref("/vault?s=sec-12")).toBeNull();
+    expect(legacyFilesHref("/files?f=a.md")).toBeNull();
   });
 });

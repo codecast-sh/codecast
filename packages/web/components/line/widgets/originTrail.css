@@ -1,0 +1,29 @@
+/* Where a thing on the line came from (OriginTrail): the steps from the raw
+   thing to now, each a link, then the raw thing opened beneath. */
+.ot { display: flex; flex-direction: column; gap: var(--lw-s2); }
+.ot-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; list-style: none; margin: 0; padding: 0; }
+.ot-step { display: inline-flex; align-items: center; gap: 2px; }
+.ot-arrow { color: var(--lw-ink-3); font-size: var(--lw-fs-xs); padding: 0 3px; }
+.ot-btn {
+  display: inline-flex; align-items: baseline; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--lw-rule); border-radius: 999px;
+  background: var(--lw-card); color: var(--lw-ink-2); font-size: var(--lw-fs-xs); font-weight: 600; text-decoration: none; line-height: 24px; cursor: pointer;
+  transition: border-color var(--lw-fast), color var(--lw-fast);
+}
+.ot-btn:hover:not([data-static]) { border-color: var(--lw-ink-3); color: var(--lw-ink); }
+.ot-btn[data-static] { cursor: default; }
+.ot-ref { font-family: var(--lw-mono); font-size: var(--lw-fs-2xs); font-weight: 500; color: var(--lw-ink-3); }
+.ot-label { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ot-step[data-tone="raw"] .ot-btn { background: var(--lw-paper-2); color: var(--lw-ink); }
+.ot-step[data-tone="ask"] .ot-btn { background: var(--lw-person-soft); color: var(--lw-person-deep); border-color: color-mix(in srgb, var(--lw-person) 35%, transparent); }
+.ot-fold { margin-left: 8px; border: 0; background: none; padding: 0; font: inherit; font-size: var(--lw-fs-xs); color: var(--lw-person); cursor: pointer; }
+.ot-fold:hover { text-decoration: underline; }
+.ot-raw { min-width: 0; }
+/* Which finding the strip shows, of how many, with a step either way. */
+.ot-of { gap: 2px; margin-left: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.ot-count { font-variant-numeric: tabular-nums; padding: 0 2px; }
+.ot-nav { display: inline-grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px; background: none; color: var(--lw-ink-2); cursor: pointer; }
+.ot-nav:hover:not(:disabled) { background: var(--lw-paper-2); color: var(--lw-ink); }
+.ot-nav:disabled { opacity: .35; cursor: default; }
+.ot-nav svg { width: 14px; height: 14px; }
+.ot-all { margin-left: 6px; color: var(--lw-person); text-decoration: none; }
+.ot-all:hover { text-decoration: underline; }

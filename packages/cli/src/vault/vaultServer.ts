@@ -9,7 +9,7 @@
 // in this file may construct a filesystem path any other way. The one route
 // that takes a machine path rather than a vault-relative one, /vault/locate,
 // hands it whole to vaultRegistry.locateVault — it names a directory to
-// register, the same thing `cast vault add <dir>` accepts, and the token that
+// register, the same thing `cast files add <dir>` accepts, and the token that
 // reaches it already spawns shells on /term/*.
 
 import { spawn } from "child_process";

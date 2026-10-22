@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, Hash, Lock, Rss, Globe, Workflow, Zap, FolderKanban, Flag, Newspaper, Radar } from "lucide-react";
+import { MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, Hash, Lock, Rss, Globe, Workflow, Zap, FolderKanban, Flag, Newspaper, Radar, KeyRound } from "lucide-react";
 import { isOpsPath } from "./ops/opsPaths";
 import { useInboxStore } from "../store/inboxStore";
 import { visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
@@ -11,6 +11,7 @@ import { statusesForTeam, statusVisual, taskStatusOf } from "../lib/taskStatuses
 import { PLAN_STATUS_OPTIONS } from "./menus/entityOptions";
 import { LivenessDot } from "./LivenessDot";
 import { isBrowserRoutePath } from "../lib/browserPane";
+import { isFilesPath } from "../lib/vault/vaultHref";
 import { visitDetailParts } from "../lib/recentVisitDetails";
 import { orgPageKind } from "./org/company/sheetStack";
 
@@ -26,7 +27,8 @@ export function PageIcon({ path, className }: { path: string; className: string 
   if (path.startsWith("/chat")) return <MessageSquare className={className} />;
   if (path.startsWith("/feed")) return <Rss className={className} />;
   if (path.startsWith("/changes")) return <Newspaper className={className} />;
-  if (path.startsWith("/files") || path.startsWith("/vault")) return <Folder className={className} />;
+  if (isFilesPath(path)) return <Folder className={className} />;
+  if (path.startsWith("/vault")) return <KeyRound className={className} />;
   if (path.startsWith("/pages") || path.startsWith("/artifacts")) return <Globe className={className} />;
   if (isBrowserRoutePath(path)) return <Globe className={className} />;
   const orgKind = orgPageKind(path);

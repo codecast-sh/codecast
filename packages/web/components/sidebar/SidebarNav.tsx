@@ -295,7 +295,10 @@ export function SidebarNavView({
       </>)}
       {/* What you are working on. Org leads: the company the rest of this
           group files into, then its tasks and the docs and files around them. */}
-      <RailHeading label="Work" isNarrow={isNarrow} />
+      {/* One hover group for the heading and its rows: pointing anywhere in
+          Work reveals the heading's pop-out, since the window holds all of it. */}
+      <div data-rail-group="work" className="group/rail mt-4 first:mt-0">
+      <RailHeading label="Work" isNarrow={isNarrow} action={workAction} />
       <div className="text-sm">
         {/* Goals and projects are work in their own right: they need no org.
             Org is the people and agent roles who carry them. */}
@@ -341,9 +344,6 @@ export function SidebarNavView({
           expanded={tasks.expanded}
           onToggle={tasks.onToggle}
           onDrill={tasks.onDrill}
-          // The Work window holds all of Work, and Tasks is where you reach
-          // for it, as Chat's row pops out the Chat window.
-          headerAction={workAction}
           icon={<TasksNavIcon />}
         />
         <NavSection
@@ -389,6 +389,7 @@ export function SidebarNavView({
           onMobileClose={onMobileClose}
           icon={<Globe className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
+      </div>
       </div>
 
       {/* The Work window keeps the pinned rail and the Work group, the

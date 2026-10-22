@@ -13,6 +13,9 @@ export * from "./agentClients";
 export * from "./executionBinding";
 export * from "./modelOptions";
 export * from "./agentDefinitions";
+// Vault: secret kinds, payload rules, env mapping and TOTP, shared by
+// Convex, the CLI and the web (docs/architecture/vault.md).
+export * from "./secrets";
 export * from "./workState";
 // The needs-input digest: the window, the wording and the row grouping, shared
 // by the Convex fold-up and the web bell so both name the same set.

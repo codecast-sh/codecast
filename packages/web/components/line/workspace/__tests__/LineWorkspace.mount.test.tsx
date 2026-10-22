@@ -96,7 +96,7 @@ test("the app: its pages, Decisions the home and the only count; G then a letter
   search = "";
   useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  expect([...host.querySelectorAll<HTMLElement>("[data-line-view-tab]")].map((b) => b.dataset.lineViewTab)).toEqual(["foryou", "problems", "line", "deploys"]);
+  expect([...host.querySelectorAll<HTMLElement>("[data-line-view-tab]")].map((b) => b.dataset.lineViewTab)).toEqual(["foryou", "timeline", "problems", "line", "flows", "deploys"]);
   expect(host.querySelector("[data-line-view-tab='foryou'] .lw-nav-label")?.textContent).toBe("Decisions");
   expect(host.querySelector("[data-line-view-tab='foryou']")?.getAttribute("aria-current")).toBe("page");
   // One number, on the For you entry; no header chip, no auto-start switch, no picker or filter over every process.

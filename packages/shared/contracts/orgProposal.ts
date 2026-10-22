@@ -563,12 +563,22 @@ export type OrgEvidenceLink = { label: string; href?: string };
 export type OrgChangeStatus = "proposed" | "accepted" | "skipped" | "applied" | "failed" | "removed";
 
 /** The statuses a person can still decide (S4): a failed change stays open
- *  so it can be retried with edits or skipped. The server's decide, acceptAll
- *  and resolve gates and the web's action rows, counts and journal all read
- *  this one set, so "still to decide" means the same thing on both sides. */
+ *  until its author revises it or the person rejects it. The server's
+ *  decide, acceptAll and resolve gates and the web's action rows, counts and
+ *  journal all read this one set, so "still to decide" means the same thing
+ *  on both sides. */
 export const ORG_DECIDABLE_STATUSES: readonly OrgChangeStatus[] = ["proposed", "failed"];
 export function isOrgChangeDecidable(status: string): boolean {
   return (ORG_DECIDABLE_STATUSES as readonly string[]).includes(status);
+}
+
+/** Whether an approval can apply the change: only a proposed one. A failed
+ *  change is a refusal the org's rules raised against the change as written
+ *  (a fault the platform raises aborts the whole call and stores nothing), so
+ *  approving it again fails the same way. It applies once its author revises
+ *  it, which puts it back to proposed, and the person may still reject it. */
+export function isOrgChangeApprovable(status: string): boolean {
+  return status === "proposed";
 }
 
 // ── The conversation is part of the proposal (S18) ──────────────────────────
@@ -643,6 +653,8 @@ export type OrgReplyItem = { verdict: OrgReplyVerdict; seqs: number[]; text?: st
 export type OrgProposalReply = { proposal: string; title: string; items: OrgReplyItem[]; applied?: boolean };
 /** What a change row keeps of the person's answer, so a card says it after a reload and on another device. */
 export type OrgChangeReply = { verdict: OrgReplyVerdict; text?: string; at: number; by?: string };
+/** The author's answer to a question on a change (`cast org revise --answer`). */
+export type OrgChangeAnswer = { text: string; at: number };
 
 /** The word a surface shows for a verdict: `act` on the control before the
  *  send, `done` on the card after it. */
@@ -753,8 +765,9 @@ export function normalizeOrgSpecChange(c: any): OrgSpecChange {
 export type OrgReviseOp =
   | { op: "remove"; seq: number; note?: string }
   | { op: "amend"; seq: number; edits?: Record<string, unknown>; rationale?: string; note?: string }
-  | { op: "add"; change: OrgSpecChange; note?: string };
-export const ORG_REVISE_OPS = ["remove", "amend", "add"] as const;
+  | { op: "add"; change: OrgSpecChange; note?: string }
+  | { op: "answer"; seq: number; text: string };
+export const ORG_REVISE_OPS = ["remove", "amend", "add", "answer"] as const;
 
 /** The shape faults of one op; the server checks the proposal's own state
  *  (open, undecided, no duplicate subject) on top of this. */
@@ -767,6 +780,7 @@ export function orgReviseOpError(raw: any): string | null {
     return faults.length ? `add: ${faults.join("; ")}` : null;
   }
   if (!Number.isInteger(raw.seq) || raw.seq < 1) return `${raw.op}: seq is the change's number (1, 2, …)`;
+  if (raw.op === "answer" && !nonEmpty(raw.text)) return "answer: text is the answer, a non-empty string";
   if (raw.op === "amend") {
     const hasEdits = raw.edits !== undefined && raw.edits !== null;
     if (hasEdits && (typeof raw.edits !== "object" || Array.isArray(raw.edits))) return "amend: edits is an object patch over the change's own keys";

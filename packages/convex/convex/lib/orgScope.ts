@@ -12,6 +12,7 @@
 // listed; `planProjectOf` carries that edge for every plan the caller touches.
 
 import { Id } from "../_generated/dataModel";
+import { keepsReportsInside } from "@codecast/shared/contracts/orgLead";
 
 export type Scope = { project_ids: Id<"projects">[]; plan_ids: Id<"plans">[] };
 export type ScopeIds = { project_ids: string[]; plan_ids: string[] };
@@ -67,6 +68,15 @@ export function scopeOverlap(a: ScopeIds, b: ScopeIds, planProjectOf: PlanProjec
   for (const p of a.plan_ids) if (planInside(p, b, planProjectOf)) plans.add(p);
   for (const p of b.plan_ids) if (planInside(p, a, planProjectOf)) plans.add(p);
   return { project_ids, plan_ids: Array.from(plans) };
+}
+
+export { keepsReportsInside };
+
+/** What of `child` falls outside `parent` when the parent holds its reports
+ *  inside its area; nothing when it does not. */
+export function outsideKeptArea(parent: { scope: Scope | ScopeIds; keeps_reports_inside?: boolean | null }, child: ScopeIds, planProjectOf: PlanProjectOf): ScopeIds {
+  if (!keepsReportsInside(parent)) return { project_ids: [], plan_ids: [] };
+  return scopeOutside(scopeIds(parent.scope as Scope), child, planProjectOf);
 }
 
 export function scopeIds(scope: Scope): ScopeIds {

@@ -1,3 +1,4 @@
+import { parsePollAnswers } from "../../lib/pollPayload";
 import { Check, CircleDot, MessageSquare } from "lucide-react";
 
 interface ToolViewProps {
@@ -36,15 +37,8 @@ function parseAnswers(input: any, output: any): Record<string, string> {
   if (input?.answers && typeof input.answers === "object") {
     return input.answers;
   }
-  if (!output) return {};
   const text = typeof output === "string" ? output : output?.content || output?.text || "";
-  const answers: Record<string, string> = {};
-  const regex = /"([^"]+)"="([^"]+)"/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    answers[match[1]] = match[2];
-  }
-  return answers;
+  return parsePollAnswers(input?.questions || [], text);
 }
 
 function QuestionBlock({ question, answer }: { question: Question; answer?: string }) {

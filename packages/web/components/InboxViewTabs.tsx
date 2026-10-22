@@ -1,15 +1,14 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import { Activity, Clock, FolderKanban, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
-import type { InboxViewMode, OrgLensMode } from "../store/inboxStore";
-import { inboxViewModes } from "../store/inboxViewModes";
+import { useRef } from "react";
+import { CalendarPlus, FolderKanban, History, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
+import type { InboxViewMode } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 
 type ViewOption = { key: InboxViewMode; label: string; icon: typeof List };
 
 const VIEW_OPTIONS: Record<InboxViewMode, Omit<ViewOption, "key">> = {
   grouped: { label: "Status", icon: List },
-  recent: { label: "Updated", icon: Activity },
-  time: { label: "Created", icon: Clock },
+  recent: { label: "Updated", icon: History },
+  time: { label: "Created", icon: CalendarPlus },
   bucket: { label: "Label", icon: Tag },
   plan: { label: "Plan", icon: Workflow },
   project: { label: "Project", icon: FolderKanban },
@@ -18,39 +17,18 @@ const VIEW_OPTIONS: Record<InboxViewMode, Omit<ViewOption, "key">> = {
   trigger: { label: "Trigger", icon: Zap },
 };
 
-// The inbox's grouping as a row of tabs under the rail header: the current
-// grouping is named, every other one is a click away. When the rail is too
-// narrow for every name, the other tabs fold to their icons (named on hover)
-// and only the current one keeps its word.
-export function InboxViewTabs({ value, onChange, hasLabels, hasPlans, orgLenses = [], hasTriggers }: {
+// The inbox's grouping as a row of tabs under the rail header, spread across
+// its width: the current grouping is named, every other one is an icon (named
+// on hover) a click away. `modes` is the panel's list, the same one Ctrl+,
+// cycles through (setInboxViewModesShown).
+export function InboxViewTabs({ value, onChange, modes }: {
   value: InboxViewMode;
   onChange: (value: InboxViewMode) => void;
-  hasLabels: boolean;
-  hasPlans: boolean;
-  /** The org lenses with something to group by, in tab order. */
-  orgLenses?: readonly OrgLensMode[];
-  hasTriggers: boolean;
+  modes: readonly InboxViewMode[];
 }) {
-  const options = inboxViewModes({ hasLabels, hasPlans, orgLenses, hasTriggers }).map((key) => ({ key, ...VIEW_OPTIONS[key] }));
+  const options = modes.map((key) => ({ key, ...VIEW_OPTIONS[key] }));
   const current = options.find((option) => option.key === value) ?? options[0];
   const stripRef = useRef<HTMLDivElement>(null);
-  const fullRef = useRef<HTMLDivElement>(null);
-  const [compact, setCompact] = useState(false);
-
-  // Compact when the fully labeled row (an invisible twin) is wider than the
-  // strip. Measuring the twin, not the strip, keeps the answer stable: the
-  // strip's own width changes with the mode it picks.
-  const optionsSig = options.map((o) => o.key).join(",");
-  useLayoutEffect(() => {
-    const strip = stripRef.current;
-    const full = fullRef.current;
-    if (!strip || !full) return;
-    const measure = () => setCompact(full.scrollWidth > strip.clientWidth);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(strip);
-    return () => observer.disconnect();
-  }, [optionsSig]);
 
   const pick = (index: number) => {
     const next = options[(index + options.length) % options.length];
@@ -87,8 +65,8 @@ export function InboxViewTabs({ value, onChange, hasLabels, hasPlans, orgLenses 
               aria-label={`By ${option.label.toLowerCase()}`}
               tabIndex={active ? 0 : -1}
               onClick={() => onChange(option.key)}
-              className={`flex items-center gap-1 h-[22px] rounded-[5px] text-[10px] font-medium whitespace-nowrap transition-colors ${
-                compact && !active ? "flex-1 justify-center min-w-[22px] px-1" : "px-1.5"
+              className={`flex items-center justify-center gap-1 h-[22px] rounded-[5px] text-[10px] font-medium whitespace-nowrap transition-colors ${
+                active ? "px-1.5" : "flex-1 min-w-[22px] px-1"
               } ${
                 active
                   ? "bg-sol-cyan/15 text-sol-cyan"
@@ -96,7 +74,7 @@ export function InboxViewTabs({ value, onChange, hasLabels, hasPlans, orgLenses 
               }`}
             >
               <Icon className="w-3 h-3 shrink-0" />
-              {(active || !compact) && <span>{option.label}</span>}
+              {active && <span>{option.label}</span>}
             </button>
           );
           return (
@@ -112,17 +90,6 @@ export function InboxViewTabs({ value, onChange, hasLabels, hasPlans, orgLenses 
             >
               {tab}
             </ShortcutTooltip>
-          );
-        })}
-      </div>
-      <div ref={fullRef} aria-hidden className="invisible absolute left-0 top-0 w-max flex items-center gap-px px-1.5 pointer-events-none">
-        {options.map((option) => {
-          const Icon = option.icon;
-          return (
-            <span key={option.key} className="flex items-center gap-1 px-1.5 text-[10px] font-medium whitespace-nowrap">
-              <Icon className="w-3 h-3 shrink-0" />
-              {option.label}
-            </span>
           );
         })}
       </div>
