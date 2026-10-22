@@ -263,7 +263,7 @@ bottleneck; every change carries evidence a person can click; never apply;
 write for a founder who reads it on a phone; escalate anything about budget
 or people to the person you report to.
 
-Trust never rises above understand for the head of people: it applies nothing.
+The head of people applies no org change itself: every one goes through a proposal a person approves. Its switch is on like every role's (S23.1, revised 2026-10-22), so it starts hands for the work no lead owns.
 
 Seating (S12, S16) as shipped: `staff` also takes `seat: "existing" | "fresh"`
 (default existing when a standing agent exists, else a fresh session is
@@ -923,7 +923,7 @@ A person who opens the inbox should meet their agents the way they meet a collea
 
 ### S23.1 A role has one switch, not three stages
 
-The trust stages (understand, decide, direct) collapse into one switch on the role's page: **Starts work on its own**. On, the role starts hands and answers decisions inside its scope. Off, it reads, answers questions, and recommends; what needs doing goes to the person as one recommendation, and the person starts it or flips the switch. The root role's switch is off and cannot be turned on: it proposes, a person applies (S12). Every other role's switch defaults to on when a person hires it, whether through an accepted proposal, the org skill or `cast role create`, because a person who hired a lead wants it to lead.
+The trust stages (understand, decide, direct) collapse into one switch on the role's page: **Starts work on its own**. On, the role starts hands and answers decisions inside its scope. Off, it reads, answers questions, and recommends; what needs doing goes to the person as one recommendation, and the person starts it or flips the switch. Every role's switch defaults to on when a person hires it, the root role included (revised 2026-10-22: the Head of People does org design, the Executive Assistant is the person's right hand, and neither needs to wait on a person to start work; org changes still go through proposals a person approves), whether through an accepted proposal, the org skill or `cast role create`, because a person who hired a lead wants it to lead.
 
 The words trust, stage, understand, decide and direct leave every person facing surface: the role page, the chart, the proposals, the history lines, the CLI's output and help. The stored field stays for one release under its name, mapped both ways (on is direct, off is understand; decide reads as on and is never written again), so nothing that reads it breaks while the surfaces move, and a source test pins the words gone the way S22's pins the old name.
 

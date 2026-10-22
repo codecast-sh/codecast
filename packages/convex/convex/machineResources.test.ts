@@ -37,7 +37,8 @@ test("resource report to authenticated read uses real schema and isolates machin
   expect(rows[0].history).toHaveLength(1);
   await expect(t.run(ctx => storeResourceSnapshot(ctx, other, sample(now), now))).rejects.toThrow("not registered");
   expect(await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now), now + 100))).toEqual({ accepted: false, background_sessions: [] });
-  await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now + 30_000), now + 30_000));
+  expect(await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now + 30_000), now + 30_000))).toEqual({ accepted: false, background_sessions: [] });
+  await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now + 60_000), now + 60_000));
   expect((await t.withIdentity({ subject: owner }).query(listMine, {}))[0].history).toHaveLength(2);
 });
 

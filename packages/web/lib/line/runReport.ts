@@ -720,7 +720,9 @@ export function closedDecisionWords(status: "withdrawn" | "dismissed", run: Pick
 }
 
 /** "Oct 12": the day a watch ends. */
-export const shortDay = (at: number) => new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+// One formatter, made once: toLocaleDateString with options builds a new one on every call.
+const SHORT_DAY = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+export const shortDay = (at: number) => SHORT_DAY.format(at);
 
 /** A run whose card was answered Ship, before its ship step starts. */
 export const APPROVED_WORDS = "Approved: waiting for the ship step to start.";

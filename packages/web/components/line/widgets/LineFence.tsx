@@ -106,7 +106,7 @@ function LineFenceLive({ spec, projectId, taskId }: { spec: LineFenceSpec; proje
   const nav = useMemo<LineNav>(() => {
     const stepHref = (id: string) => lineWorkspaceHref(param, { graph, step: id });
     const runHref = (runId: string, caseId: string | null) => lineWorkspaceHref(param, { graph, run: runId, case: caseId, view: "replay" });
-    const caseHref = (caseId: string) => lineWorkspaceHref(param, { graph, case: caseId, view: "timeline" });
+    const caseHref = (caseId: string) => lineWorkspaceHref(param, { graph, case: caseId, view: "problems" });
     return {
       openStep: (id) => router.push(stepHref(id)),
       openRun: (runId, caseId) => router.push(runHref(runId, caseId)),

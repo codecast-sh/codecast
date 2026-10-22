@@ -23,7 +23,7 @@ Open the org page on a fresh workspace and the chart is just you, with a card un
 
 The **Head of People** is the one root role every workspace has. Its job is structural: keep the org true to how the work actually runs. Until anyone else is hired it owns everything, answers questions about any area, and routes work. Hiring it seats it in a standing session, schedules its weekly *Company review*, and runs the first review right away. While it runs, the card says it is reviewing the company and that the proposal will appear on the chart when it lands.
 
-It proposes and applies nothing; it has no "starts work on its own" switch to turn on. Your right hand is a separate role, the **Executive Assistant**, which answers anything, routes requests, can span every workspace you belong to, and stays pinned in the app header.
+Changes to the org itself wait for you: it proposes them, and you approve each one. Like every role it starts work on its own, so what no lead owns yet it can pick up itself. Your right hand is a separate role, the **Executive Assistant**, which answers anything, routes requests, can span every workspace you belong to, and stays pinned in the app header.
 
 ## The review proposes leads
 

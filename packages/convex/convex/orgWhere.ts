@@ -105,6 +105,6 @@ export async function computeOrgWhere(ctx: { db: any }, userId: Id<"users">, tea
       whole_workspace: isWholeWorkspaceRole(r),
       seat: seatIds.has(String(r._id)),
     }))),
-    people: org.people.map((p: any) => ({ name: p.name, role: p.role, is_me: p.is_me })),
+    people: org.people.map((p: any) => ({ name: p.name, handle: p.handle, role: p.role, is_me: p.is_me })),
   };
 }

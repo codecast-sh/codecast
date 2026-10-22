@@ -12,9 +12,15 @@ Large: several projects. The root anchor's scope is the workspace.
   plan in scope (`active_task_id`, `active_plan_id` or `plan_ids`), or it
   carries `org_role_id` for the role. A scope project's folder puts nothing in
   scope (org-staffing.md S35; `sessionsInScope` in convex/org.ts).
-- Containment: a child's scope must be inside its parent's scope unless the
-  parent is the root. Sibling overlap is allowed and shown as a warning on the
-  org page and the scope page (two roles watch the same project).
+- Containment is off by default (2026-10-22): a role's reports may look after
+  work outside its area, and a scope edit, a move, an undo or a project lead
+  that would leave one outside applies. A person turns it on per role
+  ("Reports stay inside its area" in the role's settings, stored as
+  `keeps_reports_inside`, read only through `keepsReportsInside` in
+  shared/contracts/orgLead.ts). On, every report's scope must sit inside that
+  role's, unless the role names no area, and a template hire beside a project's
+  lead that has it on is refused. Sibling overlap is allowed and shown as a
+  warning on the org page and the scope page (two roles watch the same project).
 - Scope changes are human only (scope page settings, `cast role scope <h>
   --add project:<ref> --remove plan:<ref>`), logged as a charter doc entry, and
   wake the role immediately.

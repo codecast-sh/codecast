@@ -188,28 +188,43 @@ export function ssh(host: RemoteHost, command: string, timeoutMs?: number): stri
   });
 }
 
+const FOLDER_EXCLUDES = ["node_modules", ".git", ".conductor", "dist", ".next", ".DS_Store"].flatMap((p) => ["--exclude", p]);
+
+/**
+ * What git ignores under `dir`, as anchored rsync patterns (empty outside a
+ * repository). A folder moved as files that sits in a repository with no
+ * commit yet still has ignore rules, and they mean what they mean for a
+ * checkout with commits: caches and media stay on the machine that made them.
+ * An excluded path neither crosses nor is deleted by --delete, so the same
+ * list on the way home keeps this machine's copies.
+ */
+export function gitIgnoredPatterns(dir: string): string[] {
+  const r = gitSafe(dir, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"]);
+  if (!r.ok) return [];
+  return r.out.split("\0").filter(Boolean).map((p) => `/${p.replace(/[[*?\\]/g, "\\$&")}`);
+}
+
+/** Runs rsync over a folder with `FOLDER_EXCLUDES` plus what git ignores under `localDir`. */
+function rsyncFolder(localDir: string, flags: string[], from: string, to: string) {
+  const ignored = gitIgnoredPatterns(localDir);
+  const dir = ignored.length ? fs.mkdtempSync(path.join(os.tmpdir(), "cast-move-exclude-")) : null;
+  try {
+    const exclude = dir ? [`--exclude-from=${path.join(dir, "exclude")}`] : [];
+    if (dir) fs.writeFileSync(path.join(dir, "exclude"), ignored.join("\n") + "\n");
+    execFileSync("rsync", [...flags, ...FOLDER_EXCLUDES, ...exclude, from, to], { stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
+  } finally {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function rsyncUp(host: RemoteHost, localDir: string, remoteDir: string) {
-  const args = [
-    "-az", "--update",
-    "-e", `ssh ${sshBase(host).join(" ")}`,
-    "--exclude", "node_modules", "--exclude", ".git", "--exclude", ".conductor",
-    "--exclude", "dist", "--exclude", ".next", "--exclude", ".DS_Store",
-    `${localDir.replace(/\/?$/, "/")}`,
-    `${host.user}@${host.address}:${remoteDir.replace(/\/?$/, "/")}`,
-  ];
-  execFileSync("rsync", args, { stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
+  rsyncFolder(localDir, ["-az", "--update", "-e", `ssh ${sshBase(host).join(" ")}`],
+    `${localDir.replace(/\/?$/, "/")}`, `${host.user}@${host.address}:${remoteDir.replace(/\/?$/, "/")}`);
 }
 
 function rsyncDown(host: RemoteHost, remoteDir: string, localDir: string, opts: { delete?: boolean } = {}) {
-  const args = [
-    "-az", ...(opts.delete ? ["--delete"] : []),
-    "-e", `ssh ${sshBase(host).join(" ")}`,
-    "--exclude", "node_modules", "--exclude", ".git", "--exclude", ".conductor",
-    "--exclude", "dist", "--exclude", ".next", "--exclude", ".DS_Store",
-    `${host.user}@${host.address}:${remoteDir.replace(/\/?$/, "/")}`,
-    `${localDir.replace(/\/?$/, "/")}`,
-  ];
-  execFileSync("rsync", args, { stdio: "pipe", maxBuffer: 64 * 1024 * 1024 });
+  rsyncFolder(localDir, ["-az", ...(opts.delete ? ["--delete"] : []), "-e", `ssh ${sshBase(host).join(" ")}`],
+    `${host.user}@${host.address}:${remoteDir.replace(/\/?$/, "/")}`, `${localDir.replace(/\/?$/, "/")}`);
 }
 
 /** Copy ONE file into a remote directory (trailing-slash target avoids dir corruption). */
@@ -253,9 +268,13 @@ export function currentBranch(cwd: string): string {
   return git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
 }
 
-/** True if the cwd is a git worktree (has commits + a branch). Worktree-only guard. */
+/**
+ * True if the cwd is a git worktree with a commit, the thing git transport
+ * moves (its snapshots are commits on HEAD). A repository with no commit yet
+ * moves as a folder.
+ */
 export function isWorktree(cwd: string): boolean {
-  return gitSafe(cwd, ["rev-parse", "--is-inside-work-tree"]).out === "true";
+  return gitSafe(cwd, ["rev-parse", "--is-inside-work-tree"]).out === "true" && gitSafe(cwd, ["rev-parse", "--verify", "-q", "HEAD"]).ok;
 }
 
 /** SSH url for git push to a path on the remote. */
@@ -990,6 +1009,16 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
     // there is deleted, and a file changed there more recently than here stays.
     ssh(host, `mkdir -p ${shq(remoteCwd)}`);
     rsyncUp(host, s.cwd, remoteCwd);
+    // A repository with no commit yet stays one on the host, on the same
+    // branch, and its gitignored secrets (.env) come along as they would for
+    // a checkout with commits.
+    const unborn = gitSafe(s.cwd, ["symbolic-ref", "--short", "HEAD"]);
+    if (unborn.ok) {
+      const top = gitRootOf(s.cwd);
+      const remoteTop = remoteRepoPath(host, top);
+      ssh(host, `mkdir -p ${shq(remoteTop)} && cd ${shq(remoteTop)} && { git rev-parse --git-dir >/dev/null 2>&1 || git init -q -b ${shq(unborn.out)}; }`);
+      copyGitignoredFiles(host, top, remoteTop);
+    }
   }
   // 4. transcript, its laptop paths rewritten to the host's
   const relocated = relocatedTranscriptCopy(s.jsonlPath, { home: laptopHome(), cwd: s.cwd }, { home: remoteHome(host), cwd: remoteCwd });
