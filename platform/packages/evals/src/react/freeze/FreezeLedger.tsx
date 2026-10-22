@@ -1,13 +1,14 @@
 // The assay plate (docs/architecture/evals-ui.md 4.2 and 6): one row per
-// freeze, one column per graded batch, in the chart's order. Each well's ink
+// freeze, one column per graded batch in the chart's order, or per day where
+// batches are sparse (ledgerPlate). Each well's ink
 // is the mean score, its ring the majority verdict, and a notch marks a flip
 // on the same footing. Rows with the most flips come first; with two batches
 // pinned, the freezes that flipped between them come first and are marked.
 // The plate fills column by column in time order, 10 ms apart.
 
 import { useLayoutEffect, useMemo, useRef } from "react";
-import { type SurfaceColumn, capitalized, dayLabel, ledgerOrder, whenLabel } from "../../client";
-import type { LedgerRow, VerdictFlip } from "../../contract";
+import { type LedgerColumn, type LedgerPlate, capitalized, dayLabel, ledgerOrder, plateColumnOf, whenLabel } from "../../client";
+import type { VerdictFlip } from "../../contract";
 import { useCaseNoun, useEvalsPaths } from "../hooks";
 import { LockBadge, PageLink } from "../shell/parts";
 import { Well } from "../shell/Well";
@@ -17,9 +18,8 @@ const WELL = 16;
 const LABEL_EVERY = 3;
 
 export interface FreezeLedgerProps {
-  rows: readonly LedgerRow[];
-  /** The graded columns in view, oldest first. */
-  columns: readonly SurfaceColumn[];
+  /** The ledger over the graded columns in view (ledgerPlate). */
+  plate: LedgerPlate;
   pinned: string | null;
   compare: string | null;
   hover: string | null;
@@ -29,10 +29,15 @@ export interface FreezeLedgerProps {
   pairFlips?: ReadonlyMap<string, VerdictFlip["direction"]> | null;
 }
 
-export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, onPick, pairFlips = null }: FreezeLedgerProps) {
+export function FreezeLedger({ plate, pinned, compare, hover, onHover, onPick, pairFlips = null }: FreezeLedgerProps) {
   const noun = useCaseNoun();
   const paths = useEvalsPaths();
-  const ordered = useMemo(() => ledgerOrder(rows, pairFlips), [rows, pairFlips]);
+  const { columns, by } = plate;
+  const ordered = useMemo(() => ledgerOrder(plate.rows, pairFlips), [plate.rows, pairFlips]);
+  const held = (c: LedgerColumn, batch: string | null) => !!batch && c.batches.includes(batch);
+  // A click acts on the column's pin when it holds one (so it unpins), else on its newest batch.
+  const target = (c: LedgerColumn) => [pinned, compare].find((b) => held(c, b)) ?? c.batch;
+  const when = (at: number) => (by === "day" ? dayLabel(at) : whenLabel(at));
   const scroller = useRef<HTMLDivElement>(null);
   // The plate scrolls sideways once the batches outrun the pane. Keep what the
   // reader came for in view: the pinned columns (the later one when both do
@@ -42,7 +47,10 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
     if (!el) return;
     const keep = () => {
       if (el.scrollWidth <= el.clientWidth) return;
-      const heads = [pinned, compare].flatMap((b) => (b ? [el.querySelector<HTMLElement>(`[data-ev-col="${CSS.escape(b)}"]`)] : [])).filter((h): h is HTMLElement => !!h);
+      const heads = [pinned, compare].flatMap((b) => {
+        const col = plateColumnOf(plate, b);
+        return col ? [el.querySelector<HTMLElement>(`[data-ev-col="${CSS.escape(col.key)}"]`)] : [];
+      }).filter((h): h is HTMLElement => !!h);
       if (!heads.length) {
         el.scrollLeft = el.scrollWidth;
         return;
@@ -52,7 +60,7 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
       const nameW = el.querySelector<HTMLElement>(".ev-sf-plate-name")?.getBoundingClientRect().width ?? 0;
       const left = Math.min(...heads.map(at)) - nameW - 8;
       // A pin on the newest batch brings the flip counts beside it along.
-      const flipsHead = columns.length && [pinned, compare].includes(columns[columns.length - 1].batch) ? el.querySelector<HTMLElement>("thead .ev-sf-plate-flips") : null;
+      const flipsHead = columns.length && (held(columns[columns.length - 1], pinned) || held(columns[columns.length - 1], compare)) ? el.querySelector<HTMLElement>("thead .ev-sf-plate-flips") : null;
       const right = Math.max(...[...heads, ...(flipsHead ? [flipsHead] : [])].map((h) => at(h) + h.getBoundingClientRect().width)) + 8;
       let next = el.scrollLeft;
       if (left < next) next = left;
@@ -64,7 +72,7 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
     const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(keep);
     ro?.observe(el);
     return () => ro?.disconnect();
-  }, [pinned, compare, columns]);
+  }, [pinned, compare, plate]);
   // Labels sit at least LABEL_EVERY columns apart and never in the last two, where the flips head is.
   const dayHeads = useMemo(() => {
     let last = -Infinity;
@@ -76,8 +84,8 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
     });
   }, [columns]);
   // Numbered by time, as the compare drawer numbers them: the earlier pin is 1.
-  const pins = columns.filter((c) => c.batch === pinned || c.batch === compare);
-  const pinNumber = (c: SurfaceColumn) => (pins.includes(c) ? String(pins.indexOf(c) + 1) : null);
+  const pins = columns.filter((c) => held(c, pinned) || held(c, compare));
+  const pinNumber = (c: LedgerColumn) => (pins.includes(c) ? String(pins.indexOf(c) + 1) : null);
   if (!ordered.length) return <p className="ev-note">No {noun.one} has a graded rep in this window.</p>;
   return (
     <div ref={scroller} className="ev-sf-ledger" data-ev-ledger>
@@ -90,12 +98,12 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
             {columns.map((c, i) => {
               const pin = pinNumber(c);
               return (
-                <th key={c.batch} scope="col" className={`ev-sf-plate-col ${pin ? "ev-sf-plate-pinned" : ""} ${hover === c.batch ? "ev-sf-plate-hovered" : ""}`} data-ev-col={c.batch}>
+                <th key={c.key} scope="col" className={`ev-sf-plate-col ${pin ? "ev-sf-plate-pinned" : ""} ${held(c, hover) ? "ev-sf-plate-hovered" : ""}`} data-ev-col={c.key}>
                   <button
                     type="button"
-                    title={`${whenLabel(c.at)}: click to pin, shift-click to compare`}
+                    title={`${when(c.at)}${by === "day" ? `, ${c.batches.length} ${c.batches.length === 1 ? "batch" : "batches"}` : ""}: click to pin, shift-click to compare`}
                     aria-pressed={!!pin}
-                    onClick={(e) => onPick(c.batch, e.shiftKey)}
+                    onClick={(e) => onPick(target(c), e.shiftKey)}
                     onMouseEnter={() => onHover(c.batch)}
                     onMouseLeave={() => onHover(null)}
                   >
@@ -122,16 +130,16 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
                 <LockBadge visibility={row.visibility} />
               </th>
               {columns.map((c, ci) => {
-                const cell = row.cells[c.batch] ?? null;
-                const pin = c.batch === pinned || c.batch === compare;
+                const cell = row.cells[c.key] ?? null;
+                const pin = held(c, pinned) || held(c, compare);
                 return (
-                  <td key={c.batch} className={`${pin ? "ev-sf-plate-pinned" : ""} ${hover === c.batch ? "ev-sf-plate-hovered" : ""}`} onMouseEnter={() => onHover(c.batch)} onMouseLeave={() => onHover(null)}>
+                  <td key={c.key} className={`${pin ? "ev-sf-plate-pinned" : ""} ${held(c, hover) ? "ev-sf-plate-hovered" : ""}`} onMouseEnter={() => onHover(c.batch)} onMouseLeave={() => onHover(null)}>
                     {cell ? (
-                      <PageLink needs="freezes" href={paths.href.freeze(row.freezeId, { batch: c.batch })} className="ev-sf-well-link" aria-label={`${row.name} at ${whenLabel(c.at)}`}>
-                        <Well cell={cell} size={WELL} delayMs={ci * 10} title={`${row.name}, ${whenLabel(c.at)}: ${cell.passed} of ${cell.reps} passed${cell.mean !== null ? `, mean ${cell.mean.toFixed(2)}` : ""}${cell.flip ? `, ${cell.flip}` : ""}`} />
+                      <PageLink needs="freezes" href={paths.href.freeze(row.freezeId, { batch: row.batchOf[c.key] })} className="ev-sf-well-link" aria-label={`${row.name} at ${when(c.at)}`}>
+                        <Well cell={cell} size={WELL} delayMs={ci * 10} title={`${row.name}, ${when(c.at)}: ${cell.passed} of ${cell.reps} passed${cell.mean !== null ? `, mean ${cell.mean.toFixed(2)}` : ""}${cell.flip ? `, ${cell.flip}` : ""}`} />
                       </PageLink>
                     ) : (
-                      <Well cell={null} size={WELL} title="not run in this batch" />
+                      <Well cell={null} size={WELL} title={by === "day" ? "not run this day" : "not run in this batch"} />
                     )}
                   </td>
                 );

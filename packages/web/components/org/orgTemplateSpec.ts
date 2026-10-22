@@ -31,6 +31,8 @@ export const slugOf = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g
 
 /** The inputs a person answers in the form: everything but secrets, which bind on the host. */
 export const askedInputs = (m: OrgTemplate): TemplateInput[] => (m.inputs ?? []).filter((i) => i.kind !== "secret");
+/** The answers a hire cannot go without: required, with no default. The rest have a default or are read from the project. */
+export const requiredInputs = (m: OrgTemplate): TemplateInput[] => askedInputs(m).filter((i) => i.required && i.default === undefined);
 export const secretInputs = (m: OrgTemplate): TemplateInput[] => (m.inputs ?? []).filter((i) => i.kind === "secret");
 /** Setup steps only the person can do (W8): the hire dialog counts them and the role page puts them in front of the person one at a time. */
 export const humanSetupCount = (m: OrgTemplate): number => (m.setup ?? []).filter((s) => s.who === "human").length;

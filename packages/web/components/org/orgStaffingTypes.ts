@@ -5,7 +5,7 @@
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
 import type { RoleArea } from "@codecast/shared/contracts/orgAreas";
 import type { OrgAppliedDiffRow } from "@codecast/shared/contracts/orgChange";
-import type { OrgAsk, OrgChange, OrgChangeKind, OrgChangeReply, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalMode, OrgProposalThread } from "@codecast/shared/contracts/orgProposal";
+import type { OrgAsk, OrgChange, OrgChangeAnswer, OrgChangeKind, OrgChangeReply, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalMode, OrgProposalThread } from "@codecast/shared/contracts/orgProposal";
 
 export type { HealthFlag, RoleArea, OrgAsk, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalThread };
 
@@ -106,6 +106,8 @@ export type OrgProposalChange = {
    *  words, or an approval that carried words. Shown while `reply.at` is
    *  later than `revision.at`; an amend makes the row answerable again. */
   reply?: OrgChangeReply;
+  /** The author's answer to a question on this change (`cast org revise --answer`). */
+  answer?: OrgChangeAnswer;
 };
 
 /** Who wrote a proposal (S15). The server stores kind and id; the rest is

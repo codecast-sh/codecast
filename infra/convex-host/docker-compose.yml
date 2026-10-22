@@ -32,6 +32,14 @@ services:
     ulimits:
       nofile: { soft: 524288, hard: 524288 }
     env_file: [.env]
+    environment:
+      # The search segment cache. Its 500 MiB default became smaller than the
+      # indexes it serves: one content search on the 30-day message mirror
+      # opens 563 MB of segments, and a merge of the deep messages index needs
+      # about 1.1 GB. The cache then deleted segments that searches were still
+      # reading, and search failed most of the time from 2026-10-19 (ct-64985).
+      # Keep this above the total segment size of every search and vector index.
+      MAX_ARCHIVE_CACHE_SIZE_BYTES: "17179869184" # 16 GiB
     networks: [codecast]
     volumes:
       - /srv/convex/data:/convex/data

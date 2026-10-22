@@ -14,7 +14,7 @@ import { Fragment, memo, useCallback, useMemo, useRef, useState, type ComponentT
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useStageScroll } from "./useStageScroll";
-import { Check, ChevronDown, Inbox, SlidersHorizontal, Workflow, AlertCircle, Rocket, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, Inbox, SlidersHorizontal, Workflow, AlertCircle, Rocket, Route, History, type LucideIcon } from "lucide-react";
 import { lineFilterParam, useLineProjectId, useLineSelection, useLineWorkspace, useSyncLineHistory } from "../../../hooks/useLineWorkspace";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -43,6 +43,8 @@ import { ProblemsView } from "./views/ProblemsView";
 import { RunPage as RunPageView } from "./views/run/RunPage";
 import { ProcessView } from "./views/ProcessView";
 import { DeploysView } from "./views/deploys/DeploysView";
+import { FlowsView } from "./views/flows/FlowsView";
+import { TimelineView } from "./views/events/TimelineView";
 import { LineSettingsStage } from "../settings/LineSettingsStage";
 import "./workspace.css";
 
@@ -58,15 +60,19 @@ const RunPage = memo(RunPageView);
 const Finder = memo(FinderPage);
 const Line = memo(ProcessView);
 const Deploys = memo(DeploysView);
+const Flows = memo(FlowsView);
+const Timeline = memo(TimelineView);
 // ROUTES: the page a selection opens. A run is read under its problem (view=problems + run); a finder is a step of
 // the line (view=line + source). A builder whose page replaces one of these swaps its line here.
 function pageFor(s: LineSelection): ComponentType<LineViewProps> {
   if (s.view === "foryou") return ForYou;
   if (s.view === "problems") return s.run ? RunPage : Problems;
   if (s.view === "deploys") return Deploys;
+  if (s.view === "flows") return Flows;
+  if (s.view === "timeline") return Timeline;
   return s.source ? Finder : Line;
 }
-const ICONS: Record<LineView, LucideIcon> = { foryou: Inbox, problems: AlertCircle, line: Workflow, deploys: Rocket };
+const ICONS: Record<LineView, LucideIcon> = { foryou: Inbox, timeline: History, problems: AlertCircle, line: Workflow, flows: Route, deploys: Rocket };
 /** How long after G the second key of the go chord still counts. */
 const GO_MS = 1200;
 
@@ -278,7 +284,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
           {/* The workspace Problems and Line read, switched in place. For you lists decisions from every workspace, so
               it names none (each row's product says where it is from). */}
           {!embedded && space && scoped && <SpaceSwitcher space={space} onPick={(k) => { space.pick(k); select({ ...lineViewHome(selection.view), project: null, graph: null, status: null }); }} />}
-          {scoped && model && picks.length > 0 && (listing
+          {scoped && model && picks.length > 0 && selection.view !== "timeline" && (listing
             ? <ProcessPicker all picks={picks} drawn={listed.has(selection.process ?? "") ? selection.process! : null} here={listed} projectTitle={project?.title ?? null} onPick={(k) => select({ process: k })} />
             : <ProcessPicker picks={picks} drawn={model.graphKey} here={here} projectTitle={project?.title ?? null} onPick={(k) => k && pickProcess(k, !!projectId && !pinned && !here.has(k))} />)}
           {!embedded && scoped && <ProjectFilter selected={projectId} rollups={ws.allRollups} projects={ws.projects} byProject={ws.byProject} open={ws.open} onPick={(p) => select({ project: p })} />}
@@ -313,7 +319,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
                   {/* An open step is a page of its own (LJ8.6), in place of the view it was opened from. */}
                   {drawerOpen && !stepSlides
                     ? <StepPage model={model} workspace={ws} selection={drawerSelection} select={select} href={href} pinned={!!pinned} />
-                    : <View model={model} workspace={ws} selection={selection} select={select} href={href} pinned={!!pinned} drawerOpen={slideOpen} />}
+                    : <View model={model} workspace={ws} selection={selection} select={select} href={href} pinned={!!pinned} drawerOpen={slideOpen} space={space?.key ?? null} />}
                 </div>
               )}
             </main>

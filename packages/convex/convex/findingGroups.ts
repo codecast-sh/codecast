@@ -17,7 +17,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { createWorkContext } from "./data";
-import { resolveWorkspaceProject } from "./lib/projectRef";
+import { placeSignal, scopeProject } from "./lib/signalPlacement";
 import { embedText, embeddingWorstCase } from "./lib/embeddings";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { withinBudget, type CallScope } from "./modelCalls";
@@ -202,13 +202,17 @@ export const scopeOf = internalQuery({
     project_path: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
     project: v.optional(v.string()),
+    default_project: v.optional(v.string()),
+    // The finding's source and subject, which place it the way the door does (lib/signalPlacement).
+    source: v.optional(v.string()),
+    subject: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<CallScope & { project_id?: Id<"projects"> }> => {
     const userId = args.user_id ?? (await verifyApiToken(ctx, args.api_token ?? ""))?.userId;
     if (!userId) throw new Error("Unauthorized");
     const { db } = await createWorkContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path, conversation_id: args.conversation_id });
-    const project = await resolveWorkspaceProject(ctx, db.workspaceKey, args.project);
-    return { workspace: db.workspaceKey, ...(db.axes.team_id ? { team_id: db.axes.team_id } : {}), ...(project ? { project_id: project._id } : {}) };
+    const projectId = scopeProject(await placeSignal(ctx, db.workspaceKey, { source: args.source ?? "", subject: args.subject }, args));
+    return { workspace: db.workspaceKey, ...(db.axes.team_id ? { team_id: db.axes.team_id } : {}), ...(projectId ? { project_id: projectId } : {}) };
   },
 });
 
@@ -318,11 +322,11 @@ export const askCandidates = (near: { same: ScoredCandidate[]; cross: ScoredCand
 export async function similarCandidates(
   ctx: { runQuery: any; runMutation: any; vectorSearch: any; scheduler: any },
   filer: { api_token: string } | { user_id: Id<"users"> },
-  signal: { similar_text?: string; subject?: string; observed_at?: number },
+  signal: { source?: string; similar_text?: string; subject?: string; observed_at?: number },
   scope: Record<string, unknown>,
 ): Promise<{ scope: CallScope | null; vector?: number[]; candidates: ScoredCandidate[] }> {
   if (!signal.similar_text || !signal.subject) return { scope: null, candidates: [] };
-  const where: CallScope & { project_id?: Id<"projects"> } = await ctx.runQuery(internal.findingGroups.scopeOf, { ...filer, ...scope });
+  const where: CallScope & { project_id?: Id<"projects"> } = await ctx.runQuery(internal.findingGroups.scopeOf, { ...filer, ...scope, ...(signal.source ? { source: signal.source } : {}), subject: signal.subject });
   const embedded = await embedFinding(ctx, where, signal.similar_text);
   if (!embedded) return { scope: where, candidates: [] };
   const near = await nearCauses(ctx, where, { vector: embedded.vector, subject: signal.subject, observed_at: signal.observed_at });

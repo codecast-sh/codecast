@@ -380,6 +380,10 @@ export const joinRoom = mutation({
     // Languages this device is set to. Optional and additive: an older client
     // never sends it and the transcriber falls back to the scribe's own list.
     languages: v.optional(v.array(v.string())),
+    // Start this huddle private (call_room_state.private). Counts only for
+    // the seat that starts a new huddle, and never in a channel's room,
+    // which is that channel's own space with its own wall.
+    private: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -425,6 +429,9 @@ export const joinRoom = mutation({
       // A lock belongs to the huddle that set it, and so do the knocks at its
       // door: the next huddle in this room starts open, with nobody waiting.
       await clearRoomState(ctx, args.room_key);
+      if (args.private && auth.parsed.kind !== "channel") {
+        await upsertRoomState(ctx, args.room_key, { team_id: auth.teamId, user_id: userId }, { locked: true, private: true }, now);
+      }
     }
 
     // One huddle at a time: joining a room implicitly leaves every other —
@@ -1016,7 +1023,9 @@ export const setRoomLocked = mutation({
     const userId = await requireUser(ctx);
     const now = Date.now();
     const seat = await requireSeated(ctx, userId, args.room_key, now);
-    await upsertRoomState(ctx, args.room_key, seat, { locked: args.locked }, now);
+    // Opening the door makes a private huddle an ordinary one: shown to the
+    // team and walked into. Its record stays private (transcripts.private).
+    await upsertRoomState(ctx, args.room_key, seat, args.locked ? { locked: true } : { locked: false, private: false }, now);
     // Unlocking answers every knock at once: the door is simply open now, and
     // a leftover knock would ask the room to admit someone already inside it.
     const waiting = await sweepKnocks(ctx, args.room_key, now);
@@ -1246,6 +1255,8 @@ export const getLiveRooms = query({
         room_key: roomKey,
         team_id: live[0].team_id,
         locked: !!state?.locked,
+        // Started private: listed only to the people it admits.
+        private: !!state?.private,
         // The huddle said "don't transcribe": what keeps every seated client's
         // auto-scribe from starting it again.
         transcribe_off: !!state?.transcribe_off,
