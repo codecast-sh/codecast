@@ -17,6 +17,7 @@ import {
   setKnownValuesForTest,
 } from "./knownValueRedaction.js";
 import { redactSecrets } from "./secretRedaction.js";
+import { vaultRedactionSource } from "./secrets/redactionSource.js";
 
 const values = (list: Array<{ value: string }>) => list.map((v) => v.value);
 
@@ -186,6 +187,59 @@ describe("store", () => {
       fs.writeFileSync(path.join(repo, ".env"), "SERVICE_PASSWORD=rotatedPw-000111\n");
       store.rebuild();
       expect(redactKnownValues("rotatedPw-000111 repoEnvPw-776655")).toBe("[redacted:known:SERVICE_PASSWORD] repoEnvPw-776655");
+    } finally {
+      store.stop();
+    }
+  });
+});
+
+describe("vault values", () => {
+  const emptyHome = () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "kv-vault-"));
+    return { home, configDir: path.join(home, ".codecast") };
+  };
+  const fixedVault = (list: Array<{ name: string; value: string }>) => ({ values: () => list, refresh: async () => false });
+
+  test("the collector applies the floors, and a Vault name beats an env name for the same value", () => {
+    const store = new KnownValueStore({
+      ...emptyHome(),
+      env: () => ({ STRIPE_TOKEN: "sk_vault_9f8e7d6c5b4a" }),
+      vault: fixedVault([
+        { name: "stripe", value: "sk_vault_9f8e7d6c5b4a" },
+        { name: "pin", value: "1234" },
+        { name: "word", value: "development" },
+      ]),
+    });
+    try {
+      const m = store.rebuild();
+      expect(m.size).toBe(1);
+      expect(redactKnownValues("sk_vault_9f8e7d6c5b4a 1234 development")).toBe("[redacted:known:stripe] 1234 development");
+    } finally {
+      store.stop();
+    }
+  });
+
+  test("end to end: a transcript line holding a Vault value syncs with the secret's name", async () => {
+    let version = "team:a=1";
+    let values = [{ name: "prod-db", value: "opaque-Db-Pw-7731xyz" }];
+    const fetch = (async (url: string) =>
+      url.endsWith("/redaction-version") ? Response.json({ version }) : Response.json({ version, values })) as unknown as typeof globalThis.fetch;
+    const store = new KnownValueStore({
+      ...emptyHome(),
+      env: () => ({}),
+      vault: vaultRedactionSource({ endpoint: () => ({ siteUrl: "https://b.test", apiToken: "t" }), fetch }),
+    });
+    try {
+      store.rebuild();
+      await store.refreshVault();
+      const line = JSON.stringify({ type: "user", message: { content: "psql -p opaque-Db-Pw-7731xyz" } });
+      expect(redactSecrets(line)).toBe(JSON.stringify({ type: "user", message: { content: "psql -p [redacted:known:prod-db]" } }));
+
+      // A rotation reaches the matcher on the next tick.
+      version = "team:a=2";
+      values = [{ name: "prod-db", value: "rotated-Db-Pw-000111" }];
+      await store.refreshVault();
+      expect(redactSecrets("rotated-Db-Pw-000111")).toBe("[redacted:known:prod-db]");
     } finally {
       store.stop();
     }

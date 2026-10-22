@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs, isDecideCastCommand } from "./castCommand";
+import { stripCdPrefix, stripEnvPrefix, stripTimeoutPrefix, splitShellSegments, unwrapShellCommand, parseCastCommandString, extractSendBody, extractCommentBody, extractMessageFlag, extractFlagValue, extractCastBodyParts, normalizeCastCategory, extractBrowserPageUrl, buildBrowserRowMap, browserTabOf, extractBrowserDoSteps, splitBrowserDoOutput, extractChatSendArgs, extractStateArgs, extractDecideArgs, isDecideCastCommand, extractVaultArgs, vaultShortIdIn } from "./castCommand";
 
 describe("stripEnvPrefix", () => {
   test("strips a leading assignment", () => {
@@ -492,6 +492,41 @@ describe("normalizeCastCategory", () => {
     expect(["t", "p", "d", "sched", "schedule", "task"].map(normalizeCastCategory)).toEqual([
       "task", "plan", "doc", "trigger", "trigger", "task",
     ]);
+  });
+});
+
+describe("extractVaultArgs", () => {
+  test("secrets is the vault", () => {
+    expect(normalizeCastCategory("secrets")).toBe("vault");
+  });
+
+  test("value verbs hide their output and name their secrets past flags", () => {
+    expect(extractVaultArgs("get", "github-bot --field password")).toEqual({ names: ["github-bot"], hidesOutput: true });
+    expect(extractVaultArgs("env", "stripe-test prod-db")).toEqual({ names: ["stripe-test", "prod-db"], hidesOutput: true });
+    expect(extractVaultArgs("otp", "github-bot").hidesOutput).toBe(true);
+    expect(extractVaultArgs("ls", "").hidesOutput).toBe(false);
+  });
+
+  test("run splits the names from the command it runs", () => {
+    expect(extractVaultArgs("run", "stripe-test prod-db -- npm test -- --watch")).toEqual({
+      names: ["stripe-test", "prod-db"],
+      command: "npm test -- --watch",
+      hidesOutput: false,
+    });
+  });
+
+  test("request reads its kind and why, and a -- inside the why stays in it", () => {
+    expect(extractVaultArgs("request", 'figma --kind signin --why "export -- the logos" --site figma.com')).toEqual({
+      names: ["figma"],
+      kind: "signin",
+      why: "export -- the logos",
+      hidesOutput: false,
+    });
+  });
+
+  test("finds the short id the CLI printed", () => {
+    expect(vaultShortIdIn("requested sec-12 stripe-test in Acme\nEnd your turn dormant")).toBe("sec-12");
+    expect(vaultShortIdIn("nothing here")).toBeNull();
   });
 });
 

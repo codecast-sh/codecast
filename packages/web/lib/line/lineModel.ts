@@ -1153,7 +1153,6 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
     deps.push("|");
     for (const d of decisionsOf(taskId, anyRunByTask.get(taskId) ?? [])) deps.push(d);
     const hit = reads0.get(taskId)?.find((x) => x.deps.length === deps.length && x.deps.every((d, n) => d === deps[n]) && answers(x.asked));
-    ((globalThis as any).__ih ??= [0, 0])[hit ? 0 : 1]++; // __LP temp
     if (hit) {
       kept.set(taskId, [hit, ...(reads0.get(taskId) ?? []).filter((x) => x !== hit)].slice(0, ISSUE_READS_KEPT));
       issues.push(hit.issue);
