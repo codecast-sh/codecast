@@ -83,6 +83,7 @@ const teamFeaturesValidator = v.object({
   agent_faces: v.optional(v.boolean()),
   agent_realtime: v.optional(v.boolean()),
   ship: v.optional(v.boolean()),
+  line: v.optional(v.boolean()),
 });
 
 // A ship of one surface (cli, desktop, backend...) as Changes records it on a
