@@ -26,6 +26,11 @@ import { enqueueConfigCommand } from "./users";
 import { normalizeRepository } from "./lib/gitRefs";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { deployIsLive, type DeployRow } from "@codecast/shared/contracts/causeHistory";
+import { LINE_DEPLOY_STEP_LABELS, normalizeRoleHandle } from "@codecast/shared/contracts/lineDeploy";
+import { deployAllowance, deployGrantOf, type DeployAllowance } from "./lib/deployAllowance";
+import { countersFor } from "./lib/orgCaps";
+import { tellRole } from "./pendingMessages";
+import { liveRoleByHandle } from "./lib/orgAccess";
 import {
   DEPLOY_SHORT_ID_PREFIX,
   DEPLOY_SHORT_ID_RE,
@@ -57,6 +62,8 @@ const FIX_WATCH_MS = 7 * DAY;
 /** Error groups read for one list's after windows. */
 const GROUPS_SCAN = 600;
 const NOTE_MAX = 2000;
+/** A role asks for a deploy only once the newest waiting fix has sat this long, so a burst of merges goes out as one deploy. */
+export const DEPLOY_SETTLE_MS = 30 * 60 * 1000;
 const COMMITS_MAX = 200;
 
 const OPEN: ReadonlySet<DeployStatus> = new Set(["requested", "running"]);
@@ -239,7 +246,18 @@ async function shapeView(ctx: any, d: Doc<"deploys">): Promise<DeployView> {
     created_at: d.created_at,
     live_at: d.live_at ?? null,
     finished_at: d.finished_at ?? null,
+    ...(d.run_id ? { run_id: String(d.run_id), steps: await deployStepsOf(ctx, d.run_id) } : {}),
   };
+}
+
+const STEP_STATIONS = new Set([...Object.keys(LINE_DEPLOY_STEP_LABELS), "returned"]);
+
+/** A deploy's steps as its run's stations stand (DP8), read from the run, in run order. */
+async function deployStepsOf(ctx: any, runId: Id<"workflow_runs">): Promise<NonNullable<DeployView["steps"]>> {
+  const run = await ctx.db.get(runId);
+  return (run?.node_statuses ?? [])
+    .filter((n: any) => STEP_STATIONS.has(n.node_id))
+    .map((n: any) => ({ id: n.node_id, status: n.status, ...(n.started_at ? { started_at: n.started_at } : {}), ...(n.completed_at ? { completed_at: n.completed_at } : {}) }));
 }
 
 /**
@@ -464,9 +482,15 @@ export const stage = query({
       root: profile?.root ?? null,
       waiting: waiting.map((m) => ({ ...m, task_short_id: tasks.get(m.task_id)?.short_id ?? null, task_title: tasks.get(m.task_id)?.title ?? null })),
       open: open ? await shapeView(ctx, open) : null,
+      auto: await deployAutoOf(ctx, project, now),
     };
   },
 });
+
+/** Who asks for a deploy: a person (the Deploy button, the CLI) or the role the profile names (DP4). */
+type DeployAsker =
+  | { kind: "person"; userId: Id<"users">; cli: boolean }
+  | { kind: "role"; role: Doc<"org_roles"> };
 
 /**
  * Ask for one deploy that sends the project's waiting fixes together. The web
@@ -481,17 +505,29 @@ export async function requestDeployCore(
   opts: { teamId?: Id<"teams">; here?: boolean; cli?: boolean; clientKey?: string; requestId?: string } = {},
 ): Promise<{ _id: string; short_id: string; carries: number }> {
   const project = await readableProjectFor(ctx, userId, projectRef, opts.teamId);
+  return await askForDeploy(ctx, project, { kind: "person", userId, cli: !!opts.cli }, opts);
+}
+
+async function askForDeploy(
+  ctx: any,
+  project: Doc<"projects">,
+  asker: DeployAsker,
+  opts: { here?: boolean; clientKey?: string; requestId?: string; now?: number } = {},
+): Promise<{ _id: string; short_id: string; carries: number }> {
   const profile: any = project.line_profile ?? null;
   const deploy = profile?.deploy;
   if (!deploy?.command) throw new Error("This line has no deploy stage: add [line.deploy] command to .codecast/line.toml and publish it");
   const workspace = await resolveWorkspaceKey(ctx, project);
-  const now = Date.now();
+  const now = opts.now ?? Date.now();
   const { waiting, open } = await waitingFor(ctx, project, workspace, now);
   if (open) throw new Error(`${open.short_id} is already going out (${open.status}); wait for it to finish`);
   if (!waiting.length) throw new Error("Nothing is waiting to go out: every shipped fix is live");
   if (!opts.here && (!profile.device_id || !profile.root)) throw new Error("No machine publishes this line's profile, so nothing can run its deploy path");
 
   const shortId = await nextShortId(ctx.db, DEPLOY_SHORT_ID_PREFIX);
+  const startedBy = asker.kind === "role"
+    ? { kind: "role" as const, name: `@${asker.role.handle}`, role_id: asker.role._id }
+    : { kind: asker.cli ? "cli" as const : "person" as const, name: await personName(ctx, asker.userId), user_id: asker.userId };
   const id = await ctx.db.insert("deploys", {
     short_id: shortId,
     ...(opts.clientKey ? { client_key: opts.clientKey } : {}),
@@ -500,8 +536,8 @@ export async function requestDeployCore(
     project_id: project._id,
     target: normalizeDeployTarget(deploy.target) ?? "deploy",
     status: "requested",
-    trigger: "person",
-    started_by: { kind: opts.cli ? "cli" : "person", name: await personName(ctx, userId), user_id: userId },
+    trigger: asker.kind,
+    started_by: startedBy,
     source: "line",
     event_ids: [],
     carries: waiting.map((m) => ({
@@ -517,14 +553,92 @@ export async function requestDeployCore(
     updated_at: now,
   });
   if (!opts.here) {
+    // A person's press runs on their own machine; the role's runs on the
+    // machine of whoever published the profile, the checkout the path lives in.
+    const runner = asker.kind === "person" ? asker.userId : (profile.publisher_user_id as Id<"users">);
     try {
-      await enqueueConfigCommand(ctx, userId, "line_deploy", JSON.stringify({ deploy: shortId, root: profile.root }), profile.device_id, opts.requestId);
+      await enqueueConfigCommand(ctx, runner, "line_deploy", JSON.stringify({ deploy: shortId, root: profile.root }), profile.device_id, opts.requestId);
     } catch (err) {
       throw new Error(`The deploy runs on the machine that publishes this line, which is not yours: ask its owner, or run \`cast line deploy --go\` there (${err instanceof Error ? err.message : String(err)})`);
     }
   }
   return { _id: String(id), short_id: shortId, carries: waiting.length };
 }
+
+/** The role a profile's `[line.deploy] role` names, in the project's team (DP4). */
+async function deployRoleOf(ctx: any, project: Doc<"projects">): Promise<Doc<"org_roles"> | null> {
+  const deploy: any = (project as any).line_profile?.deploy;
+  const handle = deploy?.trigger === "role" ? normalizeRoleHandle(deploy.role) : null;
+  if (!handle) return null;
+  return await liveRoleByHandle(ctx, project.team_id ? { team_id: project.team_id } : { scope_user_id: project.user_id }, handle);
+}
+
+/** What the role trigger reads on a project's stage: the role, whether it may deploy now, and why not. */
+export type DeployAuto = { role: string; role_id: string | null; allowed: boolean; reason: string | null; used: number; limit: number | null };
+
+async function deployAutoOf(ctx: any, project: Doc<"projects">, now: number): Promise<DeployAuto | null> {
+  const deploy: any = (project as any).line_profile?.deploy;
+  if (deploy?.trigger !== "role") return null;
+  const role = await deployRoleOf(ctx, project);
+  if (!role) return { role: normalizeRoleHandle(deploy.role) ?? "", role_id: null, allowed: false, reason: `no role @${normalizeRoleHandle(deploy.role)} in this team`, used: 0, limit: null };
+  const a: DeployAllowance = deployAllowance(role, now);
+  return { role: role.handle, role_id: String(role._id), allowed: a.allowed, reason: a.reason, used: a.used, limit: a.limit };
+}
+
+export type AutoDeployResult = { asked: Array<{ project_id: string; deploy: string; role: string }>; waiting: Array<{ project_id: string; why: string }> };
+
+/**
+ * The role trigger (DP4). For every project whose profile names
+ * `trigger = "role"`, the role asks for a deploy when fixes wait, nothing is
+ * going out, the newest waiting fix has settled (DEPLOY_SETTLE_MS) and its
+ * deploy grant has room today. The ask counts against the grant's daily
+ * limit and is told to the role in one line. A project the role cannot
+ * deploy is reported with why and asks nobody.
+ */
+export async function autoDeployCore(ctx: any, now = Date.now()): Promise<AutoDeployResult> {
+  const out: AutoDeployResult = { asked: [], waiting: [] };
+  // Only a role holding a deploy grant can deploy, so the pass starts from those few and reads their teams' projects.
+  const granted: Doc<"org_roles">[] = (await ctx.db.query("org_roles").collect()).filter((r: any) => r.status === "active" && deployGrantOf(r, now));
+  const projects: Doc<"projects">[] = [];
+  for (const team of new Set(granted.map((r) => r.team_id).filter(Boolean).map(String))) {
+    const rows = await ctx.db.query("projects").withIndex("by_team_id", (q: any) => q.eq("team_id", team)).collect();
+    projects.push(...rows.filter((p: any) => p.line_profile?.deploy?.trigger === "role" && p.line_profile?.deploy?.command));
+  }
+  for (const project of projects) {
+    const projectId = String(project._id);
+    const role = await deployRoleOf(ctx, project);
+    if (!role) { out.waiting.push({ project_id: projectId, why: "no such role" }); continue; }
+    const allowance = deployAllowance(role, now);
+    const workspace = await resolveWorkspaceKey(ctx, project);
+    const { waiting, open } = await waitingFor(ctx, project, workspace, now);
+    if (open || !waiting.length) continue;
+    if (!allowance.allowed) { out.waiting.push({ project_id: projectId, why: allowance.reason ?? "not allowed" }); continue; }
+    const newest = Math.max(...waiting.map((m) => m.at));
+    if (now - newest < DEPLOY_SETTLE_MS) { out.waiting.push({ project_id: projectId, why: "settling" }); continue; }
+    let asked;
+    try {
+      asked = await askForDeploy(ctx, project, { kind: "role", role }, { now });
+    } catch (err) {
+      out.waiting.push({ project_id: projectId, why: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
+    const counters = countersFor(role, now);
+    const used = (counters.deploys ?? 0) + 1;
+    await ctx.db.patch(role._id, { counters: { ...counters, deploys: used }, updated_at: now });
+    const target = normalizeDeployTarget((project as any).line_profile.deploy.target) ?? "deploy";
+    await tellRole(ctx, role._id, {
+      content: `[line] I asked for ${asked.short_id}: ${asked.carries} shipped fix${asked.carries === 1 ? "" : "es"} of ${project.title ?? "the line"} going out to ${target}, deploy ${used} of ${allowance.limit} today. Its steps run as the line's deploy stations; a step that fails comes back as a problem on the line.`,
+      client_id: `line-deploy:${asked.short_id}`,
+    });
+    out.asked.push({ project_id: projectId, deploy: asked.short_id, role: role.handle });
+  }
+  return out;
+}
+
+export const autoDeploy = internalMutation({
+  args: {},
+  handler: async (ctx) => autoDeployCore(ctx),
+});
 
 export const request = mutation({
   args: {
@@ -550,6 +664,8 @@ export const report = mutation({
     url: v.optional(v.string()),
     note: v.optional(v.string()),
     commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()) }))),
+    // The line-deploy run carrying it (DP8), named once when the run begins.
+    run_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -562,6 +678,8 @@ export const report = mutation({
     if (args.previous_sha && !d.previous_sha) patch.previous_sha = args.previous_sha.toLowerCase();
     if (args.commits?.length && !d.commits?.length) patch.commits = args.commits.slice(0, COMMITS_MAX);
     if (args.note) patch.note = args.note.slice(-NOTE_MAX);
+    const runId = args.run_id ? ctx.db.normalizeId("workflow_runs", args.run_id) : null;
+    if (runId && !d.run_id) patch.run_id = runId;
     // A marker may have finished it already; a report never moves a deploy backwards.
     if (OPEN.has(d.status)) {
       if (args.status === "running") patch.status = "running";

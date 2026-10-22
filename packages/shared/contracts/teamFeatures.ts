@@ -9,7 +9,7 @@
 // the snippet fan-out can never disagree about which features exist or which
 // snippet belongs to which. PURE isomorphic data — no Node or DOM APIs.
 
-export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship";
+export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line";
 
 export interface TeamFeatureDescriptor {
   key: TeamFeatureKey;
@@ -75,6 +75,13 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     key: "ship",
     name: "Ship",
     desc: "A Ship button on sessions with changes, tasks in review and open pull requests: one press commits, opens the PR and shepherds it.",
+    snippets: [],
+    personal: true,
+  },
+  {
+    key: "line",
+    name: "Line",
+    desc: "The Line pages: problems each role's line finds, the fixes it proposes and the decisions it brings you. Needs Organization. In development.",
     snippets: [],
     personal: true,
   },
