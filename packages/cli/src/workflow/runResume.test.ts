@@ -186,6 +186,59 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     expect(resumePoint(grown, { status: "running", current_node_id: "decide", gate_node_id: "decide", gate_response: "S", node_statuses: [] }, cp)!.node_id).toBe("decide");
   });
 
+  // A failed run resumed at a station (cast workflow resume) is a new attempt: the cap that stops a loop within one
+  // attempt (max_visits) counts that attempt's visits only (ct-59974 died at implement's 3 of 3, then its cause was fixed).
+  describe("a failed run resumed at a station as a new attempt", () => {
+    const capped = () => parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      check [label="Check", shape=parallelogram, max_visits=1, script="mkdir -p $run_dir && echo checked >> $run_dir/check.log"]
+      exit [shape=Msquare]
+      start -> check
+      check -> exit [condition="outcome = success"]
+    }`);
+    const usedUp = (at: number) => ({ run_id: runId, node_id: "check", started: false, visit_counts: { start: 1, check: 1 }, completed: ["start", "check"], node_outcomes: { start: "success", check: "failure" } as any, context: { "check.visits": "1", kept: "what the run made" }, at });
+    const failedAtCheck = (over: Partial<ResumeRow> = {}): ResumeRow => ({
+      status: "running",
+      current_node_id: "check",
+      node_statuses: [
+        { node_id: "start", status: "completed", outcome: "success", completed_at: 1 },
+        { node_id: "check", status: "failed", outcome: "failure", completed_at: 2 },
+      ],
+      ...over,
+    });
+
+    test("the visits the earlier attempt used count no more, and what it made stays", () => {
+      const at = resumePoint(capped(), failedAtCheck({ visits_reset_at: 2000 }), usedUp(1000))!;
+      expect(at.visit_counts).toEqual({});
+      expect(at.context).toEqual({ kept: "what the run made" });
+      // Without the reset the earlier attempt's visits stand.
+      expect(resumePoint(capped(), failedAtCheck(), usedUp(1000))!.visit_counts).toEqual({ start: 1, check: 1 });
+      // A checkpoint written after the resume is this attempt's own: its visits count.
+      expect(resumePoint(capped(), failedAtCheck({ visits_reset_at: 2000 }), usedUp(3000))!.visit_counts).toEqual({ start: 1, check: 1 });
+      // Read from the row (no checkpoint on this machine) the same holds.
+      expect(resumePoint(capped(), failedAtCheck({ visits_reset_at: 2000 }), null)!.visit_counts).toEqual({});
+    });
+
+    test("the station a person named stands, even the one the run finished last before it failed", () => {
+      // The checkpoint finished `start` and routed on to `check`; the run is resumed at `start`.
+      const routed = { ...usedUp(1000), node_id: "check", completed: ["start"] };
+      expect(resumePoint(capped(), failedAtCheck({ current_node_id: "start", visits_reset_at: 2000 }), routed)!.node_id).toBe("start");
+      // A runner that died between finishing `start` and reporting `check` still goes on to `check`.
+      expect(resumePoint(capped(), failedAtCheck({ current_node_id: "start" }), routed)!.node_id).toBe("check");
+    });
+
+    test("a station whose visits the earlier attempt used up runs again, and the run finishes", async () => {
+      const runDir = lineRunDir(tmpDir, `line-${runId}`);
+      const cp = usedUp(1000);
+      fs.mkdirSync(path.dirname(checkpointPath(runDir, runId)), { recursive: true });
+      fs.writeFileSync(checkpointPath(runDir, runId), JSON.stringify(cp));
+      expect(await runWorkflow(capped(), options({ resume: failedAtCheck() }))).toBe("failed");
+      fs.writeFileSync(checkpointPath(runDir, runId), JSON.stringify(cp));
+      expect(await runWorkflow(capped(), options({ resume: failedAtCheck({ visits_reset_at: 2000 }) }))).toBe("completed");
+      expect(fs.readFileSync(path.join(runDir, "check.log"), "utf-8")).toBe("checked\n");
+    }, 30000);
+  });
+
   test("a run paused at a gate whose ask never made a decision asks it again on resume", async () => {
     gateAnswer = "S";
     const outcome = await runWorkflow(graph(), options({ resume: row({ status: "paused", current_node_id: "decide", gate_node_id: "decide" }) }));
