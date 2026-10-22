@@ -304,6 +304,8 @@ export function computeFootprint(root: string, calls: ToolCalls, deps: Footprint
   const tools = [...counts]
     .filter(([n]) => where[n] && (deps.exactName ?? exactName)(where[n], n) && !SYSTEM_PREFIXES.some((s) => where[n].startsWith(s)) && !inArea(where[n]) && !where[n].includes("/node_modules/"))
     .map(([tool, count]) => { const install = (deps.installSource ?? installSource)(where[tool]); return { tool, path: where[tool], count, ...(install ? { install } : {}) }; })
+    // A command with no source a host can repeat is reported only when the session ran it again and again: a word from prose that happens to name a stray script is not.
+    .filter((t) => t.install || t.count >= 3)
     .sort((a, b) => b.count - a.count);
 
   // A folder named once in passing is noise; one written to, or used again and again, is work.
