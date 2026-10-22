@@ -791,8 +791,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.reports_user_ids !== undefined) await ctx.runMutation!((api as any).orgRoles.setReports, { role_id: roleId, set: fields.reports_user_ids });
     // Leeway to hire: human only, through its own mutation.
     if (fields.hires_freely !== undefined) await ctx.runMutation!((api as any).orgRoles.setHiresFreely, { role_id: roleId, on: !!fields.hires_freely });
+    // Containment: off by default, human only, through its own mutation.
+    if (fields.keeps_reports_inside !== undefined) await ctx.runMutation!((api as any).orgRoles.setKeepsReportsInside, { role_id: roleId, on: !!fields.keeps_reports_inside });
     const rest: Record<string, any> = { ...fields };
-    delete rest.trust; delete rest.starts_on_its_own; delete rest.caps; delete rest.reports_user_ids; delete rest.hires_freely;
+    delete rest.trust; delete rest.starts_on_its_own; delete rest.caps; delete rest.reports_user_ids; delete rest.hires_freely; delete rest.keeps_reports_inside;
     if (rest.status === "paused" || rest.status === "active") delete rest.status;
     // tenure (S10) and avatar (S13) go through the plain update.
     if (!["name", "handle", "scope", "charter", "status", "tenure", "avatar"].some((k) => rest[k] !== undefined)) return null;

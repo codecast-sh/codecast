@@ -8,27 +8,29 @@ are we trying to move, what do we hold work to, how do we check a change, how
 do we prove and evaluate one, and who answers the card. Sections are numbered
 LP1 onward.
 
-## LP1. Project is the unit
+## LP1. What belongs to a project
 
-A line belongs to a project (a codecast `projects` row), not to a workspace.
-A team with eight projects has up to eight lines, each with its own signals,
-causes, goals, cards and throughput.
+A project (a codecast `projects` row) is where a problem lives: its goals, its
+expectations, and the person who answers its cards (the-line-model.md LM1).
+Sources and flows are the team's.
 
-- A signal carries `project_id`. A new cause is a task, and its `project_id`
-  is the signal's. The attach judge looks only inside the project. Fingerprint
-  attach looks across the workspace: an open cause holding the key takes the
-  signal wherever it sits, and a signal filed for another project records
-  that project in `filed_for_project_id` (the-line-end-to-end.md LE4).
-- `cast signal add` takes `--project <ref>`. Without it the project comes
-  from the repo's profile (`[line] project`), and a finder that serves several
-  projects names one per signal.
+- A signal carries `project_id`, set by what it is about: the expectation it
+  breaks names its project; else its source's default project, when the
+  source is single-purpose; else Ground places the problem. A new cause is a
+  task in that project. The attach judge looks only inside the project.
+  Fingerprint attach looks across the workspace: an open cause holding the
+  key takes the signal wherever it sits, and a signal filed for another
+  project records that project in `filed_for_project_id` (the-line-end-to-end.md LE4).
+- `cast signal add` takes `--project <ref>` when the filer knows it. Without
+  one, placement follows the order above; the repo profile's `[line] project`
+  is the last default, for signals nothing else places.
 - `cast goals --project <ref>` renders that project's charter and the
-  initiatives that carry it. The ground node passes the run's project.
-- `/line` shows one project at a time, with a switcher, and an "all projects"
-  roll-up that only counts.
+  initiatives that carry it. The ground node passes the problem's project.
+- `/line` lists every project's problems with a project filter. Flows are
+  listed across all projects.
 - Admission is per role (the-line.md L9), and a role's scope names projects,
   so a cause with a project is seen by the role that owns it. The cards cap is
-  counted per person across all their lines (LP6).
+  counted per person across every project they answer for (LP6).
 
 ## LP2. The profile file
 
@@ -58,6 +60,16 @@ cards = 5                            # open cards per person, across their lines
 auto = false                         # true: Ship on a task or session merges too
 method = "squash"                    # squash | merge | rebase
 
+[line.deploy]                        # the deploy stage (deploys.md DP2); run from the repository root
+command = "outreach/deploy.sh --sha $sha --actor $actor --no-watch"   # the send step
+target = "production"                # what the team's deploy markers name
+trigger = "role"                     # person (default) | role (DP4)
+role = "release"                     # with trigger = "role": the role that deploys
+ci = "cast line deploy ci --workflow ci.yml"          # each step a command (DP8); one left out passes
+gate = "cast line deploy follow --jobs gate,evals"
+rollout = "cast line deploy follow --jobs deploy"
+live = "..."                         # production answering with $sha
+
 [[line.finders]]                     # what this project listens to (LP3)
 id = "invariants"
 source = "union.invariant"
@@ -85,10 +97,13 @@ standard, and the shared principles with no project file.
 
 ## LP3. Finders are declared
 
-A finder is whatever writes signals for the project: a backend job, a trigger,
-a routine of the role that owns the line, a person. The profile lists them so
+A finder is whatever writes signals for the team: a backend job, a trigger,
+a routine, a person. The profile lists the finders that run from its repo so
 the line page can show each one with its last signal and say honestly when a
-finder is silent. A finder types its own signals (LE3) and computes a
+finder is silent. A finder's `project` is a default for a single-purpose
+source (every signal it files is about that one area); a source that sees
+many areas names none, and its signals are placed by what they are about
+(LP1). A finder types its own signals (LE3) and computes a
 fingerprint that is stable across rewording. The profile entry is a
 declaration; the finder itself lives where its data lives.
 

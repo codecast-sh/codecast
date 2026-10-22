@@ -81,6 +81,21 @@ async function verify() {
   await render({ ...growth, trust: "direct" } as OrgRole, false);
   assert.ok(hires().disabled, "a viewer who cannot edit reads it");
 
+  // ── containment: off by default, flips with one press, shown only on a role with an area ──
+  const scoped = { ...growth, trust: "direct", scope: { project_ids: ["pz"], plan_ids: [] } } as OrgRole;
+  await render(scoped);
+  const keeps = () => q<HTMLButtonElement>("[data-keeps-reports-inside-switch]");
+  assert.equal(keeps()!.getAttribute("data-keeps-reports-inside-switch"), "off");
+  assert.equal(keeps()!.getAttribute("aria-haspopup"), null, "it flips at once, with no review");
+  await act(async () => { keeps()!.click(); });
+  assert.equal(calls.pop(), 'update:{"keeps_reports_inside":true}');
+  await render({ ...scoped, keeps_reports_inside: true } as OrgRole);
+  assert.equal(keeps()!.getAttribute("data-keeps-reports-inside-switch"), "on");
+  await act(async () => { keeps()!.click(); });
+  assert.equal(calls.pop(), 'update:{"keeps_reports_inside":false}');
+  await render({ ...growth, trust: "direct", scope: { project_ids: [], plan_ids: [] } } as OrgRole);
+  assert.equal(keeps(), null, "a role with no area holds nothing");
+
   // ── a hired role: the switch is on, and one click turns it off through the stored field ──
   await render({ ...growth, trust: "direct" } as OrgRole);
   const sw = q<HTMLButtonElement>("[data-autonomy-switch]")!;
@@ -118,13 +133,12 @@ async function verify() {
   // ── the words: no stage, cap or budget reaches the person ──
   assert.doesNotMatch(text(), /trust|stage|\bcaps?\b|budget|allowance|understand|decide|direct/i);
 
-  // ── the root: off, locked, and it says why ──
+  // ── the root: its switch works like any role's ──
   if (root_) {
     await render({ ...root_, trust: "understand" } as OrgRole);
     const rs = q<HTMLButtonElement>("[data-autonomy-switch]")!;
     assert.equal(rs.getAttribute("data-autonomy-switch"), "off");
-    assert.ok(rs.disabled, "the root's switch cannot be turned on");
-    assert.match(text(), /root role proposes and you apply/);
+    assert.ok(!rs.disabled, "the root's switch can be turned on");
   }
 
   // ── the line (plan pl-838): "Edit this line" goes to its stations; a customized copy says whose ──

@@ -63,6 +63,7 @@ export function explainRelease(prev: OrgTemplate | null, next: OrgTemplate): Rel
   const p = prev ?? EMPTY;
   const routines = keyed(p.routines, next.routines, "id", ["every", "mode"]);
   const inputs = keyed(p.inputs, next.inputs, "key"), setup = keyed(p.setup, next.setup, "id");
+  const tools = keyed(p.tools, next.tools, "id");
   const evidence = keyed(p.evidence, next.evidence, "id"), ledgers = keyed(p.ledgers, next.ledgers, "id"), scoreboard = keyed(p.scoreboard, next.scoreboard, "key");
   const before = new Map(p.routines.map((r) => [r.id, r]));
   const both = next.routines.filter((r) => before.has(r.id));
@@ -100,6 +101,7 @@ export function explainRelease(prev: OrgTemplate | null, next: OrgTemplate): Rel
     ...changes.routines_recadenced.map((r) => `routine ${r.id} every ${r.from} -> ${r.to}`),
     ...inputs.added.map((k) => `input ${k} added`), ...inputs.removed.map((k) => `input ${k} removed`), ...inputs.changed.map((k) => `input ${k} changed`),
     ...setup.added.map((id) => `setup ${id} added`), ...setup.removed.map((id) => `setup ${id} removed`), ...setup.changed.map((id) => `setup ${id} changed`),
+    ...tools.added.map((id) => `tool ${id} added`), ...tools.removed.map((id) => `tool ${id} removed`), ...tools.changed.map((id) => `tool ${id} changed`),
     ...changes.evidence_changed.map((id) => `evidence ${id} changed`), ...changes.ledgers_changed.map((id) => `ledger ${id} changed`), ...changes.scoreboard_changed.map((k) => `scoreboard ${k} changed`),
     ...(["hands_per_day", "wakes_per_day", "tokens_per_day", "cards"] as const).filter((k) => p.role.caps?.[k] !== next.role.caps?.[k]).map((k) => `role.caps.${k} ${p.role.caps?.[k] ?? "none"} -> ${next.role.caps?.[k] ?? "none"}`),
     ...(["avatar", "tenure", "charter"] as const).filter((k) => !same(p.role[k], next.role[k])).map((k) => `role.${k} changed`),

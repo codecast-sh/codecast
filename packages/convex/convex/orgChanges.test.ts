@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { getEntry, listEntries, performUndo, planUndo } from "./orgChanges";
-import { performCreateRole, performRetireRole, performSetCaps, performSetProjectLead, performSetTrust, performUpdateRole } from "./orgRoles";
+import { performCreateRole, performReparentRole, performRetireRole, performSetCaps, performSetKeepsReportsInside, performSetProjectLead, performSetTrust, performUpdateRole } from "./orgRoles";
 import { applyOrgChange } from "./orgInit";
 import { gateRoleCaps } from "./spawn";
 import { roleMayStartHands } from "./orgLine";
@@ -177,7 +177,46 @@ describe("org history round trips", () => {
   });
 });
 
+// op-83 #1 in Union: the CMO narrows to its template project while the ads
+// and social leads under it keep theirs. Refused before 2026-10-22.
+test("op-83 #1: a lead's applied scope change drops projects its reports keep, on an open org", async () => {
+  const f = fixture();
+  await f.db.insert("projects", { user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-3", title: "Launch", status: "active", created_at: 1, updated_at: NOW });
+  const launch = f.db._tables.projects.find((r: any) => r.short_id === "pr-3")._id;
+  const cmo = await performCreateRole(f.ctx(), ME as any, { name: "CMO", handle: "cmo", team_id: TEAM, scope: { project_ids: [launch, P as any, "projects_q" as any], plan_ids: [] } });
+  await performCreateRole(f.ctx(), ME as any, { name: "Paid Ads", handle: "paid-ads", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] }, reports_to: { kind: "role", role_id: cmo._id } });
+  await performCreateRole(f.ctx(), ME as any, { name: "Social", handle: "social", team_id: TEAM, scope: { project_ids: ["projects_q" as any], plan_ids: [] }, reports_to: { kind: "role", role_id: cmo._id } });
+  await f.apply({ kind: "scope", handle: "cmo", remove: ["pr-1", "pr-2"] });
+  expect((await f.db.get(cmo._id)).scope.project_ids.map(String)).toEqual([String(launch)]);
+  // The same change under a CMO that keeps its reports inside is refused.
+  await f.apply({ kind: "scope", handle: "cmo", add: ["pr-1", "pr-2"] });
+  await performSetKeepsReportsInside(f.ctx(), ME as any, { role_id: cmo._id, on: true });
+  await expect(f.apply({ kind: "scope", handle: "cmo", remove: ["pr-1", "pr-2"] })).rejects.toThrow(/@paid-ads looks after project Growth and @social looks after project Billing/);
+});
+
 describe("org history refuses unsafe undo", () => {
+  // Undoing a move puts a role back under a parent that has since narrowed
+  // below it: allowed on an open org, refused under a parent that keeps its
+  // reports inside its area.
+  for (const keeps of [false, true]) test(`undoing a move under a narrowed parent ${keeps ? "is refused when the parent keeps its reports inside" : "applies by default"}`, async () => {
+    const f = fixture();
+    const a = await f.role();
+    const b = await performCreateRole(f.ctx(), ME as any, { name: "Site", handle: "site", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } });
+    const child = await performCreateRole(f.ctx(), ME as any, { name: "Child", handle: "child", team_id: TEAM, scope: a.scope, reports_to: { kind: "role", role_id: a._id } });
+    await performReparentRole(f.ctx(), ME as any, { role_id: child._id, reports_to: { kind: "role", role_id: b._id } });
+    const move = f.last();
+    await performUpdateRole(f.ctx(), ME as any, { role_id: a._id, scope: { project_ids: [P as any], plan_ids: [] } });
+    if (keeps) await performSetKeepsReportsInside(f.ctx(), ME as any, { role_id: a._id, on: true });
+    const p = await planUndo(f.ctx(), ME as any, move);
+    if (keeps) {
+      expect(p.preview.refused).toBe("Cannot undo: the scope no longer fits its parent");
+      return;
+    }
+    expect(p.preview.refused).toBeUndefined();
+    await f.undo(move);
+    expect(String((await f.db.get(child._id)).reports_to.role_id)).toBe(String(a._id));
+  });
+
   test("later field edits are left alone, and the preview makes no writes", async () => {
     const f = fixture(); const role = await f.role();
     await performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 8 }); const batch = f.last();

@@ -37,6 +37,15 @@ export function lineProjectFor(team: string | undefined, project: string | undef
   return defaults.project;
 }
 
+/** A signal's project when its filer names none: the repo profile's, sent as
+ *  a default the server keeps only until Ground places the problem, since
+ *  what a problem is about decides its project (the-line-model.md LM1). */
+export function signalDefaultProject(team: string | undefined, project: string | undefined): { default_project?: string } {
+  if (project?.trim()) return {};
+  const fallback = lineProjectFor(team, undefined);
+  return fallback ? { default_project: fallback } : {};
+}
+
 /** The named workspace, else the repo profile's `[line] team`, else the
  *  server's own rule (the session's team, the directory). A write naming a
  *  team that is not one of yours stops here. `project` rides along for the

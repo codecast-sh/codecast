@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { builtinHires, cadenceWords, cannotHireReason, displayTitle, EXECUTIVE_ASSISTANT_HIRE, HEAD_OF_PEOPLE_HIRE, type CatalogTemplate } from "./templateCatalog";
+import { builtinHires, cadenceWords, cannotHireReason, displayTitle, EXECUTIVE_ASSISTANT_HIRE, HEAD_OF_PEOPLE_HIRE, templateTools, visibleCatalog, type CatalogTemplate } from "./templateCatalog";
+import { requiredInputs } from "./orgTemplateSpec";
 
 // The gallery's honesty rules (org-hire.md H3): a card offers the hire only
 // when this workspace can take it, and says why not otherwise.
@@ -43,5 +44,19 @@ describe("built-in hires", () => {
     expect(builtinHires([{ handle: "chief-of-staff", status: "active" }], { assistant: false })).toEqual([EXECUTIVE_ASSISTANT_HIRE]);
     expect(builtinHires([{ handle: "head-of-people", status: "retired" }], { assistant: true })).toEqual([HEAD_OF_PEOPLE_HIRE]);
     expect(builtinHires([{ handle: "head-of-people", status: "active" }], { assistant: true })).toEqual([]);
+  });
+});
+
+describe("what a card says a template brings", () => {
+  test("a workspace's own copy of a template replaces Codecast's, as the server reads it", () => {
+    const own = t({ workspace: "team:t1", latest: { version: "2.0.1", digest: "b".repeat(64) } });
+    expect(visibleCatalog([t(), own, t({ template_id: "on-call" })]).map((x) => `${x.template_id}@${x.workspace}`)).toEqual(["growth@team:t1", "on-call@codecast"]);
+  });
+  test("tools split into commands and skills; answers count only what a hire cannot go without", () => {
+    const m = { ...t().manifest, tools: [{ id: "gads", kind: "command", path: "s/g.mjs", run: "node", summary: "Ads" }, { id: "ads-daily", kind: "skill", path: "skills/ads-daily" }],
+      inputs: [{ key: "a", label: "A", kind: "string", required: true }, { key: "b", label: "B", kind: "string", required: true, default: "x" }, { key: "c", label: "C", kind: "string" }, { key: "s", label: "S", kind: "secret", required: true }] } as any;
+    expect(templateTools(m)).toEqual({ commands: ["gads"], skills: ["ads-daily"] });
+    expect(templateTools(t().manifest)).toEqual({ commands: [], skills: [] });
+    expect(requiredInputs(m).map((i) => i.key)).toEqual(["a"]);
   });
 });

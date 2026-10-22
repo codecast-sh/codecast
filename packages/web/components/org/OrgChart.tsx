@@ -13,7 +13,7 @@
 // lights its node, and a marked node focuses its card. With nothing named the
 // drawer is the Head of People, or the offer to hire one.
 import { useCallback, useContext, useRef, useState } from "react";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { Maximize2, Minimize2, UserPlus } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { objectHref } from "@codecast/shared/entities";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
@@ -28,6 +28,7 @@ import { useEdgeResize } from "../../hooks/useEdgeResize";
 import { OrgHoverContext } from "./proposalContexts";
 import { useProposalChanges } from "./proposalHooks";
 import { RoleFace } from "./RoleFace";
+import { HireRoleDialog } from "./HireRoleDialog";
 import type { OrgProposalListRow } from "./orgStaffingTypes";
 import type { OrgFocusTarget } from "./orgLayout";
 import type { OrgTree } from "./orgTypes";
@@ -118,10 +119,25 @@ export function chartCardHref(o: OrgGraphObject, st: ReturnType<typeof useInboxS
 function PanelToggle({ tree, onOpen }: { tree: OrgTree | null; onOpen: () => void }) {
   const head = tree?.roles.find((r) => isHeadOfPeopleRole(r)) ?? null;
   return (
-    <button type="button" onClick={onOpen} className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] font-medium hover:bg-sol-bg-highlight/50" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 35%, transparent)", color: "var(--sol-text)" }} data-org-panel-open>
+    <button type="button" onClick={onOpen} className="inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] font-medium hover:bg-sol-bg-highlight/50" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 35%, transparent)", color: "var(--sol-text)" }} data-org-panel-open>
       {head && <RoleFace role={head} size={16} />}
       {head ? head.name : "Hire the Head of People"}
     </button>
+  );
+}
+
+/** Hire a role: the gallery of templates this workspace can hire, and a role written by hand behind it. */
+function HireButton({ tree }: { tree: OrgTree | null }) {
+  const [open, setOpen] = useState(false);
+  const meId = useInboxStore((s) => (s.currentUser as { _id?: string } | null)?._id) ?? "";
+  if (!tree) return null;
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} className="inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] font-medium hover:bg-sol-bg-highlight/50" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 35%, transparent)", color: "var(--sol-text)" }} data-org-hire>
+        <UserPlus className="h-3.5 w-3.5" /> Hire
+      </button>
+      {open && <HireRoleDialog open onClose={() => setOpen(false)} tree={tree} meId={meId} initialMode="template" onCreate={(input) => { useInboxStore.getState().createOrgRole(input); setOpen(false); }} />}
+    </>
   );
 }
 
@@ -270,7 +286,10 @@ export function OrgChart() {
         <h1 className="text-[15px] font-medium" style={{ color: "var(--sol-text)" }}>Org</h1>
         <ViewSwitch value={view} onChange={setView} />
         {view !== "goals" && <ExpandAllToggle on={people.expandAll} onChange={people.setExpandAll} />}
-        {!panelOpen && <PanelToggle tree={tree} onOpen={() => goPanel({ kind: "home" })} />}
+        <div className="ml-auto flex items-center gap-2">
+          <HireButton tree={tree} />
+          {!panelOpen && <PanelToggle tree={tree} onOpen={() => goPanel({ kind: "home" })} />}
+        </div>
       </header>}
       <div ref={measure} className="relative min-h-0 flex-1">
         <OrgMap

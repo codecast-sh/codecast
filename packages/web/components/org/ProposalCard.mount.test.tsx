@@ -290,7 +290,7 @@ test("after the send: no bands; accepted reads Accepted, applying, then applied 
   React.act(() => root.unmount());
 });
 
-test("a failed change keeps the card answerable: Retry, Adjust with Reject inside, and the note; staged, Retry says it runs again; with no composer the card is read only", () => {
+test("a failed change keeps the card answerable: Adjust with Reject inside, and the note, never Retry; with no composer the card is read only", () => {
   const root = mount(inThread(card("op-3")));
   const c = q("[data-card='op-3']");
   expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 accepted, 1 failed");
@@ -299,16 +299,12 @@ test("a failed change keeps the card answerable: Retry, Adjust with Reject insid
   const failed = () => c.querySelector<HTMLElement>("[data-subject='role:platform']")!;
   expect(failed().getAttribute("data-subject-status")).toBe("failed");
   expect(failed().querySelector("[data-failed-note]")!.textContent).toBe("Failed: A role already answers to @platform");
-  expect(failed().querySelector("[data-subject-approve]")!.textContent).toBe("Retry");
+  expect(failed().querySelector("[data-subject-approve]")).toBeNull();
   expect(failed().querySelector("[data-subject-reject]")).toBeNull();
   click(failed().querySelector("[data-subject-reply]")!);
   expect(failed().querySelector("[data-subject-reply-field] [data-subject-reject]")).not.toBeNull();
   key(failed().querySelector<HTMLElement>("[data-subject-reply-field] textarea")!, "Escape");
   expect(batch()).toEqual([]);
-  click(failed().querySelector("[data-subject-approve]")!);
-  confirmOnline();
-  expect(batch()).toEqual([["role:platform", "approve", "", [1], ["c3-role"], 1, "Head of Platform"]]);
-  expect(failed().querySelector("[data-staged]")!.textContent).toBe("Retry. Runs again when you send.Undo");
   React.act(() => root.unmount());
   clearBatch();
   // No bridge at all (team chat drawing the proposal), or a bridge whose composer cannot send: nothing could carry an answer, so none is offered.
