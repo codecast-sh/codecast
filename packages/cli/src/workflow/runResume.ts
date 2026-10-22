@@ -196,6 +196,8 @@ export interface ResumeRow {
   gate_decision_id?: string | null;
   /** A trial run's card waiting at its gate (lineTrial.ts): asked of nobody, so no decision id, but asked all the same. */
   gate_card?: string | null;
+  /** When a failed run was resumed at a station as a new attempt (`cast workflow resume`): visits count again from then. */
+  visits_reset_at?: number | null;
 }
 
 /** A row is mid-run when it is live and a runner reported past its start. */
@@ -229,8 +231,13 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
   // A runner that died between finishing a node and reporting the next one
   // left the row on the finished node and the checkpoint on the next: the
   // checkpoint's route stands, so the finished node does not run twice.
+  // A failed run resumed at a station (cast workflow resume) since the
+  // checkpoint was written: the station a person named stands, and the visits
+  // the earlier attempt used count no more (max_visits stops a loop within
+  // one attempt). A checkpoint written since the resume is this attempt's own.
+  const newAttempt = !!row.visits_reset_at && !(checkpoint && checkpoint.at > row.visits_reset_at);
   const rowNode = row.current_node_id || checkpoint?.node_id;
-  const routedOn = !!checkpoint && !checkpoint.started && checkpoint.completed[checkpoint.completed.length - 1] === rowNode;
+  const routedOn = !newAttempt && !!checkpoint && !checkpoint.started && checkpoint.completed[checkpoint.completed.length - 1] === rowNode;
   const nodeId = routedOn ? checkpoint!.node_id : rowNode;
   if (!nodeId || !graph.nodes.has(nodeId)) return null;
   const node = graph.nodes.get(nodeId)!;
@@ -264,6 +271,11 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
     }
     const last = done[done.length - 1];
     if (last) context["outcome"] = node_outcomes[last.node_id];
+  }
+
+  if (newAttempt) {
+    visit_counts = {};
+    for (const key of Object.keys(context)) if (key.endsWith(".visits")) delete context[key];
   }
 
   const asked = !routedOn && row.gate_node_id === nodeId;
