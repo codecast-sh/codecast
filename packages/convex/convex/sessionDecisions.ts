@@ -2367,8 +2367,8 @@ export const listForUser = query({
 /** Findings one problem's severity read covers: the worst among the newest. Small, since a page of decisions reads one
  *  problem each. */
 const SEVERITY_SIGNALS_CAP = 30;
-/** Open problems one line project's read covers, per status. */
-const OPEN_PROBLEMS_CAP = 1000;
+/** Pending decisions the Line's queue reads, newest first. */
+const PENDING_DECISIONS_CAP = 2000;
 /** Waiting trial cards one workspace's read covers. */
 const WAITING_TRIAL_CARDS_CAP = 1000;
 const OPEN_PROBLEM_STATUSES = ["backlog", "open", "in_progress", "in_review"] as const;
@@ -2413,9 +2413,11 @@ async function inViewerQueue(ctx: Ctx, row: DecisionRow, userId: Id<"users">): P
  * Every open decision a line asks about a problem in one workspace (a team's,
  * or the viewer's own), whoever it was asked of or given to: the Line page's
  * decision inbox, the same for every member of the team. Read by index: a
- * trial's through its waiting cards, a line project's through its open
- * problems by status and each problem's pending decisions, so nothing falls
- * out of a window however many problems a run opens.
+ * trial's through its waiting cards, a line project's from the pending
+ * decisions themselves, newest first, kept when a run asked them about an open
+ * problem of the workspace. Reading through each project's open problems
+ * instead stopped at a page of the oldest, so in a workspace holding thousands
+ * of open problems the newest ones' decisions never showed.
  * `line_workspace` names the workspace each row came from: the web's feed
  * prunes by it. The workspaces are the ones the Line page reads at once.
  */
