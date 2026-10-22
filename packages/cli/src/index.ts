@@ -107,6 +107,7 @@ import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import { registerRouteCommand } from "./routeCommand.js";
 import { registerFlowCommands } from "./flowCommand.js";
+import { teamForDirectory } from "./directoryTeam.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -14245,7 +14246,9 @@ registerFlowCommands(program, {
   cliPost, callingSession, realCwd: getRealCwd,
   // The flows published to the workspace this shell reads (flows.md FL2).
   fetchPool: async (team?: string) => {
-    const ws = await readWorkspace(team);
+    // A team named wins; else the team this directory is mapped to; else the active team.
+    const mapped = team ? null : teamForDirectory(await fetchProjectsWithTeams(readConfig() ?? ({} as Config)), getRealCwd());
+    const ws = mapped ? { kind: "team" as const, teamId: mapped } : await readWorkspace(team);
     const r = await cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
     return r?.flows ?? [];
   },
@@ -21511,10 +21514,13 @@ messaging
     }
   });
 
-// Check for updates in background (non-blocking). The SessionStart hook and
-// git's credential helper are output protocols: a cached notice would become
-// part of Claude's prompt in the first case and the credential git reads in
-// the second, so neither enters this lifecycle. Their fast paths claim them
+// Check for updates in background (non-blocking). Everything this lifecycle
+// prints goes to stderr: it runs inside whatever command was typed, and that
+// command's stdout may be read by a program (a line station's
+// `cd "$(cast ws path $worktree)"` failed on every box behind a release). The
+// SessionStart hook and git's credential helper are output protocols too: a
+// cached notice would become part of Claude's prompt in the first case and the
+// credential git reads in the second, so neither enters this lifecycle. Their fast paths claim them
 // before index.ts loads; the guard here is for a wrapper script that still
 // starts at index.ts, which reaches runFastPath only after this line.
 // CODECAST_NO_AUTO_UPDATE is set on the `_build-id` child an update spawns:
@@ -21549,7 +21555,7 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
   // if the new executable carries different daemon code.
   const daemonWasRunning = getDaemonPid() !== null;
 
-  console.log(`\nAuto-updating to v${available}...`);
+  console.error(`\nAuto-updating to v${available}...`);
   autoUpdateInstalling = true;
   const { success } = await performUpdate();
   if (success) {
@@ -21561,9 +21567,9 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
     }
 
     if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
-      console.log(`Updated to v${available} and restarted daemon.\n`);
+      console.error(`Updated to v${available} and restarted daemon.\n`);
     } else {
-      console.log(`Updated to v${available}.\n`);
+      console.error(`Updated to v${available}.\n`);
     }
   } else {
     recordUpdateFailure(available);

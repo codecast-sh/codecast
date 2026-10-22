@@ -750,6 +750,20 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { altKey: "client_key" },
     feeds: ["agentDefinitions.list"],
   },
+  // Vault (docs/architecture/vault.md): secrets' metadata only. Values never
+  // reach the store, IndexedDB or the outbox: create, rotate, fulfill and
+  // reveal call their Convex actions directly. A create paints a stub that
+  // takes its short_id from the action's answer, and the snapshot carrying
+  // that short_id supersedes it.
+  secrets: {
+    persistence: { kind: "collection", key: "secrets" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    workspaceScoped: true,
+    indexes: "_id, name",
+    sync: { altKey: "short_id" },
+    feeds: ["secrets.list"],
+  },
   agentChains: {
     persistence: { kind: "collection", key: "agentChains" },
     hydration: { phase: "deferred" },
@@ -1933,6 +1947,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   issueSyncSources: "shared",
   agentDefinitions: "shared",
   agentChains: "shared",
+  secrets: "shared",
   workflows: "shared",
   workflowRuns: "shared",
   signals: "shared",
