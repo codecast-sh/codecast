@@ -19,6 +19,22 @@ test("a settle that fails goes to the scheduler with the same hold and cost", as
   expect(scheduled).toEqual([{ ms: 0, fn: "modelCalls:settle", args: { workspace: "team:t", purpose: "judge", held: 0.18, cost: 0.02, project_ids: [] } }]);
 });
 
+// The reserve contends for the same row; nothing is spent before it lands, so a conflict asks again.
+test("a reserve refused by write conflicts asks again, and other errors still throw", async () => {
+  let tries = 0;
+  const conflicted = {
+    runMutation: async (fn: any) => {
+      if (getFunctionName(fn) === "modelCalls:reserve" && ++tries < 3) throw new Error('Documents read from or written to the "team_budgets" table changed while this mutation was being run and on every subsequent retry.');
+      return true;
+    },
+    scheduler: { runAfter: async () => {} },
+  };
+  expect(await withinBudget(conflicted, { workspace: "team:t" }, "grouping", 0.01, async () => "ok")).toEqual({ room: true, value: "ok" });
+  expect(tries).toBe(3);
+  const broken = { runMutation: async () => { throw new Error("Unauthorized"); }, scheduler: { runAfter: async () => {} } };
+  await expect(withinBudget(broken, { workspace: "team:t" }, "grouping", 0.01, async () => "ok")).rejects.toThrow("Unauthorized");
+});
+
 // One budget row in a fake db: enough for takeBudget's read and patches.
 function budgetDb(row: Record<string, any>) {
   const db = {
