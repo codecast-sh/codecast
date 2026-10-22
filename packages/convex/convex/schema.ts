@@ -7908,6 +7908,9 @@ export default defineSchema({
     // A rerun from the trial page: its runner sets the earlier run's branch
     // aside and starts from origin/main (cli lineTrialBranch.ts).
     fresh_branch: v.optional(v.boolean()),
+    // When a failed run was last resumed at a station as a new attempt: its
+    // runner counts each station's visits again from then (cli runResume.ts).
+    visits_reset_at: v.optional(v.number()),
   })
     .index("by_share_token", ["share_token"])
     // A daemon's sweep for its own live runs whose runner is gone.
