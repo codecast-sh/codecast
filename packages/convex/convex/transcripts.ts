@@ -1835,6 +1835,7 @@ export async function canReadCall(
   ctx: any,
   userId: Id<"users">,
   t: Doc<"transcripts">,
+  opts: { liveDoor?: boolean } = {},
 ): Promise<boolean> {
   // A RECORDING IS ITS CREATOR'S until they say otherwise. No participant
   // door (they are the only voice in it), and for the creator no team door
@@ -1877,7 +1878,9 @@ export async function canReadCall(
   // (the open door, a ring) may read the words being said in it, the way they
   // could walk in and hear them. That is this run only. Once it ends, the
   // doors above decide, so a walk-in who never spoke loses it as before.
-  return t.status === "live" && (await authorizeRoom(ctx, userId, t.room_key)).ok;
+  // The words only: a call's recordings pass `liveDoor: false`, so walking
+  // past an occupied room never opens its video or its delete.
+  return opts.liveDoor !== false && t.status === "live" && (await authorizeRoom(ctx, userId, t.room_key)).ok;
 }
 
 function shapeCallRow(t: Doc<"transcripts">) {
@@ -2088,6 +2091,7 @@ export async function resolveCallRef(
   ctx: any,
   userId: Id<"users">,
   ref: string,
+  opts: { liveDoor?: boolean } = {},
 ): Promise<Doc<"transcripts"> | null> {
   const r = ref.trim().toLowerCase();
   let t: Doc<"transcripts"> | null = null;
@@ -2100,7 +2104,7 @@ export async function resolveCallRef(
     const id = ctx.db.normalizeId("transcripts", r);
     t = id ? await ctx.db.get(id) : null;
   }
-  return t && (await canReadCall(ctx, userId, t)) ? t : null;
+  return t && (await canReadCall(ctx, userId, t, opts)) ? t : null;
 }
 
 /** The most turns one embedded excerpt carries; a longer range shows its

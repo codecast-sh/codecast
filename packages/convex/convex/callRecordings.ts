@@ -53,6 +53,9 @@ import { authorizeRoom, isRoomTranscribeOff, liveMembers, liveSeat, readRoomStat
 import { liveTranscriptFor, postEvent } from "./callChat";
 import { guestBySecret } from "./callGuests";
 import { beginCallRecord, canReadCall, HUDDLE_GRACE_MS, resolveCallRef } from "./transcripts";
+
+/** A recording opens to the doors that outlast the call, never the live walk-in door (canReadCall). */
+const RECORDINGS = { liveDoor: false } as const;
 import { isTeamAdmin } from "./privacy";
 import { nextShortId } from "./counters";
 import {
@@ -500,7 +503,7 @@ export const webCallRecordings = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    const t = await resolveCallRef(ctx, userId, args.call);
+    const t = await resolveCallRef(ctx, userId, args.call, RECORDINGS);
     if (!t) return null;
     const at = signingMoment(args.url_window, Date.now());
     return callRecordingsCore(ctx, t, userId, { sign: callRecordingSigner({ stable: { at, windowMs: CALL_RECORDING_URL_WINDOW_MS } }) });
@@ -516,7 +519,7 @@ export const cliCallRecordings = internalQuery({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
-    const t = await resolveCallRef(ctx, auth.userId, args.call);
+    const t = await resolveCallRef(ctx, auth.userId, args.call, RECORDINGS);
     if (!t) return null;
     return callRecordingsCore(ctx, t, auth.userId, { keys: true, liveWatch: await mayWatchLive(ctx, auth.userId, t) });
   },
@@ -569,7 +572,7 @@ export const setCallShareVideo = mutation({
   handler: async (ctx, args): Promise<{ video_shared: boolean }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const t = await resolveCallRef(ctx, userId, args.call);
+    const t = await resolveCallRef(ctx, userId, args.call, RECORDINGS);
     if (!t) throw new Error("Not found");
     // Putting faces and screens on the open web, or taking them off, is
     // news to the people filmed, the way a picture of them is
@@ -679,7 +682,7 @@ export async function deleteRecordingRun(ctx: any, userId: Id<"users">, recordin
   const row = id ? await ctx.db.get(id) : null;
   const call = row ? await ctx.db.get(row.transcript_id) : null;
   // One error for "no row" and "not yours to read", so a probe learns nothing.
-  if (!row || !call || !(await canReadCall(ctx, userId, call))) return { ok: false, code: "NOT_FOUND", message: "Recording not found" };
+  if (!row || !call || !(await canReadCall(ctx, userId, call, RECORDINGS))) return { ok: false, code: "NOT_FOUND", message: "Recording not found" };
   const runRows = (await callRows(ctx, call._id)).filter((r) => runIdOf(r) === runIdOf(row));
   const verdict = mayDeleteRun(String(userId), runRows, await isTeamAdmin(ctx, userId, call.team_id));
   if (!verdict.ok) {
@@ -736,7 +739,7 @@ async function frameShareTarget(ctx: any, apiToken: string, recordingId: string)
   const id = ctx.db.normalizeId("call_recordings", recordingId);
   const row = id ? await ctx.db.get(id) : null;
   const call = row ? await ctx.db.get(row.transcript_id) : null;
-  if (!row || !call || !(await canReadCall(ctx, auth.userId, call))) throw new Error("Recording not found");
+  if (!row || !call || !(await canReadCall(ctx, auth.userId, call, RECORDINGS))) throw new Error("Recording not found");
   const runRows = (await callRows(ctx, call._id)).filter((r) => runIdOf(r) === runIdOf(row));
   if (!mayShareFrame(String(auth.userId), row, runRows, await isTeamAdmin(ctx, auth.userId, call.team_id))) {
     throw new ConvexError({ code: "FORBIDDEN", message: FRAME_SHARE_REFUSED_WORDS });
@@ -842,7 +845,7 @@ export async function deleteFrameShareFor(ctx: any, userId: Id<"users">, shareId
   const share = id ? await ctx.db.get(id) : null;
   if (!share) return { deleted: false };
   const call = await ctx.db.get(share.transcript_id);
-  if (!call || !(await canReadCall(ctx, userId, call))) return { deleted: false };
+  if (!call || !(await canReadCall(ctx, userId, call, RECORDINGS))) return { deleted: false };
   await deleteFrameShare(ctx, share);
   return { deleted: true };
 }
