@@ -24,7 +24,7 @@ import { recordingIsWorking, recordingStatusLine } from '@/lib/recordingStatus';
 
 type Item =
   | { t: 'head'; key: string; label: string; live?: boolean }
-  | { t: 'room'; key: string; row: ReturnType<typeof useLiveRooms>[number] }
+  | { t: 'room'; key: string; row: ReturnType<typeof useLiveRooms>[number]; callId?: string }
   | { t: 'call'; key: string; call: any };
 
 export default function CallsScreen() {
@@ -36,16 +36,26 @@ export default function CallsScreen() {
   // server answers with exactly the calls this viewer may read.
   const { calls, ready } = useCallList(100);
   const places = useCallPlaces(calls);
+  const openCall = (id: string) => router.push({ pathname: '/recording/[id]', params: { id } } as never);
 
   const items = useMemo(() => {
     const out: Item[] = [];
-    if (liveRooms.length > 0) {
+    // A live call's words open from its room's card; a live call no card
+    // stands for (a voice note, a room not listed yet) is a row of its own.
+    // History is what has ended, as on the web.
+    const live = calls.filter(isCallLive);
+    const liveByRoom = new Map(live.map((c: any) => [c.room_key, String(c._id)]));
+    const rooms = new Set(liveRooms.map((r) => r.roomKey));
+    const loose = live.filter((c: any) => !rooms.has(c.room_key));
+    if (liveRooms.length > 0 || loose.length > 0) {
       out.push({ t: 'head', key: 'h:live', label: 'Live now', live: true });
-      for (const row of liveRooms) out.push({ t: 'room', key: `r:${row.roomKey}`, row });
+      for (const row of liveRooms) out.push({ t: 'room', key: `r:${row.roomKey}`, row, callId: liveByRoom.get(row.roomKey) });
+      for (const call of loose) out.push({ t: 'call', key: `c:${call._id}`, call });
     }
-    if (calls.length > 0) {
+    const past = calls.filter((c: any) => !isCallLive(c));
+    if (past.length > 0) {
       out.push({ t: 'head', key: 'h:history', label: 'History' });
-      for (const call of calls) out.push({ t: 'call', key: `c:${call._id}`, call });
+      for (const call of past) out.push({ t: 'call', key: `c:${call._id}`, call });
     }
     return out;
   }, [liveRooms, calls]);
@@ -94,14 +104,15 @@ export default function CallsScreen() {
               </RNView>
             );
           }
-          if (item.t === 'room') return <RNView style={styles.roomCard}><LiveRoomCard row={item.row} /></RNView>;
-          return (
-            <CallRow
-              call={item.call}
-              place={places[String(item.call._id)]}
-              onPress={() => router.push({ pathname: '/recording/[id]', params: { id: String(item.call._id) } } as never)}
-            />
-          );
+          if (item.t === 'room') {
+            const { callId } = item;
+            return (
+              <RNView style={styles.roomCard}>
+                <LiveRoomCard row={item.row} onOpen={callId ? () => openCall(callId) : undefined} />
+              </RNView>
+            );
+          }
+          return <CallRow call={item.call} place={places[String(item.call._id)]} onPress={() => openCall(String(item.call._id))} />;
         }}
         ListFooterComponent={!ready && calls.length === 0 && items.length > 0 ? (
           <ActivityIndicator style={{ marginTop: Spacing.lg }} color={Theme.textMuted0} />

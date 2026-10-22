@@ -8,6 +8,7 @@
 import { useSyncExternalStore } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useInboxStore } from "../../store/inboxStore";
+import { parseRoomKey } from "@codecast/shared/contracts";
 import { joinCall, startHuddle } from "./actions";
 
 export type HuddleStartRequest = {
@@ -48,14 +49,21 @@ export function closeHuddleStart(): void {
   emit();
 }
 
-/** The confirm was pressed: start what was asked for. */
-export function runHuddleStart(req: HuddleStartRequest): void {
+/** The confirm was pressed: start what was asked for, private when the
+ *  dialog said so (a window with no dialog starts team shared). */
+export function runHuddleStart(req: HuddleStartRequest, opts: { private?: boolean } = {}): void {
   closeHuddleStart();
   if (req.toUserIds?.length || req.ringChannel) {
-    void startHuddle({ roomKey: req.roomKey, toUserIds: req.toUserIds ?? [], anchorTitle: req.anchorTitle, ringChannel: req.ringChannel });
+    void startHuddle({ roomKey: req.roomKey, toUserIds: req.toUserIds ?? [], anchorTitle: req.anchorTitle, ringChannel: req.ringChannel, private: opts.private });
   } else {
-    void joinCall(req.roomKey, { intent: "deliberate" });
+    void joinCall(req.roomKey, { intent: "deliberate", private: opts.private });
   }
+}
+
+/** A channel's room is the channel's own space and keeps the channel's wall,
+ *  so only other rooms offer a private start (calls.joinRoom ignores it). */
+export function canStartPrivate(req: HuddleStartRequest): boolean {
+  return parseRoomKey(req.roomKey)?.kind !== "channel";
 }
 
 const subscribe = (fn: () => void) => {
