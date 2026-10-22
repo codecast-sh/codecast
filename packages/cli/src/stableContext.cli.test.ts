@@ -60,6 +60,8 @@ afterEach(() => {
   }
 });
 
+const FLOWS_LINE = /^<flows>[^\n]*<\/flows>\n\n/;
+
 describe("stable-context CLI isolation", () => {
   test("prints only the exact hook block and bypasses Commander preAction", async () => {
     const home = scratchHome();
@@ -101,7 +103,8 @@ describe("stable-context CLI isolation", () => {
 
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
-      expect(result.stdout).toBe(
+      // The pool's one <flows> line (flows.md FL7) may lead the block.
+      expect(result.stdout.replace(FLOWS_LINE, "")).toBe(
         `<stable-context mode="solo">
 This gives you bigger-picture visibility on what you have been and are currently working on.
 This is a snapshot from session start — \`cast feed\` / \`cast sessions\` give the current picture. Before attributing work to a session or messaging it about its work, check its evidence: \`cast diff <id>\` shows the files it changed, \`cast read <id>\` its recent turns. A session's state says who is paying attention now, not who wrote what.
@@ -168,7 +171,7 @@ Use --mine for only your sessions, -g for all teams.
         JSON.stringify({ session_id: "oc-1", cwd: "/tmp/project" }),
       );
       expect(opencode.code).toBe(0);
-      expect(opencode.stdout).toStartWith('<stable-context mode="solo">');
+      expect(opencode.stdout.replace(FLOWS_LINE, "")).toStartWith('<stable-context mode="solo">');
 
       // Cursor imports Claude user hooks and runs them with its own payload
       // (marked by cursor_version). The Claude envelope must stay silent there
