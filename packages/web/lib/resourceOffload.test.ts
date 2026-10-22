@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assignDestinations, buildOffloadPlan, loadShareOf, loadShift, sliceForPercent, SPREAD_CEILING, type OffloadPlanInput } from "./resourceOffload";
+import { assignDestinations, buildOffloadPlan, holdPlan, loadShareOf, loadShift, sliceForPercent, SPREAD_CEILING, type OffloadPlanInput } from "./resourceOffload";
 import type { OffloadCandidate, OffloadPlan } from "../components/resources/types";
 import type { ResourcePoint } from "@codecast/shared/contracts";
 const point = (at: number): ResourcePoint => ({ at, cpuPercent: 95, memoryTotal: 1000, memoryAvailable: 500, memoryAvailableIsEstimate: true, pressure: "normal", load1: 20, logicalCpus: 8, processCount: 1 });
@@ -125,4 +125,21 @@ test("a busy session that cannot move is listed with its load and why, and a bac
   expect(buildOffloadPlan(quiet)!.staying).toEqual([]);
   quiet.source.backgroundSessions = ["s"];
   expect(buildOffloadPlan(quiet)!.staying.map((s) => [s.sessionId, s.reason])).toEqual([["s", "a workflow step stays with its run"]]);
+});
+test("a held review keeps its order and numbers and takes only verdicts from new samples", () => {
+  const held = buildOffloadPlan(input())!;
+  const extra: OffloadCandidate = { ...held.candidates[0], sessionId: "s2" };
+  const opened: OffloadPlan = { ...held, candidates: [held.candidates[0], extra] };
+  const blocked = { ...held.candidates[0].perDestination.linux, readiness: "blocked" as const, blockers: ["Host is full"] };
+  const live: OffloadPlan = {
+    ...held,
+    sourceSample: { ...held.sourceSample, cpuPercent: 40 },
+    candidates: [{ ...held.candidates[0], sessionId: "s3" }, { ...held.candidates[0], relief: { cpu: 99, rssLow: 0, rssHigh: 1 }, perDestination: { linux: blocked } }],
+  };
+  const view = holdPlan(opened, live);
+  expect(view.sourceSample.cpuPercent).toBe(95);
+  expect(view.candidates.map((c) => c.sessionId)).toEqual(["s", "s2"]);
+  expect(view.candidates[0].relief.cpu).toBe(10);
+  expect(view.candidates[0].perDestination.linux.blockers).toEqual(["Host is full"]);
+  expect(view.candidates[1].perDestination.linux.readiness).toBe("blocked");
 });
