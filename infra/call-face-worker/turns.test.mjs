@@ -1,7 +1,7 @@
 // When the voice speaks, over the lines of real huddles: `node turns.test.mjs`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { nameMatchers, turnVerdict } from "./turns.mjs";
+import { nameMatchers, turnIsForVoice, turnVerdict } from "./turns.mjs";
 
 const named = nameMatchers(["Rufus", "Claude"]);
 const room = { named, quiet: false, alone: false };
@@ -36,6 +36,10 @@ test("a quiet holds until the name comes back, even alone", () => {
 
 test("with one person in the call every line is for the voice", () => {
   assert.equal(turnVerdict({ ...room, alone: true, transcript: "what does this function do" }).answer, true);
+  // Its turn ends before the words arrive, and the voice answers then.
+  assert.equal(turnIsForVoice({ quiet: false, alone: true }), true);
+  assert.equal(turnIsForVoice({ quiet: true, alone: true }), false);
+  assert.equal(turnIsForVoice({ quiet: false, alone: false }), false);
 });
 
 test("an empty name list matches nothing", () => {
