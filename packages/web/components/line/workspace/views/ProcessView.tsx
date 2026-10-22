@@ -10,7 +10,8 @@
 // to Problems' Not started: what the line has not taken. The finders sit
 // under it, a row each opening the finder's page. Map draws the same steps as
 // the graph, for its shape.
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useMemo, Profiler, type ReactNode } from "react";
+const __onR = (id: string, ph: string, d: number) => (((globalThis as any).__lp ??= {})[`render:${id}:${ph}`] ??= []).push(Math.round(d)); // __LP temp
 import { LINE_MODES, LINE_MODE_LABELS, type LineMode } from "../../../../lib/line/lineWorkspaceUrl";
 import { stepTableFigures, type StepTableRow } from "../../../../lib/line/stepTable";
 import { useStepTable } from "../step/useStepFacts";
@@ -37,8 +38,8 @@ export function ProcessView(props: LineViewProps) {
   const { selection, select } = props;
   const mode = selection.mode;
   const toggle = <ModeSwitch mode={mode} select={select} />;
-  if (mode === "map") return <GraphView {...props} lead={toggle} />;
-  return <StepsPage {...props} toggle={toggle} />;
+  if (mode === "map") return <Profiler id="map" onRender={__onR}><GraphView {...props} lead={toggle} /></Profiler>;
+  return <Profiler id="steps" onRender={__onR}><StepsPage {...props} toggle={toggle} /></Profiler>;
 }
 
 /** The Problems chips the summary row points at: the line's own queue, problems a new run must ask again and problems
@@ -52,12 +53,13 @@ const COLS: Array<{ show: StepShow; label: string }> = [
 ];
 
 const StepsPage = memo(function StepsPage({ model, workspace: ws, selection, select, href, toggle }: LineViewProps & { toggle: ReactNode }) {
-  const rows = useStepTable(model, ws);
+  let __t = performance.now(); const __m = (k: string) => { const g = ((globalThis as any).__lp ??= {}); (g[k] ??= []).push(Math.round(performance.now() - __t)); __t = performance.now(); }; // __LP temp
+  const rows = useStepTable(model, ws); __m("stepTable"); // __LP temp
   const fig = useMemo(() => stepTableFigures(rows), [rows]);
   // Every figure above the table is this line's (its project's, when one is picked), as the table's are: what waits on
   // the viewer here opens For you narrowed to this line, Not started opens Problems' chip narrowed the same way.
   const line = model.graphKey;
-  const counts = useProblemCounts({ model, workspace: ws, selection, process: line });
+  const counts = useProblemCounts({ model, workspace: ws, selection, process: line }); __m("counts"); // __LP temp
   const onYou = useMemo(() => needCount(needsOfLine(ws.needs, line, ws.project?._id ?? null)), [ws.needs, line, ws.project]);
   // One body per phase, in the line's order: the table reads as the line runs.
   const phases = useMemo(() => {
@@ -108,7 +110,7 @@ const StepsPage = memo(function StepsPage({ model, workspace: ws, selection, sel
         <div className="lw-empty"><b>No steps yet</b></div>
       )}
 
-      <FindTable workspace={ws} select={select} href={href} heading={<h2 className="lst-h lst-sub">Finders</h2>} />
+      <Profiler id="find" onRender={__onR}><FindTable workspace={ws} select={select} href={href} heading={<h2 className="lst-h lst-sub">Finders</h2>} /></Profiler>
     </div>
   );
 });

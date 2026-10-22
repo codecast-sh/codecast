@@ -82,8 +82,14 @@ export function repeatedFindings<T extends Pick<FindingLike, "title" | "detail_m
 
 /** What makes two findings one moment: the same source key and the same words, past the finder's own bookkeeping
  *  (AgentWatch ends each with "3 findings in this AgentWatch cluster", which counts up between two filings of one moment). */
-export const repeatKey = (s: Pick<FindingLike, "title" | "detail_md"> & { fingerprint?: string | null }): string =>
-  `${s.fingerprint ?? ""}\n${sameWords({ ...s, detail_md: s.detail_md?.replace(/^\s*\d+ findings? in this [^\n]*cluster[^\n]*$/gim, "") })}`;
+export function repeatKey(s: Pick<FindingLike, "title" | "detail_md"> & { fingerprint?: string | null }): string {
+  let k = repeatKeys.get(s);
+  if (k === undefined) repeatKeys.set(s, (k = `${s.fingerprint ?? ""}\n${sameWords({ ...s, detail_md: s.detail_md?.replace(/^\s*\d+ findings? in this [^\n]*cluster[^\n]*$/gim, "") })}`));
+  return k;
+}
+/** Each finding row's key, read once: a store row is replaced, never edited, when it changes, and every model build
+ *  reads every finding's. */
+const repeatKeys = new WeakMap<object, string>();
 
 /** The findings a reader lists, in the order given: a finding that says nothing is left out (and out of the count),
  *  and one that says word for word what an earlier one says folds into it as a repeat. `empty` is how many were left

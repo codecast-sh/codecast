@@ -1301,43 +1301,59 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const controlsRowRef = useRef<HTMLDivElement>(null);
   // Measured from a layout effect after every keystroke: set only on a change.
   const [fitsBesideControls, setFitsBesideControls] = useChangedState(true);
+  // The keystroke only measures text on a canvas, which never touches the
+  // page. The font and the room beside the controls change with layout (a
+  // resize, a button arriving or leaving), not with typing, so they are read
+  // in a ResizeObserver callback, where layout is already fresh. Read per
+  // keystroke instead, they forced a synchronous layout of the whole page on
+  // every key: tens of ms each beside a long transcript.
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const controlsRoomRef = useRef<number | null>(null);
   const measureFitsBesideControls = useCallback(() => {
+    const text = messageRef.current;
+    let fits = !text.includes("\n");
+    const ctx = measureCtxRef.current;
+    const room = controlsRoomRef.current;
+    // One character of slack so subpixel rounding never lets the browser
+    // wrap text we measured as fitting.
+    if (fits && text && ctx && room != null) fits = ctx.measureText(text).width <= room - ctx.measureText("M").width;
+    setFitsBesideControls(fits);
+  }, []);
+  const readControlsGeometry = useCallback(() => {
     const ta = textareaRef.current;
     const row = controlsRowRef.current;
     if (!ta || !row) return;
-    const text = messageRef.current;
-    let fits = !text.includes("\n");
-    if (fits && text) {
-      const ctx = (measureCtxRef.current ??= document.createElement("canvas").getContext("2d"));
-      if (ctx) {
-        const font = getComputedStyle(ta);
-        ctx.font = `${font.fontStyle} ${font.fontWeight} ${font.fontSize} ${font.fontFamily}`;
-        // The cluster's own box is useless here: tucked, it spans the row.
-        // Sum the buttons instead (gap-1 between them), so the reading is
-        // the same in either state. gap-x-2 sits between the field and the
-        // cluster, plus one character of slack so subpixel rounding never
-        // lets the browser wrap text we measured as fitting.
-        const buttons = Array.from(sendRef.current?.children ?? []) as HTMLElement[];
-        const controls = buttons.reduce((w, b) => w + b.offsetWidth, 0) + Math.max(0, buttons.length - 1) * 4;
-        const room = row.clientWidth - controls - 8 - ctx.measureText("M").width;
-        fits = ctx.measureText(text).width <= room;
-      }
-    }
-    setFitsBesideControls(fits);
-  }, []);
-  // isMultiline is a dep because it adds and removes the expand button, and
-  // that flag lands from the textarea's ResizeObserver one render after the
-  // text: shortening a long draft would otherwise measure against a button
-  // that is about to leave, decide it does not fit, and never look again.
-  useLayoutEffect(measureFitsBesideControls, [message, isMultiline, measureFitsBesideControls]);
+    const ctx = (measureCtxRef.current ??= document.createElement("canvas").getContext("2d"));
+    if (!ctx) return;
+    const font = getComputedStyle(ta);
+    ctx.font = `${font.fontStyle} ${font.fontWeight} ${font.fontSize} ${font.fontFamily}`;
+    // The cluster's own box is useless here: tucked, it spans the row. Sum
+    // the buttons instead (gap-1 between them), so the reading is the same in
+    // either state. gap-x-2 sits between the field and the cluster.
+    const buttons = Array.from(sendRef.current?.children ?? []) as HTMLElement[];
+    const controls = buttons.reduce((w, b) => w + b.offsetWidth, 0) + Math.max(0, buttons.length - 1) * 4;
+    controlsRoomRef.current = row.clientWidth - controls - 8;
+    measureFitsBesideControls();
+  }, [measureFitsBesideControls]);
+  useLayoutEffect(measureFitsBesideControls, [message, measureFitsBesideControls]);
+  // The row and every button in the cluster are observed, and the button set
+  // is re-observed whenever it changes (the expand button comes and goes with
+  // isMultiline), so a button that arrives or leaves re-reads the room.
   useWatchEffect(() => {
     const row = controlsRowRef.current;
     if (!row) return;
-    const observer = new ResizeObserver(measureFitsBesideControls);
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, [composeMode, measureFitsBesideControls]);
+    const cluster = sendRef.current;
+    const resize = new ResizeObserver(readControlsGeometry);
+    const observeAll = () => {
+      resize.disconnect();
+      resize.observe(row);
+      for (const button of Array.from(cluster?.children ?? [])) resize.observe(button);
+    };
+    observeAll();
+    const buttons = new MutationObserver(observeAll);
+    if (cluster) buttons.observe(cluster, { childList: true });
+    return () => { resize.disconnect(); buttons.disconnect(); };
+  }, [composeMode, readControlsGeometry]);
   const controlsTucked = !fitsBesideControls;
 
   const resetTextareaHeight = () => {
