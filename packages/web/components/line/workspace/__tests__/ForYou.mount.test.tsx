@@ -83,7 +83,7 @@ test("with nothing open the decisions are a table across the page, one fact a co
   expect(q("[data-line-foryou]")?.dataset.mode).toBe("table");
   expect([...host.querySelectorAll<HTMLElement>("tbody[data-line-need-group]")].map((g) => `${g.dataset.lineNeedGroup}:${g.querySelectorAll(".fy-tr").length}`)).toEqual(["p1:2"]);
   expect(q(".fy-tgroup")?.textContent).toBe("Callers2");
-  expect([...host.querySelectorAll<HTMLElement>(".fy-table thead th")].map((th) => th.textContent)).toEqual(["", "Decision", "Sev", "Kind", "People", "Findings", "Assignee", "Waiting"]);
+  expect([...host.querySelectorAll<HTMLElement>(".fy-table thead th")].map((th) => th.textContent)).toEqual(["", "Decision", "From", "Sev", "Kind", "People", "Findings", "Assignee", "Waiting"]);
   // The facts a person picks by, a column each, and who holds it.
   const row = q(".fy-tr[data-line-need-ref='sd-3']")!;
   expect(row.querySelector(".fy-t-ask .fy-ask")?.textContent).toBe("Quinn or Riley");

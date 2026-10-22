@@ -39,7 +39,7 @@ const button = () => document.querySelector<HTMLButtonElement>("[data-huddle-idl
 await render(8);
 await act(async () => button().click());
 assert.equal(gate.pendingHuddleStart(), null);
-assert.deepEqual(starts.pop(), { roomKey, toUserIds: [], anchorTitle: "#design", ringChannel: true });
+assert.deepEqual(starts.pop(), { roomKey, toUserIds: [], anchorTitle: "#design", ringChannel: true, private: undefined });
 
 const unregister = gate.registerHuddleStartHost();
 // The request waits for the confirm and carries how many members the buzz reaches.
@@ -56,7 +56,7 @@ assert.equal(starts.length, 0);
 await act(async () => button().click());
 gate.runHuddleStart(gate.pendingHuddleStart()!);
 assert.equal(gate.pendingHuddleStart(), null);
-assert.deepEqual(starts, [{ roomKey, toUserIds: [], anchorTitle: "#design", ringChannel: true }]);
+assert.deepEqual(starts, [{ roomKey, toUserIds: [], anchorTitle: "#design", ringChannel: true, private: undefined }]);
 // A channel whose member count is not known yet cannot start.
 await render();
 assert.equal(button().disabled, true);
