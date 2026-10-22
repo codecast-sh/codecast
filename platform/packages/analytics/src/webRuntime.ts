@@ -14,7 +14,7 @@ import {
 } from "./index";
 import { createTrackGate, resolveOptOut, type TrackGate } from "./catalog";
 import { createCodecastSink, resolveSinkTarget, type CodecastSink } from "./codecast";
-import { setupErrorCapture } from "./errors";
+import { isInjectedScriptStack, setupErrorCapture } from "./errors";
 import { scrubPosthogEvent, scrubSentryBreadcrumb, scrubSentryEvent } from "./scrub";
 
 let config: ResolvedAnalyticsConfig | null = null;
@@ -124,6 +124,12 @@ function eventMessages(event: {
   return out;
 }
 
+/** The file of each frame of the event's thrown error, the way Sentry parsed its stack. */
+function eventFrames(event: { exception?: { values?: Array<{ stacktrace?: { frames?: Array<{ filename?: string }> } }> } }): string[] {
+  const frames = event.exception?.values?.at(-1)?.stacktrace?.frames ?? [];
+  return frames.map((f) => f.filename ?? "");
+}
+
 export function initAnalytics(input: AnalyticsConfig) {
   if (initialized) return;
   initialized = true;
@@ -153,6 +159,7 @@ export function initAnalytics(input: AnalyticsConfig) {
         try {
           const translated = isPageTranslated();
           if (eventMessages(event).some((m) => isTranslatedDomError(m, translated))) return null;
+          if (isInjectedScriptStack(eventFrames(event))) return null;
         } catch {
           // Never lose an event to a bug in the filter.
         }
