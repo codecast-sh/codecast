@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commonWords, defectHeads, jaccard, problemOverlaps, ruleOf, sameExpectation, titleSimilarity, withDuplicatesUnderPrimary } from "../overlap";
+import { commonWords, defectHeads, jaccard, overlapShare, problemOverlaps, ruleOf, SAME_DEFECT, SAME_TITLE, sameExpectation, titleSimilarity, titleWords, withDuplicatesUnderPrimary } from "../overlap";
 import { takenWords } from "../lineModel";
 import { closeChip } from "../scriptReport";
 
@@ -78,5 +78,61 @@ describe("a judge's Not met title", () => {
     expect(sameExpectation("Not met: A message", "A message to a contact leads with the result")).toBe(false);
     expect(sameExpectation(judged, "Cold email describes the search the contact's need implies")).toBe(false);
     expect(sameExpectation("A message to a contact leads with the result", whole)).toBe(false);
+  });
+});
+
+describe("problemOverlaps over many problems", () => {
+  // The every-pair reading the indexed pass must equal: a duplicate is a Jaccard at SAME_TITLE or one expectation
+  // quoted twice; a defect adds problems under one rule whose stems overlap by SAME_DEFECT.
+  function everyPair(items: ReadonlyArray<{ id: string; title: string; at: number; fingerprints?: string[] }>) {
+    const sorted = [...items].sort((a, b) => a.at - b.at);
+    const common = commonWords(sorted.map((i) => i.title));
+    const words = sorted.map((i) => titleWords(i.title, common));
+    const stems = words.map((w) => new Set([...w].map((x) => x.replace(/'s$/, "").replace(/(?<=\w{3})(es|s)$/, ""))));
+    const rules = sorted.map((i) => ruleOf(i.fingerprints));
+    const dup = new Set<string>();
+    const defect = new Set<string>();
+    for (let i = 0; i < sorted.length; i++) for (let j = i + 1; j < sorted.length; j++) {
+      const key = `${sorted[i].id}|${sorted[j].id}`;
+      if (jaccard(words[i], words[j]) >= SAME_TITLE || sameExpectation(sorted[i].title, sorted[j].title)) { dup.add(key); defect.add(key); }
+      if (rules[i] && rules[i] === rules[j] && overlapShare(stems[i], stems[j]) >= SAME_DEFECT) defect.add(key);
+    }
+    return { dup, defect };
+  }
+  const together = (sets: ReadonlyArray<string>, a: string, b: string) => sets.includes(a) && sets.includes(b);
+
+  test("joins exactly the pairs the every-pair reading joins", () => {
+    const vocab = ["contact", "reply", "address", "mail", "caller", "booked", "call", "fee", "answer", "grade", "email", "held", "overnight", "sender", "zoom", "broker", "vendor", "record"];
+    let seed = 7;
+    const rand = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+    const expectation = "a caller who books a call hears the time back";
+    const items = Array.from({ length: 400 }, (_, n) => {
+      const kind = rand(10);
+      const title = kind === 0 ? `Not met: ${expectation.slice(0, 24 + rand(20))}…`
+        : kind === 1 ? expectation
+        : Array.from({ length: 2 + rand(4) }, () => vocab[rand(vocab.length)]).join(" ");
+      return { id: `p${n}`, ref: null, title, at: rand(1000), fingerprints: rand(3) ? [`moment:mo-${n}:ex-r-${rand(4)}`] : [] };
+    });
+    const m = problemOverlaps(items);
+    const want = everyPair(items);
+    const sorted = [...items].sort((a, b) => a.at - b.at);
+    for (let i = 0; i < sorted.length; i++) for (let j = i + 1; j < sorted.length; j++) {
+      const [a, b] = [sorted[i].id, sorted[j].id];
+      if (want.dup.has(`${a}|${b}`)) expect(together(m.get(a)!.set, a, b)).toBe(true);
+      if (want.defect.has(`${a}|${b}`)) expect(together(m.get(a)!.defect, a, b)).toBe(true);
+    }
+    // Nothing beyond those pairs: every set is the closure of the pairs the reading names.
+    const closure = (pairs: Set<string>) => {
+      const parent = new Map(sorted.map((i) => [i.id, i.id]));
+      const find = (x: string): string => (parent.get(x) === x ? x : find(parent.get(x)!));
+      for (const p of pairs) { const [a, b] = p.split("|"); parent.set(find(b), find(a)); }
+      return (id: string) => sorted.filter((i) => find(i.id) === find(id)).map((i) => i.id);
+    };
+    const dupOf = closure(want.dup);
+    const defectOf = closure(want.defect);
+    for (const i of sorted) {
+      expect(m.get(i.id)!.set).toEqual(dupOf(i.id));
+      expect(m.get(i.id)!.defect).toEqual(defectOf(i.id));
+    }
   });
 });

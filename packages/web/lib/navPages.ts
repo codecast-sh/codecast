@@ -38,7 +38,8 @@ export const NAV_PAGES: ReadonlyArray<{
   // "Docs", as the rail names it, so the palette and the rail agree.
   { label: "Docs", path: "/docs", icon: "file", keywords: "documents notes plans specs" },
   { label: "Code", path: "/repo", icon: "code", keywords: "repositories repository github git source commits branches pull requests history browse code" },
-  { label: "Files", path: "/files", icon: "folder", keywords: "notes markdown obsidian files vault local" },
+  { label: "Files", path: "/files", icon: "folder", keywords: "notes markdown obsidian files local" },
+  { label: "Vault", path: "/vault", icon: "key", keywords: "secrets passwords keys api tokens credentials sign-ins logins 2fa otp env" },
   { label: "Memory", path: "/memory", icon: "file", keywords: "claude code memories memory.md index recall learned facts feedback map graph" },
   { label: "Evals", path: "/evals", icon: "grid", keywords: "evals evaluations prompts surfaces regression trend freezes runs judge bisect attribution score", secondary: true },
   { label: "Multiplayer sim", path: "/evals/sim", icon: "workflow", keywords: "multiplayer sim simulator store invariants interleave scenarios shrink swim lanes sync", secondary: true },

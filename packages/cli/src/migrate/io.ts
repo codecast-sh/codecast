@@ -17,6 +17,7 @@ import {
   convexClient,
   describeBackSync,
   describeVerification,
+  FOLDER_COPY_VERIFICATION,
   moveNotice,
   readMoves,
   sendMoveNotice,
@@ -41,6 +42,8 @@ import {
 } from "../remote/session-move.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import type { BeginResult, RunnerIo, TransferResult } from "./runner.js";
+import { sessionFootprint, type Footprint } from "./footprint.js";
+import { rehearsalNotice, rehearseMove } from "./rehearse.js";
 
 type Facts = Extract<BeginResult, { ok: true }>;
 
@@ -104,28 +107,14 @@ export function resolveLocalDestination(opts: {
   return opts.exists(localCwd) ? { localCwd } : { localCwd, createIn: root };
 }
 
-export function createRunnerIo(batchId: string, opts: { out?: (line: string) => void } = {}): RunnerIo & { ready(): Promise<void> } {
-  const out = opts.out ?? ((line: string) => process.stdout.write(`${line}\n`));
-  const log = (line: string) => out(`[${stamp()}] ${line}`);
-  let client: any;
-  let token = "";
-  let api: any;
+/**
+ * Wakes and resolves the cloud host behind a device id, once per process:
+ * from the registry, else by asking each host this machine provisioned that
+ * has not reported its device id yet. Throws when this machine cannot reach it.
+ */
+export function hostResolver(log: (line: string) => void): (deviceId: string) => Promise<{ cloud: CloudHost; host: RemoteHost }> {
   const hosts = new Map<string, { cloud: CloudHost; host: RemoteHost }>();
-  const credentialRefreshed = new Set<string>();
-  // The host-home steps (host setup, tools, logins, mirror, the host's cast) once per host and repo a batch moves into.
-  const homeReady = new Set<string>();
-  const myDeviceId = localDeviceId();
-
-  const ready = async () => {
-    const c = await convexClient();
-    client = c.client;
-    token = c.token;
-    api = c.api;
-  };
-
-  const listDevices = async (): Promise<any[]> => client.query(api.devices.listDevices, { api_token: token });
-
-  const prepareHost = async (deviceId: string): Promise<{ cloud: CloudHost; host: RemoteHost }> => {
+  return async (deviceId: string) => {
     const cached = hosts.get(deviceId);
     if (cached) return cached;
     let cloud = hostForDevice(deviceId);
@@ -156,6 +145,53 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     hosts.set(deviceId, entry);
     return entry;
   };
+}
+
+/** Why the host could not run a Claude session now, or null. Every move pushes this machine's credential, so the host is asked only when there is nothing to push. */
+export async function hostLoginGap(host: () => Promise<RemoteHost>): Promise<string | null> {
+  const local = await readPushableCredentialAsync();
+  if (local.cred) return null;
+  return remoteClaudeLoginLive(await host()) ? null : `this machine has none to give it: ${local.reason}`;
+}
+
+/** Whether the host can take one more session from `localRoot` now (cloud/hostHeadroom). */
+export async function hostRoom(cloud: CloudHost, localRoot: string | undefined): Promise<{ refuse?: string; small?: string }> {
+  const { probeHeadroom, readRepoNeed, tooSmallFor } = await import("../cloud/hostHeadroom.js");
+  const room = probeHeadroom(cloud);
+  if (!room.fit) return { refuse: room.why ?? "no room" };
+  const small = tooSmallFor(room, readRepoNeed(localRoot && fs.existsSync(localRoot) ? localRoot : undefined));
+  return small ? { small } : {};
+}
+
+export function createRunnerIo(batchId: string, opts: { out?: (line: string) => void } = {}): RunnerIo & { ready(): Promise<void> } {
+  const out = opts.out ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const log = (line: string) => out(`[${stamp()}] ${line}`);
+  let client: any;
+  let token = "";
+  let api: any;
+  const credentialRefreshed = new Set<string>();
+  // The host-home steps (host setup, tools, logins, mirror, the host's cast) once per host and repo a batch moves into.
+  const homeReady = new Set<string>();
+  const myDeviceId = localDeviceId();
+
+  const ready = async () => {
+    const c = await convexClient();
+    client = c.client;
+    token = c.token;
+    api = c.api;
+  };
+
+  const listDevices = async (): Promise<any[]> => client.query(api.devices.listDevices, { api_token: token });
+
+  const resolveHost = hostResolver(log);
+  const hosts = new Map<string, { cloud: CloudHost; host: RemoteHost }>();
+  const prepareHost = async (deviceId: string) => {
+    const entry = await resolveHost(deviceId);
+    hosts.set(deviceId, entry);
+    return entry;
+  };
+  // Each session's footprint, read once by the rehearsal and used again for the host's tools.
+  const footprints = new Map<string, Footprint>();
 
   // Every runner write lands on rows the user's message traffic also writes
   // (the per-user sync head), and under a busy fleet Convex gives up on the
@@ -201,30 +237,24 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     },
 
     prepareHost: async (deviceId) => { await prepareHost(deviceId); },
-    // Every move pushes this machine's credential, so the host is asked only
-    // when there is nothing to push.
-    hostLoginGap: async (deviceId) => {
-      const local = await readPushableCredentialAsync();
-      if (local.cred) return null;
-      const { host } = await prepareHost(deviceId);
-      return remoteClaudeLoginLive(host) ? null : `this machine has none to give it: ${local.reason}`;
-    },
+    hostLoginGap: (deviceId) => hostLoginGap(async () => (await prepareHost(deviceId)).host),
 
-    hostRoom: async (deviceId, facts) => {
-      const { cloud } = await prepareHost(deviceId);
-      const { probeHeadroom, readRepoNeed, tooSmallFor } = await import("../cloud/hostHeadroom.js");
-      const room = probeHeadroom(cloud);
-      if (!room.fit) return { refuse: room.why ?? "no room" };
-      const localRoot = facts.git_root ?? facts.project_path ?? undefined;
-      const small = tooSmallFor(room, readRepoNeed(localRoot && fs.existsSync(localRoot) ? localRoot : undefined));
-      return small ? { small } : {};
+    hostRoom: async (deviceId, facts) => hostRoom((await prepareHost(deviceId)).cloud, facts.git_root ?? facts.project_path ?? undefined),
+
+    rehearse: async (facts: Facts, bring) => {
+      const { cloud, host } = await prepareHost(facts.to_device_id);
+      return rehearseMove(facts.session_id, {
+        host, cloud, destinationId: facts.to_device_id, bring,
+        footprint: (jsonl, root) => { const fp = sessionFootprint(jsonl, root); footprints.set(facts.session_id, fp); return fp; },
+      });
     },
 
     transferToCloud: async (facts: Facts, o) => {
       const { cloud, host } = await prepareHost(facts.to_device_id);
       // The move merges into the host's checkout of the repository, beside
       // whatever sessions already work there (gitPushWorktree).
-      const move = await pushSession(facts.session_id, host, { skipTree: o.skipTree, pushedHead: o.pushedHead });
+      const move = await pushSession(facts.session_id, host, { skipTree: o.skipTree, pushedHead: o.pushedHead, bring: o.bring });
+      for (const b of move.brought ?? []) log(`  brought ${b.local} → ${b.remote}${b.error ? ` FAILED: ${b.error}` : ""}`);
       // Resuming on a tree that is not this session's (a stale checkout, a push
       // that never landed) hands over the conversation without its work.
       if (move.verification && !move.verification.headsMatch) {
@@ -234,19 +264,28 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       // A moved checkout must run its tools where it lands, not just hold the
       // files: the host's declared setup, then the checkout's own (install).
       let readiness: string | undefined;
-      if (move.remoteRoot && !o.skipTree) {
+      if (!o.skipTree) {
+        // The host's home steps run for a folder moved as files too: its tools
+        // and logins are what the session needs, whatever carried its files.
         const localRoot = gitRootOf(move.localCwd);
-        const key = `${facts.to_device_id}:${move.remoteRoot}`;
+        const repoPath = move.remoteRoot ?? move.remoteCwd;
+        const key = `${facts.to_device_id}:${repoPath}`;
         if (!homeReady.has(key)) {
           homeReady.add(key);
           try {
             const { readyHostHome } = await import("../cloud/prepare.js");
+            const used = footprints.get(facts.session_id)?.tools ?? [];
             // The git step already ran in pushSession, with the moved repo in hand.
-            await readyHostHome(host, { localGitRoot: localRoot, repoPath: move.remoteRoot, cloudId: cloud.id, skipGit: true, onProgress: (m) => log(`  ${m}`) });
+            await readyHostHome(host, {
+              localGitRoot: localRoot, repoPath, cloudId: cloud.id, skipGit: true, onProgress: (m) => log(`  ${m}`),
+              extraTools: used.map((t) => ({ tool: t.tool, referenced_by: "this session ran it" })),
+            });
           } catch (err) {
             log(`  host home steps failed: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
+      }
+      if (move.remoteRoot && !o.skipTree) {
         const { readyMovedCheckout } = await import("../cloud/prepare.js");
         readiness = readyMovedCheckout(host, move.remoteRoot);
         log(`  ${readiness}`);
@@ -265,6 +304,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
         sourcePath: `${move.localCwd}`,
         verification: [describeVerification(move.verification), readiness].filter(Boolean).join("; "),
         localCwd: move.localCwd,
+        ...(move.brought ? { brought: move.brought } : {}),
       };
     },
 
@@ -317,11 +357,12 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
           execFileSync("git", ["-C", dest.createIn, "worktree", "add", "--detach", dest.localCwd, ref], { stdio: "pipe" });
         }
       }
-      const move: MoveResult = { sessionId: facts.session_id, localCwd: dest.localCwd, remoteCwd, remoteRoot, remoteProjectDir, pushedHead: readMoves()[facts.session_id]?.pushedHead ?? readMoves()[facts.session_id]?.verification?.remoteHead ?? undefined };
+      const recordedMove = readMoves()[facts.session_id];
+      const move: MoveResult = { sessionId: facts.session_id, localCwd: dest.localCwd, remoteCwd, remoteRoot, remoteProjectDir, pushedHead: recordedMove?.pushedHead ?? recordedMove?.verification?.remoteHead ?? undefined, ...(recordedMove?.brought ? { brought: recordedMove.brought } : {}) };
       const { checkoutAloneProbe } = await import("../cloud/prepare.js");
       const pulled = await pullSession(facts.session_id, host, move, { aloneInCheckout: checkoutAloneProbe(client, api, token, facts.owner_device_id, facts.conversation_id) });
       if (!pulled.ff) throw new Error(`CONFLICT: ${pulled.reason}`);
-      let verification = "synced via rsync (non-git directory)";
+      let verification = FOLDER_COPY_VERIFICATION;
       let gitRoot: string | undefined;
       if (isWorktree(dest.localCwd)) {
         verification = describeBackSync(pulled);
@@ -330,7 +371,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       return { destinationPath: dest.localCwd, gitRoot, sourcePath: remoteCwd, verification };
     },
 
-    notice: (facts: Facts, transfer: TransferResult, stoppedOnSource) => {
+    notice: (facts: Facts, transfer: TransferResult, stoppedOnSource, rehearsal) => {
       const entry = hosts.get(facts.direction === "to_cloud" ? facts.to_device_id : (facts.owner_device_id ?? ""));
       const hostName = entry ? `${entry.host.user}@${entry.host.address}` : null;
       return moveNotice({
@@ -339,6 +380,8 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
         oldCwd: facts.direction === "to_cloud" ? `${transfer.sourcePath} on ${os.hostname()}` : `${transfer.sourcePath} on ${hostName ?? facts.owner_label ?? "the cloud host"}`,
         verification: transfer.verification,
         stoppedOnSource,
+        brought: transfer.brought,
+        missingHere: rehearsal ? rehearsalNotice(rehearsal) : undefined,
       });
     },
   };

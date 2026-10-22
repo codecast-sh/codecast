@@ -111,7 +111,9 @@ project = "Infrastructure"
       ["Agent Quality", true, ["clusters", "invariants"]],
       ["Infrastructure", false, ["errors"]],
     ]);
-    expect(groups[1].finders[0]).toEqual({ id: "errors", source: "union.error", kind: ["bug", "regression"], fingerprint: "union:error:<fingerprint>", runs: "daily" });
+    // A finder that names its project, even the default one, is single-purpose: its signals land there. One that names none only files there by default.
+    expect(groups[1].finders[0]).toEqual({ id: "errors", source: "union.error", kind: ["bug", "regression"], fingerprint: "union:error:<fingerprint>", runs: "daily", single_purpose: true });
+    expect(groups[0].finders.map((f) => [f.id, !!f.single_purpose])).toEqual([["clusters", true], ["invariants", false]]);
   });
 
   test("a finder with no project anywhere is held back", async () => {

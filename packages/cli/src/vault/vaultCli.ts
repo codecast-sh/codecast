@@ -1,4 +1,4 @@
-// What `cast vault cat|grep|search|write|edit|rm|mv|links|open` actually does,
+// What `cast files cat|grep|search|write|edit|rm|mv|links|open` actually does,
 // with the terminal stripped out: pick a vault, turn what the user typed into a
 // vault-relative path, and read or change the file it names.
 //
@@ -7,7 +7,7 @@
 // come back as a specific failure it can act on rather than a stack trace —
 // hence VaultCliError carrying the process exit code, and hence resolution
 // going through the SAME VaultIndex the browser resolves links with. If
-// `[[Sleep]]` opens Areas/Health/Sleep.md in the app, `cast vault cat Sleep`
+// `[[Sleep]]` opens Areas/Health/Sleep.md in the app, `cast files cat Sleep`
 // must open that file too, ambiguity included.
 //
 // It talks to the disk through vaultScope (path rules, scanning) and vaultFs
@@ -42,7 +42,7 @@ import {
 
 /**
  * Exit codes, so a script can branch without parsing prose. Documented in
- * `cast vault --help` and kept deliberately small.
+ * `cast files --help` and kept deliberately small.
  */
 export const VAULT_EXIT = {
   ok: 0,
@@ -79,13 +79,13 @@ export class VaultCliError extends Error {
  * registers a vault per project, so an agent in a repo has a hundred vaults
  * visible and exactly one it means — the one it is standing in. Falling back to
  * "the only vault" still covers the person with a single notes folder. What is
- * never allowed is a silent pick between unrelated vaults: `cast vault write`
+ * never allowed is a silent pick between unrelated vaults: `cast files write`
  * landing in the wrong one is somebody else's notes.
  */
 export function selectVault(configDir: string, spec?: string, cwd = process.cwd()): VaultInfo {
   const vaults = listVaults(configDir);
   if (vaults.length === 0) {
-    throw new VaultCliError("No vaults registered. Add one with: cast vault add ~/notes");
+    throw new VaultCliError("No vaults registered. Add one with: cast files add ~/notes");
   }
 
   if (spec) {
@@ -105,7 +105,7 @@ export function selectVault(configDir: string, spec?: string, cwd = process.cwd(
       );
     }
     throw new VaultCliError(
-      `No vault matching "${wanted}". List them with: cast vault ls`,
+      `No vault matching "${wanted}". List them with: cast files ls`,
       VAULT_EXIT.notFound,
     );
   }
@@ -124,7 +124,7 @@ export function selectVault(configDir: string, spec?: string, cwd = process.cwd(
   if (registered.length === 0) {
     throw new VaultCliError(
       `No vaults registered, and this directory is not inside a project with notes.\n` +
-        `Add one with: cast vault add <dir>   ·   or run this from inside a project.`,
+        `Add one with: cast files add <dir>   ·   or run this from inside a project.`,
       VAULT_EXIT.ambiguous,
     );
   }
@@ -138,8 +138,8 @@ export function selectVault(configDir: string, spec?: string, cwd = process.cwd(
 /**
  * The vault the given directory is inside, or null. Deepest root wins, so a
  * vault nested inside another resolves to the inner one — the more specific
- * answer. Exported because `cast vault ls` marks this row: with a hundred
- * project vaults on screen, "which one will `cast vault cat` use?" is the
+ * answer. Exported because `cast files ls` marks this row: with a hundred
+ * project vaults on screen, "which one will `cast files cat` use?" is the
  * question the listing has to answer, and it must answer it with the SAME rule
  * selectVault applies.
  */
@@ -185,7 +185,7 @@ const READ_CONCURRENCY = 32;
  * Scan a vault and index it.
  *
  * `content: false` reads NO files — it indexes paths alone, which is all that
- * exact-path and unique-name resolution need, so `cast vault cat Sleep` costs
+ * exact-path and unique-name resolution need, so `cast files cat Sleep` costs
  * one directory walk. `content: true` reads every markdown file, which is what
  * backlinks, tags, aliases and full-text search require: a backlink is by
  * definition a link in some OTHER note, and nothing short of reading them all
@@ -317,7 +317,7 @@ export async function resolveNote(ctx: VaultCtx, input: string): Promise<NoteRef
 
 /**
  * The path a create or a move should land on. An input that names an existing
- * note resolves to it (so `cast vault write Sleep` overwrites the note the app
+ * note resolves to it (so `cast files write Sleep` overwrites the note the app
  * calls Sleep); anything else is taken literally, gaining a `.md` when it has
  * no extension the vault serves. That is Obsidian's "click the unresolved link
  * to create it" rule, which is the behaviour an agent already expects.

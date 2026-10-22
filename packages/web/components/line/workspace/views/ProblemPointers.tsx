@@ -8,7 +8,7 @@ import { useMemo } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { STATUS_LABELS, type StatusKey } from "../../../../lib/line/problemStatus";
-import { useProblemList } from "./timeline/useProblemList";
+import { useProblemRows } from "./timeline/useProblemList";
 import type { LineViewProps } from "./types";
 import "./pointers.css";
 
@@ -16,7 +16,7 @@ import "./pointers.css";
 /** `process`: one line's list instead (the Line page's own line, or For you narrowed to it); its pointers then open that line's chip. */
 export function useAllProblems({ model, workspace, selection, process = null }: Pick<LineViewProps, "model" | "workspace" | "selection"> & { process?: string | null }) {
   const unfiltered = useMemo(() => ({ ...selection, status: null, process, q: null, sort: null }), [selection, process]);
-  return useProblemList(model, workspace, unfiltered);
+  return useProblemRows(model, workspace, unfiltered);
 }
 
 /** The Problems list's count per chip, over every process (or `process`) with no chip or search. */

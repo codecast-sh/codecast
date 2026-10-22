@@ -7,7 +7,7 @@ import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
-import { attachJudgeRequest, causeDescription, makeProblemOfFindingCore, markAskDoneCore, mergeProblemCore, moveFindingOutCore, normalizeSignal, parseAttachJudgeReply, rewriteCauseDescription, type CauseCandidate } from "./signals";
+import { attachJudgeRequest, causeDescription, makeProblemOfFindingCore, markAskDoneCore, mergeProblemCore, moveFindingOutCore, unfoldProblem, normalizeSignal, parseAttachJudgeReply, rewriteCauseDescription, type CauseCandidate } from "./signals";
 
 const TOKEN = "s".repeat(64);
 const T0 = 1_760_000_000_000;
@@ -208,7 +208,7 @@ describe("signals.ingest", () => {
     const second = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart (again)", observed_at: T0 + 5000 });
     expect(second).toMatchObject({ attach: "fingerprint", task_id: first.task_id, signal_count: 2, reopened: false });
     expect(stub.state.calls).toHaveLength(0);
-    expect((await task(first.task_id)).cause).toEqual({ signal_count: 2, first_seen: T0, last_seen: T0 + 5000, fingerprints: ["err-1"], joined_at: expect.any(Number) });
+    expect((await task(first.task_id)).cause).toEqual({ signal_count: 2, first_seen: T0, last_seen: T0 + 5000, fingerprints: ["err-1"], joined_at: expect.any(Number), placed: "none" });
   });
 
   test("judge: a new fingerprint near an open cause attaches where the judge points", async () => {
@@ -774,6 +774,85 @@ describe("signals in a project (line-profile.md LP1)", () => {
     expect((await add({ fingerprint: "y", title: "y", project: "Infrastructure" })).attach).toBe("new");
   });
 
+  // The-line-model.md LM1: a problem's project is decided by what it is about.
+  const finder = (source: string, extra: Record<string, unknown> = {}) => ({ id: source, source, kind: ["regression"], fingerprint: "<id>", opens_causes: true, ...extra });
+  async function withPlacement() {
+    const base = await withProjects();
+    await base.t.run(async (ctx) => {
+      // Infrastructure's expectations: ex-infrastructure-<n> names it.
+      await ctx.db.insert("project_expectations", { project_id: base.infra, user_id: base.userId, workspace: `user:${base.userId}`, version: 1, prefix: "infrastructure", next_n: 4, items: [], summary: "first", how: "person", created_at: T0 } as any);
+      // union.invariant names Infrastructure as its own project; union.eval is broad and names none.
+      await ctx.db.patch(base.infra, { line_profile: { finders: [finder("union.invariant", { single_purpose: true })], changed_at: T0 } } as any);
+      await ctx.db.patch(base.quality, { line_profile: { finders: [finder("union.eval")], default: true, changed_at: T0 } } as any);
+    });
+    const place = async (fields: Record<string, any>) => {
+      const out = await base.add({ kind: "regression", ...fields });
+      const row: any = await base.t.run(async (ctx) => await ctx.db.get(out.signal_id));
+      return { out, row, cause: out.task_id ? await base.task(out.task_id) : null };
+    };
+    return { ...base, place };
+  }
+
+  test("placement: the expectation a signal breaks beats the filer's project and the repo default", async () => {
+    const { place, infra } = await withPlacement();
+    const { row, cause } = await place({ source: "union.eval", fingerprint: "ev-1", title: "Gate red", subject: "ex-infrastructure-3", project: "Agent Quality", default_project: "Agent Quality" });
+    expect(row).toMatchObject({ project_id: infra, placed: "expectation" });
+    expect(cause).toMatchObject({ project_id: infra, cause: { placed: "expectation" } });
+  });
+
+  test("placement: the filer's project beats the source's own and the repo default", async () => {
+    const { place, quality } = await withPlacement();
+    const { cause } = await place({ source: "union.invariant", fingerprint: "inv-1", title: "Orphan rows", project: "Agent Quality", default_project: "Infrastructure" });
+    expect(cause).toMatchObject({ project_id: quality, cause: { placed: "filer" } });
+  });
+
+  test("placement: a single-purpose source's own project beats the repo default", async () => {
+    const { place, infra, t } = await withPlacement();
+    expect((await place({ source: "union.invariant", fingerprint: "inv-2", title: "Orphan rows", default_project: "Agent Quality" })).cause).toMatchObject({ project_id: infra, cause: { placed: "source" } });
+    // A finder published onto a project that is not its profile's default named that project itself (profiles from before the flag).
+    await t.run(async (ctx) => { await ctx.db.patch(infra, { line_profile: { finders: [finder("union.escalation")], default: false, changed_at: T0 } } as any); });
+    expect((await place({ source: "union.escalation", fingerprint: "esc-1", title: "Broker asked twice", default_project: "Agent Quality" })).cause).toMatchObject({ project_id: infra, cause: { placed: "source" } });
+  });
+
+  test("placement: a broad source falls to the repo default, which Ground may replace, and with no default to no project", async () => {
+    const { place, quality } = await withPlacement();
+    const filed = await place({ source: "union.eval", fingerprint: "ev-2", title: "Gate red", default_project: "Agent Quality" });
+    expect(filed.cause).toMatchObject({ project_id: quality, cause: { placed: "default" } });
+    expect(filed.row.placed).toBe("default");
+    const none = await place({ source: "union.eval", fingerprint: "ev-3", title: "Gate red again" });
+    expect(none.cause.project_id).toBeUndefined();
+    expect(none.cause.cause.placed).toBe("none");
+    // A default that names nothing in the workspace files nowhere rather than refusing the signal.
+    expect((await place({ source: "union.eval", fingerprint: "ev-4", title: "Gate red once more", default_project: "Nowhere" })).cause.cause.placed).toBe("none");
+  });
+
+  test("placement: a source declared both with and without its own project is broad", async () => {
+    const { place, t, quality } = await withPlacement();
+    await t.run(async (ctx) => { await ctx.db.patch(quality, { line_profile: { finders: [finder("union.invariant")], default: true, changed_at: T0 } } as any); });
+    expect((await place({ source: "union.invariant", fingerprint: "inv-3", title: "Orphan rows", default_project: "Agent Quality" })).cause).toMatchObject({ project_id: quality, cause: { placed: "default" } });
+  });
+
+  test("placement: fingerprint attach still crosses projects, recording a settled project apart and never a default", async () => {
+    const { place, quality, infra } = await withPlacement();
+    const first = await place({ source: "union.eval", fingerprint: "ev-9", title: "Gate red", project: "Agent Quality" });
+    const settled = await place({ source: "union.eval", fingerprint: "ev-9", title: "Gate red", subject: "ex-infrastructure-1" });
+    expect(settled.out).toMatchObject({ attach: "fingerprint", task_id: first.out.task_id });
+    expect(settled.row).toMatchObject({ project_id: quality, filed_for_project_id: infra, placed: "expectation" });
+    const byDefault = await place({ source: "union.eval", fingerprint: "ev-9", title: "Gate red", default_project: "Infrastructure" });
+    expect(byDefault.out).toMatchObject({ attach: "fingerprint", task_id: first.out.task_id });
+    expect(byDefault.row.project_id).toBe(quality);
+    expect(byDefault.row.filed_for_project_id).toBeUndefined();
+  });
+
+  test("placement: a default does not narrow the judge, so a twin in another project is still found", async () => {
+    const { place } = await withPlacement();
+    await place({ source: "union.eval", fingerprint: "e1", title: "Checkout throws on empty cart", subject: "web/checkout", project: "Infrastructure" });
+    stub.state.calls.length = 0;
+    await place({ source: "union.eval", fingerprint: "e2", title: "Empty cart checkout crash", subject: "web/checkout", default_project: "Agent Quality" });
+    expect(stub.state.calls).toHaveLength(1);
+    expect(stub.state.calls[0].messages[0].content).toContain("Checkout throws on empty cart");
+  });
+
   test("ls --project reads only that project's signals", async () => {
     const { add, t } = await withProjects();
     await add({ fingerprint: "a", title: "One", project: "Agent Quality" });
@@ -1253,6 +1332,27 @@ describe("dissolve closes and move notes (LL13)", () => {
     expect((await task(older.task_id)).cause.signal_count).toBe(2);
     expect(await t.run(async (ctx) => await mergeProblemCore(ctx, userId, st, so))).toMatchObject({ moved: 0, already: true });
     await expect(t.run(async (ctx) => await mergeProblemCore(ctx, userId, so, so))).rejects.toThrow(/cannot merge into itself/);
+  });
+
+  test("a merge undone: the folded problem opens again and takes back exactly the findings it brought", async () => {
+    const { add, t, task, userId } = await setup();
+    const older = await add({ fingerprint: "k-old2", title: "Fee wording skips the fair-fee question" });
+    const twin = await add({ fingerprint: "k-twin2", title: "Risk notes are never routed to anyone" });
+    const [so, st] = await Promise.all([older, twin].map(async (r) => (await task(r.task_id)).short_id));
+    await t.run(async (ctx) => await mergeProblemCore(ctx, userId, st, so));
+    const signalsOn = (id: any) => t.run(async (ctx) => await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", id)).collect());
+    expect((await signalsOn(older.task_id)).map((r: any) => r.folded_from ?? null).filter(Boolean)).toEqual([twin.task_id]);
+
+    const moved = await t.run(async (ctx) => await unfoldProblem(ctx, userId, (await ctx.db.get(twin.task_id))!, null, "two causes.", Date.now()));
+    expect(moved).toBe(1);
+    const reopened = await task(twin.task_id);
+    expect(reopened.status).toBe("open");
+    expect(reopened.duplicate_of).toBeUndefined();
+    expect(reopened.cause.merged_into).toBeUndefined();
+    expect((await signalsOn(twin.task_id)).map((r: any) => [r.fingerprint, r.folded_from ?? null])).toEqual([["k-twin2", null]]);
+    expect((await signalsOn(older.task_id)).map((r: any) => r.fingerprint)).toEqual(["k-old2"]);
+    expect((await task(older.task_id)).cause.signal_count).toBe((await signalsOn(older.task_id)).length);
+    await expect(t.run(async (ctx) => await unfoldProblem(ctx, userId, (await ctx.db.get(twin.task_id))!, null, "again", Date.now()))).rejects.toThrow(/was not merged/);
   });
 
   test("moves into a closed problem open a new one; a run's moves fold into one note per problem", async () => {

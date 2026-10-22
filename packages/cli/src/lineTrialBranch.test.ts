@@ -3,8 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { freshRunBranch, processesIn, sessionIdsOf, type RunHands } from "./lineTrialBranch";
+import { freshRunBranch, ownersOf, processesIn, type RunHands } from "./lineTrialBranch";
 import { lineRunDir } from "./workflow/runner";
+import { watchDir, writeWatchState } from "./check";
 
 const sh = (cwd: string, ...args: string[]) => {
   const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
@@ -100,11 +101,86 @@ describe("freshRunBranch", () => {
     }
   }, 60_000);
 
-  test("sessionIdsOf reads the session id an agent was started or resumed with", () => {
-    expect(sessionIdsOf([1, 2, 3], [
-      `/Users/x/.codecast/bin/claude --permission-mode bypassPermissions --session-id ${SESSION} --model opus -- You are running unattended`,
-      "codex resume 0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b",
-      "bash",
-    ].join("\n"))).toEqual([SESSION, "0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b"]);
+  // th75zjnq (ct-60855): the earlier run's hands asked `cast check`, and its
+  // watchers (one tsc per program) kept working in the tree for the 45 minutes
+  // until their idle exit, so the next run was refused as "still in use".
+  test("the earlier run's typecheck watchers are stopped, and the fresh branch starts", async () => {
+    const { root, repo, tree, stopHand } = await earlierRunWithHand();
+    stopHand();
+    const home = path.join(root, "codecast-home");
+    const before = process.env.CODECAST_DIR;
+    process.env.CODECAST_DIR = home;
+    const tsc = spawn("perl", ["-e", "sleep 60"], { cwd: path.join(tree), detached: true, stdio: "ignore" });
+    try {
+      for (let i = 0; i < 50 && !processesIn(tree).some((p) => p.pid === tsc.pid); i++) await new Promise((r) => setTimeout(r, 100));
+      writeWatchState(watchDir(tree, "backend"), { pid: tsc.pid!, project: "backend", tsconfig: "tsconfig.json", root: tree, startedAt: Date.now(), inProgress: false });
+      const fresh = await freshRunBranch(repo, { name: "agentwatch_trial" }, "ct-7", new Date("2026-10-16T14:23:00Z"));
+      expect(fresh.set_aside).toBeTruthy();
+      expect(processesIn(tree)).toEqual([]);
+      expect(fs.existsSync(path.join(watchDir(tree, "backend"), "state.json"))).toBe(false);
+    } finally {
+      try { process.kill(-tsc.pid!, "SIGKILL"); } catch {}
+      if (before === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = before;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("ownersOf puts each process to the agent session it works for: its own, or the nearest ancestor's", () => {
+    // ct-60857 on the box: the tips session (claude --resume, its cwd outside
+    // the worktree) ran a tool call that cd'd into it, and the shell and its
+    // find outlived the call.
+    const ps = [
+      `18227 18185 claude --resume 177187d6-f065-454b-a797-f740e7896da4 --model opus --dangerously-skip-permissions`,
+      "19749 18227 /bin/zsh -c source snapshot.sh && eval 'cd /wt && find / -name probe2.ts'",
+      "19752 19749 /bin/zsh -c source snapshot.sh",
+      "19753 19752 bfs -S dfs / -name probe2.ts",
+      `4000 1 /Users/x/.codecast/bin/claude --permission-mode bypassPermissions --session-id ${SESSION} --model opus -- You are running unattended`,
+      "4100 1 codex resume 0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b",
+      "5567 1 codecast check --json",
+    ].join("\n");
+    const owners = ownersOf([19749, 19753, 4000, 4100, 5567], ps);
+    expect(owners.get(19753)).toEqual({ session: "177187d6-f065-454b-a797-f740e7896da4", self: false });
+    expect(owners.get(19749)).toEqual({ session: "177187d6-f065-454b-a797-f740e7896da4", self: false });
+    expect(owners.get(4000)).toEqual({ session: SESSION, self: true });
+    expect(owners.get(4100)).toEqual({ session: "0199a1b2-c3d4-4e5f-8a9b-0c1d2e3f4a5b", self: true });
+    expect(owners.has(5567)).toBe(false);
   });
+
+  // An agent outside the tree whose tool call left a process working in it.
+  async function earlierRunWithStrayTool() {
+    const run = await earlierRunWithHand();
+    run.stopHand();
+    const agent = spawn("perl", ["-e", `system("cd '${run.tree}' && exec perl -e 'sleep 60'"); sleep 60`, "--", "--session-id", SESSION], { cwd: run.root, detached: true, stdio: "ignore" });
+    for (let i = 0; i < 50 && !processesIn(run.tree).length; i++) await new Promise((r) => setTimeout(r, 100));
+    const stop = () => { try { process.kill(-agent.pid!, "SIGKILL"); } catch {} };
+    return { ...run, agent, stop };
+  }
+
+  test("a settled session's tool left in the worktree is stopped, its session is not, and the fresh branch starts", async () => {
+    const { root, repo, tree, agent, stop } = await earlierRunWithStrayTool();
+    const stopped: string[] = [];
+    const hands: RunHands = { live: async (ids) => ids.map((id) => ({ id, working: false })), stop: async (id) => { stopped.push(id); } };
+    try {
+      expect(processesIn(tree).length).toBe(1);
+      const fresh = await freshRunBranch(repo, { name: "agentwatch_trial" }, "ct-7", new Date("2026-10-16T14:23:00Z"), hands);
+      expect(fresh.set_aside).toBeTruthy();
+      expect(stopped).toEqual([]);
+      expect(() => process.kill(agent.pid!, 0)).not.toThrow();
+    } finally {
+      stop();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("a working session's tool in the worktree refuses the fresh run, naming the session", async () => {
+    const { root, repo, fixed, stop } = await earlierRunWithStrayTool();
+    const hands: RunHands = { live: async (ids) => ids.map((id) => ({ id, working: true })), stop: async () => {} };
+    try {
+      await expect(freshRunBranch(repo, { name: "agentwatch_trial" }, "ct-7", new Date(), hands)).rejects.toThrow(`still working in it (${SESSION.slice(0, 7)})`);
+      expect(sh(repo, "rev-parse", "codecast/agentwatch-trial-ct-7")).toBe(fixed);
+    } finally {
+      stop();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

@@ -10,8 +10,9 @@
 // - the Head of People, which looks after whatever no narrower role covers.
 // Scope is opt in: any other role with no projects and no plans owns no work.
 // It is a standing role that runs its routine and answers what it is asked.
-// A child's scope sits inside its parent's (scopes-and-feed.md F1), so a head
-// of engineering and the platform lead under it both list Platform. Among
+// A child's scope usually sits inside its parent's, so a head of engineering
+// and the platform lead under it both list Platform; it must only under a
+// role that keeps its reports inside its area (keepsReportsInside). Among
 // roles at the same depth the one closest to the work owns it: a role that
 // another match reports up to, at any depth, steps aside. Only roles on
 // separate lines can tie, and then they watch the work together.
@@ -35,6 +36,7 @@ export type LeadRole = {
   status?: string;
   scope?: { project_ids?: readonly unknown[]; plan_ids?: readonly unknown[] } | null;
   reports_to?: { kind: string; role_id?: unknown } | null;
+  keeps_reports_inside?: boolean | null;
 };
 
 export type ProjectLead<R> =
@@ -163,6 +165,15 @@ export function projectLeadOf<R extends LeadRole>(project: LeadProject | null | 
   return { kind: "none" };
 }
 
+/** Does this role hold its reports inside its own area (scopes-and-feed.md
+ *  F1)? Off unless a person turned it on: the org is open by default
+ *  (2026-10-22), so a report may look after work its lead does not, and no
+ *  scope edit, move or undo is refused for it. Every containment check reads
+ *  this one answer. */
+export function keepsReportsInside(role: { keeps_reports_inside?: boolean | null }): boolean {
+  return role.keeps_reports_inside === true;
+}
+
 /** What naming `role` the lead of `project` does to the role's scope. The
  *  server acts on this answer and the web says it in the same breath, so the
  *  person is told both things by the one gesture:
@@ -170,8 +181,8 @@ export function projectLeadOf<R extends LeadRole>(project: LeadProject | null | 
  *  - `listed`: it is already there; only the lead changes.
  *  - `whole_workspace`: the role already looks after everything. Adding one
  *    project would NARROW it to that project, so nothing is added.
- *  - `outside_parent`: the role reports to a role that does not look after
- *    the project, and a scope sits inside its parent's (F1). The lead is still
+ *  - `outside_parent`: the role reports to a role that keeps its reports
+ *    inside its area and does not look after the project. The lead is still
  *    set; the scope waits for the parent's. */
 export type LeadScopeChange<R> = { kind: "add" } | { kind: "listed" } | { kind: "whole_workspace" } | { kind: "outside_parent"; parent: R };
 
@@ -180,7 +191,7 @@ export function leadScopeChange<R extends LeadRole>(projectId: unknown, role: R,
   if (scopeListsProject(role, projectId)) return { kind: "listed" };
   const parentId = role.reports_to?.kind === "role" && role.reports_to.role_id ? String(role.reports_to.role_id) : null;
   const parent = parentId ? roles.find((r) => String(r._id) === parentId) : undefined;
-  if (parent && hasScope(parent) && !scopeListsProject(parent, projectId)) return { kind: "outside_parent", parent };
+  if (parent && keepsReportsInside(parent) && hasScope(parent) && !scopeListsProject(parent, projectId)) return { kind: "outside_parent", parent };
   return { kind: "add" };
 }
 

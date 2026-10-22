@@ -140,8 +140,14 @@ describe("leadScopeChange: what naming a lead does to the role's scope", () => {
     expect(leadScopeChange("proj_platform", head, [head])).toEqual({ kind: "whole_workspace" });
   });
 
-  test("a role under a parent that does not look after the project keeps its scope", () => {
+  test("open by default: a role gains the project even when its parent does not look after it", () => {
     const head = role("head", ["proj_site"]);
+    const lead = role("lead", ["proj_site"], under(head));
+    expect(leadScopeChange("proj_platform", lead, [head, lead])).toEqual({ kind: "add" });
+  });
+
+  test("a role under a parent that keeps its reports inside, and does not look after the project, keeps its scope", () => {
+    const head = { ...role("head", ["proj_site"]), keeps_reports_inside: true };
     const lead = role("lead", ["proj_site"], under(head));
     expect(leadScopeChange("proj_platform", lead, [head, lead])).toEqual({ kind: "outside_parent", parent: head });
   });

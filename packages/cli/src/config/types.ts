@@ -260,13 +260,13 @@ export interface Config extends CloudSessionSyncSettings {
   // thread self-documents. Absent → ON; `cast browser shots off` sets false.
   browser?: { auto_shots?: boolean };
 
-  // --- Vaults (index.ts `cast vault`, daemon /vault/* routes) ---
+  // --- Vaults (index.ts `cast files`, daemon /vault/* routes) ---
   // Directories of markdown the user registered for browsing over the loopback
   // bridge. Managed through vault/vaultRegistry.ts — never hand-edited elsewhere,
   // since the id is derived from the root path.
   vaults?: VaultInfo[];
   /** Project roots the user removed from the vault picker. Discovery would
-   *  otherwise re-offer them on the next listing — `cast vault rm` has to mean
+   *  otherwise re-offer them on the next listing — `cast files rm` has to mean
    *  something for a vault nobody added by hand. */
   vaults_hidden?: string[];
 
