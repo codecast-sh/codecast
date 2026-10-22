@@ -74,7 +74,8 @@ export function RecordGroupRow({ card, answer, onAnswer, open, onOpen, lone, foc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusAt]);
 
-  const retry = card.failed > 0;
+  // A failed record applies only once its author revises it: Accept is for the ones still proposed.
+  const canAccept = card.waiting > card.failed;
   const { open: fieldOpen, setOpen: setFieldOpen, field: replyField } = useAnswerField(answer, onAnswer, card.waiting > 0, GROUP_ASKS);
   const staged = !!answer && !!onAnswer && card.waiting > 0;
   const pendingText = answer?.text?.trim() ? answer.text : null;
@@ -88,7 +89,7 @@ export function RecordGroupRow({ card, answer, onAnswer, open, onOpen, lone, foc
 
   // The gutter: the controls while the group waits and nothing is staged, else where it stands.
   const slot = card.waiting > 0 && onAnswer && !staged
-    ? <>{stateWords && <StateWord status={stateWords.status} words={stateWords.words} className="mr-1" />}<AnswerControls answer={answer} retry={retry} onAnswer={onAnswer} open={fieldOpen} onOpen={setFieldOpen} /></>
+    ? <>{stateWords && <StateWord status={stateWords.status} words={stateWords.words} className="mr-1" />}<AnswerControls answer={answer} canAccept={canAccept} onAnswer={onAnswer} open={fieldOpen} onOpen={setFieldOpen} /></>
     : stateWords ? <StateWord status={stateWords.status} words={stateWords.words} /> : null;
 
   return (
@@ -132,7 +133,6 @@ export function RecordGroupRow({ card, answer, onAnswer, open, onOpen, lone, foc
               <StagedBand
                 key="band"
                 answer={answer}
-                retry={retry}
                 onUndo={() => { onAnswer?.(null); setFieldOpen(false); }}
                 you={!fieldOpen && pendingText ? <LedgerYou text={pendingText} onEdit={() => setFieldOpen(true)} data-subject-you={answer.verdict} /> : undefined}
                 joined={!!field}

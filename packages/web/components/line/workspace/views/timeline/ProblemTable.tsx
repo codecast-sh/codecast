@@ -5,7 +5,7 @@
 // stands in one phrase, and when it was last seen. Rows sit under their status
 // group; a failure cause and a project not started are headings that carry the
 // group's one act. The whole row is the link to the problem.
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useMemo, Profiler, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import { ageShort } from "../../../../../lib/lineFlow";
 import { momentWords } from "../../../../../lib/line/timeline";
@@ -14,6 +14,8 @@ import { problemListName, rowTrend, type ProblemRow, type ProblemSection, type P
 import type { StatusKey } from "../../../../../lib/line/problemStatus";
 import type { OverviewRange } from "../../../../../lib/line/problemsOverview";
 import { RowStrip } from "./RowStrip";
+const __T = <T,>(k: string, f: () => T): T => { const t = performance.now(); const r = f(); const g = ((globalThis as any).__rt ??= {}); g[k] = (g[k] ?? 0) + performance.now() - t; g[k + "#"] = (g[k + "#"] ?? 0) + 1; return r; }; // __LP temp
+
 
 /** The column heads: Findings and Last sort the whole list flat; Status returns to the page's own grouped order. */
 export function ProblemTableHead({ range, sort, onSort, grouped, day }: { range: OverviewRange; sort: ProblemSort; onSort: (s: ProblemSort) => void; /** One chip is on: the list is that group whatever the sort, so Status sorts nothing. */ grouped: boolean; /** A picked bar: the column counts that day ("Oct 9"). */ day?: string | null }) {
@@ -62,8 +64,8 @@ export function ProblemTable({ sections, now, range, win, day, showProject, proj
   sectionAct?: (status: StatusKey, rows: ReadonlyArray<ProblemRow>) => ReactNode;
 }) {
   const one = (r: ProblemRow) => {
-    const row = <Row key={r.id} row={r} range={range} win={win} dayN={day ? countIn(r.issue, day.from, day.to) : null} age={r.seenAt ? ageShort(now - r.seenAt) : ""} project={showProject ? projectName(r.projectId) : ""} process={processOf?.(r) ?? ""} href={href(r.id)} open={open} />;
-    const act = rowAct?.(r);
+    const row = <Profiler key={r.id} id="row" onRender={(_i, _p, d) => { const g = ((globalThis as any).__rt ??= {}); g.rowRender = (g.rowRender ?? 0) + d; g["rowRender#"] = (g["rowRender#"] ?? 0) + 1; }}><Row key={r.id} row={r} range={range} win={win} dayN={day ? countIn(r.issue, day.from, day.to) : null} age={r.seenAt ? ageShort(now - r.seenAt) : ""} project={showProject ? projectName(r.projectId) : ""} process={processOf?.(r) ?? ""} href={href(r.id)} open={open} /></Profiler>;
+    const act = __T("rowAct", () => rowAct?.(r));
     // The act sits under the row's status, outside its link: a press acts, never opens the problem.
     return act ? <div key={r.id} className="lwp-rowbox">{row}<div className="lwp-tr lwp-row-act" data-line-row-act={r.id}><span className="lwp-row-act-c">{act}</span></div></div> : row;
   };
@@ -128,9 +130,9 @@ export function ProblemTable({ sections, now, range, win, day, showProject, proj
 
 const Row = memo(function Row({ row: r, range, win, dayN, age, project, process, href, open }: { row: ProblemRow; range: OverviewRange; win: OverviewWindow; dayN: number | null; age: string; project: string; process: string; href: string; open: (id: string) => void }) {
   // Under a picked bar the cell is that day's count, with no arrow: the comparison is the window's, not the day's.
-  const trend = dayN == null ? rowTrend(r) : null;
+  const trend = __T("rowTrend", () => (dayN == null ? rowTrend(r) : null));
   const h = r.issue.history;
-  const strip = useMemo(() => rowStrip(h, win), [h, win]);
+  const strip = useMemo(() => __T("rowStrip", () => rowStrip(h, win)), [h, win]);
   const under = [r.issue.ref, process, project, r.dupOf && !r.foldedInto ? `same as ${r.dupOf}` : null, r.twins?.length ? `also ${r.twins.map((t) => t.issue.ref).filter(Boolean).join(", ")}` : null].filter(Boolean).join(" · ");
   return (
     <a
@@ -151,13 +153,13 @@ const Row = memo(function Row({ row: r, range, win, dayN, age, project, process,
         {under && <span className="lwp-under">{under}</span>}
       </span>
       <span className="lwp-c-find" role="gridcell" data-trend={trend ?? undefined} title={r.before == null ? `${r.findings} in all` : `${r.before} in the ${range} before, ${r.findings} in all`}>
-        <RowStrip strip={strip} words={stripWords(strip, h, range)} />
+        <RowStrip strip={strip} words={__T("stripWords", () => stripWords(strip, h, range))} />
         <span className="lw-num">{dayN ?? r.inWindow}</span>
         {trend === "up" && <ArrowUp aria-label="more than the window before" />}
         {trend === "down" && <ArrowDown aria-label="fewer than the window before" />}
       </span>
       <span className="lwp-c-status" role="gridcell" data-ready={r.stand.status === "notstarted" && r.stand.ready ? "" : undefined}>{r.stand.phrase}</span>
-      <span className="lwp-c-last lw-num" role="gridcell" title={r.seenAt ? `Newest finding ${momentWords(r.seenAt)}` : undefined}>{age}</span>
+      <span className="lwp-c-last lw-num" role="gridcell" title={r.seenAt ? `Newest finding ${__T("momentWords", () => momentWords(r.seenAt!))}` : undefined}>{age}</span>
     </a>
   );
 });
