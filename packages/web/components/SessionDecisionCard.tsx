@@ -312,6 +312,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
         optionCount: isInfraDialog || richControls ? 0 : options.length,
         sheet: full ? "full" : "peek",
       });
+      (window as any).__dbg?.push([e.key, action, full, !!stepper, keyScopeHasFocus(rootRef.current), isPermissionCard, isInfraDialog, richControls]);
       if (!action) return;
       // Outside the queue, a folded card must not claim the thread's keys:
       // j/k/digits belong to the conversation until the card owns the pane.
@@ -618,6 +619,9 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
         ref={rootRef}
         tabIndex={-1}
         data-session-decision={item.conversationId}
+        // The open sheet owns its plain keys (t, o, s, p, x): the global
+        // dispatcher runs first and would take t for the branch map.
+        data-owns-keys
         // z-40 is load-bearing: the pane carries sticky header, state bar,
         // composer and a z-30 scroll button, each its own stacking context.
         // decision-doc: the document page's type (the serif question, the
