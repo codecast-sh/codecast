@@ -6,16 +6,33 @@
 import type { ConvexReactClient } from "convex/react";
 import { getFunctionName } from "convex/server";
 import { CAPTIONS, CURRENT_USER } from "./world";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
 
 const noop = () => {};
 
-const ANSWERS: Record<string, () => unknown> = {
+// Reply suggestions anchored on whatever the conversation's tail is now.
+function SUGGESTIONS(args: any) {
+  const msgs = useInboxStore.getState().messages[args?.conversation_id] ?? [];
+  const tail = [...msgs].reverse().find((m: any) => (m.role === "user" || m.role === "assistant") && m.content?.trim() && !m.tool_results?.length);
+  if (!tail || tail.role !== "assistant") return null;
+  return {
+    anchor_message_uuid: tail.message_uuid ?? tail._id,
+    suggestions: [
+      "Ship it, and open the PR against main with the migration in its own commit",
+      "Run the full test suite first",
+      "Why did the retry path need a lock?",
+    ],
+  };
+}
+
+const ANSWERS: Record<string, (args?: unknown) => unknown> = {
+  "composerSuggestions:getComposerSuggestions": SUGGESTIONS,
   "transcripts:getLive": () => CAPTIONS(Date.now()),
   "calls:getMyCalls": () => ({ incoming: [], outgoing: [], membership: null }),
   "users:getCurrentUser": () => CURRENT_USER(Date.now()),
 };
 
-function watch(query: unknown) {
+function watch(query: unknown, args?: unknown) {
   let name = "";
   try {
     name = getFunctionName(query as never);
@@ -23,7 +40,7 @@ function watch(query: unknown) {
   const answer = ANSWERS[name];
   return {
     onUpdate: () => noop,
-    localQueryResult: () => (answer ? answer() : undefined),
+    localQueryResult: () => (answer ? answer(args) : undefined),
     localQueryLogs: () => undefined,
     journal: () => undefined,
   };
@@ -32,7 +49,7 @@ function watch(query: unknown) {
 const methods: Record<string, unknown> = {
   watchQuery: watch,
   watchPaginatedQuery: watch,
-  query: async (q: unknown) => watch(q).localQueryResult() ?? null,
+  query: async (q: unknown, a?: unknown) => watch(q, a).localQueryResult() ?? null,
   mutation: async () => null,
   action: async () => null,
   prewarmQuery: noop,
