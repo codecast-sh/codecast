@@ -1,14 +1,8 @@
 "use client";
 
-import { forwardRef, memo, useCallback, useImperativeHandle, useRef, useState } from "react";
-import { useAction, useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore } from "../store/inboxStore";
-import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { isConvexId } from "../lib/entityLinks";
+import { forwardRef, memo, useCallback, useImperativeHandle, useRef } from "react";
 import { KeyCap } from "./KeyboardShortcutsHelp";
-
+import { useComposerSuggestion } from "../hooks/useComposerSuggestion";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // A suggested reply, shown as ghost text inside the empty composer — the way
 // a shell autosuggests from history: dim, sitting where the words would go,
@@ -56,110 +50,28 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
   // The composer blanks its own placeholder while the ghost is showing.
   onVisibleChange?: (visible: boolean) => void;
 }>(function ComposerSuggestion({ conversationId, idle, hidden, onAccept, onVisibleChange }, ref) {
-  const isRealId = isConvexId(conversationId);
-
-  // Tail signature of the last real turn, as a primitive so the selector
-  // doesn't re-render this component on unrelated store churn. Mirrors the
-  // server's anchor: message_uuid ?? _id of the last user/assistant row with
-  // content.
-  const tailSig = useInboxStore((s) => {
-    const msgs = s.messages[conversationId];
-    if (!msgs?.length) return null;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      if ((m.role === "user" || m.role === "assistant") && m.content?.trim() && !m.tool_results?.length) {
-        return `${m.role}|${m._isOptimistic ? "opt" : m.message_uuid ?? m._id}`;
-      }
-    }
-    return null;
-  });
-  const [tailRole, tailKey] = tailSig ? (tailSig.split("|") as [string, string]) : [null, null];
-
-  const { data: row } = useQueryNoThrow(
-    api.composerSuggestions.getComposerSuggestions,
-    isRealId ? { conversation_id: conversationId as Id<"conversations"> } : "skip",
-  );
-  const generate = useAction(api.composerSuggestions.generateComposerSuggestions);
-  const recordOutcome = useMutation(api.composerSuggestions.recordSuggestionOutcome);
-  const attemptedRef = useRef<string | null>(null);
-  const [idx, setIdx] = useState(0);
-  // The suggestion the user accepted, held until the send settles its outcome.
-  const acceptedRef = useRef<{ text: string; anchor: string } | null>(null);
-
-  // Fire-and-forget outcome telemetry — ground truth for judging the
-  // suggester. Never blocks or fails the user gesture it rides on.
-  const report = useCallback(
-    (anchor: string, suggestion: string, outcome: "sent" | "edited" | "dismissed") => {
-      recordOutcome({
-        conversation_id: conversationId as Id<"conversations">,
-        anchor_message_uuid: anchor,
-        suggestion,
-        outcome,
-      }).catch(() => {});
-    },
-    [recordOutcome, conversationId],
-  );
-
-  // Ask for fresh suggestions when the agent's turn has settled and the
-  // stored row targets an older tail. The server dedupes by anchor, so a
-  // double-fire (second device, remount) is a cheap no-op.
-  useWatchEffect(() => {
-    if (!isRealId || hidden || !idle) return;
-    if (tailRole !== "assistant" || !tailKey || tailKey === "opt") return;
-    if (row === undefined) return; // still loading — the row may already match
-    if (row?.anchor_message_uuid === tailKey) return;
-    if (attemptedRef.current === tailKey) return;
-    const t = setTimeout(() => {
-      attemptedRef.current = tailKey;
-      generate({ conversation_id: conversationId as Id<"conversations"> }).catch(() => {});
-    }, 1200);
-    return () => clearTimeout(t);
-  }, [isRealId, hidden, idle, tailRole, tailKey, row, row?.anchor_message_uuid, generate, conversationId]);
-
-  const anchor = row?.anchor_message_uuid ?? null;
-  const visible =
-    !hidden &&
-    idle &&
-    tailRole === "assistant" &&
-    !!row?.suggestions?.length &&
-    anchor === tailKey;
-  const suggestions = visible ? row!.suggestions : [];
-
-  // A new anchor starts at the top suggestion again.
-  useWatchEffect(() => { setIdx(0); }, [anchor]);
+  const { text, index, count, accept: take, cycle, settleSend } = useComposerSuggestion({ conversationId, idle, hidden });
+  const visible = text !== null;
   useWatchEffect(() => { onVisibleChange?.(visible); }, [visible, onVisibleChange]);
 
-  const stateRef = useRef({ visible, suggestions, idx, anchor });
-  stateRef.current = { visible, suggestions, idx, anchor };
   const accept = useCallback(() => {
-    const { visible: v, suggestions: list, idx: i, anchor: a } = stateRef.current;
-    const text = v ? list[i] : undefined;
-    if (!text || !a) return false;
-    acceptedRef.current = { text, anchor: a };
-    onAccept(text);
+    const t = take();
+    if (t === null) return false;
+    onAccept(t);
     return true;
-  }, [onAccept]);
+  }, [take, onAccept]);
 
+  const countRef = useRef(count);
+  countRef.current = count;
   useImperativeHandle(ref, () => ({
-    visible: () => stateRef.current.visible && stateRef.current.suggestions.length > 0,
-    count: () => (stateRef.current.visible ? stateRef.current.suggestions.length : 0),
+    visible: () => countRef.current > 0,
+    count: () => countRef.current,
     accept,
-    cycle: (delta) => {
-      const { visible: v, suggestions: list } = stateRef.current;
-      if (!v || list.length < 2) return false;
-      setIdx((cur) => (cur + delta + list.length) % list.length);
-      return true;
-    },
-    settleSend: (text) => {
-      const accepted = acceptedRef.current;
-      acceptedRef.current = null;
-      if (!accepted || !text.trim()) return;
-      report(accepted.anchor, accepted.text, text.trim() === accepted.text.trim() ? "sent" : "edited");
-    },
-  }), [accept, report]);
+    cycle,
+    settleSend,
+  }), [accept, cycle, settleSend]);
 
   if (!visible) return null;
-  const text = suggestions[Math.min(idx, suggestions.length - 1)];
 
   // Stacked on the textarea in the same grid cell, in its font and rhythm, so
   // the ghost sits exactly where typed words would — and inert to the
@@ -171,7 +83,7 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
     <div data-composer-ghost className="pointer-events-none [grid-area:1/1] flex items-start gap-2 py-1 min-w-0 text-sm leading-relaxed animate-in fade-in-0 duration-200">
       <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sol-text-dim">{text}</span>
       <span className="shrink-0 flex items-center gap-1.5 h-[calc(0.875rem*1.625)] text-[9px] text-sol-text-dim/70 select-none">
-        {suggestions.length > 1 && <span className="tabular-nums">{idx + 1}/{suggestions.length}</span>}
+        {count > 1 && <span className="tabular-nums">{index + 1}/{count}</span>}
         <button
           type="button"
           // preventDefault so the composer keeps focus through the click.

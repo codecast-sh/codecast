@@ -81,6 +81,13 @@ export interface WorkflowNode {
   // ($vars expand) as "Stopped: ...", its task goes back to open, and nobody
   // is asked anything.
   stop?: string;
+  // A station that came from a segment (flows.md FL3): the node that named the
+  // segment, the segment's name and slug, and for its entry and exits which one.
+  segment?: string;
+  segment_label?: string;
+  segment_flow?: string;
+  segment_entry?: boolean;
+  segment_exit?: "done" | "stop";
 }
 
 export interface WorkflowEdge {
@@ -110,6 +117,12 @@ export interface WorkflowGraph {
   // graph per scenario): a line run started for a problem takes the version
   // that serves the source of its oldest finding (workflows.lineVersionFor).
   serves?: string[];
+  // What the flow is in the pool (flows.md FL2): a whole line or a segment,
+  // its name and one line a picker shows, and what it needs from the change.
+  kind?: "line" | "segment";
+  label?: string;
+  description?: string;
+  takes?: string[];
   nodes: Map<string, WorkflowNode>;
   edges: WorkflowEdge[];
   /** The files the graph was read from: its own file and every @file it inlined (parser.ts). */
