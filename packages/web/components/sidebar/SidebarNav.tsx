@@ -10,7 +10,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Flag, FolderGit2, FolderKanban, Globe, Network, Radar, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper } from "lucide-react";
+import { Flag, FolderGit2, FolderKanban, Globe, KeyRound, Network, Radar, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
@@ -182,6 +182,8 @@ export type SidebarNavActive = {
   docs: boolean;
   code: boolean;
   files: boolean;
+  /** The team Vault (/vault). */
+  vault?: boolean;
   pages: boolean;
   sessions: boolean;
   line: boolean;
@@ -380,6 +382,14 @@ export function SidebarNavView({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-6 3h4" />
             </svg>
           }
+        />}
+        {showsPage("/vault") && <NavSection
+          label="Vault"
+          href="/vault"
+          isActive={!!active.vault}
+          isNarrow={isNarrow}
+          onMobileClose={onMobileClose}
+          icon={<KeyRound className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         {showsPage("/pages") && <NavSection
           label="Pages"

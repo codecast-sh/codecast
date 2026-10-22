@@ -13,6 +13,7 @@
 import {
   formatAgentSwitchNotice,
   formatDecisionAnswer,
+  formatVaultReady,
   formatHuddleSummaryTag,
   formatMachineSwitchNotice,
   formatSessionMessage,
@@ -371,6 +372,14 @@ export function renderGalleryMessages(now: number): Row[] {
   sh("cast publish report.html", "https://codecast.sh/a/k3j9x2m4q8");
   sh("cast diff jx7bm3n", "2 files changed");
   sh("cast flow show change", "Change  line · shipped");
+  sh("cast vault ls", "sec-990  requested  stripe-test  key  STRIPE_SECRET_KEY  Acme  asked by Sarah from jx7bm3n: run the billing tests\nsec-12  prod-db  login  PROD_DB_USERNAME PROD_DB_PASSWORD  Acme  used 2h ago by jx7a41v");
+  // The value verbs: their output is the value, so the card must never show it.
+  sh("cast vault get prod-db --field password", "gallery-not-a-real-password");
+  sh("cast secrets env stripe-test", "export STRIPE_SECRET_KEY='sk_test_gallery_not_real'");
+  sh("cast vault otp github-bot", "492 017");
+  sh("cast vault run stripe-test prod-db -- npm test", "\x1b[32m✓\x1b[0m 12 pass");
+  sh('cast vault request stripe-test --env STRIPE_SECRET_KEY --why "run the billing tests"', "requested sec-990 stripe-test in Acme\nEnd your turn dormant naming it: cast state --status dormant \"Waiting on sec-990 (stripe-test) from the Vault\"");
+  user(formatVaultReady({ short_id: "sec-990", name: "stripe-test", kind: "key", env: ["STRIPE_SECRET_KEY"] }));
   sh("cast flow run change --dry-run", "Change: Check → Review → Decide → Ship\non session jx7bm3n's own edits, bound to a new task\nNothing started (--dry-run).");
 
   section("Failures and progress");

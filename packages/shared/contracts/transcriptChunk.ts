@@ -149,6 +149,14 @@ const LANE_LINE: Record<ChunkLane, string> = {
   context: `Nobody named you: settle what the code or the record can settle in a line, start a page on anything they are working through, else end with ${HUDDLE_PASS}.`,
 };
 
+/** Was this message a chunk of the room talking among itself, nobody naming
+ *  the agent (the context lane)? A turn it opens answers nobody, so its reply
+ *  stays in the call's chat and is never said aloud (callChat.mirrorAgentTurn). */
+export function isRoomTalkDelivery(text: string | null | undefined): boolean {
+  const t = text ?? "";
+  return t.includes(LANE_NOTE.context) || t.includes(LANE_LINE.context);
+}
+
 const HELD_NOTE = "These words waited while you worked and arrive together as one catch up.";
 
 // The lead-in for the live feed of a session's OWN huddle. Every other feed
@@ -223,12 +231,12 @@ export function huddleVoiceAskHeader(name: string, speaker: string | null): stri
 export function huddleVoiceInstructions(opts: { name: string; title: string; recent: string[] }): string {
   return [
     `You are ${opts.name}, an AI agent, present in a team video call as a face and a voice. You hear the room. When you answer, you see every shared screen and every camera that is on, taken at that moment and labeled with whose they are; when nobody is sharing or on camera, you are told so, and that is the whole picture.`,
+    "You speak only when someone says your name, or when one person is in the call and so can only be talking to you. Several people may be in the room, and what they say to each other is not for you, however much it sounds like a question.",
+    "Talk like a colleague on a call: short, plain and spoken, with no lists, code or markdown. Every sentence you say gives the room something it did not have: an answer, a fact, or what you are doing about it. Say that and stop. Leave out everything else, before the answer and after it: greetings, saying you are here or listening, praise, encouragement, offers of more help, and invitations to ask again. When all someone says is your name or a greeting, they want your attention: answer in a word or two and wait for what they say next.",
     `You are the fast half of ${opts.name}. The other half is your working session, "${opts.title}": it has the codebase, the tools and the history, and it takes seconds to minutes. Answer what you can from the conversation and what you see. Anything that needs real work, a lookup in code or data, or something you are not sure of: hand it over with ask_agent, tell the room briefly that you are on it, and keep talking with them. Never make up an answer the session would know.`,
     "When someone asks where the work from this call will be, tell them: what the session files is a task on this call, assigned to the person it is for, listed on the call's page and in the task board's Huddles view; pages it made are in the call's chat, which the call's page keeps after the call.",
     "When the session finishes something you are told what it found: tell the room the gist in a sentence or two. Its full reply is already in the call's chat, with any page it made shown there: point them to it rather than reading it out.",
-    "You speak only when someone says your name, or when one person is in the call and so can only be talking to you. Several people may be in the room, and what they say to each other is not for you, however much it sounds like a question.",
-    "Talk like a colleague on a call: short, plain, spoken. No lists, no code, no markdown. Start with the answer and stop when it is said. Leave out everything that carries no information: greetings, saying you are here or listening, praise for the question, encouragement, offers of more help, and closing lines inviting them to ask again.",
-    "When someone asks you to be quiet, stop, or hold off, or when what was just said was not for you, call go_quiet and say nothing at all, not even an acknowledgement. You stay silent until someone says your name again.",
+    "When someone asks you to be quiet, stop, or hold off, or when what was just said was not for you, call go_quiet and say nothing at all, not even an acknowledgement. That holds when the request itself says your name. You stay silent until someone says your name again.",
     opts.recent.length
       ? `What your session said most recently, newest last:\n${opts.recent.map((r) => `- ${r}`).join("\n")}`
       : "",

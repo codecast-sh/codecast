@@ -27,8 +27,11 @@ import { emitNotification } from "./notificationRouter";
 import { peopleFor } from "./sessionDecisions";
 import { displayName } from "./lib/displayNames";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { pickOnlineLocalDevice } from "./cloud";
 import { isConvexId } from "@codecast/shared/entities";
 import {
+  cleanSecretList,
+  cleanSecretSites,
   envNameProblem,
   formatVaultReady,
   isHostedAgentType,
@@ -209,8 +212,6 @@ function metaProblem(fields: { name?: string; env?: string[]; note?: string; sit
   return null;
 }
 
-const cleanList = (xs?: string[]) => (xs ? [...new Set(xs.map((x) => x.trim()).filter(Boolean))] : undefined);
-const cleanSites = (xs?: string[]) => cleanList(xs?.map((s) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")));
 
 function valueFields(kind: SecretKind, payload: SecretPayload) {
   return {
@@ -381,8 +382,8 @@ export const create = action({
     const userId = await ctx.runQuery(internal.secrets.callerOf, { api_token: args.api_token });
     if (!userId) return { error: "Unauthorized: sign in, or run `cast auth` on this machine" };
     const name = args.name.trim();
-    const env = cleanList(args.env);
-    const sites = cleanSites(args.sites);
+    const env = cleanSecretList(args.env);
+    const sites = cleanSecretSites(args.sites);
     const note = args.note?.trim() || undefined;
     const problem = metaProblem({ name, env, sites, note });
     if (problem) return { error: problem };
@@ -533,8 +534,8 @@ export const updateMeta = mutation({
     const patch: Partial<SecretRow> = {};
     if (args.name !== undefined) patch.name = args.name.trim();
     if (args.note !== undefined) patch.note = args.note.trim() || undefined;
-    if (args.env !== undefined) patch.env = cleanList(args.env)?.length ? cleanList(args.env) : undefined;
-    if (args.sites !== undefined) patch.sites = cleanSites(args.sites)?.length ? cleanSites(args.sites) : undefined;
+    if (args.env !== undefined) patch.env = cleanSecretList(args.env)?.length ? cleanSecretList(args.env) : undefined;
+    if (args.sites !== undefined) patch.sites = cleanSecretSites(args.sites)?.length ? cleanSecretSites(args.sites) : undefined;
     const problem = metaProblem({ name: patch.name, env: patch.env, sites: patch.sites, note: patch.note });
     if (problem) return { error: problem };
     if (patch.name && patch.name !== row.name) {
@@ -581,8 +582,8 @@ export const request = mutation({
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const name = args.name.trim();
-    const env = cleanList(args.env);
-    const sites = cleanSites(args.sites);
+    const env = cleanSecretList(args.env);
+    const sites = cleanSecretSites(args.sites);
     const why = args.why?.trim() || undefined;
     const problem = metaProblem({ name, env, sites, note: why });
     if (problem) return { error: problem };
@@ -639,6 +640,43 @@ export const request = mutation({
   },
 });
 
+/**
+ * Save sign-in "From my Chrome": ask one of the person's online laptops to
+ * read a site's cookies out of their Chrome and store them here itself (the
+ * `vault_capture_signin` daemon command, secrets/signinCommand.ts). Only the
+ * site, the name and the workspace go through this row; the cookies go from
+ * that laptop into the encrypted secret, and the outcome comes back on the
+ * command (users.getCommandResult). Never parked on an offline laptop, the
+ * way a browser carry is not (cloud.pickOnlineLocalDevice).
+ */
+export const requestSigninCapture = mutation({
+  args: { site: v.string(), name: v.optional(v.string()), device_id: v.string(), ...workspaceArgs },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { error: "Sign in to codecast to save a sign-in" };
+    const site = cleanSecretSites([args.site])?.[0];
+    if (!site || /\s/.test(site)) return { error: "Name the site like github.com" };
+    const name = args.name?.trim() || undefined;
+    if (name) {
+      const p = secretNameProblem(name);
+      if (p) return { error: p };
+    }
+    const where = await writeKey(ctx, userId, args);
+    if ("error" in where) return where;
+    const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+    const laptop = pickOnlineLocalDevice(devices as any, Date.now(), args.device_id);
+    if (!laptop) return { error: "That laptop is not online: wake it or pick another, or sign in through the agent browser" };
+    const command_id = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "vault_capture_signin" as const,
+      args: JSON.stringify({ site, ...(name ? { name } : {}), ...(where.team_id ? { team_id: where.team_id } : { personal: true }) }),
+      created_at: Date.now(),
+      target_device_id: laptop.device_id,
+    });
+    return { command_id, device_id: laptop.device_id, label: laptop.label };
+  },
+});
+
 // ── Values out ───────────────────────────────────────────────────────────────
 
 export const readTargets = internalQuery({
@@ -671,7 +709,9 @@ export const recordReads = internalMutation({
     for (const id of args.ids) {
       const row = await ctx.db.get(id);
       if (!row) continue;
-      await recordEvent(ctx, row, args.kind, { actor: args.user_id, conversation_id: args.conversation_id, purpose: args.purpose });
+      // A browser's read of a saved sign-in is the moment an agent was signed in with it.
+      const kind = args.kind === "read" && args.purpose === "signin" ? "signed_in" : args.kind;
+      await recordEvent(ctx, row, kind, { actor: args.user_id, conversation_id: args.conversation_id, purpose: args.purpose });
       if (args.kind === "read") {
         await ctx.db.patch(row._id, { last_used_at: now, last_used_by_conversation: args.conversation_id, use_count: (row.use_count ?? 0) + 1 });
       }
