@@ -44,6 +44,9 @@ const MIRROR_RETRY_MS = 15_000;
 const MIRROR_ATTEMPTS = 2;
 // The most rows one mirror walks past the watermark: a few turns of tool calls.
 const MIRROR_SCAN = 200;
+// How long an ask waits for the reply its voice says. Past it the room has
+// moved on, and the reply is in the chat.
+const ASKED_TELL_MS = 10 * 60_000;
 
 export const list = query({
   args: {
@@ -399,9 +402,15 @@ export const mirrorAgentTurn = internalMutation({
         transcript_id: feed.transcript_id,
       });
     }
-    await ctx.db.patch(feed._id, { last_mirrored_message_id: replies[replies.length - 1]._id });
+    // Its voice says only what answers someone who asked (callFace.ts tell),
+    // once: the ask is spent on the first reply that posts.
+    const asked = posted.length > 0 && (feed.addressed_at ?? 0) > Date.now() - ASKED_TELL_MS;
+    await ctx.db.patch(feed._id, {
+      last_mirrored_message_id: replies[replies.length - 1]._id,
+      ...(asked ? { addressed_at: undefined } : {}),
+    });
     if (posted.length === 0) return { mirrored: false, reason: "passed" };
-    await scheduleFaceTell(ctx, feed, posted.map((m) => m.content ?? ""));
+    if (asked) await scheduleFaceTell(ctx, feed, posted.map((m) => m.content ?? ""));
     return { mirrored: true };
   },
 });

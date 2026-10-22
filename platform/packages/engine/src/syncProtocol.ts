@@ -177,7 +177,13 @@ export function applySyncTable<T extends { _id: string }>(
     // Ids may carry colons (a room key is "dm:a:b"); field names never do. So
     // an exclude or include names the whole rest, and a field lock splits at
     // its LAST colon.
-    if (entry.type === "exclude") excludeIds.add(rest);
+    if (entry.type === "exclude") {
+      // A prune's exclude yields to a push that carries the row again: one
+      // feed's absence (a row it no longer answers for, or a wrong answer it
+      // later corrected) must not hide the row from every feed for good.
+      if (entry.pruned && incomingIds.has(rest)) { delete mutPending()[key]; continue; }
+      excludeIds.add(rest);
+    }
     else if (entry.type === "include") includeIds.push(rest);
     else if (entry.type === "field") {
       const colon = rest.lastIndexOf(":");
@@ -328,7 +334,7 @@ export function applySyncTable<T extends { _id: string }>(
         // Out-of-scope records and records with pending local state keep the
         // normal delta behavior.
         if (pruneAbsentScope && pruneAbsentScope(prev[id]) && !pendingIds!.has(id)) {
-          mutPending()[`${tableName}:${id}`] = { type: "exclude", ts: Date.now() };
+          mutPending()[`${tableName}:${id}`] = { type: "exclude", ts: Date.now(), pruned: true };
           continue;
         }
         table[id] = prev[id];

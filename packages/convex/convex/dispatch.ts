@@ -917,6 +917,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   markOrgTemplateSetup: async (ctx, _userId, [instanceKey, id, status]: [string, string, "done" | "open" | "skipped"]) => {
     return await ctx.runMutation!((api as any).orgTemplates.setup, { instance_key: instanceKey, id, status });
   },
+  answerOrgTemplateInput: async (ctx, _userId, [instanceKey, key, value]: [string, string, string]) => {
+    return await ctx.runMutation!((api as any).orgTemplates.answer, { instance_key: instanceKey, key, value });
+  },
   activateOrgTemplateRoutine: async (ctx, _userId, [taskId]: [string]) => {
     return await ctx.runMutation!((api as any).orgTemplates.activateRoutine, { task_id: taskId });
   },
