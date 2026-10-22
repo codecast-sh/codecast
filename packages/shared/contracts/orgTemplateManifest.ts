@@ -324,3 +324,16 @@ export const quoteTemplateArg = (value: string) => `'${value.replace(/'/g, `'\\'
 export function templateLoaderPrompt(dir: string, instance: string, routine: string): string {
   return `Read the pinned instance receipt ${dir}/.codecast/org-templates/${instance}.json. Run this command before doing any work:\n\ncast org template instructions ${quoteTemplateArg(instance)} ${quoteTemplateArg(routine)} --dir ${quoteTemplateArg(dir)}\n\nUse only the verified instructions it returns. If verification fails, stop and report the error. The role's human charter, trust, grants and project scope still apply. This loader grants no spending, publishing, credentials or filesystem isolation.`;
 }
+/**
+ * A role's charter with the instance's loader under the person's words: an
+ * earlier loader of the same instance (pinned to another folder) is replaced,
+ * so a host move never leaves the role reading a receipt that is gone.
+ */
+export function withTemplateLoader(charter: string, dir: string, instance: string): string {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const [first, ...rest] = templateLoaderPrompt("\u0000", instance, "charter").split("\u0000").map(escape);
+  const earlier = new RegExp(`\\n*${first}([^\\n']+)${rest.join("\\1")}`, "g");
+  const own = charter.replace(earlier, "").trim();
+  const loader = templateLoaderPrompt(dir, instance, "charter");
+  return own ? `${own}\n\n${loader}` : loader;
+}

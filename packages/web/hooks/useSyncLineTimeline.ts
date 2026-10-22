@@ -31,7 +31,8 @@ export function useSyncLineTimeline(workspace?: string | null): LineTimelineFeed
   const convex = useConvex();
   const settled = useServerAuthSettled();
   const { args, key } = useFeederWorkspace(workspace);
-  const argsKey = args === "skip" || !settled ? null : JSON.stringify(args);
+  // The ingest scope names the workspace kind beside the team: a team id alone resolves to the caller's personal one.
+  const argsKey = args === "skip" || !settled ? null : JSON.stringify(args.team_id ? { workspace: "team", team_id: args.team_id } : { workspace: "personal" });
   const [state, setState] = useState<{ key: string | null; floor: number | null; done: boolean; loading: boolean }>({ key: null, floor: null, done: false, loading: false });
   const busy = useRef(false);
 
@@ -46,34 +47,37 @@ export function useSyncLineTimeline(workspace?: string | null): LineTimelineFeed
   useEffect(() => {
     if (!argsKey) return;
     let stopped = false;
+    // The first read runs whatever the page's visibility; a repeat waits for the page to be seen.
+    let first = true;
     const head = () => {
-      if (document.visibilityState !== "visible") return;
+      if (!first && document.visibilityState !== "visible") return;
+      first = false;
       read(undefined, HEAD_ROWS).then((res) => {
         if (stopped || !res) return;
         // The head never lowers a floor an older page already reached.
-        setState((s) => (s.key === key && s.floor != null && s.floor <= res.cutoff ? s : { key, floor: res.cutoff, done: res.cutoff === 0, loading: false }));
+        setState((s) => (s.key === argsKey && s.floor != null && s.floor <= res.cutoff ? s : { key: argsKey, floor: res.cutoff, done: res.cutoff === 0, loading: false }));
       }).catch((e) => console.warn("[feeder:lineTimeline] head failed", e));
     };
     head();
     const timer = setInterval(head, HEAD_POLL_MS);
     document.addEventListener("visibilitychange", head);
     return () => { stopped = true; clearInterval(timer); document.removeEventListener("visibilitychange", head); };
-  }, [argsKey, key, read]);
+  }, [argsKey, read]);
 
-  const floor = state.key === key ? state.floor : null;
-  const done = state.key === key && state.done;
+  const floor = state.key === argsKey ? state.floor : null;
+  const done = state.key === argsKey && state.done;
   const loadOlder = useCallback(() => {
     if (busy.current || floor == null || done) return;
     busy.current = true;
     setState((s) => ({ ...s, loading: true }));
     read(floor, PAGE_ROWS).then((res) => {
       if (!res) return;
-      setState((s) => ({ key, floor: Math.min(s.floor ?? res.cutoff, res.cutoff === 0 ? 0 : res.cutoff), done: res.cutoff === 0, loading: false }));
+      setState((s) => ({ key: argsKey, floor: Math.min(s.floor ?? res.cutoff, res.cutoff), done: res.cutoff === 0, loading: false }));
     }).catch((e) => {
       console.warn("[feeder:lineTimeline] page failed", e);
       setState((s) => ({ ...s, loading: false }));
     }).finally(() => { busy.current = false; });
-  }, [floor, done, key, read]);
+  }, [floor, done, argsKey, read]);
 
   return { floor, workspace: key, loading: state.loading, done, loadOlder };
 }
