@@ -41,6 +41,8 @@ export interface MeteredCall {
 export type SurfaceRequest = MessagesRequest & {
   /** Images sent after the prompt, each introduced by its label, so the model can see what the prompt names by that label. */
   images?: Array<{ label: string; url: string }>;
+  /** A JSON schema the answer is generated under (structured outputs), so it is always one well-formed object of that shape. */
+  output_schema?: Record<string, unknown>;
 };
 
 /** The user turn: the prompt alone, or the prompt followed by each labelled image. */
@@ -57,7 +59,7 @@ function userContent(req: SurfaceRequest) {
 
 /**
  * The JSON body prod posts for a request. Key order is model, max_tokens,
- * temperature, thinking, system, messages, tools: every server call site uses
+ * temperature, thinking, system, messages, tools, output_config: every server call site uses
  * that order, so JSON.stringify of this object is byte-identical to what each
  * site sent.
  *
@@ -74,6 +76,7 @@ export function anthropicBody(req: SurfaceRequest) {
     ...(req.system ? { system: req.system } : {}),
     messages: [{ role: "user" as const, content: userContent(req) }],
     ...(req.tools ? { tools: req.tools } : {}),
+    ...(req.output_schema ? { output_config: { format: { type: "json_schema" as const, schema: req.output_schema } } } : {}),
   };
 }
 
@@ -128,6 +131,7 @@ export async function callModelMetered(args: CallArgs): Promise<MeteredCall> {
         max_tokens: args.max_tokens,
         temperature: args.temperature,
         images: args.images,
+        output_schema: args.output_schema,
       },
       { signal: abort.signal },
     );

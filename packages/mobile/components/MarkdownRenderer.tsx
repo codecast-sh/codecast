@@ -22,6 +22,8 @@ import { Theme, themedStyles, useTheme } from '@/constants/Theme';
 import { CastCanvas, canvasAvailable } from './CastCanvas';
 import { CastDiff } from './CastDiff';
 import { DIFF_FENCE } from '@codecast/web/lib/castDiff';
+import { FLOW_FENCE_LANG, readFlowFence } from '@codecast/web/lib/line/flowFence';
+import { FlowCard, FlowRunCard } from './session/FlowCard';
 import { EntityPill } from './EntityPill';
 import { SearchHighlightContext, markedRuns } from './search/highlight';
 import { parseMarkdown, plainText, planTable } from '@/lib/markdown';
@@ -453,6 +455,10 @@ function renderBlock(node: Nodes, ctx: MdCtx, k: string, first: boolean): React.
       // into the Hermes bundle. Binaries without the WebView native module
       // fall through to the plain code block.
       if (language === 'cast-canvas' && canvasAvailable) return <CastCanvas key={k} code={node.value} />;
+      if (language === FLOW_FENCE_LANG) {
+        const read = readFlowFence(node.value);
+        if (read.ok) return read.spec.run ? <FlowRunCard key={k} runId={read.spec.run} /> : <FlowCard key={k} slug={read.spec.flow!} />;
+      }
       if (language === DIFF_FENCE) return <CastDiff key={k} raw={node.value} fallback={<CodeBlockWithCopy content={node.value} language="diff" />} />;
       // Words quoted exactly (an approval's draft): plain lines, with no
       // highlighting, expand or copy, because they are not code.

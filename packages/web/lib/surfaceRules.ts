@@ -205,11 +205,13 @@ export const DEV_SURFACES = {
 
 export type DevSurface = keyof typeof DEV_SURFACES;
 
-/** Surfaces still being built, shown only to Codecast staff in every mode
- *  (lib/staff.ts on the server, `users.staff`). */
+/** Surfaces still being built, shown in every mode only to Codecast staff
+ *  (lib/staff.ts on the server, `users.staff`) and to a workspace whose team
+ *  turned the line feature on (teams.features.line). */
 const STAFF_ONLY_SURFACES: ReadonlySet<DevSurface> = new Set<DevSurface>(["nav.line"]);
 
-/** Whether `name` is open to this viewer at all, before any mode rule. */
+/** Whether `name` is open to this viewer at all, before any mode rule.
+ *  `staff`: the viewer is staff or the workspace has the line feature on. */
 export function staffGateOpen(staff: boolean, name: DevSurface): boolean {
   return staff || !STAFF_ONLY_SURFACES.has(name);
 }

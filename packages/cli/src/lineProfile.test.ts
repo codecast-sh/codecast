@@ -126,6 +126,16 @@ describe("line profile (LP2)", () => {
     expect(r.sources["deploy.trigger"]).toBe("default");
   });
 
+  test("[line.deploy] names the role that deploys and a command per step; unset ones stay off the profile", () => {
+    const err = (t: string) => { try { parseLineProfileText(t); } catch (e) { return (e as Error).message; } return null; };
+    expect(err(`[line.deploy]\ncommand = "./deploy.sh"\ntrigger = "role"`)).toContain("needs role");
+    const parsed = parseLineProfileText(`[line.deploy]\ncommand = "./deploy.sh --no-watch"\ntrigger = "role"\nrole = "@Release"\nci = "cast line deploy ci"\nlive = "curl -sf https://x/health"\n`);
+    const r = resolveLineProfile(parsed.values);
+    expect(r.profile.deploy).toEqual({ command: "./deploy.sh --no-watch", target: null, trigger: "role", role: "release", ci: "cast line deploy ci", live: "curl -sf https://x/health" });
+    expect(r.sources["deploy.live"]).toBe("file");
+    expect(parseLineProfileText(`[line.deploy]\ntrigger = "count"`).warnings[0]).toContain("not built yet");
+  });
+
   test("unknown keys are refused with where they are", () => {
     const err = (t: string) => { try { parseLineProfileText(t, ".codecast/line.toml"); } catch (e) { return e as Error; } return null; };
     expect(err(`[line]\nprojet = "X"`)?.message).toBe('.codecast/line.toml: [line] has unknown key "projet" (known: team, project, principles, prompting, size_budget, watch_days, commands, caps, merge, deploy, finders)');
