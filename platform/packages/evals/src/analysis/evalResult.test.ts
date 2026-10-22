@@ -65,6 +65,18 @@ describe('buildEvalResult', () => {
     expect(s.branch).toMatchObject({ reps: 2, passed: 1, median: 1 });
   });
 
+  test('a rep the harness lost is void: no crash, no fail, out of the tally (ct-57900: five copy-in timeouts failed a better branch)', () => {
+    const lost = reps(5, false, { error: 'sealed world could not be copied in (case 1cfb10ce): canceling statement due to statement timeout', score: null, infra: true });
+    const r = buildEvalResult(file([freeze('miss1aaaa', reps(5, false), reps(5, true), { kind: 'miss', proven: true }), freeze('f2', reps(5, true), lost)]));
+    const s = r.surfaces[0]!;
+    expect(s.crashes).toBe(0);
+    expect(s.reasons).toEqual([]);
+    expect(r.ok).toBe(true);
+    expect(s.branch).toMatchObject({ reps: 5, passed: 5 });
+    // Every rep of a side lost still leaves that side unscored: no evidence, never a pass.
+    expect(unscoredSurfaces(file([freeze('f1', reps(3, true), lost)]))).toEqual(['reply']);
+  });
+
   test('no base reps fails closed, with the reason the eval gave', () => {
     const r = buildEvalResult({ ...file([]), surfaces: [{ surface: 'reply', title: 'Reply', freezes: [freeze('f1', null, reps(5, true))], base_failure: 'the base cannot load the reply adapter' }] });
     expect(r.surfaces[0]!.reasons).toEqual(['the base cannot load the reply adapter']);

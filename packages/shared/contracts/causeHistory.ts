@@ -487,7 +487,17 @@ export function carryingDeploys(merge: AttemptMerge, deploys: ReadonlyArray<Depl
   return [...byTarget.values()];
 }
 
+/** One reading per deploy list: every problem of a line reads the same list, and a line holds thousands of problems. */
+const coverageRead = new WeakMap<ReadonlyArray<DeployRow>, DeployCoverage>();
+
 function coverageOf(all: ReadonlyArray<DeployRow> | undefined): DeployCoverage {
+  if (!all) return readCoverage(all);
+  let read = coverageRead.get(all);
+  if (!read) coverageRead.set(all, (read = readCoverage(all)));
+  return read;
+}
+
+function readCoverage(all: ReadonlyArray<DeployRow> | undefined): DeployCoverage {
   if (!all) return { state: "unread", targets: [], words: "Reading the project's deploys." };
   const deploys = all.filter(deployIsLive);
   if (!deploys.length) {
