@@ -27,6 +27,7 @@ const LIMITS_VERSION = "2"; // 2: a subagent or workflow agent stopped on a limi
 const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
 const CHECK_VERSION = "1"; // first release: cast check, one shared tsc watcher per tree and project
 const SIM_VERSION = "1"; // first release: cast sim, the shared simulator pool on a laptop or a cloud Mac
+const VAULT_VERSION = "1"; // first release: cast vault, credentials from the team's Vault instead of the conversation
 const SKILLS_VERSION = "3"; // bumped: cast-ship ships a whole shared checkout with cast ship checkout
 const PR_VERSION = "2"; // bumped: cast pr create, the change guide as the walkthrough
 const MODS_VERSION = "1"; // first release: cast mod, panes, commands and fences in the app
@@ -98,6 +99,10 @@ export function getComputerVersion(): string {
 
 export function getSimVersion(): string {
   return SIM_VERSION;
+}
+
+export function getVaultVersion(): string {
+  return VAULT_VERSION;
 }
 
 export function getCheckVersion(): string {

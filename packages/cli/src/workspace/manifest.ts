@@ -8,6 +8,7 @@
  */
 
 import * as fs from "node:fs";
+import { envNameProblem, secretNameProblem } from "@codecast/shared/contracts/secrets";
 import type {
   BrowserSpec,
   HostSpec,
@@ -18,6 +19,7 @@ import type {
   ServiceSpec,
   SetupSpec,
   TeardownSpec,
+  VaultBinding,
   VerifySpec,
   WorkspaceManifest,
 } from "./types.js";
@@ -86,11 +88,12 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   const host = validateHost(raw["host"], file);
   const sync = validateSync(raw["sync"], file);
   const ship = validateShip(raw["ship"], file);
+  const vault = validateVault(raw["vault"], file);
 
   // Reject unknown top-level keys so typos in manifest are surfaced loudly.
   const known = new Set([
     "setup", "ports", "services", "env", "teardown", "verify", "browser",
-    "backend", "detected", "host", "sync", "ship",
+    "backend", "detected", "host", "sync", "ship", "vault",
   ]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) {
@@ -109,7 +112,7 @@ function validate(raw: Record<string, unknown>, file?: string): WorkspaceManifes
   }
   const backend = backendRaw ?? "local";
 
-  return { ...(ship ? { ship } : {}), ...(host ? { host } : {}), ...(sync ? { sync } : {}), setup, ports, services, env, teardown, ...(verify ? { verify } : {}), browser, backend, detected };
+  return { ...(ship ? { ship } : {}), ...(host ? { host } : {}), ...(sync ? { sync } : {}), ...(vault ? { vault } : {}), setup, ports, services, env, teardown, ...(verify ? { verify } : {}), browser, backend, detected };
 }
 
 /** An apt package or systemd unit name: nothing a shell would read as more than one word. */
@@ -184,6 +187,37 @@ function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
     return { name, when, run, stage };
   });
   return { mode, check, tests: (raw["tests"] as boolean | undefined) ?? true, level: (raw["level"] as boolean | undefined) ?? false, deploy };
+}
+
+/**
+ * [vault]: `ENV_VAR = "secret-name"`, or `ENV_VAR = { secret = "secret-name",
+ * required = true }` for one `cast dev` must not start without. Both names
+ * follow the Vault's own rules; a bad line is refused naming its env var. The
+ * right-hand side is never quoted back, since a pasted value lands there.
+ */
+function validateVault(raw: unknown, file?: string): Record<string, VaultBinding> | undefined {
+  if (raw === undefined) return undefined;
+  if (!isPlainObject(raw)) throw new ManifestError(`[vault] must be a table of ENV_VAR = "secret-name" lines`, file, "vault");
+  const out: Record<string, VaultBinding> = {};
+  for (const [envVar, value] of Object.entries(raw)) {
+    const refuse = (why: string): never => { throw new ManifestError(`[vault] ${envVar}: ${why}`, file, `vault.${envVar}`); };
+    const envProblem = envNameProblem(envVar);
+    if (envProblem) refuse(envProblem);
+    const table = isPlainObject(value) ? value : null;
+    const secret = table ? table["secret"] : value;
+    if (typeof secret !== "string") refuse(`the value must be a secret name in quotes, or { secret = "name", required = true }`);
+    if (table) {
+      for (const key of Object.keys(table)) {
+        if (key !== "secret" && key !== "required") refuse(`unknown key '${key}' (a line takes secret and required)`);
+      }
+      if (table["required"] !== undefined && typeof table["required"] !== "boolean") refuse("'required' must be true or false");
+    }
+    if (secretNameProblem(secret as string)) {
+      refuse("the value is not a secret name: use 1 to 63 lowercase letters, digits and dashes, like stripe-test. A value itself goes in with cast vault add");
+    }
+    out[envVar] = { secret: secret as string, required: table?.["required"] === true };
+  }
+  return out;
 }
 
 function validateVerify(raw: unknown, file?: string): VerifySpec | undefined {
