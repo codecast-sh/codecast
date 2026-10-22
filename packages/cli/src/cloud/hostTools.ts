@@ -67,6 +67,8 @@ export interface HostToolRequirement {
   version?: string;
   /** The laptop file that names it (a hook, a skill, settings.json). */
   referenced_by?: string;
+  /** How the laptop got it, when it can tell (migrate/footprint installSource): what the host installs. */
+  install?: { brew: string } | { npm: string };
 }
 
 export interface UnsupportedItem {
@@ -369,12 +371,18 @@ export const HELPER_PACKAGES: Readonly<Record<string, { npm?: string; brew?: str
 };
 
 /** Whether a host installs `tool` when it lacks it (the same rules hostToolsScript writes). */
-export function hostInstalls(tool: string, host: { mac: boolean; brew: boolean }): boolean {
-  const cli = TOOL_CLIS.find((c) => c.bin === tool);
+export function hostInstalls(req: Pick<HostToolRequirement, "tool" | "install">, host: { mac: boolean; brew: boolean }): boolean {
+  const cli = TOOL_CLIS.find((c) => c.bin === req.tool);
   if (cli) return !host.mac || !!cli.portable;
-  if (tool === "uv") return !host.mac || host.brew;
-  if (HELPER_PACKAGES[tool]?.npm) return true;
-  return host.mac && host.brew;
+  if (req.tool === "uv") return !host.mac || host.brew;
+  const pkg = helperPackage(req);
+  return !!pkg.npm || (!!pkg.brew && host.mac && host.brew);
+}
+
+/** What installs a helper: the laptop's own source when known, else the table above. Nothing is guessed from the name alone. */
+function helperPackage(req: Pick<HostToolRequirement, "tool" | "install">): { npm?: string; brew?: string } {
+  if (req.install) return req.install;
+  return HELPER_PACKAGES[req.tool] ?? {};
 }
 
 /**
@@ -853,6 +861,8 @@ const VERSION_RE = /^\d+\.\d+\.\d+$/;
 /** Every installer download: a hung mirror must not hold session placement for the script's whole cap. */
 const CURL_LIMITS = "-fsSL --connect-timeout 10 --max-time 300";
 const TOOL_RE = /^[A-Za-z][A-Za-z0-9._+-]*$/;
+/** An npm package spec safe to put in a shell line: `name`, `@scope/name`, optionally `@version`. */
+const NPM_SPEC_RE = /^(@[a-z0-9._-]+\/)?[a-z0-9._-]+(@[0-9A-Za-z.+-]+)?$/;
 
 /** A version string that may be interpolated into a script, or undefined (unpinned). */
 export function safeVersion(v: string | undefined): string | undefined {
@@ -1002,12 +1012,12 @@ ${install ? `elif [ "$INSTALL" = 1 ]${cli.portable ? ' || [ "$(uname -s)" = Darw
   }
   for (const h of helpers) {
     const ref = (h.referenced_by ?? "").replace(/["\\\n\r]/g, "");
-    const pkg = HELPER_PACKAGES[h.tool] ?? {};
-    const npm = pkg.npm && TOOL_RE.test(pkg.npm) ? `elif command -v npm >/dev/null 2>&1; then
+    const pkg = helperPackage(h);
+    const npm = pkg.npm && NPM_SPEC_RE.test(pkg.npm) ? `elif command -v npm >/dev/null 2>&1; then
   if err=$( { ${npmGlobal(pkg.npm, undefined)}; } 2>&1 ) && command -v ${h.tool} >/dev/null 2>&1; then add installed ${h.tool}; else miss ${h.tool} "${ref}" "$(printf '%s' "$err" | tail -c 160)"; fi
 ` : "";
-    const formula = pkg.brew ?? h.tool;
-    const brew = !pkg.npm && TOOL_RE.test(formula) ? `elif [ "$BREW" = 1 ]; then
+    const formula = pkg.brew;
+    const brew = !npm && formula && TOOL_RE.test(formula) ? `elif [ "$BREW" = 1 ]; then
   if err=$(brew_install ${formula} 2>&1) && command -v ${h.tool} >/dev/null 2>&1; then add installed ${h.tool}; else miss ${h.tool} "${ref}" "$(printf '%s' "$err" | tail -c 160)"; fi
 ` : "";
     lines.push(`if command -v ${h.tool} >/dev/null 2>&1; then add ok ${h.tool}

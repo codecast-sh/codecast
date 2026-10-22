@@ -15,6 +15,7 @@ import { FindingReader, useFinderName, type ReaderSignal } from "./FindingReader
 import { MomentView } from "./MomentView";
 import { useLineNav } from "./parts";
 import { sourceName } from "../../../lib/line/sourceNames";
+import { entityRoute } from "@codecast/shared/entities";
 import "./originTrail.css";
 
 export type OriginTrailProps = {
@@ -44,6 +45,8 @@ export const OriginTrail = memo(function OriginTrail({ decision, task: taskProp,
   const s = useTrackedStore([
     (st) => { const x = decision ? (st.sessionDecisions as any)[decision] : null; return x ? `${x.status}|${x.task_id ?? ""}|${x.session_title ?? ""}` : null; },
     (st) => { const t = taskOf(st); return t ? `${t._id}|${t.title}|${t.short_id ?? ""}` : null; },
+    // A card asked outside the line: the asking session's own work (its bound task, else its plan).
+    (st) => { const c = decision ? (st.sessionDecisions as any)[decision]?.conversation_id : null; const x = c ? (st.sessions as any)[c] : null; return x ? `${x.active_task?.short_id ?? ""}|${x.active_plan?.short_id ?? ""}` : null; },
   ]);
   const d = decision ? ((s.sessionDecisions as any)[decision] ?? null) : null;
   const task = taskOf(s);
@@ -67,7 +70,9 @@ export const OriginTrail = memo(function OriginTrail({ decision, task: taskProp,
   if (d && !line) {
     // A card a session asked: the session is the origin, its task beside it.
     steps.push({ key: "session", label: d.session_title || "A session", href: d.conversation_id ? `/conversation/${d.conversation_id}` : null, tone: "raw" });
-    if (task) steps.push({ key: "task", label: task.title, ref: task.short_id, href: `/tasks/${task.short_id ?? taskId}` });
+    const asker = d.conversation_id ? (s.sessions as any)[d.conversation_id] : null;
+    const work = task ? { title: task.title, short_id: task.short_id ?? taskId } : asker?.active_task ?? asker?.active_plan ?? null;
+    if (work?.short_id) steps.push({ key: "task", label: work.title, ref: work.short_id, href: entityRoute(work.short_id.startsWith("pl-") ? "plan" : "task", work.short_id) });
   } else {
     if (finding) {
       const raw = momentRef ? "Conversation" : finding.subject?.startsWith("eg-") ? "Error" : finding.source === "person" ? "Report" : sourceName(finding.source);
