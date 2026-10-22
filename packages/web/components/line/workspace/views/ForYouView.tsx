@@ -38,6 +38,8 @@ import { useTeamRosterIdentity } from "../../../../hooks/useTeamRoster";
 import { useRolesAndPeopleOptions, type AssigneeOption } from "../../../../hooks/useRolesAndPeopleOptions";
 import { LineDecision, LineDecisionPrefetch } from "../../widgets/LineDecision";
 import { WaitingItem } from "../../widgets/WaitingItem";
+import { OriginTrail } from "../../widgets/OriginTrail";
+import { sourceChipWords } from "../../../../lib/line/stepRuns";
 import { useAllProblems } from "./ProblemPointers";
 import { AssignDecision } from "./AssignDecision";
 import type { LineViewProps } from "./types";
@@ -213,7 +215,8 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
     return t && !t.cause ? t.short_id ?? t._id : null;
   });
 
-  const ctx: RowCtx = { view, pinned: !!pinned, projectTitle, people, now, current, picked, cursor: reading ? null : order[cursorAt]?.key ?? null, onOpen: open, onPick: togglePick, onHover: setHovered, assigning, setAssigning };
+  const from = (n: LineNeed) => { const o = n.caseId ? workspace.sources.get(n.caseId) : null; return o ? sourceChipWords(o) : null; };
+  const ctx: RowCtx = { from, view, pinned: !!pinned, projectTitle, people, now, current, picked, cursor: reading ? null : order[cursorAt]?.key ?? null, onOpen: open, onPick: togglePick, onHover: setHovered, assigning, setAssigning };
   const scope = line ? (
     <button type="button" className="fy-scope" aria-pressed onClick={() => select({ process: null, need: null }, undefined, { replace: true })} aria-label="Show the decisions of every line" data-line-foryou-process={line}>
       {[processTitle.get(line) ?? line, lineProject ? projectTitle.get(lineProject) : null].filter(Boolean).join(" · ")}<X aria-hidden />
@@ -272,6 +275,7 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
                   </span>}
                 </div>
                 <div className="fy-reader-b">
+                  {(current.decisionId || current.caseId) && <div className="fy-origin" data-line-foryou-origin><OriginTrail key={current.key} decision={current.decisionId ?? null} task={current.decisionId ? null : current.caseId ?? null} folded /></div>}
                   {current.kind === "decision" && (current.decisionId || current.decisionRef)
                     ? <LineDecision key={current.key} id={current.decisionId ?? current.decisionRef!} head={false} quiet onProblem={toProblem(current)} onRun={toRun(current)} />
                     : <WaitingItem key={current.key} need={current} now={now} onProblem={toProblem(current)} onRun={toRun(current)} head={false} asked={false} />}
@@ -306,6 +310,8 @@ type RowCtx = {
   view: InboxView; pinned: boolean; projectTitle: Map<string, string>; people: ReadonlyArray<AssigneeOption>; now: number;
   current: LineNeed | null; picked: ReadonlySet<string>; cursor: string | null;
   onOpen: (n: LineNeed) => void; onPick: (n: LineNeed) => void; onHover: (key: string | null) => void;
+  /** Where a row's problem came from (its finder, judge or reporter), by case id. */
+  from: (n: LineNeed) => string | null;
   assigning: "row" | "picked" | null; setAssigning: (a: "row" | "picked" | null) => void;
 };
 
@@ -333,6 +339,7 @@ function ListRow({ n, ctx }: { n: LineNeed; ctx: RowCtx }) {
         <span className="fy-ask">{askOf(n)}</span>
         <span className="fy-facts">
           {band && <span className="fy-sev lw-num" data-sev={band} title={`Worst finding: severity ${n.severity} of 10`}>{n.severity}</span>}
+          {ctx.from(n) && <span className="fy-from" data-line-need-from>{ctx.from(n)}</span>}
           {ctx.view.group !== "kind" && <span className="fy-kind" data-kind={n.change ?? "other"}>{DECISION_CHANGE_LABEL[n.change ?? "other"]}</span>}
           {!!n.reach && <span className="fy-n" title={`${n.reach} ${n.reach === 1 ? "person" : "people"} reached`}><Users aria-hidden /><span className="lw-num">{n.reach}</span></span>}
           {!!n.findings && <span className="fy-n" title={`${n.findings} ${n.findings === 1 ? "finding" : "findings"}`}><SquareStack aria-hidden /><span className="lw-num">{n.findings}</span></span>}
@@ -358,6 +365,7 @@ function PickBox({ picked, onPick, label = "Select" }: { picked: boolean; onPick
 /** The table's columns, and the order each head picks (none for the question itself). */
 const COLUMNS: ReadonlyArray<{ key: string; label: string; order: InboxOrder | null; tip?: string; num?: boolean }> = [
   { key: "ask", label: "Decision", order: null },
+  { key: "from", label: "From", order: null, tip: "Where the problem came from: the judge, source or person that found it" },
   { key: "sev", label: "Sev", order: "severity", tip: "Worst finding's severity, 1 to 10", num: true },
   { key: "kind", label: "Kind", order: "kind" },
   { key: "people", label: "People", order: "impact", tip: "People reached", num: true },
@@ -401,6 +409,7 @@ function TableRow({ n, ctx, cols }: { n: LineNeed; ctx: RowCtx; cols: typeof COL
   const open = assignOpen || (ctx.assigning === "row" && ctx.cursor === n.key);
   const cell: Record<string, ReactNode> = {
     ask: <><span className="fy-ask">{askOf(n)}</span><Rec v={n.recommend} /></>,
+    from: <span className="fy-from" data-line-need-from>{ctx.from(n) ?? ""}</span>,
     sev: band ? <span className="fy-sev lw-num" data-sev={band}>{n.severity}</span> : null,
     kind: <span className="fy-kind" data-kind={n.change ?? "other"}>{DECISION_CHANGE_LABEL[n.change ?? "other"]}</span>,
     people: n.reach ? <span className="lw-num">{n.reach}</span> : null,

@@ -25,7 +25,8 @@ describe("the line app's selection in the URL", () => {
     expect(readLineSelection(q("view=notebook"))).toMatchObject({ view: "line", mode: "table" });
     expect(readLineSelection(q("view=process&mode=notebook")).mode).toBe("table");
     expect(readLineSelection(q("view=replay")).view).toBe("problems");
-    expect(readLineSelection(q("view=timeline")).view).toBe("problems");
+    expect(readLineSelection(q("view=timeline")).view).toBe("timeline");
+    expect(readLineSelection(q("view=timeline&case=t1")).view).toBe("problems");
     // Chat's job is a step's instructions.
     expect(readLineSelection(q("view=chat&step=prove"))).toMatchObject({ view: "line", step: "prove", tab: "instructions" });
   });
@@ -55,7 +56,7 @@ describe("the line app's selection in the URL", () => {
     expect(lineSelectionSearch(q(""), { view: "notebook" })).toBe("?view=line");
     expect(lineSelectionSearch(q(""), { view: "graph" })).toBe("?view=line&mode=map");
     expect(lineSelectionSearch(q("view=problems&case=t1"), { view: "replay", run: "r1" })).toBe("?view=problems&case=t1&run=r1");
-    expect(lineSelectionSearch(q(""), { view: "timeline", case: "t1" })).toBe("?view=problems&case=t1");
+    expect(lineSelectionSearch(q(""), { view: "problems", case: "t1" })).toBe("?view=problems&case=t1");
     expect(lineSelectionSearch(q(""), { view: "inbox", decision: "sd-5" })).toBe("?decision=sd-5");
     expect(lineSelectionSearch(q("view=line&step=prove"), { view: "chat" })).toBe("?view=line&step=prove&steptab=instructions");
   });

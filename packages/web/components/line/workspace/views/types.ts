@@ -20,4 +20,6 @@ export type LineViewProps = {
   drawerOpen?: boolean;
   /** The app is pinned to one project (its page's Line tab): nothing in it changes the project filter. */
   pinned?: boolean;
+  /** The workspace the app reads (the header's switcher); null while none holds a problem. */
+  space?: string | null;
 };
