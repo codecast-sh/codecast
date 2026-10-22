@@ -8,7 +8,7 @@ import { countersFor } from "./orgCaps";
 export const MERGE_AUTHORITY_ID = "merge";
 export const MERGE_AUTHORITY_LABEL = "Merge the line's approved branches into the project's default branch when their checks pass; the daily limit counts merges only";
 
-type Grant = { id: string; kind: string; label: string; limit?: { per_day?: number }; expires_at?: number };
+export type Grant = { id: string; kind: string; label: string; limit?: { per_day?: number }; expires_at?: number };
 
 export type MergeAllowance = {
   on: boolean;
@@ -20,11 +20,16 @@ export type MergeAllowance = {
   grant: Grant | null;
 };
 
-/** The role's merge grant when it holds one that has not expired. */
-export function mergeGrantOf(role: { authority?: Grant[] | null }, now: number): Grant | null {
-  const g = (role.authority ?? []).find((a) => a.id === MERGE_AUTHORITY_ID && a.kind === "write");
+/** The role's grant with this id and kind when it holds one that has not expired. */
+export function authorityGrantOf(role: { authority?: Grant[] | null }, id: string, kind: string, now: number): Grant | null {
+  const g = (role.authority ?? []).find((a) => a.id === id && a.kind === kind);
   if (!g) return null;
   return g.expires_at !== undefined && g.expires_at <= now ? null : g;
+}
+
+/** The role's merge grant when it holds one that has not expired. */
+export function mergeGrantOf(role: { authority?: Grant[] | null }, now: number): Grant | null {
+  return authorityGrantOf(role, MERGE_AUTHORITY_ID, "write", now);
 }
 
 /** Whether this line may merge right now, read from the role row alone. */
