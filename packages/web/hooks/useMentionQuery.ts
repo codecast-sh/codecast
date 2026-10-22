@@ -5,7 +5,7 @@ import type { MentionItem } from "../lib/mentionItem";
 import { matchHandle, memberHandle } from "@codecast/shared/chat";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
-import { agentStatusAt } from "../lib/liveness";
+import { agentStatusAt, sessionAwakeAt } from "../lib/liveness";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import type { ChatChannelRow, ChatRailRow } from "../store/chatSlice";
 import { useDebounce } from "./useDebounce";
@@ -231,8 +231,9 @@ let previousMentionItems: MentionItem[] = [];
 
 export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, scope: MentionScope): MentionItem[] {
   const personify = personifyAllNow();
+  const viewerId = s.currentUser?._id ? String(s.currentUser._id) : "";
   const inputs = [
-    scope.kind, scope.kind === "team" ? scope.teamId : scope.kind === "personal" ? scope.userId : "",
+    scope.kind, scope.kind === "team" ? scope.teamId : scope.kind === "personal" ? scope.userId : "", viewerId,
     s.mentionIndex, s.tasks, s.docs, s.plans, s.sessions, s.teamMembers, s.chatSlackPeople,
     s.buckets, s.bucketAssignments, s.recentVisits, s._lastViewedAt, personify,
   ];
@@ -240,6 +241,7 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
   const idx = s.mentionIndex || { tasks: {}, docs: {}, plans: {} };
   const merged = (windowRows: Record<string, any>, storeRows: Record<string, any>) =>
     mergeEntityRows<any>(windowRows, storeRows).filter((row) => inScope(row, scope));
+  const now = Date.now();
   const items: MentionItem[] = [
     ...(s.teamMembers || []).map((m) => {
       const handle = memberHandle(m) ?? undefined;
@@ -277,11 +279,15 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
       id: p._id, type: "plan", label: p.title, sublabel: p.short_id, shortId: p.short_id,
       status: p.status, goal: p.goal, updatedAt: p.updated_at,
     })),
-    ...Object.values(s.sessions).filter((sess) => inScope(sess, scope)).map((sess) => ({
+    // The viewer's own sessions cross the workspace line: the boundary keeps a
+    // team's work from leaking into another, and nothing of the viewer's own
+    // leaks by being offered to the viewer. A session filed under another team
+    // is still the one they mean when they type its name.
+    ...Object.values(s.sessions).filter((sess) => inScope(sess, scope) || (!!viewerId && String(sess.user_id) === viewerId)).map((sess) => ({
       id: sess._id, type: "session", label: sess.title || "Untitled Session",
       sublabel: sess.idle_summary || undefined, shortId: sess._id.slice(0, 7).toLowerCase(),
       messageCount: sess.message_count, projectPath: sess.git_root || sess.project_path,
-      status: agentStatusAt(sess, Date.now()), agentType: sess.agent_type,
+      status: agentStatusAt(sess, now), awake: sessionAwakeAt(sess, now) || undefined, agentType: sess.agent_type,
       model: sess.model ?? undefined, updatedAt: sess.updated_at, idleSummary: sess.idle_summary,
       identity: identityRowOf(sess as never), worker: !!sess.is_subagent || undefined,
     })),

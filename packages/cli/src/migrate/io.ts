@@ -17,6 +17,7 @@ import {
   convexClient,
   describeBackSync,
   describeVerification,
+  FOLDER_COPY_VERIFICATION,
   moveNotice,
   readMoves,
   sendMoveNotice,
@@ -321,7 +322,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       const { checkoutAloneProbe } = await import("../cloud/prepare.js");
       const pulled = await pullSession(facts.session_id, host, move, { aloneInCheckout: checkoutAloneProbe(client, api, token, facts.owner_device_id, facts.conversation_id) });
       if (!pulled.ff) throw new Error(`CONFLICT: ${pulled.reason}`);
-      let verification = "synced via rsync (non-git directory)";
+      let verification = FOLDER_COPY_VERIFICATION;
       let gitRoot: string | undefined;
       if (isWorktree(dest.localCwd)) {
         verification = describeBackSync(pulled);

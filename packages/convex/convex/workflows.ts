@@ -1,9 +1,12 @@
-import { mutation, query } from "./functions";
+import { internalMutation, mutation, query } from "./functions";
 import { ConvexError, v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "./_generated/dataModel";
 import { LINE_SLUG_RE } from "@codecast/shared/contracts/orgProposal";
+import { publishableFlowSource } from "@codecast/shared/contracts/flowPool";
+import { createDataContext } from "./data";
+import { computeWorkspaceKey, isTeamMember } from "./lib/access";
 
 const nodeV = v.object({
   id: v.string(),
@@ -69,7 +72,30 @@ const upsertArgs = {
   // The finding sources whose problems this line version runs (the graph's
   // `serves`): lineVersionFor routes a line run on a problem by them.
   serves: v.optional(v.array(v.string())),
+  // `cast flow publish` (flows.md FL2): the workspace whose pool the flow
+  // joins, named by the publisher. Any other push leaves where the row lives.
+  publish: v.optional(v.object({
+    workspace: v.union(v.literal("personal"), v.literal("team")),
+    team_id: v.optional(v.id("teams")),
+  })),
 };
+
+type Publish = { workspace: "personal" | "team"; team_id?: Id<"teams"> };
+
+/**
+ * The row's two axes (CLAUDE.md "Workspace access vs routing"), resolved
+ * through the data context so a team is only ever one the publisher belongs
+ * to. A publish files a flow under the workspace it names; a graph that is
+ * a draft or declares no kind= is its owner's alone, whatever an earlier
+ * publish said; any other push keeps the row where it is. Null: leave it.
+ */
+async function workflowAxes(ctx: any, userId: Id<"users">, source: string | undefined, publish: Publish | undefined, existing: any) {
+  const publishable = publishableFlowSource(source);
+  if (publish && !publishable) throw new ConvexError("Only a flow whose graph declares kind= and carries no draft= can be published");
+  if (publish) return (await createDataContext(ctx, { userId, ...publish })).axes;
+  if (publishable && existing?.workspace) return null;
+  return (await createDataContext(ctx, { userId, workspace: "personal" })).axes;
+}
 
 // One body for the CLI push and the web's edit: a row per (user, slug).
 // `create_only` refuses a slug that already has a row (the line's fork).
@@ -90,11 +116,12 @@ export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, 
 }
 
 // `serves`: a list or null (a push: written as the file says), undefined (the web: left as it is).
-async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, ...args }: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null }) {
+async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, ...args }: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish }) {
   const now = Date.now();
   const existing = await workflowBySlug(ctx, userId, args.slug);
 
   if (existing && create_only) throw new ConvexError(`${args.slug} already exists: reload to see its stations`);
+  const axes = await workflowAxes(ctx, userId, args.source, publish, existing);
   if (existing) {
     await ctx.db.patch(existing._id, {
       name: args.name,
@@ -106,6 +133,7 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, s
       // A push that does not say where the graph lives leaves what an earlier one said.
       ...(args.origin ? { origin: args.origin } : {}),
       ...(serves !== undefined ? { serves: serves ?? undefined } : {}),
+      ...(axes ?? {}),
       updated_at: now,
     });
     if (args.origin) await recordGraphVersion(ctx, existing._id, userId, args.origin, now);
@@ -114,9 +142,9 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, s
 
   const id = await ctx.db.insert("workflows", {
     user_id: userId,
-    // Personal by default: workflows carry no project_path to resolve a
-    // directory mapping against, and stamping the active team here would
-    // expose them wholesale the day a team read path lands on by_team_id.
+    // Personal unless published: workflows carry no project_path to resolve
+    // a directory mapping against, so only a publish names a team.
+    ...axes,
     name: args.name,
     slug: args.slug,
     goal: args.goal,
@@ -151,7 +179,8 @@ export const webUpsert = mutation({
   args: { ...upsertArgs, create_only: v.optional(v.boolean()) },
   // Only a machine's push says where a graph lives; the web never does.
   // Which sources a version serves is the graph file's to say, so the web's edit leaves it.
-  handler: async (ctx, { stack: _stack, origin: _origin, serves: _serves, ...args }) => {
+  // Publishing is `cast flow publish`'s; the web's edit leaves where the row lives.
+  handler: async (ctx, { stack: _stack, origin: _origin, serves: _serves, publish: _publish, ...args }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not signed in");
     if (!LINE_SLUG_RE.test(args.slug)) throw new Error("A workflow slug is 1 to 64 characters of a-z, 0-9 and -");
@@ -186,6 +215,77 @@ export const webList = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .order("desc")
       .take(50);
+  },
+});
+
+/** How many flows a pool read returns: the newest published ones. */
+const POOL_CAP = 200;
+
+/**
+ * The pool's published flows in one workspace (flows.md FL2): every row
+ * filed under its key, read through the data context, whose graph is still
+ * publishable. A row joins only once a push filed it (a stored key): a row
+ * from before keys is its owner's, whatever team it was once tagged with.
+ * The owner's own rows also arrive through webList; a teammate's arrive only
+ * here. A team the viewer is not in reads nothing.
+ */
+export async function poolFlowRows(ctx: any, userId: Id<"users">, teamId?: Id<"teams">) {
+  if (teamId && !(await isTeamMember(ctx, userId, teamId))) return [];
+  const db = await createDataContext(ctx, { userId, ...(teamId ? { workspace: "team" as const, team_id: teamId } : { workspace: "personal" as const }) });
+  const rows: any[] = await db.query("workflows").collect();
+  return rows
+    .filter((w) => typeof w.workspace === "string" && w.workspace && publishableFlowSource(w.source))
+    .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
+    .slice(0, POOL_CAP);
+}
+
+export const webPool = query({
+  args: { team_id: v.optional(v.id("teams")) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    return await poolFlowRows(ctx, userId, args.team_id);
+  },
+});
+
+/** `cast flow ls/show/run`: the pool's published flows, with who published each and what the CLI needs to run one. */
+export const poolForCli = query({
+  args: { api_token: v.string(), team_id: v.optional(v.id("teams")) },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) return { error: "Unauthorized" };
+    const rows = await poolFlowRows(ctx, result.userId, args.team_id);
+    const names = new Map<string, string | null>();
+    for (const r of rows) {
+      const id = String(r.user_id);
+      if (!names.has(id)) names.set(id, ((await ctx.db.get(r.user_id)) as any)?.name ?? null);
+    }
+    return {
+      flows: rows.map((r) => ({
+        _id: r._id, slug: r.slug, name: r.name, source: r.source, workspace: r.workspace, updated_at: r.updated_at,
+        nodes: r.nodes.map((n: any) => ({ id: n.id, ...(n.prompt ? { prompt: n.prompt } : {}), ...(n.script ? { script: n.script } : {}) })),
+        origin: r.origin ? { file: r.origin.file, files: r.origin.files } : null,
+        by: names.get(String(r.user_id)) ?? null,
+        mine: String(r.user_id) === String(result.userId),
+      })),
+    };
+  },
+});
+
+// Rows from before keys stay their owner's (flows.md FL2): stamped personal,
+// and the team tag the old insert copied from the user is dropped, so both
+// axes say the same. Run repeatedly until it reports 0.
+export const backfillWorkspace = internalMutation({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("workflows")
+      .withIndex("by_workspace", (q) => q.eq("workspace", undefined))
+      .take(args.limit ?? 100);
+    for (const r of rows) {
+      await ctx.db.patch(r._id, { workspace: computeWorkspaceKey({ user_id: r.user_id }, null), team_id: undefined });
+    }
+    return { stamped: rows.length };
   },
 });
 

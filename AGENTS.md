@@ -206,9 +206,13 @@ Typing in the composer stays as cheap as typing in a bare text field, with the
 cache a busy account holds (thousands of sessions). `packages/web/scripts/typing-guard.sh`
 holds the budget and runs before every ship that touches web, shared or platform
 code (`.codecast/workspace.toml`) and in CI: a keystroke into a box with text
-commits React once, writes nothing to the store and changes no DOM outside the
-textarea; no store subscription compares a long string (a wake signature is a
-digest: `makeCollectionSig`, never the rows spelled out); a write nothing reads
+commits React once, writes nothing to the store, changes nothing in the DOM
+tree and reads no layout. React rewrites a controlled textarea's text node on
+every change, and on a page of `:has()` rules that re-styles the page (60 ms a
+key on a long transcript), so a typing box takes its ref from
+`useHeldTextareaRef` (`lib/holdTextareaTextNode.ts`). No store subscription
+compares a long string (a wake signature is a digest: `makeCollectionSig`,
+never the rows spelled out); a write nothing reads
 re-renders nothing; list rows run no infinite animation (one pulsing dot per
 running agent re-layers the page every frame); transcript rows are not
 compositor layers; a typed key that matches no shortcut never queries the DOM.

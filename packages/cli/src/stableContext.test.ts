@@ -86,7 +86,8 @@ describe("stable-context recording", () => {
     const built = await buildStableContext({ auth_token: "secret", convex_url: "https://example.cloud" }, { mode: "team", global: false, cwd: "/repo", session: "conversations123" });
 
     expect(asked["https://example.site/cli/org/where"]).toEqual({ api_token: "secret", session: "conversations123" });
-    expect(built!.text).toMatch(/^<org-context workspace="Acme">[\s\S]*<\/org-context>\n\n<stable-context mode="team">/);
+    // The org leads; the pool's one <flows> line (flows.md FL7) may sit between it and the feed.
+    expect(built!.text).toMatch(/^<org-context workspace="Acme">[\s\S]*<\/org-context>\n\n(<flows>[^\n]*<\/flows>\n\n)?<stable-context mode="team">/);
     expect(built!.text).toContain("@growth Growth lead · reports to Ashot · looks after Growth");
   });
 
