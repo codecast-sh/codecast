@@ -149,12 +149,13 @@ const LANE_LINE: Record<ChunkLane, string> = {
   context: `Nobody named you: settle what the code or the record can settle in a line, start a page on anything they are working through, else end with ${HUDDLE_PASS}.`,
 };
 
-/** Was this message a chunk of the room talking among itself, nobody naming
- *  the agent (the context lane)? A turn it opens answers nobody, so its reply
- *  stays in the call's chat and is never said aloud (callChat.mirrorAgentTurn). */
-export function isRoomTalkDelivery(text: string | null | undefined): boolean {
+/** Was this message addressed to the agent: a chunk where someone named it
+ *  (the ask lane), or a request its voice handed over? Only a turn such a
+ *  message opens answers someone, so only its reply is said aloud in the
+ *  call (callChat.mirrorAgentTurn); every other reply stays in the chat. */
+export function isAskDelivery(text: string | null | undefined): boolean {
   const t = text ?? "";
-  return t.includes(LANE_NOTE.context) || t.includes(LANE_LINE.context);
+  return t.includes(LANE_NOTE.ask) || t.includes(LANE_LINE.ask) || t.includes(VOICE_ASK_LEAD);
 }
 
 const HELD_NOTE = "These words waited while you worked and arrive together as one catch up.";
@@ -221,9 +222,11 @@ export function huddleVoiceNote(name: string): string {
   return `In the call you have a voice: ${name}'s face, run by a fast live model that hears and sees the room and answers people at once. Lines from "${name} (voice)" in the transcript are what it said. It hands you whatever needs real work, and when you end a turn it tells the room what you found, in its own words.`;
 }
 
+const VOICE_ASK_LEAD = "Your voice in the call handed you this";
+
 /** A request the voice handed to the session. */
 export function huddleVoiceAskHeader(name: string, speaker: string | null): string {
-  return `Your voice in the call handed you this${speaker ? `, from ${speaker}` : ""}. It told the room you are looking into it. ${huddleVoiceNote(name)}`;
+  return `${VOICE_ASK_LEAD}${speaker ? `, from ${speaker}` : ""}. It told the room you are looking into it. ${huddleVoiceNote(name)}`;
 }
 
 /** The voice's standing instructions: who it is and what the session is

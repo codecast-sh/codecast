@@ -157,6 +157,7 @@ function workerStart(id: string, at: number) {
     { _id: `started-${id}`, conversation_id: "conv1", role: "user", tool_results: [{ tool_use_id: `t-${id}`, content: `Async agent launched. agentId: ${id}` }], timestamp: at + 0.5 },
   ];
 }
+const askRow = (at: number) => ({ _id: `ask-${at}`, conversation_id: "conv1", role: "user", content: `${huddleVoiceAskHeader("Ember", "Ada")}\n\nWhat changed?`, timestamp: at });
 const taskNotification = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n</task-notification>`;
 
 describe("a voice's lifetime is its feed row", () => {
@@ -172,6 +173,7 @@ describe("a voice's lifetime is its feed row", () => {
       transcripts: [transcript()],
       messages: [
         { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
+        askRow(1.5),
         { _id: "m2", conversation_id: "conv1", role: "assistant", content: "The **fix** is in `auth.ts`:\n```ts\nconst x = 1;\n```\nShip it.", timestamp: 2 },
       ],
       call_chat_messages: [],
@@ -257,6 +259,65 @@ describe("a voice's lifetime is its feed row", () => {
     }
   });
 
+  // Only a message addressed to the agent opens a turn the room asked for.
+  // Everything else the session answers while an ask is open, and every
+  // worker such a turn starts, stays in the chat.
+  test("while an ask is open, replies to anything not addressed to the agent stay in the chat", async () => {
+    const prompts = [
+      `<session-message from="jx7a838">The deploy finished.</session-message>`,
+      `<scheduled-task title="Check CI">Check if CI is green on main</scheduled-task>`,
+      "what's the status of the auth fix?",
+    ];
+    for (const content of prompts) {
+      for (const viaWorker of [false, true]) {
+        const ctx = ctxWith({
+          call_agent_feeds: [feed({ addressed_at: Date.now() })],
+          transcripts: [transcript()],
+          messages: [
+            { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
+            { _id: "u1", conversation_id: "conv1", role: "user", content, timestamp: 2 },
+            ...(viaWorker
+              ? [
+                  ...workerStart("a6d86171", 3),
+                  { _id: "m2", conversation_id: "conv1", role: "assistant", content: "Started a check.", timestamp: 4 },
+                  { _id: "u2", conversation_id: "conv1", role: "user", content: taskNotification("a6d86171"), timestamp: 5 },
+                ]
+              : []),
+            { _id: "m3", conversation_id: "conv1", role: "assistant", content: "CI is green.", timestamp: 6 },
+          ],
+          call_chat_messages: [],
+        });
+        await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+        expect(ctx.db._tables.call_chat_messages.length).toBeGreaterThan(0);
+        expect(faceCalls(ctx)).toEqual([]);
+      }
+    }
+  });
+
+  // A later turn that checks on a worker prints its id again; the worker's
+  // result is still judged by the turn that launched it.
+  test("a worker's result follows its launch, not a later turn that mentions it", async () => {
+    const roomTalk = `${ownRoomChunkHeader({ name: "Ember", lane: "context", held: false, full: false })}\n\nAda: how does refresh work?`;
+    const ctx = ctxWith({
+      call_agent_feeds: [feed({ addressed_at: Date.now() })],
+      transcripts: [transcript()],
+      messages: [
+        { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
+        { _id: "u1", conversation_id: "conv1", role: "user", content: roomTalk, timestamp: 2 },
+        ...workerStart("a6d86171", 3),
+        { _id: "m2", conversation_id: "conv1", role: "assistant", content: "Building a page.", timestamp: 4 },
+        askRow(5),
+        { _id: "check", conversation_id: "conv1", role: "user", tool_results: [{ tool_use_id: "t-check", content: "a6d86171 is still running" }], timestamp: 6 },
+        { _id: "m3", conversation_id: "conv1", role: "assistant", content: "Still building.", timestamp: 7 },
+        { _id: "u3", conversation_id: "conv1", role: "user", content: taskNotification("a6d86171"), timestamp: 8 },
+        { _id: "m4", conversation_id: "conv1", role: "assistant", content: "Refresh page is up.", timestamp: 9 },
+      ],
+      call_chat_messages: [],
+    });
+    await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+    expect(faceCalls(ctx).map((c) => c.args.text)).toEqual(["Still building."]);
+  });
+
   test("while an ask is open, a reply to room talk nobody addressed to it stays in the chat", async () => {
     const roomTalk = (full: boolean) => `${ownRoomChunkHeader({ name: "Ember", lane: "context", held: false, full })}\n\nAda: the build is red`;
     for (const full of [true, false]) {
@@ -281,7 +342,8 @@ test("a page link is shown in the chat and never read aloud", async () => {
   const ctx = ctxWith({
     call_agent_feeds: [feed({ addressed_at: Date.now() })],
     transcripts: [transcript()],
-    messages: [{ _id: "m2", conversation_id: "conv1", role: "assistant", content: "Here is the funnel by week:\n\nhttps://codecast.sh/a/funnel-weekly\n\nSignups dipped in week 3.", timestamp: 2 }],
+    // The ask sits before the first mirror's window: the turn's prompt is read back.
+    messages: [askRow(1), { _id: "m2", conversation_id: "conv1", role: "assistant", content: "Here is the funnel by week:\n\nhttps://codecast.sh/a/funnel-weekly\n\nSignups dipped in week 3.", timestamp: 2 }],
     call_chat_messages: [],
   });
   await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
