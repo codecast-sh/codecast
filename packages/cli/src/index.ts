@@ -107,6 +107,7 @@ import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import { registerRouteCommand } from "./routeCommand.js";
 import { registerFlowCommands } from "./flowCommand.js";
+import { teamForDirectory } from "./directoryTeam.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -139,7 +140,7 @@ import type { PlanStep } from "@codecast/shared/tasks";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion} from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextFastPathArgv, isTaskContextFastPath, runFastPath } from "./fastPath.js";
@@ -2248,6 +2249,7 @@ const SNIPPET_SECTIONS = {
   limits: snippetSection("limits"),
   computer: snippetSection("computer"),
   sim: snippetSection("sim"),
+  vault: snippetSection("vault"),
   check: snippetSection("check"),
   pr: snippetSection("pr"),
   mods: snippetSection("mods"),
@@ -2413,13 +2415,14 @@ function uninstallSkillsSnippet(): void {
  * refresh and the `cast install` table all derive from this one list, so a new
  * section snippet is its catalog entry, its version and one line here.
  */
-type SectionSnippetSlug = "calls" | "limits" | "pr" | "computer" | "sim" | "check" | "mods";
+type SectionSnippetSlug = "calls" | "limits" | "pr" | "computer" | "sim" | "vault" | "check" | "mods";
 const SECTION_SNIPPET_VERSIONS: Record<SectionSnippetSlug, () => string> = {
   calls: getCallsVersion,
   limits: getLimitsVersion,
   pr: getPrVersion,
   computer: getComputerVersion,
   sim: getSimVersion,
+  vault: getVaultVersion,
   check: getCheckVersion,
   mods: getModsVersion,
 };
@@ -3177,13 +3180,13 @@ const vaultCmd = program
   .command("files")
   .alias("file")
   .description(
-    "Read and write local markdown vaults, the folders the Files page shows\n\n" +
-    "A vault is a directory of markdown you registered. The daemon serves it\n" +
+    "Read and write the local markdown folders the Files page shows\n\n" +
+    "A folder is a directory of markdown you registered. The daemon serves it\n" +
     "to the web app's Files page over its local 127.0.0.1 bridge; these\n" +
     "commands read and write the same files directly, so a note you change\n" +
     "here shows up in an open browser tab within a second. Registration is\n" +
     "per-device and the files never leave this machine.\n\n" +
-    "Managing the list of vaults:\n" +
+    "Managing the list of folders:\n" +
     "  cast files add ~/notes\n" +
     "  cast files add ~/work/wiki --name Wiki\n" +
     "  cast files ls\n" +
@@ -3196,22 +3199,22 @@ const vaultCmd = program
     "  cast files edit Sleep --old 'bed at 11' --new 'bed at 10'\n" +
     "  cast files links Sleep                    # what points here\n" +
     "  cast files open Sleep                     # a link for the human\n\n" +
-    "Paths: every command takes a vault-relative path OR the bare name a\n" +
+    "Paths: every command takes a folder-relative path OR the bare name a\n" +
     "[[wiki link]] would use, resolved by the same rules the app uses. A name\n" +
     "matching several notes errors and lists them.\n\n" +
-    "Vaults: --vault <id|name|dir> picks one. Without it, commands use the\n" +
-    "vault the current directory is inside — so inside a project you can just\n" +
-    "say `cast files cat <note>`. With a single registered vault anywhere,\n" +
+    "Folders: --vault <id|name|dir> picks one. Without it, commands use the\n" +
+    "folder the current directory is inside — so inside a project you can just\n" +
+    "say `cast files cat <note>`. With a single registered folder anywhere,\n" +
     "that one is used.\n\n" +
     "Machine-readable: every read command takes --json.\n\n" +
-    "Exit codes: 0 ok · 1 not found · 2 ambiguous (name or vault matched\n" +
-    "several) · 3 the vault's directory is unreachable"
+    "Exit codes: 0 ok · 1 not found · 2 ambiguous (name or folder matched\n" +
+    "several) · 3 the folder's directory is unreachable"
   )
   .showHelpAfterError(true);
 
 vaultCmd
   .command("add")
-  .description("Register a directory as a vault")
+  .description("Register a directory of markdown as a folder")
   .argument("<dir>", "Directory of markdown files")
   .option("--name <name>", "Display name (defaults to the directory name)")
   .action((dir: string, options: any) => {
@@ -3229,13 +3232,13 @@ vaultCmd
   .command("ls")
   .alias("list")
   .description(
-    "List the vaults this machine can open\n\n" +
-    "Two kinds appear here. VAULTS are directories you registered with\n" +
+    "List the folders this machine can open\n\n" +
+    "Two kinds appear here. FOLDERS are directories you registered with\n" +
     "`cast files add` — they are listed in full. PROJECTS are your own code\n" +
     "repositories, found automatically because they contain markdown; there\n" +
     "are usually hundreds, so only a few are shown unless you ask for --all.\n" +
     "Both open, scan and edit identically once you name one.\n\n" +
-    "The row marked `← you are here` is the vault every other command uses\n" +
+    "The row marked `← you are here` is the folder every other command uses\n" +
     "when you leave --vault off.\n\n" +
     "Examples:\n" +
     "  cast files ls\n" +
@@ -3253,7 +3256,7 @@ vaultCmd
       return;
     }
     if (vaults.length === 0) {
-      console.log(`${c.dim}No vaults. Add one with: cast files add ~/notes${c.reset}`);
+      console.log(`${c.dim}No folders. Add one with: cast files add ~/notes${c.reset}`);
       return;
     }
 
@@ -3274,7 +3277,7 @@ vaultCmd
     };
 
     if (registered.length) {
-      console.log(`${c.bold}Vaults${c.reset} ${c.dim}— registered with cast files add${c.reset}`);
+      console.log(`${c.bold}Folders${c.reset} ${c.dim}— registered with cast files add${c.reset}`);
       registered.forEach(row);
     }
 
@@ -3307,18 +3310,18 @@ vaultCmd
 vaultCmd
   .command("mirror")
   .description(
-    "Mirror a vault so other devices can read it\n\n" +
+    "Mirror a folder so other devices can read it\n\n" +
     "Off by default. Turning it on lets this machine's daemon push note\n" +
     "metadata (title, tags, links, headings) and the bodies of notes under\n" +
-    "64KB to codecast, so the vault is readable — never writable — from\n" +
+    "64KB to codecast, so the folder is readable — never writable — from\n" +
     "another device. The files stay here and stay canonical; the mirror is a\n" +
     "copy that follows them. Turning it off deletes the copy.\n\n" +
     "Examples:\n" +
     "  cast files mirror ~/notes --on\n" +
     "  cast files mirror ~/notes --off"
   )
-  .argument("<dirOrId>", "Vault directory or id")
-  .option("--on", "Start mirroring this vault")
+  .argument("<dirOrId>", "Folder path or id")
+  .option("--on", "Start mirroring this folder")
   .option("--off", "Stop mirroring and delete the remote copy")
   .action((dirOrId: string, options: any) => {
     if (options.on === options.off) {
@@ -3327,7 +3330,7 @@ vaultCmd
     }
     const vault = setVaultMirroring(CONFIG_DIR, dirOrId, !!options.on);
     if (!vault) {
-      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast files ls`);
+      console.error(`${c.red}No folder matching "${dirOrId}".${c.reset} List them with: cast files ls`);
       process.exit(1);
     }
     if (options.on) {
@@ -3347,12 +3350,12 @@ vaultCmd
 vaultCmd
   .command("forget")
   .alias("unregister")
-  .description("Unregister a vault (the directory and its notes are untouched)")
-  .argument("<dirOrId>", "Vault directory or id")
+  .description("Unregister a folder (the directory and its notes are untouched)")
+  .argument("<dirOrId>", "Folder path or id")
   .action((dirOrId: string) => {
     const removed = removeVault(CONFIG_DIR, dirOrId);
     if (!removed) {
-      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast files ls`);
+      console.error(`${c.red}No folder matching "${dirOrId}".${c.reset} List them with: cast files ls`);
       process.exit(1);
     }
     console.log(`${c.green}ok${c.reset} unregistered ${c.cyan}${removed.name}${c.reset} ${c.dim}${removed.root}${c.reset}`);
@@ -3397,7 +3400,7 @@ async function runVault(fn: () => Promise<void>): Promise<void> {
 }
 
 const withVaultOption = (cmd: Command): Command =>
-  cmd.option("--vault <idOrNameOrDir>", "Which vault (defaults to the only registered one)");
+  cmd.option("--vault <idOrNameOrDir>", "Which folder (defaults to the only registered one)");
 
 /** Body from --content, --content-file, or stdin. An agent piping a heredoc is
  *  the common case, so stdin is the default rather than an opt-in. */
@@ -3430,7 +3433,7 @@ withVaultOption(
     .alias("show")
     .description(
       "Print a note (paginated for long ones)\n\n" +
-      "The path may be vault-relative or the bare name a [[wiki link]] would\n" +
+      "The path may be folder-relative or the bare name a [[wiki link]] would\n" +
       "use — `Sleep`, `Health/Sleep`, `Areas/Health/Sleep.md` all find the same\n" +
       "note. A name matching several notes lists them and exits 2.\n\n" +
       "Examples:\n" +
@@ -3496,7 +3499,7 @@ withVaultOption(
   vaultCmd
     .command("grep")
     .description(
-      "Search note bodies across the whole vault\n\n" +
+      "Search note bodies across the whole folder\n\n" +
       "Prints every matching line under the note it came from, so a hit reads\n" +
       "as `path` then `line  text`. The pattern is a regex; one that doesn't\n" +
       "compile is searched for literally.\n\n" +
@@ -3580,10 +3583,10 @@ withVaultOption(
     .command("search")
     .description(
       "Find notes by title, tag, path and prose\n\n" +
-      "Takes the same operators the vault's search pane does, so a query that\n" +
+      "Takes the same operators the folder's search pane does, so a query that\n" +
       "works in the app works here:\n" +
       "  tag:health      note carries this tag, or one nested under it\n" +
-      "  path:areas      vault-relative path contains this\n" +
+      "  path:areas      folder-relative path contains this\n" +
       "  file:sleep      filename (without extension) contains this\n" +
       "  \"exact words\"   this phrase, contiguous\n" +
       "  -draft          drop notes mentioning this\n\n" +
@@ -3730,9 +3733,9 @@ withVaultOption(
     .alias("delete")
     .description(
       "Move a note to the trash\n\n" +
-      "The note goes to the OS trash (or the vault's own .trash when that is on\n" +
+      "The note goes to the OS trash (or the folder's own .trash when that is on\n" +
       "another volume), never an unlink — exactly what deleting from the app\n" +
-      "does. To unregister a whole vault instead, use: cast files forget\n\n" +
+      "does. To unregister a whole folder instead, use: cast files forget\n\n" +
       "Examples:\n" +
       "  cast files rm 'Inbox/Old Idea'"
     )
@@ -3743,7 +3746,7 @@ withVaultOption(
     // The old spelling of `cast files forget`. Refuse rather than reinterpret:
     // someone typing a vault root here meant to unregister, not to delete.
     if (findVault(CONFIG_DIR, notePath)) {
-      throw new VaultCliError(`"${notePath}" is a registered vault. To unregister it: cast files forget ${notePath}`);
+      throw new VaultCliError(`"${notePath}" is a registered folder. To unregister it: cast files forget ${notePath}`);
     }
     const ctx = await openVault(CONFIG_DIR, options.vault);
     const ref = await resolveNote(ctx, notePath);
@@ -3800,7 +3803,7 @@ withVaultOption(
     .command("links")
     .description(
       "Show what a note links to, what links back, and what resolves to nothing\n\n" +
-      "Backlinks are found by reading every note in the vault — a link INTO\n" +
+      "Backlinks are found by reading every note in the folder — a link INTO\n" +
       "this note lives in some other file, and nothing short of reading them\n" +
       "all can know which. A few thousand notes takes tens of milliseconds.\n\n" +
       "Examples:\n" +
@@ -3866,8 +3869,8 @@ withVaultOption(
     .command("open")
     .description(
       "Print the codecast link to a note, to hand a human something clickable\n\n" +
-      "The link carries the note's path, not which vault it is in — the app\n" +
-      "opens it in whichever vault the reader has open. With several vaults\n" +
+      "The link carries the note's path, not which folder it is in — the app\n" +
+      "opens it in whichever folder the reader has open. With several folders\n" +
       "registered, say which one alongside the link.\n\n" +
       "Examples:\n" +
       "  cast files open Sleep\n" +
@@ -14245,7 +14248,9 @@ registerFlowCommands(program, {
   cliPost, callingSession, realCwd: getRealCwd,
   // The flows published to the workspace this shell reads (flows.md FL2).
   fetchPool: async (team?: string) => {
-    const ws = await readWorkspace(team);
+    // A team named wins; else the team this directory is mapped to; else the active team.
+    const mapped = team ? null : teamForDirectory(await fetchProjectsWithTeams(readConfig() ?? ({} as Config)), getRealCwd());
+    const ws = mapped ? { kind: "team" as const, teamId: mapped } : await readWorkspace(team);
     const r = await cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
     return r?.flows ?? [];
   },
@@ -21511,10 +21516,13 @@ messaging
     }
   });
 
-// Check for updates in background (non-blocking). The SessionStart hook and
-// git's credential helper are output protocols: a cached notice would become
-// part of Claude's prompt in the first case and the credential git reads in
-// the second, so neither enters this lifecycle. Their fast paths claim them
+// Check for updates in background (non-blocking). Everything this lifecycle
+// prints goes to stderr: it runs inside whatever command was typed, and that
+// command's stdout may be read by a program (a line station's
+// `cd "$(cast ws path $worktree)"` failed on every box behind a release). The
+// SessionStart hook and git's credential helper are output protocols too: a
+// cached notice would become part of Claude's prompt in the first case and the
+// credential git reads in the second, so neither enters this lifecycle. Their fast paths claim them
 // before index.ts loads; the guard here is for a wrapper script that still
 // starts at index.ts, which reaches runFastPath only after this line.
 // CODECAST_NO_AUTO_UPDATE is set on the `_build-id` child an update spawns:
@@ -21549,7 +21557,7 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
   // if the new executable carries different daemon code.
   const daemonWasRunning = getDaemonPid() !== null;
 
-  console.log(`\nAuto-updating to v${available}...`);
+  console.error(`\nAuto-updating to v${available}...`);
   autoUpdateInstalling = true;
   const { success } = await performUpdate();
   if (success) {
@@ -21561,9 +21569,9 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
     }
 
     if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
-      console.log(`Updated to v${available} and restarted daemon.\n`);
+      console.error(`Updated to v${available} and restarted daemon.\n`);
     } else {
-      console.log(`Updated to v${available}.\n`);
+      console.error(`Updated to v${available}.\n`);
     }
   } else {
     recordUpdateFailure(available);

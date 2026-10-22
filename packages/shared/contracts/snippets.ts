@@ -699,6 +699,44 @@ export const BROWSER_SECTION: SectionSpec = {
   endMarker: BROWSER_SNIPPET_END,
 };
 
+export const VAULT_SNIPPET_END = "<!-- /codecast-vault -->";
+export const VAULT_SNIPPET = `
+## Vault
+
+Credentials come from the team's Vault: never ask a person to paste one into chat. When one is missing, \`cast vault request <name> --why "…"\` and end your turn dormant naming it; filling it wakes you. A printed value enters the transcript, so prefer \`cast vault run [names] -- <cmd>\` over \`get\` (with \`[vault]\` in workspace.toml, no names or .env needed), and never echo, log or write a value into a tracked file. \`cast vault otp <name>\` gives a 2FA code. Saved sign-ins load by themselves on \`cast browser open\`; after signing in somewhere new by hand, \`cast vault save-signin <site>\`. \`cast guide vault\` has the rest.
+${VAULT_SNIPPET_END}
+`;
+
+/** What `cast guide vault` prints after the body: the detail an install leaves out of CLAUDE.md. */
+export const VAULT_REFERENCE = `
+\`\`\`bash
+cast vault ls                                    # what you can use, open requests first
+cast vault run [names…] -- <cmd>                 # values in the command's env, never in output
+cast vault get <name> [--field password]         # one raw value, for a pipe or $(…)
+cast vault otp <name>                            # a login's current 2FA code
+cast vault request <name> --env VAR --why "…"    # ask a person; --kind login|file|signin
+cast vault save-signin <site>                    # the agent browser's sign-in, for every agent
+cast vault show <name>                           # details and recent use by session; never the value
+cast vault env [names…]                          # export lines for eval; leaves file secrets out
+cast vault add <name> --env VAR --site <host>    # value from a hidden prompt, stdin, --file or --from-env
+cast vault rotate <name> | fill <name>           # a new value, or the value a request waits for
+cast vault rm <name> --yes
+\`\`\`
+
+\`run\` maps each kind to the environment: a key to its \`--env\` names (or \`NAME_UPPER\`), a login to \`NAME_USERNAME\` and \`NAME_PASSWORD\`, a file to the path of a 0600 temp file removed when the command exits. The exit code is the command's. A value is never an argument: \`add\`, \`rotate\` and \`fill\` read it from a hidden prompt, stdin, \`--file\` or \`--from-env\`. Writes go to the repo profile's team, else the active team, else personal; \`--team\` names another.
+
+A \`[vault]\` line in \`.codecast/workspace.toml\` is \`ENV_VAR = "secret-name"\`, or \`{ secret = "secret-name", required = true }\` when \`cast dev\` must not start without it. \`cast vault ls\` marks the secrets this repo maps and names the \`cast vault request\` for each one the Vault lacks.
+
+Saved sign-ins load only into an agent browser that is not the human's own Chrome (a cloud host, a separate profile); their Chrome already holds their own logins. \`save-signin\` reads the agent browser a person just signed in through; \`--from-chrome\` reads the human's Chrome on this machine instead. A sign-in goes to the team unless \`--personal\`, so save someone's own account for the team only when they asked.
+
+Every read is recorded against this session, and the Vault page shows it. A value that reaches output anyway shows up as \`[redacted:known:<name>]\`: the Vault's name for it, not a broken string. \`cast vault request\` on a name that already has a value says so and asks for nothing.
+`;
+
+export const VAULT_SECTION: SectionSpec = {
+  headings: ["## Vault"],
+  endMarker: VAULT_SNIPPET_END,
+};
+
 export const COMPUTER_SNIPPET_END = "<!-- /codecast-computer -->";
 export const COMPUTER_SNIPPET = `
 ## Computer
@@ -1405,6 +1443,25 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     enabledKey: "browser_enabled",
     versionKey: "browser_version",
     section: { spec: BROWSER_SECTION, body: BROWSER_SNIPPET, reference: BROWSER_REFERENCE },
+  },
+  {
+    slug: "vault",
+    aliases: ["secrets", "secret", "passwords"],
+    name: "Vault",
+    category: "hands",
+    desc: "Team keys, logins and sign-ins for agents, never pasted in chat (cast vault)",
+    detail:
+      "Adds `cast vault` so agents take credentials from the team's Vault instead of the " +
+      "conversation: `cast vault run` puts keys into one command's environment without printing " +
+      "them, `cast vault otp` gives a 2FA code, and saved sign-ins load into an agent's browser " +
+      "on their own. A missing credential is never asked for in chat: the agent runs " +
+      "`cast vault request`, a person fills a masked field in the conversation or on the Vault " +
+      "page, and the session continues. Every read is recorded against the session that made it.",
+    writesTo: "CLAUDE.md — a ## Vault section with the command reference",
+    shipped: "2026-10-22",
+    enabledKey: "vault_enabled",
+    versionKey: "vault_version",
+    section: { spec: VAULT_SECTION, body: VAULT_SNIPPET, reference: VAULT_REFERENCE },
   },
   {
     slug: "computer",

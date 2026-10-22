@@ -256,6 +256,7 @@ import { getPosition, setPosition } from "./positionTracker.js";
 import { TokenDecryptError } from "./tokenEncryption.js";
 import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerToken.js";
 import { startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
+import { vaultRedactionSource } from "./secrets/redactionSource.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { launchTokenLedger } from "./launchToken.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
@@ -8732,6 +8733,16 @@ async function executeRemoteCommand(
         // cloud/browserSync.ts. The child's line holds counts, never a cookie.
         const { handleBrowserSyncCommand } = await import("./cloud/browserSync.js");
         const out = await handleBrowserSyncCommand(commandArgs, { isRemoteDevice, runCastCommand, log, childErrorDetail });
+        result = out.result;
+        error = out.error;
+        break;
+      }
+      case "vault_capture_signin": {
+        // The web's Save sign-in from this laptop's Chrome. The child reads
+        // the cookies and stores them in the Vault; its line holds counts and
+        // a name, never a cookie (secrets/signinCommand.ts).
+        const { handleCaptureSigninCommand } = await import("./secrets/signinCommand.js");
+        const out = await handleCaptureSigninCommand(commandArgs, { isRemoteDevice, runCastCommand, log, childErrorDetail });
         result = out.result;
         error = out.error;
         break;
@@ -29567,6 +29578,14 @@ async function main(): Promise<void> {
       if (!token) return [];
       try { return [token, secretFromStored(token)]; } catch { return [token]; }
     },
+    vault: vaultRedactionSource({
+      endpoint: () => {
+        const siteUrl = getSiteUrl();
+        const apiToken = getAuthToken();
+        return siteUrl && apiToken ? { siteUrl, apiToken } : null;
+      },
+      log,
+    }),
     log,
   });
   resumeStartedSessionDiscovery();
