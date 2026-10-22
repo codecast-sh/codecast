@@ -346,7 +346,7 @@ async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<bo
 // learn the question is gone.
 export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = "Cancelled by user"): Promise<void> {
   if (run.status === "completed" || run.status === "failed") return;
-  await withdrawOpenGate(ctx, run, now);
+  await withdrawOpenGate(ctx, { ...run, status: "failed", fail_reason: reason }, now);
   await ctx.db.patch(run._id, { status: "failed", fail_reason: reason, updated_at: now });
   await stopStationHands(ctx, run);
 }
@@ -378,10 +378,26 @@ export async function stopStationHands(ctx: Ctx, run: any, nodeIds?: string[]): 
 
 // A run that ends, however it ends, takes back the question it was waiting
 // on: no card stays in the queue, or its notice unread, for a run that is over.
+// So does the question a presenting station (a gate's `asker=`) posted for a
+// gate that never took it up (its card refused until the run failed): that
+// question exists only for the gate, so an answer would drive nothing
+// (sd-1072 on ct-61115). What other stations post (a proposal for an
+// expectation) is answered on its own and stays.
 async function withdrawOpenGate(ctx: Ctx, run: any, now: number): Promise<void> {
-  if (!run.gate_decision_id) return;
-  const decision = await ctx.db.get(run.gate_decision_id);
+  const decision = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
   if (decision && decision.status === "pending") await withdrawCore(ctx, decision, now);
+  if (!run.primary_conversation_id) return;
+  const wf: any = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  const askers = new Set<string>(((wf?.nodes ?? []) as Array<{ type?: string; asker?: string }>).filter((n) => n.type === "human" && n.asker).map((n) => n.asker!));
+  if (!askers.size) return;
+  const why = `The run that asked it ${run.status === "failed" && run.fail_reason ? `stopped (${run.fail_reason})` : "ended"} before its gate took the question up, so an answer would drive nothing.`;
+  for (const node of run.node_statuses ?? []) {
+    if (!node.session_id || !askers.has(node.node_id)) continue;
+    const conv: any = await findConversationByAnyRef(ctx as any, node.session_id, run.user_id);
+    if (!conv || String(conv.parent_conversation_id ?? "") !== String(run.primary_conversation_id)) continue;
+    const open = await ctx.db.query("session_decisions").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id).eq("status", "pending")).collect();
+    for (const d of open) if (!d.workflow_run_id) await withdrawCore(ctx, d as any, now, undefined, why);
+  }
 }
 
 // A run created for a task logs into a session of its own, and nobody talks
@@ -603,6 +619,10 @@ export async function createRunCore(
     fallback_team_id?: Id<"teams">;
     // Start a run even though the task's bound run is still live (LE1.4).
     force?: boolean;
+    // A new line run on a problem proves against unfixed code: the machine sets
+    // the problem's earlier branch aside and starts it again from origin/main
+    // (cli lineTrialBranch.ts). Its fix stays on the set-aside branch, prior art.
+    fresh_branch?: boolean;
     now?: number;
   },
 ): Promise<{ run_id: Id<"workflow_runs">; primary_conversation_id: Id<"conversations"> }> {
@@ -628,6 +648,7 @@ export async function createRunCore(
     node_statuses: [],
     goal_override: opts.goal_override,
     project_path: opts.project_path,
+    ...(opts.fresh_branch && opts.task ? { fresh_branch: true } : {}),
     created_at: now,
     updated_at: now,
   });
@@ -736,6 +757,8 @@ export const createFromCli = mutation({
       const match = wf.find(w => w.name === args.workflow_name);
       if (match) workflowDocId = match._id;
     }
+    // A line run: the shipped line or a role's, or a line version (one that serves a scenario).
+    const lineRun = isLineRunSlug(args.workflow_name) || !!((workflowDocId ? await ctx.db.get(workflowDocId) : null) as any)?.serves?.length;
 
     const { run_id, primary_conversation_id } = await createRunCore(ctx, userId, {
       workflow_name: workflowName,
@@ -747,6 +770,7 @@ export const createFromCli = mutation({
       project_path: args.project_path,
       spawner_conversation_id: spawner?._id,
       force: args.force,
+      fresh_branch: args.detach && lineRun,
       now,
     });
     if (args.detach) await queueRunOnDaemon(ctx, userId, run_id, { device: args.run_on_device, ...(version ? { slug: version.slug } : {}), now });
@@ -1083,7 +1107,7 @@ export const updateProgress = mutation({
     // A runner that reports its run over (a signal while it waits at a gate)
     // leaves no open gate behind. The run is already patched past its pause,
     // so the withdraw keeps this report's fail_reason.
-    if (args.run_status === "completed" || args.run_status === "failed") await withdrawOpenGate(ctx, run, now);
+    if (args.run_status === "completed" || args.run_status === "failed") await withdrawOpenGate(ctx, { ...run, node_statuses: nodeStatuses, status: args.run_status, fail_reason: args.fail_reason ?? run.fail_reason }, now);
     const runOver = args.run_status === "completed" || args.run_status === "failed";
     if (runOver || args.node_status !== "running") {
       await stopStationHands(ctx, { ...run, node_statuses: nodeStatuses }, runOver ? undefined : [args.node_id]);
@@ -1470,8 +1494,8 @@ export async function resumeRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wo
  * stays on the row, a problem its failure blocked is unblocked, and `fresh_branch` has the machine read the line's
  * graph as it is now. A decision the run waited on is the caller's to settle after, once the run no longer waits on it.
  */
-export async function resumeRunAt(ctx: Ctx, userId: Id<"users">, run: Doc<"workflow_runs">, node: string, now: number): Promise<void> {
-  await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, updated_at: now });
+export async function resumeRunAt(ctx: Ctx, userId: Id<"users">, run: Doc<"workflow_runs">, node: string, now: number, opts: { newAttempt?: boolean } = {}): Promise<void> {
+  await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, ...(opts.newAttempt ? { visits_reset_at: now } : {}), updated_at: now });
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task?.execution_status === "blocked") await patchTask(ctx, task, { execution_status: undefined, execution_concerns: undefined });
   await queueRunOnDaemon(ctx, userId, run._id, { device: run.runner_device!, now });
@@ -1511,6 +1535,39 @@ export const reaskFromCli = mutation({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) return { error: "Unauthorized" };
     return reaskRunCore(ctx, auth.userId, args.run_id, { at: args.at, asker: args.asker, check: args.check });
+  },
+});
+
+/**
+ * `cast workflow resume <task> --at <station>`: a failed run tried again from a station of its graph, on its own
+ * branch, once its lead has fixed what failed it. The owner resumes it, as with reask. The run keeps what it made, and
+ * a resume is a new attempt: the visits the earlier attempt used, the cap that stops a loop within one attempt, count
+ * again from now (`visits_reset_at`, which the runner reads). The caller checks the station against the graph the run
+ * will read (as it is now, which the stored workflow may predate). A trial problem resumes under its trial's limits
+ * (cast line trial rerun <task> --at).
+ */
+export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs">, at: string, opts: { check?: boolean } = {}, now = Date.now()) {
+  const run = await ctx.db.get(runId);
+  if (!run || !(await canReadRun(ctx, userId, run))) throw new ConvexError("Run not found");
+  if (String(run.user_id) !== String(userId)) throw new ConvexError("Only the run's owner resumes it");
+  const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+  if (task && isTerminalTaskStatus(task.status)) throw new ConvexError(`${task.short_id} is ${task.status}: a closed problem is not resumed`);
+  if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast line trial rerun ${task.short_id} --at <station> resumes it under the trial's budget`);
+  if (run.status !== "failed") throw new ConvexError(`The run is ${run.status}: only a failed run is resumed at a station (a run waiting on a decision is asked again with cast workflow reask)`);
+  const node = at.trim();
+  if (!node) throw new ConvexError("Name the station to resume at");
+  if (!run.runner_device) throw new ConvexError("The run names no machine to pick it up");
+  if (opts.check) return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node };
+  await resumeRunAt(ctx, userId, run, node, now, { newAttempt: true });
+  return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node };
+}
+
+export const resumeFromCli = mutation({
+  args: { api_token: v.string(), run_id: v.id("workflow_runs"), at: v.string(), check: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) return { error: "Unauthorized" };
+    return resumeFailedRunCore(ctx, auth.userId, args.run_id, args.at, { check: args.check });
   },
 });
 

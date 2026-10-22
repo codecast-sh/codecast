@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performAcceptUpgrade, performCatalog, performFileLesson, performRetire, performYank, performInstanceForRole, performInstanceStatus, performListInstances, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance } from "./orgTemplates";
+import { performAcceptUpgrade, performCatalog, performFileLesson, performRetire, performYank, performInstanceForRole, performInstanceStatus, performListInstances, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance, performWriteLoaderCharter, refuseHiredRowFromWire } from "./orgTemplates";
+import { templateLoaderPrompt } from "@codecast/shared/contracts/orgTemplateManifest";
 import { applyOrgChange } from "./orgInit";
 
 // Roles hired from a template (org-hire.md W8): the server side of publish,
@@ -14,6 +15,8 @@ const ACME = "teams_acme" as any, OTHER = "teams_other" as any, CODECAST = "team
 const WS = `team:${ACME}`;
 const P = "projects_p";
 
+const cmoRole = () => ({ _id: "role-1", short_id: "or-1", handle: "acme-growth-cmo", name: "CMO", status: "active", trust: "understand", scope_type: "team", team_id: ACME, host_user_id: ME, reports_to: { kind: "user", user_id: ME }, scope: { project_ids: [P], plan_ids: [] }, created_at: 1, updated_at: 1 });
+
 function fixtures(over: Record<string, any[]> = {}) {
   return makeFakeDb({
     users: [{ _id: ME, name: "Me" }, { _id: MATE, name: "Mate" }, { _id: OUT, name: "Out" }],
@@ -25,7 +28,7 @@ function fixtures(over: Record<string, any[]> = {}) {
     ],
     teams: [{ _id: ACME, name: "Acme" }, { _id: OTHER, name: "Other" }, { _id: CODECAST, name: "Codecast" }],
     projects: [{ _id: P, user_id: ME, team_id: ACME, workspace: WS, short_id: "pr-1", title: "Growth", status: "active", created_at: 1, updated_at: 1 }],
-    org_roles: [{ _id: "role-1", short_id: "or-1", handle: "acme-growth-cmo", name: "CMO", status: "active", trust: "understand", scope_type: "team", team_id: ACME, host_user_id: ME, reports_to: { kind: "user", user_id: ME }, scope: { project_ids: [P], plan_ids: [] }, created_at: 1, updated_at: 1 }],
+    org_roles: [cmoRole()],
     org_templates: [], org_template_instances: [], org_template_lessons: [],
     counters: [], org_changes: [], org_role_history: [], anchors: [], conversations: [], session_owners: [], managed_sessions: [], tasks: [], plans: [], docs: [],
     ...over,
@@ -174,6 +177,43 @@ describe("the hire and upgrade changes through the org apply core (org-hire.md H
     const up = await applyOrgChange(humanCtx(db), ME, boundary, { kind: "upgrade", instance: "acme-growth", template: "growth", to: "2.1.0", digest: D2 }, human);
     expect((up as any).note).toContain("bind acme-growth --to 2.1.0");
     expect((await db.get(rows[0]._id)).pending_upgrade).toMatchObject({ to: "2.1.0", digest: D2, accepted_by: ME });
+  });
+});
+
+describe("the loader charter of a web hire (org-hire.md H3)", () => {
+  beforeEach(() => { process.env.CODECAST_TEMPLATES_TEAM_ID = CODECAST; });
+  afterEach(() => { delete process.env.CODECAST_TEMPLATES_TEAM_ID; });
+  const boundary = { team_id: ACME } as any;
+  const human = { provision: false, human_decision: "sd-1" } as any;
+  const humanCtx = (db: any) => ({ db, auth: { getUserIdentity: async () => ({ subject: ME }) } }) as any;
+  const other = { _id: "role-2", short_id: "or-2", handle: "acme-seo", name: "SEO", status: "active", trust: "understand", scope_type: "team", team_id: ACME, host_user_id: ME, reports_to: { kind: "user", user_id: ME }, scope: { project_ids: [P], plan_ids: [] }, charter: "The person's words", created_at: 1, updated_at: 1 };
+  test("the host step writes its own hire's loader on the accept, from a terminal, and nothing else", async () => {
+    const db = fixtures({ org_roles: [cmoRole(), other] });
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: manifest(), digest: D1, status: "stable" });
+    const terminal = ctx(db); // an api token call: no browser identity
+    const write = { project_id: P as any, instance: "acme-growth", role_id: "role-1" as any, dir: "/src/acme" };
+    // Nothing hired yet: no authority.
+    await expect(performWriteLoaderCharter(terminal, ME, write)).rejects.toThrow(/awaiting its host step/);
+    await applyOrgChange(humanCtx(db), ME, boundary, { kind: "hire", handle: "acme-growth-cmo", template: "growth", version: "2.0.0", digest: D1, instance: "acme-growth", project: "pr-1" }, human);
+    // Another role, a relative folder: refused, and the other role's charter stands.
+    await expect(performWriteLoaderCharter(terminal, ME, { ...write, role_id: "role-2" as any })).rejects.toThrow(/another role/);
+    await expect(performWriteLoaderCharter(terminal, ME, { ...write, dir: "src/acme" })).rejects.toThrow(/absolute folder/);
+    expect((await db.get("role-2" as any)).charter).toBe("The person's words");
+    // The hire's own role gets the loader the server builds, under the charter the person gave it, once.
+    await db.patch("role-1" as any, { charter: "Owns growth for Acme." });
+    const loader = templateLoaderPrompt("/src/acme", "acme-growth", "charter");
+    await performWriteLoaderCharter(terminal, ME, write);
+    expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${loader}`);
+    await performWriteLoaderCharter(terminal, ME, write);
+    expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${loader}`);
+    // Once the host claims the row, the charter is the person's again.
+    await performUpsertInstance(ctx(db), ME, { instance_key: "receipt-uuid", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: D1, project_id: P as any, role_id: "role-1" as any, host: { machine: "mbp", dir: "/src/acme" }, phase: "ready" });
+    await expect(performWriteLoaderCharter(terminal, ME, { ...write, dir: "/elsewhere" })).rejects.toThrow(/awaiting its host step/);
+  });
+  test("the wire cannot write the row that authorises it", () => {
+    expect(() => refuseHiredRowFromWire({ instance_key: "pending:p:acme-growth" })).toThrow(/accepting the hire/);
+    expect(() => refuseHiredRowFromWire({ instance_key: "receipt-uuid", phase: "awaiting_host" })).toThrow(/accepting the hire/);
+    expect(() => refuseHiredRowFromWire({ instance_key: "receipt-uuid", phase: "ready" })).not.toThrow();
   });
 });
 

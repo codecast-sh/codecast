@@ -211,6 +211,24 @@ describe("workflow/runner (command nodes)", () => {
     expect(cap.logs.some(l => l.includes("hello-world"))).toBe(true);
   });
 
+  // ct-58757: Verify sent Implement back twice, and both later hands, told
+  // nothing of why, checked their own work again and handed it in unchanged.
+  test("a station the run comes back to is told which station sent it back and what it found", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start  [shape=Mdiamond]
+      impl   [label="Implement", shape=parallelogram, max_visits=3, script="echo impl-sees-[$sent_back]"]
+      verify [label="Verify", shape=parallelogram, script="if [ -f ${tmpDir}/twice ]; then exit 0; fi; touch ${tmpDir}/twice; echo tests-failed-in-a.test.ts; exit 1"]
+      exit   [shape=Msquare]
+      start -> impl -> verify
+      verify -> impl [condition="outcome = failure"]
+      verify -> exit [condition="outcome = success"]
+    }`);
+    expect(await runWorkflow(g, { cwd: tmpDir })).not.toBe("failed");
+    const seen = cap.logs.filter(l => l.includes("impl-sees-") && !l.includes("$ echo"));
+    expect(seen[0]).toContain("impl-sees-[]");
+    expect(seen[1]).toContain("impl-sees-[Verify: tests-failed-in-a.test.ts]");
+  });
+
   test("command node honors a per-node timeout attribute (seconds)", async () => {
     const g = parseWorkflowSource(`digraph g {
       start [shape=Mdiamond]
@@ -778,6 +796,24 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(cap.logs.some(l => l.includes("jx7hand stopped on an auth error"))).toBe(true);
   }, 30000);
 
+  test("a station routed on its outcome whose hand died fails its run with the hand's reason", async () => {
+    // ct-60973's Refine, 2026-10-22: the hand stopped on "API Error: 401 OAuth
+    // access token has expired" and the run failed as "no outgoing edge from
+    // refine (outcome failure)", which names no cause.
+    pinned = { state: "", status: "" };
+    inboxReads = [{ id: "conv_hand", work_state: "needs_input", is_live: false, message_count: 4, blocked_on: "auth", session_error: "API Error: 401 OAuth access token has expired" } as any];
+    const routed = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      refine [label="Refine", backend=session, agent=claude, prompt="refine it"]
+      exit [shape=Msquare]
+      start -> refine
+      refine -> exit [condition="outcome = success"]
+    }`);
+    expect(await runWorkflow(routed, { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions)).toBe("failed");
+    const failed = calls.find(c => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed");
+    expect(String(failed?.body.fail_reason)).toContain("hand jx7hand at refine stopped on an auth error before doing the work: API Error: 401");
+  }, 30000);
+
   test("a hand that pinned its result passes even before its transcript has synced", async () => {
     inboxReads = [{ id: "conv_hand", work_state: "done", is_live: false, message_count: 0 } as any];
     expect(await run()).toBe("completed");
@@ -976,6 +1012,105 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
   }, 30000);
 });
 
+// ── A station answered by its handoff ────────────────────────────────────────
+
+describe("workflow/runner (a station whose edges route on the handoff)", () => {
+  const handedOff = { status: "in_review", execution_status: "done" };
+  let tmpDir: string;
+  let cap: ReturnType<typeof captureConsole>;
+  let origFetch: typeof fetch;
+  let calls: Array<{ route: string; body: any }>;
+  let inboxReads: Array<Record<string, unknown>>;
+  // The task as the server holds it; the hand hands off on its Nth inbox read.
+  let task: { status: string; execution_status?: string };
+  let handsOffAtRead: number;
+  let pinned: { state: string; status: string };
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    cap = captureConsole();
+    origFetch = globalThis.fetch;
+    calls = [];
+    inboxReads = [];
+    task = { status: "in_progress" };
+    handsOffAtRead = Infinity;
+    pinned = { state: "", status: "" };
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      const body = JSON.parse(init?.body || "{}");
+      calls.push({ route, body });
+      const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
+      if (route === "/cli/spawn") return reply({ conversation_id: "conv_hand", short_id: "jx7hand" });
+      if (route === "/cli/inbox") {
+        if (calls.filter(c => c.route === "/cli/inbox").length >= handsOffAtRead) task = handedOff;
+        return reply({ sessions: [inboxReads.length > 1 ? inboxReads.shift() : inboxReads[0]] });
+      }
+      if (route === "/cli/sessions/state/get") return reply(pinned);
+      if (route === "/cli/work/get") return reply(task);
+      if (route === "/cli/work/update") task = { status: body.status ?? task.status };
+      return reply({ ok: true });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    cap.restore();
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  const graph = () => parseWorkflowSource(`digraph line {
+    start [shape=Mdiamond]
+    implement [label="Implement", backend=session, agent=claude, prompt="build it"]
+    verify [shape=parallelogram, script="true"]
+    exit [shape=Msquare]
+    start -> implement
+    implement -> verify [condition="handoff = done"]
+    verify -> exit
+  }`);
+  const run = () => runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, handoffAskGraceMs: 50 } as RunOptions);
+
+  test("a hand that handed off is done, though a dormant pin and its background work keep it parked", async () => {
+    // ct-58311, ct-61013, ct-58686 (2026-10-22): each Implement hand handed
+    // off and ended its turn; a dormant pin from an earlier wait, or a check
+    // it left running, kept its session parked until the 180 minute timeout.
+    inboxReads = [{ id: "conv_hand", work_state: "dormant", is_live: true, agent_status: "waiting", message_count: 140 }];
+    pinned = { state: "Waiting on the project check", status: "dormant" };
+    handsOffAtRead = 3;
+    expect(await run()).toBe("completed");
+    expect(cap.logs.some(l => l.includes("handed off"))).toBe(true);
+    expect(calls.some(c => c.route === "/cli/messages/send")).toBe(false);
+  }, 30000);
+
+  test("a hand read as finished without a handoff is asked once, and its handoff then routes the run", async () => {
+    // ct-60376, ct-57854, ct-61269, ct-58286: the hand read idle in the middle
+    // of a tool call and the run routed on an empty handoff.
+    inboxReads = [{ id: "conv_hand", work_state: "needs_input", is_live: false, message_count: 22 }];
+    handsOffAtRead = 4;
+    expect(await run()).toBe("completed");
+    const asks = calls.filter(c => c.route === "/cli/messages/send");
+    expect(asks.length).toBe(1);
+    expect(asks[0]!.body.to).toBe("conv_hand");
+    expect(asks[0]!.body.body).toContain("cast task handoff ct-9");
+  }, 30000);
+
+  test("a hand that settles again without a handoff fails the station instead of routing", async () => {
+    inboxReads = [{ id: "conv_hand", work_state: "needs_input", is_live: false, message_count: 22 }];
+    expect(await run()).toBe("failed");
+    expect(calls.filter(c => c.route === "/cli/messages/send").length).toBe(1);
+    const failed = calls.find(c => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed");
+    expect(String(failed?.body.fail_reason)).toContain("ended its turn without a handoff, also after being asked for one");
+  }, 30000);
+
+  test("a task still in review from the last round goes back in progress when the station starts", async () => {
+    inboxReads = [{ id: "conv_hand", work_state: "working", is_live: true, message_count: 3 }];
+    task = handedOff;
+    handsOffAtRead = 3;
+    expect(await run()).toBe("completed");
+    const reopen = calls.find(c => c.route === "/cli/work/update" && c.body.status === "in_progress");
+    expect(reopen?.body.short_id).toBe("ct-9");
+  }, 30000);
+});
+
 // ── A gate's change card (LE11) ──────────────────────────────────────────────
 
 describe("gatePayload card", () => {
@@ -1042,4 +1177,82 @@ describe("refreshedOnResume (line-versions.md LV4)", () => {
   test("a station the graph dropped is skipped", () => {
     expect(refreshedOnResume(g, ["gone", "later"]).map((n) => n.id)).toEqual(["later"]);
   });
+});
+
+// ── A presenter the run sends back ───────────────────────────────────────────
+
+describe("workflow/runner (a station that presents a decision, sent back to)", () => {
+  let tmpDir: string;
+  let cap: ReturnType<typeof captureConsole>;
+  let origFetch: typeof fetch;
+  let calls: Array<{ route: string; body: any }>;
+  // The presenter's pin, as the server stamps it: its last visit's until it pins again.
+  let pin: { state: string; status: string; at: number };
+  let readsSinceSend: number;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    cap = captureConsole();
+    origFetch = globalThis.fetch;
+    calls = [];
+    pin = { state: "", status: "", at: 0 };
+    readsSinceSend = -1;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      const body = JSON.parse(init?.body || "{}");
+      calls.push({ route, body });
+      const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
+      if (route === "/cli/spawn") {
+        pin = { state: "Posted the decision", status: "done", at: 100 };
+        return reply({ conversation_id: "conv_presenter", short_id: "jx7pres" });
+      }
+      if (route === "/cli/messages/send") readsSinceSend = 0;
+      if (route === "/cli/inbox") {
+        // Brought back, it works a while and then pins again.
+        if (readsSinceSend >= 0 && ++readsSinceSend === 4) pin = { state: "Corrected the decision", status: "done", at: 200 };
+        return reply({ sessions: [{ id: "conv_presenter", work_state: pin.status || "working", is_live: readsSinceSend > 0, message_count: 12 }] });
+      }
+      if (route === "/cli/sessions/state/get") return reply(pin);
+      return reply({ ok: true });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    cap.restore();
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  // The card refuses the first report and takes the second.
+  const graph = () => parseWorkflowSource(`digraph line {
+    start [shape=Mdiamond]
+    present [label="Present", backend=session, agent=claude, max_visits=2, prompt="present it"]
+    card [shape=parallelogram, script="test -f ${tmpDir}/refused && exit 0; touch ${tmpDir}/refused; exit 1"]
+    decide [shape=hexagon, asker=present, prompt="ship?"]
+    exit [shape=Msquare]
+    start -> present
+    present -> card
+    card -> decide [condition="outcome = success and card.exit_code = 7"]
+    card -> exit [condition="outcome = success"]
+    card -> present [condition="outcome = failure"]
+    decide -> exit [label="[s] Ship"]
+  }`);
+  const run = () => runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
+
+  test("goes back to the hand that posted the decision, with its brief, and waits for it to pin again", async () => {
+    // ct-61115: a fresh Present hand found sd-1072 posted by its predecessor,
+    // re-pinned the same report, and the run failed on max_visits with the
+    // decision linked to nothing.
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/spawn").length).toBe(1);
+    const sends = calls.filter(c => c.route === "/cli/messages/send");
+    expect(sends.length).toBe(1);
+    expect(sends[0]!.body.to).toBe("conv_presenter");
+    expect(sends[0]!.body.wake).toBe(true);
+    expect(sends[0]!.body.body).toContain("present it");
+    // It settled on the new pin, not on the one it left last visit.
+    const settled = calls.filter(c => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "present" && c.body.node_status === "completed");
+    expect(settled.length).toBe(2);
+    expect(readsSinceSend).toBeGreaterThanOrEqual(4);
+  }, 30000);
 });

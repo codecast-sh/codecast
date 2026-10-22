@@ -1,5 +1,5 @@
 // How bytes land in a vault, and how a path leaves one. Both writers — the
-// loopback routes the browser uses (vaultServer.ts) and the `cast vault`
+// loopback routes the browser uses (vaultServer.ts) and the `cast files`
 // commands an agent uses — go through here, so a note saved from a browser tab
 // and a note saved from a terminal are written the same way and a delete means
 // the same thing on both. Two implementations of "delete a note" is how one of

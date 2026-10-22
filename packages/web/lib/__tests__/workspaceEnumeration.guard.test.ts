@@ -50,6 +50,7 @@ const ALLOWED = new Map<string, string>([
   ["app/projects/[id]/page.tsx", "short id LOOKUP of the one project the address names (pj-…)"],
   ["hooks/useLineWorkspace.ts", "short id / slug LOOKUP of the one project a /line address names, settling a shared slug on the active workspace"],
   ["hooks/useLineSpace.ts", "counts problems per workspace the viewer belongs to (the /line workspace switcher's choices and numbers) and a short_id LOOKUP of the one problem a /line link names; renders no row"],
+  ["store/lineWorkflowSlice.ts", "slug LOOKUP of the viewer's own workflow for a write the server re-authorizes; renders nothing"],
   ["store/lineSlice.ts", "the slice that owns lineLabels, finding the viewer's own label by its natural key for a write the server re-authorizes; renders nothing"],
   ["store/orgLens.ts", "project id to goal LOOKUP, read only for the projects of sessions already on screen; renders no goal row"],
   ["store/trialSlice.ts", "the slice that owns trialCards, marking the cards of the one problem a write names; renders nothing"],

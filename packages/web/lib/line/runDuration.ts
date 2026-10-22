@@ -37,7 +37,12 @@ export function workMs(run: Pick<DurationRun, "node_statuses">): number | null {
 
 /** The median working time of the given runs that finished having built a fix, in ms; null under MIN_RUNS of them. */
 export function medianRunMs(runs: ReadonlyArray<DurationRun>): number | null {
-  const ms = runs.filter(finished).map(workMs).filter((m): m is number => m != null && m > 0).sort((a, b) => a - b);
+  return medianOf(runs.filter(finished).map(workMs).filter((m): m is number => m != null && m > 0));
+}
+
+/** The median of working times, in ms; null under MIN_RUNS of them. */
+function medianOf(times: ReadonlyArray<number>): number | null {
+  const ms = [...times].sort((a, b) => a - b);
   if (ms.length < MIN_RUNS) return null;
   const mid = ms.length >> 1;
   return ms.length % 2 ? ms[mid] : Math.round((ms[mid - 1] + ms[mid]) / 2);
@@ -57,10 +62,30 @@ export function useRunDuration(projectIds: string | ReadonlyArray<string> | null
   const key = typeof projectIds === "string" ? projectIds : (projectIds ?? []).join(",");
   const sig = useInboxStore((s) => {
     if (!key) return "";
-    const ids = new Set(key.split(","));
-    const tasks = s.tasks as Record<string, { project_id?: string | null }>;
-    const own = (Object.values((s as unknown as { workflowRuns?: Record<string, DurationRun> }).workflowRuns ?? {})).filter((r) => { const p = r.task_id ? tasks[r.task_id]?.project_id : null; return !!p && ids.has(p); });
-    return String(medianRunMs(own) ?? "");
+    const by = workTimesByProject((s as unknown as { workflowRuns?: Record<string, DurationRun> }).workflowRuns, s.tasks as Record<string, { project_id?: string | null }>);
+    return String(medianOf([...new Set(key.split(","))].flatMap((p) => by.get(p) ?? [])) ?? "");
   });
   return useMemo(() => (sig ? Number(sig) : null), [sig]);
+}
+
+/** Each project's finished runs' working times, read once per change of the runs or the tasks: every control that
+ *  says a duration reads the same index, so a list of them costs one pass over the runs, not one each. */
+const workTimes = new WeakMap<object, { tasks: object; by: Map<string, number[]> }>();
+const NO_RUNS: Record<string, DurationRun> = {};
+
+function workTimesByProject(runs: Record<string, DurationRun> | undefined, tasks: Record<string, { project_id?: string | null }>): Map<string, number[]> {
+  const rows = runs ?? NO_RUNS;
+  const hit = workTimes.get(rows);
+  if (hit && hit.tasks === tasks) return hit.by;
+  const by = new Map<string, number[]>();
+  for (const r of Object.values(rows)) {
+    const p = r.task_id ? tasks?.[r.task_id]?.project_id : null;
+    if (!p || !finished(r)) continue;
+    const ms = workMs(r);
+    if (ms == null || ms <= 0) continue;
+    const at = by.get(p);
+    if (at) at.push(ms); else by.set(p, [ms]);
+  }
+  workTimes.set(rows, { tasks, by });
+  return by;
 }

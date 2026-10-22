@@ -26,10 +26,11 @@ import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
 import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
-import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, type RingStub } from "./ringStubs";
+import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, settleRingIn, type RingStub } from "./ringStubs";
 import { getScribeStatus, startScribe, stopScribe } from "./transcription";
 import type { ScribeRoute } from "./scribeEngine";
-import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { chosenDevice, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { DEVICE_KINDS, onDevicesChanged } from "./deviceRank";
 import { switchRecorderMic } from "./recorder";
 import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
@@ -222,7 +223,7 @@ function startLevelMeter() {
 // here for the life of the seat and re-sent with every re-take.
 let walkieJoinedSeat: string | null = null;
 
-async function controlJoin(roomKey: string, opts?: { walkieJoin?: boolean }) {
+async function controlJoin(roomKey: string, opts?: { walkieJoin?: boolean; private?: boolean }) {
   if (!convex) throw new Error("calls not bound yet");
   if (opts?.walkieJoin) walkieJoinedSeat = roomKey;
   await convex.mutation(api.calls.joinRoom, {
@@ -232,6 +233,7 @@ async function controlJoin(roomKey: string, opts?: { walkieJoin?: boolean }) {
     // Only ever true, never false: the stamp says a conversation started here
     // and nothing takes that back but leaving.
     ...(opts?.walkieJoin || walkieJoinedSeat === roomKey ? { walkie_join: true } : {}),
+    ...(opts?.private ? { private: true } : {}),
   });
 }
 
@@ -383,6 +385,10 @@ export type JoinOpts = {
    *  The seat, its stamps, the phase and the mute all carry through, and a
    *  failure is handed back to the retry loop instead of ending the call. */
   rejoin?: boolean;
+  /** Start the huddle private (calls.joinRoom `private`): locked, unlisted to
+   *  the team, its record kept to the people in it. Only a join that opens an
+   *  empty room starts a huddle, so it means nothing anywhere else. */
+  private?: boolean;
 };
 
 /**
@@ -1167,6 +1173,20 @@ export async function switchDevice(
   } catch {}
 }
 
+// A device that comes or goes mid-call moves the call to the best-ranked one
+// plugged in: headphones put on during a call carry it, and pulling them off
+// falls back to the next device the person ranked rather than the OS's pick.
+onDevicesChanged(() => {
+  for (const kind of DEVICE_KINDS) {
+    const want = chosenDevice(kind);
+    if (!want) continue;
+    if (kind === "audioinput") void switchRecorderMic(want);
+    if (room && (room.getActiveDevice(kind) ?? "default") !== want) {
+      void room.switchActiveDevice(kind, want).catch(() => {});
+    }
+  }
+});
+
 // ── ringing ───────────────────────────────────────────────────────────────
 
 // Ring people into a room, joining it yourself first (the caller waits
@@ -1176,22 +1196,20 @@ export async function switchDevice(
 // clicking "huddle at someone" is the intent to talk, so they are speaking
 // the moment anyone answers (joining an existing room stays muted — the
 // shoulder-tap contract — this is the one deliberate exception).
-export async function startHuddle(opts: {
+export type StartHuddleOpts = {
   roomKey: string;
   toUserIds: string[];
   anchorTitle?: string;
   ringChannel?: boolean;
-}): Promise<void> {
+  private?: boolean;
+};
+
+export async function startHuddle(opts: StartHuddleOpts): Promise<void> {
   if (voiceHostElsewhere() && (await sendVoiceCommand("startHuddle", [opts]))) return;
   return startHuddleHere(opts);
 }
 
-async function startHuddleHere(opts: {
-  roomKey: string;
-  toUserIds: string[];
-  anchorTitle?: string;
-  ringChannel?: boolean;
-}): Promise<void> {
+async function startHuddleHere(opts: StartHuddleOpts): Promise<void> {
   if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   if (!convex) return;
   setCall({ phase: "ringing_out" as const, roomKey: opts.roomKey, error: null, errorFix: null, muted: !readJoinPrefs().micOn });
@@ -1200,7 +1218,7 @@ async function startHuddleHere(opts: {
   // ringInto settles them (or the join fails and they are taken back).
   ringStubs(opts.roomKey, opts.toUserIds, true);
   try {
-    await joinCall(opts.roomKey, { intent: "deliberate" });
+    await joinCall(opts.roomKey, { intent: "deliberate", private: opts.private });
     if (useInboxStore.getState().call.phase !== "connected") {
       ringStubs(opts.roomKey, opts.toUserIds, false);
       return;
@@ -1323,8 +1341,18 @@ async function roomStillLive(roomKey: string): Promise<boolean> {
 }
 
 export async function acceptInvite(inviteId: string, roomKey: string): Promise<void> {
+  stopRinging(inviteId);
   if (voiceHostElsewhere() && (await sendVoiceCommand("acceptInvite", [inviteId, roomKey]))) return;
   return acceptInviteHere(inviteId, roomKey);
+}
+
+/** The press answers the ring: the card, the toast and the sound all read
+ *  myCalls.incoming, so the invite leaves it now, not after the round trip. */
+function stopRinging(inviteId: string): void {
+  settleRingIn(inviteId);
+  const st = useInboxStore.getState();
+  const cur = st.myCalls ?? { incoming: [], outgoing: [], membership: null };
+  if (cur.incoming?.some((r: any) => String(r._id) === inviteId)) st.syncTable("myCalls", { ...cur });
 }
 
 async function acceptInviteHere(inviteId: string, roomKey: string): Promise<void> {
@@ -1377,6 +1405,7 @@ async function acceptInviteHere(inviteId: string, roomKey: string): Promise<void
 }
 
 export async function declineInvite(inviteId: string): Promise<void> {
+  stopRinging(inviteId);
   if (!convex) return;
   await convex
     .mutation(api.calls.respondInvite, { invite_id: inviteId, accept: false })

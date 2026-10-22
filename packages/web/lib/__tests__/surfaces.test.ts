@@ -316,4 +316,14 @@ describe("staff-only surfaces", () => {
     expect(surfaceMode(false, false, true).showsPage("/line/settings")).toBe(true);
     expect(surfaceMode(false, false, false).showsPage("/tasks")).toBe(true);
   });
+
+  test("a team with the line feature on opens the line to its members in its workspace", () => {
+    const teams = [{ _id: "t1", features: { line: true } }, { _id: "t2", features: {} }];
+    const member = (active?: string) => ({ ...state(undefined, 1), currentUser: { staff: false }, teams, clientState: { ui: active ? { active_team_id: active } : {} } });
+    expect(surfaceShown(member("t1"), "nav.line")).toBe(true);
+    expect(surfaceShown(member("t2"), "nav.line")).toBe(false);
+    // Personal borrows from the viewer's teams, like org.
+    expect(surfaceShown(member(), "nav.line")).toBe(true);
+    expect(surfaceShown({ ...member("t1"), teams: [] }, "nav.line")).toBe(false);
+  });
 });

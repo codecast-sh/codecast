@@ -29,8 +29,26 @@ export const isDefaultLeadTemplate = (templateId: string) => templateId === DEFA
 export const SLUG_RE = /^[a-z][a-z0-9-]{0,47}$/;
 export const slugOf = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/^[^a-z]+/, "").slice(0, 48);
 
+/** The handle a template's role gets for an instance name (its pattern's `{{instance}}` filled). */
+export const handleFor = (m: Pick<OrgTemplate, "role">, instance: string) => m.role.handle.replace(/\{\{\s*instance\s*\}\}/g, instance);
+/** Handles are 2 to 32 characters on the server. */
+const HANDLE_MAX = 32;
+/**
+ * The instance name the form starts with: the project's slug and the
+ * template's id, the project part cut at a word so the role's handle fits.
+ */
+export function defaultInstance(projectTitle: string, m: Pick<OrgTemplate, "id" | "role">): string {
+  const room = HANDLE_MAX - handleFor(m, `-${m.id}`).length;
+  const words = slugOf(projectTitle).split("-").filter(Boolean);
+  let base = "";
+  for (const w of words) { const next = base ? `${base}-${w}` : w; if (next.length > room) break; base = next; }
+  return base ? `${base}-${m.id}` : m.id;
+}
+
 /** The inputs a person answers in the form: everything but secrets, which bind on the host. */
 export const askedInputs = (m: OrgTemplate): TemplateInput[] => (m.inputs ?? []).filter((i) => i.kind !== "secret");
+/** The answers a hire cannot go without: required, with no default. The rest have a default or are read from the project. */
+export const requiredInputs = (m: OrgTemplate): TemplateInput[] => askedInputs(m).filter((i) => i.required && i.default === undefined);
 export const secretInputs = (m: OrgTemplate): TemplateInput[] => (m.inputs ?? []).filter((i) => i.kind === "secret");
 /** Setup steps only the person can do (W8): the hire dialog counts them and the role page puts them in front of the person one at a time. */
 export const humanSetupCount = (m: OrgTemplate): number => (m.setup ?? []).filter((s) => s.who === "human").length;
@@ -41,6 +59,7 @@ export function hireErrors(d: HireDraft): string[] {
   if (!d.template) errors.push("Choose a template");
   if (!d.project) errors.push("Choose a project");
   if (!SLUG_RE.test(d.instance)) errors.push("The instance name is a lowercase slug (a letter, then letters, digits or dashes)");
+  else if (d.template && !d.seatHandle && handleFor(d.template.manifest, d.instance).length > HANDLE_MAX) errors.push(`The role's handle @${handleFor(d.template.manifest, d.instance)} is longer than ${HANDLE_MAX} characters: shorten the name`);
   if (d.template) for (const input of askedInputs(d.template.manifest)) {
     const value = d.config[input.key];
     if (input.required && input.default === undefined && !(value ?? "").trim()) errors.push(`${input.label} is required`);
