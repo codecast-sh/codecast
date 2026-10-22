@@ -1607,6 +1607,9 @@ export default defineSchema({
       // Merges the line made today (the-line.md L12), read against the
       // role's merge authority limit (per_day).
       merges: v.optional(v.number()),
+      // Deploys the role asked for today (deploys.md DP4), read against its
+      // deploy authority limit (per_day).
+      deploys: v.optional(v.number()),
     })),
     // When the role last read its brief from its own session (orgRoles
     // .markBriefRead): `cast brief` shows what changed since (org-staffing.md S25).
@@ -3763,6 +3766,9 @@ export default defineSchema({
     })),
     // Why it failed, or the deploy command's last words.
     note: v.optional(v.string()),
+    // The line-deploy run that carries it through its steps (DP8): each
+    // step's state is that run's station, read from the run, never copied here.
+    run_id: v.optional(v.id("workflow_runs")),
     created_at: v.number(),
     live_at: v.optional(v.number()),
     finished_at: v.optional(v.number()),
@@ -6224,6 +6230,9 @@ export default defineSchema({
     // moved it off (its fingerprint is then the new issue's key).
     merged_into: v.optional(v.string()),
     split_from: v.optional(v.string()),
+    // The problem a merge moved this finding off (signals.foldProblem), so the
+    // merge can be undone exactly (signals.unfoldProblem).
+    folded_from: v.optional(v.id("tasks")),
     // A judge's finding marked wrong, and what diagnosing it found
     // (learning-loop.md LL11, convex/judgeReview.ts). The finding stays where
     // it was filed; the case it became is a signal of its own (case_of).
@@ -7006,6 +7015,14 @@ export default defineSchema({
     team_id: v.id("teams"),
     locked: v.boolean(),
     locked_by: v.id("users"),
+    // A PRIVATE HUDDLE, chosen at start (calls.joinRoom `private`). It is
+    // locked like any locked room, and goes further: teammates outside it do
+    // not see it in their live rooms at all, a teammate who can merely see
+    // the session it is about is not let in (only its owner and whoever made
+    // it private), and the call record is marked private too
+    // (transcripts.private). Dies with the huddle like the lock; opening the
+    // door clears it.
+    private: v.optional(v.boolean()),
     // The huddle's opt-out from transcription. Every huddle transcribes by
     // default (any deliberate participant's client becomes the scribe), so
     // "stop transcribing" has to be a fact about the ROOM or the next client
@@ -7310,6 +7327,11 @@ export default defineSchema({
     // team_id says (team_id is routing, never access — canReadCall is the
     // gate). Meaningless on huddles, which have the room's own rules.
     rec_shared: v.optional(v.boolean()),
+    // A huddle started private (call_room_state.private). Its record belongs
+    // to the people who were in it: whoever spoke, was filmed or started it,
+    // and for a people room the people its key names. Room membership that
+    // reaches further (a team-visible session, a channel) grants nothing here.
+    private: v.optional(v.boolean()),
     // Public sharing: "anyone with the link" (publicShare.ts). A grant to
     // read this one call's record, never to join its room.
     share_token: v.optional(v.string()),
@@ -7908,6 +7930,9 @@ export default defineSchema({
     // A rerun from the trial page: its runner sets the earlier run's branch
     // aside and starts from origin/main (cli lineTrialBranch.ts).
     fresh_branch: v.optional(v.boolean()),
+    // When a failed run was last resumed at a station as a new attempt: its
+    // runner counts each station's visits again from then (cli runResume.ts).
+    visits_reset_at: v.optional(v.number()),
   })
     .index("by_share_token", ["share_token"])
     // A daemon's sweep for its own live runs whose runner is gone.

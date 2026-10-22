@@ -2,6 +2,7 @@ import { LocalParticipant, Room, Track, type Participant } from "livekit-client"
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import { callParticipantKind } from "@codecast/shared/contracts";
 import { isMediaDenial } from "./mediaDenial";
+import { noteDevices } from "./deviceRank";
 
 // ── track fan-out to React ────────────────────────────────────────────────
 // One tile per VIDEO TRACK, not per participant: a person can have a camera
@@ -97,7 +98,9 @@ export async function mediaFailureReason(kind: "camera" | "microphone", err?: an
  */
 export async function listDevices(kind: MediaDeviceKind, opts?: { prompt?: boolean }): Promise<MediaDeviceInfo[]> {
   try {
-    return await Room.getLocalDevices(kind, opts?.prompt !== false);
+    const devices = await Room.getLocalDevices(kind, opts?.prompt !== false);
+    noteDevices(kind, devices);
+    return devices;
   } catch {
     return [];
   }
