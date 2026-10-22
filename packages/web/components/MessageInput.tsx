@@ -74,6 +74,8 @@ import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { SLASH_QUERY_RE, SLASH_TRIGGER_RE, matchSlashSkills } from "../lib/sessionSkills";
 import { useSharedDraft } from "../hooks/useSharedDraft";
 import { SharedCarets } from "./SharedCarets";
+import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
+import { useFileSearch } from "../lib/fsBrowse";
 
 const api = _typedApi as any;
 const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({ default: m.ComposeEditor })));
@@ -129,7 +131,7 @@ const EMPTY_QUEUE: string[] = [];
 const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onForkReply, autoFocusInput }: { userName: string; userAvatar?: string | null; onForkReply: (content: string) => void; autoFocusInput?: boolean }) {
   const [message, setMessage] = useState("");
   const [isForking, setIsForking] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useHeldTextareaRef();
   useMountEffect(() => { if (autoFocusInput && textareaRef.current && !hasOpenModal(textareaRef.current)) textareaRef.current.focus(); });
   useWatchEffect(() => {
     if (textareaRef.current) {
@@ -462,6 +464,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     { teamId: mentionScope.kind === "team" ? mentionScope.teamId : undefined, types: SERVER_MENTION_TYPES },
   );
 
+  // The folder the session's agent runs in, whose files the @ list completes
+  // from (through this machine's daemon; empty when the session lives elsewhere).
+  const fileRoot = useInboxStore((s) => {
+    const row = s.sessions[conversationId];
+    return chatMentionMode ? null : row?.project_path || row?.git_root || null;
+  });
+  const convex = useConvex();
+  const diskFiles = useFileSearch(convex, fileRoot, acTrigger?.type === "@" && acQuery ? acQuery : null);
+
   // What this session or chat thread already names leads the @ and # lists
   // (lib/mentionContext). Read once per opened trigger, not per keystroke:
   // the transcript does not change while a mention is being typed.
@@ -521,11 +532,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const candidates = filterMentionItems(acCandidates, acQuery, chatMentionMode);
       const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 10 : 6, acQuery, personifyAllNow());
 
-      const fileMatches = (filePathsRef.current || [])
+      // Files this session already touched lead, then the project's own files
+      // on disk (useFileSearch), both as paths relative to the folder the
+      // agent runs in, which is how it resolves an @path.
+      const rel = (p: string) => (fileRoot && p.startsWith(fileRoot + "/") ? p.slice(fileRoot.length + 1) : p);
+      const touched = (filePathsRef.current || [])
         .filter(p => {
           const name = p.split("/").pop() || p;
           return matchScore(name, acQuery) !== Infinity || matchScore(p, acQuery) !== Infinity;
         })
+        .map(rel);
+      const onDisk = acQuery && diskFiles ? diskFiles.files.filter((f) => matchScore(f, acQuery) !== Infinity) : [];
+      const fileMatches = [...new Set([...touched.slice(0, 4), ...onDisk, ...touched.slice(4)])]
         .slice(0, 8)
         .map(p => ({ label: p, description: undefined, type: "file" as string }));
       items.push(...fileMatches);
@@ -533,7 +551,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return orderMentionItems(items);
     }
     return [];
-  }, [acTrigger, acQuery, skills, acCandidates, chatMentionMode, acContext, mentionScope]);
+  }, [acTrigger, acQuery, skills, acCandidates, chatMentionMode, acContext, mentionScope, fileRoot, diskFiles]);
 
   const clampedAcIndex = acItems.length > 0 ? Math.min(acIndex, acItems.length - 1) : 0;
 
@@ -777,7 +795,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Durable send: routes through the store's dispatch outbox so a reload
   // mid-send survives and is redriven on next load (idempotent on client_id).
   const sendMessage = useInboxStore((s) => s.sendMessage);
-  const convex = useConvex();
 
   // Best-effort enrichment, hard-bounded so it can NEVER block the durable send:
   // a stalled convex.query (reconnecting socket / auth refresh) falls back to the
@@ -1301,43 +1318,59 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const controlsRowRef = useRef<HTMLDivElement>(null);
   // Measured from a layout effect after every keystroke: set only on a change.
   const [fitsBesideControls, setFitsBesideControls] = useChangedState(true);
+  // The keystroke only measures text on a canvas, which never touches the
+  // page. The font and the room beside the controls change with layout (a
+  // resize, a button arriving or leaving), not with typing, so they are read
+  // in a ResizeObserver callback, where layout is already fresh. Read per
+  // keystroke instead, they forced a synchronous layout of the whole page on
+  // every key: tens of ms each beside a long transcript.
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const controlsRoomRef = useRef<number | null>(null);
   const measureFitsBesideControls = useCallback(() => {
+    const text = messageRef.current;
+    let fits = !text.includes("\n");
+    const ctx = measureCtxRef.current;
+    const room = controlsRoomRef.current;
+    // One character of slack so subpixel rounding never lets the browser
+    // wrap text we measured as fitting.
+    if (fits && text && ctx && room != null) fits = ctx.measureText(text).width <= room - ctx.measureText("M").width;
+    setFitsBesideControls(fits);
+  }, []);
+  const readControlsGeometry = useCallback(() => {
     const ta = textareaRef.current;
     const row = controlsRowRef.current;
     if (!ta || !row) return;
-    const text = messageRef.current;
-    let fits = !text.includes("\n");
-    if (fits && text) {
-      const ctx = (measureCtxRef.current ??= document.createElement("canvas").getContext("2d"));
-      if (ctx) {
-        const font = getComputedStyle(ta);
-        ctx.font = `${font.fontStyle} ${font.fontWeight} ${font.fontSize} ${font.fontFamily}`;
-        // The cluster's own box is useless here: tucked, it spans the row.
-        // Sum the buttons instead (gap-1 between them), so the reading is
-        // the same in either state. gap-x-2 sits between the field and the
-        // cluster, plus one character of slack so subpixel rounding never
-        // lets the browser wrap text we measured as fitting.
-        const buttons = Array.from(sendRef.current?.children ?? []) as HTMLElement[];
-        const controls = buttons.reduce((w, b) => w + b.offsetWidth, 0) + Math.max(0, buttons.length - 1) * 4;
-        const room = row.clientWidth - controls - 8 - ctx.measureText("M").width;
-        fits = ctx.measureText(text).width <= room;
-      }
-    }
-    setFitsBesideControls(fits);
-  }, []);
-  // isMultiline is a dep because it adds and removes the expand button, and
-  // that flag lands from the textarea's ResizeObserver one render after the
-  // text: shortening a long draft would otherwise measure against a button
-  // that is about to leave, decide it does not fit, and never look again.
-  useLayoutEffect(measureFitsBesideControls, [message, isMultiline, measureFitsBesideControls]);
+    const ctx = (measureCtxRef.current ??= document.createElement("canvas").getContext("2d"));
+    if (!ctx) return;
+    const font = getComputedStyle(ta);
+    ctx.font = `${font.fontStyle} ${font.fontWeight} ${font.fontSize} ${font.fontFamily}`;
+    // The cluster's own box is useless here: tucked, it spans the row. Sum
+    // the buttons instead (gap-1 between them), so the reading is the same in
+    // either state. gap-x-2 sits between the field and the cluster.
+    const buttons = Array.from(sendRef.current?.children ?? []) as HTMLElement[];
+    const controls = buttons.reduce((w, b) => w + b.offsetWidth, 0) + Math.max(0, buttons.length - 1) * 4;
+    controlsRoomRef.current = row.clientWidth - controls - 8;
+    measureFitsBesideControls();
+  }, [measureFitsBesideControls]);
+  useLayoutEffect(measureFitsBesideControls, [message, measureFitsBesideControls]);
+  // The row and every button in the cluster are observed, and the button set
+  // is re-observed whenever it changes (the expand button comes and goes with
+  // isMultiline), so a button that arrives or leaves re-reads the room.
   useWatchEffect(() => {
     const row = controlsRowRef.current;
     if (!row) return;
-    const observer = new ResizeObserver(measureFitsBesideControls);
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, [composeMode, measureFitsBesideControls]);
+    const cluster = sendRef.current;
+    const resize = new ResizeObserver(readControlsGeometry);
+    const observeAll = () => {
+      resize.disconnect();
+      resize.observe(row);
+      for (const button of Array.from(cluster?.children ?? [])) resize.observe(button);
+    };
+    observeAll();
+    const buttons = new MutationObserver(observeAll);
+    if (cluster) buttons.observe(cluster, { childList: true });
+    return () => { resize.disconnect(); buttons.disconnect(); };
+  }, [composeMode, readControlsGeometry]);
   const controlsTucked = !fitsBesideControls;
 
   const resetTextareaHeight = () => {
