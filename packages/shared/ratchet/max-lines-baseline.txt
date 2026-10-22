@@ -21,7 +21,7 @@ packages/cli/src/capabilities/nativeCatalog.ts 1050
 packages/cli/src/ccAccounts.test.ts 2450
 packages/cli/src/ccAccounts.ts 3300
 packages/cli/src/check.ts 1100
-packages/cli/src/cloud/hostTools.ts 1150
+packages/cli/src/cloud/hostTools.ts 1200
 packages/cli/src/cloud/mirror/apply.test.ts 1100
 packages/cli/src/cloud/mirror/apply.ts 1300
 packages/cli/src/cloud/mirror/transform.ts 850
@@ -45,7 +45,7 @@ packages/cli/src/index.ts 21700
 packages/cli/src/jsonlGenerator.test.ts 950
 packages/cli/src/jsonlGenerator.ts 1100
 packages/cli/src/judgeFixCommand.ts 850
-packages/cli/src/orgTemplate.test.ts 1150
+packages/cli/src/orgTemplate.test.ts 1200
 packages/cli/src/orgTemplateRun.ts 1100
 packages/cli/src/parser.test.ts 1300
 packages/cli/src/parser.ts 2600
@@ -122,8 +122,8 @@ packages/convex/convex/oauthConnectors.test.ts 850
 packages/convex/convex/org.ts 1600
 packages/convex/convex/orgHealth.ts 950
 packages/convex/convex/orgInit.ts 1950
-packages/convex/convex/orgProposals.test.ts 1800
-packages/convex/convex/orgProposals.ts 1450
+packages/convex/convex/orgProposals.test.ts 1850
+packages/convex/convex/orgProposals.ts 1500
 packages/convex/convex/orgRoles.ts 2350
 packages/convex/convex/pendingMessages.test.ts 950
 packages/convex/convex/pendingMessages.ts 2500
@@ -154,7 +154,7 @@ packages/convex/convex/tasks.ts 4850
 packages/convex/convex/teams.ts 1600
 packages/convex/convex/threads.test.ts 850
 packages/convex/convex/threads.ts 850
-packages/convex/convex/transcripts.test.ts 1950
+packages/convex/convex/transcripts.test.ts 2000
 packages/convex/convex/transcripts.ts 2950
 packages/convex/convex/users.ts 4500
 packages/convex/convex/workflow_runs.ts 1900
@@ -241,7 +241,7 @@ packages/web/lib/desktop.test.ts 1150
 packages/web/lib/desktop.ts 1700
 packages/web/lib/faces/faceRow.test.ts 850
 packages/web/lib/faces/faceRow.ts 1050
-packages/web/lib/line/lineModel.ts 1300
+packages/web/lib/line/lineModel.ts 1350
 packages/web/lib/line/problemPage.ts 1150
 packages/web/lib/line/runReport.ts 1350
 packages/web/lib/lineFlow.ts 1000

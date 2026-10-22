@@ -54,10 +54,11 @@ import { join } from "node:path";
 // ingest.ts +100 and schema.ts +100 lead it.
 //
 // A fourth reset, same cause. On 2026-10-22 main was pushed as one whole-tree
-// ship with CI red (39851809732), and 25 listed files had grown past their
-// pins in it. The baseline of 2026-10-22 re-pinned those 25 to the committed
-// sizes at 4b3de4795 plus the fix that landed this. The three files newly over
-// the cap (agentReviews.ts, deploys.ts, files/page.tsx) were split rather than
+// ship with CI red (39851809732), and 31 listed files had grown past their
+// pins in it and the ships that followed it that day. The baseline of
+// 2026-10-22 re-pinned those 31 to the committed sizes at 7db1d49f0 plus the
+// fix that landed this. The four files newly over the cap (agentReviews.ts,
+// deploys.ts, orgTemplates.ts, files/page.tsx) were split rather than
 // listed, and PIN fell to 258. The growth is split work owed: check.ts +250,
 // workflow/runner.test.ts +250 and remote/session-move.ts +200 lead it.
 
