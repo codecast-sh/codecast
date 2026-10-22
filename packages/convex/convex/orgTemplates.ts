@@ -19,6 +19,7 @@ import { answerProblem, compareVersions, validateTemplate, withTemplateLoader, t
 import { type ReleaseChanges, type ReleaseClass, type UpdateNames, updateNames, bumpRefusal, changelogBetween, classifyRelease, jumpBetween, previousRelease, releaseNote, updateOffer, withClasses } from "@codecast/shared/contracts/orgTemplateRelease";
 import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState, type SetupText } from "@codecast/shared/contracts/orgTemplateState";
 import { routineState, type RoutineReadiness } from "@codecast/shared/contracts/orgTemplateReadiness";
+import { bindNote, type RoutineRow } from "./lib/orgTemplateBindNote";
 import type { LessonKind } from "@codecast/shared/contracts/orgTemplateLearning";
 import { applyActivate, getArmableTask } from "./agentTasks";
 import { performUpdateRole, refuseUnlessHuman, standingConversationOf } from "./orgRoles";
@@ -288,7 +289,6 @@ export async function performWriteLoaderCharter(ctx: Ctx, userId: Id<"users">, a
   return { role_id: args.role_id, charter };
 }
 
-type RoutineRow = { id: string; title: string; every: string; mode: "propose" | "apply"; external: boolean; retired: boolean; trigger: { id: string; short_id?: string; status: string; run_at?: number; precheck?: string; interval_ms?: number; run_count?: number; last_run_at?: number; last_run_failed?: boolean } | null };
 /** The pinned release's routines with the trigger each is bound to: the role page's Triggers rows, and the list a role hears after a bind. */
 export async function routineRows(ctx: Ctx, row: any, manifest: OrgTemplate | undefined): Promise<RoutineRow[]> {
   const rows: RoutineRow[] = [];
@@ -299,34 +299,6 @@ export async function routineRows(ctx: Ctx, row: any, manifest: OrgTemplate | un
     rows.push({ id: r.id, title: trigger?.title ?? r.title, every: r.every, mode: r.mode ?? "propose", external: !!bound?.external, retired: !!bound?.retired, trigger: trigger ? { id: String(trigger._id), short_id: trigger.short_id, status: trigger.status, run_at: trigger.run_at, precheck: trigger.precheck, interval_ms: trigger.interval_ms, run_count: trigger.run_count, last_run_at: trigger.last_run_at, last_run_failed: trigger.last_run_failed } : null });
   }
   return rows;
-}
-
-const listed = (words: string[]) => words.length <= 1 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
-/**
- * What a role hears, once, when its host step finishes or a secret is bound:
- * what is bound now, what is still missing, and where each routine stands.
- * Plain words, because it arrives in the standing session as a message.
- */
-export function bindNote(o: { instance: string; machine?: string; becameReady: boolean; newlyBound: string[]; secrets: { key: string; label: string; bound: boolean; unlocks?: string[] }[]; routines: RoutineRow[]; readiness: Record<string, RoutineReadiness> }): string {
-  const on = o.machine ? ` on ${o.machine}` : "";
-  const fresh = o.secrets.filter((s) => o.newlyBound.includes(s.key));
-  const missing = o.secrets.filter((s) => !s.bound);
-  const lines: string[] = [];
-  if (o.becameReady) lines.push(`The host step for ${o.instance} finished${on}: the template is installed, the instance file is written and your routines exist; each turns on as soon as it is ready.`);
-  if (fresh.length) {
-    const unlocks = [...new Set(fresh.flatMap((s) => s.unlocks ?? []))];
-    lines.push(`${listed(fresh.map((s) => s.label))} ${fresh.length === 1 ? "is" : "are"} now bound for ${o.instance}${on}: the value is in a file there and its path is in the instance file.${unlocks.length ? ` ${listed(unlocks)} needed it.` : ""}`);
-  }
-  if (o.secrets.length) lines.push(missing.length ? `Still missing: ${listed(missing.map((s) => s.label))}.` : "Every secret this template asks for is bound.");
-  const live = o.routines.filter((r) => !r.retired);
-  if (live.length) {
-    lines.push("Routines:");
-    for (const r of live) {
-      const needs = o.readiness[r.id]?.missing ?? [];
-      lines.push(`- ${r.title}${r.trigger?.short_id ? ` (${r.trigger.short_id})` : ""}: ${routineState(r, o.readiness[r.id])}${needs.length ? `; ${needs.join("; ")}` : ""}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 /**
