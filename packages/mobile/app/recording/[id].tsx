@@ -25,18 +25,22 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { useCallDetail } from '@codecast/web/hooks/useSyncCalls';
+import { useCallDetail, useCallPlaces } from '@codecast/web/hooks/useSyncCalls';
+import { isCallLive } from '@codecast/web/lib/calls/callStatus';
+import { callTitle } from '@codecast/web/lib/calls/roomLabels';
+import { speakerColor, speakerShortName } from '@codecast/web/components/calls/speakers';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useCallRecordings } from '@codecast/web/lib/calls/callRecordingsFeed';
 import { playableFiles, videoAt } from '@codecast/web/lib/calls/callVideo';
 import { api as _api } from '@codecast/convex/convex/_generated/api';
-import { parseCallAnchor, parseCallMomentParam, segmentAt } from '@codecast/shared/contracts';
+import { isRecRoomKey, parseCallAnchor, parseCallMomentParam, segmentAt } from '@codecast/shared/contracts';
 import { buildEntityUrl, callRefId, formatCallTime, isConvexId } from '@codecast/shared/entities';
 import { openWebPage } from '@/lib/links';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { recordingState } from '@/lib/recordingStatus';
 import { optionalNative } from '@/lib/optionalNative';
+import { LivePulse, LiveRoomAction, useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
 
 // Same lazy probe as lib/calls/ringtone.ts and lib/recorder.ts: a JS bundle
 // newer than the installed binary must lose the player, not the screen.
@@ -143,8 +147,18 @@ export default function RecordingDetailScreen() {
     } catch {}
   }, []);
 
+  // A huddle running now: its words arrive as they are said, the screen
+  // follows them, and the room's own door (join, knock) sits on top.
+  const huddle = !!call && !isRecRoomKey(call.room_key);
+  const live = !!call && isCallLive(call);
+  const room = useLiveRooms(useCallsOn()).find((r) => r.roomKey === call?.room_key);
+  const place = useCallPlaces(call ? [call] : [])[String(call?._id)];
+  // An untitled huddle running now is named like the card it was opened from.
+  const title = useInboxStore((s: any) =>
+    call ? (!call.title && room ? room.label : callTitle({ ...call, place }, s)) : listRow?.title || 'Recording',
+  );
   const state = call ? recordingState(call as any) : null;
-  const waiting = state && state !== 'ready' ? WAITING_COPY[state] : null;
+  const waiting = state && state !== 'ready' && !(live && huddle) ? WAITING_COPY[state] : null;
   const segments = call?.segments ?? [];
 
   // The line the link named, marked until the person plays or taps.
@@ -159,6 +173,15 @@ export default function RecordingDetailScreen() {
   const focusSeq = focusIndex !== null ? segments[focusIndex]?.seq : null;
   const [marked, setMarked] = useState(true);
   const list = useRef<FlatList<any>>(null);
+  // Following the newest line while the reader sits at the bottom; scrolling
+  // up to reread stops it, scrolling back down resumes it.
+  const atEnd = useRef(true);
+  const listHeight = useRef(0);
+  const follow = live && focusIndex === null;
+  const readerScrolled = (e: any) => {
+    const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+    atEnd.current = contentOffset.y + layoutMeasurement.height >= contentSize.height - 80;
+  };
   const landed = useRef(false);
   useEffect(() => {
     if (landed.current || focusIndex === null) return;
@@ -211,9 +234,17 @@ export default function RecordingDetailScreen() {
           <FontAwesome name="angle-left" size={24} color={Theme.textMuted} />
         </TouchableOpacity>
         <RNText style={styles.headerTitle} numberOfLines={1}>
-          {call?.title || listRow?.title || 'Recording'}
+          {title}
         </RNText>
       </RNView>
+      {live && huddle ? (
+        <RNView style={styles.liveBar}>
+          <LivePulse color={Theme.green} size={7} />
+          <RNText style={styles.liveText}>Live</RNText>
+          <RNView style={{ flex: 1 }} />
+          {room ? <LiveRoomAction row={room} /> : null}
+        </RNView>
+      ) : null}
 
       {call === undefined ? (
         <RNView style={styles.center}>
@@ -221,7 +252,7 @@ export default function RecordingDetailScreen() {
         </RNView>
       ) : call === null ? (
         <RNView style={styles.center}>
-          <RNText style={styles.hint}>This recording is not yours to open.</RNText>
+          <RNText style={styles.hint}>This call is not yours to open.</RNText>
         </RNView>
       ) : (
         <FlatList
@@ -233,6 +264,16 @@ export default function RecordingDetailScreen() {
             setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: 0.3, animated: false }), 60);
           }}
           keyExtractor={(s: any) => String(s.seq)}
+          // Only the reader's own scrolling decides: the follow's scrolls land
+          // short of a line not measured yet, and must not stop the follow.
+          onScrollEndDrag={readerScrolled}
+          onMomentumScrollEnd={readerScrolled}
+          onLayout={(e) => (listHeight.current = e.nativeEvent.layout.height)}
+          // To the measured bottom: scrollToEnd goes by the list's estimate,
+          // which falls short of a long line that just arrived.
+          onContentSizeChange={(_w, h) => {
+            if (follow && atEnd.current) list.current?.scrollToOffset({ offset: Math.max(0, h - listHeight.current), animated: false });
+          }}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
             <RNView style={styles.head}>
@@ -310,9 +351,20 @@ export default function RecordingDetailScreen() {
               ) : null}
             </RNView>
           }
-          renderItem={({ item }: { item: any }) => {
+          renderItem={({ item, index }: { item: any; index: number }) => {
             const here = (position >= item.t0 && position < item.t1) || (marked && !playing && item.seq === focusSeq);
+            // A huddle has many voices: a line names who said it when the
+            // speaker changes. A recording is one microphone and names nobody.
+            const speaker = huddle && segments[index - 1]?.speaker_id !== item.speaker_id
+              ? speakerShortName(item.speaker_name, item.speaker_id)
+              : null;
             return (
+              <>
+              {speaker ? (
+                <RNText style={[styles.speaker, { color: (Theme as any)[speakerColor(String(item.speaker_id)).replace('text-sol-', '')] }]}>
+                  {speaker}
+                </RNText>
+              ) : null}
               <TouchableOpacity
                 style={[styles.line, here && styles.lineHere]}
                 onPress={() => {
@@ -325,6 +377,7 @@ export default function RecordingDetailScreen() {
                 <RNText style={styles.lineTime}>{formatCallTime(item.t0)}</RNText>
                 <RNText style={styles.lineText}>{item.text}</RNText>
               </TouchableOpacity>
+              </>
             );
           }}
         />
@@ -346,6 +399,22 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     backgroundColor: Theme.bgAlt,
   },
   headerTitle: { flex: 1, fontSize: FontSize.lg, fontWeight: '600', color: Theme.text },
+  liveBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.borderLight,
+  },
+  liveText: { fontSize: FontSize.sm, fontWeight: '600', color: Theme.green, fontVariant: ['tabular-nums'] },
+  speaker: {
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+  },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.xxl },
 
   listContent: { paddingBottom: Spacing.xxxl },

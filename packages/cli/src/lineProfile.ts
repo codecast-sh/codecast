@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
-import { LINE_DEPLOY_KEYS, LINE_DEPLOY_TRIGGERS, normalizeDeployTarget, type LineDeployTrigger } from "@codecast/shared/contracts/lineDeploy";
+import { LINE_DEPLOY_KEYS, LINE_DEPLOY_STEPS, LINE_DEPLOY_TRIGGERS, normalizeDeployTarget, normalizeRoleHandle, type LineDeployTrigger } from "@codecast/shared/contracts/lineDeploy";
 import {
   CAPS_KEYS,
   CODECAST_PRINCIPLES,
@@ -177,6 +177,12 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
         if (!(LINE_DEPLOY_TRIGGERS as readonly string[]).includes(trigger)) throw new LineProfileError(`[line.deploy] trigger must be one of ${LINE_DEPLOY_TRIGGERS.join(", ")}`);
         values.deploy.trigger = trigger as LineDeployTrigger;
       }
+      if (line.deploy.role !== undefined) values.deploy.role = normalizeRoleHandle(text(line.deploy.role, "[line.deploy] role"));
+      for (const step of LINE_DEPLOY_STEPS) {
+        if (step !== "send" && line.deploy[step] !== undefined) values.deploy[step] = text(line.deploy[step], `[line.deploy] ${step}`);
+      }
+      if (values.deploy.trigger === "role" && !values.deploy.role) throw new LineProfileError('[line.deploy] trigger = "role" needs role: the handle of the role that deploys');
+      if (values.deploy.trigger === "schedule" || values.deploy.trigger === "count") warnings.push(`[line.deploy] trigger = "${values.deploy.trigger}" is not built yet: only a person starts this line's deploys`);
     }
     if (line.finders !== undefined) {
       if (!Array.isArray(line.finders)) throw new LineProfileError("[[line.finders]] must be an array of tables");
@@ -241,11 +247,24 @@ export function resolveLineProfile(values: LineProfileValues, opts: { root?: str
       command: pick("deploy.command", values.deploy?.command, d.deploy!.command),
       target: pick("deploy.target", values.deploy?.target, d.deploy!.target),
       trigger: pick("deploy.trigger", values.deploy?.trigger, d.deploy!.trigger),
+      // The role and the steps ride only when set, so a profile that names none
+      // publishes the shape an older backend accepts.
+      ...optionalDeployFields(values.deploy, sources),
     },
     finders: pick("finders", values.finders, d.finders),
   };
   const notes = lineProfileNotes(profile);
   return { root: opts.root ?? null, file: opts.file ?? null, profile, sources, notes, warnings: opts.warnings ?? [] };
+}
+
+/** `[line.deploy]` role and step commands the file sets (deploys.md DP4, DP8), each with its source. */
+function optionalDeployFields(deploy: LineProfileValues["deploy"], sources: Record<string, ValueSource>): Partial<NonNullable<LineProfile["deploy"]>> {
+  const out: Partial<NonNullable<LineProfile["deploy"]>> = {};
+  for (const k of ["role", ...LINE_DEPLOY_STEPS.filter((s) => s !== "send")] as const) {
+    const value = deploy?.[k];
+    if (value) { out[k] = value; sources[`deploy.${k}`] = "file"; }
+  }
+  return out;
 }
 
 /** The nearest `.codecast/line.toml` from `cwd` up, stopping at the repository root (the first directory holding `.git`). */
@@ -329,6 +348,8 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
     ["deploy.command", p.deploy?.command ?? "(none: the line stops at Ship)"],
     ["deploy.target", p.deploy?.target ?? "(none)"],
     ["deploy.trigger", p.deploy?.trigger ?? "person"],
+    ...(p.deploy?.role ? [["deploy.role", `@${p.deploy.role}`] as [string, string]] : []),
+    ...LINE_DEPLOY_STEPS.filter((s) => s !== "send" && p.deploy?.[s]).map((s): [string, string] => [`deploy.${s}`, p.deploy![s as "ci"]!]),
   ];
   const width = Math.max(...rows.map(([k]) => k.length));
   const out = [r.file ? `profile ${r.file}` : `no ${LINE_PROFILE_REL_PATH}${r.root ? ` in ${r.root}` : ""}: every value is a default`, ""];
@@ -380,7 +401,12 @@ export function starterLineProfile(opts: { project: string; team?: string | null
     `# [line.deploy]                    # the deploy stage: sends the shipped fixes waiting to go out, together`,
     `# command = "..."                  # the team's deploy path, run from the repository root; $sha, $deploy, $actor expand`,
     `# target = "production"           # the surface or environment its deploy markers name`,
-    `# trigger = "person"              # who starts it: person (today's only one), role, schedule, count`,
+    `# trigger = "person"              # who starts it: person (the Deploy button), or role (the role below, within its deploy grant's daily limit)`,
+    `# role = "release"                 # with trigger = "role": the role that deploys`,
+    `# ci = "..."                       # each step a command, run in order around the send (CI, Send, Gate, Roll out, Live); one left out passes`,
+    `# gate = "..."`,
+    `# rollout = "..."`,
+    `# live = "..."`,
     ``,
     `# [[line.finders]]                 # what this project listens to; one table per finder`,
     `# id = "lessons"`,

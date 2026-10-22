@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronRight, Globe, Lock } from "lucide-react";
-import { batchLabel, baselineWords, cadenceItems, capitalized, dayLabel, newestBaseline, nextPins, noiseFlipWords, noiseFlipsShort, orderedPair, score2, separationTitle, shortModel, surfaceColumns, usd, verdictOfSet, type SurfaceAxis, type SurfaceFilters } from "../../client";
+import { batchLabel, baselineWords, cadenceItems, capitalized, dayLabel, ledgerPlate, newestBaseline, nextPins, noiseFlipWords, noiseFlipsShort, orderedPair, score2, separationTitle, shortModel, surfaceColumns, usd, verdictOfSet, type SurfaceAxis, type SurfaceFilters } from "../../client";
 import { flipCounts, type BatchStats, type BatchVerdict, type BatchesResponse, type EpochResponse, type SurfaceInfo, type SurfaceResponse } from "../../contract";
 import { ComparePanel, EpochDiffSheet, FreezeLedger } from "../freeze";
 import { useCaseNoun, useEvalsCapabilities, useEvalsHost, useEvalsPaths } from "../hooks";
@@ -163,6 +163,7 @@ export function SurfaceView(props: SurfaceViewProps) {
   const pair = pinned && compare && allCols.has(pinned) && allCols.has(compare) ? orderedPair(allCols, pinned, compare) : null;
   const freezeNames = useMemo(() => Object.fromEntries(data.ledger.map((r) => [r.freezeId, r.name])), [data.ledger]);
   const latest = [...data.batches].reverse().find((b) => !b.dry && b.reps > 0) ?? null;
+  const plate = useMemo(() => ledgerPlate(data.ledger, graded), [data.ledger, graded]);
   const totalFlips = data.ledger.reduce((s, r) => s + r.flips, 0);
   // The drawer's flips for the pinned pair, which the plate sorts and marks by.
   const pairRes = pair ? batches.res : null;
@@ -418,7 +419,7 @@ export function SurfaceView(props: SurfaceViewProps) {
           <section className="ev-sf-ledger-wrap" aria-label={`${capitalized(noun.one)} ledger`}>
             <div className="ev-sf-chart-head">
               <h2 className="ev-title">
-                <VerdictGlyph state={data.ledger.some((r) => r.flips) ? "mixed" : "pass"} size={12} />
+                <VerdictGlyph state={totalFlips ? "mixed" : "pass"} size={12} />
                 {capitalized(noun.many)}
                 <span className="ev-quiet ev-tabular ev-sf-count">
                   {data.ledger.length} {data.ledger.length === 1 ? noun.one : noun.many}, {totalFlips} {totalFlips === 1 ? "flip" : "flips"} on the same footing
@@ -435,7 +436,7 @@ export function SurfaceView(props: SurfaceViewProps) {
                 <span className="ev-quiet">ink is the mean, the ring the majority</span>
               </span>
             </div>
-            <FreezeLedger rows={data.ledger} columns={graded} pinned={pinned} compare={compare} hover={hover} onHover={setHover} onPick={pick} pairFlips={pairFlips} />
+            <FreezeLedger plate={plate} pinned={pinned} compare={compare} hover={hover} onHover={setHover} onPick={pick} pairFlips={pairFlips} />
           </section>
         </div>
 
