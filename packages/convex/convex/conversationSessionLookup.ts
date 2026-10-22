@@ -9,19 +9,30 @@ const hasMatchingUser = (
   return record.user_id.toString() === authUserId.toString();
 };
 
+// One Claude session id can sit on several conversation rows: when a session
+// moves to another person's machine, the transcript left on the old machine
+// syncs into a new row under its original owner. Every caller filters by
+// owner or access, so probe all of them; `.first()` returns whichever row
+// the index holds first and hides the caller's own.
+const sessionIdCandidatesNewestFirst = async (
+  ctx: LookupCtx,
+  sessionId: string
+): Promise<LookupRecord[]> => {
+  const candidates = await ctx.db
+    .query("conversations")
+    .withIndex("by_session_id", (q: any) => q.eq("session_id", sessionId))
+    .take(16);
+  return [...candidates].reverse();
+};
+
 export const findConversationBySessionReference = async (
   ctx: LookupCtx,
   sessionId: string,
   authUserId: { toString(): string } | string
 ): Promise<LookupRecord | null> => {
-  const directConversation = await ctx.db
-    .query("conversations")
-    .withIndex("by_session_id", (query: any) => query.eq("session_id", sessionId))
-    .first();
-
-  if (hasMatchingUser(directConversation, authUserId)) {
-    return directConversation;
-  }
+  const directConversation = (await sessionIdCandidatesNewestFirst(ctx, sessionId))
+    .find((conversation) => hasMatchingUser(conversation, authUserId));
+  if (directConversation) return directConversation;
 
   const managedSession = await ctx.db
     .query("managed_sessions")
@@ -94,11 +105,9 @@ export const findConversationByAnyRefWhere = async (
   }
 
   // session_id: directly on the conversation, or via the managed_sessions link.
-  const directConversation = await ctx.db
-    .query("conversations")
-    .withIndex("by_session_id", (q: any) => q.eq("session_id", trimmed))
-    .first();
-  if (directConversation && (await accept(directConversation))) return directConversation;
+  for (const candidate of await sessionIdCandidatesNewestFirst(ctx, trimmed)) {
+    if (await accept(candidate)) return candidate;
+  }
 
   const managedSession = await ctx.db
     .query("managed_sessions")

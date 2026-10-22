@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { freshRunBranch, processesIn, sessionIdsOf, type RunHands } from "./lineTrialBranch";
 import { lineRunDir } from "./workflow/runner";
+import { watchDir, writeWatchState } from "./check";
 
 const sh = (cwd: string, ...args: string[]) => {
   const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
@@ -96,6 +97,30 @@ describe("freshRunBranch", () => {
       expect(sh(repo, "rev-parse", `codecast/${fresh.set_aside}`)).toBe(fixed);
     } finally {
       stopHand();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // th75zjnq (ct-60855): the earlier run's hands asked `cast check`, and its
+  // watchers (one tsc per program) kept working in the tree for the 45 minutes
+  // until their idle exit, so the next run was refused as "still in use".
+  test("the earlier run's typecheck watchers are stopped, and the fresh branch starts", async () => {
+    const { root, repo, tree, stopHand } = await earlierRunWithHand();
+    stopHand();
+    const home = path.join(root, "codecast-home");
+    const before = process.env.CODECAST_DIR;
+    process.env.CODECAST_DIR = home;
+    const tsc = spawn("perl", ["-e", "sleep 60"], { cwd: path.join(tree), detached: true, stdio: "ignore" });
+    try {
+      for (let i = 0; i < 50 && !processesIn(tree).some((p) => p.pid === tsc.pid); i++) await new Promise((r) => setTimeout(r, 100));
+      writeWatchState(watchDir(tree, "backend"), { pid: tsc.pid!, project: "backend", tsconfig: "tsconfig.json", root: tree, startedAt: Date.now(), inProgress: false });
+      const fresh = await freshRunBranch(repo, { name: "agentwatch_trial" }, "ct-7", new Date("2026-10-16T14:23:00Z"));
+      expect(fresh.set_aside).toBeTruthy();
+      expect(processesIn(tree)).toEqual([]);
+      expect(fs.existsSync(path.join(watchDir(tree, "backend"), "state.json"))).toBe(false);
+    } finally {
+      try { process.kill(-tsc.pid!, "SIGKILL"); } catch {}
+      if (before === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = before;
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 60_000);

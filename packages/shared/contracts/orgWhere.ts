@@ -20,7 +20,7 @@ export type OrgWhere = {
   /** Above the seat's role, nearest first, ending at a person. */
   chain: string[];
   roles: Array<{ handle: string; name: string; reports_to: string; scope: string[]; whole_workspace: boolean; seat: boolean }>;
-  people: Array<{ name: string; role: string; is_me: boolean }>;
+  people: Array<{ name: string; handle?: string; role: string; is_me: boolean }>;
 };
 
 export const ORG_WHERE_ROLES_MAX = 20;
@@ -64,7 +64,7 @@ export function orgWhereLines(w: OrgWhere): string[] {
     out.push(`  @${r.handle} ${r.name}${r.reports_to ? ` · reports to ${r.reports_to}` : ""} · ${scope}${r.seat ? " · yours" : ""}`);
   }
   if (w.roles.length > ORG_WHERE_ROLES_MAX) out.push(`  +${w.roles.length - ORG_WHERE_ROLES_MAX} more: cast org ls`);
-  if (w.people.length) out.push(`People: ${w.people.map((p) => `${p.name}${p.role !== "member" || p.is_me ? ` (${[p.role !== "member" ? p.role : "", p.is_me ? "your person" : ""].filter(Boolean).join(", ")})` : ""}`).join(", ")}`);
+  if (w.people.length) out.push(`People: ${w.people.map((p) => `${p.name}${p.handle ? ` @${p.handle}` : ""}${p.role !== "member" || p.is_me ? ` (${[p.role !== "member" ? p.role : "", p.is_me ? "your person" : ""].filter(Boolean).join(", ")})` : ""}`).join(", ")}`);
   return out;
 }
 
@@ -75,7 +75,7 @@ Information goes to whoever owns it, in the cheapest form that reaches them in t
 
 As a lead, read your whole area each time you run, connect what one session found to the sessions it affects, and send each only what changes its next action.
 
-cast role wake @handle reaches a role; cast send <id> a session; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue; cast org where shows this picture as it stands now.`;
+cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue; cast org where shows this picture as it stands now.`;
 
 /** The block injected at session start. */
 export function orgContextBlock(w: OrgWhere): string {

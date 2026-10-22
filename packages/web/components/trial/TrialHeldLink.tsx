@@ -5,7 +5,7 @@
 // opened list shows.
 import Link from "next/link";
 import { useLineWorkspace, type LineWorkspace } from "../../hooks/useLineWorkspace";
-import { useProblemList } from "../line/workspace/views/timeline/useProblemList";
+import { useProblemRows } from "../line/workspace/views/timeline/useProblemList";
 import { readLineSelection } from "../../lib/line/lineWorkspaceUrl";
 import type { LineModel } from "../../lib/line/lineModel";
 
@@ -17,7 +17,7 @@ export function TrialHeldLink({ projectId, href, why }: { projectId: string; hre
 }
 
 function Counted({ model, ws, href, why }: { model: LineModel; ws: LineWorkspace; href: string; why: string }) {
-  const list = useProblemList(model, ws, NOT_STARTED);
+  const list = useProblemRows(model, ws, NOT_STARTED);
   return <HeldLink href={href} why={why} n={list.counts.by.notstarted} />;
 }
 
