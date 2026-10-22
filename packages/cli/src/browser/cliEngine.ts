@@ -588,6 +588,9 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // Your logins for this site, as your real Chrome holds them right now —
     // the clone the browser started from may be hours old (credentials.ts).
     if (url && !real && !pane) await carryLogins(url);
+    // Then a sign-in the team saved in the Vault, where the browser still has
+    // none for the site; on a cloud host this is the one that applies.
+    if (url && !real && !pane) await useVaultSignin(url);
   } else {
     await ensurePinnedTab(session);
   }
@@ -729,6 +732,20 @@ export async function carryLogins(
     if (r.injected) console.log(fmt.muted(`  carried ${r.injected} cookie${r.injected === 1 ? "" : "s"} for ${r.host} from your Chrome`));
   } catch {
     /* a courtesy: never fail the open over it */
+  }
+}
+
+/**
+ * A saved sign-in for the site (secrets/signinBrowser.ts), and a write-back of
+ * newer cookies when the browser already uses it. Loaded only when `open`
+ * runs, and never fails the open.
+ */
+async function useVaultSignin(url: string): Promise<void> {
+  try {
+    const { signInOnOpen } = await import("../secrets/signinBrowser.js");
+    await signInOnOpen(url, () => detectSessionId?.() ?? null, (line) => console.log(fmt.muted(`  ${line}`)));
+  } catch {
+    /* a courtesy, like carryLogins */
   }
 }
 
