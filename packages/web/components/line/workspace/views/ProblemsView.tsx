@@ -4,6 +4,7 @@
 // which takes the page. The list's filter, sort and window stay in the
 // address while a problem is open, so its prev and next walk the list the
 // person came from and Back returns to it.
+import { Profiler } from "react"; // __LP temp
 import { ProblemsHome } from "./timeline/ProblemsHome";
 import { useProblemList } from "./timeline/useProblemList";
 import { ProblemPage } from "./problem/ProblemPage";
@@ -13,7 +14,9 @@ import "./timeline/overview.css";
 
 export function ProblemsView(props: LineViewProps) {
   const { model, workspace, selection, select, href, drawerOpen } = props;
+  const __t = performance.now(); // __LP temp
   const list = useProblemList(model, workspace, selection);
+  (((globalThis as any).__lp ??= {}).problemList ??= []).push(Math.round(performance.now() - __t)); // __LP temp
 
   if (!workspace.problems.length) return <div className="lw-empty" data-line-problems="empty"><b>No problems</b></div>;
 
@@ -25,7 +28,7 @@ export function ProblemsView(props: LineViewProps) {
             <ProblemPage {...props} order={list.order} />
           </div>
         ) : (
-          <ProblemsHome list={list} workspace={workspace} selection={selection} select={select} href={href} drawerOpen={drawerOpen} />
+          <Profiler id="problemsHome" onRender={(id, phase, d) => (((globalThis as any).__lp ??= {})[`render:${id}:${phase}`] ??= []).push(Math.round(d))}><ProblemsHome list={list} workspace={workspace} selection={selection} select={select} href={href} drawerOpen={drawerOpen} /></Profiler>
         )}
       </div>
     </div>
