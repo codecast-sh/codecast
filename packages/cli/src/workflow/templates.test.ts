@@ -713,7 +713,8 @@ describe("line.cast offline run through the session path", () => {
         effects[stationOf[id]]?.();
         out = { sessions: [{ id, work_state: "done", is_live: false }] };
       } else if (route === "/cli/sessions/state/get") {
-        out = { ok: true, status: pinnedStatus[stationOf[body.session]] ?? "done", state: pinned[stationOf[body.session]] ?? null };
+        // Each read is a fresh pin, so a presenter the run went back to reads as answering again.
+        out = { ok: true, status: pinnedStatus[stationOf[body.session]] ?? "done", state: pinned[stationOf[body.session]] ?? null, at: calls.length };
       } else if (route === "/cli/workflow-runs/poll-gate") {
         out = { status: "paused", gate_response: gateAnswers.shift() ?? null };
       } else if (route === "/cli/work/update" || route === "/cli/work/comment" || route === "/cli/decide") {
@@ -848,7 +849,9 @@ describe("line.cast offline run through the session path", () => {
     gateAnswers = ["R: keep the old flag", "S"];
     const outcome = await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }));
     expect(outcome).toBe("completed");
-    expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "review", "card_write", "implement", "review", "card_write"]);
+    // The second Present goes back to the hand that presented (runner presentsDecision), so it spawns nothing.
+    expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "review", "card_write", "implement", "review"]);
+    expect(calls.filter((c) => c.route === "/cli/messages/send" && c.body.to === "conv_6")).toHaveLength(1);
     const s = spawns();
     expect(s[6].prompt).toContain("# Human Instructions\nkeep the old flag");
     expect(s.filter((x) => x.prompt.includes("keep the old flag"))).toHaveLength(1);
