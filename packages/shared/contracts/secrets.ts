@@ -158,6 +158,18 @@ export function fingerprint(value: string | undefined | null): string | undefine
   return `${v.slice(0, 4)}…${v.slice(-4)}`;
 }
 
+/** A list of names as stored: trimmed, blanks and repeats dropped. Every
+ *  writer cleans with this, and the web's optimistic edit too, so the server's
+ *  echo equals what the person sees. */
+export function cleanSecretList(xs?: string[]): string[] | undefined {
+  return xs ? [...new Set(xs.map((x) => x.trim()).filter(Boolean))] : undefined;
+}
+
+/** Sites as stored: bare lowercase hostnames, whatever URL was pasted. */
+export function cleanSecretSites(xs?: string[]): string[] | undefined {
+  return cleanSecretList(xs?.map((s) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")));
+}
+
 /** The fingerprint a row shows for its payload: a key's value; nothing else has one. */
 export function payloadFingerprint(kind: SecretKind, payload: SecretPayload): string | undefined {
   return kind === "key" ? fingerprint((payload as KeyPayload).value) : undefined;
@@ -301,7 +313,7 @@ export function parseOtpauth(uri: string): TotpParams | null {
   const secret = (u.searchParams.get("secret") ?? "").toUpperCase().replace(/[\s=-]/g, "");
   if (!secret || !base32Decode(secret)) return null;
   const label = decodeURIComponent(u.pathname.replace(/^\//, ""));
-  const [labelIssuer, account] = label.includes(":") ? label.split(/:(.*)/s, 2).map((s) => s.trim()) : [undefined, label.trim()];
+  const [labelIssuer, account] = label.includes(":") ? label.split(/:([\s\S]*)/, 2).map((s) => s.trim()) : [undefined, label.trim()];
   const digits = Number(u.searchParams.get("digits") ?? 6);
   const period = Number(u.searchParams.get("period") ?? 30);
   const algorithm = ALGORITHMS[(u.searchParams.get("algorithm") ?? "SHA1").toUpperCase()];
