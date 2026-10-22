@@ -46,7 +46,9 @@ function gateOf(r: MapRun | undefined, holderOf: (runId: string) => string | nul
   return { node: run.gate_node_id, since: at ?? run.updated_at ?? null, holder: holderOf(String(run._id)) };
 }
 
-export function useProblemList(model: LineModel, workspace: LineWorkspace, selection: LineSelection) {
+/** Every problem's row with its one status, and the count per chip: what a page that only counts or looks a problem
+ *  up reads, without the list's sections, chart and figures. */
+export function useProblemRows(model: LineModel, workspace: LineWorkspace, selection: LineSelection) {
   const range = isOverviewRange(selection.win) ? selection.win : DEFAULT_RANGE;
   const status = isStatusKey(selection.status) ? selection.status : null;
   const sort: ProblemSort = isProblemSort(selection.sort) ? selection.sort : null;
@@ -144,6 +146,12 @@ export function useProblemList(model: LineModel, workspace: LineWorkspace, selec
   }, [workspace.problems, process, lessons, win, facts, projectName, workspace.sources, workspace.overlaps, workspace.now]);
 
   const counts = useMemo(() => statusCounts(all, q, filter.found), [all, q, filter.found]);
+  return { all, counts, process, filter, sort, range, win, q, projectName };
+}
+
+/** The Problems list as the page draws it: the rows, and the sections, order, figures and chart over them. */
+export function useProblemList(model: LineModel, workspace: LineWorkspace, selection: LineSelection) {
+  const { all, counts, process, filter, sort, range, win, q, projectName } = useProblemRows(model, workspace, selection);
   // The line's start order (lineStartOrder): Not started lists a project's ready problems in it.
   const startOrder = useMemo(() => {
     const goalOf = goalOfRefs(workspace.projects as Array<{ short_id?: string; priority?: string | null }>);
