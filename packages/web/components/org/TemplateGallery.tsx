@@ -9,15 +9,15 @@ import { ArrowRight, Lock, Search } from "lucide-react";
 import { RoleAvatar } from "./avatars";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import type { TemplateRoutine } from "@codecast/shared/contracts/orgTemplateManifest";
-import { humanSetupCount, isDefaultLeadTemplate, secretInputs } from "./orgTemplateSpec";
-import { cadenceWords, cannotHireReason, displayTitle, type BuiltinHire, type CatalogTemplate } from "./templateCatalog";
+import { humanSetupCount, isDefaultLeadTemplate, requiredInputs, secretInputs } from "./orgTemplateSpec";
+import { cadenceWords, cannotHireReason, displayTitle, templateTools, type BuiltinHire, type CatalogTemplate } from "./templateCatalog";
 import { Button } from "../ui/button";
 
 function askWords(t: CatalogTemplate): string[] {
   const m = t.manifest;
-  const answers = t.asks.inputs - t.asks.secrets;
+  const answers = requiredInputs(m).length;
   const out: string[] = [];
-  if (answers) out.push(`${answers} answer${answers === 1 ? "" : "s"}`);
+  if (answers) out.push(`${answers} answer${answers === 1 ? "" : "s"} needed`);
   if (t.asks.secrets) out.push(`${t.asks.secrets} secret${t.asks.secrets === 1 ? "" : "s"} kept on your machine`);
   if (t.asks.authority) out.push(`${t.asks.authority} permission${t.asks.authority === 1 ? "" : "s"} outside codecast`);
   const yours = humanSetupCount(m);
@@ -154,6 +154,7 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
           {routines.length > 4 && <li className="text-[11px] text-sol-text-dim">and {routines.length - 4} more</li>}
         </ul>
       </div>
+      <ToolsRow template={t} />
       {reason && <p className="mt-auto rounded-md px-2 py-1.5 text-[11px] leading-snug text-sol-text-muted" style={{ background: "color-mix(in srgb, var(--sol-yellow) 10%, transparent)" }} data-template-card-reason>{reason}</p>}
       <footer className={`flex items-center justify-between gap-2 pt-1 ${reason ? "" : "mt-auto"}`}>
         <span className="flex items-center gap-1.5 text-[10.5px] text-sol-text-dim">
@@ -169,5 +170,22 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
         )}
       </footer>
     </article>
+  );
+}
+
+/** What the role brings to the job: the commands it runs and the skills it
+ *  reads, by name, shipped and versioned with the template. */
+export function ToolsRow({ template: t, max = 4 }: { template: Pick<CatalogTemplate, "manifest">; max?: number }) {
+  const { commands, skills } = templateTools(t.manifest);
+  if (!commands.length && !skills.length) return null;
+  return (
+    <div className="min-w-0" data-template-tools={commands.length + skills.length}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-sol-text-dim">Ships {commands.length ? `${commands.length} tool${commands.length === 1 ? "" : "s"}` : ""}{commands.length && skills.length ? " · " : ""}{skills.length ? `${skills.length} skill${skills.length === 1 ? "" : "s"}` : ""}</p>
+      <ul className="mt-1 flex flex-wrap gap-1">
+        {commands.slice(0, max).map((id) => <li key={id} className="rounded px-1.5 py-px text-[10.5px] text-sol-text" style={{ fontFamily: "var(--font-mono)", background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" }} data-template-tool={id}>{id}</li>)}
+        {commands.length > max && <li className="px-0.5 text-[10.5px] text-sol-text-dim">+{commands.length - max}</li>}
+        {!commands.length && skills.slice(0, max).map((id) => <li key={id} className="rounded px-1.5 py-px text-[10.5px] text-sol-text-muted" style={{ fontFamily: "var(--font-mono)", background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>{id}</li>)}
+      </ul>
+    </div>
   );
 }

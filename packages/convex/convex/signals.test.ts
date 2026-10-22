@@ -7,7 +7,7 @@ import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
-import { attachJudgeRequest, causeDescription, makeProblemOfFindingCore, markAskDoneCore, mergeProblemCore, moveFindingOutCore, normalizeSignal, parseAttachJudgeReply, rewriteCauseDescription, type CauseCandidate } from "./signals";
+import { attachJudgeRequest, causeDescription, makeProblemOfFindingCore, markAskDoneCore, mergeProblemCore, moveFindingOutCore, unfoldProblem, normalizeSignal, parseAttachJudgeReply, rewriteCauseDescription, type CauseCandidate } from "./signals";
 
 const TOKEN = "s".repeat(64);
 const T0 = 1_760_000_000_000;
@@ -208,7 +208,7 @@ describe("signals.ingest", () => {
     const second = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart (again)", observed_at: T0 + 5000 });
     expect(second).toMatchObject({ attach: "fingerprint", task_id: first.task_id, signal_count: 2, reopened: false });
     expect(stub.state.calls).toHaveLength(0);
-    expect((await task(first.task_id)).cause).toEqual({ signal_count: 2, first_seen: T0, last_seen: T0 + 5000, fingerprints: ["err-1"], joined_at: expect.any(Number) });
+    expect((await task(first.task_id)).cause).toEqual({ signal_count: 2, first_seen: T0, last_seen: T0 + 5000, fingerprints: ["err-1"], joined_at: expect.any(Number), placed: "none" });
   });
 
   test("judge: a new fingerprint near an open cause attaches where the judge points", async () => {
@@ -1253,6 +1253,27 @@ describe("dissolve closes and move notes (LL13)", () => {
     expect((await task(older.task_id)).cause.signal_count).toBe(2);
     expect(await t.run(async (ctx) => await mergeProblemCore(ctx, userId, st, so))).toMatchObject({ moved: 0, already: true });
     await expect(t.run(async (ctx) => await mergeProblemCore(ctx, userId, so, so))).rejects.toThrow(/cannot merge into itself/);
+  });
+
+  test("a merge undone: the folded problem opens again and takes back exactly the findings it brought", async () => {
+    const { add, t, task, userId } = await setup();
+    const older = await add({ fingerprint: "k-old2", title: "Fee wording skips the fair-fee question" });
+    const twin = await add({ fingerprint: "k-twin2", title: "Risk notes are never routed to anyone" });
+    const [so, st] = await Promise.all([older, twin].map(async (r) => (await task(r.task_id)).short_id));
+    await t.run(async (ctx) => await mergeProblemCore(ctx, userId, st, so));
+    const signalsOn = (id: any) => t.run(async (ctx) => await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", id)).collect());
+    expect((await signalsOn(older.task_id)).map((r: any) => r.folded_from ?? null).filter(Boolean)).toEqual([twin.task_id]);
+
+    const moved = await t.run(async (ctx) => await unfoldProblem(ctx, userId, (await ctx.db.get(twin.task_id))!, null, "two causes.", Date.now()));
+    expect(moved).toBe(1);
+    const reopened = await task(twin.task_id);
+    expect(reopened.status).toBe("open");
+    expect(reopened.duplicate_of).toBeUndefined();
+    expect(reopened.cause.merged_into).toBeUndefined();
+    expect((await signalsOn(twin.task_id)).map((r: any) => [r.fingerprint, r.folded_from ?? null])).toEqual([["k-twin2", null]]);
+    expect((await signalsOn(older.task_id)).map((r: any) => r.fingerprint)).toEqual(["k-old2"]);
+    expect((await task(older.task_id)).cause.signal_count).toBe((await signalsOn(older.task_id)).length);
+    await expect(t.run(async (ctx) => await unfoldProblem(ctx, userId, (await ctx.db.get(twin.task_id))!, null, "again", Date.now()))).rejects.toThrow(/was not merged/);
   });
 
   test("moves into a closed problem open a new one; a run's moves fold into one note per problem", async () => {

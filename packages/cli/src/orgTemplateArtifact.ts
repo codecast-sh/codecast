@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { inputTokens, manifestFiles, templatePath, templateSlug, validateTemplate, validateTokens, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
+import { inputTokens, manifestFiles, templatePath, templateSlug, toolIds, validateTemplate, validateTokens, type OrgTemplate, type TemplateTool } from "@codecast/shared/contracts/orgTemplateManifest";
 
 // The manifest's types, validator and tokens live in shared, read by the CLI,
 // the server and the web alike; this module is the release folder on disk.
@@ -25,14 +25,39 @@ function assembleArtifact(root: string, files: Map<string, Buffer>, executable: 
   const raw = files.get("org-template.json");
   if (!raw) throw new Error("Release is missing org-template.json");
   const manifest = validateTemplate(JSON.parse(raw.toString("utf8")));
-  const inputs = inputTokens(manifest);
+  const inputs = inputTokens(manifest), tools = toolIds(manifest);
   for (const file of manifestFiles(manifest)) {
     if (!files.has(file)) throw new Error(`Missing template instruction file: ${file}`);
-    validateTokens(files.get(file)!.toString("utf8"), inputs);
+    validateTokens(files.get(file)!.toString("utf8"), inputs, tools);
   }
+  for (const tool of manifest.tools ?? []) toolSummary(tool, files, executable);
   const digest = createHash("sha256");
   for (const [name, bytes] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) digest.update(JSON.stringify([name, bytes.length, executable.has(name)]) + "\n").update(bytes);
   return { root, manifest, files, executable, hash: digest.digest("hex") };
+}
+/** A skill's one line: the `description` of its SKILL.md frontmatter, the one place it is written. */
+export function skillDescription(text: string): string | null {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  const line = front?.[1].split(/\r?\n/).find((l) => /^description:/.test(l));
+  const value = line?.slice("description:".length).trim().replace(/^(["'])(.*)\1$/, "$2");
+  return value || null;
+}
+/**
+ * A declared tool checked against the release's files, returning its one
+ * line: a command is a file (executable unless it names a runner), a skill a
+ * folder whose SKILL.md carries a description.
+ */
+export function toolSummary(tool: TemplateTool, files: Map<string, Buffer>, executable: Set<string>): string {
+  if (tool.kind === "command") {
+    if (!files.has(tool.path)) throw new Error(`Tool ${tool.id}: ${tool.path} is not a file in the release`);
+    if (!tool.run && !executable.has(tool.path)) throw new Error(`Tool ${tool.id}: ${tool.path} is not executable; mark it executable or name its runner with run`);
+    return tool.summary!;
+  }
+  const skill = files.get(`${tool.path}/SKILL.md`);
+  if (!skill) throw new Error(`Tool ${tool.id}: ${tool.path}/SKILL.md is missing`);
+  const description = skillDescription(skill.toString("utf8"));
+  if (!description) throw new Error(`Tool ${tool.id}: ${tool.path}/SKILL.md has no description in its frontmatter`);
+  return description;
 }
 /**
  * The release as one blob publish uploads and the host step downloads

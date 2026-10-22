@@ -8,9 +8,10 @@ import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
-import { GROUND_FIELDS, GROUND_PURPOSE } from "@codecast/shared/contracts/goalsBrief";
+import { GROUND_FIELDS, GROUND_OUTPUT_SCHEMA, GROUND_PROJECT_FIELD, GROUND_PURPOSE } from "@codecast/shared/contracts/goalsBrief";
 import { HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { admissionWait, cardLoadFor, lineCandidates, personCardLoad } from "./orgLine";
+import { setBudgetCap } from "./lib/teamBudget";
 
 setDefaultTimeout(60_000);
 
@@ -51,6 +52,7 @@ async function setup() {
   "./syncOutbox.ts": () => import("./syncOutbox"),
     "./signals.ts": () => import("./signals"),
     "./lineGround.ts": () => import("./lineGround"),
+    "./modelCalls.ts": () => import("./modelCalls"),
   });
   const ids = await t.run(async (ctx) => {
     const person = await ctx.db.insert("users", { name: "Founder" } as any);
@@ -58,6 +60,8 @@ async function setup() {
     const team = await ctx.db.insert("teams", { name: "Acme", features: { org: true } } as any);
     await ctx.db.insert("team_memberships", { user_id: person, team_id: team, role: "admin", joined_at: T0 } as any);
     const workspace = `team:${team}`;
+    // Ground spends from the workspace's model budget, which is off until a person sets a cap.
+    await setBudgetCap(ctx, workspace, team, 100, person, Date.now());
     const project = (short_id: string, title: string, goal: string) =>
       ctx.db.insert("projects", { user_id: person, team_id: team, workspace, short_id, title, goal, status: "active", created_at: T0, updated_at: T0 } as any);
     const checkout = await project("pr-1", "Checkout", "Every cart that reaches checkout becomes an order");
@@ -85,6 +89,7 @@ describe("lineGround.sweep (LE5)", () => {
     expect(await sweep()).toMatchObject({ grounded: 1, unreadable: 0, unanswered: 0 });
 
     const call = stub.state.calls.at(-1);
+    expect(call.output_config).toEqual({ format: { type: "json_schema", schema: GROUND_OUTPUT_SCHEMA } });
     expect(call.system).toContain(GROUND_PURPOSE);
     expect(call.system).toContain(GROUND_FIELDS);
     const prompt: string = call.messages[0].content;
@@ -123,14 +128,63 @@ describe("lineGround.sweep (LE5)", () => {
     expect(await task(first.task_id)).toMatchObject({ readiness: "ready", readiness_note: "Both reports" });
   });
 
-  test("a cause with no project is grounded against the whole workspace's goals", async () => {
-    const { add, sweep } = await setup();
-    await add({ fingerprint: "err-2", title: "Avatar upload rejects PNG" });
-    stub.state.replies.push(ground({ goal_ref: "pr-2", category: "ux" }));
+  test("a cause with no project is grounded against the whole workspace's goals, and placed in one", async () => {
+    const { add, sweep, task, avatars, t } = await setup();
+    const filed = await add({ fingerprint: "err-2", title: "Avatar upload rejects PNG" });
+    stub.state.replies.push(ground({ goal_ref: "pr-2", category: "ux", project: "pr-2" }));
     expect(await sweep()).toMatchObject({ grounded: 1 });
-    const prompt: string = stub.state.calls.at(-1).messages[0].content;
+    const call = stub.state.calls.at(-1);
+    const prompt: string = call.messages[0].content;
     expect(prompt).toContain("Every cart that reaches checkout becomes an order");
     expect(prompt).toContain("Profiles look like their owners");
+    expect(prompt).toContain("filed under: no project");
+    expect(call.system).toContain(GROUND_PROJECT_FIELD);
+    expect(call.output_config.format.schema.properties.project.enum).toEqual(["pr-1", "pr-2", "none"]);
+    expect(await task(filed.task_id)).toMatchObject({ project_id: avatars, goal_ref: "pr-2", cause: { placed: "ground" } });
+    const row = await t.run(async (ctx) => await ctx.db.get(filed.signal_id));
+    expect(row).toMatchObject({ project_id: avatars });
+    expect(row?.filed_for_project_id).toBeUndefined();
+  });
+
+  test("a cause filed under the repo's default project is placed by what it is about: it moves with its signals and keeps where it was filed", async () => {
+    const { add, sweep, task, checkout, avatars, t } = await setup();
+    const filed = await add({ fingerprint: "err-3", title: "Avatar upload rejects PNG", default_project: "pr-1" });
+    const again = await add({ fingerprint: "err-3", title: "Avatar upload rejects PNG", default_project: "pr-1" });
+    expect(again).toMatchObject({ attach: "fingerprint", task_id: filed.task_id });
+    expect(await task(filed.task_id)).toMatchObject({ project_id: checkout, cause: { placed: "default" } });
+    stub.state.replies.push(ground({ goal_ref: "pr-2", category: "ux", project: "pr-2" }));
+    expect(await sweep()).toMatchObject({ grounded: 1 });
+    const prompt: string = stub.state.calls.at(-1).messages[0].content;
+    expect(prompt).toContain("filed under: pr-1 Checkout, by default");
+    // Placing reads every project's charter, not only the default's.
+    expect(prompt).toContain("Profiles look like their owners");
+
+    expect(await task(filed.task_id)).toMatchObject({ project_id: avatars, cause: { placed: "ground", signal_count: 2 } });
+    const rows = await t.run(async (ctx) => await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", filed.task_id)).collect());
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row).toMatchObject({ project_id: avatars, filed_for_project_id: checkout });
+    const comments = await t.run(async (ctx) => await ctx.db.query("task_comments").collect());
+    expect(comments.some((c: any) => c.author === "ground" && c.text.includes("Placed in Avatars, moved from Checkout, where it was filed by default."))).toBe(true);
+  });
+
+  test("a cause ground keeps in its default project stays there, and one no charter covers leaves it", async () => {
+    const { add, sweep, task, checkout } = await setup();
+    const kept = await add({ fingerprint: "err-4", title: "Checkout throws on empty cart", default_project: "pr-1" });
+    const left = await add({ fingerprint: "err-5", title: "Office printer jams", default_project: "pr-1" });
+    stub.state.replies.push(ground({ goal_ref: "pr-1", project: "pr-1" }), ground({ goal_ref: "none", readiness: "not_actionable", project: "none" }));
+    expect(await sweep()).toMatchObject({ grounded: 2 });
+    expect(await task(kept.task_id)).toMatchObject({ project_id: checkout, cause: { placed: "ground" } });
+    const gone = await task(left.task_id);
+    expect(gone.project_id).toBeUndefined();
+    expect(gone.cause.placed).toBe("ground");
+  });
+
+  test("a project the brief does not list leaves a cause being placed needing a person", async () => {
+    const { add, sweep, task } = await setup();
+    const filed = await add({ fingerprint: "err-6", title: "Avatar upload rejects PNG" });
+    stub.state.replies.push(ground({ goal_ref: "pr-2", project: "pr-9" }));
+    expect(await sweep()).toMatchObject({ grounded: 0, unreadable: 1 });
+    expect((await task(filed.task_id)).readiness_note).toContain('project "pr-9" is not a project the brief lists');
   });
 
   test("an answer it cannot use leaves the cause needing a person, with the reason, and is not asked again", async () => {
@@ -146,6 +200,28 @@ describe("lineGround.sweep (LE5)", () => {
     const before = stub.state.calls.length;
     await sweep();
     expect(stub.state.calls.length).toBe(before);
+  });
+
+  test("each call is charged to the workspace's budget and the cause's project, and a full cap leaves the cause for a later pass", async () => {
+    const { add, task, sweep, t, workspace, team, person, checkout } = await setup();
+    const filed = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", project: "pr-1" });
+    stub.state.replies.push(ground({ goal_ref: "pr-1" }));
+    expect(await sweep()).toMatchObject({ grounded: 1 });
+    const { budget, spend } = await t.run(async (ctx) => ({
+      budget: await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).first(),
+      spend: await ctx.db.query("model_spend_hours").collect(),
+    }));
+    expect(budget!.by_purpose.grouping).toBeGreaterThan(0);
+    expect(budget!.held_usd).toBe(0);
+    expect(spend.map((r: any) => r.project_id)).toEqual([checkout]);
+
+    const next = await add({ fingerprint: "err-2", title: "Checkout drops the coupon", project: "pr-1" });
+    await t.run(async (ctx) => setBudgetCap(ctx, workspace, team, 0, person, Date.now()));
+    const before = stub.state.calls.length;
+    expect(await sweep()).toMatchObject({ grounded: 0, unbudgeted: 1 });
+    expect(stub.state.calls.length).toBe(before);
+    expect((await task(next.task_id)).readiness).toBeUndefined();
+    expect((await task(filed.task_id)).readiness).toBe("ready");
   });
 
   test("no reply at all leaves the cause untouched for the next pass", async () => {
@@ -211,7 +287,8 @@ describe("admission after grounding (LP1, LP6)", () => {
     const { add, sweep, t, hop, checkoutLead } = await orgSetup();
     const inProject = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", project: "pr-1" });
     const unprojected = await add({ fingerprint: "err-2", title: "Avatar upload rejects PNG" });
-    stub.state.replies.push(ground({ goal_ref: "pr-1" }), ground({ goal_ref: "pr-2" }));
+    // Ground finds no project for the unprojected one, so it stays the Head of People's.
+    stub.state.replies.push(ground({ goal_ref: "pr-1" }), ground({ goal_ref: "pr-2", project: "none" }));
 
     // Ungrounded causes are nobody's candidates yet.
     expect(await t.run(async (ctx) => lineCandidates(ctx, await ctx.db.get(checkoutLead.id)))).toEqual([]);

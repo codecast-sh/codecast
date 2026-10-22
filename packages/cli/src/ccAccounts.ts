@@ -863,9 +863,10 @@ export function activeProfileName(): string | undefined {
   return listProfiles().find((p) => p.active)?.name;
 }
 
-export function listProfiles(): CcProfileMeta[] {
+/** `credential` is the active login when the caller already read it (the daemon reads it off the loop). */
+export function listProfiles(credential: string | null = readActiveCredential()): CcProfileMeta[] {
   const index = readProfileIndex();
-  const activeUuid = activeAccountSummary()?.uuid;
+  const activeUuid = activeAccountSummary(credential)?.uuid;
   return Object.entries(index.profiles)
     .map(([name, meta]) => ({
       name,
