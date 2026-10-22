@@ -199,7 +199,7 @@ export function becameOf(e: TimelineEvent, ix: ChainIndex, now: number): ChainSt
     case "finding":
       return e.task ? fromProblem(e.task, ix, now, {}) : [];
     case "problem_opened": case "problem_merged": case "problem_closed":
-      return e.task ? fromProblem(e.task, ix, now, { problem: true }) : [];
+      return e.task ? fromProblem(e.task, ix, now, {}) : [];
     case "run_started": case "station": case "run_ended":
       return e.task ? fromProblem(e.task, ix, now, { problem: true, run: true }) : [];
     case "decision_asked": case "decision_answered": case "decision_closed":
