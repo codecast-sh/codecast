@@ -3,11 +3,11 @@
 // composer's list) as a row of pills above the composer; a tap completes the
 // token. The list and the matching are web's (lib/sessionSkills).
 import { useMemo } from 'react';
-import { ScrollView, TouchableOpacity } from 'react-native';
+import { ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
+import { themedStyles } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { applySlashSkill, matchSlashSkills, resolveSessionSkills, slashQueryAt } from '@codecast/web/lib/sessionSkills';
-import { pillStyles } from '@/components/SuggestionPills';
 
 export function SlashCommandPills({ conversationId, text, onPick }: { conversationId: string; text: string; onPick: (next: string) => void }) {
   const availableSkills = useInboxStore((s) => (s.currentUser as any)?.available_skills as string | undefined);
@@ -37,3 +37,29 @@ export function SlashCommandPills({ conversationId, text, onPick }: { conversati
     </ScrollView>
   );
 }
+
+// Inset like the composer card below, so the row lines up with it.
+const pillStyles = themedStyles((Theme) => StyleSheet.create({
+  strip: {
+    flexGrow: 0,
+    marginBottom: 6,
+  },
+  stripContent: {
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+  },
+  pill: {
+    maxWidth: 300,
+    borderWidth: 1,
+    borderColor: Theme.border,
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  pillText: {
+    fontSize: 12,
+    color: Theme.textMuted,
+  },
+}));
