@@ -25,6 +25,7 @@ import {
 } from "@codecast/shared/contracts";
 import { formatJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
+import { FLOW_FENCE_LANG } from "./line/flowFence";
 import { DIFF_FENCE } from "./castDiff";
 
 /** Every gallery row's id starts with this, so a loader can replace an earlier copy. */
@@ -170,6 +171,12 @@ A line widget:
 
 \`\`\`${LINE_FENCE_LANG}
 {"widget":"step","project":"pr-12","graph":"agentwatch","step":"dissolve"}
+\`\`\`
+
+A flow from the pool:
+
+\`\`\`${FLOW_FENCE_LANG}
+{"flow":"change"}
 \`\`\`
 
 A connected app's view:
