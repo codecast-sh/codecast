@@ -12,6 +12,7 @@ import "./timeline/problems.css";
 import "./timeline/overview.css";
 
 export function ProblemsView(props: LineViewProps) {
+  if (true) return <div data-bisect>{Array.from({ length: 2000 }, (_, i) => <span key={i}>x</span>)}</div>; // __BISECT
   const { model, workspace, selection, select, href, drawerOpen } = props;
   const list = useProblemList(model, workspace, selection);
 
