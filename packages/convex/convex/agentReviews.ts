@@ -595,6 +595,49 @@ export const refileHeld = internalAction({
 });
 
 /** The findings an agent judge's newest run on a moment recorded, and the moment's subject. */
+/**
+ * One filed finding that named several causes, listed again one cause per
+ * finding (the findings turn's own rule): each new finding files through the
+ * door, where grouping places it, and the original retires naming the
+ * findings it became. A relist of one item changes nothing. Run with
+ * packages/convex/run.sh; `findings` is the relist's JSON reply.
+ */
+export const relistFinding = internalAction({
+  args: { signal: v.string(), findings: v.string() },
+  handler: async (ctx, args): Promise<{ signal: string; relisted: string[]; tasks: string[] }> => {
+    const row: Doc<"signals"> | null = await ctx.runQuery(internal.agentReviews.signalByShortId, { signal: args.signal });
+    if (!row || row.retired || row.merged_into || !row.source.startsWith("judge:") || !row.moment) throw new Error(`${args.signal} is not a live judge finding`);
+    const findings = parseAgentFindings(args.findings) ?? [];
+    if (findings.length < 2) return { signal: args.signal, relisted: [], tasks: [] };
+    const source = await ctx.runQuery(internal.agentReviews.sourceOfMoment, { moment: row.moment });
+    if (!source) throw new Error(`${row.moment} has no source`);
+    const { subject } = await ctx.runQuery(internal.agentReviews.runFindings, { moment: row.moment, judge: row.subject });
+    const relisted: string[] = [];
+    const tasks = new Set<string>();
+    for (const f of findings) {
+      const signal = agentFindingSignal(f, { judge: row.subject, judge_version: row.judge_version ?? "", moment: row.moment, subject }, row.evidence_url);
+      const result = await ctx.runAction(internal.signals.ingestAs, { user_id: source.owner_user_id, ...signal, observed_at: row.observed_at, ...sourceFilingScope(source), ...(row.project_id ? { project: String(row.project_id) } : {}) });
+      relisted.push(result.short_id);
+      if (result.task_short_id) tasks.add(result.task_short_id);
+    }
+    await ctx.runMutation(internal.agentReviews.retireRelisted, { signal_id: row._id, into: relisted, actor: source.owner_user_id });
+    return { signal: args.signal, relisted, tasks: [...tasks] };
+  },
+});
+
+export const signalByShortId = internalQuery({
+  args: { signal: v.string() },
+  handler: async (ctx, args) => await ctx.db.query("signals").withIndex("by_short_id", (q: any) => q.eq("short_id", args.signal)).first(),
+});
+
+export const retireRelisted = internalMutation({
+  args: { signal_id: v.id("signals"), into: v.array(v.string()), actor: v.id("users") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.signal_id);
+    if (row && !row.retired && !row.merged_into) await retireSignals(ctx, [row], { reason: `listed again one cause per finding: ${args.into.join(", ")}`, actor: args.actor });
+  },
+});
+
 export const runFindings = internalQuery({
   args: { moment: v.string(), judge: v.string() },
   handler: async (ctx, args): Promise<{ subject: string; findings: AgentFinding[] }> => {
@@ -781,4 +824,13 @@ export const filingPage = internalQuery({
     const rows = (page.page as Doc<"signals">[]).filter((r) => r.source === `judge:${args.judge}`).map((r) => ({ task: r.task_id ? String(r.task_id) : null, key: r.fingerprint, retired: !!r.retired || !!r.merged_into }));
     return { rows, cursor: page.isDone ? null : page.continueCursor };
   },
+});
+
+/** A bulk start's failed moments with why (run with packages/convex/run.sh), to retry once the cause is gone. */
+export const failedMoments = internalQuery({
+  args: { batch: v.string() },
+  handler: async (ctx, args) =>
+    (await ctx.db.query("moments").withIndex("by_status_due", (q: any) => q.eq("status", "failed")).collect())
+      .filter((m: Doc<"moments">) => m.batch === args.batch)
+      .map((m: Doc<"moments">) => ({ moment: m.short_id, subject: m.subject, error: (m.error ?? "").slice(0, 300) })),
 });
