@@ -23,11 +23,16 @@ export interface ReaskPlan {
  * the runner left alone, when `at` names no station, or when the run stands at
  * a gate the graph no longer has and no station was named to pick it up at.
  */
-export async function prepareReask(deps: PublishDeps, runId: string, ref: string, at?: string): Promise<ReaskPlan> {
+/** The run row as the server holds it, and the graph a runner picking it up here would read: the stations as they are now. */
+export async function currentRunGraph(deps: PublishDeps, runId: string): Promise<{ got: any; graph: import("./types.js").WorkflowGraph | null }> {
   const got = await apiPost(deps, "/cli/workflow-runs/get", { run_id: runId }, { read: true, exitOnError: false }).catch(() => null);
   const { graphForDaemonRun } = await import("./daemonGraph.js");
   const { deviceId } = await import("../remote/device.js");
-  const graph = got?.run ? graphForDaemonRun({ ...got.run, fresh_branch: true }, got.workflow, got.run.project_path || process.cwd(), deviceId(), true) : null;
+  return { got, graph: got?.run ? graphForDaemonRun({ ...got.run, fresh_branch: true }, got.workflow, got.run.project_path || process.cwd(), deviceId(), true) : null };
+}
+
+export async function prepareReask(deps: PublishDeps, runId: string, ref: string, at?: string): Promise<ReaskPlan> {
+  const { got, graph } = await currentRunGraph(deps, runId);
   const gate: string | undefined = got?.run?.gate_node_id || (got?.run?.status === "failed" ? got.run.current_node_id : undefined) || undefined;
   if (at && graph && !graph.nodes.has(at)) throw new Error(`The run's graph has no station ${at}`);
   if (!at && gate && graph && !graph.nodes.has(gate)) throw new Error(`${ref} waits at ${gate}, which its graph no longer has: pick it up with --at <station>`);
