@@ -1,0 +1,14 @@
+// A segment (flows.md FL2): the project's eval command on the base and on the
+// branch, and `cast line eval-result` for the verdict (LE8, line-profile.md LP4).
+digraph eval {
+  graph [kind="segment", label="Eval", description="The project's evals on the base and on the change", takes="branch"]
+  start [shape=Mdiamond]
+  eval [label="Eval", shape=parallelogram, timeout=10800, script="@line/eval.sh"]
+  passed   [shape=Msquare, label="Passed"]
+  worse    [shape=Msquare, label="Eval failed", stop="The evals scored the change worse than the base. $eval.output"]
+  unscored [shape=Msquare, label="Unscored", stop="The evals could not score the change. $eval.output"]
+  start -> eval
+  eval -> passed   [condition="outcome = success"]
+  eval -> worse    [condition="outcome = failure and eval.exit_code = 1"]
+  eval -> unscored [condition="outcome = failure and eval.exit_code != 1"]
+}
