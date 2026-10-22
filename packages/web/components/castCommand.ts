@@ -341,6 +341,7 @@ const CAST_CATEGORY_ALIASES: Record<string, string> = {
   d: "doc",
   sched: "trigger",
   schedule: "trigger",
+  secrets: "vault",
 };
 
 export function normalizeCastCategory(category: string): string {

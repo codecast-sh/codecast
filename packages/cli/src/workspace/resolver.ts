@@ -23,6 +23,7 @@
 
 import * as path from "node:path";
 import { AGENT_CONTEXT_ROOTS, collectProjectContext } from "../cloud/mirror/discovery.js";
+import { readLocalConfig } from "../config/readLocalConfig.js";
 import { detectProject } from "./detect.js";
 import { DEFAULT_BROWSER, MANIFEST_REL_PATH, parseManifest } from "./manifest.js";
 import type { BrowserSpec, WorkspaceManifest } from "./types.js";
@@ -58,7 +59,7 @@ export function withAgentConfigCopies(
   root: string,
   opts: { isInputRoot: boolean; warn?: (m: string) => void },
 ): WorkspaceManifest {
-  const context = collectProjectContext({ root, includeTracked: opts.isInputRoot, includeAncestors: false, tolerateMissing: true });
+  const context = collectProjectContext({ root, includeTracked: opts.isInputRoot, includeAncestors: false, tolerateMissing: true, config: readLocalConfig() });
   for (const skipped of context.skipped) opts.warn?.(`agent config ${skipped.path} skipped: ${skipped.reason}`);
   const existing = manifest.setup.copy;
   const additions = context.files.filter((f) => f.scope === "project")
