@@ -10,7 +10,8 @@
 // to Problems' Not started: what the line has not taken. The finders sit
 // under it, a row each opening the finder's page. Map draws the same steps as
 // the graph, for its shape.
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useMemo, Profiler, type ReactNode } from "react";
+const __onR = (id: string, ph: string, d: number) => (((globalThis as any).__lp ??= {})[`render:${id}:${ph}`] ??= []).push(Math.round(d)); // __LP temp
 import { LINE_MODES, LINE_MODE_LABELS, type LineMode } from "../../../../lib/line/lineWorkspaceUrl";
 import { stepTableFigures, type StepTableRow } from "../../../../lib/line/stepTable";
 import { useStepTable } from "../step/useStepFacts";
@@ -37,8 +38,8 @@ export function ProcessView(props: LineViewProps) {
   const { selection, select } = props;
   const mode = selection.mode;
   const toggle = <ModeSwitch mode={mode} select={select} />;
-  if (mode === "map") return <GraphView {...props} lead={toggle} />;
-  return <StepsPage {...props} toggle={toggle} />;
+  if (mode === "map") return <Profiler id="map" onRender={__onR}><GraphView {...props} lead={toggle} /></Profiler>;
+  return <Profiler id="steps" onRender={__onR}><StepsPage {...props} toggle={toggle} /></Profiler>;
 }
 
 /** The Problems chips the summary row points at: the line's own queue, problems a new run must ask again and problems

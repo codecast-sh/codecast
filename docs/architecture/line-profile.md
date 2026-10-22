@@ -58,6 +58,16 @@ cards = 5                            # open cards per person, across their lines
 auto = false                         # true: Ship on a task or session merges too
 method = "squash"                    # squash | merge | rebase
 
+[line.deploy]                        # the deploy stage (deploys.md DP2); run from the repository root
+command = "outreach/deploy.sh --sha $sha --actor $actor --no-watch"   # the send step
+target = "production"                # what the team's deploy markers name
+trigger = "role"                     # person (default) | role (DP4)
+role = "release"                     # with trigger = "role": the role that deploys
+ci = "cast line deploy ci --workflow ci.yml"          # each step a command (DP8); one left out passes
+gate = "cast line deploy follow --jobs gate,evals"
+rollout = "cast line deploy follow --jobs deploy"
+live = "..."                         # production answering with $sha
+
 [[line.finders]]                     # what this project listens to (LP3)
 id = "invariants"
 source = "union.invariant"
