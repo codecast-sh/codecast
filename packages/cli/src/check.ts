@@ -9,6 +9,10 @@
  * which put the box into swap and starved everything else on it, Chrome's
  * extension included. `tsc --watch` keeps the graph in memory and re-checks
  * only what changed, in seconds, so one watcher serves any number of askers.
+ * An answer comes only from a pass that checked the files as they are on
+ * disk: tsc records each file's content version in its build info, and the
+ * asker compares those with the disk rather than trusting that tsc's file
+ * watching heard every change in time.
  *
  * The unit of sharing is the tree: sessions in the shared checkout share a
  * watcher; a worktree gets its own on first use. A watcher is a detached
@@ -171,6 +175,105 @@ export function projectsTouching(root: string, projects: CheckProject[], changed
   });
 }
 
+// ---------------------------------------------------------------------------
+// Whether a pass checked the files on disk
+// ---------------------------------------------------------------------------
+
+const SOURCE_MAP_COMMENT = /^\/\/[@#] source[M]appingURL=(.+)\r?\n?$/;
+
+/** The text as tsc reads a file: a byte order mark names the encoding and is dropped. */
+function textAsTscReads(bytes: Buffer): string {
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return Buffer.from(bytes.subarray(0, bytes.length & ~1)).swap16().toString("utf16le", 2);
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString("utf16le", 2);
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.toString("utf8", 3);
+  return bytes.toString("utf8");
+}
+
+/** The text without its last source map comment and the blank or `//#` lines after it, which tsc leaves out of a file's version. */
+function withoutSourceMapComment(text: string): string {
+  let lineEnd = text.length;
+  let lineStart = lineEnd;
+  for (let pos = lineEnd - 1; pos >= 0; pos--) {
+    const ch = text.charCodeAt(pos);
+    if (ch === 10 || ch === 13) {
+      if (ch === 10 && pos && text.charCodeAt(pos - 1) === 13) pos--;
+    } else if (ch < 127 || (ch !== 0x2028 && ch !== 0x2029)) {
+      lineStart = pos;
+      continue;
+    }
+    const line = text.substring(lineStart, lineEnd);
+    if (SOURCE_MAP_COMMENT.test(line)) return text.substring(0, lineStart);
+    if (!/^\s*(\/\/[@#] .*)?$/.test(line)) return text;
+    lineEnd = lineStart;
+  }
+  return text;
+}
+
+/** The version tsc records for a file's content: the sha256 of its text, source map comment aside (tsc's getSourceFileVersionAsHashFromText). */
+export function tscFileVersion(bytes: Buffer): string {
+  let text = textAsTscReads(bytes);
+  if (/\/\/[@#] source[M]appingURL=(.+)\r?\n?$/.test(text)) text = withoutSourceMapComment(text);
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** Each file's stat and version when last read, so an unchanged file is not hashed on every ask. */
+type DiskVersions = Record<string, [mtimeMs: number, size: number, ino: number, version: string]>;
+const diskVersionsPath = (dir: string): string => path.join(dir, "disk-versions.json");
+
+/**
+ * The program's files whose content on disk is not what the last finished
+ * pass checked. tsc records every file's version in the build info it writes
+ * as a pass ends, so this compares the pass with the disk directly, whatever
+ * tsc's file watching heard. Null when there is nothing to compare: no pass
+ * has written build info, or it records no content versions.
+ */
+export function filesNotAsChecked(dir: string, now = Date.now()): string[] | null {
+  type Program = { fileNames?: unknown; fileInfos?: unknown };
+  let info: Program & { program?: Program };
+  try {
+    info = JSON.parse(fs.readFileSync(buildInfoPath(dir), "utf-8"));
+  } catch {
+    return null;
+  }
+  // TypeScript before 5.6 nests the program under `program`.
+  const { fileNames, fileInfos } = info.program ?? info;
+  if (!Array.isArray(fileNames) || !Array.isArray(fileInfos)) return null;
+  let known: DiskVersions = {};
+  try {
+    known = JSON.parse(fs.readFileSync(diskVersionsPath(dir), "utf-8"));
+  } catch {}
+  const read: DiskVersions = {};
+  const differ: string[] = [];
+  let compared = 0;
+  fileInfos.forEach((entry, i) => {
+    const recorded = typeof entry === "string" ? entry : (entry as { version?: unknown } | null)?.version;
+    const name = fileNames[i];
+    if (typeof recorded !== "string" || !/^[0-9a-f]{64}$/.test(recorded) || typeof name !== "string") return;
+    compared++;
+    const file = path.resolve(dir, name);
+    let version: string;
+    try {
+      const st = fs.statSync(file);
+      const was = known[file];
+      version = was && was[0] === st.mtimeMs && was[1] === st.size && was[2] === st.ino ? was[3] : tscFileVersion(fs.readFileSync(file));
+      // A file written within the clock's last two seconds can be written
+      // again with the same stat, so its version is read afresh next time.
+      if (now - st.mtimeMs > 2_000) read[file] = [st.mtimeMs, st.size, st.ino, version];
+    } catch {
+      differ.push(file);
+      return;
+    }
+    if (version !== recorded) differ.push(file);
+  });
+  if (!compared) return null;
+  try {
+    const tmp = `${diskVersionsPath(dir)}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(read));
+    fs.renameSync(tmp, diskVersionsPath(dir));
+  } catch {}
+  return differ;
+}
+
 /** A git command's output lines in `root`; throws with git's message when it fails (a bad ref). */
 export function gitLines(root: string, args: string[]): string[] {
   const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
@@ -228,8 +331,12 @@ export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" 
 }
 /** A big program needs more heap than node's default; the largest figure the projects' own CI uses (union landing's typecheck.sh). */
 export const TSC_NODE_OPTIONS = "--max-old-space-size=6144";
-/** After a request, how long a change may take to reach tsc's watcher before we trust the last pass. */
-export const SETTLE_MS = 750;
+/**
+ * How long a pass that did not check the files on disk may wait for tsc to
+ * start one that does, before the watcher counts as having lost track of
+ * them. tsc starts a pass a quarter second after it hears of a change.
+ */
+export const UNSEEN_GRACE_MS = 15_000;
 /** How long a watcher's recorded pid may be dead before an ask stops waiting on it. */
 const DEAD_GRACE_MS = 5_000;
 
@@ -441,7 +548,12 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   // Incremental: a restarted watcher (the slot cap stops idle ones) and a
   // seeded worktree re-check only what changed since the recorded pass.
   const oomBefore = oomKillCount();
-  const child = spawn(own ?? "tsc", ["--noEmit", "--watch", "--preserveWatchOutput", "--pretty", "false", "--incremental", "--tsBuildInfoFile", buildInfoPath(dir), "-p", path.join(root, tsconfig)], {
+  // Files are watched through their directories. tsc's default watches each
+  // file's inode, and on Linux an inode replaced while something still holds
+  // it open (git checkout swaps every file it changes) never reports its
+  // deletion: the watch stays on the old inode, and tsc never hears of that
+  // path again (ct-62781: an Implement round looped on exports present on disk).
+  const child = spawn(own ?? "tsc", ["--noEmit", "--watch", "--watchFile", "useFsEventsOnParentDirectory", "--preserveWatchOutput", "--pretty", "false", "--incremental", "--tsBuildInfoFile", buildInfoPath(dir), "-p", path.join(root, tsconfig)], {
     cwd: path.dirname(path.join(root, tsconfig)),
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS || TSC_NODE_OPTIONS },
@@ -589,16 +701,19 @@ export async function checkProject(
   } finally {
     release();
   }
-  if (!state || !isPidAlive(state.pid)) started = await startWhenSlotFrees(target, root, { ...opts, start: opts.start ?? startDetachedWatcher, note, kill, deadline });
-  // Mark the ask (keeps the watcher alive), then let a change that landed a
-  // moment ago reach tsc before trusting the last pass.
+  const startOpts = { ...opts, start: opts.start ?? startDetachedWatcher, note, kill, deadline };
+  if (!state || !isPidAlive(state.pid)) started = await startWhenSlotFrees(target, root, startOpts);
+  // Mark the ask, which keeps the watcher alive.
   const askedAt = Date.now();
   const current = readWatchState(dir);
   if (current) writeWatchState(dir, { ...current, askedAt });
-  await sleep(SETTLE_MS);
   let noted = false;
   let beat = askedAt;
   let deadSince: { pid: number; at: number } | null = null;
+  // A finished pass that did not check the files on disk, and since when;
+  // and when this ask rebuilt the program because tsc never caught up.
+  let behind = null as { finishedAt: number; since: number } | null;
+  let rebuiltAt = 0;
   for (;;) {
     const s = readWatchState(dir);
     if (!s) throw new Error(`the ${project} typecheck watcher went away: ${lastLogLine(dir) ?? "it left no log"} (${logPath(dir)})`);
@@ -613,7 +728,30 @@ export async function checkProject(
       beat = Date.now();
       writeWatchState(dir, { ...s, askedAt: beat });
     }
-    if (!s.inProgress && s.finishedAt) {
+    // A finished pass answers only if it checked the files as they are on
+    // disk. A change can land after a pass read the file (tsc starts another,
+    // which this ask waits for), or tsc can miss it outright; neither shows
+    // in the pass's own output. After a rebuild, every file older than the
+    // new program was read from disk by it, so only newer ones can differ.
+    const notAsChecked = !s.inProgress && s.finishedAt ? (filesNotAsChecked(dir) ?? []).filter((f) => !rebuiltAt || modifiedSince(f, rebuiltAt)) : [];
+    if (!s.inProgress && s.finishedAt && notAsChecked.length) {
+      if (behind?.finishedAt !== s.finishedAt) behind = { finishedAt: s.finishedAt, since: Date.now() };
+      else if (Date.now() - behind.since > UNSEEN_GRACE_MS) {
+        const named = notAsChecked.slice(0, 3).map((f) => path.relative(root, f)).join(", ") + (notAsChecked.length > 3 ? ` and ${notAsChecked.length - 3} more` : "");
+        if (rebuiltAt) throw new Error(`the ${project} typecheck watcher does not see changes to ${named}, even rebuilt; read ${logPath(dir)}`);
+        note(`the ${project} watcher never saw the current ${named}; rebuilding its program from the files on disk`);
+        logWatcherEvent("rebuild", { project, root }, `tsc missed ${named}`);
+        try {
+          kill(s.pid);
+        } catch {}
+        fs.rmSync(statePath(dir), { force: true });
+        started = (await startWhenSlotFrees(target, root, startOpts)) || started;
+        rebuiltAt = readWatchState(dir)?.startedAt ?? Date.now();
+        behind = null;
+        continue;
+      }
+    }
+    if (!s.inProgress && s.finishedAt && !notAsChecked.length) {
       const diagnostics = fs.existsSync(outputPath(dir)) ? fs.readFileSync(outputPath(dir), "utf-8") : "";
       // A global tsc resolves libs and types its own way, so its errors are not
       // the project's. Say so rather than let a wall of them read as real. The
@@ -630,6 +768,15 @@ export async function checkProject(
       note(`waiting for the ${project} typecheck pass to finish…`);
     }
     await sleep(300);
+  }
+}
+
+/** The file was written at or after `at` (a file that is gone counts as changed). */
+function modifiedSince(file: string, at: number): boolean {
+  try {
+    return fs.statSync(file).mtimeMs >= at;
+  } catch {
+    return true;
   }
 }
 
@@ -665,14 +812,32 @@ export function listWatchers(): Array<WatchState & { dir: string }> {
 }
 
 /**
- * Every watcher start, eviction and idle exit on this machine, one line each.
+ * Stop every watcher on `tree` or a tree inside it. A watcher outlives the
+ * session that asked for it by up to IDLE_EXIT_MS, and its tsc works inside
+ * the tree all that time: a tree being set aside or released has nobody left
+ * to ask, and its watchers would keep it in use. Returns what was stopped.
+ */
+export function stopWatchersIn(tree: string, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM")): Array<WatchState & { dir: string }> {
+  const stopped = listWatchers().filter((w) => w.root === tree || w.root.startsWith(`${tree}/`));
+  for (const w of stopped) {
+    try {
+      kill(w.pid);
+    } catch {}
+    fs.rmSync(statePath(w.dir), { force: true });
+    logWatcherEvent("stop", w, "its tree was released");
+  }
+  return stopped;
+}
+
+/**
+ * Every watcher start, eviction, stop, rebuild and idle exit on this machine, one line each.
  * A program stopped to make room is rebuilt whole on its next ask, so this is
  * the cost the cap trades against memory, and the record that shows a cap
  * too small for the trees sharing it.
  */
 export const eventsPath = (): string => path.join(checkHome(), "events.log");
 
-export function logWatcherEvent(event: "start" | "evict" | "idle-exit", w: { project: string; root: string }, detail = ""): void {
+export function logWatcherEvent(event: "start" | "evict" | "stop" | "idle-exit" | "rebuild", w: { project: string; root: string }, detail = ""): void {
   try {
     fs.mkdirSync(checkHome(), { recursive: true });
     fs.appendFileSync(eventsPath(), `${new Date().toISOString()} ${event} ${w.project} ${w.root}${detail ? ` ${detail}` : ""}\n`);

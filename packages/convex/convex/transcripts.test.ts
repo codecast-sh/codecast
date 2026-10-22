@@ -847,6 +847,50 @@ describe("webCallPlaces names only the calls the viewer may read", () => {
   });
 });
 
+// A teammate who could walk into a running huddle through its open door may
+// read its words while it runs, and loses them when it ends unless they spoke.
+describe("a running huddle reads to whoever its door admits", () => {
+  const now = Date.now();
+  const ctxFor = (over: { status?: string; locked?: boolean } = {}) => ({
+    db: makeFakeDb({
+      transcripts: [{
+        _id: "tr_dm", room_key: "dm:ub:uc", team_id: "teamA", started_by: "ub", status: over.status ?? "live",
+        started_at: now - 60_000, routes: [], last_seq: 2, participants: [{ id: "ub", name: "Bo" }, { id: "uc", name: "Cy" }],
+      }],
+      transcript_segments: [
+        { _id: "s1", transcript_id: "tr_dm", seq: 1, speaker_id: "ub", speaker_name: "Bo", text: "hi", t0: 0, t1: 1 },
+      ],
+      call_members: [
+        { _id: "cm1", room_key: "dm:ub:uc", user_id: "ub", team_id: "teamA", joined_at: now, last_seen: now },
+        { _id: "cm2", room_key: "dm:ub:uc", user_id: "uc", team_id: "teamA", joined_at: now, last_seen: now },
+      ],
+      call_room_state: over.locked ? [{ _id: "rs1", room_key: "dm:ub:uc", locked: true }] : [],
+      call_chat_messages: [],
+      call_session_links: [],
+      tasks: [],
+      users: [{ _id: "ua", name: "Ada" }, { _id: "ub", name: "Bo" }, { _id: "uc", name: "Cy" }],
+      team_memberships: ["ua", "ub", "uc"].map((u) => ({ user_id: u, team_id: "teamA" })),
+      teams: [{ _id: "teamA", features: { calls: true } }],
+    }),
+    auth: { async getUserIdentity() { return { subject: "ua|session" }; } },
+  });
+
+  test("an open live huddle lists and opens with its lines", async () => {
+    const c = ctxFor();
+    expect((await (webListCalls as any)._handler(c, {})).map((r: any) => r._id)).toEqual(["tr_dm"]);
+    const detail = await (webGetCall as any)._handler(c, { transcript_id: "tr_dm" });
+    expect(detail?.segments.map((s: any) => s.text)).toEqual(["hi"]);
+  });
+
+  test("a locked huddle stays shut", async () => {
+    expect(await (webGetCall as any)._handler(ctxFor({ locked: true }), { transcript_id: "tr_dm" })).toBeNull();
+  });
+
+  test("once it ends, a teammate who never spoke cannot read it", async () => {
+    expect(await (webGetCall as any)._handler(ctxFor({ status: "ended" }), { transcript_id: "tr_dm" })).toBeNull();
+  });
+});
+
 // ── Recording scope: private shelf, team triage ───────────────────────────
 //
 // A recording is born private to its creator, listed on their personal shelf
