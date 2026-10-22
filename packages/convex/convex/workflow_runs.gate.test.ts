@@ -408,6 +408,21 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     expect(tables.daemon_commands).toHaveLength(1);
   });
 
+  test("a line run the daemon starts on a problem proves against unfixed code (fresh_branch)", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].status = "failed";
+    const line = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", detach: true, run_on_device: "dev-box" });
+    expect(tables.workflow_runs.find((w: any) => w._id === line.run_id)?.fresh_branch).toBe(true);
+    const other = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "review", task_id: "ct-7", detach: true, force: true });
+    expect(tables.workflow_runs.find((w: any) => w._id === other.run_id)?.fresh_branch).toBeUndefined();
+    // A line version the CLI chose names itself; it is a line run by what it serves.
+    tables.workflows.push({ _id: "workflows_v", user_id: HOST, name: "agentwatch", slug: "agentwatch", serves: ["union.desk"] });
+    const version = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "agentwatch", task_id: "ct-7", detach: true, force: true });
+    expect(tables.workflow_runs.find((w: any) => w._id === version.run_id)?.fresh_branch).toBe(true);
+    const here = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", force: true });
+    expect(tables.workflow_runs.find((w: any) => w._id === here.run_id)?.fresh_branch).toBeUndefined();
+  });
+
   test("createFromCli starts a new attempt once the cause's run has ended", async () => {
     for (const status of ["completed", "failed"]) {
       const { ctx, tables } = await seed();

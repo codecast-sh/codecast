@@ -196,6 +196,8 @@ export interface ResumeRow {
   gate_decision_id?: string | null;
   /** A trial run's card waiting at its gate (lineTrial.ts): asked of nobody, so no decision id, but asked all the same. */
   gate_card?: string | null;
+  /** When a failed run was resumed at a station as a new attempt (`cast workflow resume`): visits count again from then. */
+  visits_reset_at?: number | null;
 }
 
 /** A row is mid-run when it is live and a runner reported past its start. */
@@ -264,6 +266,14 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
     }
     const last = done[done.length - 1];
     if (last) context["outcome"] = node_outcomes[last.node_id];
+  }
+
+  // A resume of a failed run is a new attempt: max_visits stops a loop within
+  // one attempt, so the visits the earlier attempt used count no more. A
+  // checkpoint written since the resume is this attempt's own, and stands.
+  if (row.visits_reset_at && !(checkpoint && checkpoint.at > row.visits_reset_at)) {
+    visit_counts = {};
+    for (const key of Object.keys(context)) if (key.endsWith(".visits")) delete context[key];
   }
 
   const asked = !routedOn && row.gate_node_id === nodeId;
