@@ -19,6 +19,7 @@ import { useHostedMode, useSurface } from '@codecast/web/lib/surfaces';
 import { LANE_COPY, meterWords } from '@codecast/web/components/simple/lane';
 import { usePlanMeter } from '@codecast/web/components/simple/usePlanFigures';
 import { useLaneMailAbilities } from '@codecast/web/components/simple/useLaneMail';
+import { useSecrets } from '@codecast/web/hooks/useSyncSecrets';
 
 // The settings home is a short list of rows; each opens its own screen
 // (app/settings/[section].tsx), so every switch is one tap deeper and the
@@ -38,6 +39,7 @@ export default function SettingsScreen() {
   const machines = useSurface('settings.machines');
   const meter = usePlanMeter();
   const mail = useLaneMailAbilities();
+  const vaultAsks = useSecrets().filter((r) => r.status === 'requested').length;
   // The route is cast for the same reason the inbox's pushes are: expo's
   // typed-route union only regenerates when Metro runs.
   const open = (section: string) => router.push(`/settings/${section}` as never);
@@ -100,6 +102,7 @@ export default function SettingsScreen() {
             onPress={() => open('devices')}
           />
         ) : null}
+        <NavRow icon="shield" label="Vault" detail={vaultAsks ? `${vaultAsks} requested` : undefined} onPress={() => open('vault')} />
         <NavRow icon="adjust" label="Appearance" detail={themeLabelOf(storeTheme).label} onPress={() => open('appearance')} />
         <NavRow
           icon="lock"
