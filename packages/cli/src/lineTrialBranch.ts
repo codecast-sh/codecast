@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "./proc.js";
+import { stopWatchersIn } from "./check.js";
 import { lineRunDir, runSlug } from "./workflow/runner.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 
@@ -43,16 +44,39 @@ export function processesIn(tree: string, lsofOut?: string): Array<{ pid: number
   return found;
 }
 
-/** The agent sessions among `pids`: the session id each one was started or resumed with. */
-export function sessionIdsOf(pids: number[], psOut?: string): string[] {
-  if (!pids.length) return [];
-  const out = psOut ?? (spawnSync("ps", ["-o", "args=", "-p", pids.join(",")], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout ?? "");
-  const ids = new Set<string>();
+/** The session id an agent's command line was started or resumed with. */
+function sessionIdIn(args: string): string | null {
+  const m = args.match(/(?:--session-id|--resume|\bresume)[ =]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * The agent session each of `pids` works for: its own, or the nearest
+ * ancestor's that names one, since a shell or a tool an agent ran carries no
+ * session id of its own. `self` when the process is the agent. Processes no
+ * agent started are left out.
+ */
+export function ownersOf(pids: number[], psOut?: string): Map<number, { session: string; self: boolean }> {
+  const out = psOut ?? (spawnSync("ps", ["-A", "-o", "pid=,ppid=,args="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 }).stdout ?? "");
+  const table = new Map<number, { ppid: number; args: string }>();
   for (const line of out.split("\n")) {
-    const m = line.match(/(?:--session-id|--resume|\bresume)[ =]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-    if (m) ids.add(m[1].toLowerCase());
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+    if (m) table.set(Number(m[1]), { ppid: Number(m[2]), args: m[3] });
   }
-  return [...ids];
+  const owners = new Map<number, { session: string; self: boolean }>();
+  for (const pid of pids) {
+    for (let at = pid, hops = 0; at > 1 && hops < 32; hops++) {
+      const row = table.get(at);
+      if (!row) break;
+      const session = sessionIdIn(row.args);
+      if (session) {
+        owners.set(pid, { session, self: at === pid });
+        break;
+      }
+      at = row.ppid;
+    }
+  }
+  return owners;
 }
 
 /** Codecast's view of the sessions found working in a worktree, and the way to stop one. */
@@ -79,18 +103,34 @@ export function runHandsVia(post: (route: string, body: Record<string, unknown>)
  * under it on the fresh branch is where its next commit, or its repair of a
  * branch it finds reset, lands: a build hand settled while it worked put its
  * fix back onto the "fresh" branch with `git reset --keep`, and the next run
- * proved against it (ct-60298). A session that is working refuses the fresh
- * run; one that has settled is the earlier run's leftover and is stopped.
- * Anything still running in the tree after that refuses too.
+ * proved against it (ct-60298). Each process in the tree is put to the
+ * agent session it works for, its own or the one that started it (a shell, a
+ * tool call). A session that is working refuses the fresh run. One that has
+ * settled is done with the tree: an agent working in the tree itself is the
+ * earlier run's leftover hand and is stopped; one that only left processes
+ * there keeps its session and loses those (a find the box's tips session ran
+ * in ct-60857's worktree outlived its tool call's timeout by an hour and
+ * refused the next run). So are the tree's typecheck watchers (`cast check`),
+ * which outlive the hands that asked for them. Anything still running in the
+ * tree after that refuses too.
  */
 async function clearTree(tree: string, hands?: RunHands, waitMs = 15_000): Promise<void> {
   let busy = processesIn(tree);
   if (!busy.length) return;
-  const live = hands ? await hands.live(sessionIdsOf(busy.map((p) => p.pid))) : [];
+  const owners = ownersOf(busy.map((p) => p.pid));
+  const live = hands ? await hands.live([...new Set([...owners.values()].map((o) => o.session))]) : [];
   const working = live.filter((h) => h.working);
-  if (working.length) throw new Error(`${tree} has a session still working in it (${working.map((h) => h.id.slice(0, 7)).join(", ")}): an earlier run's hand is at work there. Let it finish or kill it, then start the run again.`);
-  for (const h of live) await hands!.stop(h.id);
-  for (const until = Date.now() + (live.length ? waitMs : 0); ; busy = processesIn(tree)) {
+  if (working.length) throw new Error(`${tree} has a session still working in it (${working.map((h) => h.id.slice(0, 7)).join(", ")}). Let it finish or kill it, then start the run again.`);
+  let left = 0;
+  for (const h of live) {
+    const its = busy.filter((p) => owners.get(p.pid)?.session === h.id);
+    if (its.some((p) => owners.get(p.pid)!.self)) await hands!.stop(h.id);
+    else for (const p of its) {
+      try { process.kill(p.pid, "SIGTERM"); left++; } catch {}
+    }
+  }
+  const watchers = stopWatchersIn(tree);
+  for (const until = Date.now() + (live.length || left || watchers.length ? waitMs : 0); ; busy = processesIn(tree)) {
     if (!busy.length) return;
     if (Date.now() >= until) break;
     await new Promise((r) => setTimeout(r, 1000));

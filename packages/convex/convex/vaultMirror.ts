@@ -164,7 +164,7 @@ async function findMirror(
 
 /**
  * Announce a vault before pushing its notes, and carry its opt-in state. The
- * user turned mirroring on with `cast vault mirror <dir> --on`; turning it off
+ * user turned mirroring on with `cast files mirror <dir> --on`; turning it off
  * calls this with enabled:false, which deletes the mirror row AND every note it
  * projected. Off means gone, not stale — a user who revokes consent should not
  * find the notes still readable from another device.

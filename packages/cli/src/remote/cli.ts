@@ -26,7 +26,7 @@ import {
   type RemoteHost,
   type SyncVerification,
 } from "./session-move.js";
-import { reorientationNotice } from "../sessionMoveNotice.js";
+import { reorientationNotice, type ReorientationFacts } from "../sessionMoveNotice.js";
 import { deviceInfo, deviceId } from "./device.js";
 import { ensureUp, hostState, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
 import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
@@ -97,9 +97,12 @@ function parseJson(out: string): { result?: string; session_id?: string } {
   try { return JSON.parse(out); } catch { return { result: out.slice(0, 200) }; }
 }
 
+/** What a move that copied a folder as files can say: outside a repository, or in one with no commit yet, git has nothing to compare. */
+export const FOLDER_COPY_VERIFICATION = "copied as files with rsync (no git commit to verify against); files git ignores stay where they were";
+
 /** One line stating what the transfer verification proved (or couldn't). */
 export function describeVerification(v: SyncVerification | undefined): string {
-  if (!v) return "no git verification available (non-git directory, synced via rsync)";
+  if (!v) return FOLDER_COPY_VERIFICATION;
   if (!v.headsMatch) {
     return `WARNING: destination HEAD ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} does not match source ${v.localHead.slice(0, 8)} on branch ${v.branch} — the transfer may be incomplete`;
   }
@@ -126,9 +129,13 @@ export function moveNotice(opts: {
   /** Pre-rendered: each direction proves a different thing (see describeBackSync). */
   verification: string | undefined;
   stoppedOnSource?: Array<{ name: string; via?: string }>;
+  brought?: ReorientationFacts["brought"];
+  missingHere?: string[];
 }): string | null {
   return reorientationNotice({
     stoppedOnSource: opts.stoppedOnSource,
+    brought: opts.brought,
+    missingHere: opts.missingHere,
     destination: opts.destination,
     newCwd: opts.newCwd,
     oldCwd: opts.oldCwd,

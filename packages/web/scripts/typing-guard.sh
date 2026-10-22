@@ -3,7 +3,11 @@
 # code (.codecast/workspace.toml) and in CI with the rest of the web tests.
 # Each test holds one cause of slow typing in the composer to its budget:
 #   composerTypingBudget  a keystroke commits once, writes nothing to the store,
-#                         changes no DOM outside the textarea (7,000 sessions)
+#                         changes nothing in the DOM tree (the textarea's text
+#                         node included) and reads no layout (7,000 sessions)
+#   holdTextareaTextNode  a held controlled textarea changes value, not its
+#                         text node, which on a page of :has() rules re-styles
+#                         the page
 #   storeWriteBudget      no store subscription compares a long string; a write
 #                         nothing reads, or a heartbeat, re-renders nothing
 #   listRowsHoldStill     list rows run no infinite animation
@@ -18,6 +22,7 @@ bun test --isolate \
   components/__tests__/listRowsHoldStill.test.tsx \
   components/__tests__/transcriptRowsNoLayers.guard.test.ts \
   hooks/__tests__/useConvexSync.typingDefer.mount.test.tsx \
-  lib/__tests__/inputQuiet.test.ts
+  lib/__tests__/inputQuiet.test.ts \
+  lib/__tests__/holdTextareaTextNode.mount.test.tsx
 cd "$root/platform/packages/keys"
 bun test src/dispatch.test.ts

@@ -157,10 +157,10 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className={`${wide ? "max-w-[800px]" : "max-w-[520px]"} grid-cols-1 max-h-[92vh] overflow-y-auto transition-[max-width] duration-200`} style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} data-hire-stage={mode === "template" ? templateStage : "manual"}>
+      <DialogContent className={`${wide ? "max-w-[960px]" : "max-w-[520px]"} grid-cols-1 max-h-[92vh] overflow-y-auto transition-[max-width] duration-200`} style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }} data-hire-stage={mode === "template" ? templateStage : "manual"}>
         <DialogHeader>
           <DialogTitle className="text-[17px]" style={{ fontFamily: "var(--font-serif)" }}>{title}</DialogTitle>
-          <DialogDescription className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>{seat ? seatSentence(seat) : mode === "manual" ? "A role has an area it looks after, someone it reports to, and a charter that says what it is for. It starts as soon as you create it." : templateStage === "gallery" ? "A ready-made role for one project: pick one to see what it asks for. Nothing is set up until you approve it." : "Answer what the template asks; the hire is one proposal you decide on the org page."}</DialogDescription>
+          <DialogDescription className={mode === "template" && !seat ? "sr-only" : "text-[12px]"} style={{ color: "var(--sol-text-muted)" }}>{seat ? seatSentence(seat) : mode === "manual" ? "A role has an area it looks after, someone it reports to, and a charter that says what it is for. It starts as soon as you create it." : templateStage === "gallery" ? "A ready-made role for one project: pick one to see what it asks for. Nothing is set up until you approve it." : "Answer what the template asks; the hire is one proposal you decide on the org page."}</DialogDescription>
         </DialogHeader>
         <div className={seat ? "hidden" : "grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1"} role="group" aria-label="Role setup">
           {([["manual", "Write a role"], ["template", "From a template"]] as const).map(([value, label]) => (

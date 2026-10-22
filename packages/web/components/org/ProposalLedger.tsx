@@ -31,7 +31,7 @@ import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { newRolesLedger } from "../consequential/roleOnline";
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 
-type Proposal = Pick<OrgProposalListRow, "_id" | "short_id" | "title" | "status" | "team_id" | "scope_user_id" | "reply">;
+type Proposal = Pick<OrgProposalListRow, "_id" | "short_id" | "title" | "status" | "team_id" | "scope_user_id" | "reply"> & Partial<Pick<OrgProposalListRow, "author">>;
 /** What a ref of the batch names a proposal by. */
 type ProposalRef = Pick<Proposal, "_id" | "short_id" | "title">;
 
@@ -203,7 +203,7 @@ export function AnsweredCard({ proposal, batch, card, number, focusId, ...rest }
   const answerOrReview = onAnswer && roles.length ? (a: SubjectAnswer | null) => (a?.verdict === "approve" && answer?.verdict !== "approve" ? hireReview.open(roles, () => onAnswer(a)) : onAnswer(a)) : onAnswer;
   return (
     <>
-      <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "open" ? answerOrReview : undefined} focused={focused} revisedNew={revised || undefined} {...rest} />
+      <ProposalSubjectCard card={card} answer={answer} onAnswer={proposal.status === "open" ? answerOrReview : undefined} focused={focused} revisedNew={revised || undefined} author={proposal.author?.name} {...rest} />
       {hireReview.element}
     </>
   );

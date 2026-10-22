@@ -300,7 +300,7 @@ describe("VaultMirror push cycle", () => {
     await mirror.syncAll();
     expect(subscribed).toEqual([]);
 
-    // `cast vault mirror --on` only edits config.json — the daemon has to
+    // `cast files mirror --on` only edits config.json — the daemon has to
     // notice on its own.
     setVaultMirroring(configDir, notesDir, true);
     await mirror.syncAll();

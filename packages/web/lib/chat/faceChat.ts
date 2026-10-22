@@ -33,8 +33,6 @@ export type FaceArrival = {
   loud: boolean;
   /** How many lines this arrival stands for (the rail can collapse several). */
   count: number;
-  /** Your own reply to them, sent from their card. */
-  me?: boolean;
 };
 
 export type FaceBubble = {
@@ -108,12 +106,6 @@ export function registerFaceChatLayer(l: FaceChatLayer): () => void {
 function remember(authorId: string, a: FaceArrival) {
   const list = (state.recent[authorId] ?? []).filter((x) => x.messageId !== a.messageId);
   set({ recent: { ...state.recent, [authorId]: [...list, a].slice(-RECENT_PER_AUTHOR) } });
-}
-
-/** A reply you sent from their card into a channel: it stays in the card
- *  beside the line it answered. DM replies live in the store already. */
-export function rememberFaceReply(authorId: string, a: FaceArrival) {
-  remember(authorId, { ...a, me: true });
 }
 
 function addUnseen(authorId: string, items: readonly FaceArrival[]) {
