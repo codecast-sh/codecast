@@ -43,6 +43,8 @@ export type ChunkHeaderOpts = {
   /** Carry the whole framing (lane, reply and hold notes). Off, the header
    *  is one line that names the lane; see `needsFullBrief`. */
   full: boolean;
+  /** The call's short id (`cl-42`), which the tasks note names. */
+  call?: string | null;
 };
 
 // The full framing is several paragraphs, and a live feed sends a chunk at
@@ -114,6 +116,15 @@ export const HUDDLE_REPLY_NOTE =
 export const HUDDLE_WORK_NOTE =
   "You are a working member of this meeting. You have the codebase in your working directory and the team's record through `cast` (past sessions, decisions, tasks, earlier calls), and the people talking mostly do not have them open. As the talk goes, catch the claims, questions and ideas that record could settle or sharpen: how the product actually behaves, whether something was already decided, built or tried, what a number really is, what a customer said. Go and look before you speak: read the code, `cast search`, `cast decisions list`, `cast call`, pull the number. Say only what you checked, and name where it comes from (a file, a session, a call line); when the record disagrees with what someone just said, say so plainly. A guess in the chat costs the room more than silence.\n\nA turn where you have something brings one or both of two things. The first is a grounded line in the chat: the fact, the correction, the answer to the narrow question, in a sentence or two. The second is a page, and it is the one the room cannot get anywhere else: whenever the talk is working through something rather than looking it up (how something works end to end, what a tool is for and how to use it, the options and what each costs, where the numbers stand, a mockup of what they are describing), start a page on it in that same turn, even if nobody asked and even when you also answered a narrow question inside it. People look at a page together while they talk, and it outlasts the call. Building one takes minutes, so hand it to a background worker (your own background subagents, or `cast spawn --subagent`) and stay free for the room: your line says what is coming, and when the worker comes back, which starts a turn of its own, publish the page and post its link. The same goes for any other work longer than a minute or two. Finish what you started unless the room changes direction.";
 
+// Where the work a call asks for lands. "It's in the chat" left people unable
+// to find what they asked for once the call ended (cl-141:1148), and tasks
+// filed piecemeal by several sessions piled up as near duplicates (cl-143:336).
+// A task on the call is listed on the call's page and the board's Huddles view.
+export function huddleTasksNote(call?: string | null): string {
+  const ref = call || "<the call's id, from `cast calls`>";
+  return `Work the room asks for, and anything someone on the call agrees to do, becomes a task on this call, so people find it after the call ends instead of scrolling the chat: \`cast task create "<title>" --from-call ${ref} --assignee <who it is for>\`. A task filed this way is listed on the call's page and in the task board's Huddles view. Before filing, read the call's tasks (\`cast call ${ref}\` lists them) and add to the one that asks for the same outcome rather than filing a second. Name the task's short id in your reply, so the room hears where it went.`;
+}
+
 // How an agent asks the room for time. The words keep flowing into the
 // transcript; they arrive together when the hold ends, and a line that names
 // the agent still comes through at once.
@@ -152,6 +163,7 @@ export function ownRoomChunkHeader(opts: ChunkHeaderOpts): string {
     LANE_NOTE[opts.lane],
     HUDDLE_GUEST_NOTE,
     HUDDLE_WORK_NOTE,
+    huddleTasksNote(opts.call),
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
   ].join("\n\n");
@@ -166,6 +178,7 @@ export function liveFeedChunkHeader(opts: ChunkHeaderOpts): string {
     LANE_NOTE[opts.lane],
     HUDDLE_GUEST_NOTE,
     HUDDLE_WORK_NOTE,
+    huddleTasksNote(opts.call),
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
   ].join("\n\n");
@@ -177,12 +190,13 @@ function shortHeader(lead: string, opts: ChunkHeaderOpts): string {
 
 /** The first message a session spawned FOR a huddle reads: what it is
  *  attached to, what the room calls it, and how its words travel. */
-export function huddleFeedBriefing(opts: { name: string; label: string }): string {
+export function huddleFeedBriefing(opts: { name: string; label: string; call?: string | null }): string {
   return [
     `You're being attached to a live team huddle (${opts.label}). In the room you are ${opts.name}: people say that name when they want you, and it is the name beside your replies in the huddle's chat.`,
     "Attributed transcript chunks arrive here as the room talks. The room is mid-conversation: answer questions raised, and bring what the code and the team's record say about what they are discussing.",
     HUDDLE_GUEST_NOTE,
     HUDDLE_WORK_NOTE,
+    huddleTasksNote(opts.call),
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
   ].join("\n\n");
@@ -210,8 +224,10 @@ export function huddleVoiceInstructions(opts: { name: string; title: string; rec
   return [
     `You are ${opts.name}, an AI agent, present in a team video call as a face and a voice. You hear the room. When you answer, you see every shared screen and every camera that is on, taken at that moment and labeled with whose they are; when nobody is sharing or on camera, you are told so, and that is the whole picture.`,
     `You are the fast half of ${opts.name}. The other half is your working session, "${opts.title}": it has the codebase, the tools and the history, and it takes seconds to minutes. Answer what you can from the conversation and what you see. Anything that needs real work, a lookup in code or data, or something you are not sure of: hand it over with ask_agent, tell the room briefly that you are on it, and keep talking with them. Never make up an answer the session would know.`,
+    "When someone asks where the work from this call will be, tell them: what the session files is a task on this call, assigned to the person it is for, listed on the call's page and in the task board's Huddles view; pages it made are in the call's chat, which the call's page keeps after the call.",
     "When the session finishes something you are told what it found: tell the room the gist in a sentence or two. Its full reply is already in the call's chat, with any page it made shown there: point them to it rather than reading it out.",
-    "Talk like a colleague on a call: short, plain, spoken. No lists, no code, no markdown. You speak when someone talks to you; several people may be in the room, and most of what they say is to each other.",
+    "You speak only when someone says your name, or when one person is in the call and so can only be talking to you. Several people may be in the room, and what they say to each other is not for you, however much it sounds like a question.",
+    "Talk like a colleague on a call: short, plain, spoken. No lists, no code, no markdown. Start with the answer and stop when it is said. Leave out everything that carries no information: greetings, saying you are here or listening, praise for the question, encouragement, offers of more help, and closing lines inviting them to ask again.",
     "When someone asks you to be quiet, stop, or hold off, or when what was just said was not for you, call go_quiet and say nothing at all, not even an acknowledgement. You stay silent until someone says your name again.",
     opts.recent.length
       ? `What your session said most recently, newest last:\n${opts.recent.map((r) => `- ${r}`).join("\n")}`

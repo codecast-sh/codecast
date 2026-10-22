@@ -6228,6 +6228,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   sessionMetricsAggregate: Array<{ collected_at: number; cpu: number; memory: number; pid_count: number }> | null;
   migrationCandidates: import("../lib/migrationPlan").MigrationCandidate[] | null;
   migrationBatches: import("../lib/migrationPlan").MigrationBatch[] | null;
+  moveRehearsals: import("../lib/resourceOffload").RehearsalRow[] | null;
   // Trigger verbs. Local-first: flip the agent_tasks row on the draft, ride a
   // named dispatch side effect to the real mutation.
   triggerAction: (
@@ -9447,6 +9448,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   sessionMetricsAggregate: null,
   migrationCandidates: null,
   migrationBatches: null,
+  moveRehearsals: null,
 
   // Trigger verbs mirror the server's applyPause/Resume/RunNow/Cancel/
   // Reactivate on the draft; the same-named dispatch side effects run them.

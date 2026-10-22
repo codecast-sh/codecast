@@ -21,8 +21,10 @@
 //          (ensureFaces), because the scheduler can run minutes behind, and
 //          the feed's own scheduled join is the fallback. A dispatch already
 //          on its way for the session wins.
-//   tell   Each reply the room's chat shows reaches the worker on the room's
-//          data channel.
+//   tell   A reply to a turn someone asked for (a line naming the agent, or
+//          work its voice handed over) reaches the worker on the room's data
+//          channel. Everything else the session posts stays in the chat: an
+//          agent speaks only when spoken to.
 //   leave  The worker is told to go, the face is removed from the room, and
 //          its dispatch is cleared. Like join, a client in the call does it
 //          at once (removeAgent, ensureFaces) and the feed's scheduled leave
@@ -203,6 +205,7 @@ export const ask = internalMutation({
     const feed = await liveFeed(ctx, args.conversation_id, args.room_key);
     const who = feed && (await characterFor(ctx, feed.conversation_id));
     if (!feed || !who) return false;
+    await ctx.db.patch(feed._id, { addressed_at: Date.now() });
     await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
       as_user: feed.added_by,
       to: String(feed.conversation_id),

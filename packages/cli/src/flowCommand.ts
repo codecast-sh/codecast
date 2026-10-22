@@ -14,7 +14,7 @@ export interface FlowDeps {
   callingSession: () => string | undefined;
   realCwd: () => string;
   /** The flows published to the workspace's pool (/cli/workflows/pool); nothing when it cannot be read. */
-  fetchPool: () => Promise<import("./workflow/flowPool.js").PushedPoolRow[]>;
+  fetchPool: (team?: string) => Promise<import("./workflow/flowPool.js").PushedPoolRow[]>;
 }
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -38,10 +38,11 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
     .command("ls")
     .description("List the pool: each flow's kind, what it takes, and its stations in order")
     .option("--kind <kind>", "Only lines or only segments (line, segment)")
+    .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
     .option("--json", "Print the pool as JSON")
-    .action(async (opts: { kind?: string; json?: boolean }) => {
+    .action(async (opts: { kind?: string; json?: boolean; team?: string }) => {
       const { flowLine } = await import("./workflow/flowPool.js");
-      const pool = (await readPool(deps)).filter((f) => !opts.kind || f.kind === opts.kind);
+      const pool = (await readPool(teamDeps(deps, opts.team))).filter((f) => !opts.kind || f.kind === opts.kind);
       if (opts.json) { console.log(JSON.stringify(pool, null, 2)); return; }
       const group = (kind: string, title: string) => {
         const rows = pool.filter((f) => f.kind === kind);
@@ -63,9 +64,10 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
   flow
     .command("show <flow>")
     .description("A flow's stations, what each does, and where each sends the work")
+    .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
     .option("--json", "Print the flow as JSON")
-    .action(async (slug: string, opts: { json?: boolean }) => {
-      const found = await findFlow(slug, deps);
+    .action(async (slug: string, opts: { json?: boolean; team?: string }) => {
+      const found = await findFlow(slug, teamDeps(deps, opts.team));
       if (opts.json) { console.log(JSON.stringify(found, null, 2)); return; }
       const home = found.where === "team" ? `the team's${found.by ? `, from ${found.by}` : ""}` : found.where === "pushed" ? "yours, published" : found.file ? `${found.where} · ${path.relative(deps.realCwd(), found.file)}` : found.where;
       console.log(`${bold(found.label)}  ${dim(`${found.kind} · ${home}`)}`);
@@ -138,11 +140,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
     .option("--only <paths>", "With a session's edits: only these files belong to the change (comma-separated paths or globs)")
     .option("--foreground", "Run here and wait, rather than handing the run to this machine's daemon")
     .option("--dry-run", "Say what would run on what, and start nothing")
+    .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
     .option("--json", "Print {run_id, task, branch, worktree, files} as JSON")
-    .action(async (slug: string, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean }) => {
+    .action(async (slug: string, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string }) => {
       const only = opts.only ? opts.only.split(",").map((s) => s.trim()).filter(Boolean) : null;
       const cwd = deps.realCwd();
-      const found = await findFlow(slug, deps);
+      const found = await findFlow(slug, teamDeps(deps, opts.team));
       if (found.errors.length) { console.error(`✗ ${found.slug} does not run: ${found.errors.join("; ")}`); process.exit(1); }
       const top = (spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim();
       if (!top) { console.error("cast flow run works inside a git checkout"); process.exit(1); }
@@ -290,6 +293,9 @@ async function shortSessionId(session: string | null, deps: FlowDeps): Promise<s
   const conv = readLocalConversationMap()[session];
   return conv ? String(conv).slice(0, 7) : session.slice(0, 8);
 }
+
+/** The deps with the pool read from a named team's workspace. */
+const teamDeps = (deps: FlowDeps, team?: string): FlowDeps => (team ? { ...deps, fetchPool: () => deps.fetchPool(team) } : deps);
 
 /** The pool as this session sees it: the repo's, the shipped, and the workspace's published flows. */
 async function readPool(deps: FlowDeps) {
