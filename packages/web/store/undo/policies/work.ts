@@ -29,6 +29,9 @@ import type { TaskWaitInput } from "../../taskGraphDraft";
 
 type Spec = { spec: UndoSpec };
 
+/** The fields updateSecretMeta writes, each with how secrets.updateMeta unsets it (a name is never unset). */
+const SECRET_CLEARS = new Map<string, unknown>([["name", undefined], ["note", ""], ["env", []], ["sites", []]]);
+
 const call = (action: string, ...args: unknown[]): Invocation => ({ action, args, runDraft: false });
 
 const cellsOf = (ctx: UndoCtx, stores: string | readonly string[], field?: string): CellChange[] => {
@@ -612,6 +615,23 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
         }),
     },
   },
+  // A Vault secret's metadata edit sends back the prior fields. An unset prior
+  // goes back as the clear secrets.updateMeta reads: "" for a note, [] for env
+  // vars and sites. The value is never in the store, so never in an undo.
+  updateSecretMeta: {
+    spec: {
+      label: (ctx) => `Edited ${quoted(ctx.before?.secrets?.[ctx.args[0] as string]?.name, "secret")}`,
+      inverse: (ctx) =>
+        rowIds(cellsOf(ctx, "secrets")).flatMap((id) => {
+          const patch: Record<string, unknown> = {};
+          for (const c of cellsOf(ctx, "secrets")) {
+            if (c.id !== id || !c.field || !SECRET_CLEARS.has(c.field)) continue;
+            patch[c.field] = c.before ?? SECRET_CLEARS.get(c.field);
+          }
+          return Object.keys(patch).length ? [call("updateSecretMeta", id, patch)] : [];
+        }),
+    },
+  },
   // Resolving is undone by reopening. Reopening is not recorded: re-resolving
   // stamps a fresh resolved_at on the server, which the cached stamp an undo
   // restores never matches, so its lock would never retire. For the same
@@ -939,6 +959,7 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   settleOrgHandoff: org((ctx) => `${ctx.args[1] === "close" ? "Closed" : "Ran"} the handoff of ${roleName(ctx.before, ctx.args[0] as string)}`),
   setOrgLineMerge: org((ctx) => `Turned the merge step ${ctx.args[1] ? "on" : "off"} for ${roleName(ctx.before, ctx.args[0] as string)}`),
   markOrgTemplateSetup: org((ctx) => `Marked a setup item ${String(ctx.args[2])}`),
+  answerOrgTemplateInput: org(() => "Answered a template role's setup question"),
   activateOrgTemplateRoutine: org(() => "Turned on a template role's routine"),
   setOrgTemplateLearning: org((ctx) => `${ctx.args[1] ? "Let" : "Stopped"} Codecast learn${ctx.args[1] ? "" : "ing"} from template roles`),
   // Not in the record: a reset wipes the chart the record describes, and

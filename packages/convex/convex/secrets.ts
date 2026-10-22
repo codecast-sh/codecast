@@ -29,6 +29,8 @@ import { displayName } from "./lib/displayNames";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { isConvexId } from "@codecast/shared/entities";
 import {
+  cleanSecretList,
+  cleanSecretSites,
   envNameProblem,
   formatVaultReady,
   isHostedAgentType,
@@ -37,8 +39,6 @@ import {
   secretNameProblem,
   signinExpiresAt,
   validatePayload,
-  SECRET_KINDS,
-  SECRET_READ_PURPOSES,
   type LoginPayload,
   type SecretKind,
   type SecretMeta,
@@ -48,8 +48,8 @@ import {
 
 type SecretRow = Doc<"secrets">;
 
-const kindValidator = v.union(...SECRET_KINDS.map((k) => v.literal(k))) as any;
-const purposeValidator = v.union(...SECRET_READ_PURPOSES.map((p) => v.literal(p))) as any;
+const kindValidator = v.union(v.literal("key"), v.literal("login"), v.literal("signin"), v.literal("file"));
+const purposeValidator = v.union(v.literal("get"), v.literal("run"), v.literal("env"), v.literal("otp"), v.literal("signin"));
 
 /** Where a write lands: a team (membership checked) or the caller's personal workspace. Exactly one. */
 const workspaceArgs = { team_id: v.optional(v.id("teams")), personal: v.optional(v.boolean()) };
@@ -211,8 +211,6 @@ function metaProblem(fields: { name?: string; env?: string[]; note?: string; sit
   return null;
 }
 
-const cleanList = (xs?: string[]) => (xs ? [...new Set(xs.map((x) => x.trim()).filter(Boolean))] : undefined);
-const cleanSites = (xs?: string[]) => cleanList(xs?.map((s) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")));
 
 function valueFields(kind: SecretKind, payload: SecretPayload) {
   return {
@@ -383,8 +381,8 @@ export const create = action({
     const userId = await ctx.runQuery(internal.secrets.callerOf, { api_token: args.api_token });
     if (!userId) return { error: "Unauthorized: sign in, or run `cast auth` on this machine" };
     const name = args.name.trim();
-    const env = cleanList(args.env);
-    const sites = cleanSites(args.sites);
+    const env = cleanSecretList(args.env);
+    const sites = cleanSecretSites(args.sites);
     const note = args.note?.trim() || undefined;
     const problem = metaProblem({ name, env, sites, note });
     if (problem) return { error: problem };
@@ -535,8 +533,8 @@ export const updateMeta = mutation({
     const patch: Partial<SecretRow> = {};
     if (args.name !== undefined) patch.name = args.name.trim();
     if (args.note !== undefined) patch.note = args.note.trim() || undefined;
-    if (args.env !== undefined) patch.env = cleanList(args.env)?.length ? cleanList(args.env) : undefined;
-    if (args.sites !== undefined) patch.sites = cleanSites(args.sites)?.length ? cleanSites(args.sites) : undefined;
+    if (args.env !== undefined) patch.env = cleanSecretList(args.env)?.length ? cleanSecretList(args.env) : undefined;
+    if (args.sites !== undefined) patch.sites = cleanSecretSites(args.sites)?.length ? cleanSecretSites(args.sites) : undefined;
     const problem = metaProblem({ name: patch.name, env: patch.env, sites: patch.sites, note: patch.note });
     if (problem) return { error: problem };
     if (patch.name && patch.name !== row.name) {
@@ -583,8 +581,8 @@ export const request = mutation({
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const name = args.name.trim();
-    const env = cleanList(args.env);
-    const sites = cleanSites(args.sites);
+    const env = cleanSecretList(args.env);
+    const sites = cleanSecretSites(args.sites);
     const why = args.why?.trim() || undefined;
     const problem = metaProblem({ name, env, sites, note: why });
     if (problem) return { error: problem };
@@ -593,6 +591,7 @@ export const request = mutation({
     const conversation = await resolveConversation(ctx, userId, args.conversation);
     const now = Date.now();
     const fields = {
+      kind: args.kind,
       env,
       sites,
       request_why: why,
@@ -613,7 +612,6 @@ export const request = mutation({
         team_id: where.team_id,
         short_id,
         name,
-        kind: args.kind,
         status: "requested",
         created_by: userId,
         created_at: now,

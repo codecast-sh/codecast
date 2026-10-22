@@ -28,6 +28,7 @@ import { GenericListView, ListGroup, ItemRowState } from "../../components/Gener
 import { TaskMenuItems } from "../../components/menus/ObjectContextMenus";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { TaskRow, KanbanCard } from "../../components/tasks/TaskRow";
+import { CallListFeeder } from "../../components/tasks/TaskCallChip";
 
 // The personal space has no roster; a stable empty list keeps the memos quiet.
 const NO_MEMBERS: RosterIdentity[] = [];
@@ -49,7 +50,9 @@ import { undoAsOne } from "../../store/undoActions";
 import { gestureToast } from "../../store/undoStack";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
-import { tasksForSource } from "../../lib/taskSource";
+import { CALLS_SOURCE, tasksForSource } from "../../lib/taskSource";
+import { useCollectionRows } from "../../hooks/useCollectionRows";
+import { callTitle } from "../../lib/calls/roomLabels";
 import { isReadyInStore, readySig, UNBLOCKED_VIEW } from "../../lib/taskBlockers";
 import {
   Plus,
@@ -81,7 +84,14 @@ import {
   CornerDownRight,
   Copy,
   CirclePlay,
+  Phone,
 } from "lucide-react";
+
+// The Huddles pill: every task pulled from a call, grouped by its call. It is
+// a source and a grouping rather than a status, so it has its own tab key.
+const HUDDLES_TAB = "huddles";
+
+const callRefSig = (c: any) => `${c.title ?? ""}|${c.short_id ?? ""}|${c.started_at ?? ""}`;
 
 // One task-status vocabulary, shared with TaskStatusBadge and the groupers.
 const STATUS_CONFIG = TASK_STATUS;
@@ -727,7 +737,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // the defaults in the personal space. Everything visible is one workspace
   // (filterToWorkspace below), so one list serves columns, groups and drops.
   const taskStatuses = useTeamTaskStatusList(activeTeamId);
-  const setStatusFilter = useCallback((s: string) => {
+  const setStatusFilter = useCallback((s: string, also?: Record<string, string>) => {
     // The "completed in the last N days" window only means anything while
     // finished work is on screen, so a selection that drops it drops the window
     // too. A team's done status may be named anything, so ask the category.
@@ -735,7 +745,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     const keepsDone = s === "all" || keys.has("done")
       || taskStatuses.some((st) => st.category === "done" && keys.has(st.id));
     setTaskFilter({ status: s });
-    setParam({ status: s, statuses: "", ...(keepsDone ? {} : { completed: "" }) });
+    setParam({ status: s, statuses: "", ...(keepsDone ? {} : { completed: "" }), ...also });
   }, [setTaskFilter, setParam, taskStatuses]);
   const kanbanKeyFor = useCallback((t: TaskItem) => taskStatusKey(t as any, taskStatuses), [taskStatuses]);
   // Board columns run pipeline order (open left, done right), then any order
@@ -985,9 +995,17 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // Every grouping the list offers — including combined ones like
   // "Assignee · Project" — comes out of one keyed grouper (lib/taskGrouping),
   // so an added axis or pairing costs a descriptor rather than a memo.
+  // What the Call axis names its groups by (the cached call list).
+  const groupsByCall = parseTaskGroup(group).includes("call");
+  const showsCallChips = useMemo(() => filteredTasks.some((t) => !!t.from_call), [filteredTasks]);
+  const callRows = useCollectionRows<any>("callList", { sig: callRefSig });
+  const calls = useMemo(() => {
+    const s = useInboxStore.getState();
+    return Object.fromEntries(callRows.map((c) => [String(c._id), { title: callTitle(c, s as any), short_id: c.short_id ?? undefined, started_at: c.started_at }]));
+  }, [callRows]);
   const groupCtx = useMemo(
-    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses, roles: orgRoles, teamMembers, currentUser, initiativeOfProject, plainHeaders: hostedMode }),
-    [projects, setParam, taskStatuses, orgRoles, teamMembers, currentUser, initiativeOfProject, hostedMode]
+    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses, roles: orgRoles, teamMembers, currentUser, initiativeOfProject, plainHeaders: hostedMode, calls }),
+    [projects, setParam, taskStatuses, orgRoles, teamMembers, currentUser, initiativeOfProject, hostedMode, calls]
   );
 
   const listGroups = useMemo(
@@ -1014,7 +1032,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // Counts for both vocabularies at once: by category (what the presets mean)
   // and by resolved status (what the Status filter offers, custom ones included).
   const taskCounts = useMemo(() => {
-    const counts: Record<string, number> = { active: 0, all: 0, [UNBLOCKED_VIEW]: 0 };
+    const counts: Record<string, number> = { active: 0, all: 0, [UNBLOCKED_VIEW]: 0, [HUDDLES_TAB]: 0 };
     const storeTasks = useInboxStore.getState().tasks;
     for (const t of completionFilteredTasks) {
       counts[t.status] = (counts[t.status] || 0) + 1;
@@ -1024,8 +1042,11 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
       if ((ACTIVE as string[]).includes(t.status)) counts.active++;
       if (isReadyInStore(t, storeTasks, viewerId)) counts[UNBLOCKED_VIEW]++;
     }
+    // The Huddles pill counts across sources: its rows are every active task
+    // pulled from a call, whichever source the list shows now.
+    counts[HUDDLES_TAB] = tasksForSource(scopedTasksList, CALLS_SOURCE).length;
     return counts;
-  }, [completionFilteredTasks, kanbanKeyFor, blockerSig, viewerId]);
+  }, [completionFilteredTasks, kanbanKeyFor, blockerSig, viewerId, scopedTasksList]);
   // One status vocabulary, two controls over it. The pills carry the three
   // answers people want without thinking — the live work, everything, the
   // finished work — and every finer selection (one status, a handful, a team's
@@ -1205,6 +1226,17 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   const familyIndex = useMemo(() => taskFamilyIndex(tasksList), [tasksList]);
 
   const isBotView = sourceFilter === "triage";
+  // Huddles is a source and a grouping at once: every status of the tasks
+  // pulled from calls, one group per call. Any other pill leaves both behind.
+  const inHuddles = sourceFilter === CALLS_SOURCE && groupsByCall;
+  const selectTab = useCallback((key: string) => {
+    if (key === HUDDLES_TAB) {
+      setTaskFilter({ status: "all" });
+      setParam({ source: CALLS_SOURCE, group: "call", status: "all", statuses: "", completed: "" });
+      return;
+    }
+    setStatusFilter(key, inHuddles ? { source: "", group: "" } : undefined);
+  }, [inHuddles, setParam, setStatusFilter, setTaskFilter]);
   const renderTaskRow = useCallback((task: TaskItem, state: ItemRowState) => {
     const nest = viewNesting.get(task._id);
     const total = familyIndex.descendants.get(task._id) ?? 0;
@@ -1233,6 +1265,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
 
   return (
     <>
+    {(groupsByCall || showsCallChips) && <CallListFeeder />}
     <GenericListView<TaskItem>
           banner={
             <FeatureUpsell
@@ -1258,9 +1291,11 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
             { key: "all", label: "All", count: taskCounts.all, icon: Layers, title: "Every status, Backlog and Done and Dropped included" },
             { key: doneValue || "done", label: "Done", count: taskCounts.done || 0, icon: STATUS_CONFIG.done.icon,
               title: "Finished work" },
+            ...(hostedMode ? [] : [{ key: HUDDLES_TAB, label: "Huddles", count: taskCounts[HUDDLES_TAB], icon: Phone,
+              title: "Every task pulled from a call, grouped by the call it came from" }]),
           ]}
-          activeTab={statusFilter}
-          onTabChange={setStatusFilter}
+          activeTab={inHuddles ? HUDDLES_TAB : statusFilter}
+          onTabChange={selectTab}
           groupBy={primaryAxis}
           groupOptions={[
             { value: "none", label: "No grouping" },
@@ -1346,6 +1381,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
                   { key: "", label: "Your board (default)", icon: User },
                   { key: "agent", label: "Agent-internal", icon: Bot, color: "text-sol-cyan" },
                   { key: "all", label: "All active", icon: Layers },
+                  { key: CALLS_SOURCE, label: "From calls", icon: Phone, color: "text-sol-magenta" },
                   { key: "triage", label: "Suggested", icon: Lightbulb, color: "text-sol-yellow" },
                   { key: "dismissed", label: "Dismissed", icon: EyeOff, color: "text-sol-text-dim" },
                 ],

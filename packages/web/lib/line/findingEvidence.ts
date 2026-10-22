@@ -21,9 +21,16 @@ const WRAPPER = [/^opened by\b/i, /^about:/i, /^where it was seen:/i];
 export function isEmptyFinding(s: Pick<FindingLike, "title" | "detail_md" | "source" | "subject"> & { moment?: string | null }): boolean {
   // A judge's finding on a moment is that moment: the conversation it frames is the evidence, words or none.
   if (s.moment) return false;
-  const blocks = findingBlocks({ ...s, evidence_url: null }).filter((b) => !(b.kind === "text" && WRAPPER.some((re) => re.test(b.text))));
-  return blocks.every((b) => b.kind === "text" && b.text.split("\n").every((l) => !l.trim() || STUB.test(l.trim())));
+  let empty = emptyReads.get(s);
+  if (empty === undefined) {
+    const blocks = findingBlocks({ ...s, evidence_url: null }).filter((b) => !(b.kind === "text" && WRAPPER.some((re) => re.test(b.text))));
+    emptyReads.set(s, (empty = blocks.every((b) => b.kind === "text" && b.text.split("\n").every((l) => !l.trim() || STUB.test(l.trim())))));
+  }
+  return empty;
 }
+/** Each finding row's reading, made once: a store row is replaced, never edited, when it changes, and every model
+ *  build reads every finding's. */
+const emptyReads = new WeakMap<object, boolean>();
 
 /** A problem the door opened on a finding that says nothing: its description carries that finding's body (the door
  *  writes it there), so this reads at list level, before the problem's own findings are fed. A problem filed by hand,

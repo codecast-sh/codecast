@@ -2,6 +2,7 @@ import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActi
 import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress } from "@codecast/shared/contracts";
+import { cleanSecretList, cleanSecretSites, type SecretMeta } from "@codecast/shared/contracts/secrets";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
 import type { SharedObjectKind } from "@codecast/shared/entities";
@@ -6228,6 +6229,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   sessionMetricsAggregate: Array<{ collected_at: number; cpu: number; memory: number; pid_count: number }> | null;
   migrationCandidates: import("../lib/migrationPlan").MigrationCandidate[] | null;
   migrationBatches: import("../lib/migrationPlan").MigrationBatch[] | null;
+  moveRehearsals: import("../lib/resourceOffload").RehearsalRow[] | null;
   // Trigger verbs. Local-first: flip the agent_tasks row on the draft, ride a
   // named dispatch side effect to the real mutation.
   triggerAction: (
@@ -6610,7 +6612,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   relateTasks: (shortId: string, other: string) => Promise<any>;
   unrelateTasks: (shortId: string, other: string) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; status_id?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string; parent?: string; client_key?: string; from_call?: string }) => Promise<any>;
-  clearTombstones: (table: "savedViews" | "signals") => void;
+  clearTombstones: (table: "savedViews" | "signals" | "sessionDecisions") => void;
   removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
@@ -6636,6 +6638,12 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   removeAgentDefinition: (id: string) => void;
   upsertAgentChain: (fields: Partial<AgentChainSpec> & { name: string; description: string; _id?: string }) => Promise<any>;
   removeAgentChain: (id: string) => void;
+
+  // -- Vault (docs/architecture/vault.md): metadata only --
+  updateSecretMeta: (id: string, fields: { name?: string; note?: string; env?: string[]; sites?: string[] }) => void;
+  removeSecret: (id: string) => void;
+  stageSecret: (row: SecretMeta) => void;
+  settleSecretStub: (stubId: string, shortId: string | null) => void;
 
   addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }) => void;
@@ -9447,6 +9455,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   sessionMetricsAggregate: null,
   migrationCandidates: null,
   migrationBatches: null,
+  moveRehearsals: null,
 
   // Trigger verbs mirror the server's applyPause/Resume/RunNow/Cancel/
   // Reactivate on the draft; the same-named dispatch side effects run them.
@@ -13133,6 +13142,35 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete (this.agentChains as any)[id];
   }),
 
+  // Vault. Only metadata moves through the store: a value goes straight to its
+  // Convex action (create, rotate, fulfill, reveal), so no outbox, cache or
+  // replica ever holds one. Edits normalize the way the server does, so its
+  // echo equals the draft and the field lock clears.
+  updateSecretMeta: action(function (this: Draft, id: string, fields: { name?: string; note?: string; env?: string[]; sites?: string[] }) {
+    const row = (this.secrets as any)[id];
+    if (!row) return;
+    if (fields.name !== undefined) row.name = fields.name.trim();
+    if (fields.note !== undefined) row.note = fields.note.trim() || undefined;
+    if (fields.env !== undefined) row.env = cleanSecretList(fields.env)?.length ? cleanSecretList(fields.env) : undefined;
+    if (fields.sites !== undefined) row.sites = cleanSecretSites(fields.sites)?.length ? cleanSecretSites(fields.sites) : undefined;
+    row.updated_at = Date.now();
+  }),
+  removeSecret: action(function (this: Draft, id: string) {
+    delete (this.secrets as any)[id];
+  }),
+  // A create's row before the server has one: keyed by a stub id, painted at
+  // once, and given its short_id when the create answers (registry altKey).
+  stageSecret: sync(function (this: Draft, row: SecretMeta) {
+    (this.secrets as any)[row._id] = row;
+  }),
+  settleSecretStub: sync(function (this: Draft, stubId: string, shortId: string | null) {
+    const rows = this.secrets as any;
+    if (!rows[stubId]) return;
+    // The snapshot can land before the action answers; then the real row is already here.
+    if (!shortId || Object.values(rows).some((r: any) => r._id !== stubId && r.short_id === shortId)) delete rows[stubId];
+    else rows[stubId].short_id = shortId;
+  }),
+
   // Local-first create: an optimistic stub renders the row instantly (the
   // quick-add loop on task detail fires several per second). The stub carries a
   // minted client_key and is keyed by `temp_task_<key>`; when the server row
@@ -13180,7 +13218,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // becomes a no-op for everyone else.
   // The same repair for signals: a short-lived dev build pruned them with
   // pruneAbsentScope too, and nothing else tombstones that table.
-  clearTombstones: sync(function (this: Draft, table: "savedViews" | "signals") {
+  // And for sessionDecisions: a queue answer that wrongly left out open line
+  // cards pruned them for good before a prune's exclude yielded to a later
+  // push (useSyncSessionDecisions).
+  clearTombstones: sync(function (this: Draft, table: "savedViews" | "signals" | "sessionDecisions") {
     for (const key of Object.keys(this.pending)) {
       if (key.startsWith(`${table}:`)) delete (this.pending as any)[key];
     }

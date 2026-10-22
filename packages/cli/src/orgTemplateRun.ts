@@ -8,7 +8,7 @@ import { keepsReportsInside } from "@codecast/shared/contracts/orgLead";
 import type { OrgInitDeps } from "./orgInit.js";
 import { acquireFileLock } from "./lockFile.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
-import { artifactFromSnapshot, atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, intervalMs, noSymlink, readArtifact, releaseRoot, snapshotArtifact, templateLoaderPrompt, templateRoleFields, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
+import { answerProblem, artifactFromSnapshot, atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, intervalMs, noSymlink, readArtifact, releaseRoot, snapshotArtifact, templateLoaderPrompt, templateRoleFields, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
 import { writeInstanceFile } from "./orgTemplateInstance.js";
 import { fill, quoteTemplateArg, receiptPath, setupText, setupWords, toolsBlock } from "./orgTemplateText.js";
 export { quoteTemplateArg, receiptPath };
@@ -84,10 +84,8 @@ export function parseInputs(manifest: OrgTemplate, raw: string[] = []): Record<s
     if (!input) throw new Error(`Unknown input: ${key}`);
     if (input.kind === "secret") throw new Error(`Secret input ${key} is bound on the host with --secret, never answered as text`);
     if (key in config) throw new Error(`Input answered twice: ${key}`);
-    if (value.includes("\0") || value.includes("{{") || value.includes("}}")) throw new Error(`Invalid value for ${key}`);
-    if ((input.kind === "number" || input.kind === "money") && (!/^-?\d+(\.\d+)?$/.test(value) || (input.kind === "money" && Number(value) < 0))) throw new Error(`${key} must be a number`);
-    if (input.kind === "boolean" && value !== "true" && value !== "false") throw new Error(`${key} must be true or false`);
-    if (input.kind === "choice" && !input.choices!.includes(value)) throw new Error(`${key} must be one of: ${input.choices!.join(", ")}`);
+    const problem = answerProblem(input, value);
+    if (problem) throw new Error(`${key}: ${problem}`);
     config[key] = value;
   }
   for (const input of declared.values()) {
@@ -388,6 +386,7 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
     if (receipt.phase === "provisioning") await provisionAndArm(deps, receipt, tree);
     if (receipt.phase !== "ready") throw new Error(`Instance is ${receipt.phase}; bind runs once the role and its routines exist (reconcile first)`);
     const manifest = artifact.manifest;
+    await pullSetupMarks(deps, receipt);
     const secrets = new Map((manifest.inputs ?? []).filter((i) => i.kind === "secret").map((i) => [i.key, i]));
     const paths: Record<string, string> = {};
     for (const entry of options.secret ?? []) {
@@ -585,6 +584,9 @@ async function pullSetupMarks(deps: OrgInitDeps, receipt: TemplateReceipt): Prom
   if (!receipt.instanceId) return;
   const status = await request(deps, "/cli/org/template/instance-status", { instance_key: receipt.key });
   receipt.setup = { ...receipt.setup, ...(status.setup_marks ?? {}) };
+  // An answer a person gave on the role page after the hire lands in the receipt and so in the instance file.
+  const answered = Object.entries((status.config ?? {}) as Record<string, string>).filter(([, v]) => typeof v === "string" && v !== "");
+  if (answered.length) receipt.config = { ...receipt.config, ...Object.fromEntries(answered) };
 }
 export const setupTemplate = (deps: OrgInitDeps, instance: string, id: string | undefined, options: TemplateOptions) => {
   const chosen = [options.done && "done", options.skip && "skipped", options.open && "open"].filter(Boolean) as string[];
@@ -847,6 +849,10 @@ async function adoptHiredInstance(deps: OrgInitDeps, instance: string, dir: stri
   if (!row) throw new Error(candidates.length > 1 && !options.project ? `Several projects have an instance named ${instance}; pass --project` : `Instance ${instance} is not on project ${options.project}`);
   if (!row.role_id) throw new Error(`The hire ${instance} has no role yet: accept its role change first`);
   const project = await verifiedProject(deps, tree, dir, String(row.project_id));
+  // A web hire names no folder; the project does. When its folder is on this
+  // machine and this is not it, binding here would pin the role to the wrong checkout.
+  const home = project.registeredDir && fs.existsSync(project.registeredDir) ? canonicalDirectory(project.registeredDir) : null;
+  if (home && home !== dir) throw new Error(`${instance} works on ${project.name}, whose checkout on this machine is ${home}, not ${dir}. Run: cast org template bind ${quoteTemplateArg(instance)} --dir ${quoteTemplateArg(home)}`);
   const role = (tree.roles ?? []).find((r: any) => r._id === row.role_id);
   if (!role) throw new Error("The hire's role is not in this workspace");
   const artifact = await releaseArtifact(deps, { template_id: row.template_id, version: row.version, digest: row.digest }, args);

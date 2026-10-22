@@ -917,6 +917,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   markOrgTemplateSetup: async (ctx, _userId, [instanceKey, id, status]: [string, string, "done" | "open" | "skipped"]) => {
     return await ctx.runMutation!((api as any).orgTemplates.setup, { instance_key: instanceKey, id, status });
   },
+  answerOrgTemplateInput: async (ctx, _userId, [instanceKey, key, value]: [string, string, string]) => {
+    return await ctx.runMutation!((api as any).orgTemplates.answer, { instance_key: instanceKey, key, value });
+  },
   activateOrgTemplateRoutine: async (ctx, _userId, [taskId]: [string]) => {
     return await ctx.runMutation!((api as any).orgTemplates.activateRoutine, { task_id: taskId });
   },
@@ -1927,6 +1930,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   removeAgentChain: async (ctx, userId, [id]: [string]) => {
     if (!isServerId(id)) return;
     await (ctx as any).runMutation(api.agentDefinitions.removeChain, { id });
+  },
+  // Vault metadata edits and deletes; no value ever rides this rail. A stub
+  // that never reached the server has nothing to change there.
+  updateSecretMeta: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    if (!isServerId(id)) return;
+    return await (ctx as any).runMutation(api.secrets.updateMeta, { ref: id, ...fields });
+  },
+  removeSecret: async (ctx, userId, [id]: [string]) => {
+    if (!isServerId(id)) return;
+    return await (ctx as any).runMutation(api.secrets.remove, { ref: id });
   },
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {

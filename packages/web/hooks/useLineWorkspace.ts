@@ -329,7 +329,16 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   // its steps are read from what its runs recorded.
   // A fix merged by hand through its pull request or committed to main (problemPage fixMerges): each problem's history reads it as its merge.
   const refOfTask = useMemo(() => new Map((everyRow.tasks as Array<{ _id: string; short_id?: string }>).map((t) => [t._id, t.short_id ?? null])), [everyRow.tasks]);
-  const handMergesSig = useInboxStore((st) => fixMergesSig((st as unknown as { pullRequests?: Record<string, FixPullRequest> }).pullRequests, (id) => refOfTask.get(id), everyRow.tasks as LandedTask[]));
+  // The selector runs on every store write anywhere in the app: it reads the merges again only when the pull requests
+  // or the tasks it reads them against moved.
+  const mergesOf = useMemo(() => {
+    let read: { prs: unknown; sig: string } | null = null;
+    return (prs: Record<string, FixPullRequest> | undefined) => {
+      if (read?.prs !== prs) read = { prs, sig: fixMergesSig(prs, (id) => refOfTask.get(id), everyRow.tasks as LandedTask[]) };
+      return read.sig;
+    };
+  }, [refOfTask, everyRow.tasks]);
+  const handMergesSig = useInboxStore((st) => mergesOf((st as unknown as { pullRequests?: Record<string, FixPullRequest> }).pullRequests));
   const handMerges = useMemo(() => new Map<string, HandMerge>(JSON.parse(handMergesSig)), [handMergesSig]);
   const modelOf = useCallback((rows: { runs: unknown[]; tasks: LineModelRows["tasks"]; signals: unknown[] }, project: string | null, forYou: Map<string, string>, deploysRead: boolean, key: string = lg.graphKey) => {
     const mine = (r: { project_id?: string }) => !project || r.project_id === project;

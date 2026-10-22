@@ -846,9 +846,8 @@ const projectKey = (id: string | null | undefined) => id || NO_PROJECT;
  * The rows of one project's line: its causes (and its other tasks, whose runs
  * count apart), the signals filed into it, the runs and cards on its tasks.
  */
-export function scopeLine<D extends LineDecision, R extends LineRows<D>>(rows: R, key: string): R {
+export function scopeLine<D extends LineDecision, R extends LineRows<D>>(rows: R, key: string, taskKey: ReadonlyMap<string, string> = projectKeysOf(rows.tasks)): R {
   if (key === ALL_PROJECTS) return rows;
-  const taskKey = new Map(rows.tasks.map((t) => [t._id, projectKey(t.project_id)]));
   const mine = (taskId: string | null | undefined) => !!taskId && taskKey.get(taskId) === key;
   return {
     ...rows,
@@ -858,6 +857,9 @@ export function scopeLine<D extends LineDecision, R extends LineRows<D>>(rows: R
     decisions: rows.decisions.filter((d) => mine(d.task_id)),
   };
 }
+
+/** Each task's project key: what scopeLine reads a row's project from. Read once when scoping to many projects. */
+export const projectKeysOf = (tasks: ReadonlyArray<{ _id: string; project_id?: string | null }>): Map<string, string> => new Map(tasks.map((t) => [t._id, projectKey(t.project_id)]));
 
 /** Waiting causes no run has touched on any line: the part of the queue the
  *  per-line counts (lineGraphs `work`, which count causes their runs worked)
@@ -933,7 +935,7 @@ export type RollupRow = {
 export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: LineProject[], now: number, cardsCap?: number, admissions?: ReadonlyMap<string, LineAdmission>): RollupRow[] {
   const keys = new Set<string>();
   for (const t of rows.tasks) if (isCause(t)) keys.add(projectKey(t.project_id));
-  const causeKey = new Map(rows.tasks.map((t) => [t._id, projectKey(t.project_id)]));
+  const causeKey = projectKeysOf(rows.tasks);
   for (const s of rows.signals) keys.add(s.project_id || causeKey.get(s.task_id) || NO_PROJECT);
   for (const p of projects) if (p.line_profile) keys.add(p._id);
   const byId = new Map(projects.map((p) => [p._id, p]));
@@ -942,7 +944,7 @@ export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: 
     const project = byId.get(key);
     // A project the viewer cannot see (another workspace's) is not a line here.
     if (key !== NO_PROJECT && !project) continue;
-    const scoped = scopeLine(rows, key);
+    const scoped = scopeLine(rows, key, causeKey);
     const admission = key === NO_PROJECT ? NO_PROJECT_ADMISSION : admissions?.get(key);
     const f = buildLineFlow({ ...scoped, initiatives: [], projects: [], now, cardsCap, finders: project?.line_profile?.finders, findersSince: project?.line_profile?.changed_at, admission });
     out.push({
