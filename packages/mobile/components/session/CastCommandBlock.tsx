@@ -22,6 +22,8 @@ import {
   type ParsedCastCommand,
 } from '@codecast/web/components/castCommand';
 import { decideOutputId } from '@codecast/web/components/conversation/classify';
+import { flowCommandTarget } from '@codecast/web/lib/line/flowCommandOutput';
+import { FlowCard, FlowRunCard } from './FlowCard';
 import { stripAnsiCodes } from '@codecast/web/lib/ansi';
 import { THREAD_STATE_STATUS_META } from '@codecast/web/lib/threadState';
 import { parseThreadStateStatus } from '@codecast/shared/contracts';
@@ -43,6 +45,7 @@ const CATEGORY: Record<string, { icon: FeatherName; tone: Tone }> = {
   read: { icon: 'book-open', tone: 'violet' },
   state: { icon: 'map-pin', tone: 'cyan' },
   decide: { icon: 'help-circle', tone: 'yellow' },
+  flow: { icon: 'shuffle', tone: 'blue' },
   chat: { icon: 'message-circle', tone: 'blue' },
   publish: { icon: 'upload-cloud', tone: 'magenta' },
   diff: { icon: 'git-commit', tone: 'magenta' },
@@ -100,6 +103,24 @@ export function CastCommandBlock({ cast, output, isError, image }: {
     </RNView>
   );
   const status = isError ? <RNText style={[styles.small, { color: Theme.red }]}>failed</RNText> : null;
+
+  // `cast flow run|show`: the run it started, live, or the flow itself (flows.md FL6).
+  if (cat === 'flow') {
+    const target = flowCommandTarget(subcommand, args, output, !!isError);
+    return (
+      <RNView>
+        <TouchableOpacity activeOpacity={0.6} onPress={() => setOpen((o) => !o)} style={styles.railHead}>
+          <Feather name="shuffle" size={13} color={color} />
+          <RNText style={[styles.kicker, { color }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>flow {subcommand}</RNText>
+          {target.flow ? <RNText style={styles.small} maxFontSizeMultiplier={CHROME_FONT_CAP}>{target.flow}{target.dryRun ? ' · dry run' : ''}</RNText> : null}
+          <RNView style={{ flex: 1 }} />
+          {status}
+        </TouchableOpacity>
+        {target.runId ? <FlowRunCard runId={target.runId} /> : target.flow && (subcommand === 'show' || target.dryRun) ? <FlowCard slug={target.flow} /> : null}
+        {raw}
+      </RNView>
+    );
+  }
 
   // `cast send <session> "…"`: the outgoing twin of a received session message.
   if (cat === 'send' && SESSION_ID_RE.test(subcommand)) {
