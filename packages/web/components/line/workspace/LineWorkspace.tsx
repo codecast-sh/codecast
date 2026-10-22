@@ -315,7 +315,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
               {settings && model && !unresolved ? (
                 <LineSettingsStage projectId={projectId} line={drawnLine} lines={picks} projects={ws.projects} rollups={ws.allRollups} processOf={ws.process.project} href={settingsAt} />
               ) : !model || unresolved ? <Skeleton /> : (
-                <div className="lw-stage-in" key={scoped ? `${selection.view}:${selection.mode}:${model.graphKey}:${projectId ?? "all"}` : `foryou:${projectId ?? "all"}`}>
+                <div className="lw-stage-in" /* __BISECT key */>
                   {/* An open step is a page of its own (LJ8.6), in place of the view it was opened from. */}
                   {drawerOpen && !stepSlides
                     ? <StepPage model={model} workspace={ws} selection={drawerSelection} select={select} href={href} pinned={!!pinned} />

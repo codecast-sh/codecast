@@ -38,7 +38,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
     .command("ls")
     .description("List the pool: each flow's kind, what it takes, and its stations in order")
     .option("--kind <kind>", "Only lines or only segments (line, segment)")
-    .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
+    .option("--team <name>", "Read this team's pool (default: the team this directory is mapped to, else the active team)")
     .option("--json", "Print the pool as JSON")
     .action(async (opts: { kind?: string; json?: boolean; team?: string }) => {
       const { flowLine } = await import("./workflow/flowPool.js");
@@ -64,7 +64,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
   flow
     .command("show <flow>")
     .description("A flow's stations, what each does, and where each sends the work")
-    .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
+    .option("--team <name>", "Read this team's pool (default: the team this directory is mapped to, else the active team)")
     .option("--json", "Print the flow as JSON")
     .action(async (slug: string, opts: { json?: boolean; team?: string }) => {
       const found = await findFlow(slug, teamDeps(deps, opts.team));
@@ -140,7 +140,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
     .option("--only <paths>", "With a session's edits: only these files belong to the change (comma-separated paths or globs)")
     .option("--foreground", "Run here and wait, rather than handing the run to this machine's daemon")
     .option("--dry-run", "Say what would run on what, and start nothing")
-    .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
+    .option("--team <name>", "Read this team's pool (default: the team this directory is mapped to, else the active team)")
     .option("--json", "Print {run_id, task, branch, worktree, files} as JSON")
     .action(async (slug: string, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string }) => {
       const only = opts.only ? opts.only.split(",").map((s) => s.trim()).filter(Boolean) : null;
