@@ -52,8 +52,9 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveLabelConvIds } from "./buckets";
 import { isDaemonManagedRow, listLiveManagedSessions } from "./lib/liveSessions";
 import { DAEMON_COMMAND_TTL_MS, fromConvexAgentType } from "@codecast/shared/contracts";
+import { invalidBringPaths } from "@codecast/shared/contracts/moveRehearsal";
 
-async function getAuthenticatedUserId(ctx: { db: any }, apiToken?: string): Promise<Id<"users"> | null> {
+export async function getAuthenticatedUserId(ctx: { db: any }, apiToken?: string): Promise<Id<"users"> | null> {
   const sessionUserId = await getAuthUserId(ctx as any);
   if (sessionUserId) return sessionUserId;
   if (apiToken) {
@@ -426,6 +427,8 @@ export async function performCreateBatch(
     wait_for_idle_ms?: number;
     interrupt_on_timeout?: boolean;
     concurrency?: number;
+    /** Paths every row's move brings beside its checkout (a resource offload names them per session instead). */
+    bring_paths?: string[];
     /** Plan only: report rows and skips, write nothing. */
     dry_run?: boolean;
   },
@@ -493,6 +496,7 @@ export async function performCreateBatch(
   const rows: Array<PlannedRow & { migration_id: string }> = [];
   let position = 0;
   for (const r of plan.rows) {
+    const bring = args.resource_offload?.selections.find((s) => s.conversation_id === r.conversation_id)?.bring ?? args.bring_paths;
     const migrationId = await ctx.db.insert("session_migrations", {
       user_id: userId,
       batch_id: batchId,
@@ -509,6 +513,7 @@ export async function performCreateBatch(
       attempt: 0,
       created_at: now,
       updated_at: now,
+      ...(bring?.length ? { bring_paths: bring } : {}),
     });
     rows.push({ ...r, migration_id: migrationId.toString() });
   }
@@ -533,11 +538,14 @@ export const createBatch = mutation({
     wait_for_idle_ms: v.optional(v.number()),
     interrupt_on_timeout: v.optional(v.boolean()),
     concurrency: v.optional(v.number()),
+    bring_paths: v.optional(v.array(v.string())),
     dry_run: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
+    const bad = invalidBringPaths(args.bring_paths);
+    if (bad) throw new Error(bad);
     return performCreateBatch(ctx, userId, args);
   },
 });
@@ -660,6 +668,7 @@ export const runnerBatch = query({
         position: r.position,
         source_path: r.source_path ?? null,
         destination_path: r.destination_path ?? null,
+        bring_paths: r.bring_paths ?? [],
       })),
     };
   },

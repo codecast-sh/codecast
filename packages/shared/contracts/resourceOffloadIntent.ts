@@ -1,7 +1,7 @@
 export type ResourceOffloadIntent = {
   client_batch_id: string;
   source_device_id: string;
-  selections: Array<{ conversation_id: string; session_id: string; destination_id: string; attested: string[] }>;
+  selections: Array<{ conversation_id: string; session_id: string; destination_id: string; attested: string[]; /** Paths the move brings along (MoveRehearsal missing). */ bring?: string[] }>;
   wait_for_idle_ms: number;
 };
 

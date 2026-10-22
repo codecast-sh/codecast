@@ -132,6 +132,8 @@ export type OrgRole = {
   line_merge?: boolean;
   /** Leeway to hire: its proposals of roles under itself come online with nobody approving. A person's switch. */
   hires_freely?: boolean;
+  /** Containment: on, the roles reporting to this one keep their scopes inside its area. Off unless a person turns it on. */
+  keeps_reports_inside?: boolean;
   /** Knowledge handoff (org-staffing.md S32): which role this one succeeded
    *  for which area, and when the outgoing role handed over the rest. */
   succeeded?: OrgSuccession[];

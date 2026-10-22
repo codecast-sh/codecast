@@ -6,6 +6,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useInboxStore } from "../store/inboxStore";
+import { visibleCatalog, type CatalogTemplate } from "../components/org/templateCatalog";
 
 /** Dev builds only: a fixture set from the console stands in for the server
  *  (`window.__orgTemplateFixture = { catalog?: [...], instance?: { role_id, ... } }`,
@@ -23,8 +24,8 @@ function fixture(): { catalog?: any[]; instance?: any } | null {
 export function useTemplateCatalog(teamId: string | undefined) {
   const { data, error } = useQueryNoThrow(api.orgTemplates.catalog, teamId === undefined ? {} : { team_id: teamId as Id<"teams"> });
   const fx = fixture();
-  if (fx?.catalog) return { templates: fx.catalog as any[], ready: true, error: undefined };
-  return { templates: (data ?? []) as any[], ready: data !== undefined, error };
+  if (fx?.catalog) return { templates: visibleCatalog(fx.catalog), ready: true, error: undefined };
+  return { templates: visibleCatalog((data ?? []) as CatalogTemplate[]), ready: data !== undefined, error };
 }
 
 /** The instance a role was hired as, with its record and readiness; null for an ordinary role. */

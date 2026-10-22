@@ -121,3 +121,46 @@ export function buildSingleAnswerPayload(
   const label = (question.options[optionIndex]?.label ?? "").replace(" (Recommended)", "");
   return buildPollPayload([question], { 0: [{ key, label }] });
 }
+
+// Text Claude Code may print right after an answer's closing quote: the next
+// answer, the chosen option's preview or the user's notes, or the closing sentence.
+const ANSWER_TERMINATORS = [", \"", " selected preview:", " user notes:", ". You can now"];
+
+/**
+ * The answers an AskUserQuestion result reports, keyed by question text. Claude Code
+ * writes them as `"<question>"="<answer>"` without escaping quotes inside either, so a
+ * generic `"…"="…"` match loses any question or answer holding a `"`. Locate each
+ * known question's own marker instead, prefer an exact option label after it, and
+ * otherwise end the answer at the first quote followed by a known terminator.
+ */
+export function parsePollAnswers(
+  questions: Array<Pick<PollQuestion, "question" | "options">>,
+  content: string | undefined
+): Record<string, string> {
+  const answers: Record<string, string> = {};
+  if (!content) return answers;
+  for (const q of questions) {
+    const marker = `"${q.question}"="`;
+    const at = content.indexOf(marker);
+    if (at < 0) continue;
+    const start = at + marker.length;
+    const rest = content.slice(start);
+    const endsAt = (p: number) =>
+      p === rest.length - 1 || rest.slice(p + 1) === "." || ANSWER_TERMINATORS.some(t => rest.startsWith(t, p + 1));
+    const label = q.options
+      .map(o => o.label)
+      .sort((a, b) => b.length - a.length)
+      .find(l => rest.startsWith(`${l}"`) && endsAt(l.length));
+    if (label !== undefined) {
+      answers[q.question] = label;
+      continue;
+    }
+    for (let p = rest.indexOf('"'); p >= 0; p = rest.indexOf('"', p + 1)) {
+      if (endsAt(p)) {
+        answers[q.question] = rest.slice(0, p);
+        break;
+      }
+    }
+  }
+  return answers;
+}

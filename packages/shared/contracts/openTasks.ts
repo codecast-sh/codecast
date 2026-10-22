@@ -1,7 +1,7 @@
 // The daemon's report of the background work a session's harness still holds:
 // the tasks that will re-invoke the agent when they finish (a run_in_background
 // Bash, a command the harness moved to the background on timeout, a Monitor, a
-// Workflow run). Scraped from the transcript, then — for the shell-backed kinds
+// Workflow run, a background Agent). Scraped from the transcript, then — for the shell-backed kinds
 // — checked against the live process table: the harness runs each as a child
 // shell of the agent process, so a task whose shell is gone is dead however
 // open the transcript still says it is (the harness loses a completion notice
@@ -15,7 +15,7 @@
 //
 // PURE isomorphic data — consumed by the CLI (producer), Convex (validator +
 // overlay) and the web (renderer).
-export const OPEN_TASK_KINDS = ["background", "promoted", "monitor", "workflow"] as const;
+export const OPEN_TASK_KINDS = ["background", "promoted", "monitor", "workflow", "agent"] as const;
 export type OpenTaskKind = (typeof OPEN_TASK_KINDS)[number];
 
 export type OpenTaskReport = {

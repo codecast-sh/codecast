@@ -11,7 +11,7 @@ import { MessageReview } from "../../MessageReview";
 import { fmtDuration } from "../../triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, type MonitorStatus } from "../../monitorRows";
 import { OptionPreview } from "../../tools/AskUserQuestionToolView";
-import { buildPollPayload, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../../../lib/pollPayload";
+import { buildPollPayload, parsePollAnswers, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../../../lib/pollPayload";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { useInboxStore } from "../../../store/inboxStore";
 import { Radar, Terminal } from "lucide-react";
@@ -262,12 +262,8 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
   let answers: Record<string, string> = {};
   if (parsedInput.answers && typeof parsedInput.answers === "object") {
     answers = parsedInput.answers;
-  } else if (result?.content) {
-    const regex = /"([^"]+)"="([^"]+)"/g;
-    let match;
-    while ((match = regex.exec(result.content)) !== null) {
-      answers[match[1]] = match[2];
-    }
+  } else {
+    answers = parsePollAnswers(questions, result?.content);
   }
 
   const isInteractive = !result && !!onSendMessage && !sent;

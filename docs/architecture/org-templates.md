@@ -71,7 +71,7 @@ If an attempted create has no verifiable server row, the command stops instead o
 
 ## Human approval and scheduling
 
-Installation creates an explicit-boundary stack without inheriting the proposer session's workspace. Its one protected `access` decision carries the shared `org-proposal` contract and the fixed create/create-with-changes/skip options. Reconcile requires `answered_by.kind === "user"`, a blocking decision, and the original proposal block. A human's answer may change the role, but its scope must still be exactly the instance project. The proposal carries the role's Starts work on its own switch, on by default like every hire (off only for the Head of People); applying the answer sets the switch the person approved, and reconcile refuses a role whose switch differs from it.
+Installation creates an explicit-boundary stack without inheriting the proposer session's workspace. Its one protected `access` decision carries the shared `org-proposal` contract and the fixed create/create-with-changes/skip options. Reconcile requires `answered_by.kind === "user"`, a blocking decision, and the original proposal block. A human's answer may change the role, but its scope must still be exactly the instance project. Afterwards the role's scope must hold the instance project and may grow: a lead's area covers the projects of the leads that report to it, so reconcile refuses only a scope that lost the instance project. The proposal carries the role's Starts work on its own switch, on by default like every hire (off only for the Head of People); applying the answer sets the switch the person approved, and reconcile refuses a role whose switch differs from it.
 
 Reconcile calls `/cli/org/apply-decision` with `provision: false`, verifies the resulting role, then calls `/cli/role/provision` with the explicit project directory. The backend must include the personal-stack boundary fix: when a stack exists, its personal or team boundary is authoritative rather than falling through to the conversation's team. Deploy that backend before using personal template reconcile.
 
@@ -96,6 +96,44 @@ cast org template install /releases/growth --instance product-growth --project <
 ```
 
 Adopted triggers must exist in the account's full trigger list and match the pinned project directory. They are external references, with actual cadence and pause observations. Their prompts, bindings, cadence, precheck, pause state and IDs are never changed by reconcile or upgrade, even if the new release removes the routine. One trigger cannot satisfy multiple routine IDs. Existing external channels may still target older sessions; adoption records that fact. `cast org template cutover <instance> [routine...] --dir <checkout>` replaces them with managed routines at their live cadences, pausing and keeping each adopted trigger (org-hire.md H8).
+
+## Tools a template ships
+
+A role's job is more than its words. The CMO queries Google Ads through a script, the Release Captain plans merges through another, and the channel routines load skills. Those files always travelled inside the release folder, but nothing named them: a prompt reached each one by a `{{template.root}}/scripts/...` path written in prose, the gallery could not say a template brings tools, and nobody could change one without editing the publisher's checkout.
+
+**Declared in the manifest.** A v2 manifest may carry `tools`, at most 50, each `{ id, kind, path, summary?, run?, needs? }`:
+
+```json
+"tools": [
+  { "id": "gads", "kind": "command", "path": "scripts/gads.mjs", "run": "bun", "summary": "Google Ads API: query with GAQL, validate and apply mutations", "needs": ["bun"] },
+  { "id": "ads-daily", "kind": "skill", "path": "skills/ads-daily" }
+]
+```
+
+- `kind: "command"` is a file the role runs: a script or a CLI with its own subcommands. `run` names the program that runs it (`bun`, `node`, `python3`, `sh`, `bash`); without it the file must be executable in the release. `summary` is required: it is the one line the role and the gallery read.
+- `kind: "skill"` is a folder holding `SKILL.md` and whatever files it uses. Its summary is the `description` in the SKILL.md frontmatter, the one place it is written; a skill tool carries no `summary` and no `run`.
+- `needs` lists programs the tool expects on the host's `PATH`. `status` and `tools` report the missing ones; nothing installs them.
+
+Inspect refuses a tool whose path is missing, unsafe or of the wrong shape (a command path must be a file, a skill path a folder with a SKILL.md that has a `description`), and duplicate ids. Tool files are not filled with tokens: a script runs exactly as published and reads its instance from the environment below. Declaring tools changes nothing about the digest, freezing or the snapshot: they were already release files.
+
+**How the role finds them.** Every `instructions` answer (the charter and each routine) ends its pinned header with the tool list: each id, its one line, and how to use it. A command is used through `cast org template run <instance> <tool> --dir <checkout> -- <args>`; a skill is read at its SKILL.md path in the pinned release. Prompts reference a tool by `{{tool.<id>}}`, which fills to that same command line or path; a token for an undeclared tool fails inspect. `cast org template tools <instance>` prints the list with what is missing on this host.
+
+**`run` is the stable entry point.** It verifies the pinned release's digest, then runs the tool from it with the project checkout as the working directory and `CODECAST_TEMPLATE_ROOT`, `CODECAST_TEMPLATE_INSTANCE`, `CODECAST_INSTANCE_FILE` (the receipt) and `CODECAST_PROJECT_DIR` set, passing arguments, stdin, stdout and the exit code through. It reads no server state, so it costs what the tool costs. Because a session calls the tool by instance and id rather than by a versioned path, a moved pin changes what runs without any prompt or memory changing.
+
+**Edit, try, release.** The pinned release stays read only. A role, or a person, changes a tool in a draft beside it:
+
+```sh
+cast org template edit <instance>                 # writable copy of the pinned release; prints its path
+cast org template run <instance> <tool> --draft -- <args>   # try the edited tool
+cast org template diff <instance>                 # files changed, the release class, the version it will carry
+cast org template release <instance> --changelog "What changed and why"
+```
+
+The draft lives at `<project>/.codecast/org-templates/drafts/<instance>/`. `edit` on an existing draft prints its path; `--reset` copies the pin again. `diff` lists added, changed and removed files (`--patch` adds the unified diff) and classifies the draft against the pin with the release rules (`classifyRelease`): content, structure or authority, and the smallest version that class allows.
+
+`release` is the whole loop in one command. It refuses an authority release (a new permission, a routine's mode, the line, the role's identity): the role never widens what it may do, and a person publishes such a change with `publish`. Otherwise it writes the next version into the draft's manifest, adds the changelog as that version's section of the draft's CHANGELOG.md, publishes the draft as a `canary` release into the instance's own workspace, then runs the host step with `--to` that version, so the instance moves through the journalled upgrade and its role is told what moved. The draft is removed once the instance is on the new release; it is now the pin.
+
+**Where an edit flows.** When the instance's workspace published the template, the release is the template's next version, and its other instances see it as an update like any other. When the template came from Codecast's library, the first release creates the workspace's own copy of the template, same id, its versions continuing from the pin. The workspace's own copy is the one its catalog and its instances read from then on, so Codecast's later releases stop being offered to it; that is the cost of running edited tools, and the role page's template line names the copy. Before publishing, `release` files the change upstream as a lesson on Codecast's template (its changelog and the list of changed files, never file contents), so the library can take the improvement into its next release. A Codecast admin releasing from a Codecast instance passes `--codecast` to release into the library itself.
 
 ## Verification
 

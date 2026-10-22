@@ -20,6 +20,7 @@ import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { publishedLineProfileValidator } from "./lib/lineProfileValidator";
+import { signalPlacedValidator } from "./lib/signalPlacedValidator";
 import { callGuestLeftReasonValidator, callGuestStatusValidator, guestNoticeValidator, callRecordingErrorKindValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { assistantTables } from "./assistantSchema";
@@ -1367,6 +1368,27 @@ export default defineSchema({
     .index("by_batch_id", ["batch_id"])
     .index("by_user_created", ["user_id", "created_at"]),
 
+  // A dry run of one session's move, made by the machine holding its files
+  // (cast migrate rehearse) when the offload review asks: whether it would
+  // land and what the session would miss on the destination. Read by the
+  // review and by resourceOffload.start; MoveRehearsal is `result`.
+  move_rehearsals: defineTable({
+    user_id: v.id("users"),
+    request_id: v.string(),
+    source_device_id: v.string(),
+    conversation_id: v.id("conversations"),
+    session_id: v.string(),
+    destination_id: v.string(),
+    status: v.union(v.literal("pending"), v.literal("done"), v.literal("failed")),
+    result: v.optional(v.string()),
+    error: v.optional(v.string()),
+    created_at: v.number(),
+    finished_at: v.optional(v.number()),
+  })
+    .index("by_request", ["request_id"])
+    .index("by_user_created", ["user_id", "created_at"])
+    .index("by_session_destination", ["session_id", "destination_id", "created_at"]),
+
   session_migrations: defineTable({
     user_id: v.id("users"),
     batch_id: v.string(),
@@ -1409,6 +1431,9 @@ export default defineSchema({
     // The resume the flip enqueued on the destination — polled to confirm the
     // session actually came up there.
     resume_command_id: v.optional(v.id("daemon_commands")),
+    // Repositories and folders on the source the move brings beside the
+    // session's own checkout (a rehearsal found the session works in them).
+    bring_paths: v.optional(v.array(v.string())),
   })
     .index("by_batch", ["batch_id", "position"])
     .index("by_conversation", ["conversation_id"])
@@ -1607,6 +1632,9 @@ export default defineSchema({
       // Merges the line made today (the-line.md L12), read against the
       // role's merge authority limit (per_day).
       merges: v.optional(v.number()),
+      // Deploys the role asked for today (deploys.md DP4), read against its
+      // deploy authority limit (per_day).
+      deploys: v.optional(v.number()),
     })),
     // When the role last read its brief from its own session (orgRoles
     // .markBriefRead): `cast brief` shows what changed since (org-staffing.md S25).
@@ -1645,6 +1673,12 @@ export default defineSchema({
     // (orgProposals.routeHire). Off (absent or false) unless a person turns it on.
     // Human only, logged like the line's merge step.
     hires_freely: v.optional(v.boolean()),
+    // Containment (scopes-and-feed.md F1): on, every role reporting to this
+    // one keeps its scope inside this role's, and a scope edit, a move or an
+    // undo that breaks that is refused. Off (absent) unless a person turns it
+    // on: the org is open by default (2026-10-22). Read through
+    // shared/contracts/orgLead keepsReportsInside.
+    keeps_reports_inside: v.optional(v.boolean()),
     // Knowledge handoff when an area moves (org-staffing.md S32). On the
     // RECEIVING role: which role it succeeded for which project or plan, so
     // its page says where its lines came from.
@@ -1906,6 +1940,9 @@ export default defineSchema({
     // while `at` is later than the row's last revision; an amend makes the
     // row answerable again.
     reply: v.optional(orgChangeReplyValidator),
+    // The author's answer to a question on this change (`cast org revise
+    // --answer`). The card shows it under the person's words it came after.
+    answer: v.optional(v.object({ text: v.string(), at: v.number() })),
   }).index("by_proposal", ["proposal_id", "seq"]),
 
   // ── Roles hired from a template (docs/architecture/org-hire.md W8) ──
@@ -3763,6 +3800,9 @@ export default defineSchema({
     })),
     // Why it failed, or the deploy command's last words.
     note: v.optional(v.string()),
+    // The line-deploy run that carries it through its steps (DP8): each
+    // step's state is that run's station, read from the run, never copied here.
+    run_id: v.optional(v.id("workflow_runs")),
     created_at: v.number(),
     live_at: v.optional(v.number()),
     finished_at: v.optional(v.number()),
@@ -5589,6 +5629,75 @@ export default defineSchema({
     updated_at: v.number(),
   }).index("by_mod_name", ["mod_id", "name"]),
 
+  // Vault (docs/architecture/vault.md): the team's keys, logins, files and
+  // saved browser sign-ins, one row per secret. `workspace` is ACCESS (a team
+  // secret is every member's, a personal one its owner's); team_id is routing.
+  // value_enc is the payload JSON encrypted under the deployment's connection
+  // key with the workspace in its derivation (secrets.ts), so a row moved to
+  // another workspace no longer decrypts. No query returns it; values leave
+  // only through secrets.reveal and secrets.cliRead, each recording an event.
+  // A `requested` row is an agent's ask with no value yet.
+  secrets: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    short_id: v.string(),
+    name: v.string(),
+    kind: v.union(v.literal("key"), v.literal("login"), v.literal("signin"), v.literal("file")),
+    status: v.union(v.literal("ready"), v.literal("requested")),
+    value_enc: v.optional(v.string()),
+    env: v.optional(v.array(v.string())),
+    sites: v.optional(v.array(v.string())),
+    note: v.optional(v.string()),
+    // First 4 and last 4 of a key (shared/contracts/secrets fingerprint).
+    fingerprint: v.optional(v.string()),
+    // A sign-in's latest cookie expiry, so the page says when it runs out.
+    signin_expires_at: v.optional(v.number()),
+    created_by: v.id("users"),
+    created_at: v.number(),
+    updated_by: v.optional(v.id("users")),
+    updated_at: v.number(),
+    rotated_at: v.optional(v.number()),
+    last_used_at: v.optional(v.number()),
+    last_used_by_conversation: v.optional(v.id("conversations")),
+    use_count: v.optional(v.number()),
+    // A request (`cast vault request`): who asked, from which session, and why.
+    requested_by: v.optional(v.id("users")),
+    requested_from_conversation: v.optional(v.id("conversations")),
+    request_why: v.optional(v.string()),
+  })
+    .index("by_workspace", ["workspace"])
+    .index("by_workspace_name", ["workspace", "name"])
+    .index("by_short_id", ["short_id"]),
+
+  // Vault's audit trail: every create, change, reveal, agent read and request
+  // of a secret, with who and from which session. Kept after the secret is
+  // deleted (secret_name says what it was). Only the secret's panel reads it.
+  secret_events: defineTable({
+    secret_id: v.id("secrets"),
+    workspace: v.string(),
+    secret_name: v.string(),
+    kind: v.union(
+      v.literal("created"),
+      v.literal("updated"),
+      v.literal("rotated"),
+      v.literal("revealed"),
+      v.literal("read"),
+      v.literal("injected"),
+      v.literal("signed_in"),
+      v.literal("refreshed"),
+      v.literal("requested"),
+      v.literal("fulfilled"),
+      v.literal("deleted"),
+    ),
+    actor_user_id: v.optional(v.id("users")),
+    conversation_id: v.optional(v.id("conversations")),
+    // What an agent read it for: get, run, env, otp or signin.
+    purpose: v.optional(v.string()),
+    at: v.number(),
+  })
+    .index("by_secret_at", ["secret_id", "at"])
+    .index("by_workspace_at", ["workspace", "at"]),
+
   // What a mod's local half published ($.publish): one value per mod and key,
   // the latest write wins. The web syncs these into the store, so the
   // sandboxed half reads them like any other data ($.local.get).
@@ -6082,6 +6191,12 @@ export default defineSchema({
       // How many findings it held when the ground step wrote its note
       // (lineGround.regroundWhenRegrouped): the note quotes what it read.
       grounded_count: v.optional(v.number()),
+      // How its project was decided (lib/signalPlacement.ts, the-line-model.md
+      // LM1): settled by the expectation its first signal breaks, the filer or
+      // a single-purpose source; a default or nothing, which the ground step
+      // replaces with its own placement ("ground"). Absent on problems opened
+      // before it was kept, and on ones a person made.
+      placed: v.optional(signalPlacedValidator),
       // The title and the findings on the problem when it was written
       // (lineRetitle.ts): once none of them is left, the problem is renamed
       // from the findings on it now.
@@ -6198,6 +6313,9 @@ export default defineSchema({
     // Set when the finder filed it for a project other than its cause's: a
     // fingerprint attaches across the workspace (the-line-end-to-end.md LE4).
     filed_for_project_id: v.optional(v.id("projects")),
+    // How the project it was filed for was decided (lib/signalPlacement.ts);
+    // a held signal placed later opens its problem with the same standing.
+    placed: v.optional(signalPlacedValidator),
     // "similar": grouping put it on the problem whose findings read the same (learning-loop.md LL9).
     // "message": a problem already held its message under another expectation (signals.ts messageCause).
     attach: v.union(v.literal("fingerprint"), v.literal("message"), v.literal("judge"), v.literal("similar"), v.literal("new"), v.literal("person"), v.literal("held")),
@@ -6224,6 +6342,9 @@ export default defineSchema({
     // moved it off (its fingerprint is then the new issue's key).
     merged_into: v.optional(v.string()),
     split_from: v.optional(v.string()),
+    // The problem a merge moved this finding off (signals.foldProblem), so the
+    // merge can be undone exactly (signals.unfoldProblem).
+    folded_from: v.optional(v.id("tasks")),
     // A judge's finding marked wrong, and what diagnosing it found
     // (learning-loop.md LL11, convex/judgeReview.ts). The finding stays where
     // it was filed; the case it became is a signal of its own (case_of).
@@ -7006,6 +7127,14 @@ export default defineSchema({
     team_id: v.id("teams"),
     locked: v.boolean(),
     locked_by: v.id("users"),
+    // A PRIVATE HUDDLE, chosen at start (calls.joinRoom `private`). It is
+    // locked like any locked room, and goes further: teammates outside it do
+    // not see it in their live rooms at all, a teammate who can merely see
+    // the session it is about is not let in (only its owner and whoever made
+    // it private), and the call record is marked private too
+    // (transcripts.private). Dies with the huddle like the lock; opening the
+    // door clears it.
+    private: v.optional(v.boolean()),
     // The huddle's opt-out from transcription. Every huddle transcribes by
     // default (any deliberate participant's client becomes the scribe), so
     // "stop transcribing" has to be a fact about the ROOM or the next client
@@ -7310,6 +7439,11 @@ export default defineSchema({
     // team_id says (team_id is routing, never access — canReadCall is the
     // gate). Meaningless on huddles, which have the room's own rules.
     rec_shared: v.optional(v.boolean()),
+    // A huddle started private (call_room_state.private). Its record belongs
+    // to the people who were in it: whoever spoke, was filmed or started it,
+    // and for a people room the people its key names. Room membership that
+    // reaches further (a team-visible session, a channel) grants nothing here.
+    private: v.optional(v.boolean()),
     // Public sharing: "anyone with the link" (publicShare.ts). A grant to
     // read this one call's record, never to join its room.
     share_token: v.optional(v.string()),
@@ -7662,6 +7796,10 @@ export default defineSchema({
     })),
     model_stylesheet: v.optional(v.string()),
     is_private: v.optional(v.boolean()),
+    // ACCESS (computeWorkspaceKey through createDataContext): `team:<id>` for
+    // a flow published to the team's pool (flows.md FL2), else `user:<owner>`.
+    // team_id is routing only.
+    workspace: v.optional(v.string()),
     // Where the graph lives (line-workspace.md LW4): the machine that pushed
     // it from a file, the checkout, the .cast and each station's file
     // (repo-relative), and the hash of the graph as pushed. The app edits and
@@ -7683,6 +7821,7 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
+    .index("by_workspace", ["workspace"])
     .index("by_user_slug", ["user_id", "slug"]),
 
   // Every version of a pushed graph (line-workspace.md LW4: every save is a
@@ -7908,6 +8047,9 @@ export default defineSchema({
     // A rerun from the trial page: its runner sets the earlier run's branch
     // aside and starts from origin/main (cli lineTrialBranch.ts).
     fresh_branch: v.optional(v.boolean()),
+    // When a failed run was last resumed at a station as a new attempt: its
+    // runner counts each station's visits again from then (cli runResume.ts).
+    visits_reset_at: v.optional(v.number()),
   })
     .index("by_share_token", ["share_token"])
     // A daemon's sweep for its own live runs whose runner is gone.

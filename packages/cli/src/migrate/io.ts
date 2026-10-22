@@ -17,6 +17,7 @@ import {
   convexClient,
   describeBackSync,
   describeVerification,
+  FOLDER_COPY_VERIFICATION,
   moveNotice,
   readMoves,
   sendMoveNotice,
@@ -104,28 +105,14 @@ export function resolveLocalDestination(opts: {
   return opts.exists(localCwd) ? { localCwd } : { localCwd, createIn: root };
 }
 
-export function createRunnerIo(batchId: string, opts: { out?: (line: string) => void } = {}): RunnerIo & { ready(): Promise<void> } {
-  const out = opts.out ?? ((line: string) => process.stdout.write(`${line}\n`));
-  const log = (line: string) => out(`[${stamp()}] ${line}`);
-  let client: any;
-  let token = "";
-  let api: any;
+/**
+ * Wakes and resolves the cloud host behind a device id, once per process:
+ * from the registry, else by asking each host this machine provisioned that
+ * has not reported its device id yet. Throws when this machine cannot reach it.
+ */
+export function hostResolver(log: (line: string) => void): (deviceId: string) => Promise<{ cloud: CloudHost; host: RemoteHost }> {
   const hosts = new Map<string, { cloud: CloudHost; host: RemoteHost }>();
-  const credentialRefreshed = new Set<string>();
-  // The host-home steps (host setup, tools, logins, mirror, the host's cast) once per host and repo a batch moves into.
-  const homeReady = new Set<string>();
-  const myDeviceId = localDeviceId();
-
-  const ready = async () => {
-    const c = await convexClient();
-    client = c.client;
-    token = c.token;
-    api = c.api;
-  };
-
-  const listDevices = async (): Promise<any[]> => client.query(api.devices.listDevices, { api_token: token });
-
-  const prepareHost = async (deviceId: string): Promise<{ cloud: CloudHost; host: RemoteHost }> => {
+  return async (deviceId: string) => {
     const cached = hosts.get(deviceId);
     if (cached) return cached;
     let cloud = hostForDevice(deviceId);
@@ -156,6 +143,45 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     hosts.set(deviceId, entry);
     return entry;
   };
+}
+
+/** Why the host could not run a Claude session now, or null. Every move pushes this machine's credential, so the host is asked only when there is nothing to push. */
+export async function hostLoginGap(host: () => Promise<RemoteHost>): Promise<string | null> {
+  const local = await readPushableCredentialAsync();
+  if (local.cred) return null;
+  return remoteClaudeLoginLive(await host()) ? null : `this machine has none to give it: ${local.reason}`;
+}
+
+/** Whether the host can take one more session from `localRoot` now (cloud/hostHeadroom). */
+export async function hostRoom(cloud: CloudHost, localRoot: string | undefined): Promise<{ refuse?: string; small?: string }> {
+  const { probeHeadroom, readRepoNeed, tooSmallFor } = await import("../cloud/hostHeadroom.js");
+  const room = probeHeadroom(cloud);
+  if (!room.fit) return { refuse: room.why ?? "no room" };
+  const small = tooSmallFor(room, readRepoNeed(localRoot && fs.existsSync(localRoot) ? localRoot : undefined));
+  return small ? { small } : {};
+}
+
+export function createRunnerIo(batchId: string, opts: { out?: (line: string) => void } = {}): RunnerIo & { ready(): Promise<void> } {
+  const out = opts.out ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const log = (line: string) => out(`[${stamp()}] ${line}`);
+  let client: any;
+  let token = "";
+  let api: any;
+  const credentialRefreshed = new Set<string>();
+  // The host-home steps (host setup, tools, logins, mirror, the host's cast) once per host and repo a batch moves into.
+  const homeReady = new Set<string>();
+  const myDeviceId = localDeviceId();
+
+  const ready = async () => {
+    const c = await convexClient();
+    client = c.client;
+    token = c.token;
+    api = c.api;
+  };
+
+  const listDevices = async (): Promise<any[]> => client.query(api.devices.listDevices, { api_token: token });
+
+  const prepareHost = hostResolver(log);
 
   // Every runner write lands on rows the user's message traffic also writes
   // (the per-user sync head), and under a busy fleet Convex gives up on the
@@ -201,24 +227,9 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     },
 
     prepareHost: async (deviceId) => { await prepareHost(deviceId); },
-    // Every move pushes this machine's credential, so the host is asked only
-    // when there is nothing to push.
-    hostLoginGap: async (deviceId) => {
-      const local = await readPushableCredentialAsync();
-      if (local.cred) return null;
-      const { host } = await prepareHost(deviceId);
-      return remoteClaudeLoginLive(host) ? null : `this machine has none to give it: ${local.reason}`;
-    },
+    hostLoginGap: (deviceId) => hostLoginGap(async () => (await prepareHost(deviceId)).host),
 
-    hostRoom: async (deviceId, facts) => {
-      const { cloud } = await prepareHost(deviceId);
-      const { probeHeadroom, readRepoNeed, tooSmallFor } = await import("../cloud/hostHeadroom.js");
-      const room = probeHeadroom(cloud);
-      if (!room.fit) return { refuse: room.why ?? "no room" };
-      const localRoot = facts.git_root ?? facts.project_path ?? undefined;
-      const small = tooSmallFor(room, readRepoNeed(localRoot && fs.existsSync(localRoot) ? localRoot : undefined));
-      return small ? { small } : {};
-    },
+    hostRoom: async (deviceId, facts) => hostRoom((await prepareHost(deviceId)).cloud, facts.git_root ?? facts.project_path ?? undefined),
 
     transferToCloud: async (facts: Facts, o) => {
       const { cloud, host } = await prepareHost(facts.to_device_id);
@@ -321,7 +332,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       const { checkoutAloneProbe } = await import("../cloud/prepare.js");
       const pulled = await pullSession(facts.session_id, host, move, { aloneInCheckout: checkoutAloneProbe(client, api, token, facts.owner_device_id, facts.conversation_id) });
       if (!pulled.ff) throw new Error(`CONFLICT: ${pulled.reason}`);
-      let verification = "synced via rsync (non-git directory)";
+      let verification = FOLDER_COPY_VERIFICATION;
       let gitRoot: string | undefined;
       if (isWorktree(dest.localCwd)) {
         verification = describeBackSync(pulled);

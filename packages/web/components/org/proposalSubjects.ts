@@ -11,7 +11,7 @@ import type { OrgAppliedDiffRow } from "@codecast/shared/contracts/orgChange";
 import { changeWords, fieldMoves, proposalTotals, recordTotalsWords, subjectWords, type ChangeField, type ChangeWordsCtx, type FieldRef, type FieldText } from "@codecast/shared/contracts/orgChangeWords";
 import {
   andList, editedOrgChange, isOrgChangeDecidable, isOrgQuietChange, orgRecordGroups, quietChangeSentence, recordAct,
-  type OrgAskNames, type OrgChange, type OrgChangeReply, type OrgChangeStatus, type OrgEvidenceLink, type OrgPriority, type OrgRecordGroup,
+  type OrgAskNames, type OrgChange, type OrgChangeAnswer, type OrgChangeReply, type OrgChangeStatus, type OrgEvidenceLink, type OrgPriority, type OrgRecordGroup,
 } from "@codecast/shared/contracts/orgProposal";
 import { refMatches, refResolves, type OrgGhostOptions } from "./orgLayout";
 import type { OrgProposalChange } from "./orgStaffingTypes";
@@ -73,6 +73,8 @@ export type SubjectCard = {
   failed: { seq: number; note: string }[];
   /** The person's latest answer that still stands (S39). Null once the author amended the change after it. */
   reply: OrgChangeReply | null;
+  /** The author's answer to the person's words (changeAnswer). */
+  answer: OrgChangeAnswer | null;
   /** What a change needs from, or gives to, another change of the proposal. */
   depends: string[];
   /** What the author's revise did (S18): the word, the note, and the fields it moved. */
@@ -184,6 +186,15 @@ export function changeReply(change: Pick<OrgProposalChange, "reply" | "revision"
   const reply = change.reply;
   if (!reply) return null;
   return change.revision && change.revision.at >= reply.at ? null : reply;
+}
+
+/** The author's answer while it still answers something: newer than the
+ *  person's words on the row and than the row's last revision. */
+export function changeAnswer(change: Pick<OrgProposalChange, "answer" | "reply" | "revision">): OrgChangeAnswer | null {
+  const answer = change.answer;
+  if (!answer) return null;
+  if ((change.reply && change.reply.at > answer.at) || (change.revision && change.revision.at > answer.at)) return null;
+  return answer;
 }
 
 /** The latest answer that still stands across a set of rows. */
@@ -587,6 +598,7 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
       sits: sitsOf(group, kind, rows),
       failed: members.filter((c) => c.status === "failed").map((c) => ({ seq: c.seq, note: c.applied_note?.trim() ?? "" })),
       reply: latestReply(members),
+      answer: members.map(changeAnswer).filter((a): a is OrgChangeAnswer => !!a).sort((a, b) => b.at - a.at)[0] ?? null,
       depends: dedupe(drawn.map((c) => c.depends?.trim() ?? "").filter(Boolean), (d) => d),
       revisions: drawn.filter((c) => c.revision).map((c) => ({
         seq: c.seq, word: revisionWord(c.revision!), note: c.revision!.note,
