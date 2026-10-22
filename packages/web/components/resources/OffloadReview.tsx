@@ -8,7 +8,9 @@
 // reasoning sits behind disclosures, and sessions that stay are grouped by
 // reason. Checks no machine can prove are confirmed by pressing Move; the
 // confirmation is recorded per session as such, never as a passed check.
-// Blockers cannot be overridden.
+// Blockers cannot be overridden. The review holds the plan it opened on, so a
+// new sample never reorders or re-picks what the person is looking at. Once
+// Move is pressed the panel follows that launch (OffloadProgress).
 import React from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Cloud, Laptop, RotateCcw, X } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -16,7 +18,7 @@ import { WAIT_PRESETS, isRowActive, isRowTerminal } from "../../lib/migrationPla
 import { MigrationStatusPill } from "../MigrationStatusPill";
 import { fmtAgo, fmtBytes, fmtCpu, memoryUsed, namedStops, projectName } from "./resourceModel";
 import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRun, OffloadSelection, ResourceActions, ResourceSession, StayingSession } from "./types";
-import { SPREAD_CEILING, assignDestinations, loadShareOf, loadShift, sliceForPercent } from "../../lib/resourceOffload";
+import { SPREAD_CEILING, assignDestinations, holdPlan, loadShareOf, loadShift, sliceForPercent } from "../../lib/resourceOffload";
 import { Button } from "../ui/button";
 
 const movable = (r: OffloadCandidate["perDestination"][string] | undefined) => r?.readiness === "ready" || r?.readiness === "preflight_required";
@@ -254,9 +256,13 @@ export type OffloadReviewProps = {
   actions?: ResourceActions;
   actionsDisabledReason?: string;
   onClose: () => void;
+  /** Move was pressed and the launch started; the panel follows it from here. */
+  onStarted: (clientBatchId: string) => void;
 };
 
-export function OffloadReview({ plan, sessions, sourceName, now, initialSelected, actions, actionsDisabledReason, onClose }: OffloadReviewProps) {
+export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initialSelected, actions, actionsDisabledReason, onClose, onStarted }: OffloadReviewProps) {
+  const [held] = React.useState(livePlan);
+  const plan = React.useMemo(() => holdPlan(held, livePlan), [held, livePlan]);
   const byId = React.useMemo(() => new Map(sessions.map((s) => [s.sessionId, s])), [sessions]);
   const preselect = initialSelected?.length ? new Set(initialSelected) : undefined;
   // The dial picks the sessions; ticking a box by hand takes over until the dial moves again (null).
@@ -506,7 +512,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
             size="lg"
             disabled={!!moveBlocked}
             title={moveBlocked}
-            onClick={() => { actions?.onStartOffload?.(selections, { waitForTurnMs: wait }); onClose(); }}
+            onClick={() => { const id = actions?.onStartOffload?.(selections, { waitForTurnMs: wait }); if (id) onStarted(id); }}
             className="w-full rounded-lg disabled:pointer-events-auto disabled:cursor-not-allowed"
           >
             Move {going.length > 0 ? plural(going.length, "session") : "sessions"}
@@ -514,6 +520,122 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
           {moveBlocked && off && <div className="text-center text-[10px] text-sol-text-dim">{off}</div>}
         </footer>
       )}
+    </section>
+  );
+}
+
+type RunProps = { byId: Map<string, ResourceSession>; destinations: Map<string, string>; actions?: ResourceActions; actionsDisabledReason?: string };
+
+const runActive = (run: OffloadRun) => run.rows.some((r) => isRowActive(r.status) || r.status === "queued");
+
+/** One line per session in a run: where it goes, where it is, and Retry when it failed. */
+function RunRows({ run, byId, destinations, actions, actionsDisabledReason }: RunProps & { run: OffloadRun }) {
+  return (
+    <>
+      {run.rows.map((r) => (
+        <div key={r.sessionId} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 text-[11px] sm:grid-cols-[minmax(0,1fr)_9rem_auto_4.5rem]" data-run-row={r.sessionId}>
+          <span className="truncate text-sol-text-secondary">{byId.get(r.sessionId)?.title ?? r.sessionId}</span>
+          <span className="hidden truncate text-sol-text-muted sm:block">→ {destinations.get(r.destinationId) ?? r.destinationId}</span>
+          <MigrationStatusPill status={r.status} />
+          <span className="hidden text-right sm:block">
+            {r.status === "failed" && (actions?.onRetry
+              ? <button type="button" className="inline-flex items-center gap-1 text-sol-cyan hover:underline" onClick={() => actions.onRetry!(run.batchId, r.sessionId)}><RotateCcw className="h-3 w-3" />Retry</button>
+              : <span className="text-sol-text-dim" title={actionsDisabledReason}>Retry</span>)}
+          </span>
+          {r.error && <span className="col-span-full flex gap-1 pl-2 text-[10px] text-sol-red/90"><AlertTriangle className="mt-px h-3 w-3 shrink-0" />{r.error}</span>}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** What the source machine measured before and after, once every session has finished moving. */
+function RunRelief({ run }: { run: OffloadRun }) {
+  const b = run.measured?.before; const a = run.measured?.after;
+  if (!b) return null;
+  return (
+    <div className="text-[10px] text-sol-text-muted">
+      {a && run.finishedAt !== undefined && a.at > run.finishedAt && run.rows.every((r) => isRowTerminal(r.status))
+        ? <>Measured on this machine: memory in use {fmtBytes(memoryUsed(b))} → {fmtBytes(memoryUsed(a))} ({memoryUsed(b) - memoryUsed(a) >= 0 ? "−" : "+"}{fmtBytes(Math.abs(memoryUsed(b) - memoryUsed(a)))}), CPU {b.cpuPercent?.toFixed(0) ?? "n/a"}% → {a.cpuPercent?.toFixed(0) ?? "n/a"}%. Other work on the machine moves these numbers too.</>
+        : <>Relief is measured from the first sample after every session has finished moving.</>}
+    </div>
+  );
+}
+
+const STAGE_TONE = { done: "bg-sol-green", failed: "bg-sol-red", moving: "bg-sol-cyan", queued: "bg-sol-text-dim/40", cancelled: "bg-sol-text-dim/20" } as const;
+
+/** The panel after Move: one launch (a run per destination) followed to the end, from the store's batches. */
+export function OffloadProgress({ runs, sourceName, onClose, ...rowProps }: RunProps & { runs: OffloadRun[]; sourceName: string; onClose: () => void }) {
+  const rows = runs.flatMap((r) => r.rows);
+  const count = (f: (s: OffloadRun["rows"][number]["status"]) => boolean) => rows.filter((r) => f(r.status)).length;
+  const stages = {
+    done: count((s) => s === "done"),
+    moving: count(isRowActive),
+    queued: count((s) => s === "queued"),
+    failed: count((s) => s === "failed"),
+    cancelled: count((s) => s === "cancelled"),
+  };
+  const active = runs.some(runActive);
+  const cancellable = runs.filter((r) => runActive(r) && !r.cancelUnavailable);
+  const { actions } = rowProps;
+  return (
+    <section aria-label="Offload progress" className="flex h-full min-h-0 flex-col bg-sol-bg">
+      <header className="flex items-start gap-3 px-5 pb-3 pt-5">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[17px] font-semibold tracking-tight text-sol-text">{active || !rows.length ? "Moving" : "Moved"} off {sourceName}</h2>
+          <p className="mt-1 flex items-center gap-1.5 text-[12px] text-sol-text-muted">
+            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", active || !rows.length ? "animate-pulse bg-sol-cyan" : stages.failed ? "bg-sol-red" : "bg-sol-green")} />
+            {!rows.length ? "Starting" : active ? "In progress, never interrupts a turn" : stages.failed ? `${stages.failed} failed` : "Finished"}
+          </p>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close" className="-mr-1 rounded-full p-1.5 text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text"><X className="h-4 w-4" /></button>
+      </header>
+
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-4">
+        <div className="space-y-2 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-progress>
+          <div className="flex items-baseline gap-2 text-[11px]">
+            <span className="text-[20px] font-semibold tabular-nums leading-none text-sol-text">{stages.done}<span className="text-sol-text-dim">/{rows.length}</span></span>
+            <span className="text-sol-text-dim">moved</span>
+            <span className="ml-auto flex gap-3 tabular-nums text-sol-text-muted">
+              {stages.moving > 0 && <span>{stages.moving} moving</span>}
+              {stages.queued > 0 && <span>{stages.queued} queued</span>}
+              {stages.failed > 0 && <span className="text-sol-red">{stages.failed} failed</span>}
+              {stages.cancelled > 0 && <span>{stages.cancelled} cancelled</span>}
+            </span>
+          </div>
+          <div className="flex h-1.5 overflow-hidden rounded-full bg-sol-border/25">
+            {(Object.keys(STAGE_TONE) as Array<keyof typeof STAGE_TONE>).map((k) => stages[k] > 0 && (
+              <span key={k} className={cn("h-full transition-[width] duration-300", STAGE_TONE[k])} style={{ width: `${stages[k] / rows.length * 100}%` }} />
+            ))}
+          </div>
+        </div>
+
+        {runs.map((run) => (
+          <div key={run.batchId} className="space-y-1.5 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-run={run.batchId}>
+            <RunRows run={run} {...rowProps} />
+            <RunRelief run={run} />
+          </div>
+        ))}
+      </div>
+
+      <footer className="flex gap-2 border-t border-sol-border/20 px-5 pb-5 pt-3.5">
+        {active && (
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            disabled={!actions?.onCancel || !cancellable.length}
+            title={!actions?.onCancel ? rowProps.actionsDisabledReason : runs.find((r) => r.cancelUnavailable)?.cancelUnavailable}
+            onClick={() => cancellable.forEach((r) => actions!.onCancel!(r.batchId))}
+            className="flex-1 rounded-lg disabled:pointer-events-auto disabled:cursor-not-allowed"
+          >
+            Cancel remaining
+          </Button>
+        )}
+        <Button type="button" variant={active ? "secondary" : "cyan"} size="lg" onClick={onClose} className="flex-1 rounded-lg">
+          {active ? "Hide" : "Done"}
+        </Button>
+      </footer>
     </section>
   );
 }
@@ -526,10 +648,9 @@ export function OffloadRuns({ runs, sessions, destinations, now, actions, action
   return (
     <div className="border-b border-sol-border/30">
       {runs.map((run) => {
-        const active = run.rows.some((r) => isRowActive(r.status) || r.status === "queued");
+        const active = runActive(run);
         const done = run.rows.filter((r) => r.status === "done").length;
         const failed = run.rows.filter((r) => r.status === "failed").length;
-        const b = run.measured?.before; const a = run.measured?.after;
         return (
           <div key={run.batchId} className="px-4 py-2.5" data-run={run.batchId}>
             <div className="flex flex-wrap items-center gap-x-3 text-[11px]">
@@ -540,27 +661,9 @@ export function OffloadRuns({ runs, sessions, destinations, now, actions, action
                 : <span className="ml-auto cursor-not-allowed text-sol-text-dim" title={run.cancelUnavailable ?? actionsDisabledReason}>Cancel remaining</span>)}
             </div>
             <div className="mt-1.5 space-y-1">
-              {run.rows.map((r) => (
-                <div key={r.sessionId} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 text-[11px] sm:grid-cols-[minmax(0,1fr)_9rem_auto_4.5rem]">
-                  <span className="truncate text-sol-text-secondary">{byId.get(r.sessionId)?.title ?? r.sessionId}</span>
-                  <span className="hidden truncate text-sol-text-muted sm:block">→ {destinations.get(r.destinationId) ?? r.destinationId}</span>
-                  <MigrationStatusPill status={r.status} />
-                  <span className="hidden text-right sm:block">
-                    {r.status === "failed" && (actions?.onRetry
-                      ? <button type="button" className="inline-flex items-center gap-1 text-sol-cyan hover:underline" onClick={() => actions.onRetry!(run.batchId, r.sessionId)}><RotateCcw className="h-3 w-3" />Retry</button>
-                      : <span className="text-sol-text-dim" title={actionsDisabledReason}>Retry</span>)}
-                  </span>
-                  {r.error && <span className="col-span-full flex gap-1 pl-2 text-[10px] text-sol-red/90"><AlertTriangle className="mt-px h-3 w-3 shrink-0" />{r.error}</span>}
-                </div>
-              ))}
+              <RunRows run={run} byId={byId} destinations={destinations} actions={actions} actionsDisabledReason={actionsDisabledReason} />
             </div>
-            {b && (
-              <div className="mt-1.5 text-[10px] text-sol-text-muted">
-                {a && run.finishedAt !== undefined && a.at > run.finishedAt && run.rows.every((r) => isRowTerminal(r.status))
-                  ? <>Measured on this machine: memory in use {fmtBytes(memoryUsed(b))} → {fmtBytes(memoryUsed(a))} ({memoryUsed(b) - memoryUsed(a) >= 0 ? "−" : "+"}{fmtBytes(Math.abs(memoryUsed(b) - memoryUsed(a)))}), CPU {b.cpuPercent?.toFixed(0) ?? "n/a"}% → {a.cpuPercent?.toFixed(0) ?? "n/a"}%. Other work on the machine moves these numbers too.</>
-                  : <>Relief is measured from the first sample after every session has finished moving.</>}
-              </div>
-            )}
+            <div className="mt-1.5"><RunRelief run={run} /></div>
           </div>
         );
       })}

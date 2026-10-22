@@ -7,13 +7,17 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { isHostedUi, simpleModeAllowed } from "../components/simple/lanePaths";
 import type { LaneHint } from "../components/simple/laneBoot";
 import { hasNoMachine, type DefaultAgentState } from "./defaultAgent";
+import { workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { assistantScopeOnly, inAssistantScope } from "./assistantScope";
 import { HOSTED_ACTION_WORDS as HOSTED_ACTION_WORDS_OF, MODE_WORDS, actionSurface as actionSurfaceOf, shownFor, staffGateOpen, surfaceMode, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
 
 export { DEV_SURFACES, DEVELOPER_MODE, HOSTED_ACTION_WORDS, MODE_WORDS, actionSurface, helpContextSurface, hiddenPageRedirect, modePageLabel, pageSurface, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
 
 /** The slice of store state the registry reads. */
-export type SurfaceState = Pick<DefaultAgentState, "clientState" | "machineRoster" | "machineRosterLive">;
+export type SurfaceState = Pick<DefaultAgentState, "clientState" | "machineRoster" | "machineRosterLive"> & {
+  clientState: { ui?: { active_team_id?: string } | null };
+  teams?: any[];
+};
 
 /** True in hosted mode. Until the client state says (a cold load before
  *  hydration, a brand-new signup with no cache), the device's last known mode
@@ -27,11 +31,13 @@ export function isHostedMode(s: Pick<SurfaceState, "clientState"> & { laneHint?:
 
 /** Whether `name` shows for this viewer. */
 export function surfaceShown(s: SurfaceState & { laneHint?: LaneHint | null; currentUser?: { staff?: boolean } | null }, name: DevSurface): boolean {
-  return staffGateOpen(isStaffViewer(s), name) && shownFor(isHostedMode(s), hasNoMachine(s), name);
+  return staffGateOpen(staffSurfacesOpen(s), name) && shownFor(isHostedMode(s), hasNoMachine(s), name);
 }
 
-function isStaffViewer(s: { currentUser?: { staff?: boolean } | null }): boolean {
-  return s.currentUser?.staff === true;
+/** The staff-only surfaces open to staff, and to everyone in a workspace
+ *  whose team turned the line feature on. */
+function staffSurfacesOpen(s: Pick<SurfaceState, "clientState" | "teams"> & { currentUser?: { staff?: boolean } | null }): boolean {
+  return s.currentUser?.staff === true || workspaceFeatureEnabled(s.teams || [], s.clientState.ui?.active_team_id, "line");
 }
 
 /** Live: whether `name` shows. */
@@ -95,7 +101,7 @@ export function useModeWords(): ModeWords {
 export function useSurfaceMode(): SurfaceMode {
   const hosted = useHostedMode();
   const noMachine = useInboxStore(hasNoMachine);
-  const staff = useInboxStore(isStaffViewer);
+  const staff = useInboxStore(staffSurfacesOpen);
   return useMemo(() => surfaceMode(hosted, noMachine, staff), [hosted, noMachine, staff]);
 }
 
