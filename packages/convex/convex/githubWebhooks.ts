@@ -2239,3 +2239,30 @@ async function handleIssueCommentDeleted(ctx: any, payload: any): Promise<boolea
 
   return true;
 }
+
+// Deliveries past any use. A stored delivery is read for two things only: the
+// duplicate check by delivery_id (GitHub retries within hours) and the
+// unprocessed queues (by_processed, by_ci_pending), which drain within
+// minutes. Nothing pruned them, so every delivery stayed forever: 2.9M rows and
+// 63 GB of Postgres on 2026-10-22, about 160k more a day (ct-60898). A page
+// at a time, paced, so the backlog drains over about a day without crowding
+// live writes.
+export const WEBHOOK_EVENT_RETENTION_MS = 7 * 24 * 3600_000;
+const WEBHOOK_EVENT_PRUNE_PAGE = 200;
+const WEBHOOK_EVENT_PRUNE_PACE_MS = 5_000;
+
+export const pruneWebhookEvents = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - WEBHOOK_EVENT_RETENTION_MS;
+    const old = await ctx.db
+      .query("github_webhook_events")
+      .withIndex("by_creation_time", (q) => q.lt("_creationTime", cutoff))
+      .take(WEBHOOK_EVENT_PRUNE_PAGE);
+    for (const row of old) await ctx.db.delete(row._id);
+    if (old.length === WEBHOOK_EVENT_PRUNE_PAGE) {
+      await ctx.scheduler.runAfter(WEBHOOK_EVENT_PRUNE_PACE_MS, internal.githubWebhooks.pruneWebhookEvents, {});
+    }
+    return old.length;
+  },
+});

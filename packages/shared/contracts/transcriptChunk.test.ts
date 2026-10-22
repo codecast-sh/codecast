@@ -58,16 +58,16 @@ describe("chunk headers", () => {
     expect(h).toContain("cast call hold");
   });
 
-  test("the context lane owes no reply and says what waited", () => {
+  test("the context lane says nobody named the agent and what waited", () => {
     const h = ownRoomChunkHeader({ name: "Ember", lane: "context", held: true, full: true });
-    expect(h).toContain("no reply is owed");
+    expect(h).toContain("Nobody named you");
     expect(h).toContain("waited while you worked");
   });
 
   test("a feed from elsewhere says so and carries the same lanes", () => {
     const h = liveFeedChunkHeader({ name: "Pip", lane: "context", held: false, full: true });
     expect(h.startsWith("Huddle transcript (live). You are in the room as Pip.")).toBe(true);
-    expect(h).toContain("no reply is owed");
+    expect(h).toContain("Nobody named you");
   });
 
   test("the briefing tells a new session its name and how to ask for time", () => {

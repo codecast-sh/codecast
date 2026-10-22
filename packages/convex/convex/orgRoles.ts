@@ -5,7 +5,7 @@ import { internal } from "./_generated/api";
 import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
 import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
-import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, lineSlugOf, ORG_AUTHORITY_KINDS, authorityWords, orgEveryToMs, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
+import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, andList, lineSlugOf, ORG_AUTHORITY_KINDS, authorityWords, orgEveryToMs, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
 import { WAKE_TUNE, briefBudget, briefOverBudgetMessage, msToEvery, roleWakeOf, wakeTuneRefusal, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
 import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME, leadScopeChange, type AssistantReach } from "@codecast/shared/contracts/orgLead";
@@ -185,11 +185,15 @@ export function overlapsAmong(role: { _id: any; reports_to: any; scope: Scope },
   return out;
 }
 
-async function refuseOutside(ctx: Ctx, outside: { project_ids: string[]; plan_ids: string[] }, who: string): Promise<never> {
+async function scopeNames(ctx: Ctx, ids: { project_ids: string[]; plan_ids: string[] }): Promise<string[]> {
   const names: string[] = [];
-  for (const id of outside.project_ids) names.push(`project ${(await ctx.db.get(id))?.title ?? id}`);
-  for (const id of outside.plan_ids) names.push(`plan ${(await ctx.db.get(id))?.short_id ?? id}`);
-  throw new Error(`${who}: ${names.join(", ")}`);
+  for (const id of ids.project_ids) names.push(`project ${(await ctx.db.get(id))?.title ?? id}`);
+  for (const id of ids.plan_ids) names.push(`plan ${(await ctx.db.get(id))?.short_id ?? id}`);
+  return names;
+}
+
+async function refuseOutside(ctx: Ctx, outside: { project_ids: string[]; plan_ids: string[] }, who: string): Promise<never> {
+  throw new Error(`${who}: ${(await scopeNames(ctx, outside)).join(", ")}`);
 }
 
 // Validate a scope for `role`: every id resolves inside the role's boundary,
@@ -207,7 +211,7 @@ export async function checkScope(
   for (const id of scope.project_ids) {
     const project = await ctx.db.get(id);
     if (!project || workspaceKey(workspaceForResource(project)) !== key || !(await canAccessProject(ctx as any, userId, project))) {
-      throw new Error(`Project ${id} is not in this workspace`);
+      throw new Error(`Project ${project?.title ?? id} is not in this workspace`);
     }
   }
   for (const id of scope.plan_ids) {
@@ -230,14 +234,21 @@ export async function checkScope(
     }
   }
   const outside_children: Array<{ role_id: Id<"org_roles">; short_id: string; handle: string }> = [];
+  const keeps: string[] = [];
   if (!isScopeless(nextIds)) {
     for (const child of children) {
       const outside = scopeOutside(nextIds, scopeIds(child.scope), planProjectOf);
-      if (outside.project_ids.length || outside.plan_ids.length) outside_children.push({ role_id: child._id, short_id: child.short_id, handle: child.handle });
+      if (!outside.project_ids.length && !outside.plan_ids.length) continue;
+      outside_children.push({ role_id: child._id, short_id: child.short_id, handle: child.handle });
+      keeps.push(`@${child.handle} looks after ${andList(await scopeNames(ctx, outside))}`);
     }
   }
+  // A role's reports look after only what it does, so the refusal names what
+  // each report would lose and the two ways out.
   if (outside_children.length) {
-    throw new Error(`Narrow ${outside_children.map((c) => `@${c.handle}`).join(", ")} first: their scope would fall outside this role's`);
+    const one = outside_children.length === 1;
+    const handles = andList(outside_children.map((c) => `@${c.handle}`));
+    throw new Error(`${andList(keeps)}, and ${one ? "reports" : "they report"} to @${role.handle}, so @${role.handle} has to keep that work. Take it off ${handles}, or have ${one ? "it" : "them"} report to someone else, before this change can apply.`);
   }
   return { scope: next, overlaps: overlapsAmong({ ...role, scope: next }, siblings, planProjectOf), outside_children };
 }
@@ -407,8 +418,7 @@ async function performCreateRoleCore(
     status: "active",
     charter: args.charter?.trim() || undefined,
     review_backend: normalizeBackend(args.review_backend),
-    // The switch (org-staffing.md S23.1): on for every role a person hires,
-    // off for the root, which proposes and never applies (S12).
+    // The switch (org-staffing.md S23.1): on for every role a person hires.
     trust: defaultTrustFor({ handle }),
     tenure,
     avatar,
@@ -1828,9 +1838,6 @@ async function performSetTrustCore(ctx: any, userId: Id<"users">, args: SetTrust
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const on = typeof args.on === "boolean" ? args.on : typeof args.trust === "string" ? switchFromStageWord(args.trust) : null;
   if (on === null) throw new Error(`Say on or off${args.trust ? ` (not "${args.trust}")` : ""}: cast role autonomy @${role.handle} on|off`);
-  // The root proposes and applies nothing (org-staffing.md S12, S23.1): its
-  // switch stays off.
-  if (isHeadOfPeopleRole(role) && on) throw new Error("The workspace's root role does not start work on its own: it proposes, a person applies");
   const previous = trustOf(role);
   const previousOn = roleStartsOnItsOwn(role);
   const trust = trustForSwitch(on);

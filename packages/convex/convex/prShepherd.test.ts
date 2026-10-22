@@ -453,3 +453,20 @@ describe("the prompt describes the row as it is when it is built", () => {
     expect(prompt).not.toContain("abcdef1");
   });
 });
+
+describe("a patch that changes nothing writes nothing", () => {
+  // Each write stores a whole new version of a ~110 KB row, and the merge-state
+  // poll mostly re-sends what GitHub already said (ct-60898).
+  test("re-sending the current values leaves the row alone, and a real change still writes", async () => {
+    const ctx = context({ pull_requests: [pullRequest({ shepherd_state: "review_pending" })] });
+    const prRows = () => ctx.db._patched.filter((p: any) => p._id === PR);
+    await patchPullRequest(ctx, PR, { head_sha: pullRequest().head_sha, state: "open", base_ref: "main" });
+    expect(prRows()).toHaveLength(0);
+    expect((await ctx.db.get(PR)).updated_at).toBe(2);
+
+    await patchPullRequest(ctx, PR, { head_sha: "9999999999999999999999999999999999999999", state: "open" });
+    expect(prRows()).toHaveLength(1);
+    expect(prRows()[0].patch).not.toHaveProperty("state");
+    expect((await ctx.db.get(PR)).head_sha).toBe("9999999999999999999999999999999999999999");
+  });
+});
