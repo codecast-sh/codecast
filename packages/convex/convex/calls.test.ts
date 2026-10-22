@@ -948,6 +948,53 @@ describe("lock, knock and the live-room list", () => {
     expect(byKey["session:cvs"]).toMatchObject({ redacted: false, title: "Shared work" });
   });
 
+  test("a huddle started private is shut, unlisted and unknockable to the team", async () => {
+    const { ctx, rows } = fakeCtx();
+    // A session every teammate can see: its ordinary huddle admits them all.
+    rows.conversations = [{ _id: "cvs", user_id: "ub", team_id: "t1", is_private: false, title: "Shared work" }];
+    as(ctx, "ub");
+    await (await fn("joinRoom"))(ctx, { room_key: "session:cvs", muted: true, private: true });
+    expect(rows.call_room_state[0]).toMatchObject({ locked: true, private: true, locked_by: "ub" });
+    const { authorizeRoom } = await import("./callRooms");
+    expect((await authorizeRoom(ctx, "uc" as any, "session:cvs")).ok).toBe(false);
+    expect((await authorizeRoom(ctx, "ub" as any, "session:cvs")).ok).toBe(true);
+    as(ctx, "uc");
+    expect(await (await fn("getLiveRooms"))(ctx, {})).toEqual([]);
+    await expect((await fn("knock"))(ctx, { room_key: "session:cvs" })).rejects.toThrow(/Cannot knock/);
+    // Rung in, they walk through like any guest.
+    rows.call_invites.push({ _id: "ci1", room_key: "session:cvs", team_id: "t1", from_user: "ub", to_user: "uc", status: "accepted", created_at: Date.now(), responded_at: Date.now() });
+    expect((await authorizeRoom(ctx, "uc" as any, "session:cvs")).ok).toBe(true);
+    // Opening the door makes it an ordinary huddle again.
+    rows.call_invites = [];
+    as(ctx, "ub");
+    await (await fn("setRoomLocked"))(ctx, { room_key: "session:cvs", locked: false });
+    expect(rows.call_room_state[0]).toMatchObject({ locked: false, private: false });
+    expect((await authorizeRoom(ctx, "uc" as any, "session:cvs")).ok).toBe(true);
+  });
+
+  test("a channel's room never starts private", async () => {
+    const { ctx, rows } = fakeCtx();
+    rows.chat_channels = [{ _id: "ch1", team_id: "t1", name: "design" }];
+    await (await fn("joinRoom"))(ctx, { room_key: "channel:ch1", muted: true, private: true });
+    expect(rows.call_room_state ?? []).toEqual([]);
+  });
+
+  test("a private huddle's record stays with the people who were in it", async () => {
+    const { ctx, rows } = fakeCtx();
+    rows.conversations = [{ _id: "cvs", user_id: "ub", team_id: "t1", is_private: false, title: "Shared work" }];
+    const { canReadCall } = await import("./transcripts");
+    const call: any = { _id: "tr1", room_key: "session:cvs", team_id: "t1", started_by: "ub", status: "ended", participants: [{ id: "ua", name: "Ann" }], routes: [], last_seq: 0 };
+    expect(await canReadCall(ctx, "uc" as any, call)).toBe(true);
+    call.private = true;
+    expect(await canReadCall(ctx, "uc" as any, call)).toBe(false);
+    expect(await canReadCall(ctx, "ua" as any, call)).toBe(true);
+    expect(await canReadCall(ctx, "ub" as any, call)).toBe(true);
+    // A people room's key names exactly who it was for.
+    const pair: any = { ...call, room_key: "dm:ua:uc", started_by: "ua", participants: [] };
+    expect(await canReadCall(ctx, "uc" as any, pair)).toBe(true);
+    expect(await canReadCall(ctx, "ub" as any, pair)).toBe(false);
+  });
+
   test("a heartbeat does not re-push the team-wide list", async () => {
     // Byte-stability is the contract: every client on the team holds this
     // subscription while any huddle runs.

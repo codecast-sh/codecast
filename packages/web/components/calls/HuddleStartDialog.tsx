@@ -5,12 +5,12 @@
 // switchDevice and the switches through the sticky join prefs, the same
 // writes the stage and call settings make, so nothing is decided twice.
 import { useRef, useState, useSyncExternalStore } from "react";
-import { Headphones, Link2, Loader2, Mic, MicOff, Video, VideoOff, Volume2 } from "lucide-react";
+import { Headphones, Link2, Loader2, Lock, Mic, MicOff, Users, Video, VideoOff, Volume2 } from "lucide-react";
 import { CHANNEL_HUDDLE_WARNING_SIZE } from "@codecast/shared/contracts";
 import { GuestPreview, canPickSpeaker } from "../../lib/calls/guestRoom";
 import { readJoinPrefs, rememberCamera, rememberMic } from "../../lib/calls/joinPrefs";
 import { switchDevice } from "../../lib/calls/callManager";
-import { closeHuddleStart, runHuddleStart, type HuddleStartRequest } from "../../lib/calls/huddleStart";
+import { canStartPrivate, closeHuddleStart, runHuddleStart, type HuddleStartRequest } from "../../lib/calls/huddleStart";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -21,18 +21,27 @@ import { memberDisplayName } from "../presence/memberPresence";
 import { firstName } from "./speakers";
 import { DeviceOptions } from "./DeviceRows";
 import { GuestInvite } from "./GuestDoor";
+import { SegmentedToggle } from "../SegmentedToggle";
 
 type PreviewKind = "mic" | "camera" | "speaker";
 const DEVICE_KIND = { mic: "audioinput", camera: "videoinput", speaker: "audiooutput" } as const;
 const KIND_WORD = { mic: "Microphone", camera: "Camera", speaker: "Speaker" } as const;
 const KIND_ICON = { mic: Mic, camera: Video, speaker: Volume2 } as const;
 
+// Who may see and join the huddle. Team is the default every time: private is
+// a choice made for one huddle, never a remembered setting.
+const SHARING = [
+  { key: "team", label: "Team", icon: Users, title: "Teammates see it and can join" },
+  { key: "private", label: "Private", icon: Lock, title: "Only people you ring in see it, join it and read its record" },
+];
+
 export default function HuddleStartDialog({ req }: { req: HuddleStartRequest }) {
   const preview = usePreview();
+  const [isPrivate, setPrivate] = useState(false);
   return (
     <Dialog open onOpenChange={(open) => !open && closeHuddleStart()}>
       <DialogContent className="flex w-[calc(100%-2rem)] max-w-[420px] flex-col gap-0 overflow-hidden rounded-xl border-sol-border bg-sol-bg p-0 text-sol-text">
-        <Heading req={req} />
+        <Heading req={req} isPrivate={isPrivate} setPrivate={setPrivate} />
         {preview && <PreviewBody preview={preview} />}
         <div className="flex items-center gap-2 border-t border-sol-border/60 px-4 py-3">
           <GuestInvite
@@ -55,7 +64,7 @@ export default function HuddleStartDialog({ req }: { req: HuddleStartRequest }) 
               autoFocus
               onClick={() => {
                 preview?.dispose();
-                runHuddleStart(req);
+                runHuddleStart(req, { private: isPrivate });
               }}
             >
               <Headphones />
@@ -84,7 +93,7 @@ function usePreview(): GuestPreview | null {
 }
 
 // Who the start reaches, as a line of facts: the room, then who hears it.
-function Heading({ req }: { req: HuddleStartRequest }) {
+function Heading({ req, isPrivate, setPrivate }: { req: HuddleStartRequest; isPrivate: boolean; setPrivate: (on: boolean) => void }) {
   const names = useInboxStore((s) =>
     (req.toUserIds ?? [])
       .map((id) => s.teamMembers.find((m: any) => String(m?._id) === id))
@@ -97,10 +106,17 @@ function Heading({ req }: { req: HuddleStartRequest }) {
     ? `Buzzes ${req.channelMemberCount ? `all ${Math.max(0, req.channelMemberCount - 1)} members` : "everyone"}`
     : names
       ? `Rings ${names}`
-      : (req.hint ?? "Teammates can join");
+      : isPrivate
+        ? "Only people you ring in"
+        : (req.hint ?? "Teammates can join");
   return (
     <div className="px-4 pb-3 pt-4 pr-10">
-      <DialogTitle className="text-[15px] font-medium">Start a huddle</DialogTitle>
+      <div className="flex items-center justify-between gap-3">
+        <DialogTitle className="text-[15px] font-medium">Start a huddle</DialogTitle>
+        {canStartPrivate(req) && (
+          <SegmentedToggle size="sm" value={isPrivate ? "private" : "team"} onChange={(k) => setPrivate(k === "private")} items={SHARING} />
+        )}
+      </div>
       <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-sol-text-muted">
         {req.anchorTitle && <span className="truncate text-sol-text-secondary">{req.anchorTitle}</span>}
         {req.anchorTitle && <span className="text-sol-text-dim">·</span>}
