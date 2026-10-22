@@ -203,7 +203,9 @@ describe("orgProposals.decide", () => {
     expect(first).toMatchObject({ status: "failed", note: expect.stringContaining("@growth is already or-1"), resolved: false });
     expect(await performDecideChange(ctx, ME as any, { change_id: p.ids[1], verdict: "skip" })).toMatchObject({ status: "skipped", resolved: false });
     expect((await db.get(p.id)).status).toBe("open");
-    // Retry with edits: the failed row is decided again, and only then does the proposal resolve.
+    // As written it fails the same way, so a bare accept is refused with the reason.
+    await expect(performDecideChange(ctx, ME as any, { change_id: p.ids[0], verdict: "accept", provision: false })).rejects.toThrow("op-1#1 failed: @growth is already or-1");
+    // With edits it is a different change: the failed row is decided again, and only then does the proposal resolve.
     const retry = await performDecideChange(ctx, ME as any, { change_id: p.ids[0], verdict: "accept", edits: { handle: "growth-2" }, provision: false });
     expect(retry).toMatchObject({ status: "applied", role: { handle: "growth-2" }, resolved: true });
   });
@@ -221,6 +223,17 @@ describe("orgProposals.decide", () => {
 });
 
 describe("orgProposals.acceptAll", () => {
+  test("a refusal that crossed the sub-transaction is stored as its own sentence: no runtime lead, no stack frame", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "trust", handle: "growth", trust: "decide" })]) });
+    // What Convex hands back from a runMutation whose handler threw (op-83#1).
+    const wrapped = new Error("Uncaught Error: @paid-ads looks after project Paid Ads, and reports to @cmo, so @cmo has to keep that work.\n    at acceptOne (../../convex/orgProposals.ts:441:2)\n");
+    const out = await performAcceptAll({ ...ctxOf(db), runMutation: async () => { throw wrapped; } }, ME as any, { proposal: r.short_id, provision: false });
+    const note = "@paid-ads looks after project Paid Ads, and reports to @cmo, so @cmo has to keep that work.";
+    expect(out.results[0]).toMatchObject({ status: "failed", note });
+    expect((await db.get(r.changes[0].id)).applied_note).toBe(note);
+  });
+
   test("applies in the contract's order: projects, roles parents first, then moves, scope, budget, trust, routines, adopt, retire", async () => {
     const db = fixtures();
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([
@@ -812,7 +825,7 @@ describe("orgProposals.revise", () => {
     await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "amend", seq: 1, edits: { caps: { wakes_per_day: -1 } } }] })).rejects.toThrow("The edited change is not valid");
     await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "amend", seq: 1 }] })).rejects.toThrow("amend: give edits, a rationale, or both");
     await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "add", change: { change: { kind: "nope" }, rationale: "x" } }] })).rejects.toThrow("ops[0]: add:");
-    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "explode", seq: 1 }] })).rejects.toThrow("op is one of remove, amend, add");
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "explode", seq: 1 }] })).rejects.toThrow("op is one of remove, amend, add, answer");
     await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [] })).rejects.toThrow("ops is a non-empty list");
     // One change per subject, the create rule, holds through a revise.
     await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "add", change: change({ kind: "retire", handle: "growth" }) }] })).rejects.toThrow("add: retire @growth repeats #3: one change per subject");
@@ -823,6 +836,38 @@ describe("orgProposals.revise", () => {
     await performWithdrawProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1" });
     await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 1 }] })).rejects.toThrow("op-1 is withdrawn; only an open proposal can be revised");
     await expect(performReviseProposal(ctx, ME as any, { proposal: "op-77", from_session: "s1", ops: [{ op: "remove", seq: 1 }] })).rejects.toThrow("Proposal not found: op-77");
+  });
+
+  test("a failed change is the author's to fix: an amend puts it back to decide, clean; a remove takes it off", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const r = await performCreateProposal(ctx, ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "role", name: "Growth again", handle: "growth" }), change({ kind: "trust", handle: "growth", trust: "decide" })]) });
+    await performAcceptAll(ctx, ME as any, { proposal: r.short_id, seqs: [1], provision: false });
+    expect(await db.get(r.changes[0].id)).toMatchObject({ status: "failed", applied_note: expect.stringContaining("@growth is already or-1") });
+    const out = await performReviseProposal(ctx, ME as any, { proposal: r.short_id, from_session: "s1", ops: [{ op: "amend", seq: 1, edits: { handle: "growth-2" } }] });
+    expect(out.changes[0]).toMatchObject({ status: "proposed", line: expect.stringContaining("@growth-2") });
+    const row = await db.get(r.changes[0].id);
+    expect([row.applied_note, row.applied_at, row.decided_at]).toEqual([undefined, undefined, undefined]);
+    expect((await performDecideChange(ctx, ME as any, { change_id: String(row._id), verdict: "accept", provision: false, seen: await seenNow(db) })).status).toBe("applied");
+    // A failed row can also be taken off.
+    const again = await performCreateProposal(ctx, ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "role", name: "Growth thrice", handle: "growth" })]) });
+    await performAcceptAll(ctx, ME as any, { proposal: again.short_id, provision: false });
+    expect((await performReviseProposal(ctx, ME as any, { proposal: again.short_id, from_session: "s1", ops: [{ op: "remove", seq: 1 }] })).changes[0].status).toBe("removed");
+  });
+
+  test("an answer goes on the change, decided or not, and writes no revision; a removed or unknown change refuses it", async () => {
+    const { db, r } = await seeded();
+    const ctx = ctxOf(db);
+    await performReply(ctx, ME as any, { proposal: "op-1", items: [{ verdict: "note", seqs: [1], text: "why halve it?" }] });
+    await performDecideChange(ctx, ME as any, { change_id: String(r.changes[1].id), verdict: "skip" });
+    const out = await performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "answer", seq: 1, text: "  wakes ran 3x over budget last week " }, { op: "answer", seq: 2, text: "it was not ready" }] });
+    expect(out.answered).toEqual([1, 2]);
+    expect(out.revisions).toEqual([]);
+    expect(await db.get(r.changes[0].id)).toMatchObject({ status: "proposed", reply: { verdict: "note", text: "why halve it?" }, answer: { text: "wakes ran 3x over budget last week", at: expect.any(Number) } });
+    expect((await db.get(r.changes[0].id)).revision).toBeUndefined();
+    expect((await db.get(r.changes[1].id)).answer.text).toBe("it was not ready");
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "answer", seq: 9, text: "x" }] })).rejects.toThrow("answer: op-1#9 does not exist");
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "answer", seq: 1, text: " " }] })).rejects.toThrow("answer: text is the answer");
   });
 
   test("removing the last undecided change leaves the proposal open; a removed change is never decided, and the next decision resolves what is left", async () => {
@@ -888,7 +933,7 @@ describe("orgProposals.say", () => {
       "",
       "growth is dead, drop it",
       "",
-      "(Reply here; the org page shows this thread beside op-1. To change the proposal run `cast org revise op-1 --remove <n>`, `--amend <n> --edits '{...}'` or `--add change.json`. Applying stays the person's.)",
+      "(Reply here; the org page shows this thread beside op-1. To change the proposal run `cast org revise op-1 --remove <n>`, `--amend <n> --edits '{...}'` or `--add change.json`; to answer a question on a change so its card shows it, `--answer <n> --text \"...\"`. Applying stays the person's.)",
       "</proposal-message>",
     ]);
     // No change named: the header names the proposal.
@@ -1561,9 +1606,10 @@ describe("orgProposals.reply (S39)", () => {
     expect(trust.status).toBe("applied");
     expect(retire).toMatchObject({ status: "skipped", reply: { verdict: "reject", text: "keep growth" } });
     expect((await db.get(p.id)).status).toBe("open");
-    // The failed row takes a fresh answer: Retry is an approve again.
-    const retry = await performReply(ctxOf(db), ME as any, { proposal: p.short_id, provision: false, items: [{ verdict: "approve", seqs: [1] }] });
-    expect(retry).toMatchObject({ failed: 1, resolved: false });
+    // Approving the refused row again is no retry: it stays failed until it changes, and the proposal waits.
+    const again = await performReply(ctxOf(db), ME as any, { proposal: p.short_id, provision: false, items: [{ verdict: "approve", seqs: [1] }] });
+    expect(again).toMatchObject({ applied: 0, failed: 0, resolved: false });
+    expect(p.rows()[0].status).toBe("failed");
   });
 });
 

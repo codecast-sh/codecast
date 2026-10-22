@@ -7,6 +7,8 @@
 // cause is a heading that starts its problems again; under Not started each
 // project is a heading with its line's start control, the control's one home.
 // The filter, sort, window and search are the URL's, so Back returns to them.
+import { Profiler } from "react"; // __LP temp
+const __onR = (id: string, ph: string, d: number) => (((globalThis as any).__lp ??= {})[`render:${id}:${ph}`] ??= []).push(Math.round(d)); // __LP temp
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Search, X } from "lucide-react";
 import { useEventListener } from "../../../../../hooks/useEventListener";
@@ -210,13 +212,13 @@ export function ProblemsHome({ list, workspace, selection, select, href, drawerO
   return (
     <div className="lwp-list" ref={scrollRef} data-line-problems-home="">
       <div className="lwp-top">
-        <ProblemFigures figures={figures} range={range} href={href} select={select} on={figureOn} />
+        <Profiler id="figures" onRender={__onR}><ProblemFigures figures={figures} range={range} href={href} select={select} on={figureOn} /></Profiler>
         <div className="lw-seg lwp-win" role="group" aria-label="Window">
           {OVERVIEW_RANGES.map((r) => <button key={r} type="button" aria-pressed={range === r} onClick={() => select({ win: r === DEFAULT_RANGE ? null : r })} data-line-overview-range={r}>{r}</button>)}
         </div>
       </div>
-      {overview.total > 0 && <ProblemsTrend overview={overview} picked={found && found !== "more" ? found.from : null} pick={pickBar} href={barHref}
-        shifts={list.shifts} finderHref={finderHref} openFinder={openFinder} />}
+      {overview.total > 0 && <Profiler id="trend" onRender={__onR}><ProblemsTrend overview={overview} picked={found && found !== "more" ? found.from : null} pick={pickBar} href={barHref}
+        shifts={list.shifts} finderHref={finderHref} openFinder={openFinder} /></Profiler>}
       <div className="lwp-stick">
         <div className="lwp-bar">
           <div className="lwp-chips" role="group" aria-label="Status">
@@ -247,7 +249,7 @@ export function ProblemsHome({ list, workspace, selection, select, href, drawerO
       {sections.length ? (
         // The rows are the controls; this only moves focus between them.
         <div className="lwp-rows" onKeyDown={moveRow}>
-          <ProblemTable sections={sections} now={workspace.now} range={range} win={list.win} day={found && found !== "more" ? found : null} showProject={!workspace.project} projectName={list.projectName} processOf={processOf} href={caseHref} open={open} onStatus={setStatus} subAct={subAct} rowAct={rowAct} sectionAct={sectionAct} />
+          <Profiler id="table" onRender={__onR}><ProblemTable sections={sections} now={workspace.now} range={range} win={list.win} day={found && found !== "more" ? found : null} showProject={!workspace.project} projectName={list.projectName} processOf={processOf} href={caseHref} open={open} onStatus={setStatus} subAct={subAct} rowAct={rowAct} sectionAct={sectionAct} /></Profiler>
         </div>
       ) : (
         <div className="lw-empty lwp-none" data-line-problems-none="">

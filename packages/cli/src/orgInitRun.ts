@@ -274,15 +274,19 @@ export function buildReviseOps(options: any, readJson: (value: string, flag: str
       const raw = readJson(file, "--add");
       for (const c of Array.isArray(raw) ? raw : [raw]) ops.push({ op: "add", change: c as OrgSpecChange, ...note });
     }
+    if (options.answer !== undefined) {
+      if (!options.text) fail("--answer wants --text <words>: the answer the card shows");
+      ops.push({ op: "answer", seq: seqOf(options.answer, "--answer"), text: String(options.text) });
+    } else if (options.text) fail("--text goes with --answer <seq>");
   }
-  if (!ops.length) fail("Nothing to do: give --remove <seq>, --amend <seq> with --edits or --rationale, --add <file>, or --ops <file>");
+  if (!ops.length) fail("Nothing to do: give --remove <seq>, --amend <seq> with --edits or --rationale, --add <file>, --answer <seq> with --text, or --ops <file>");
   const faults = ops.map((o, i) => { const f = orgReviseOpError(o); return f ? `  - ops[${i}]: ${f}` : null; }).filter(Boolean);
   if (faults.length) fail(`The revise is not valid:\n${faults.join("\n")}`);
   return ops;
 }
 
 export async function revise(deps: OrgInitDeps, ref: string, options: any): Promise<void> {
-  if (!/^op-\d+$/.test(ref)) fail(`Usage: cast org revise op-N [--remove <seq>] [--amend <seq> --edits <json> | --rationale <text>] [--add <file>] [--note <text>]; got ${ref}`);
+  if (!/^op-\d+$/.test(ref)) fail(`Usage: cast org revise op-N [--remove <seq>] [--amend <seq> --edits <json> | --rationale <text>] [--add <file>] [--answer <seq> --text <words>] [--note <text>]; got ${ref}`);
   const ops = buildReviseOps(options);
   const from_session = deps.callingSession();
   if (!from_session) fail("cast org revise runs inside the session that posted the proposal (or the standing session of the role that did); at a plain shell, decide it on the org page instead");
@@ -292,6 +296,7 @@ export async function revise(deps: OrgInitDeps, ref: string, options: any): Prom
   const { decided, total } = decidedCount(r);
   console.log(`${fmt.success("✓")} ${fmt.highlight(ref)} revised ${fmt.muted(`· ${decided} of ${total} decided`)}`);
   for (const j of r.revisions ?? []) console.log(`  ${revisionLine(j)}`);
+  for (const seq of r.answered ?? []) console.log(`  ${fmt.accent("answered")} #${seq} ${fmt.muted("(shown on the card under the person's words)")}`);
   console.log(`${fmt.muted("The person decides what is left on the org page:")} ${fmt.accent(proposalUrl(deps, ref))}`);
 }
 
