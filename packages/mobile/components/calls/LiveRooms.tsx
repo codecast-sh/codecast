@@ -139,23 +139,28 @@ function peopleLine(row: LiveRoomRow): string {
   return row.mine ? `you're in it with ${names.length === 1 ? "nobody yet" : list}` : list;
 }
 
-/** One live huddle: faces, name, who is in it, and the one thing you may do
- *  about it. */
-export function LiveRoomCard({ row }: { row: LiveRoomRow }) {
-  const Theme = useTheme();
+/** Walk into a room open to you: the call plane joins, the call screen opens. */
+function useWalkIn(): (row: LiveRoomRow) => void {
   const router = useRouter();
-  const knock = useKnock();
-  const walkIn = () => {
+  return (row) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     void joinCall(row.roomKey);
     router.push("/call");
   };
-  const action = row.mine ? (
+}
+
+/** The one thing you may do about a live huddle: open the one you are in,
+ *  join one open to you, or knock at a locked one. */
+export function LiveRoomAction({ row }: { row: LiveRoomRow }) {
+  const router = useRouter();
+  const knock = useKnock();
+  const walkIn = useWalkIn();
+  return row.mine ? (
     <Pressable onPress={() => router.push("/call")} style={({ pressed }) => [styles.actionGhost, pressed && styles.pressed]} accessibilityLabel={`Show ${row.label}`}>
       <Text style={styles.actionGhostText}>open</Text>
     </Pressable>
   ) : row.canJoin ? (
-    <Pressable onPress={walkIn} style={({ pressed }) => [styles.actionJoin, pressed && styles.pressed]} accessibilityLabel={`Join ${row.label}`}>
+    <Pressable onPress={() => walkIn(row)} style={({ pressed }) => [styles.actionJoin, pressed && styles.pressed]} accessibilityLabel={`Join ${row.label}`}>
       <Ionicons name="headset" size={13} color={SolarizedLight.bgAlt} />
       <Text style={styles.actionJoinText}>join</Text>
     </Pressable>
@@ -175,10 +180,19 @@ export function LiveRoomCard({ row }: { row: LiveRoomRow }) {
       <Text style={styles.actionKnockText}>knock</Text>
     </Pressable>
   );
+}
+
+/** One live huddle: faces, name, who is in it, and the one thing you may do
+ *  about it. With `onOpen` (the huddle's words are readable), the card itself
+ *  opens them and walking in stays on the button. */
+export function LiveRoomCard({ row, onOpen }: { row: LiveRoomRow; onOpen?: () => void }) {
+  const Theme = useTheme();
+  const walkIn = useWalkIn();
+  const onPress = row.mine ? () => walkIn(row) : onOpen ?? (row.canJoin ? () => walkIn(row) : undefined);
   return (
     <Pressable
-      onPress={row.mine || row.canJoin ? walkIn : undefined}
-      style={({ pressed }) => [styles.card, row.mine && styles.cardMine, pressed && (row.mine || row.canJoin) && styles.pressed]}
+      onPress={onPress}
+      style={({ pressed }) => [styles.card, row.mine && styles.cardMine, pressed && !!onPress && styles.pressed]}
     >
       <Facepile members={row.members} />
       <RNView style={styles.cardMain}>
@@ -193,7 +207,7 @@ export function LiveRoomCard({ row }: { row: LiveRoomRow }) {
         </RNView>
         <Text style={styles.cardSub} numberOfLines={1}>{peopleLine(row)}</Text>
       </RNView>
-      {action}
+      <LiveRoomAction row={row} />
     </Pressable>
   );
 }
