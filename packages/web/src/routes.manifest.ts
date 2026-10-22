@@ -111,6 +111,7 @@ const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-requ
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
 const BlogTurns = lazy(() => import("@/app/(marketing)/blog/the-tree-at-the-end-of-every-turn/page"));
+const BlogUndo = lazy(() => import("@/app/(marketing)/blog/undo-with-a-history/page"));
 const BlogChartReply = lazy(() => import("@/app/(marketing)/blog/the-chart-in-the-reply/page"));
 const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
 const BlogTaskPage = lazy(() => import("@/app/(marketing)/blog/the-task-your-agent-reports-to/page"));
@@ -168,6 +169,7 @@ const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"))
 const Docs = lazy(() => import("@/app/docs/page"));
 const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const AgentFeatures = lazy(() => import("@/app/agent-features/page"));
+const Files = lazy(() => import("@/app/files/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
@@ -311,6 +313,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/what-your-team-sees", component: cast(BlogTeamSees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/one-repository-twenty-checkouts", component: cast(BlogWorktrees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-tree-at-the-end-of-every-turn", component: cast(BlogTurns), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/undo-with-a-history", component: cast(BlogUndo), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-chart-in-the-reply", component: cast(BlogChartReply), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-questions-your-agents-save-for-you", component: cast(BlogQuestions), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-task-your-agent-reports-to", component: cast(BlogTaskPage), layout: "marketing", guestOk: true, guestKind: "public" },
@@ -385,8 +388,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "docs", component: cast(Docs), layout: "dashboardShell", tab: "/docs", fullWidth: true },
   { path: "capabilities", component: cast(Capabilities), layout: "dashboardShell", tab: "/capabilities", fullWidth: true },
   { path: "agent-features", component: cast(AgentFeatures), layout: "dashboardShell", tab: "/agent-features" },
-  { path: "files", component: cast(Vault), layout: "dashboardShell", tab: "/files", fullWidth: true },
-  { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true }, // permanent pre-rename alias for /files
+  { path: "files", component: cast(Files), layout: "dashboardShell", tab: "/files", fullWidth: true },
+  { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true }, // the team Vault; old /vault?f=… Files links redirect to /files
   { path: "pages", component: cast(Artifacts), layout: "dashboardShell", tab: "/pages" },
   { path: "artifacts", component: cast(Artifacts), layout: "dashboardShell", tab: "/artifacts" }, // pre-rename alias for /pages
   { path: "docs/:id", component: cast(DocDetail), layout: "dashboardShell", tab: "/docs/:id", fullWidth: true },

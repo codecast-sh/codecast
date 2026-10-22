@@ -36,7 +36,7 @@ export const DESTRUCTIVE_COMMANDS: readonly DestructiveCommand[] = [
   },
   { path: ["workspace", "destroy"] },
   { path: ["keys", "rm"] },
-  { path: ["vault", "rm"] },
+  { path: ["files", "rm"] },
   { path: ["label", "rm"] },
   { path: ["accounts", "rm"] },
   { path: ["anchor", "rm"] },
