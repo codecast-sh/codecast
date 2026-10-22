@@ -14244,8 +14244,8 @@ registerRouteCommand(program, orgDeps);
 registerFlowCommands(program, {
   cliPost, callingSession, realCwd: getRealCwd,
   // The flows published to the workspace this shell reads (flows.md FL2).
-  fetchPool: async () => {
-    const ws = await readWorkspace();
+  fetchPool: async (team?: string) => {
+    const ws = await readWorkspace(team);
     const r = await cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
     return r?.flows ?? [];
   },

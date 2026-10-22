@@ -326,9 +326,27 @@ describe("pruneAbsentScope", () => {
       pruneAbsentScope: inScope,
     });
     expect(table.b).toBeUndefined();
-    expect(pending["items:b"]).toEqual({ type: "exclude", ts: expect.any(Number) } as any);
+    expect(pending["items:b"]).toEqual({ type: "exclude", ts: expect.any(Number), pruned: true } as any);
     // Out-of-scope rows keep the normal delta behavior.
     expect(table.c).toBe(prev.c);
+  });
+
+  it("a pruned row comes back when a later complete answer for its scope carries it, never from a plain overlay", () => {
+    const first = applySyncTable("items", [row("a", { status: "in" })], {}, prev, { isDelta: true, pruneAbsentScope: inScope });
+    expect(first.table.b).toBeUndefined();
+    // A plain delta overlay may be stale: b stays gone.
+    const stale = applySyncTable("items", [row("b", { status: "in" })], first.pending, first.table, { isDelta: true });
+    expect(stale.table.b).toBeUndefined();
+    // The scope's own later answer carries b: its newer word lifts the prune (a wrong answer, corrected).
+    const back = applySyncTable("items", [row("a", { status: "in" }), row("b", { status: "in" })], first.pending, first.table, { isDelta: true, pruneAbsentScope: inScope });
+    expect(back.table.b).toEqual(row("b", { status: "in" }));
+    expect(back.pending["items:b"]).toBeUndefined();
+  });
+
+  it("an exclude a person's delete planted still holds against a push that carries the row", () => {
+    const pending: Record<string, PendingEntry> = { "items:b": { type: "exclude", ts: 1 } };
+    const { table } = applySyncTable("items", [row("b", { status: "in" })], pending, prev, { isDelta: true });
+    expect(table.b).toBeUndefined();
   });
 
   it("never prunes a row with local pending state", () => {

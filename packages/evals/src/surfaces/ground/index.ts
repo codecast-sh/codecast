@@ -3,7 +3,7 @@ import { UsageError } from '@platform/evals/cli';
 
 import { COMMENTS_SHOWN, GROUND_AUTHOR, groundRequest, SIGNALS_SHOWN } from '../../../../convex/convex/lineGround';
 import { parseJsonBlock } from '../../../../convex/convex/lib/anthropic';
-import { briefGoalRefs, parseGroundReply, type GoalsBrief, type GroundCauseInput, type GroundFields } from '../../../../shared/contracts/goalsBrief';
+import { briefGoalRefs, groundPlacingProjects, parseGroundReply, type GoalsBrief, type GroundCauseInput, type GroundFields } from '../../../../shared/contracts/goalsBrief';
 import { castJson } from '../../adapters/cast';
 import { toConvoMessages } from '../../adapters/convo';
 import { gate, type Captured, type SurfaceImpl } from '../../surface';
@@ -34,7 +34,7 @@ const REF_FORMS = `ground@ takes a fixture or a cause, like ground@fixture:<case
 export const groundRequestFor = (snap: GroundSnap) => groundRequest(snap.cause, snap.brief, snap.now);
 
 /** The ground fields from a reply, read the way the server reads them. */
-export const parseGround = (snap: GroundSnap, text: string) => parseGroundReply(parseJsonBlock(text), briefGoalRefs(snap.brief));
+export const parseGround = (snap: GroundSnap, text: string) => parseGroundReply(parseJsonBlock(text), briefGoalRefs(snap.brief), groundPlacingProjects(snap.cause, snap.brief));
 
 type Parsed = ReturnType<typeof parseGround>;
 
