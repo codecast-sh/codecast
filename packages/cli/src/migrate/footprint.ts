@@ -37,6 +37,33 @@ export interface FootprintTool {
   /** Where this machine's shell finds it. */
   path: string;
   count: number;
+  /** How this machine got it, so a host can get the same thing (installSource). */
+  install?: ToolInstall;
+}
+
+/** A Homebrew formula, or an npm package pinned to this machine's version. */
+export type ToolInstall = { brew: string } | { npm: string };
+
+/**
+ * Where a command on this machine came from, read from where its path really
+ * leads: a Homebrew keg (`Cellar/<formula>/…`), or a global npm or bun package
+ * (`node_modules/<pkg>/…`, pinned to the installed version so a host never gets
+ * an unrelated package of the same name). A linked package (npm link), a
+ * script in ~/bin or anything else has no source a host can repeat.
+ */
+export function installSource(binPath: string): ToolInstall | undefined {
+  let real: string;
+  try { real = fs.realpathSync(binPath); } catch { return undefined; }
+  const keg = /\/Cellar\/([^/]+)\//.exec(real);
+  if (keg) return { brew: keg[1] };
+  const mod = /^(.*\/node_modules\/)(@[^/]+\/[^/]+|[^/@][^/]*)\//.exec(real);
+  if (!mod) return undefined;
+  const dir = mod[1] + mod[2];
+  try {
+    if (fs.lstatSync(dir).isSymbolicLink()) return undefined;
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf-8"));
+    return pkg.name === mod[2] && typeof pkg.version === "string" ? { npm: `${pkg.name}@${pkg.version}` } : undefined;
+  } catch { return undefined; }
 }
 
 export interface Footprint {
@@ -209,6 +236,7 @@ export interface FootprintDeps {
   loaded?: (label: string) => boolean;
   /** Whether the file at `p` is spelled `name` exactly (macOS finds `Tests` as `tests`). */
   exactName?: (p: string, name: string) => boolean;
+  installSource?: (p: string) => ToolInstall | undefined;
 }
 
 function exactName(p: string, name: string): boolean {
@@ -275,7 +303,7 @@ export function computeFootprint(root: string, calls: ToolCalls, deps: Footprint
   const inArea = (p: string) => p.startsWith(`${root}/`) || [...areas.keys()].some((a) => p.startsWith(`${a}/`));
   const tools = [...counts]
     .filter(([n]) => where[n] && (deps.exactName ?? exactName)(where[n], n) && !SYSTEM_PREFIXES.some((s) => where[n].startsWith(s)) && !inArea(where[n]) && !where[n].includes("/node_modules/"))
-    .map(([tool, count]) => ({ tool, path: where[tool], count }))
+    .map(([tool, count]) => { const install = (deps.installSource ?? installSource)(where[tool]); return { tool, path: where[tool], count, ...(install ? { install } : {}) }; })
     .sort((a, b) => b.count - a.count);
 
   // A folder named once in passing is noise; one written to, or used again and again, is work.

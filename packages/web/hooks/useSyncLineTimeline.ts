@@ -46,8 +46,11 @@ export function useSyncLineTimeline(workspace?: string | null): LineTimelineFeed
   useEffect(() => {
     if (!argsKey) return;
     let stopped = false;
+    // The first read runs whatever the page's visibility; a repeat waits for the page to be seen.
+    let first = true;
     const head = () => {
-      if (document.visibilityState !== "visible") return;
+      if (!first && document.visibilityState !== "visible") return;
+      first = false;
       read(undefined, HEAD_ROWS).then((res) => {
         if (stopped || !res) return;
         // The head never lowers a floor an older page already reached.
