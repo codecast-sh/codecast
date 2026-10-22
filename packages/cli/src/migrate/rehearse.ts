@@ -154,6 +154,11 @@ export async function rehearseMove(sessionId: string, ctx: RehearseContext): Pro
   };
 }
 
+/** The rehearsal of a move to a destination this machine cannot reach: that alone blocks it. */
+export function unreachableRehearsal(sessionId: string, destinationId: string, why: string, now = Date.now()): MoveRehearsal {
+  return { session_id: sessionId, destination_id: destinationId, at: now, blockers: [why], transfer: { method: "files" }, missing: [], services: [], tools: { missing: [], installs: [] }, machine: [] };
+}
+
 /** The rehearsal as lines a moved agent reads in its notice: what it will not find on the host. */
 export function rehearsalNotice(r: MoveRehearsal): string[] {
   const out: string[] = [];
