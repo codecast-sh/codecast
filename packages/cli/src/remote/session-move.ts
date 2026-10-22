@@ -1067,9 +1067,7 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
     // sibling pushed (its snapshot, never this folder's plain HEAD).
     if (repo) verification = verifyRemoteSync(host, root, remoteRoot, opts.pushedHead);
   } else if (repo) {
-    // A linked worktree seeds from the host's checkout of its main repository.
-    const main = path.dirname(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
-    const { head } = await gitPushWorktree(host, root, remoteRoot, main !== root ? remoteRepoPath(host, main) : undefined);
+    const { head } = await gitPushWorktree(host, root, remoteRoot, seedFor(host, root));
     pushedHead = head;
     copyGitignoredFiles(host, root, remoteRoot); // .env etc, not carried by git
     // Verify against what landed (the merged commit), not local HEAD.
@@ -1092,6 +1090,12 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
   if (fs.existsSync(sessionDir)) rsyncSessionDir(sessionDir, path.posix.join(remoteProjectDir, sessionId), host, "up");
 
   return { sessionId, localCwd: s.cwd, remoteCwd, ...(repo ? { remoteRoot } : {}), remoteProjectDir, verification, pushedHead, ...(brought.length ? { brought } : {}) };
+}
+
+/** A linked worktree seeds from the host's checkout of its main repository, so only its own snapshot crosses. */
+function seedFor(host: RemoteHost, root: string): string | undefined {
+  const main = path.dirname(git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+  return main !== root ? remoteRepoPath(host, main) : undefined;
 }
 
 /** A session's folder beside its transcript, without the subagent transcripts (large, and nothing a resume reads). */
@@ -1133,7 +1137,7 @@ export async function pushPath(host: RemoteHost, localPath: string): Promise<Bro
   const repo = isWorktree(localPath) && gitRootOf(localPath) === localPath;
   try {
     if (repo) {
-      const { head } = await gitPushWorktree(host, localPath, remote);
+      const { head } = await gitPushWorktree(host, localPath, remote, seedFor(host, localPath));
       copyGitignoredFiles(host, localPath, remote);
       return { local: localPath, remote, kind: "repo", head };
     }

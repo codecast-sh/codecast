@@ -2626,10 +2626,13 @@ export const markRouteSent = internalMutation({
     full_brief: v.optional(v.boolean()),
     // A context lane chunk went out at this time (CONTEXT_MIN_GAP_MS).
     context_at: v.optional(v.number()),
+    // An ask lane chunk went out at this time: the agent was named.
+    addressed_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const t = await ctx.db.get(args.transcript_id);
     if (!t) return;
+    if (args.addressed_at && args.kind === "session") await markFeedAddressed(ctx, args.target, t._id, args.addressed_at);
     await ctx.db.patch(t._id, {
       routes: t.routes.map((r) =>
         r.kind === args.kind && r.target === args.target
@@ -2646,6 +2649,18 @@ export const markRouteSent = internalMutation({
     });
   },
 });
+
+/** Someone asked this agent for something, so its voice says the reply to
+ *  this turn (callChat.mirrorAgentTurn). The feed of this call only. */
+export async function markFeedAddressed(ctx: any, conversationId: string, transcriptId: Id<"transcripts">, at: number): Promise<void> {
+  const id = ctx.db.normalizeId("conversations", conversationId);
+  if (!id) return;
+  const feed = await ctx.db
+    .query("call_agent_feeds")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", id))
+    .first();
+  if (feed && feed.transcript_id === transcriptId) await ctx.db.patch(feed._id, { addressed_at: at });
+}
 
 export const deliverToSession = internalMutation({
   args: {
@@ -2801,6 +2816,7 @@ export const deliverRoutes = internalAction({
       const asUser = route.added_by ?? transcript.started_by;
       let fullBrief: boolean | undefined;
       let contextLane = false;
+      let askLane = false;
       try {
         if (route.kind === "session") {
           const target = pacing[route.target] ?? null;
@@ -2816,6 +2832,7 @@ export const deliverRoutes = internalAction({
             continue;
           }
           contextLane = verdict.lane === "context";
+          askLane = verdict.lane === "ask";
           // A session hearing its OWN room is being spoken to, not sent a
           // report about a meeting elsewhere, and the two want different
           // words in front of the same chunk.
@@ -2868,6 +2885,7 @@ export const deliverRoutes = internalAction({
           sent_seq: maxSeq,
           full_brief: fullBrief,
           ...(contextLane ? { context_at: now } : {}),
+          ...(askLane ? { addressed_at: now } : {}),
         });
         if (contextLane) contextSent = true;
       } catch (err) {

@@ -113,6 +113,8 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   replay: new RegExp(`^(?:rp-\\d+|${REPLAY_REF_SOURCE})$`, "i"),
   // `dp` takes digits only, like the other short prefixes: a deploy.
   deploy: /^dp-\d+$/i,
+  // `sec` too (sec-4): a Vault secret.
+  secret: /^sec-\d+$/i,
   // Repository objects: `owner/repo#482`, `owner/repo@sha`.
   pr: new RegExp(`^${PR_REF_SOURCE}$`, "i"),
   commit: new RegExp(`^${COMMIT_REF_SOURCE}$`, "i"),
@@ -319,4 +321,5 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   source: "--sol-orange",
   replay: "--sol-magenta",
   deploy: "--sol-green",
+  secret: "--sol-yellow",
 };

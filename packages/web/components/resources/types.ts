@@ -11,6 +11,7 @@ import type {
   ResourcePoint,
 } from "@codecast/shared/contracts";
 import type { MigrationRowStatus } from "../../lib/migrationPlan";
+import type { MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
 
 export type MachineRole = "local" | "cloud_linux" | "cloud_mac";
 
@@ -88,6 +89,8 @@ export type OffloadCandidate = {
     notes?: string[];
     /** Why this destination fits or does not, from observed work (e.g. Xcode seen). */
     fit?: string;
+    /** The source machine's dry run of this move, while it runs and once it answers. */
+    rehearsal?: OffloadRehearsal;
   }>;
   /** Observed evidence that the session needs macOS, if any. */
   requiresMac?: string;
@@ -149,7 +152,14 @@ export type OffloadSelection = {
   destinationId: string;
   /** The pending items the user confirmed they checked, verbatim. */
   attested: string[];
+  /** Repositories and folders the move brings beside the session's checkout. */
+  bring?: string[];
 };
+
+export type OffloadRehearsal =
+  | { status: "pending" }
+  | { status: "failed"; error: string }
+  | { status: "done"; result: MoveRehearsal };
 
 /**
  * Every callback is optional. An absent callback renders its control
