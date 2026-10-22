@@ -25,10 +25,11 @@ import type { useComposerField } from '@/lib/composerField';
 // A send with attachments and no text carries this as its content.
 export const IMAGE_ONLY_CONTENT = '[image]';
 
+export type ComposerSuggestion = { text: string; index: number; count: number; onUse: () => void; onNext: () => void };
+
 export type ComposerImage = { uri: string; mime: string; storageId?: string; uploading: boolean };
 
-// The optimistic-send core, shared by the composer's send button and the
-// suggestion pills (which send fixed text with no attachments): pending row
+// The optimistic-send core behind the composer's send button: pending row
 // in the store instantly, fire-and-forget delivery via the outbox (after the
 // create lands, when this is a session started a moment ago). An image still
 // uploading rides the bubble as its local preview; the send goes out once
@@ -123,7 +124,7 @@ export type ComposerStatus = { color: string; dot?: string; label: string };
 
 export function MessageComposer({
   field, images, placeholder, canSend, onSend, stop, status, attach = true,
-  error, onDismissError, above, cardStyle, inputStyle,
+  error, onDismissError, suggestion, above, cardStyle, inputStyle,
 }: {
   field: ReturnType<typeof useComposerField>;
   images: ReturnType<typeof useComposerImages>;
@@ -137,7 +138,9 @@ export function MessageComposer({
   attach?: boolean;
   error?: string | null;
   onDismissError?: () => void;
-  /** Rows that sit just above the card (suggestions, slash commands). */
+  /** A suggested reply for the empty box, shown where the words would go. */
+  suggestion?: ComposerSuggestion | null;
+  /** Rows that sit just above the card (slash commands). */
   above?: ReactNode;
   cardStyle?: StyleProp<ViewStyle>;
   inputStyle?: StyleProp<TextStyle>;
@@ -159,6 +162,9 @@ export function MessageComposer({
     setExpanded(false);
   }, [epoch]);
   const showStop = !canSend && !!stop;
+  // The suggestion owns the empty box: its text is the placeholder, so it
+  // wraps and grows the box like typed words, and typing replaces it.
+  const ghost = !message && !showStop ? suggestion ?? null : null;
 
   // Shared between the inline card and the fullscreen editor so both modes show
   // the same attachments/errors and drive the same send.
@@ -213,6 +219,20 @@ export function MessageComposer({
           </RNView>
         )}
       </RNView>
+      {ghost && (
+        <RNView style={styles.suggestionActions}>
+          {ghost.count > 1 && (
+            <TouchableOpacity style={styles.suggestionChip} onPress={ghost.onNext} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Next suggestion">
+              <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.suggestionChipText, styles.suggestionCount]}>{ghost.index + 1}/{ghost.count}</RNText>
+              <Feather name="chevron-right" size={13} color={Theme.textMuted} />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.suggestionChip} onPress={ghost.onUse} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Use suggestion">
+            <Feather name="corner-down-left" size={12} color={Theme.text} />
+            <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.suggestionChipText, { color: Theme.text }]}>Use</RNText>
+          </TouchableOpacity>
+        </RNView>
+      )}
       {/* Never `disabled` — a disabled TouchableOpacity drops the tap, and on a
           new session the JS thread is often still catching up (create, cache
           write, keyboard) while the native field already shows text. Keep the
@@ -255,7 +275,7 @@ export function MessageComposer({
           ]}
           value={message}
           onChangeText={onChangeText}
-          placeholder={placeholder}
+          placeholder={ghost?.text ?? placeholder}
           placeholderTextColor={Theme.textMuted0}
           multiline
           maxLength={10000}
@@ -394,6 +414,30 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   composerSpacer: S.composerSpacer,
   composerStatus: S.composerStatus,
   composerStatusText: chipText,
+  suggestionActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginRight: 8,
+  },
+  suggestionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: 32,
+    paddingHorizontal: 11,
+    borderRadius: 16,
+    backgroundColor: Theme.bgAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
+  suggestionChipText: {
+    ...chipText,
+    color: Theme.textMuted,
+  },
+  suggestionCount: {
+    fontVariant: ['tabular-nums'],
+  },
   textInput: {
     ...S.textInput,
     color: Theme.text,
