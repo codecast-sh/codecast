@@ -31,7 +31,8 @@ export function useSyncLineTimeline(workspace?: string | null): LineTimelineFeed
   const convex = useConvex();
   const settled = useServerAuthSettled();
   const { args, key } = useFeederWorkspace(workspace);
-  const argsKey = args === "skip" || !settled ? null : JSON.stringify(args);
+  // The ingest scope names the workspace kind beside the team: a team id alone resolves to the caller's personal one.
+  const argsKey = args === "skip" || !settled ? null : JSON.stringify(args.team_id ? { workspace: "team", team_id: args.team_id } : { workspace: "personal" });
   const [state, setState] = useState<{ key: string | null; floor: number | null; done: boolean; loading: boolean }>({ key: null, floor: null, done: false, loading: false });
   const busy = useRef(false);
 
@@ -46,8 +47,11 @@ export function useSyncLineTimeline(workspace?: string | null): LineTimelineFeed
   useEffect(() => {
     if (!argsKey) return;
     let stopped = false;
+    // The first read runs whatever the page's visibility; a repeat waits for the page to be seen.
+    let first = true;
     const head = () => {
-      if (document.visibilityState !== "visible") return;
+      if (!first && document.visibilityState !== "visible") return;
+      first = false;
       read(undefined, HEAD_ROWS).then((res) => {
         if (stopped || !res) return;
         // The head never lowers a floor an older page already reached.
