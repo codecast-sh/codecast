@@ -23,13 +23,15 @@ const PAGE_ROWS_MAX = 200;
 
 type Ctx = { db: any };
 
-const lt = (field: string, ws: string, before: number | undefined) => (q: any) => {
-  const w = q.eq("workspace", ws);
+/** The window a page reads: before `before`, and after `after` when a poll asks only for what is new. */
+const range = (field: string, ws: string, before: number | undefined, after: number | undefined) => (q: any) => {
+  let w = q.eq("workspace", ws);
+  if (after != null) w = w.gt(field, after);
   return before != null ? w.lt(field, before) : w;
 };
 
-async function newest<T>(ctx: Ctx, table: string, index: string, field: string, ws: string, before: number | undefined, n: number): Promise<{ rows: T[]; oldest: number | null }> {
-  const rows: any[] = await ctx.db.query(table).withIndex(index, lt(field, ws, before)).order("desc").take(n);
+async function newest<T>(ctx: Ctx, table: string, index: string, field: string, ws: string, before: number | undefined, after: number | undefined, n: number): Promise<{ rows: T[]; oldest: number | null }> {
+  const rows: any[] = await ctx.db.query(table).withIndex(index, range(field, ws, before, after)).order("desc").take(n);
   return { rows, oldest: rows.length >= n ? rows[rows.length - 1][field] : null };
 }
 
@@ -65,20 +67,21 @@ function runEvents(r: Doc<"workflow_runs">, ws: string, task: Doc<"tasks"> | nul
 
 /** One page of the timeline for the caller's workspace (see the head of this file). */
 export const page = query({
-  args: { ...scopeArgs, before: v.optional(v.number()), rows: v.optional(v.number()) },
+  // `after`: only what changed since then (a poll of the head), so a poll reads the new rows, never the page again.
+  args: { ...scopeArgs, before: v.optional(v.number()), after: v.optional(v.number()), rows: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const { workspaceKey: ws } = await scopeOf(ctx, args);
     const n = Math.min(Math.max(args.rows ?? PAGE_ROWS, 1), PAGE_ROWS_MAX);
-    const before = args.before;
+    const { before, after } = args;
     const [moments, judged, signals, tasks, runs, errors, replays, deploys] = await Promise.all([
-      newest<Doc<"moments">>(ctx, "moments", "by_workspace_created", "created_at", ws, before, n),
-      newest<Doc<"judge_runs">>(ctx, "judge_runs", "by_workspace_at", "at", ws, before, n),
-      newest<Doc<"signals">>(ctx, "signals", "by_workspace_created", "created_at", ws, before, n),
-      newest<Doc<"tasks">>(ctx, "tasks", "by_workspace_updated", "updated_at", ws, before, n),
-      newest<Doc<"workflow_runs">>(ctx, "workflow_runs", "by_workspace_updated", "updated_at", ws, before, n),
-      newest<Doc<"external_events">>(ctx, "external_events", "by_workspace_created", "created_at", ws, before, n),
-      newest<Doc<"replays">>(ctx, "replays", "by_workspace_started", "started_at", ws, before, n),
-      newest<Doc<"deploys">>(ctx, "deploys", "by_workspace_created", "created_at", ws, before, n),
+      newest<Doc<"moments">>(ctx, "moments", "by_workspace_created", "created_at", ws, before, after, n),
+      newest<Doc<"judge_runs">>(ctx, "judge_runs", "by_workspace_at", "at", ws, before, after, n),
+      newest<Doc<"signals">>(ctx, "signals", "by_workspace_created", "created_at", ws, before, after, n),
+      newest<Doc<"tasks">>(ctx, "tasks", "by_workspace_updated", "updated_at", ws, before, after, n),
+      newest<Doc<"workflow_runs">>(ctx, "workflow_runs", "by_workspace_updated", "updated_at", ws, before, after, n),
+      newest<Doc<"external_events">>(ctx, "external_events", "by_workspace_created", "created_at", ws, before, after, n),
+      newest<Doc<"replays">>(ctx, "replays", "by_workspace_started", "started_at", ws, before, after, n),
+      newest<Doc<"deploys">>(ctx, "deploys", "by_workspace_created", "created_at", ws, before, after, n),
     ]);
     const cutoff = Math.max(0, ...[moments, judged, signals, tasks, runs, errors, replays, deploys].map((s) => s.oldest ?? 0));
 
@@ -117,12 +120,17 @@ export const page = query({
         });
       }
     }
+    // A judge's read names the conversation it read: its contact, as the moment's own event does.
+    const momentRows = new Map<string, Doc<"moments"> | null>(moments.rows.map((m) => [String(m._id), m]));
     for (const j of judged.rows) {
       if (j.status === "skipped") continue;
+      const k = String(j.moment_id);
+      if (!momentRows.has(k)) momentRows.set(k, await ctx.db.get(j.moment_id));
+      const m = momentRows.get(k);
       events.push({
         _id: `judged:${j._id}`, workspace: ws, at: j.at, kind: "judged", source: `judge:${j.judge}`,
         ...(j.expectations[0] ? { project_id: String(j.expectations[0].project_id) } : {}),
-        title: j.judge, detail: j.status === "failed" ? "failed" : `${j.findings} findings`, moment: j.moment_short_id,
+        title: m?.who ? String(m.who) : m?.subject ?? j.moment_short_id, detail: j.status === "failed" ? "failed" : `${j.findings} findings`, moment: j.moment_short_id,
       });
     }
     for (const s of signals.rows) {
@@ -141,7 +149,9 @@ export const page = query({
     for (const t of tasks.rows) if (t.cause?.merged_into) intoRefs.set(String(t.cause.merged_into), (await taskOf(t.cause.merged_into))?.short_id);
     for (const t of tasks.rows) {
       if (t.source !== "signal" || !t.cause) continue;
-      events.push(...problemEvents(t, ws, (id) => intoRefs.get(String(id))));
+      // A problem comes from where its findings do: its newest finding's source.
+      const first: Doc<"signals"> | null = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).order("desc").first();
+      events.push(...problemEvents(t, ws, (id) => intoRefs.get(String(id))).map((e) => (first ? { ...e, source: first.source } : e)));
     }
     for (const r of runs.rows) {
       if (!r.task_id) continue;

@@ -365,6 +365,7 @@ import type * as mods from "../mods.js";
 import type * as momentWhoBackfill from "../momentWhoBackfill.js";
 import type * as moments from "../moments.js";
 import type * as momentsSchema from "../momentsSchema.js";
+import type * as moveRehearsals from "../moveRehearsals.js";
 import type * as notificationRouter from "../notificationRouter.js";
 import type * as notifications from "../notifications.js";
 import type * as oauthConnectors from "../oauthConnectors.js";
@@ -880,6 +881,7 @@ declare const fullApi: ApiFromModules<{
   momentWhoBackfill: typeof momentWhoBackfill;
   moments: typeof moments;
   momentsSchema: typeof momentsSchema;
+  moveRehearsals: typeof moveRehearsals;
   notificationRouter: typeof notificationRouter;
   notifications: typeof notifications;
   oauthConnectors: typeof oauthConnectors;

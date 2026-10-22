@@ -136,7 +136,7 @@ export async function rehearseMove(sessionId: string, ctx: RehearseContext): Pro
   const missing: MoveRehearsalPath[] = areas
     .filter((_, i) => !facts[`path${i}`])
     .map((a) => ({ path: a.path, kind: a.kind, bytes: transferBytes(a.path), writes: a.writes, uses: a.uses }));
-  const absentTools = fp.tools.filter((_, i) => !facts[`tool${i}`]).map((t) => t.tool);
+  const absentTools = fp.tools.filter((_, i) => !facts[`tool${i}`]);
   const brew = facts.brew === "yes";
   const here = localOs();
   const machine = facts.os && osDiffers(here, facts.os) ? [`${here} here, ${facts.os} on the host`] : [];
@@ -149,7 +149,7 @@ export async function rehearseMove(sessionId: string, ctx: RehearseContext): Pro
     transfer,
     missing,
     services: fp.services.map((sv) => ({ label: sv.label, running: sv.running })),
-    tools: { missing: absentTools, installs: absentTools.filter((t) => hostInstalls(t, { mac: facts.os.startsWith("macOS"), brew })) },
+    tools: { missing: absentTools.map((t) => t.tool), installs: absentTools.filter((t) => hostInstalls(t, { mac: facts.os.startsWith("macOS"), brew })).map((t) => t.tool) },
     machine,
   };
 }
