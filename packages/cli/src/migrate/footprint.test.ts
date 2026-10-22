@@ -10,7 +10,7 @@ function home(): string {
   return h;
 }
 
-const deps = (h: string, extra: object = {}) => ({ home: h, which: (names: string[]) => Object.fromEntries(names.map((n) => [n, `/opt/homebrew/bin/${n}`])), loaded: () => true, exactName: () => true, ...extra });
+const deps = (h: string, extra: object = {}) => ({ home: h, which: (names: string[]) => Object.fromEntries(names.map((n) => [n, `/opt/homebrew/bin/${n}`])), loaded: () => true, exactName: () => true, installSource: (p: string) => ({ brew: path.basename(p) }), ...extra });
 
 describe("reading commands", () => {
   test("names the program of each pipeline stage, past env and wrappers", () => {
@@ -44,6 +44,12 @@ describe("computeFootprint", () => {
     expect(fp.areas.map((a) => [a.path.slice(h.length), a.kind])).toEqual([["/src/dailies", "repo"], ["/.dailies", "folder"]]);
     expect(fp.services.map((s) => s.label)).toEqual(["sh.dailies.host"]);
     expect(fp.tools.map((t) => t.tool)).toEqual(["pnpm", "xcodegen"]);
+  });
+
+  test("a command with no source a host can repeat needs three runs to count", () => {
+    const h = home();
+    const fp = computeFootprint(path.join(h, "src/video"), { writes: [], reads: [], commands: ["tests", "tests", "vid a", "vid b", "vid c"] }, deps(h, { installSource: () => undefined }));
+    expect(fp.tools.map((t) => t.tool)).toEqual(["vid"]);
   });
 
   test("tools found only in system folders, or spelled differently on a case-insensitive disk, are not reported", () => {
