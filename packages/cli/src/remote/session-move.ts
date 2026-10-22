@@ -545,7 +545,8 @@ function planLanding(host: RemoteHost, localRoot: string, remotePath: string, ur
   const merge = spawnSync("git", ["-C", localRoot, "merge-tree", "--write-tree", "--name-only", "--no-messages", `--merge-base=${base}`, ours, sent], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
   const [merged, ...conflicts] = (merge.stdout ?? "").trim().split("\n").filter(Boolean);
   if (merge.status === 1) {
-    throw new Error(`this folder and the host checkout ${remotePath} both changed ${[...new Set(conflicts)].join(", ")}; nothing was moved`);
+    const files = [...new Set(conflicts)];
+    throw new Error(`this folder and the host checkout ${remotePath} both changed ${files.slice(0, 3).join(", ")}${files.length > 3 ? ` and ${files.length - 3} more` : ""}; nothing was moved`);
   }
   if (merge.status !== 0 || !merged) throw new Error(`could not merge with the host checkout: ${(merge.stderr ?? "").trim().slice(0, 300)}`);
   const date = git(localRoot, ["log", "-1", "--format=%cI", head]);
