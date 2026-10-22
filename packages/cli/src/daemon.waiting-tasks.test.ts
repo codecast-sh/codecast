@@ -77,6 +77,17 @@ describe("scanOpenBackgroundTasks", () => {
     expect([...scanOpenBackgroundTasks(transcript(workflowStart("wdbvz98da"), notification("wdbvz98da", "stopped")))]).toEqual([]);
   });
 
+  test("a background Agent is open until its terminal notification", () => {
+    // ct-61095, 2026-10-22: a Dissolve hand ended its turn with five extractor
+    // agents still reading, the session read finished, and the line failed the
+    // station on the spot. The harness re-invokes the hand when each agent
+    // reports, so the session is waiting on its own work.
+    const agentStart = (id: string) => toolResult(`Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: ${id} (internal ID - do not mention to user. Use SendMessage with to: '${id}', summary: '<5-10 word recap>' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes.`);
+    expect([...scanOpenBackgroundTasks(transcript(agentStart("a4fb365edbce95bed")))]).toEqual(["a4fb365edbce95bed"]);
+    expect([...scanOpenBackgroundTasks(transcript(agentStart("a4fb365edbce95bed"), notification("a4fb365edbce95bed", "completed")))]).toEqual([]);
+    expect([...scanOpenBackgroundTasks(transcript(toolResult('12: "Async agent launched successfully. agentId: aquoted"')))]).toEqual([]);
+  });
+
   test("Monitor interim event notifications (no <status>) do NOT close the task", () => {
     const open = scanOpenBackgroundTasks(transcript(monitorStart("m1"), notification("m1"), notification("m1")));
     expect([...open]).toEqual(["m1"]);

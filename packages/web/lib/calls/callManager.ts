@@ -29,7 +29,8 @@ import { memberDisplayName } from "../liveEntities";
 import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, type RingStub } from "./ringStubs";
 import { getScribeStatus, startScribe, stopScribe } from "./transcription";
 import type { ScribeRoute } from "./scribeEngine";
-import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { chosenDevice, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { DEVICE_KINDS, onDevicesChanged } from "./deviceRank";
 import { switchRecorderMic } from "./recorder";
 import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
 import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
@@ -1166,6 +1167,20 @@ export async function switchDevice(
     await room.switchActiveDevice(kind, deviceId);
   } catch {}
 }
+
+// A device that comes or goes mid-call moves the call to the best-ranked one
+// plugged in: headphones put on during a call carry it, and pulling them off
+// falls back to the next device the person ranked rather than the OS's pick.
+onDevicesChanged(() => {
+  for (const kind of DEVICE_KINDS) {
+    const want = chosenDevice(kind);
+    if (!want) continue;
+    if (kind === "audioinput") void switchRecorderMic(want);
+    if (room && (room.getActiveDevice(kind) ?? "default") !== want) {
+      void room.switchActiveDevice(kind, want).catch(() => {});
+    }
+  }
+});
 
 // ── ringing ───────────────────────────────────────────────────────────────
 

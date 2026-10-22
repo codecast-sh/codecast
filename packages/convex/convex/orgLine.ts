@@ -312,6 +312,7 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
     spawner_conversation_id: anchor?.conversation_id ?? undefined,
     org_role_id: role._id,
     fallback_team_id: role.team_id ?? undefined,
+    fresh_branch: isLineRunSlug(slug),
     now,
   });
 
