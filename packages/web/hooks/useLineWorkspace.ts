@@ -334,7 +334,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const mergesOf = useMemo(() => {
     let read: { prs: unknown; sig: string } | null = null;
     return (prs: Record<string, FixPullRequest> | undefined) => {
-      if (read?.prs !== prs) read = { prs, sig: fixMergesSig(prs, (id) => refOfTask.get(id), everyRow.tasks as LandedTask[]) };
+      if (!read || read.prs !== prs) read = { prs, sig: fixMergesSig(prs, (id) => refOfTask.get(id), everyRow.tasks as LandedTask[]) };
       return read.sig;
     };
   }, [refOfTask, everyRow.tasks]);

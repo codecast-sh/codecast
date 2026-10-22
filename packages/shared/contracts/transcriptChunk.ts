@@ -149,6 +149,14 @@ const LANE_LINE: Record<ChunkLane, string> = {
   context: `Nobody named you: settle what the code or the record can settle in a line, start a page on anything they are working through, else end with ${HUDDLE_PASS}.`,
 };
 
+/** Was this message a chunk of the room talking among itself, nobody naming
+ *  the agent (the context lane)? A turn it opens answers nobody, so its reply
+ *  stays in the call's chat and is never said aloud (callChat.mirrorAgentTurn). */
+export function isRoomTalkDelivery(text: string | null | undefined): boolean {
+  const t = text ?? "";
+  return t.includes(LANE_NOTE.context) || t.includes(LANE_LINE.context);
+}
+
 const HELD_NOTE = "These words waited while you worked and arrive together as one catch up.";
 
 // The lead-in for the live feed of a session's OWN huddle. Every other feed

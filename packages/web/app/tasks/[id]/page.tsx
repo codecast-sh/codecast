@@ -17,7 +17,7 @@ import { type ExternalEventRecord } from "../../../lib/externalEvents";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { IssueLink } from "../../../components/tasks/IssueLink";
-import { TaskCallChip } from "../../../components/tasks/TaskCallChip";
+import { CallListFeeder, TaskCallChip } from "../../../components/tasks/TaskCallChip";
 import { useIssueSyncSources } from "../../../hooks/useSyncIssueSyncSources";
 import { PaneLoader } from "../../../components/PaneLoader";
 import { TaskListContent } from "../page";
@@ -603,7 +603,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                 </Link>
               )}
               {/* The call this task was pulled from: its recap and sibling tasks. */}
-              {data.from_call && <TaskCallChip callId={data.from_call} size="head" />}
+              {data.from_call && <><CallListFeeder /><TaskCallChip callId={data.from_call} size="head" /></>}
               {!taskTeamId && (
                 <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px] whitespace-nowrap flex-shrink-0">Personal</span>
               )}
