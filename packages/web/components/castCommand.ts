@@ -350,6 +350,11 @@ export function normalizeCastCategory(category: string): string {
 // `cast decide` (not a read: `ls`, `show`) is the authored twin of
 // AskUserQuestion: the human needs to see the card in a condensed feed, not a
 // "ran 1 command" receipt they have to open.
+/** `cast flow run` that started a run (not a dry run): a change on its way through a flow, which the reader follows (flows.md FL6). */
+export function isFlowRunCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
+  return !!cast && normalizeCastCategory(cast.category) === "flow" && cast.subcommand === "run" && !/(^|\s)--dry-run\b/.test(cast.args);
+}
+
 export function isDecideCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
   if (!cast) return false;
   if (normalizeCastCategory(cast.category) !== "decide") return false;

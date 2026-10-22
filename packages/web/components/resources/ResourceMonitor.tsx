@@ -7,8 +7,9 @@ import React from "react";
 import { AlertTriangle, Cloud, CloudUpload, Laptop, Search, X } from "lucide-react";
 import { sustainedResourcePressure } from "@codecast/shared/contracts";
 import { cn } from "../../lib/utils";
+import { isRowTerminal } from "../../lib/migrationPlan";
 import { HealthStrip, MiniTrace } from "./HealthStrip";
-import { OffloadReview, OffloadRuns } from "./OffloadReview";
+import { OffloadProgress, OffloadReview, OffloadRuns } from "./OffloadReview";
 import { ResourceTable } from "./ResourceTable";
 import {
   KINDS, KIND_LABEL, buildRows, processesUnavailable, fmtAgo, fmtBytes, freshness, machineTotals, memoryUsed, memoryUsedPct, sortRows, DEFAULT_SORT_DIR,
@@ -134,7 +135,8 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
   const [stateFilter, setStateFilter] = React.useState<StateFilter>("all");
   const [query, setQuery] = React.useState("");
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
-  const [reviewing, setReviewing] = React.useState<{ deviceId: string; preselect?: string[] } | null>(null);
+  // `launched` is the Move press the panel follows once the review is done.
+  const [reviewing, setReviewing] = React.useState<{ deviceId: string; preselect?: string[]; launched?: string } | null>(null);
   // A notification's link opens the review once its machine's plan exists; plans arrive with the first sample.
   const opened = React.useRef<string | undefined>(undefined);
   React.useEffect(() => {
@@ -168,6 +170,9 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
   const destinations = new Map(machines.map((m) => [m.deviceId, m.name]));
   for (const p of plans) for (const d of p.destinations) destinations.set(d.deviceId, d.name);
   const selectedIds = [...selected];
+  const launchedRuns = reviewing?.launched ? runs.filter((r) => r.clientBatchId === reviewing.launched) : [];
+  // A session in a move shows where it is going in the table, in place of its usual state.
+  const moving = new Map(runs.flatMap((r) => r.rows.filter((row) => !isRowTerminal(row.status)).map((row) => [row.sessionId, { status: row.status, to: destinations.get(row.destinationId) ?? row.destinationId }] as const)));
   const off = actionsDisabledReason ?? "Not available here";
 
   const toggle = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -257,7 +262,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                   )}
                 </div>
               )}
-              <OffloadRuns runs={runs} sessions={sessions} destinations={destinations} now={now} actions={actions} actionsDisabledReason={actionsDisabledReason} />
+              <OffloadRuns runs={runs.filter((r) => !launchedRuns.includes(r))} sessions={sessions} destinations={destinations} now={now} actions={actions} actionsDisabledReason={actionsDisabledReason} />
               {machine ? <HealthStrip machine={machine} freshness={fr!} now={now} /> : <MachineList machines={machines} now={now} onPick={setMachineId} />}
               <Composition machines={scope} />
 
@@ -314,6 +319,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                   machines={scope}
                   now={now}
                   selected={selected}
+                  moving={moving}
                   onToggle={toggle}
                   actions={actions}
                   actionsDisabledReason={actionsDisabledReason}
@@ -331,8 +337,19 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
           )}
         </div>
       </div>
-      {reviewing && plan && (
+      {reviewing && (reviewing.launched || plan) && (
         <aside className="fixed inset-0 z-30 flex flex-col lg:static lg:z-auto lg:w-[34rem] lg:shrink-0 lg:border-l lg:border-sol-border/30">
+          {reviewing.launched ? (
+            <OffloadProgress
+              runs={launchedRuns}
+              sourceName={destinations.get(reviewing.deviceId) ?? "this machine"}
+              byId={new Map(sessions.map((s) => [s.sessionId, s]))}
+              destinations={destinations}
+              actions={actions}
+              actionsDisabledReason={actionsDisabledReason}
+              onClose={() => setReviewing(null)}
+            />
+          ) : plan && (
           <OffloadReview
             key={`${plan.deviceId}:${reviewing.preselect?.join(",") ?? ""}`}
             plan={plan}
@@ -343,7 +360,9 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
             actions={actions}
             actionsDisabledReason={actionsDisabledReason}
             onClose={() => setReviewing(null)}
+            onStarted={(launched) => { setReviewing((r) => r && { ...r, launched }); setSelected(new Set()); }}
           />
+          )}
         </aside>
       )}
     </div>
