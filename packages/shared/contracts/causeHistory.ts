@@ -436,6 +436,8 @@ export type HistoryInput<R extends HistoryRunRow, O extends AttemptOutcome> = {
   occurrences: OccurrenceRow | undefined;
   /** Undefined until read; the project's deploys. */
   deploys: ReadonlyArray<DeployRow> | undefined;
+  /** The deploys' coverage (deployCoverage) when the caller read it once for many problems; read from `deploys` otherwise. */
+  coverage?: DeployCoverage;
   /** Per run, what its stations found, proposed and built, and the argument a close made. */
   said: (runId: string) => RunSaid;
   /** A run's outcome in the reader's words. */
@@ -492,7 +494,7 @@ export function carryingDeploys(merge: AttemptMerge, deploys: ReadonlyArray<Depl
 /** One reading per deploy list: every problem of a line reads the same list, and a line holds thousands of problems. */
 const coverageRead = new WeakMap<ReadonlyArray<DeployRow>, DeployCoverage>();
 
-function coverageOf(all: ReadonlyArray<DeployRow> | undefined): DeployCoverage {
+export function coverageOf(all: ReadonlyArray<DeployRow> | undefined): DeployCoverage {
   if (!all) return readCoverage(all);
   let read = coverageRead.get(all);
   if (!read) coverageRead.set(all, (read = readCoverage(all)));
@@ -608,7 +610,7 @@ export function causeHistory<R extends HistoryRunRow, O extends AttemptOutcome>(
   }
 
   // ── ships, merges and the deploys that carried them ──
-  const coverage = coverageOf(input.deploys);
+  const coverage = input.coverage ?? coverageOf(input.deploys);
   const ships: HistoryShip[] = [];
   for (const a of attempts) {
     if (a.ended !== "shipped" && !a.merge) continue;

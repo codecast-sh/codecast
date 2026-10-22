@@ -72,6 +72,16 @@ export interface VerifySpec {
 }
 
 /**
+ * One line of [vault]: the Vault secret an env var takes its value from
+ * (docs/architecture/vault.md, Projects). `cast dev` starts a server without a
+ * missing secret unless the line marks it required.
+ */
+export interface VaultBinding {
+  secret: string;
+  required: boolean;
+}
+
+/**
  * Per-workspace browser configuration. When enabled, a headless Chromium is
  * launched after setup completes and torn down at release. The CDP port is
  * allocated via the named-port system using `cdp_port` (default base=9222
@@ -175,6 +185,8 @@ export interface WorkspaceManifest {
   env: Record<string, string>;
   teardown: TeardownSpec;
   verify?: VerifySpec;
+  /** [vault]: env var name → the secret that fills it under `cast vault run` and `cast dev`. */
+  vault?: Record<string, VaultBinding>;
   /** Per-workspace browser configuration (off by default). */
   browser: BrowserSpec;
   /**

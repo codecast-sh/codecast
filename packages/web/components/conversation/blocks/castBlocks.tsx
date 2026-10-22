@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { CastFlowBlock } from "./CastFlowBlock";
+import { VaultRequestCard } from "./VaultRequestCard";
 import { useRouter } from "next/navigation";
 import { useState, useMemo, useContext } from "react";
 import { useChatMessageRow, useEnsureChatMessage } from "../../../hooks/useChatSync";
@@ -16,14 +17,14 @@ import { RelativeTimeNow } from "../../../lib/conversationFormat";
 import { THREAD_STATE_STATUS_META } from "../../../lib/threadState";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
-import { extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, browserTabOf, type CastBodyPart, type ChatSendArgs, type DecideArgs } from "../../castCommand";
+import { extractSendBody, extractChatSendArgs, normalizeCastCategory, extractCastBodyParts, extractStateArgs, extractBrowserDoSteps, splitBrowserDoOutput, extractDecideArgs, extractVaultArgs, browserTabOf, type CastBodyPart, type ChatSendArgs, type DecideArgs } from "../../castCommand";
 import { useInboxStore, useTrackedStore, type SessionDecisionItem } from "../../../store/inboxStore";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { DocDates } from "../../DocDates";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../hooks/useSyncDecisionDetail";
-import { FileText, CornerUpRight, BookOpen, Check, Split, Pin } from "lucide-react";
+import { FileText, CornerUpRight, BookOpen, Check, Split, Pin, Lock } from "lucide-react";
 import { ImageBlock } from "./interactiveBlocks";
 import { CastBrowserRowContext, ChatWakeContext } from "../../../lib/conversationBlockContexts";
 import { NestedStepList } from "./shared";
@@ -694,6 +695,11 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
         accent: "border-sol-cyan/25",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="9" /><path strokeLinecap="round" strokeLinejoin="round" d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 010 18M12 3a15 15 0 000 18" /></svg>
       };
+      case "vault": return {
+        color: "text-sol-yellow/80",
+        accent: "border-sol-yellow/25",
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><rect x="5" y="11" width="14" height="10" rx="2" /><path strokeLinecap="round" strokeLinejoin="round" d="M8 11V7a4 4 0 018 0v4" /></svg>
+      };
       case "diff": case "summary": case "handoff": case "context": case "ask": return {
         color: "text-sol-magenta/80",
         accent: "border-sol-magenta/25",
@@ -708,6 +714,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
   };
 
   const config = getCategoryConfig();
+  const vault = cat === "vault" ? extractVaultArgs(subcommand, args) : null;
 
   const firstArg = useMemo(() => {
     if (!args) return "";
@@ -748,6 +755,18 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
     };
 
     const outputLines = output.trim().split("\n").filter(l => l.trim()).length;
+
+    // A value verb names its secrets and nothing else: the output is the value.
+    // `run` adds the command the secrets were handed to.
+    if (vault && (vault.hidesOutput || subcommand === "run")) {
+      return (
+        <>
+          {vault.names.map((n) => <span key={n} className="text-sol-text-muted font-mono">{n}</span>)}
+          {vault.command && <span className="text-sol-text-dim font-mono truncate">-- {truncateStr(vault.command, 80)}</span>}
+          {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+        </>
+      );
+    }
 
     if (isEntityCommand && entityIds.length > 0 && cat !== "doc") return null;
 
@@ -835,6 +854,9 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
   }
   // `cast decide` — the decision card, live from the store row when it exists.
   // `ls` is a plain read and keeps the generic row.
+  if (vault && subcommand === "request" && vault.names[0]) {
+    return <VaultRequestCard name={vault.names[0]} kind={vault.kind} why={vault.why} output={output} isError={!!isError} />;
+  }
   const decide = cat === "decide" ? extractDecideArgs(subcommand, args) : null;
   if (decide && (decide.verb === "show" || decide.verb === "answer" || decide.verb === "recommend") && decide.ref) {
     return <CastDecideRefBlock decide={decide} rawCmd={cast.raw} output={output} isError={!!isError} />;
@@ -921,6 +943,8 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
               {doFooter && <div className="px-2 py-1 text-[11px] font-mono text-sol-text-dim">{doFooter}</div>}
               {!output && <div className="p-2 text-xs text-sol-text-dim">Running</div>}
             </>
+          ) : vault?.hidesOutput ? (
+            <div className="p-2 text-xs text-sol-text-dim inline-flex items-center gap-1"><Lock className="w-3 h-3" />value hidden</div>
           ) : output && output.trim() ? (
             <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
               {renderAnsi(output)}
