@@ -13,8 +13,8 @@ import { workspaceAnchorFor } from "./anchors";
 import { resolveChatMentions } from "./lib/mentionResolve";
 
 // The head of people (docs/architecture/org-staffing.md S6) and the charters
-// on projects and plans (S7): one seat per company, adoptable, capped at
-// understand, with the weekly review armed on its standing session; and the
+// on projects and plans (S7): one seat per company, adoptable, starting work
+// on its own, with the weekly review armed on its standing session; and the
 // project goal leading the role's frame and a hand's briefing.
 
 const ME = "u".repeat(31) + "m";
@@ -72,7 +72,7 @@ describe("orgRoles.staff", () => {
     const role = tables.org_roles[0];
     expect(role.name).toBe("Head of People");
     expect(role.scope).toEqual({ project_ids: [], plan_ids: [] });
-    expect(role.trust).toBe("understand");
+    expect(role.trust).toBe("direct");
     expect(role.reports_to).toEqual({ kind: "user", user_id: ME });
     expect(role.charter).toBe(headOfPeopleCharter("Me"));
     expect(role.anchor_id).toBeDefined();
@@ -496,15 +496,13 @@ describe("orgRoles.staff", () => {
     expect(topSeat.org_role_id).toBeUndefined();
   });
 
-  test("the root role's switch cannot be turned on (S12, S23.1)", async () => {
+  test("the root role's switch turns off and on like any role's (S23.1)", async () => {
     const { ctx, tables } = world();
     const out = await performStaff(ctx, ME as any, { team_id: TEAM, adopt_conversation_id: "mine" });
-    for (const args of [{ on: true }, { trust: "decide" }, { trust: "direct" }]) {
-      await expect(performSetTrust(ctx, ME as any, { role_id: String(out.role._id), ...args, human_decision: "sd-1" } as any)).rejects.toThrow(/does not start work on its own/);
-    }
-    expect(tables.org_roles[0].trust).toBe("understand");
-    // Turning it off again is allowed (a no-op a person may make).
     await performSetTrust(ctx, ME as any, { role_id: String(out.role._id), on: false, human_decision: "sd-1" } as any);
+    expect(tables.org_roles[0].trust).toBe("understand");
+    await performSetTrust(ctx, ME as any, { role_id: String(out.role._id), on: true, human_decision: "sd-1" } as any);
+    expect(tables.org_roles[0].trust).toBe("direct");
   });
 
   test("a role a person hires starts with the switch on; the charter notes each flip in a person's words (S23.1)", async () => {

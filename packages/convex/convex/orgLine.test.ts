@@ -109,6 +109,8 @@ describe("orgLine.sweep (L9)", () => {
     // daemon command carries the slug for run-daemon to resolve.
     expect(run.workflow_id).toBeUndefined();
     expect(run.workflow_name).toBe("line");
+    // A new line run proves against unfixed code: the daemon sets an earlier run's branch aside.
+    expect(run.fresh_branch).toBe(true);
     expect(tables.daemon_commands).toHaveLength(1);
     expect(tables.daemon_commands[0].user_id).toBe(HOST);
     expect(tables.daemon_commands[0].command).toBe("run_workflow");

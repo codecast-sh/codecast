@@ -42,11 +42,13 @@ import { useLineGraph } from "../components/line/map/useLineGraph";
 import { useProductName } from "./useLoopSteps";
 import { problemOrigins, type ProblemSource } from "../lib/line/stepRuns";
 import { activeProblemCount, isCountedActive, lessonOnlyIds } from "../lib/line/problemTable";
-import { problemOverlaps, type Overlap } from "../lib/line/overlap";
+import { problemOverlaps, type Overlap, type OverlapItem } from "../lib/line/overlap";
 import { heldFrom } from "../lib/line/sourcesView";
 
 const api = _api as any;
 const EMPTY: never[] = [];
+const __LP = <T,>(k: string, f: () => T): T => { const t = performance.now(); const r = f(); const d = performance.now() - t; const g = ((globalThis as any).__lp ??= {}); (g[k] ??= []).push(Math.round(d * 10) / 10); return r; }; // __LP temp
+const __LD = (k: string, deps: Record<string, unknown>) => { const g = ((globalThis as any).__ld ??= {}); const prev = g[`${k}:prev`] as Record<string, unknown> | undefined; if (prev) for (const d in deps) if (prev[d] !== deps[d]) g[`${k}.${d}`] = (g[`${k}.${d}`] ?? 0) + 1; g[`${k}:prev`] = deps; }; // __LP temp
 
 export type { LineSelection, LineSelectionPatch, LineView } from "../lib/line/lineWorkspaceUrl";
 export { LINE_VIEWS, DEFAULT_LINE_VIEW } from "../lib/line/lineWorkspaceUrl";
@@ -215,18 +217,18 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   useSyncTaskSignals(caseRow);
 
   // The process is what runs on problems: a run of any other workflow on a task is not the line's.
-  const scoped = useMemo(() => {
+  const scoped = useMemo(() => __LP("scoped", () => {
     const rows = projectId ? scopeLine(lineRows, projectId) : lineRows;
     const causes = new Set(rows.tasks.filter(isCause).map((t) => t._id));
     return { ...rows, runs: rows.runs.filter((r) => !!r.task_id && causes.has(r.task_id)) };
-  }, [lineRows, projectId]);
+  }), [lineRows, projectId]);
   const runs = scoped.runs as unknown as MapRun[];
   const signals = scoped.signals as MapSignal[];
   // The processes over every project, so the picker never changes with the filter.
-  const processes = useMemo(() => {
+  const processes = useMemo(() => __LP("processes", () => {
     const causes = new Set(lineRows.tasks.filter(isCause).map((t) => t._id));
     return graphPickOrder(projectGraphs((lineRows.runs as unknown as GraphRun[]).filter((r) => !!r.task_id && causes.has(r.task_id))));
-  }, [lineRows]);
+  }), [lineRows]);
 
   // The graph: the project's own stations for codecast's line, else the row its newest run ran.
   const lg = useLineGraph(projectId, runs as unknown as GraphRun[], signals, graphKey);
@@ -242,14 +244,14 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const taskProject = useMemo(() => new Map(scoped.tasks.map((t) => [t._id, (t as { project_id?: string | null }).project_id ?? null])), [scoped]);
   const everyTaskProject = useMemo(() => new Map(lineRows.tasks.map((t) => [t._id, (t as { project_id?: string | null }).project_id ?? null])), [lineRows.tasks]);
   // Each project's repositories, so its deploys read where its merges went.
-  const repositories = useMemo(() => {
+  const repositories = useMemo(() => __LP("repositories", () => {
     const by = new Map<string, Array<{ merge?: { pr_url?: string } | null }>>();
     for (const r of lineRows.runs as unknown as Array<{ task_id?: string; merge?: { pr_url?: string } | null }>) {
       const p = r.task_id ? everyTaskProject.get(r.task_id) : null;
       if (p) by.set(p, [...(by.get(p) ?? []), r]);
     }
     return new Map([...by].map(([p, rs]) => [p, repositoriesOf(rs)]));
-  }, [lineRows.runs, everyTaskProject]);
+  }), [lineRows.runs, everyTaskProject]);
   const { deploysReady: ownDeploysReady } = useSyncLineHistory(projectId, projectId ? repositories.get(projectId) ?? "" : "");
   const deploysReady = projectId ? ownDeploysReady : true;
   // History is read for every project (the project filter's counts read every project's problems), held in the store
@@ -278,14 +280,14 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const trialProjects = useMemo(() => new Set(trialRows.map((p) => p._id)), [trialRows]);
   // The runs a trial started (its own rows, and every run on a trial project's problem): an answer at their gates ships nothing.
   const trialRunRows = useTrialRuns({ all: true, workspaces: spaceKeys });
-  const trialRuns = useMemo(() => {
+  const trialRuns = useMemo(() => __LP("trialRuns", () => {
     const out = new Set(trialRunRows.map((r) => r.run_id).filter((x): x is string => !!x));
     for (const r of lineRows.runs as unknown as Array<{ _id: string; task_id?: string }>) {
       const p = r.task_id ? everyTaskProject.get(r.task_id) : null;
       if (p && trialProjects.has(p)) out.add(r._id);
     }
     return out;
-  }, [trialRunRows, lineRows.runs, everyTaskProject, trialProjects]);
+  }), [trialRunRows, lineRows.runs, everyTaskProject, trialProjects]);
   // A problem whose project starts nothing on its own says so in a word, read from its own project's switch (LL5);
   // a trial project's from its dispatcher (held, or none).
   const trialHeld = useMemo(() => new Map(trialRows.flatMap((p) => { const w = trialStartWord(p.dispatch); return w ? [[p._id, w] as const] : []; })), [trialRows]);
@@ -304,10 +306,10 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   useSyncTrial();
   const allTrialCards = useTrialCards({ workspaces: spaceKeys });
   // A run's decision about a task that is not a line problem (a task filed by hand, a judge fix) names that task, read from the store.
-  const otherIds = useMemo(() => {
+  const otherIds = useMemo(() => __LP("otherIds", () => {
     const causes = new Set(everyRow.tasks.filter(isCause).map((t) => t._id));
     return [...new Set((everyRow.decisions as Array<{ task_id?: string | null }>).map((d) => d.task_id).filter((id): id is string => !!id && !causes.has(id)))].sort();
-  }, [everyRow]);
+  }), [everyRow]);
   const otherSig = useInboxStore((s) => otherIds.map((id) => {
     const t = (s.tasks as Record<string, { title?: string; short_id?: string; project_id?: string } | undefined> | undefined)?.[id];
     return t?.title ? [id, t.short_id ?? "", t.project_id ?? "", t.title].join("\u0001") : "";
@@ -319,7 +321,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   // The decisions a line asks are the team's: every open one on a problem the viewer can read, whoever it was asked of
   // or assigned to (the line's cards, with the viewer's own queue rows winning), and every waiting trial card. Who
   // holds one is the row's assignee (lib/line/decisionFacts), never a reason to hide it.
-  const allInbox = useMemo(() => buildLineInbox({ ...everyRow, decisions: allDecisions as unknown as typeof everyRow.decisions, decisionsComplete: teamDecisions.ready, projects, rollups: rollupRows, admissions, trialCards: allTrialCards, trialProjects, viewer: viewerId, otherTasks, now }), [everyRow, allDecisions, teamDecisions.ready, projects, rollupRows, admissions, allTrialCards, trialProjects, viewerId, otherTasks, now]);
+  const allInbox = useMemo(() => __LP("allInbox", () => buildLineInbox({ ...everyRow, decisions: allDecisions as unknown as typeof everyRow.decisions, decisionsComplete: teamDecisions.ready, projects, rollups: rollupRows, admissions, trialCards: allTrialCards, trialProjects, viewer: viewerId, otherTasks, now })), [everyRow, allDecisions, teamDecisions.ready, projects, rollupRows, admissions, allTrialCards, trialProjects, viewerId, otherTasks, now]);
   const projectInbox = useMemo(() => (projectId ? allInbox.map((g) => ({ ...g, rows: g.rows.filter((r) => r.projectId === projectId) })).filter((g) => g.rows.length > 0) : allInbox), [allInbox, projectId]);
   const forYouByCase = useMemo(() => inboxKindByCase(projectInbox), [projectInbox]);
 
@@ -335,7 +337,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
     const mine = (r: { project_id?: string }) => !project || r.project_id === project;
     // Only a deploy that went live carried anything.
     const deploys = allDeploys.filter((d) => deployIn(d, project) && d.status === "live");
-    return buildLineModel({
+    const __in = {
       runs: rows.runs as MapRun[],
       tasks: rows.tasks,
       signals: rows.signals as MapSignal[],
@@ -353,16 +355,19 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
       holdOf,
       forYou,
       trialRuns,
-    }, key);
+    };
+    ((globalThis as any).__mi ??= []).push({ __in, key }); if ((globalThis as any).__mi.length > 12) (globalThis as any).__mi.shift(); // __LP temp
+    return buildLineModel(__in, key);
   }, [allDeploys, allDecisions, everyTaskProject, allOccurrences, labels, graph, viewerId, names, now, watchDays, handMerges, holdOf, trialRuns, lg.graphKey]);
   const allForYouByCase = useMemo(() => inboxKindByCase(allInbox), [allInbox]);
-  const allModel = useMemo(() => modelOf(everyRow, null, allForYouByCase, true), [modelOf, everyRow, allForYouByCase]);
-  const model = useMemo(() => (projectId ? modelOf(scoped, projectId, forYouByCase, deploysReady) : allModel), [projectId, modelOf, scoped, forYouByCase, deploysReady, allModel]);
+  __LD("m", { allDeploys, allDecisions, everyTaskProject, allOccurrences, labels, graph, viewerId, names, now, watchDays, handMerges, holdOf, trialRuns, gk: lg.graphKey, everyRow, allForYouByCase, allInbox, lineRows, signals: lineRows.signals, tasks: lineRows.tasks, runs: lineRows.runs, dec: lineRows.decisions, ownCards, allLineCards, teamReady: teamDecisions.ready, projects, rollupRows, admissions, allTrialCards, trialProjects, otherTasks, overlapProbe: 0, lgSource: lg.source, lgRow: lg.row, lgOwn: lg.ownLine, lgPicked: lg.picked, lgRunId: lg.picked?.runId, lgWf: lg.picked?.workflowId, ownCardsLen: ownCards.length }); (globalThis as any).__lgk = [lg.graphKey, lg.ownLine, !!lg.row, lg.picked?.runId]; // __LP temp
+  const allModel = useMemo(() => __LP("allModel", () => modelOf(everyRow, null, allForYouByCase, true)), [modelOf, everyRow, allForYouByCase]);
+  const model = useMemo(() => __LP("model", () => (projectId ? modelOf(scoped, projectId, forYouByCase, deploysReady) : allModel)), [projectId, modelOf, scoped, forYouByCase, deploysReady, allModel]);
   // Every problem, in every process and every project (LJ8.2): Problems lists these under the project filter, as For
   // you lists every process's needs, so "Waiting on you" there and For you count the same things. Each problem is read
   // in the process its newest run ran (processIndex), the drawn one from the model above; the picker narrows the list,
   // never the scope. Built over every project so the project filter's counts never move with the filter.
-  const everyProblem = useMemo(() => {
+  const everyProblem = useMemo(() => __LP("everyProblem", () => {
     const projectOf = (id: string) => everyTaskProject.get(id) ?? null;
     const idx = processIndex(everyRow.runs as unknown as GraphRun[], projectOf);
     const keys = new Set<string>();
@@ -373,20 +378,20 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
       for (const i of issues) if (idx.task(i.id, projectOf(i.id)) === key) out.push({ ...i, process: key });
     }
     return out.sort((a, b) => b.history.lastActivity - a.history.lastActivity);
-  }, [everyRow, everyTaskProject, allModel, modelOf, allForYouByCase]);
+  }), [everyRow, everyTaskProject, allModel, modelOf, allForYouByCase]);
   const problems = useMemo(() => (projectId ? everyProblem.filter((i) => everyTaskProject.get(i.id) === projectId) : everyProblem), [everyProblem, projectId, everyTaskProject]);
 
   // Where each problem came from: one reading every list and the run detail show. The findings in the store first;
   // a problem whose findings are older than the window reads its kept quotes; none, and the cell stays empty.
   const bots = useMemo(() => new Set(roster.filter((m) => m.is_bot).map((m) => m._id)), [roster]);
-  const sources = useMemo(() => problemOrigins({
+  const sources = useMemo(() => __LP("sources", () => problemOrigins({
     signals: lineRows.signals as Array<{ source: string; judge?: string; task_id: string; user_id?: string }>,
     issues: allModel.issues, tasks: lineRows.tasks as Array<{ _id: string; source?: string; user_id?: string }>, isCause: (t) => isCause(t as never), names, bots,
     occurrences: allOccurrences as ReadonlyArray<{ task_id: string; sources?: ReadonlyArray<string> }>,
-  }), [lineRows.signals, lineRows.tasks, names, bots, allModel.issues, allOccurrences]);
+  })), [lineRows.signals, lineRows.tasks, names, bots, allModel.issues, allOccurrences]);
 
   // The problems only a lesson filed, off that same reading: one set for the nav, the project filter and the Problems tabs.
-  const lessons = useMemo(() => lessonOnlyIds(sources), [sources]);
+  const lessons = useMemo(() => __LP("lessons", () => lessonOnlyIds(sources)), [sources]);
 
   // Over every project, a write goes to the project holding most of the drawn process's runs.
   const homeId = useMemo(() => {
@@ -403,20 +408,25 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const product = useProductName((project ?? home) as any);
 
   // Which process each row belongs to, read over every project so a row never changes process with the filter.
-  const processOf = useMemo(() => inboxProcessOf(everyRow.runs as unknown as GraphRun[], everyRow.tasks as Array<{ _id: string; project_id?: string | null }>), [everyRow]);
+  const processOf = useMemo(() => __LP("processOf", () => inboxProcessOf(everyRow.runs as unknown as GraphRun[], everyRow.tasks as Array<{ _id: string; project_id?: string | null }>)), [everyRow]);
   // The picker's counts: each row under exactly one process, so they sum to the project's whole.
   const forYouByGraph = useMemo(() => inboxByGraph(projectInbox, processOf), [projectInbox, processOf]);
   // The Inbox, the header's "for you" and the nav count read the process drawn, like every other view.
   const inbox = useMemo(() => projectInbox.map((g) => ({ ...g, rows: g.rows.filter((r) => processOf.row(r) === model.graphKey) })).filter((g) => g.rows.length > 0), [projectInbox, processOf, model.graphKey]);
   // Problems that are one problem under two ids (overlap): filed under the oldest, over every active problem in every
   // process and project, so a twin folds the same way whatever the filter or the picker shows.
-  const overlaps = useMemo(() => {
+  // Read off what it compares (each active problem's ref, title, age and fingerprints), so a push or a clock tick that
+  // moves none of those never re-runs it.
+  const overlapItems = useMemo(() => {
     const rows = new Map((everyRow.tasks as Array<{ _id: string; created_at?: number; _creationTime?: number; cause?: { fingerprints?: string[] } | null }>).map((t) => [t._id, t]));
-    return problemOverlaps(everyProblem.filter((i) => isCountedActive(i, lessons)).map((i) => {
+    return everyProblem.filter((i) => isCountedActive(i, lessons)).map((i): OverlapItem => {
       const t = rows.get(i.id);
       return { id: i.id, ref: i.ref, title: i.title, at: t?.created_at ?? t?._creationTime ?? 0, fingerprints: t?.cause?.fingerprints ?? null };
-    }));
+    });
   }, [everyProblem, lessons, everyRow.tasks]);
+  const overlapKey = useMemo(() => overlapItems.map((i) => `${i.id}\u0001${i.ref ?? ""}\u0001${i.title}\u0001${i.at}\u0001${i.fingerprints?.join(",") ?? ""}`).join("\u0002"), [overlapItems]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on what the items say, not on their array
+  const overlaps = useMemo(() => __LP("overlaps", () => problemOverlaps(overlapItems)), [overlapKey]);
   // What waits on the viewer, over every process and every project: For you has no picker and no project filter (a
   // need names its own process and project), so picking a project on Problems or Line never hides an ask. Only a
   // project's own Line tab (`pinned`) narrows it.
@@ -425,7 +435,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   // A fix the viewer approved that never landed waits on them too (approvedFix): read off each problem's own history,
   // as its band reads it, so For you and the problem's page say the same thing.
   // Every approved fix nothing landed, whoever approved it: the same rule and the same set as Problems' chip of that name.
-  const unlanded = useMemo(() => {
+  const unlanded = useMemo(() => __LP("unlanded", () => {
     const isTrial = (runId: string) => trialRuns.has(runId);
     const newest = newestRuns(everyRow.runs as MapRun[]);
     const out: LineNeed[] = [];
@@ -436,8 +446,8 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
       out.push(unlandedNeed({ id: i.id, ref: i.ref ?? null, title: i.title, name: (i as { name?: string | null }).name ?? null, projectId, process: i.process }, fix));
     }
     return out;
-  }, [pinned, problems, everyProblem, trialRuns, everyRow.runs, everyTaskProject]);
-  const needs = useMemo(() => {
+  }), [pinned, problems, everyProblem, trialRuns, everyRow.runs, everyTaskProject]);
+  const needs = useMemo(() => __LP("needs", () => {
     // A problem is listed once: one that already asks something keeps that need.
     const asked = lineNeeds(needInbox, processOf);
     const held = new Set(asked.map((n) => n.caseId));
@@ -445,11 +455,11 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
       const o = overlaps.get(id);
       return o && o.primary !== id ? { caseId: o.primary, ref: o.primaryRef } : null;
     });
-  }, [needInbox, processOf, overlaps, unlanded]);
+  }), [needInbox, processOf, overlaps, unlanded]);
   const forYou = useMemo(() => needCount(needs), [needs]);
   // The project filter's counts, in the process drawn: what waits on the viewer there and its problems not yet done.
   // Over every process, like Problems' list: a project's numbers are its own, whatever the picker draws.
-  const byProject = useMemo(() => lineProjectCounts(allInbox, processOf, null, everyProblem, (id) => everyTaskProject.get(id), lessons), [allInbox, processOf, everyProblem, everyTaskProject, lessons]);
+  const byProject = useMemo(() => __LP("byProject", () => lineProjectCounts(allInbox, processOf, null, everyProblem, (id) => everyTaskProject.get(id), lessons)), [allInbox, processOf, everyProblem, everyTaskProject, lessons]);
   // History is fed for the projects with problems, in any process (Problems lists every one), whatever the filter: one
   // feeder set, so the counts above read the same rows picked or not, and a project with no problems costs nothing.
   const historyFeeds = useMemo(() => {
