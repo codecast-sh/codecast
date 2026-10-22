@@ -2367,8 +2367,8 @@ export const listForUser = query({
 /** Findings one problem's severity read covers: the worst among the newest. Small, since a page of decisions reads one
  *  problem each. */
 const SEVERITY_SIGNALS_CAP = 30;
-/** Open problems one line project's read covers, per status. */
-const OPEN_PROBLEMS_CAP = 1000;
+/** Pending decisions the Line's queue reads, newest first. */
+const PENDING_DECISIONS_CAP = 2000;
 /** Waiting trial cards one workspace's read covers. */
 const WAITING_TRIAL_CARDS_CAP = 1000;
 const OPEN_PROBLEM_STATUSES = ["backlog", "open", "in_progress", "in_review"] as const;
@@ -2413,9 +2413,11 @@ async function inViewerQueue(ctx: Ctx, row: DecisionRow, userId: Id<"users">): P
  * Every open decision a line asks about a problem in one workspace (a team's,
  * or the viewer's own), whoever it was asked of or given to: the Line page's
  * decision inbox, the same for every member of the team. Read by index: a
- * trial's through its waiting cards, a line project's through its open
- * problems by status and each problem's pending decisions, so nothing falls
- * out of a window however many problems a run opens.
+ * trial's through its waiting cards, a line project's from the pending
+ * decisions themselves, newest first, kept when a run asked them about an open
+ * problem of the workspace. Reading through each project's open problems
+ * instead stopped at a page of the oldest, so in a workspace holding thousands
+ * of open problems the newest ones' decisions never showed.
  * `line_workspace` names the workspace each row came from: the web's feed
  * prunes by it. The workspaces are the ones the Line page reads at once.
  */
@@ -2425,10 +2427,15 @@ export const listOpenForLines = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const out = [];
+    const pending: DecisionRow[] = await ctx.db.query("session_decisions").withIndex("by_status_created", (q: any) => q.eq("status", "pending")).order("desc").take(PENDING_DECISIONS_CAP);
+    const asked = pending.filter((d) => d.workflow_run_id && d.task_id);
+    const askedTasks = new Map<string, Doc<"tasks"> | null>();
+    for (const d of asked) if (!askedTasks.has(String(d.task_id))) askedTasks.set(String(d.task_id), await ctx.db.get(d.task_id as Id<"tasks">));
     for (const workspace of [...new Set(args.workspaces)].slice(0, 20)) {
       const [kind, id] = workspace.split(":");
       if (kind === "user" ? id !== String(userId) : kind !== "team" || !(await isTeamMember(ctx, userId, id as Id<"teams">))) continue;
       const projects = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).collect();
+      const trialProjects = new Set(projects.filter((p: Doc<"projects">) => p.line_trial).map((p: Doc<"projects">) => String(p._id)));
       const rows: DecisionRow[] = [];
       const seen = new Set<string>();
       const take = (d: DecisionRow | null) => {
@@ -2445,16 +2452,11 @@ export const listOpenForLines = query({
         const task = await ctx.db.get(card.task_id);
         if (task?.workspace === workspace) take(await ctx.db.get(card.decision_id));
       }
-      for (const project of projects) {
-        if (project.line_trial) continue;
-        for (const status of OPEN_PROBLEM_STATUSES) {
-          const tasks = await ctx.db.query("tasks").withIndex("by_project_status", (q: any) => q.eq("project_id", project._id).eq("status", status)).take(OPEN_PROBLEMS_CAP);
-          for (const task of tasks) {
-            if (!task.cause || task.workspace !== workspace) continue;
-            const open: DecisionRow[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", task._id).eq("status", "pending")).collect();
-            for (const d of open) take(d);
-          }
-        }
+      for (const d of asked) {
+        const task = askedTasks.get(String(d.task_id));
+        if (!task?.cause || task.workspace !== workspace || !(OPEN_PROBLEM_STATUSES as readonly string[]).includes(task.status)) continue;
+        if (task.project_id && trialProjects.has(String(task.project_id))) continue;
+        take(d);
       }
       out.push(...(await decisionRowsForViewer(ctx, rows, (r) => inViewerQueue(ctx, r, userId), { line_workspace: workspace })));
     }

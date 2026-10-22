@@ -15,7 +15,7 @@ import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId, reachableRole, tellRole } from "./pendingMessages";
 import { canAccessProject, requireTeamAdmin, requireTeamMembership, resolveWorkspaceKey, workspaceGrantsAccess, workspaceKey, type WorkspaceKey } from "./lib/access";
-import { compareVersions, templateLoaderPrompt, validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
+import { compareVersions, validateTemplate, withTemplateLoader, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
 import { type ReleaseChanges, type ReleaseClass, type UpdateNames, updateNames, bumpRefusal, changelogBetween, classifyRelease, jumpBetween, previousRelease, releaseNote, updateOffer, withClasses } from "@codecast/shared/contracts/orgTemplateRelease";
 import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState, type SetupText } from "@codecast/shared/contracts/orgTemplateState";
 import { routineState, type RoutineReadiness } from "@codecast/shared/contracts/orgTemplateReadiness";
@@ -262,7 +262,8 @@ export const hiredRowKey = (projectId: string, instance: string) => `pending:${p
 /**
  * The host step of a web hire adds the loader that reads the pinned
  * release's charter on that host under the charter the role already has (a
- * hire onto a standing role keeps the person's words). The charter is human
+ * hire onto a standing role keeps the person's words; a loader the same
+ * instance left for another folder is replaced). The charter is human
  * only (orgRoles.refuseUnlessHuman), and the person's authority here is their
  * accept of the hire: the row it wrote, still awaiting its host, names this
  * role. The server builds the text from the instance and the folder, so the
@@ -280,10 +281,9 @@ export async function performWriteLoaderCharter(ctx: Ctx, userId: Id<"users">, a
   if (!row || row.phase !== "awaiting_host" || row.workspace !== (await resolveWorkspaceKey(ctx as any, project))) throw new Error(`No hire of ${args.instance} on this project is awaiting its host step; change the charter from the role page`);
   if (String(row.role_id) !== String(args.role_id)) throw new Error(`The hire ${args.instance} is for another role`);
   if (!/^\/[^\n']*[^/\n']$/.test(args.dir)) throw new Error("dir must be the project's absolute folder on the host");
-  const loader = templateLoaderPrompt(args.dir, args.instance, "charter");
   const own = ((await ctx.db.get(args.role_id))?.charter ?? "").trim();
-  if (own.includes(loader)) return { role_id: args.role_id, charter: own };
-  const charter = own ? `${own}\n\n${loader}` : loader;
+  const charter = withTemplateLoader(own, args.dir, args.instance);
+  if (charter === own) return { role_id: args.role_id, charter };
   await performUpdateRole(ctx, userId, { role_id: String(args.role_id), charter, human_decision: `hire:${String(row._id)}` });
   return { role_id: args.role_id, charter };
 }

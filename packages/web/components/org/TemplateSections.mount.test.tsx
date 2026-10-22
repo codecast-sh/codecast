@@ -34,7 +34,8 @@ async function verifyTemplateSections() {
     ],
     scoreboard: [{ key: "primary_events_7d", label: "Primary events", value: "7", observed_at: now - 3_600_000, source: "ct-1" }, { key: "cost", label: "Cost per event" }],
     secrets: [{ key: "accounts.ads", label: "Google Ads credentials", bound: false }, { key: "accounts.publora", label: "Publora key", bound: true }],
-    template: { name: "CMO", latest_stable: "2.1.0", changelog: "## 2.1.0\nThe search-console guide names the owning account." }, update_available: "2.1.0", update_digest: "f".repeat(64),
+    tools: [{ id: "gads", kind: "command", path: "scripts/gads.mjs", run: "node", summary: "Ads API" }, { id: "ads-daily", kind: "skill", path: "skills/ads-daily" }],
+    template: { name: "CMO", workspace: "codecast", latest_stable: "2.1.0", changelog: "## 2.1.0\nThe search-console guide names the owning account." }, update_available: "2.1.0", update_digest: "f".repeat(64),
     // The host step from the web (H3): the machine that runs the role, and how the last request went.
     bind_host: { device: { device_id: "dev-mbp", label: "MacBook", online: true, can_receive_secrets: true, pubkey: "PUB" }, dir: "/src/acme", reason: null },
     host_step: { state: "idle" },
@@ -62,6 +63,9 @@ async function verifyTemplateSections() {
   assert.match(text, /Waiting on you: Verify the domain \(unlocks seo-weekly\)/);
   assert.match(text, /Allowed outside codecast: write \(Ship pages\)/);
   assert.doesNotMatch(text, /Expired/);
+  // The tools it ships, by name, and whose copy of the template it runs.
+  assert.deepEqual([...document.querySelectorAll("[data-template-tools] span[title], [data-template-tools] span:not(:first-child)")].map((el) => el.textContent), ["gads", "ads-daily"]);
+  assert.match(text, /From Codecast's library/);
   assert.match(text, /Update available: 2\.1\.0/);
   // The learning switch (H12) says in one sentence what leaves and what comes back; off until a person turns it on.
   assert.match(text, /Let Codecast learn from this workspace's template roles/);
