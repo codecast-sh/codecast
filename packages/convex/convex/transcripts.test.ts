@@ -1626,6 +1626,22 @@ describe("delivering the words to the routes", () => {
     expect((await c.db.get("t1" as any)).routes[0].context_at).toBeGreaterThan(0);
   });
 
+  test("only a chunk that names the agent marks its feed as asked", async () => {
+    const feed = { _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "channel:chan1", added_by: "ub" };
+    const room = actionCtx({ transcripts: [huddle([route()])], call_agent_feeds: [{ ...feed }] });
+    await (deliverRoutes as any)._handler(room, { transcript_id: "t1", include_after_routes: false, reason: "flush" });
+    expect(room.sends).toHaveLength(1);
+    expect((await room.db.get("f1" as any)).addressed_at).toBeUndefined();
+    const named = actionCtx({
+      transcripts: [huddle([route()])],
+      call_agent_feeds: [{ ...feed }],
+      transcript_segments: [{ _id: "s3", transcript_id: "t1", seq: 3, speaker_id: "u1", speaker_name: "Ada", text: "Claude, why is the build red", t0: 1_000, t1: 2_000 }],
+    });
+    await (deliverRoutes as any)._handler(named, { transcript_id: "t1", include_after_routes: false, reason: "flush" });
+    expect(named.sends[0].body).toContain("They named you");
+    expect((await named.db.get("f1" as any)).addressed_at).toBeGreaterThan(0);
+  });
+
   test("the call's final delivery retries with backoff, a bounded number of times", async () => {
     const c = actionCtx({ transcripts: [huddle([route()], { status: "ended" })] }, { sendFails: 1 });
     await (deliverRoutes as any)._handler(c, { transcript_id: "t1", include_after_routes: true });
@@ -1821,6 +1837,25 @@ describe("markRouteSent briefing count", () => {
     await send(8, true);
     t = await db.get("t1" as any);
     expect(t.routes[0].briefed_chunks).toBe(1);
+  });
+
+  test("a chunk that named the agent marks its feed in this call, and only that one", async () => {
+    const db = makeFakeDb({
+      transcripts: [{ _id: "t1", routes: [{ kind: "session", target: "conv1", mode: "live", sent_seq: 0 }] }],
+      conversations: [{ _id: "conv1" }, { _id: "conv2" }],
+      call_agent_feeds: [
+        { _id: "f1", conversation_id: "conv1", transcript_id: "t1" },
+        { _id: "f2", conversation_id: "conv2", transcript_id: "t9" },
+      ],
+    });
+    const send = (target: string, addressed_at?: number) =>
+      (markRouteSent as any)._handler({ db }, { transcript_id: "t1", kind: "session", target, sent_seq: 1, addressed_at });
+    await send("conv1");
+    expect((await db.get("f1" as any)).addressed_at).toBeUndefined();
+    await send("conv1", 5_000);
+    expect((await db.get("f1" as any)).addressed_at).toBe(5_000);
+    await send("conv2", 6_000);
+    expect((await db.get("f2" as any)).addressed_at).toBeUndefined();
   });
 });
 

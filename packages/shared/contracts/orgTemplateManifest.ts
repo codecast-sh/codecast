@@ -108,6 +108,41 @@ export function substitute(text: string, values: Record<string, string>, inputs?
     return values[token];
   });
 }
+/** Why a value cannot answer this input, or null when it can: one rule for the hire, the CLI and an answer given after the hire. */
+export function answerProblem(input: TemplateInput, value: string): string | null {
+  if (!value) return `${input.label} needs a value`;
+  if (value.includes("\0") || value.includes("{{") || value.includes("}}")) return `Invalid value for ${input.label}: it cannot hold {{, }} or a NUL`;
+  if ((input.kind === "number" || input.kind === "money") && !/^-?\d+(\.\d+)?$/.test(value)) return `${input.label} must be a number`;
+  if (input.kind === "money" && Number(value) < 0) return `${input.label} must not be negative`;
+  if (input.kind === "boolean" && value !== "true" && value !== "false") return `${input.label} must be true or false`;
+  if (input.kind === "choice" && !(input.choices ?? []).includes(value)) return `${input.label} must be one of: ${(input.choices ?? []).join(", ")}`;
+  return null;
+}
+/** The answers a hire cannot go without that `config` leaves blank: required inputs with no default (secrets bind on the host). */
+export function missingRequired(manifest: Pick<OrgTemplate, "inputs">, config: Record<string, string> = {}): TemplateInput[] {
+  return (manifest.inputs ?? []).filter((i) => i.kind !== "secret" && i.required && i.default === undefined && !(config[i.key] ?? "").trim());
+}
+/** How an unanswered input reads wherever its token is filled: its label, marked, never an empty string. */
+export const missingAnswer = (label: string) => `[${label}]`;
+/**
+ * Fill only the answer tokens (`{{input.<key>}}`) of a manifest text from an
+ * instance's answers, leaving every other token as it is. An unanswered input
+ * renders as its marked label and is listed in `needs`, so the place showing
+ * the text can ask for it.
+ */
+export function fillAnswers(text: string, manifest: Pick<OrgTemplate, "inputs">, config: Record<string, string> = {}): { text: string; needs: string[] } {
+  const inputs = new Map((manifest.inputs ?? []).map((i) => [i.key, i]));
+  const needs: string[] = [];
+  const out = text.replace(/\{\{input\.([^{}]+)\}\}/g, (token, key: string) => {
+    const input = inputs.get(key);
+    if (!input) return token;
+    const value = config[key] || (input.default !== undefined ? String(input.default) : "");
+    if (value !== "") return value;
+    if (!needs.includes(key)) needs.push(key);
+    return missingAnswer(input.label);
+  });
+  return { text: out, needs };
+}
 export function templatePath(value: string): string {
   if (!value || isAbsolutePath(value) || value.includes("\\") || value.includes("\0") || value.split("/").some((p) => !p || p === "." || p === "..") || value.includes("{{")) throw new Error(`Unsafe artifact path: ${value}`);
   return value;
@@ -323,4 +358,17 @@ export const quoteTemplateArg = (value: string) => `'${value.replace(/'/g, `'\\'
  */
 export function templateLoaderPrompt(dir: string, instance: string, routine: string): string {
   return `Read the pinned instance receipt ${dir}/.codecast/org-templates/${instance}.json. Run this command before doing any work:\n\ncast org template instructions ${quoteTemplateArg(instance)} ${quoteTemplateArg(routine)} --dir ${quoteTemplateArg(dir)}\n\nUse only the verified instructions it returns. If verification fails, stop and report the error. The role's human charter, trust, grants and project scope still apply. This loader grants no spending, publishing, credentials or filesystem isolation.`;
+}
+/**
+ * A role's charter with the instance's loader under the person's words: an
+ * earlier loader of the same instance (pinned to another folder) is replaced,
+ * so a host move never leaves the role reading a receipt that is gone.
+ */
+export function withTemplateLoader(charter: string, dir: string, instance: string): string {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const [first, ...rest] = templateLoaderPrompt("\u0000", instance, "charter").split("\u0000").map(escape);
+  const earlier = new RegExp(`\\n*${first}([^\\n']+)${rest.join("\\1")}`, "g");
+  const own = charter.replace(earlier, "").trim();
+  const loader = templateLoaderPrompt(dir, instance, "charter");
+  return own ? `${own}\n\n${loader}` : loader;
 }

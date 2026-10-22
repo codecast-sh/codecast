@@ -15,7 +15,7 @@ import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId, reachableRole, tellRole } from "./pendingMessages";
 import { canAccessProject, requireTeamAdmin, requireTeamMembership, resolveWorkspaceKey, workspaceGrantsAccess, workspaceKey, type WorkspaceKey } from "./lib/access";
-import { compareVersions, templateLoaderPrompt, validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
+import { answerProblem, compareVersions, validateTemplate, withTemplateLoader, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
 import { type ReleaseChanges, type ReleaseClass, type UpdateNames, updateNames, bumpRefusal, changelogBetween, classifyRelease, jumpBetween, previousRelease, releaseNote, updateOffer, withClasses } from "@codecast/shared/contracts/orgTemplateRelease";
 import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState, type SetupText } from "@codecast/shared/contracts/orgTemplateState";
 import { routineState, type RoutineReadiness } from "@codecast/shared/contracts/orgTemplateReadiness";
@@ -262,7 +262,8 @@ export const hiredRowKey = (projectId: string, instance: string) => `pending:${p
 /**
  * The host step of a web hire adds the loader that reads the pinned
  * release's charter on that host under the charter the role already has (a
- * hire onto a standing role keeps the person's words). The charter is human
+ * hire onto a standing role keeps the person's words; a loader the same
+ * instance left for another folder is replaced). The charter is human
  * only (orgRoles.refuseUnlessHuman), and the person's authority here is their
  * accept of the hire: the row it wrote, still awaiting its host, names this
  * role. The server builds the text from the instance and the folder, so the
@@ -280,10 +281,9 @@ export async function performWriteLoaderCharter(ctx: Ctx, userId: Id<"users">, a
   if (!row || row.phase !== "awaiting_host" || row.workspace !== (await resolveWorkspaceKey(ctx as any, project))) throw new Error(`No hire of ${args.instance} on this project is awaiting its host step; change the charter from the role page`);
   if (String(row.role_id) !== String(args.role_id)) throw new Error(`The hire ${args.instance} is for another role`);
   if (!/^\/[^\n']*[^/\n']$/.test(args.dir)) throw new Error("dir must be the project's absolute folder on the host");
-  const loader = templateLoaderPrompt(args.dir, args.instance, "charter");
   const own = ((await ctx.db.get(args.role_id))?.charter ?? "").trim();
-  if (own.includes(loader)) return { role_id: args.role_id, charter: own };
-  const charter = own ? `${own}\n\n${loader}` : loader;
+  const charter = withTemplateLoader(own, args.dir, args.instance);
+  if (charter === own) return { role_id: args.role_id, charter };
   await performUpdateRole(ctx, userId, { role_id: String(args.role_id), charter, human_decision: `hire:${String(row._id)}` });
   return { role_id: args.role_id, charter };
 }
@@ -384,7 +384,7 @@ export async function instanceFor(ctx: Ctx, userId: Id<"users">, instanceKey: st
   return { row, manifest: release.manifest as OrgTemplate, template };
 }
 /** The instance record plus the authority its role holds (org_roles.authority), for readiness. */
-export const stateOf = (row: any, role?: any): InstanceState => ({ evidence: row.evidence, scoreboard: row.scoreboard, setup: row.setup, authority: (role?.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) });
+export const stateOf = (row: any, role?: any): InstanceState => ({ evidence: row.evidence, scoreboard: row.scoreboard, setup: row.setup, config: row.config, authority: (role?.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) });
 
 // ── The instance record (H5 to H7) ──────────────────────────────────────────
 
@@ -409,6 +409,23 @@ export async function performMarkSetup(ctx: Ctx, userId: Id<"users">, args: { in
   const next = markSetup(manifest, state, args.id, { status: args.status, evidence: args.evidence });
   await ctx.db.patch(row._id, { setup: state.setup, updated_at: Date.now() });
   return next;
+}
+
+/**
+ * A hire's answer given after the hire, from the setup item that names it: the
+ * row's answers take it, the page's words fill from it at once, and a ready
+ * instance's host step is queued so the instance file on its machine has it too.
+ */
+export async function performAnswerInput(ctx: Ctx, userId: Id<"users">, args: { instance_key: string; key: string; value: string }) {
+  const { row, manifest } = await instanceFor(ctx, userId, args.instance_key);
+  const input = (manifest.inputs ?? []).find((i) => i.key === args.key);
+  if (!input || input.kind === "secret") throw new Error(`Not an answer this template asks for: ${args.key}`);
+  const value = args.value.trim();
+  const problem = answerProblem(input, value);
+  if (problem) throw new Error(problem);
+  await ctx.db.patch(row._id, { config: { ...(row.config ?? {}), [args.key]: value }, updated_at: Date.now() });
+  if (row.phase === "ready") await enqueueBind(ctx, userId, { ...row, config: { ...(row.config ?? {}), [args.key]: value } });
+  return { key: args.key, value };
 }
 
 /** What the role page and `status` show: the row, its setup rows, the one open ask, readiness per routine. */
@@ -733,7 +750,7 @@ export const upsertInstance = mutation({
     bindings: v.optional(v.record(v.string(), v.object({ host: v.string(), path_hash: v.string(), bound_at: v.number() }))),
     ledgers: v.optional(v.record(v.string(), v.object({ taskId: v.string(), shortId: v.string() }))),
     routines: v.optional(v.record(v.string(), v.object({ triggerId: v.optional(v.string()), external: v.optional(v.boolean()), retired: v.optional(v.boolean()) }))),
-    setup_text: v.optional(v.record(v.string(), v.object({ title: v.string(), price: v.optional(v.string()), guide: v.optional(v.string()) }))),
+    setup_text: v.optional(v.record(v.string(), v.object({ title: v.string(), price: v.optional(v.string()), guide: v.optional(v.string()), needs: v.optional(v.array(v.string())) }))),
     from_session: v.optional(v.string()),
   },
   handler: async (ctx, { api_token, ...args }) => {
@@ -752,6 +769,10 @@ export const recordEvidenceCheck = mutation({
 export const report = mutation({
   args: { api_token: v.optional(v.string()), instance_key: v.string(), entries: v.array(v.string()), source: v.optional(v.string()), observed_at: v.optional(v.number()) },
   handler: async (ctx, { api_token, ...args }) => performRecordScores(ctx, await requireCaller(ctx, api_token), args),
+});
+export const answer = mutation({
+  args: { api_token: v.optional(v.string()), instance_key: v.string(), key: v.string(), value: v.string() },
+  handler: async (ctx, { api_token, ...args }) => performAnswerInput(ctx, await requireCaller(ctx, api_token), args),
 });
 export const setup = mutation({
   args: { api_token: v.optional(v.string()), instance_key: v.string(), id: v.string(), status: v.string(), evidence: v.optional(v.string()), from_agent: v.optional(v.boolean()) },
