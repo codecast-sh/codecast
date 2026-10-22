@@ -158,3 +158,23 @@ test("updateNames: the offered release's words, and the instance's own for what 
     inputs: { "product.domain": "Domain", "accounts.x": "X key" },
   });
 });
+
+describe("tools a template ships", () => {
+  test("declaring, dropping or changing a tool is structure; a tool's files alone are content", () => {
+    const tool = { id: "gads", kind: "command" as const, path: "scripts/gads.mjs", run: "node", summary: "Ads API" };
+    const withTool = { ...base("1.1.0"), schemaVersion: 2 as const, tools: [tool] };
+    expect(explainRelease({ ...base(), schemaVersion: 2 }, withTool)).toMatchObject({ class: "structure", why: ["tool gads added"] });
+    expect(explainRelease(withTool, { ...withTool, version: "1.2.0", tools: [{ ...tool, summary: "Ads API, v2" }] })).toMatchObject({ class: "structure", why: ["tool gads changed"] });
+    expect(classifyRelease(withTool, { ...withTool, version: "1.1.1" }).class).toBe("content");
+  });
+  test("a tool token is known only for a declared tool; tool entries are checked by kind", async () => {
+    const { validateTemplate, validateTokens, toolIds } = await import("./orgTemplateManifest");
+    const m = validateTemplate({ ...base(), schemaVersion: 2, tools: [{ id: "gads", kind: "command", path: "scripts/gads.mjs", summary: "Ads" }, { id: "kick", kind: "skill", path: "skills/kick" }] });
+    expect(() => validateTokens("Run {{tool.gads}} then read {{tool.kick}}", new Set(), toolIds(m))).not.toThrow();
+    expect(() => validateTokens("Run {{tool.other}}", new Set(), toolIds(m))).toThrow(/Unknown template token: tool.other/);
+    expect(() => validateTemplate({ ...base(), schemaVersion: 2, tools: [{ id: "x", kind: "command", path: "a.mjs" }] })).toThrow(/tool.summary/);
+    expect(() => validateTemplate({ ...base(), schemaVersion: 2, tools: [{ id: "x", kind: "skill", path: "skills/x", run: "bun" }] })).toThrow(/SKILL.md description/);
+    expect(() => validateTemplate({ ...base(), schemaVersion: 2, tools: [{ id: "x", kind: "binary", path: "a" }] })).toThrow(/command or skill/);
+    expect(() => validateTemplate({ ...base(), schemaVersion: 2, tools: [{ id: "x", kind: "command", path: "../a", summary: "s" }] })).toThrow(/Unsafe artifact path/);
+  });
+});

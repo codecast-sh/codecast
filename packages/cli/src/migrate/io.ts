@@ -223,7 +223,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
             // The git step already ran in pushSession, with the moved repo in hand.
             await readyHostHome(host, {
               localGitRoot: localRoot, repoPath, cloudId: cloud.id, skipGit: true, onProgress: (m) => log(`  ${m}`),
-              extraTools: used.map((t) => ({ tool: t.tool, referenced_by: "this session ran it" })),
+              extraTools: used.map((t) => ({ tool: t.tool, referenced_by: "this session ran it", ...(t.install ? { install: t.install } : {}) })),
             });
           } catch (err) {
             log(`  host home steps failed: ${err instanceof Error ? err.message : String(err)}`);

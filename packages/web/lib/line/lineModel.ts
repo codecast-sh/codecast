@@ -1133,7 +1133,7 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
   const reads0 = issueReads.get(key) ?? new Map<string, IssueRead[]>();
   const kept = new Map<string, IssueRead[]>();
   const shared = [
-    rows.deploys ? rows.deploys.length : -1, ...(rows.deploys ?? []), rows.watchDays ?? null, now, rows.forYou ? 1 : 0,
+    rows.deploys ? rows.deploys.length : -1, ...(rows.deploys ?? []), rows.watchDays ?? null, rows.forYou ? 1 : 0,
     order.map((id) => `${id}:${steps[id].kind}:${steps[id].stage}:${steps[id].half}`).join(","),
     faults.map((f) => `${f.runId}|${f.caseId}|${f.caseRef}|${f.step}|${f.stepLabel}|${f.words}|${f.at}`).join("\n"),
   ];
@@ -1141,7 +1141,10 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
   for (const taskId of causeIds) {
     const task = taskById.get(taskId);
     const project = (task as { project_id?: string | null } | undefined)?.project_id ?? null;
-    const deps: unknown[] = [...shared, task, occurrencesByTask.get(taskId), rows.holdOf?.(project) ?? null, rows.forYou?.get(taskId) ?? null, rows.handMerges?.get(taskId) ?? null];
+    // The clock reaches a problem only through a run's age or end and a watch's deadline (causeWhere, causeHistory): one
+    // with neither reads the same at any time, so a tick does not read it again.
+    const timed = !!anyRunByTask.get(taskId)?.length || !!(task as { watch_until?: number | null } | undefined)?.watch_until;
+    const deps: unknown[] = [...shared, timed ? now : null, task, occurrencesByTask.get(taskId), rows.holdOf?.(project) ?? null, rows.forYou?.get(taskId) ?? null, rows.handMerges?.get(taskId) ?? null];
     for (const r of runsByTask.get(taskId) ?? []) deps.push(runById.get(r.id));
     deps.push("|");
     for (const r of anyRunByTask.get(taskId) ?? []) deps.push(r);
@@ -1150,6 +1153,7 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
     deps.push("|");
     for (const d of decisionsOf(taskId, anyRunByTask.get(taskId) ?? [])) deps.push(d);
     const hit = reads0.get(taskId)?.find((x) => x.deps.length === deps.length && x.deps.every((d, n) => d === deps[n]) && answers(x.asked));
+    ((globalThis as any).__ih ??= [0, 0])[hit ? 0 : 1]++; // __LP temp
     if (hit) {
       kept.set(taskId, [hit, ...(reads0.get(taskId) ?? []).filter((x) => x !== hit)].slice(0, ISSUE_READS_KEPT));
       issues.push(hit.issue);

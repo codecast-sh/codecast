@@ -301,3 +301,33 @@ describe("the chain axis", () => {
     expect(canSubGroup("status", "chain")).toBe(false);
   });
 });
+
+describe("the Call axis (the board's Huddles view)", () => {
+  const calls = {
+    c1: { title: "Team huddle", short_id: "cl-143", started_at: 100 },
+    c2: { title: "Call with Cam", short_id: "cl-141", started_at: 200 },
+  };
+  const callCtx = { ...ctx, calls };
+
+  it("groups tasks by the call they were pulled from, newest call first, the rest last", () => {
+    const a = task({ from_call: "c1" });
+    const b = task({ from_call: "c2" });
+    const c = task({ from_call: "c1" });
+    const d = task();
+    const g = groups("call", [a, b, c, d], "", callCtx);
+    expect(g.map((x) => x.label)).toEqual(["Call with Cam", "Team huddle", "Not from a call"]);
+    expect(g[1].items.map((t) => t._id)).toEqual([a._id, c._id]);
+  });
+
+  it("names a call outside the cached list plainly, in a group of its own", () => {
+    const g = groups("call", [task({ from_call: "unknown" })], "", callCtx);
+    expect(g.map((x) => x.label)).toEqual(["Call"]);
+  });
+
+  it("a drop links the task to the call, and the none group unlinks it", () => {
+    const t = task();
+    const [into] = groups("call", [task({ from_call: "c1" })], "", callCtx);
+    expect(taskGroupDropUpdates("call", into.key, t, callCtx)).toEqual({ from_call: "c1" });
+    expect(TASK_AXES.call.dropUpdates("", t, callCtx)).toEqual({ from_call: "" });
+  });
+});

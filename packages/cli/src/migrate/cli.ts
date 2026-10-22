@@ -22,6 +22,7 @@ import { convexClient } from "../remote/cli.js";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
+import type { BroughtPath } from "../remote/session-move.js";
 import { bringsByDefault } from "@codecast/shared/contracts/moveRehearsal";
 import { createRunnerIo } from "./io.js";
 import { hostResolver } from "./hosts.js";
@@ -263,7 +264,7 @@ export function registerMigrateCommand(program: Command): void {
       if (row.direction !== "to_local" || !row.from_device_id) { console.error("that session runs on this machine; bring paths with a move (cast migrate start --bring)"); process.exit(1); }
       const { pushPath } = await import("../remote/session-move.js");
       const { host } = await hostResolver((line) => console.error(line))(row.from_device_id);
-      const brought = [];
+      const brought: BroughtPath[] = [];
       for (const p of paths) {
         const b = await pushPath(host, path.resolve(p));
         brought.push(b);
