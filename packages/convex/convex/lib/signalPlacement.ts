@@ -17,9 +17,10 @@
 // step reads a subject that way; an initiative metric names the projects it
 // carries, which is several, not an owner.
 //
-// The first three settle the project. The last two are provisional: the
-// problem waits where the default put it (or in no project), and only a
-// settled project scopes the attach judge or is recorded apart.
+// The first three settle the project. The last two leave it to Ground
+// (lineGround.ts), which names the project in the same call that grounds the
+// cause and records `placed: "ground"`; until then only a settled project
+// scopes the attach judge or is recorded apart.
 import type { Doc, Id } from "../_generated/dataModel";
 import { expectationIdPrefix, isExpectationId } from "@codecast/shared/contracts/expectations";
 import { resolveWorkspaceProject } from "./projectRef";

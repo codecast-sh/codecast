@@ -7,5 +7,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
-COPY worker.mjs vision.mjs ./
+COPY worker.mjs turns.mjs vision.mjs ./
 CMD ["node", "worker.mjs", "start"]

@@ -259,17 +259,26 @@ export const GROUND_FIELDS = `- goal_ref: the metric ref or project short id fro
 - risk: \`low\` when a reviewer can judge the diff alone; \`review\` when it needs a careful look; \`plan\` when it changes architecture, a schema, billing or auth, or a design across several systems, so the approach is planned and written down before anything is built.
 - readiness: \`ready\` when a session could start now. Nobody is asked anything before the work is done, so a cause is ready whenever what is unknown about it can be found by reading the code, the data or the product's own record: finding it is the next stations' work, and the note says what to find. \`needs_context\` when the work turns on something written nowhere a session can read, named in the note; the cause then waits, open, with that reason on it. \`not_actionable\` when there is nothing to change (a duplicate, intended behavior, noise).`;
 
-const GROUND_SYSTEM = `${GROUND_PURPOSE}
+/**
+ * The fifth field, asked only of a cause nothing has placed (the-line-model.md
+ * LM1): no expectation it breaks, no filer and no single-purpose source named
+ * its project, so it sits where a default put it, or nowhere.
+ */
+export const GROUND_PROJECT_FIELD = `- project: the project this cause belongs to, as a short id from the brief's projects, or \`none\` when no project's charter covers it. A project is decided by what the problem is about: the behavior, surface or area its signals report, read against each project's charter. Where it was filed says nothing about that, since a default put it there; keep it only when that project's charter is the one that covers the problem. goal_ref is a separate judgment and may name a goal another project carries.`;
 
-You see the cause as filed, the signals attached to it, its latest comments, and the goals brief of the project it belongs to (of its whole workspace when it names no project). Decide from those alone. You cannot read the code or the product's data, and the stations after you can: a question they could settle by looking is theirs to settle, and the cause is ready.
+function groundSystem(placing: boolean): string {
+  return `${GROUND_PURPOSE}
+
+You see the cause as filed, the signals attached to it, its latest comments, and the goals brief of the project it belongs to (of its whole workspace when it names no project${placing ? " or you are placing it" : ""}). Decide from those alone. You cannot read the code or the product's data, and the stations after you can: a question they could settle by looking is theirs to settle, and the cause is ready.
 
 ${GROUND_DATA_NOTE}
 
-${GROUND_FIELDS}
+${GROUND_FIELDS}${placing ? `\n${GROUND_PROJECT_FIELD}` : ""}
 
 Reply with one JSON object and nothing else:
-{"goal_ref": "<ref or none>", "category": "<category>", "risk": "<risk>", "readiness": "<readiness>", "note": "<why, one plain line>"}
+{"goal_ref": "<ref or none>", "category": "<category>", "risk": "<risk>", "readiness": "<readiness>", ${placing ? `"project": "<project short id>", ` : ""}"note": "<why, one plain line>"}
 The note is what a person reads on the cause, so it says why in their terms. They read it under the cause's own report count (the signals total), so any size the note gives is that count; a number the description reports for something wider, such as a product's whole cluster, would read as a second, contradicting count for the same cause. When unsure of the risk, use review.`;
+}
 
 /**
  * The shape of a ground answer, which the call is generated under (structured
@@ -289,6 +298,23 @@ export const GROUND_OUTPUT_SCHEMA: Record<string, unknown> = {
   required: ["goal_ref", "category", "risk", "readiness", "note"],
   additionalProperties: false,
 };
+
+/** The answer's shape for a cause being placed: the base shape plus a project, one of the brief's. */
+export function groundOutputSchema(placing: readonly string[] | null): Record<string, unknown> {
+  if (!placing?.length) return GROUND_OUTPUT_SCHEMA;
+  const base = GROUND_OUTPUT_SCHEMA as { properties: Record<string, unknown>; required: string[] };
+  return {
+    ...GROUND_OUTPUT_SCHEMA,
+    properties: { ...base.properties, project: { type: "string", enum: [...placing, NO_GOAL] } },
+    required: [...base.required.slice(0, -1), "project", "note"],
+  };
+}
+
+/** The projects a cause being placed may land in: every project the brief lists (or none, which is always open). Null when the cause is not being placed, or the brief lists none. */
+export function groundPlacingProjects(cause: Pick<GroundCauseInput, "placing">, brief: GoalsBrief): string[] | null {
+  if (!cause.placing || !brief.projects.length) return null;
+  return brief.projects.map((p) => p.short_id);
+}
 
 /** Every goal_ref a brief offers: each initiative metric's ref, each project's short id, the line, and none. */
 export function briefGoalRefs(brief: GoalsBrief): Set<string> {
@@ -320,6 +346,11 @@ export type GroundCauseInput = {
   last_seen?: number;
   signals: Array<{ source: string; kind: string; title: string; subject?: string; goal_hint?: string; detail_md?: string; observed_at: number }>;
   comments: Array<{ author?: string; text: string; created_at?: number }>;
+  /**
+   * Set when nothing has placed the cause (LM1), so the call also names its
+   * project; `filed_under` is the project a default filed it in, if any.
+   */
+  placing?: { filed_under?: { short_id: string; title: string } };
 };
 
 const GROUND_DESCRIPTION_CHARS = 2000;
@@ -331,6 +362,7 @@ export function groundCausePrompt(cause: GroundCauseInput, brief: GoalsBrief, no
   const facts = [
     `title: ${oneLine(cause.title)}`,
     cause.priority ? `priority: ${cause.priority}` : null,
+    cause.placing ? `filed under: ${cause.placing.filed_under ? `${cause.placing.filed_under.short_id} ${oneLine(cause.placing.filed_under.title)}, by default` : "no project"}` : null,
     cause.created_at ? `filed: ${day(cause.created_at)}` : null,
     cause.signal_count ? `signals: ${cause.signal_count}${cause.first_seen ? `, first seen ${day(cause.first_seen)}` : ""}${cause.last_seen ? `, last seen ${day(cause.last_seen)}` : ""}` : null,
     cause.description?.trim() ? `description:\n${clip(cause.description.trim(), GROUND_DESCRIPTION_CHARS)}` : null,
@@ -352,13 +384,13 @@ export function groundCausePrompt(cause: GroundCauseInput, brief: GoalsBrief, no
     comments ? `<comments>\n${comments}\n</comments>` : null,
     `<goals>\n${renderGoalsBrief(brief, { brief: true, now }).trim()}\n</goals>`,
   ].filter(Boolean).join("\n\n");
-  return { system: GROUND_SYSTEM, prompt };
+  return { system: groundSystem(!!groundPlacingProjects(cause, brief)), prompt };
 }
 
-export type GroundFields = { goal_ref: string; category: LineCategory; risk: LineRisk; readiness: LineReadiness; readiness_note: string };
+export type GroundFields = { goal_ref: string; category: LineCategory; risk: LineRisk; readiness: LineReadiness; readiness_note: string; project?: string };
 
-/** The four fields and the note from a ground reply, or the one line saying why it cannot be read. */
-export function parseGroundReply(parsed: unknown, refs: ReadonlySet<string>): { fields: GroundFields } | { error: string } {
+/** The four fields and the note from a ground reply (and the project, when `placing` lists where it may go), or the one line saying why it cannot be read. */
+export function parseGroundReply(parsed: unknown, refs: ReadonlySet<string>, placing: readonly string[] | null = null): { fields: GroundFields } | { error: string } {
   if (!parsed || typeof parsed !== "object") return { error: "the reply was not a JSON object" };
   const r = parsed as Record<string, unknown>;
   const str = (k: string) => (typeof r[k] === "string" ? (r[k] as string).trim() : "");
@@ -371,7 +403,9 @@ export function parseGroundReply(parsed: unknown, refs: ReadonlySet<string>): { 
   if (!(LINE_RISKS as readonly string[]).includes(risk)) return { error: `risk "${risk}" is not one of ${LINE_RISKS.join(", ")}` };
   const readiness = str("readiness").toLowerCase().replace(/-/g, "_");
   if (!(LINE_READINESS as readonly string[]).includes(readiness)) return { error: `readiness "${readiness}" is not one of ${LINE_READINESS.join(", ")}` };
-  return { fields: { goal_ref: goalRef, category: category as LineCategory, risk: risk as LineRisk, readiness: readiness as LineReadiness, readiness_note: noteWhole(oneLine(str("note"))) } };
+  const project = str("project").toLowerCase() === NO_GOAL ? NO_GOAL : str("project");
+  if (placing && project !== NO_GOAL && !placing.includes(project)) return { error: `project "${project}" is not a project the brief lists` };
+  return { fields: { goal_ref: goalRef, category: category as LineCategory, risk: risk as LineRisk, readiness: readiness as LineReadiness, readiness_note: noteWhole(oneLine(str("note"))), ...(placing ? { project } : {}) } };
 }
 
 /** Where a ground note stops: far past what a note says, so the ask it ends with is kept. */

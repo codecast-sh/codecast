@@ -14,7 +14,11 @@ import { useServerAuthSettled } from "./useServerAuthSettled";
 
 const HEAD_POLL_MS = 30_000;
 const HEAD_ROWS = 40;
-const PAGE_ROWS = 80;
+const PAGE_ROWS = 200;
+/** How far before the previous poll a poll reads from, for a client clock behind the server's. */
+const SKEW_MS = 60_000;
+/** Pages one poll reads at most to close a burst; past them the gap is left and the next poll starts from now. */
+const CATCH_UP_PAGES = 5;
 
 export type LineTimelineFeed = {
   /** The time the loaded events are complete down to; null before the first answer. */
@@ -31,13 +35,14 @@ export function useSyncLineTimeline(workspace?: string | null): LineTimelineFeed
   const convex = useConvex();
   const settled = useServerAuthSettled();
   const { args, key } = useFeederWorkspace(workspace);
-  const argsKey = args === "skip" || !settled ? null : JSON.stringify(args);
+  // The ingest scope names the workspace kind beside the team: a team id alone resolves to the caller's personal one.
+  const argsKey = args === "skip" || !settled ? null : JSON.stringify(args.team_id ? { workspace: "team", team_id: args.team_id } : { workspace: "personal" });
   const [state, setState] = useState<{ key: string | null; floor: number | null; done: boolean; loading: boolean }>({ key: null, floor: null, done: false, loading: false });
   const busy = useRef(false);
 
-  const read = useCallback(async (before: number | undefined, rows: number) => {
+  const read = useCallback(async (before: number | undefined, rows: number, after?: number) => {
     if (!argsKey) return null;
-    const res = await convex.query(api.lineTimeline.page, { ...JSON.parse(argsKey), ...(before != null ? { before } : {}), rows });
+    const res = await convex.query(api.lineTimeline.page, { ...JSON.parse(argsKey), ...(before != null ? { before } : {}), ...(after != null ? { after } : {}), rows });
     if (res.events.length) useInboxStore.getState().syncTable("lineTimeline", res.events as any, { isDelta: true } as any);
     return res;
   }, [convex, argsKey]);
@@ -46,34 +51,57 @@ export function useSyncLineTimeline(workspace?: string | null): LineTimelineFeed
   useEffect(() => {
     if (!argsKey) return;
     let stopped = false;
-    const head = () => {
-      if (document.visibilityState !== "visible") return;
-      read(undefined, HEAD_ROWS).then((res) => {
-        if (stopped || !res) return;
-        // The head never lowers a floor an older page already reached.
-        setState((s) => (s.key === key && s.floor != null && s.floor <= res.cutoff ? s : { key, floor: res.cutoff, done: res.cutoff === 0, loading: false }));
-      }).catch((e) => console.warn("[feeder:lineTimeline] head failed", e));
+    // The first read runs whatever the page's visibility; a repeat waits for the page to be seen. A repeat reads only
+    // what changed since the one before (`after`, a minute early for clocks that disagree), and reads on down while a
+    // burst fills its page, so what it holds stays gap free.
+    let since: number | null = null;
+    let running = false;
+    const head = async () => {
+      if (running || (since != null && document.visibilityState !== "visible")) return;
+      running = true;
+      const started = Date.now();
+      try {
+        if (since == null) {
+          const res = await read(undefined, HEAD_ROWS);
+          if (stopped || !res) return;
+          // The head never lowers a floor an older page already reached.
+          setState((s) => (s.key === argsKey && s.floor != null && s.floor <= res.cutoff ? s : { key: argsKey, floor: res.cutoff, done: res.cutoff === 0, loading: false }));
+        } else {
+          const after = since - SKEW_MS;
+          let before: number | undefined;
+          for (let i = 0; i < CATCH_UP_PAGES; i++) {
+            const res = await read(before, PAGE_ROWS, after);
+            if (stopped || !res || res.cutoff <= after) break;
+            before = res.cutoff;
+          }
+        }
+        since = started;
+      } catch (e) {
+        console.warn("[feeder:lineTimeline] head failed", e);
+      } finally {
+        running = false;
+      }
     };
     head();
     const timer = setInterval(head, HEAD_POLL_MS);
     document.addEventListener("visibilitychange", head);
     return () => { stopped = true; clearInterval(timer); document.removeEventListener("visibilitychange", head); };
-  }, [argsKey, key, read]);
+  }, [argsKey, read]);
 
-  const floor = state.key === key ? state.floor : null;
-  const done = state.key === key && state.done;
+  const floor = state.key === argsKey ? state.floor : null;
+  const done = state.key === argsKey && state.done;
   const loadOlder = useCallback(() => {
     if (busy.current || floor == null || done) return;
     busy.current = true;
     setState((s) => ({ ...s, loading: true }));
     read(floor, PAGE_ROWS).then((res) => {
       if (!res) return;
-      setState((s) => ({ key, floor: Math.min(s.floor ?? res.cutoff, res.cutoff === 0 ? 0 : res.cutoff), done: res.cutoff === 0, loading: false }));
+      setState((s) => ({ key: argsKey, floor: Math.min(s.floor ?? res.cutoff, res.cutoff), done: res.cutoff === 0, loading: false }));
     }).catch((e) => {
       console.warn("[feeder:lineTimeline] page failed", e);
       setState((s) => ({ ...s, loading: false }));
     }).finally(() => { busy.current = false; });
-  }, [floor, done, key, read]);
+  }, [floor, done, argsKey, read]);
 
   return { floor, workspace: key, loading: state.loading, done, loadOlder };
 }

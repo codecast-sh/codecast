@@ -60,5 +60,8 @@ describe("lineTimeline.page", () => {
     expect(first.events.map((e: any) => e.signal_ref ?? e.deploy)).toEqual(["sg-4", "sg-3", "dp-1"]);
     const next = await h(page)(w.as("u1"), { ...TEAM, rows: 2, before: first.cutoff });
     expect(next.events.map((e: any) => e.signal_ref)).toEqual(["sg-2", "sg-1"]);
+    // A poll asks only for what came after its last read.
+    const poll = await h(page)(w.as("u1"), { ...TEAM, after: 125 });
+    expect(poll.events.map((e: any) => e.signal_ref)).toEqual(["sg-4", "sg-3"]);
   });
 });

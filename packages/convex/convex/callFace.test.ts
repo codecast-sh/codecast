@@ -157,7 +157,7 @@ describe("a voice's lifetime is its feed row", () => {
 
   test("a mirrored reply is told as plain words; a passed turn tells nothing", async () => {
     const ctx = ctxWith({
-      call_agent_feeds: [feed()],
+      call_agent_feeds: [feed({ addressed_at: Date.now() })],
       transcripts: [transcript()],
       messages: [
         { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
@@ -170,19 +170,50 @@ describe("a voice's lifetime is its feed row", () => {
       { name: "callFace:tell", args: { room_key: "session:conv1", conversation_id: "conv1", text: "The fix is in auth.ts: Ship it." } },
     ]);
     const passed = ctxWith({
-      call_agent_feeds: [feed()],
+      call_agent_feeds: [feed({ addressed_at: Date.now() })],
       transcripts: [transcript()],
       messages: [{ _id: "m2", conversation_id: "conv1", role: "assistant", content: "[pass]", timestamp: 2 }],
       call_chat_messages: [],
     });
     await call(mirrorAgentTurn, passed, { conversation_id: "conv1", attempt: 0 });
     expect(faceCalls(passed)).toEqual([]);
+    // A pass spends nothing: the reply that answers the ask is still to come.
+    expect(passed.db._tables.call_agent_feeds[0].addressed_at).toBeNumber();
+  });
+
+  // cl-158:548: the voice told the room "the session just finished" when
+  // nobody had asked. What the session offers unasked is for the chat.
+  test("a reply nobody asked for stays in the chat and is never said", async () => {
+    const reply = { _id: "m2", conversation_id: "conv1", role: "assistant", content: "The doc is built and in the chat.", timestamp: 2 };
+    const unasked = ctxWith({ call_agent_feeds: [feed()], transcripts: [transcript()], messages: [reply], call_chat_messages: [] });
+    await call(mirrorAgentTurn, unasked, { conversation_id: "conv1", attempt: 0 });
+    expect(unasked.db._tables.call_chat_messages).toHaveLength(1);
+    expect(faceCalls(unasked)).toEqual([]);
+    const stale = ctxWith({ call_agent_feeds: [feed({ addressed_at: Date.now() - 11 * 60_000 })], transcripts: [transcript()], messages: [reply], call_chat_messages: [] });
+    await call(mirrorAgentTurn, stale, { conversation_id: "conv1", attempt: 0 });
+    expect(faceCalls(stale)).toEqual([]);
+  });
+
+  test("an ask is said once: the next unasked reply stays in the chat", async () => {
+    const ctx = ctxWith({
+      call_agent_feeds: [feed({ addressed_at: Date.now() })],
+      transcripts: [transcript()],
+      messages: [{ _id: "m2", conversation_id: "conv1", role: "assistant", content: "Refresh races on the token write.", timestamp: 2 }],
+      call_chat_messages: [],
+    });
+    await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+    expect(faceCalls(ctx)).toHaveLength(1);
+    expect(ctx.db._tables.call_agent_feeds[0].addressed_at).toBeUndefined();
+    ctx.db._tables.messages.push({ _id: "m3", conversation_id: "conv1", role: "assistant", content: "Also, the retry is unbounded.", timestamp: 3 });
+    await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+    expect(faceCalls(ctx)).toHaveLength(1);
+    expect(ctx.db._tables.call_chat_messages).toHaveLength(2);
   });
 });
 
 test("a page link is shown in the chat and never read aloud", async () => {
   const ctx = ctxWith({
-    call_agent_feeds: [feed()],
+    call_agent_feeds: [feed({ addressed_at: Date.now() })],
     transcripts: [transcript()],
     messages: [{ _id: "m2", conversation_id: "conv1", role: "assistant", content: "Here is the funnel by week:\n\nhttps://codecast.sh/a/funnel-weekly\n\nSignups dipped in week 3.", timestamp: 2 }],
     call_chat_messages: [],
@@ -224,6 +255,8 @@ describe("what the worker reads and writes", () => {
     expect(sent.args.to).toBe("conv1");
     expect(sent.args.body).toContain("from Ada");
     expect(sent.args.body).toEndWith("Why does refresh race?");
+    // Its answer is one the voice will say.
+    expect(ctx.db._tables.call_agent_feeds[0].addressed_at).toBeNumber();
   });
 
   test("what the voice said lands in the transcript under its own name", async () => {
