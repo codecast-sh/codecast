@@ -782,3 +782,12 @@ export const filingPage = internalQuery({
     return { rows, cursor: page.isDone ? null : page.continueCursor };
   },
 });
+
+/** A bulk start's failed moments with why (run with packages/convex/run.sh), to retry once the cause is gone. */
+export const failedMoments = internalQuery({
+  args: { batch: v.string() },
+  handler: async (ctx, args) =>
+    (await ctx.db.query("moments").withIndex("by_status_due", (q: any) => q.eq("status", "failed")).collect())
+      .filter((m: Doc<"moments">) => m.batch === args.batch)
+      .map((m: Doc<"moments">) => ({ moment: m.short_id, subject: m.subject, error: (m.error ?? "").slice(0, 300) })),
+});
