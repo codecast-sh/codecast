@@ -105,9 +105,12 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
       dryRun({ source_device_id: source, selections: toServer(sel), wait_for_idle_ms: 10 * 60_000, dry_run: true })
         .then((res: { checks: Check[] }) => setPreflight((m) => ({ ...m, [source]: { at: Date.now(), checks: res.checks } })))
         .catch(report("resources.preflight"));
-      // The machine holding the sessions rehearses each move; its answers arrive through the store.
+    },
+    // The machine holding the sessions rehearses each move; its answers arrive through the store.
+    onRehearse: (sel) => {
+      const source = sourceOf(sel);
       const asked = toServer(sel).map(({ conversation_id, session_id, destination_id }) => ({ conversation_id, session_id, destination_id }));
-      if (asked.length) rehearse({ request_id: rehearsalRequestId(), source_device_id: source, selections: asked }).catch(report("resources.rehearse"));
+      if (source && asked.length) rehearse({ request_id: rehearsalRequestId(), source_device_id: source, selections: asked }).catch(report("resources.rehearse"));
     },
     onStartOffload: (sel, { waitForTurnMs }) => {
       const source = sourceOf(sel);
