@@ -304,6 +304,27 @@ describe("classifyTmuxLiveState", () => {
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(finished))).toBe("idle");
   });
 
+  // On Linux the spinner cycles through a plain "*" where macOS draws ✳. A
+  // read that landed on that frame took a hand in the middle of a long Bash
+  // call for idle, and the line settled four Implement stations on Cam's box
+  // as finished (ct-60376, ct-57854, ct-61269, ct-58286; captured on Ubuntu,
+  // Claude Code 2.1.307, 2026-10-22).
+  test("busy on the Linux spinner's plain asterisk frame", () => {
+    const running = `  Printing 15 ticks, 8 seconds apart · 16s
+  ⎿  $ for i in $(seq 1 15); do echo tick $i; sleep 8; done (12s · 3 lines)
+     (ctrl+b ctrl+b (twice) to run in background)
+
+* Percolating… (23s · ↓ 320 tokens)
+
+──────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────
+  session 9%, resets in 4h 38m · week 56%, resets in 5d 14h
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+`;
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(running))).toBe("busy");
+  });
+
   // While hooks run, Claude Code puts their progress ahead of the elapsed time
   // inside the parentheses. Read as idle, the pane reconcile settled a session
   // mid-turn and it sat in needs input for five minutes (2026-10-02, jx7f4ks).
