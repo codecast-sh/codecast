@@ -66,10 +66,27 @@ export function isMidTurn(s: Pick<SessionEdits, "status">): boolean {
   return !!s.status && MID_TURN.has(s.status);
 }
 
-function relIn(root: string, p: string): string | null {
+function relDirect(root: string, p: string): string | null {
   const rel = path.relative(root, p);
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
   return rel.split(path.sep).join("/");
+}
+
+const realDirs = new Map<string, string>();
+/** A path with its directory's symlinks resolved (/tmp/x is /private/tmp/x on macOS), when the directory exists. */
+function realOf(p: string): string {
+  const dir = path.dirname(p);
+  let real = realDirs.get(dir);
+  if (real === undefined) {
+    try { real = fs.realpathSync(dir); } catch { real = dir; }
+    realDirs.set(dir, real);
+  }
+  return path.join(real, path.basename(p));
+}
+
+/** The repo-relative path of `p`, as written or through the symlinks either side names (git reports a checkout by its real path; a transcript records the path the agent typed). */
+function relIn(root: string, p: string): string | null {
+  return relDirect(root, p) ?? relDirect(realOf(path.join(root, "x")).slice(0, -2), realOf(p));
 }
 
 // ── shell commands ───────────────────────────────────────────────────────────

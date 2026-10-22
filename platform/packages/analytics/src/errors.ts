@@ -39,6 +39,29 @@ let installedOn: Window | null = null;
 const matches = (message: string | undefined, patterns: (string | RegExp)[]): boolean =>
   !!message && patterns.some((p) => (typeof p === "string" ? message.includes(p) : p.test(message)));
 
+/**
+ * Whether every frame of a stack ran in code no script file holds: text pasted
+ * into devtools, or run through CDP's Runtime.evaluate or Electron's
+ * executeJavaScript by a person or an agent inspecting the page. V8 names those
+ * frames `<anonymous>`, the engine's own frames `(native)` or `(<anonymous>)`,
+ * and every frame of the app's own bundle carries its URL. Such an error is a
+ * bug in the injected text, not in the app, so it earns neither a toast nor a
+ * report. A stack with no frames at all proves nothing and is kept.
+ */
+export function isInjectedScriptStack(locations: string[]): boolean {
+  return locations.length > 0 && locations.every((l) => /^(<anonymous>|native)(:\d+:\d+)?$/.test(l));
+}
+
+/** Where each V8 frame ran: `at fn (where)` or `at where`. */
+function stackLocations(value: unknown): string[] {
+  const stack = value instanceof Error ? value.stack : undefined;
+  return (stack ?? "")
+    .split("\n")
+    .map((line) => /^\s+at (?:.*\((.*)\)|(.*))$/.exec(line))
+    .filter((m) => m !== null)
+    .map((m) => (m[1] ?? m[2]).trim());
+}
+
 function handleGlobalError(value: unknown, key: string, source: string, event: { preventDefault(): void }) {
   const options = toastOptions;
   const ignored = options ? options.ignoredErrorPatterns ?? [] : fallback?.ignored ?? [];
@@ -46,6 +69,8 @@ function handleGlobalError(value: unknown, key: string, source: string, event: {
     event.preventDefault();
     return;
   }
+  // Left in the console for whoever ran it.
+  if (isInjectedScriptStack(stackLocations(value))) return;
   if (!claimErrorKey(key)) return;
   const toError = options?.toError ?? defaultToError;
   if (options) {
