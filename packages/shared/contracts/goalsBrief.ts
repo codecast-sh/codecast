@@ -271,6 +271,25 @@ Reply with one JSON object and nothing else:
 {"goal_ref": "<ref or none>", "category": "<category>", "risk": "<risk>", "readiness": "<readiness>", "note": "<why, one plain line>"}
 The note is what a person reads on the cause, so it says why in their terms. They read it under the cause's own report count (the signals total), so any size the note gives is that count; a number the description reports for something wider, such as a product's whole cluster, would read as a second, contradicting count for the same cause. When unsure of the risk, use review.`;
 
+/**
+ * The shape of a ground answer, which the call is generated under (structured
+ * outputs): a free-text note written straight into a JSON string came back
+ * with its closing quote missing in about one call in thirty, and the cause
+ * then waited on a person (ct-61099, ct-61798).
+ */
+export const GROUND_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    goal_ref: { type: "string" },
+    category: { type: "string", enum: [...LINE_CATEGORIES] },
+    risk: { type: "string", enum: [...LINE_RISKS] },
+    readiness: { type: "string", enum: [...LINE_READINESS] },
+    note: { type: "string" },
+  },
+  required: ["goal_ref", "category", "risk", "readiness", "note"],
+  additionalProperties: false,
+};
+
 /** Every goal_ref a brief offers: each initiative metric's ref, each project's short id, the line, and none. */
 export function briefGoalRefs(brief: GoalsBrief): Set<string> {
   const refs = new Set<string>([NO_GOAL, LINE_GOAL]);

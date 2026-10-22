@@ -129,6 +129,13 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and ship.exit_code = 3", { outcome: "success", "ship.exit_code": "3" }, false],
     ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "1" }, true],
     ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "3" }, false],
+    // The ship segment inside the change line (flows.md FL3): its stations read under the node's name.
+    ["outcome = success and ship__rebase.json.landed != true", { outcome: "success", "ship__rebase.json.landed": "false" }, true],
+    ["outcome = success and ship__rebase.json.landed = true", { outcome: "success", "ship__rebase.json.landed": "true" }, true],
+    ["outcome = failure and ship__rebase.exit_code = 1", { outcome: "failure", "ship__rebase.exit_code": "1" }, true],
+    ["outcome = failure and ship__rebase.exit_code != 1", { outcome: "failure", "ship__rebase.exit_code": "1" }, false],
+    ["outcome = failure and ship__ship.exit_code = 3", { outcome: "failure", "ship__ship.exit_code": "3" }, true],
+    ["outcome = failure and ship__ship.exit_code != 3", { outcome: "failure", "ship__ship.exit_code": "3" }, false],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {
@@ -259,5 +266,17 @@ describe("$node.json.<path>", () => {
   test("script vars: an unresolved dotted tail stays literal", () => {
     expect(expandScriptVars("cp $file.bak", { file: "x" })).toBe("cp 'x'.bak");
     expect(expandScriptVars("echo $nothing.here", {})).toBe("echo $nothing.here");
+  });
+
+  test("script vars are quoted for where they land: bare, inside double quotes, inside single quotes", () => {
+    const ctx = { default_branch: "main", title: `it's "$x"`, worktree: "line-ct-1" };
+    expect(expandScriptVars(`git rev-parse "origin/$default_branch"`, ctx)).toBe(`git rev-parse "origin/main"`);
+    expect(expandScriptVars(`echo "$title" $title '$title'`, ctx)).toBe(`echo "it's \\"\\$x\\"" 'it'\\''s "$x"' 'it'\\''s "$x"'`);
+    expect(expandScriptVars(`cd "$(cast ws path $worktree)"`, ctx)).toBe(`cd "$(cast ws path 'line-ct-1')"`);
+    expect(expandScriptVars(`# the branch's $worktree\necho $worktree`, ctx)).toBe(`# the branch's $worktree\necho 'line-ct-1'`);
+    for (const s of [`echo "$title" $title '$title'`, `x="a$(echo "$title")b"; echo "$x"`]) {
+      const r = Bun.spawnSync(["bash", "-c", expandScriptVars(s, ctx)]);
+      expect(r.stdout.toString()).toBe(s.startsWith("x=") ? `a${ctx.title}b\n` : `${ctx.title} ${ctx.title} ${ctx.title}\n`);
+    }
   });
 });

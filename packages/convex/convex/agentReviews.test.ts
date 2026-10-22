@@ -210,6 +210,29 @@ describe("agent reviews", () => {
     expect([...run!.signal_ids!].sort()).toEqual(live.map((x) => x._id).sort());
   }, 120_000);
 
+  test("a finding that named two causes is listed again as one finding per cause; a relist of one item changes nothing", async () => {
+    const { t, ids, scope, extract } = await setup();
+    await t.run((ctx) => ctx.db.patch(ids.project, { line_profile: { finders: [{ id: "review", source: "judge:review", kind: ["prompt_miss", "bug"], fingerprint: "agent:<contact>", opens_causes: true }], changed_at: T0 } } as any));
+    await t.mutation(api.agentReviews.startForCli, { ...scope, source: "app", kind: "conversation", subjects: ["c_1"] });
+    await extract();
+    const r = (await t.action(api.agentReviews.claimForCli, { api_token: TOKEN, device_id: "host-1", slots: 1 }))[0];
+    const one = JSON.stringify({ findings: [JSON.parse(FINDINGS).findings[0]] });
+    await t.action(api.agentReviews.doneForCli, { api_token: TOKEN, device_id: "host-1", review: r.review, ok: true, findings_text: one });
+    await filing(t);
+    const [mixed] = await t.run((ctx) => ctx.db.query("signals").collect());
+    const item = (what: string, cause: string) => ({ what, evidence: [{ quote: "q" }], hurt: "h", severity: 5, layer: "software", cause, cause_checked: false });
+
+    expect(await t.action(internal.agentReviews.relistFinding, { signal: mixed!.short_id, findings: JSON.stringify({ findings: [item("A reminder opened a new thread.", "chatId passed as thread id")] }) })).toMatchObject({ relisted: [] });
+    const out = await t.action(internal.agentReviews.relistFinding, { signal: mixed!.short_id, findings: JSON.stringify({ findings: [item("A reminder opened a new thread.", "chatId passed as thread id"), item("A heads-up came from another address.", "heads-up sends from the canonical domain")] }) });
+    expect(out.relisted).toHaveLength(2);
+    const rows = await t.run((ctx) => ctx.db.query("signals").collect());
+    expect(rows.find((x) => x._id === mixed!._id)!.retired!.reason).toBe(`listed again one cause per finding: ${out.relisted.join(", ")}`);
+    const live = rows.filter((x) => !x.retired);
+    expect(live.map((x) => x.short_id).sort()).toEqual([...out.relisted].sort());
+    expect(live.every((x) => x.moment === mixed!.moment && x.subject === mixed!.subject)).toBe(true);
+    await expect(t.action(internal.agentReviews.relistFinding, { signal: mixed!.short_id, findings: "{}" })).rejects.toThrow(/not a live judge finding/);
+  }, 120_000);
+
   test("an agent judge is refused on a source that keeps its moments on the host, and a bulk start needs one", async () => {
     const { t, scope } = await setup();
     await t.mutation(api.ingest.updateSource, { ...scope, source: "app", config: { moment_storage: "host" } });

@@ -1,4 +1,5 @@
 import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
+import { RunThroughFlow } from "./line/widgets/RunThroughFlow";
 import { RunLogEndedBar, isEndedRunLog } from "./conversation/RunLogEndedBar";
 import { CloudAgentLink, CloudAgentMenuItems } from "./cloudAgents";
 import { useCloudAgentActions } from "./cloudAgents/sessionAgent";
@@ -4120,6 +4121,11 @@ const ConversationViewInner = (
                     </button>
                   );
                 })()}
+
+                {/* Run this session's change through a flow of the pool (flows.md FL4). */}
+                {!guest && isOwner && conversation?._id && (
+                  <RunThroughFlow conversationId={String(conversation._id)} sessionTitle={conversation.title || "This session"} />
+                )}
 
                 {/* The runner: which machine, whose account, is its daemon
                     delivering, and the terminal one click away. Three pills
