@@ -247,7 +247,7 @@ export function ProblemsHome({ list, workspace, selection, select, href, drawerO
       {sections.length ? (
         // The rows are the controls; this only moves focus between them.
         <div className="lwp-rows" onKeyDown={moveRow}>
-          <ProblemTable sections={sections} now={workspace.now} range={range} win={list.win} day={found && found !== "more" ? found : null} showProject={!workspace.project} projectName={list.projectName} processOf={processOf} href={caseHref} open={open} onStatus={setStatus} subAct={subAct} rowAct={rowAct} sectionAct={sectionAct} />
+          <ProblemTable sections={sections} now={workspace.now} range={range} win={list.win} day={found && found !== "more" ? found : null} showProject={!workspace.project} projectName={list.projectName} processOf={processOf} href={caseHref} open={open} onStatus={setStatus} subAct={() => null} rowAct={() => null /* __BISECT */} sectionAct={() => null} />
         </div>
       ) : (
         <div className="lw-empty lwp-none" data-line-problems-none="">
