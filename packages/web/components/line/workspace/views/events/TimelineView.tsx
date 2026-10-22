@@ -27,6 +27,8 @@ import "./timelineView.css";
 
 const ROW_H = 34;
 const DAY_H = 30;
+/** Events read on open to reach the start of today; past it, scrolling reads further. */
+const TODAY_CAP = 10_000;
 
 const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 const dayName = (at: number, now: number) => {
@@ -111,6 +113,11 @@ export function TimelineView({ workspace: ws, selection, select, href, space }: 
   });
   const items = virtualizer.getVirtualItems();
   const last = items[items.length - 1]?.index ?? 0;
+  // On open, read back to the start of today (what came in today is the view's first question), within a cap.
+  const today = new Date(new Date(now).toDateString()).getTime();
+  useWatchEffect(() => {
+    if (feed.floor != null && feed.floor > today && !feed.loading && !feed.done && stored.length < TODAY_CAP) feed.loadOlder();
+  }, [feed.floor, feed.loading, feed.done, today, stored.length, feed.loadOlder]);
   // Near the end of what is loaded: read the next page.
   useWatchEffect(() => { if (list.length && last >= list.length - 20) feed.loadOlder(); }, [last, list.length, feed.loadOlder]);
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performAcceptUpgrade, performCatalog, performFileLesson, performRetire, performYank, performInstanceForRole, performInstanceStatus, performListInstances, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance, performWriteLoaderCharter, refuseHiredRowFromWire } from "./orgTemplates";
+import { performAcceptUpgrade, performAnswerInput, performCatalog, performFileLesson, performRetire, performYank, performInstanceForRole, performInstanceStatus, performListInstances, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance, performWriteLoaderCharter, refuseHiredRowFromWire } from "./orgTemplates";
 import { templateLoaderPrompt } from "@codecast/shared/contracts/orgTemplateManifest";
 import { applyOrgChange } from "./orgInit";
 
@@ -206,6 +206,9 @@ describe("the loader charter of a web hire (org-hire.md H3)", () => {
     expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${loader}`);
     await performWriteLoaderCharter(terminal, ME, write);
     expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${loader}`);
+    // A host step rerun from another folder before the claim moves the loader, never stacks a second one.
+    await performWriteLoaderCharter(terminal, ME, { ...write, dir: "/src/acme/site" });
+    expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${templateLoaderPrompt("/src/acme/site", "acme-growth", "charter")}`);
     // Once the host claims the row, the charter is the person's again.
     await performUpsertInstance(ctx(db), ME, { instance_key: "receipt-uuid", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: D1, project_id: P as any, role_id: "role-1" as any, host: { machine: "mbp", dir: "/src/acme" }, phase: "ready" });
     await expect(performWriteLoaderCharter(terminal, ME, { ...write, dir: "/elsewhere" })).rejects.toThrow(/awaiting its host step/);
@@ -373,11 +376,20 @@ describe("setup guides on the record, and the role hearing about a bind (org-hir
   test("the role page reads each setup step's filled words and guide, each routine's trigger, and an ask that moves past a skipped step", async () => {
     const { db } = seated();
     await performPublish(ctx(db), ME, { as_codecast: true, manifest: hired(), digest: D1, status: "stable" });
-    // Before the host step the row has no rendered text: the manifest's own words stand in.
+    // Before the host step the row has no rendered text: the manifest's words are filled from the answers here,
+    // and an answer the hire left blank reads as its label and is asked for in place, never an empty gap.
     await performUpsertInstance(ctx(db), MATE, { ...hire, role_id: "role-1" as any, phase: "awaiting_host" });
     let page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
-    expect(page.setup[0]).toMatchObject({ id: "search-console", title: "Verify {{input.product.domain}}", how: "org/setup/search-console.md" });
+    expect(page.setup[0]).toMatchObject({ id: "search-console", title: "Verify [Domain]", how: "org/setup/search-console.md", needs: [{ key: "product.domain", label: "Domain", kind: "string" }] });
+    expect(page.ask).toMatchObject({ title: "Verify [Domain]" });
     expect(page.setup[0].guide).toBeUndefined();
+    // The answer, given on the page: refused for a secret or an unknown key, then the words fill at once.
+    await expect(performAnswerInput(ctx(db), MATE, { instance_key: "key-1", key: "accounts.ads", value: "x" })).rejects.toThrow(/Not an answer this template asks for/);
+    await expect(performAnswerInput(ctx(db), MATE, { instance_key: "key-1", key: "product.domain", value: " " })).rejects.toThrow(/Domain needs a value/);
+    await performAnswerInput(ctx(db), MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io" });
+    page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
+    expect(page.setup[0]).toMatchObject({ title: "Verify acme.io", needs: [] });
+    expect((await performInstanceStatus(ctx(db), MATE, { instance_key: "key-1" })).config).toMatchObject({ "product.domain": "acme.io" });
     await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5 }));
     page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
     expect(page.setup.map((r: any) => [r.id, r.title, r.guide])).toEqual([["search-console", "Verify acme.io", "Add the TXT record, then run /src/acme/verify.sh."], ["publora", "Connect Publora", undefined], ["measurement", "See one event", undefined]]);

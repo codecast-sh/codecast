@@ -13,6 +13,50 @@ routes). The Files CLI moves to `cast files`; `cast vault` with a Files verb
 failing silently. `/vault?f=…` and `/vault?graph…` deep links, already written
 into notes and transcripts, still land on Files; the bare `/vault` is the Vault.
 
+## Principles
+
+Infisical (project secrets injected at run time, versions, access requests,
+audit) and 1Password (items with fields, `op://` references, Watchtower,
+sign in once and autofill) both start from a person handling a secret. Vault
+starts from who actually consumes a credential here: an agent, inside a
+transcript, sent to a model provider. That changes what "best" means.
+
+1. **A value should never enter a model's context.** Whatever a command
+   prints, the model reads and the transcript records. So the default way to
+   use a secret is to have it substituted where it is needed, never printed:
+   `cast vault run` puts values into a child process's env; references
+   (`vault://name` in a `.env` or `[vault]` in workspace.toml) let a repo
+   name its secrets without holding them; saved sign-ins load into the
+   browser without passing through the agent. `get` exists for pipes and
+   `$(…)`, and a bare `get` into the agent's own output is the one thing the
+   guidance forbids. Redaction is the second line of defence, not the first.
+2. **Ask through the right channel, at the moment of need.** Agents find out
+   they need a credential halfway through a task. The request card puts a
+   masked field in front of the person in the conversation and the inbox,
+   then wakes the agent. A secret pasted into the composer is caught on send
+   and offered as "Save to Vault" instead, so the habit people already have
+   becomes the right one.
+3. **Use is shared, risk is gated.** Every agent in the team can use a team
+   secret without ceremony; that is the job. A secret marked **Ask first**
+   (production database, live payment keys) needs a person's approval per
+   session before any agent reads it: the read becomes a decision card
+   ("jx7… wants live-stripe for: refund order 123", Approve for this session
+   / Deny), and the approval is the audit record. No per-agent ACL matrix.
+4. **Every read is attributable.** Each read names the session, so "which
+   agent used the prod key last Tuesday" is one click, and an agent's use of
+   a secret shows up in its transcript as a card with the name, never the
+   value.
+5. **Nothing silently rots.** Rotation keeps the previous value for 7 days
+   with one-click restore (a rotation that breaks prod is undone in seconds).
+   The list carries health in structure, the way Watchtower does: never
+   used, unused for 90 days, sign-in expiring or expired, Ask first. No
+   score, no prose.
+6. **Fewer concepts than either inspiration.** No vault-within-vault, no
+   environments, no folders: a team has one Vault, personal secrets are a
+   scope, names carry environment (`stripe-test`, `stripe-live`), and a
+   repo's `[vault]` map says which names it uses. Every concept added has to
+   remove more friction than it costs to learn.
+
 ## The job
 
 A team's agents keep hitting the same wall: the work needs a credential (a
@@ -150,6 +194,21 @@ DATABASE_URL = "staging-db"
 
 `cast vault run -- <cmd>` with no names injects that set, and `cast dev`
 starts a project's servers with it, so a repo needs no `.env` on disk.
+
+## Second round (after the first four waves)
+
+- **Ask first** flag on a secret; agent reads go through an approval decision
+  per session (`cast decide` machinery), approvals and denials logged.
+- **Versions**: rotate keeps the previous ciphertext for 7 days; Restore in
+  the detail panel and `cast vault restore <name>`.
+- **References**: `vault://<name>` (and `vault://<name>/<field>`) as a value
+  in any `.env` file that `cast vault run --env-file` or `cast dev` loads.
+- **Composer catch**: on send (never per keystroke, see the typing budget),
+  a message containing a credential-shaped string (secretPatterns.ts) offers
+  "Save to Vault" in place of sending the value; the message goes out with
+  the secret's name instead.
+- **Health** states in the list and detail (never used, stale 90 days,
+  sign-in expiring or expired, Ask first).
 
 ## Not in this build
 

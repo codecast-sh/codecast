@@ -1,5 +1,6 @@
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { routineState } from "@codecast/shared/contracts/orgTemplateReadiness";
+import type { SetupNeed } from "@codecast/shared/contracts/orgTemplateState";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { captureException } from "@sentry/react";
@@ -43,7 +44,7 @@ function Part({ sheet, label, name, children }: { sheet?: boolean; label: string
 
 export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId: string; canEdit: boolean; teamId?: string; inSheet?: boolean }) {
   const { instance } = useTemplateInstance(roleId);
-  const { markSetup, activate, propose } = useTemplateActions();
+  const { markSetup, activate, propose, answer } = useTemplateActions();
   const { lessons } = useInstanceLessons(instance?.instance_key);
   const [proposed, setProposed] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -96,6 +97,7 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
                       </span>
                     )}
                   </div>
+                  {canEdit && s.status === "open" && (s.needs ?? []).map((n: SetupNeed) => <AnswerField key={n.key} need={n} busy={busy === `answer:${n.key}`} onSave={(value) => void act(`answer:${n.key}`, () => answer(instance.instance_key, n.key, value))} />)}
                   {shown && (
                     <div className="mb-1.5 mt-1 rounded-lg border border-sol-border/50 bg-sol-bg-alt/60 px-2.5 py-2" data-template-guide={s.id}>
                       {s.guide
@@ -316,5 +318,20 @@ function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: bool
         <p className="mt-1">On the machine that runs this role, in the project&apos;s folder: <code style={{ fontFamily: "var(--font-mono)" }}>{cli}</code></p>
       </details>
     </div>
+  );
+}
+
+/** An answer the hire left blank, asked where the step that needs it is: one field and Save. */
+function AnswerField({ need, busy, onSave }: { need: SetupNeed; busy: boolean; onSave: (value: string) => void }) {
+  const [value, setValue] = useState("");
+  const field = "h-7 min-w-0 flex-1 rounded-md border border-sol-border/50 bg-sol-bg-alt px-2 text-[12px] text-sol-text outline-none focus:border-sol-cyan";
+  return (
+    <form className="mt-1 flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); if (value.trim()) onSave(value.trim()); }} data-template-answer={need.key}>
+      <span className="shrink-0 text-sol-text-muted">{need.label}</span>
+      {need.kind === "choice"
+        ? <select value={value} onChange={(e) => setValue(e.target.value)} className={field}><option value="" />{(need.choices ?? []).map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        : <input value={value} onChange={(e) => setValue(e.target.value)} inputMode={need.kind === "number" || need.kind === "money" ? "decimal" : undefined} className={field} spellCheck={false} aria-label={need.label} />}
+      <button type="submit" disabled={busy || !value.trim()} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50">Save</button>
+    </form>
   );
 }

@@ -28,9 +28,11 @@ async function verifyHireFlow() {
     // Published without its snapshot: readable, not hireable; the card says so and offers nothing.
     { template_id: "draft", workspace: "team:fixture-team", name: "Draft role", description: "A release with no files", latest: { version: "0.1.0", digest: "b".repeat(64) }, latest_status: "draft", installable: false, asks: { inputs: 0, secrets: 0, authority: 0, setup: 0, routines: 1 }, manifest: { ...manifest, id: "draft", inputs: [], authority: [], setup: [] } },
   ];
+  // A lead's own template hire, by role id: what instanceForRole answers for it.
+  const leadInstances: Record<string, any> = {};
   mock.module("../../hooks/useTemplateHire", () => ({
     useTemplateCatalog: () => ({ templates: catalog, ready: true }),
-    useTemplateInstance: () => ({ instance: null, ready: true }),
+    useTemplateInstance: (roleId?: string) => ({ instance: (roleId && leadInstances[roleId]) ?? null, ready: true }),
     useTemplateActions: () => ({ propose: async (spec: any) => { proposed.push(spec); return { short_id: "op-9", link: "/org?proposal=op-9" }; }, markSetup: async () => {}, activate: async () => {}, requestBind: async () => ({}), setLearning: async (_team: string | undefined, enabled: boolean) => { learningSet.push(enabled); learningOn = enabled; } }),
     useTemplateLearning: () => ({ learning: { enabled: learningOn, can_change: true, changed_by: null }, ready: true }),
     useInstanceLessons: () => ({ lessons: lessonRows, ready: true }),
@@ -144,6 +146,30 @@ async function verifyHireFlow() {
   assert.ok(document.querySelector("[data-template-posted='op-9']"));
   assert.equal(document.querySelector("[data-template-form]"), null);
   await act(async () => root.unmount());
+
+  // A project whose lead was hired from the same template: the form gives the
+  // work to the lead rather than hiring a second one under it, and offers
+  // nothing when the lead already runs it on this project.
+  const lead = { ...ORG_FIXTURE.roles[0], _id: "lead-1", handle: "product-cmo", name: "CMO", status: "active", scope: { project_ids: ["project-1"], plan_ids: [] } };
+  const withLead = { ...ORG_FIXTURE, roles: [...ORG_FIXTURE.roles, lead] } as typeof ORG_FIXTURE;
+  const pickGrowth = async () => {
+    const again = createRoot(document.getElementById("root")!);
+    await act(async () => again.render(<HireRoleDialog open onClose={() => {}} tree={withLead} meId="fixture-user-me" initialProjects={[project]} initialMode="template" onCreate={() => {}} />));
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-template-card="growth"] [data-template-card-hire]')!.click());
+    return again;
+  };
+  leadInstances["lead-1"] = { template_id: "growth", version: "2.0.0", project_id: "another-project" };
+  let again = await pickGrowth();
+  assert.equal(document.querySelector("[data-template-lead]")!.getAttribute("data-lead-runs"), "elsewhere");
+  assert.equal(document.querySelector<HTMLInputElement>('input[name="template-seat"]:checked')!.parentElement!.textContent!.startsWith("Give it to @product-cmo"), true, "the lead that runs this template is the default seat");
+  await act(async () => again.unmount());
+  leadInstances["lead-1"] = { template_id: "growth", version: "2.0.0", project_id: "project-1" };
+  again = await pickGrowth();
+  assert.equal(document.querySelector("[data-template-lead]")!.getAttribute("data-lead-runs"), "here");
+  assert.equal(document.querySelector('input[name="template-seat"]'), null);
+  assert.match(document.body.textContent!, /@product-cmo already runs CMO on Product/);
+  assert.equal(button("Propose the hire").disabled, true);
+  await act(async () => again.unmount());
   closeDomWindow(dom);
   console.log("org template hire mount: passed");
 }
