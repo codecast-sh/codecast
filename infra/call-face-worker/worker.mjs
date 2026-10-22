@@ -30,7 +30,7 @@ import { AutoSubscribe, cli, defineAgent, llm, voice, WorkerOptions } from "@liv
 import * as openai from "@livekit/agents-plugin-openai";
 import { AudioMixer, AudioStream, RoomEvent, TrackKind } from "@livekit/rtc-node";
 import { AccessToken } from "livekit-server-sdk";
-import { nameMatchers, turnVerdict } from "./turns.mjs";
+import { nameMatchers, turnIsForVoice, turnVerdict } from "./turns.mjs";
 import { eachTrack, isPerson, people, watchVideo } from "./vision.mjs";
 
 const AGENT_NAME = process.env.FACE_AGENT_NAME || "codecast-face";
@@ -239,17 +239,18 @@ async function runRealtime(ctx, meta, face) {
   // the voice, so it answers the moment the turn ends; with more, it waits
   // for the words to know whether it was named.
   let answered = false;
+  const alone = () => people(room).length <= 1;
   const answerTurn = () => {
     answered = true;
     answer().catch((e) => console.error("answer failed", e));
   };
   session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
     if (ev.newState === "speaking") answered = false;
-    else if (ev.oldState === "speaking" && !answered && !quiet && people(room).length <= 1) answerTurn();
+    else if (ev.oldState === "speaking" && !answered && turnIsForVoice({ quiet, alone: alone() })) answerTurn();
   });
   session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
     if (!ev.isFinal || answered || !ev.transcript.trim()) return;
-    const verdict = turnVerdict({ transcript: ev.transcript, named, quiet, alone: people(room).length <= 1 });
+    const verdict = turnVerdict({ transcript: ev.transcript, named, quiet, alone: alone() });
     quiet = verdict.quiet;
     if (verdict.answer) answerTurn();
   });
