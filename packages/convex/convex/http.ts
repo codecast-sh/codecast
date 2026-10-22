@@ -4284,6 +4284,15 @@ cliRoute("/cli/chat/search", async (ctx, body) => {
 cliRoute("/cli/chat/send", async (ctx, body) => {
   return await ctx.runMutation(api.chat.sendMessage, await withChatMessageIds(ctx, body, "thread_root_id"));
 });
+// A direct message room with these people (`cast chat dm`), found or made.
+// body: { api_token, team_id?, handles }.
+cliRoute("/cli/chat/open-dm", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.openDm, body);
+});
+// The team's people and the handle each answers to (`cast teams members`).
+cliRoute("/cli/chat/people", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.listPeople, body);
+});
 cliRoute("/cli/chat/mark-read", async (ctx, body) => {
   return await ctx.runMutation(api.chat.markRead, body);
 });
@@ -4874,6 +4883,7 @@ cliRoute("/cli/workflow-runs/set-primary", async (ctx, body) => ctx.runMutation(
 cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.respondToGateFromCli, body));
 // `cast workflow reask`: a run's decision asked again by the stations as they are now.
 cliRoute("/cli/workflow-runs/reask", async (ctx, body) => ctx.runMutation(api.workflow_runs.reaskFromCli, body));
+cliRoute("/cli/workflow-runs/resume", async (ctx, body) => ctx.runMutation(api.workflow_runs.resumeFromCli, body));
 cliRoute("/cli/workflow-runs/ingest", async (ctx, body) => ctx.runMutation(api.workflow_runs.ingestSnapshot, body));
 cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api.workflow_runs.getByExternalRun, body));
 // the-line.md L8: `cast workflow runs [--task|--plan]`, one list across workflows.

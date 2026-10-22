@@ -111,7 +111,7 @@ describe("F1 scope rules", () => {
     await roleWithScope(db, "billing", { project_ids: [Q], plan_ids: [] }, { kind: "role", role_id: parent._id });
     await expect(
       performUpdateRole(ctxOf(db), ME as any, { role_id: parent.short_id, scope: { project_ids: [P as any], plan_ids: [] } }),
-    ).rejects.toThrow(/Narrow @billing first/);
+    ).rejects.toThrow(/^@billing looks after project \S+, and reports to @growth, so @growth has to keep that work\. Take it off @billing, or have it report to someone else, before this change can apply\.$/);
     const other = await roleWithScope(db, "other", { project_ids: [P], plan_ids: [] });
     const billing = (await db.query("org_roles").withIndex("by_team_handle", (q: any) => q.eq("team_id", TEAM).eq("handle", "billing")).first())!;
     await expect(

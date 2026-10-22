@@ -834,6 +834,41 @@ function sourceFromIds(ids: string[]): LineGraphSource {
   return src;
 }
 
+type RowsIndex = {
+  graphs: ProjectGraph[];
+  taskById: Map<string, LineModelRows["tasks"][number]>;
+  taskByRef: Map<string, LineModelRows["tasks"][number]>;
+  anyRunByTask: Map<string, MapRun[]>;
+  signalsByTask: Map<string, MapSignal[]>;
+  /** The problems no run has taken, under the process their project runs (processIndex), never under every one. */
+  unrunByProcess: Map<string, string[]>;
+};
+/** The indexes every build over the same rows reads, made once for them: one rebuild draws each process over one row set. */
+const rowsIndexes = new WeakMap<object, { runs: object; signals: object; index: RowsIndex }>();
+
+function rowsIndex(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], signals: ReadonlyArray<MapSignal>): RowsIndex {
+  const hit = rowsIndexes.get(tasks);
+  if (hit && hit.runs === runs && hit.signals === signals) return hit.index;
+  const group = <T,>(rows: ReadonlyArray<T>, keyOf: (r: T) => string | null | undefined) => {
+    const by = new Map<string, T[]>();
+    for (const r of rows) { const k = keyOf(r); if (!k) continue; const at = by.get(k); if (at) at.push(r); else by.set(k, [r]); }
+    return by;
+  };
+  const taskById = new Map(tasks.map((t) => [t._id, t]));
+  const anyRunByTask = group(runs, (r) => r.task_id);
+  const process = processIndex(runs as ReadonlyArray<GraphRun>, (id) => (taskById.get(id) as { project_id?: string | null } | undefined)?.project_id);
+  const index: RowsIndex = {
+    graphs: projectGraphs(runs as ReadonlyArray<GraphRun>, signals as ReadonlyArray<{ task_id: string; source: string }>),
+    taskById,
+    taskByRef: new Map(tasks.flatMap((t) => (t.short_id ? [[t.short_id, t] as const] : []))),
+    anyRunByTask,
+    signalsByTask: group(signals, (s) => s.task_id),
+    unrunByProcess: new Map([...group(tasks.filter((t) => t.cause && !anyRunByTask.has(t._id)), (t) => process.task(t._id))].map(([k, ts]) => [k, ts.map((t) => t._id)])),
+  };
+  rowsIndexes.set(tasks, { runs, signals, index });
+  return index;
+}
+
 /**
  * One project's line as every view reads it. `rows` are the project's rows
  * (its runs of any graph, its causes and signals, its labels); `graphKey`
@@ -842,7 +877,8 @@ function sourceFromIds(ids: string[]): LineGraphSource {
  */
 export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel {
   const signals = rows.signals ?? [];
-  const graphs = projectGraphs(rows.runs as ReadonlyArray<GraphRun>, signals as ReadonlyArray<{ task_id: string; source: string }>);
+  const index = rowsIndex(rows.runs, rows.tasks, signals);
+  const { graphs, taskById, anyRunByTask, signalsByTask, taskByRef } = index;
   const key = graphKey || graphs[0]?.key || CODECAST_LINE;
   const isLine = isCodecastLine(key);
   const runs = rows.runs.filter((r) => graphKeyOf(r as GraphRun) === key).sort((a, b) => b.created_at - a.created_at);
@@ -871,7 +907,6 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
   const g: GraphCtx = { graph, kindOf, labelOf, words, edgeOf: new Map(src.edges.map((e) => [`${e.from}->${e.to}`, e])) };
 
   // ── every run, read once ──
-  const taskById = new Map(rows.tasks.map((t) => [t._id, t]));
   const decisionsByRun = new Map<string, MapDecision[]>();
   for (const d of rows.decisions ?? []) {
     if (!d.workflow_run_id) continue;
@@ -1065,19 +1100,23 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
   const now = rows.now ?? Date.now();
   const runsByTask = new Map<string, LineRunModel[]>();
   for (const r of runModels) if (r.caseId) runsByTask.set(r.caseId, [...(runsByTask.get(r.caseId) ?? []), r]);
-  const anyRunByTask = new Map<string, MapRun[]>();
-  for (const r of rows.runs) if (r.task_id) anyRunByTask.set(r.task_id, [...(anyRunByTask.get(r.task_id) ?? []), r]);
-  const signalsByTask = new Map<string, MapSignal[]>();
-  for (const s of signals) if (s.task_id) signalsByTask.set(s.task_id, [...(signalsByTask.get(s.task_id) ?? []), s]);
   const occurrencesByTask = new Map((rows.occurrences ?? []).map((o) => [o.task_id, o]));
   const readById = new Map(reads.map((r) => [r.run._id, r.read]));
   const said = (runId: string) => saidOf(readById.get(runId)?.visits ?? [], steps);
   // A close that folded its problem into a codecast cause ("ct-4681") counts what comes after once that cause was resolved; a cause named only in the product's own words ("C1") reads as not shipped.
-  const taskByRef = new Map(rows.tasks.flatMap((t) => (t.short_id ? [[t.short_id, t] as const] : [])));
   const foldFixAt = (into: string) => { const t = taskByRef.get(into); return t && /^(done|closed)$/.test(t.status) ? t.resolved_at ?? null : null; };
-  // A problem no run has taken yet waits under the process its project runs (processIndex), never under every one.
-  const process = processIndex(rows.runs as ReadonlyArray<GraphRun>, (id) => (taskById.get(id) as { project_id?: string | null } | undefined)?.project_id);
-  const causeIds = [...runsByTask.keys(), ...rows.tasks.filter((t) => t.cause && !anyRunByTask.has(t._id) && process.task(t._id) === key).map((t) => t._id)];
+  const causeIds = [...runsByTask.keys(), ...(index.unrunByProcess.get(key) ?? [])];
+  // A problem's decisions: those naming it, and those any of its runs asked, in the order the rows hold them.
+  const allDecisions = rows.decisions ?? [];
+  const decisionAt = { task: new Map<string, number[]>(), run: new Map<string, number[]>() };
+  allDecisions.forEach((d, n) => {
+    for (const [by, k] of [[decisionAt.task, d.task_id], [decisionAt.run, d.workflow_run_id]] as const) if (k) { const at = by.get(k); if (at) at.push(n); else by.set(k, [n]); }
+  });
+  const decisionsOf = (taskId: string, taskRuns: ReadonlyArray<MapRun>) => {
+    const at = new Set(decisionAt.task.get(taskId));
+    for (const r of taskRuns) for (const n of decisionAt.run.get(r._id) ?? []) at.add(n);
+    return [...at].sort((a, b) => a - b).map((n) => allDecisions[n]);
+  };
   const issues: LineIssue[] = [];
   // The line's own machine faults: a problem that names the same identifier is happening again each time one fails.
   const faults = stepFaults(steps);
@@ -1107,7 +1146,7 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
       ...(rows.forYou ? { forYou: rows.forYou.get(taskId) ?? null } : {}),
       lineFaults: faultsNaming(`${task?.title ?? ""}\n${(task as { description?: string | null } | undefined)?.description ?? ""}`, faults),
       history: causeHistory({
-        task, runs: allRuns, decisions: (rows.decisions ?? []).filter((d) => d.task_id === taskId || (!!d.workflow_run_id && allRuns.some((r) => r._id === d.workflow_run_id))),
+        task, runs: allRuns, decisions: decisionsOf(taskId, allRuns),
         signals: own, occurrences, deploys: rows.deploys, said, foldFixAt, handMerge: rows.handMerges?.get(taskId) ?? null, watchDays: rows.watchDays ?? null, now,
       }),
     });

@@ -224,32 +224,35 @@ export type ProblemRowsInput = {
 
 /** Every problem's row: its one status (problemStatus) and its findings on the page's window. */
 export function buildProblemRows(issues: ReadonlyArray<LineIssue>, input: ProblemRowsInput): ProblemRow[] {
+  return foldTwins(issues.map((issue) => problemRow(issue, input)), input.overlaps);
+}
+
+/** One problem's row before twins fold: what it is whichever list it is listed in. */
+export function problemRow(issue: LineIssue, input: ProblemRowsInput): ProblemRow {
   const { win } = input;
   const span = win.d1 - win.d0;
-  return foldTwins(issues.map((issue) => {
-    const h = issue.history;
-    const projectId = input.projectOf(issue.id);
-    const from = [...new Set((input.sources?.get(issue.id)?.all ?? []).map((a) => sourceLabel(a.source.toLowerCase())))];
-    const o = input.overlaps?.get(issue.id);
-    // The window before is comparable only when the series reaches back over all of it.
-    const reaches = !h.capped || (h.since != null && h.since <= win.d0 - span);
-    const facts = input.facts(issue.id);
-    return {
-      id: issue.id,
-      issue,
-      stand: problemStand(issue, facts, input.now),
-      projectId,
-      findings: Math.max(issue.findings, h.occurrences.length),
-      inWindow: countIn(issue, win.d0, win.d1),
-      before: reaches ? countIn(issue, win.d0 - span, win.d0) : null,
-      series: h.occurrencesFrom === "history" || !!projectId,
-      seenAt: h.occurrences[h.occurrences.length - 1]?.at ?? h.firstAt ?? 0,
-      lastAt: Math.max(h.lastActivity || 0, issue.lastRunAt || 0),
-      dupOf: o && o.set.length > 1 && o.primary !== issue.id ? o.primaryRef : null,
-      hay: [issue.title, issue.ref ?? "", input.projectName(projectId), ...from].join("\n").toLowerCase(),
-      aboutSteps: facts.aboutSteps ?? [],
-    };
-  }), input.overlaps);
+  const h = issue.history;
+  const projectId = input.projectOf(issue.id);
+  const from = [...new Set((input.sources?.get(issue.id)?.all ?? []).map((a) => sourceLabel(a.source.toLowerCase())))];
+  const o = input.overlaps?.get(issue.id);
+  // The window before is comparable only when the series reaches back over all of it.
+  const reaches = !h.capped || (h.since != null && h.since <= win.d0 - span);
+  const facts = input.facts(issue.id);
+  return {
+    id: issue.id,
+    issue,
+    stand: problemStand(issue, facts, input.now),
+    projectId,
+    findings: Math.max(issue.findings, h.occurrences.length),
+    inWindow: countIn(issue, win.d0, win.d1),
+    before: reaches ? countIn(issue, win.d0 - span, win.d0) : null,
+    series: h.occurrencesFrom === "history" || !!projectId,
+    seenAt: h.occurrences[h.occurrences.length - 1]?.at ?? h.firstAt ?? 0,
+    lastAt: Math.max(h.lastActivity || 0, issue.lastRunAt || 0),
+    dupOf: o && o.set.length > 1 && o.primary !== issue.id ? o.primaryRef : null,
+    hay: [issue.title, issue.ref ?? "", input.projectName(projectId), ...from].join("\n").toLowerCase(),
+    aboutSteps: facts.aboutSteps ?? [],
+  };
 }
 
 /** Twins nothing has started yet (Not started, the overlap's younger member) fold under their older problem when it is

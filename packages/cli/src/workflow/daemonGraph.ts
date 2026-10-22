@@ -45,10 +45,10 @@ export function daemonRunGraph(
     if (run.goal_override) graph.goal = run.goal_override;
     if (run.fresh_branch || !run.current_node_id || graph.nodes.has(run.current_node_id)) return { graph, file: origin };
   }
-  return { graph: graphElsewhere(run, wf, cwd), file: null };
+  return { graph: graphElsewhere(run, wf, cwd, deviceId), file: null };
 }
 
-function graphElsewhere(run: DaemonRun, wf: DaemonRow, cwd: string): WorkflowGraph | null {
+function graphElsewhere(run: DaemonRun, wf: DaemonRow, cwd: string, deviceId?: string): WorkflowGraph | null {
   // A task-bound run of a line in a checkout with its own line runs that,
   // ahead of the role's pushed line and the shipped one (line-map.md LX5).
   const repo = repoLineForRun(run, wf, cwd);
@@ -56,6 +56,17 @@ function graphElsewhere(run: DaemonRun, wf: DaemonRow, cwd: string): WorkflowGra
     const graph = parseWorkflowSource(repo.source, repo.dir);
     if (run.goal_override) graph.goal = run.goal_override;
     return graph;
+  }
+  // The pushed source is the whole graph; the stored node copy keeps only the
+  // attributes its table names (a stop exit's words, a segment's routing are
+  // not among them). Read the source when it stands alone, or from the file
+  // this machine pushed it from.
+  const fromSource = sourceGraph(wf, cwd, deviceId);
+  if (fromSource) {
+    if (run.goal_override) fromSource.goal = run.goal_override;
+    if (wf?.stack) fromSource.stack = wf.stack;
+    if (wf?.name) fromSource.name = wf.name;
+    return fromSource;
   }
   if (wf?.nodes?.length) {
     const nodes = new Map<string, any>();
@@ -105,6 +116,19 @@ export async function publishDaemonGraph(file: string, wf: DaemonRow, deviceId: 
     model_stylesheet: graph.model_stylesheet,
     origin,
   });
+}
+
+/** The graph from a row's DOT source: the file it was pushed from when it is on this machine, else the source itself when it names no file. */
+function sourceGraph(wf: DaemonRow, cwd: string, deviceId?: string): WorkflowGraph | null {
+  if (!wf?.source) return null;
+  try {
+    const file = deviceId && wf.origin?.device_id === deviceId ? path.join(wf.origin.root, wf.origin.file) : null;
+    if (file && fs.existsSync(file)) return parseWorkflowFile(file);
+    if (/"@[\w./-]|\bextends\s*=/.test(wf.source)) return null;
+    return parseWorkflowSource(wf.source, cwd);
+  } catch {
+    return null;
+  }
 }
 
 function stackFromSource(source: string | undefined): string | undefined {

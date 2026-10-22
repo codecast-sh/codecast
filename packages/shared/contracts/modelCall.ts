@@ -14,6 +14,8 @@ export interface ModelCallSpec {
   prompt: string;
   /** json: the answer must hold one JSON value, kept parsed beside the text. */
   output: ModelCallOutput;
+  /** The JSON schema the answer is generated under, when its shape is fixed. */
+  output_schema?: Record<string, unknown>;
 }
 
 export interface ModelCallUsage {
