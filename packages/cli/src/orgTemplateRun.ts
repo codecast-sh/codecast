@@ -282,7 +282,10 @@ function verifyRole(tree: any, receipt: TemplateReceipt, handle?: string): any {
   const candidates = (tree.roles ?? []).filter((r: any) => receipt.role ? r._id === receipt.role.id : r.handle === handle);
   if (candidates.length !== 1) throw new Error("Applied role cannot be verified; refusing to adopt an unrelated seat");
   const role = candidates[0];
-  if (role.status === "retired" || role.scope?.project_ids?.length !== 1 || role.scope.project_ids[0] !== receipt.project.id || role.scope?.plan_ids?.length !== 0) throw new Error("Role scope must remain exactly the instance project; no whole-workspace fallback");
+  // The scope must hold the instance project. It may hold more: a lead's area
+  // covers the areas of the roles that report to it, so a role that hired
+  // leads for neighbouring projects keeps those projects too.
+  if (role.status === "retired" || !(role.scope?.project_ids ?? []).some((id: any) => String(id) === String(receipt.project.id))) throw new Error("Role scope must include the instance project; no whole-workspace fallback");
   if (receipt.role && role.handle !== receipt.role.handle) throw new Error("Role handle changed; review the receipt before reconciling");
   return role;
 }
