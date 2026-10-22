@@ -256,6 +256,7 @@ import { getPosition, setPosition } from "./positionTracker.js";
 import { TokenDecryptError } from "./tokenEncryption.js";
 import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerToken.js";
 import { startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
+import { vaultRedactionSource } from "./secrets/redactionSource.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { launchTokenLedger } from "./launchToken.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
@@ -29567,6 +29568,14 @@ async function main(): Promise<void> {
       if (!token) return [];
       try { return [token, secretFromStored(token)]; } catch { return [token]; }
     },
+    vault: vaultRedactionSource({
+      endpoint: () => {
+        const siteUrl = getSiteUrl();
+        const apiToken = getAuthToken();
+        return siteUrl && apiToken ? { siteUrl, apiToken } : null;
+      },
+      log,
+    }),
     log,
   });
   resumeStartedSessionDiscovery();
