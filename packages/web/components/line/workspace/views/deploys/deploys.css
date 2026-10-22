@@ -33,6 +33,27 @@
 .dpv-nopath { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
 .dpv-error { margin: 6px 12px 0; font-size: var(--lw-fs-xs); color: var(--lw-bad); }
 
+/* The role that sends this line's fixes on its own (DP4). */
+.dpv-role { display: flex; align-items: baseline; gap: 8px; padding: 6px 10px 2px 12px; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); }
+.dpv-role-h { font-weight: 650; color: var(--lw-ink); text-decoration: none; }
+a.dpv-role-h:hover { color: var(--lw-person); }
+.dpv-role[data-tone="warn"] .dpv-role-what { color: var(--lw-warn); }
+.dpv-role-n { margin-left: auto; color: var(--lw-ink-3); }
+
+/* A deploy's steps, its run's stations (DP8). */
+.dpv-steps { display: flex; flex-wrap: wrap; gap: 4px 6px; list-style: none; margin: var(--lw-s2) 0 var(--lw-s3); padding: 0; }
+.dpv-step { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border: 1px solid var(--lw-rule); border-radius: 999px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.dpv-step-dot { width: 7px; height: 7px; border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--lw-ink-3); }
+.dpv-step-name { font-weight: 600; }
+.dpv-step-t { color: var(--lw-ink-3); }
+.dpv-step[data-state="completed"] { color: var(--lw-ink-2); }
+.dpv-step[data-state="completed"] .dpv-step-dot { background: var(--lw-ok); box-shadow: none; }
+.dpv-step[data-state="running"] { color: var(--lw-ink); border-color: color-mix(in srgb, var(--lw-live) 50%, transparent); background: var(--lw-live-soft); }
+.dpv-step[data-state="running"] .dpv-step-dot { background: var(--lw-live); box-shadow: none; }
+.dpv-step[data-state="failed"] { color: var(--lw-bad); border-color: color-mix(in srgb, var(--lw-bad) 45%, transparent); }
+.dpv-step[data-state="failed"] .dpv-step-dot { background: var(--lw-bad); box-shadow: none; }
+.dpv-step[data-state="skipped"] { opacity: 0.5; }
+
 /* A deploy row: dot, id, target and sha, state, fixes, age. */
 .dpv-rows { list-style: none; margin: 0; padding: 0; }
 .dpv-row {

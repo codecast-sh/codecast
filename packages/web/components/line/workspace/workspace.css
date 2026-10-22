@@ -544,3 +544,84 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 
 /* The decision a run waits on, opened in the Runs view over the run it came from: the pane is the decision's own page. */
 .lw-nav[data-settling] .lw-nav-count { opacity: .4; }
+
+/* A flow of the pool, or a run of one (flows.md FL6): FlowFence, the Flows view. */
+.lw-flow { border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); background: var(--lw-card); overflow: hidden; }
+.lw-flow-cold { height: 132px; background: var(--lw-card-2); }
+.lw-flow-head { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px 7px; border-bottom: 1px solid var(--lw-rule-2); min-width: 0; }
+.lw-flow-kind { flex: none; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--lw-ink-3); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--lw-rule); }
+.lw-flow-kind[data-kind="line"] { color: var(--sol-blue); border-color: color-mix(in srgb, var(--sol-blue) 35%, transparent); }
+.lw-flow-name { flex: none; color: var(--lw-ink); font-weight: 600; font-size: var(--lw-fs-md, 13px); }
+.lw-flow-path { flex: 1 1 auto; min-width: 0; color: var(--lw-ink-3); font-size: var(--lw-fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lw-flow-path em { font-style: normal; color: var(--lw-ink-3); opacity: .8; }
+.lw-flow-state { flex: none; font-size: var(--lw-fs-sm); font-weight: 600; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--sol-blue) 12%, transparent); color: var(--sol-blue); }
+.lw-flow-state[data-tone="passed"] { background: color-mix(in srgb, var(--sol-green) 14%, transparent); color: var(--sol-green); }
+.lw-flow-state[data-tone="stopped"], .lw-flow-state[data-tone="failed"] { background: color-mix(in srgb, var(--sol-red) 12%, transparent); color: var(--sol-red); }
+.lw-flow-state[data-tone="waiting"] { background: color-mix(in srgb, var(--sol-yellow) 16%, transparent); color: var(--sol-yellow); }
+.lw-flow-task { flex: none; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); font-family: var(--font-mono, monospace); text-decoration: none; }
+.lw-flow-task:hover { color: var(--lw-ink); text-decoration: underline; }
+.lw-flow-why { padding: 7px 12px 9px; border-top: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-sm); color: var(--lw-ink-2); white-space: pre-wrap; max-height: 5.6em; overflow: hidden; }
+
+/* The flow diagram (FlowDiagram): the passing path, segments as frames, routes off the path, a run's state. */
+.fd { padding: 12px 12px 10px; overflow-x: auto; background:
+  radial-gradient(circle at 1px 1px, var(--lw-grid, color-mix(in srgb, var(--sol-border) 30%, transparent)) 1px, transparent 0) 0 0 / 18px 18px, var(--lw-paper); scrollbar-width: thin; }
+.fd-path { display: flex; align-items: flex-start; gap: 0; margin: 0; padding: 0; list-style: none; width: max-content; min-width: 100%; }
+.fd-cell, .fd-seg-cell { display: flex; align-items: flex-start; }
+.fd-arrow { flex: none; width: 18px; height: 32px; position: relative; }
+.fd-arrow::before { content: ""; position: absolute; left: 3px; right: 6px; top: 50%; border-top: 1.5px solid var(--lw-ink-3); opacity: .55; }
+.fd-arrow::after { content: ""; position: absolute; right: 3px; top: calc(50% - 3.5px); border: 3.5px solid transparent; border-left: 5px solid var(--lw-ink-3); opacity: .55; }
+
+.fd-step-wrap { display: flex; flex-direction: column; gap: 5px; width: max-content; max-width: 170px; }
+.fd-step { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px 0 9px; border-radius: 8px; border: 1px solid var(--lw-rule); background: var(--lw-card); white-space: nowrap; transition: border-color .2s, background-color .2s, opacity .2s; }
+.fd-step-name { font-size: var(--lw-fs-sm); font-weight: 600; color: var(--lw-ink); }
+.fd-who { flex: none; width: 14px; height: 14px; color: var(--lw-ink-3); }
+.fd-dot { flex: none; width: 15px; height: 15px; border-radius: 50%; display: grid; place-items: center; font-size: 9.5px; font-weight: 700; line-height: 1; border: 1.5px solid currentColor; }
+
+/* A run's state: done, here now, stopped, not reached. */
+.fd[data-has-run] .fd-step[data-state="idle"] { opacity: .45; }
+.fd-step[data-state="done"] .fd-dot { color: #fff; background: var(--lw-ok); border-color: var(--lw-ok); }
+.fd-step[data-state="current"] { border-color: var(--lw-person); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lw-person) 18%, transparent); }
+.fd-step[data-state="current"] .fd-dot { color: var(--lw-person); background: color-mix(in srgb, var(--lw-person) 22%, transparent); }
+.fd-step[data-state="stopped"] { border-color: var(--lw-bad); background: var(--lw-bad-soft); }
+.fd-step[data-state="stopped"] .fd-dot { color: #fff; background: var(--lw-bad); border-color: var(--lw-bad); }
+
+.fd-seg { display: flex; flex-direction: column; gap: 6px; padding: 16px 7px 7px; border-radius: 11px; position: relative; border: 1px dashed color-mix(in srgb, var(--lw-ink-3) 40%, transparent); background: color-mix(in srgb, var(--lw-card) 55%, transparent); }
+.fd-seg-name { position: absolute; top: -8px; left: 9px; padding: 0 5px; font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .02em; color: var(--lw-ink-2); background: var(--lw-paper); border-radius: 4px; }
+.fd-seg-steps { display: flex; align-items: flex-start; }
+.fd-seg[data-state="done"] { border-style: solid; border-color: color-mix(in srgb, var(--lw-ok) 45%, transparent); }
+.fd-seg[data-state="current"] { border-style: solid; border-color: color-mix(in srgb, var(--lw-person) 55%, transparent); }
+.fd-seg[data-state="stopped"] { border-style: solid; border-color: color-mix(in srgb, var(--lw-bad) 55%, transparent); }
+.fd-seg[data-state="done"] .fd-seg-name { color: var(--lw-ok); }
+.fd-seg[data-state="stopped"] .fd-seg-name { color: var(--lw-bad); }
+
+.fd-routes { margin: 0; padding: 0 0 0 4px; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.fd-route { display: grid; grid-template-columns: 13px 1fr; font-size: var(--lw-fs-2xs); line-height: 1.35; color: var(--lw-ink-3); }
+.fd-route b { font-weight: 600; color: var(--lw-ink-2); }
+.fd-route-mark { text-align: left; color: var(--lw-ink-3); }
+.fd-route-to { opacity: .7; }
+/* On a run, the route it took: red only where it stopped. */
+.fd-route[data-taken] b { color: var(--lw-ink); }
+.fd-route[data-taken][data-tone="stop"], .fd-route[data-taken][data-tone="stop"] b, .fd-route[data-taken][data-tone="stop"] .fd-route-mark { color: var(--lw-bad); }
+.fd-end { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 17px; font-size: var(--lw-fs-sm); font-weight: 600; color: var(--lw-ink-2); border: 1.5px solid var(--lw-ink-3); }
+.fd-end[data-reached] { color: var(--lw-ok); border-color: var(--lw-ok); background: var(--lw-ok-soft); }
+.fd[data-compact] { padding: 8px 10px; }
+.lw-flow-stop { flex: none; font-size: var(--lw-fs-xs); padding: 1px 9px; border-radius: 6px; border: 1px solid var(--lw-rule); background: var(--lw-card); color: var(--lw-ink-2); cursor: pointer; }
+.lw-flow-stop:hover { border-color: var(--lw-bad); color: var(--lw-bad); }
+
+/* Run through (RunThroughFlow): the pool, the picked flow drawn, the press. */
+.rtf { margin: 0; max-width: none; }
+.rtf-list { list-style: none; margin: 0; padding: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; border-bottom: 1px solid var(--lw-rule-2); }
+.rtf-row { width: 100%; display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: 7px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; background: none; text-align: left; cursor: pointer; min-width: 0; }
+.rtf-row:hover { background: var(--lw-card-2); }
+.rtf-row[aria-selected="true"] { background: var(--lw-card); border-color: var(--lw-rule); }
+.rtf-row b { font-size: var(--lw-fs-sm); color: var(--lw-ink); font-weight: 600; }
+.rtf-path { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rtf-preview { background: var(--lw-paper); }
+.rtf-foot { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-top: 1px solid var(--lw-rule-2); }
+.rtf-desc { flex: 1; min-width: 0; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rtf-go { flex: none; font-size: var(--lw-fs-sm); font-weight: 600; padding: 5px 12px; border-radius: 7px; border: 1px solid color-mix(in srgb, var(--sol-blue) 50%, transparent); background: color-mix(in srgb, var(--sol-blue) 14%, var(--lw-card)); color: var(--sol-blue); cursor: pointer; }
+.rtf-go:hover { background: color-mix(in srgb, var(--sol-blue) 22%, var(--lw-card)); }
+.fd-seg[data-parallel] .fd-seg-steps { flex-direction: column; gap: 6px; }
+.fd-seg[data-parallel] { border-style: solid; border-color: color-mix(in srgb, var(--lw-ink-3) 28%, transparent); }
+.fd-seg-par { font-weight: 500; color: var(--lw-ink-3); }
+.fd-seg[data-parallel] .fd-step-wrap { max-width: none; }
