@@ -3,7 +3,7 @@
 // guide. One renderer (the manifest's substitute), read by install, bind,
 // instructions and status in orgTemplateRun.ts.
 import * as path from "node:path";
-import { canonicalDirectory, inputToken, quoteTemplateArg, inputTokens, noSymlink, substitute, templateSlug, toolIds, toolSummary, toolToken, type OrgTemplate, type TemplateArtifact, type TemplateTool } from "./orgTemplateArtifact.js";
+import { canonicalDirectory, fillAnswers, inputToken, quoteTemplateArg, inputTokens, missingAnswer, noSymlink, substitute, templateSlug, toolIds, toolSummary, toolToken, type OrgTemplate, type TemplateArtifact, type TemplateTool } from "./orgTemplateArtifact.js";
 import type { SetupText } from "./orgTemplateState.js";
 import type { TemplateReceipt } from "./orgTemplateRun.js";
 
@@ -21,9 +21,9 @@ export function toolUse(receipt: Pick<TemplateReceipt, "instance" | "project" | 
 }
 function values(receipt: TemplateReceipt, manifest?: Pick<OrgTemplate, "inputs" | "tools">): Record<string, string> {
   const base: Record<string, string> = { instance: receipt.instance, "project.ref": receipt.project.ref, "project.name": receipt.project.name, "project.dir": receipt.project.dir, "template.root": receipt.template.root, "instance.file": receiptPath(receipt.project.dir, receipt.instance) };
-  // Every declared input substitutes: the answer, or the empty string for an
-  // unanswered optional one (a required one never reaches here unanswered).
-  for (const input of manifest?.inputs ?? []) base[inputToken(input.key)] = receipt.config?.[input.key] ?? "";
+  // Every declared input substitutes: the answer, else its default, else its
+  // marked label, so no text ever reads with a hole where an answer belongs.
+  for (const input of manifest?.inputs ?? []) base[inputToken(input.key)] = receipt.config?.[input.key] || (input.default !== undefined ? String(input.default) : "") || missingAnswer(input.label);
   for (const tool of manifest?.tools ?? []) base[toolToken(tool.id)] = toolUse(receipt, tool);
   return base;
 }
@@ -34,7 +34,11 @@ const SETUP_GUIDE_BUDGET = 256 * 1024;
 type SetupItem = NonNullable<OrgTemplate["setup"]>[number];
 /** One setup item's words for this instance (H5): its title and price, and its how-to guide from the pinned release. */
 export function setupWords(artifact: TemplateArtifact, receipt: TemplateReceipt, item: SetupItem, withGuide: boolean): SetupText[string] {
+  // The answers this item's words name that the hire left blank: the page asks for them in place.
+  const words = [item.title, item.price ?? "", item.how ? artifact.files.get(item.how)?.toString("utf8") ?? "" : ""].join("\n");
+  const needs = fillAnswers(words, artifact.manifest, receipt.config).needs;
   return {
+    ...(needs.length ? { needs } : {}),
     title: fill(item.title, receipt, artifact.manifest),
     ...(item.price ? { price: fill(item.price, receipt, artifact.manifest) } : {}),
     ...(withGuide && item.how ? { guide: fill(artifact.files.get(item.how)!.toString("utf8"), receipt, artifact.manifest) } : {}),

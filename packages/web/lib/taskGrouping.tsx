@@ -17,7 +17,7 @@
  */
 import { ReactNode } from "react";
 import Link from "next/link";
-import { User, MessageSquare, FolderKanban, Tag, ListChecks, Flag } from "lucide-react";
+import { User, MessageSquare, FolderKanban, Tag, ListChecks, Flag, Phone } from "lucide-react";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { byListOrder } from "./initiatives";
 import { objectHref } from "./entityLinks";
@@ -57,7 +57,13 @@ export type TaskGroupContext = {
   /** Hosted mode: a group header is its name and face, with no link out to
    *  a profile or a role page. */
   plainHeaders?: boolean;
+  /** The calls tasks were pulled from (tasks.from_call), by id: what the
+   *  Call axis names and dates its groups by. */
+  calls?: Record<string, TaskCallRef>;
 };
+
+/** What a Call group header shows about its call. */
+export type TaskCallRef = { title: string; short_id?: string; started_at?: number };
 
 const ctxStatuses = (ctx: TaskGroupContext | undefined): TeamTaskStatus[] =>
   orderedStatuses(ctx?.taskStatuses ?? DEFAULT_TASK_STATUSES);
@@ -141,6 +147,9 @@ const assigneeAxis: TaskAxis = {
   noneLabel: "Unassigned",
   dropUpdates: (key) => ({ assignee: key }),
 };
+
+const callOf = (key: string, ctx: TaskGroupContext): TaskCallRef | undefined => ctx.calls?.[key];
+const callDay = (at?: number) => (at ? new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "");
 
 export const TASK_AXES: Record<string, TaskAxis> = {
   status: {
@@ -339,10 +348,36 @@ export const TASK_AXES: Record<string, TaskAxis> = {
     },
     noneLabel: "No session",
   },
+
+  // The call a task was pulled from (tasks.from_call): the Huddles view groups
+  // by it, so everything one call asked for reads together whoever holds it.
+  // A call outside the cached list still gets its own group, named "Call".
+  call: {
+    label: "Call",
+    keyOf: (t) => t.from_call || "",
+    // Newest call first: calls are a chronology.
+    compare: (a, b, ctx) => (callOf(b.key, ctx)?.started_at ?? 0) - (callOf(a.key, ctx)?.started_at ?? 0),
+    header: (b, ctx) => {
+      const call = callOf(b.key, ctx);
+      const day = callDay(call?.started_at);
+      return {
+        label: call?.title || "Call",
+        icon: <Phone className="w-3.5 h-3.5 text-sol-magenta" />,
+        badge: day ? <span className="text-[10px] text-sol-text-dim normal-case tracking-normal">{day}</span> : undefined,
+        extra: ctx.plainHeaders ? undefined : (
+          <Link href={`/calls/${call?.short_id || b.key}`} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>
+            {call?.short_id ? `Open ${call.short_id}` : "Open call"}
+          </Link>
+        ),
+      };
+    },
+    noneLabel: "Not from a call",
+    dropUpdates: (key) => ({ from_call: key }),
+  },
 };
 
 /** Axis order for the group menus. */
-export const TASK_AXIS_KEYS = ["status", "initiative", "project", "plan", "assignee", "chain", "label", "session"] as const;
+export const TASK_AXIS_KEYS = ["status", "initiative", "project", "plan", "assignee", "chain", "label", "session", "call"] as const;
 
 /** Split a group value into its axes, dropping anything unknown. "none" (or an
  *  unrecognised value) yields an empty list, meaning a flat list. */

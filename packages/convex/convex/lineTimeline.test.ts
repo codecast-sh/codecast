@@ -27,7 +27,8 @@ describe("lineTimeline.page", () => {
   test("a moment, its review, the finding it filed, the problem, a run's steps, all named by what they touch", async () => {
     const w = world({
       moments: [{ _id: "m1", workspace: WS, source_id: "src1", kind: "conversation", subject: "c_1", who: "Pat Doe", short_id: "mo-1", created_at: 100 }],
-      agent_reviews: [{ _id: "rv1", workspace: WS, moment_id: "m1", judge: "comms", short_id: "rv-1", status: "done", findings: 1, finished_at: 150, created_at: 110 }],
+      agent_reviews: [{ _id: "rv1", workspace: WS, moment_id: "m1", judge: "comms", short_id: "rv-1", status: "done", findings: 1, finished_at: 150, created_at: 110, run_id: "j1" }],
+      judge_runs: [{ _id: "j1", workspace: WS, moment_id: "m1", moment_short_id: "mo-1", judge: "comms", status: "ok", findings: 1, expectations: [], at: 150 }],
       signals: [{ _id: "s1", workspace: WS, short_id: "sg-1", source: "judge:comms", kind: "bug", title: "Promised a call", fingerprint: "f", moment: "mo-1", task_id: "t1", project_id: "p1", created_at: 200, observed_at: 200 }],
       tasks: [
         { _id: "t1", workspace: WS, short_id: "ct-1", title: "Missed callbacks", source: "signal", cause: {}, status: "in_progress", created_at: 210, updated_at: 400, project_id: "p1" },
@@ -43,7 +44,7 @@ describe("lineTimeline.page", () => {
     ]);
     const byKind = Object.fromEntries(res.events.map((e: any) => [e.kind + (e.task ?? ""), e]));
     expect(byKind["moment"]).toMatchObject({ source: "acme-moments", title: "Pat Doe", moment: "mo-1", project_id: "p1" });
-    expect(byKind["review"]).toMatchObject({ source: "judge:comms", review: "rv-1", detail: "1 findings" });
+    expect(byKind["review"]).toMatchObject({ source: "judge:comms", review: "rv-1", detail: "1 findings", title: "Pat Doe" });
     expect(byKind["findingt1"]).toMatchObject({ signal_ref: "sg-1", task_ref: "ct-1", moment: "mo-1" });
     expect(byKind["problem_mergedt2"]).toMatchObject({ into_ref: "ct-1" });
     expect(byKind["stationt1"]).toMatchObject({ node: "prove", detail: "reproduced", run: "r1" });
@@ -60,5 +61,8 @@ describe("lineTimeline.page", () => {
     expect(first.events.map((e: any) => e.signal_ref ?? e.deploy)).toEqual(["sg-4", "sg-3", "dp-1"]);
     const next = await h(page)(w.as("u1"), { ...TEAM, rows: 2, before: first.cutoff });
     expect(next.events.map((e: any) => e.signal_ref)).toEqual(["sg-2", "sg-1"]);
+    // A poll asks only for what came after its last read.
+    const poll = await h(page)(w.as("u1"), { ...TEAM, after: 125 });
+    expect(poll.events.map((e: any) => e.signal_ref)).toEqual(["sg-4", "sg-3"]);
   });
 });

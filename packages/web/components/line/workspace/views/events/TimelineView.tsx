@@ -27,6 +27,8 @@ import "./timelineView.css";
 
 const ROW_H = 34;
 const DAY_H = 30;
+/** Events read on open to reach the start of today; past it, scrolling reads further. */
+const TODAY_CAP = 10_000;
 
 const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 const dayName = (at: number, now: number) => {
@@ -111,6 +113,11 @@ export function TimelineView({ workspace: ws, selection, select, href, space }: 
   });
   const items = virtualizer.getVirtualItems();
   const last = items[items.length - 1]?.index ?? 0;
+  // On open, read back to the start of today (what came in today is the view's first question), within a cap.
+  const today = new Date(new Date(now).toDateString()).getTime();
+  useWatchEffect(() => {
+    if (feed.floor != null && feed.floor > today && !feed.loading && !feed.done && stored.length < TODAY_CAP) feed.loadOlder();
+  }, [feed.floor, feed.loading, feed.done, today, stored.length, feed.loadOlder]);
   // Near the end of what is loaded: read the next page.
   useWatchEffect(() => { if (list.length && last >= list.length - 20) feed.loadOlder(); }, [last, list.length, feed.loadOlder]);
 
@@ -169,6 +176,8 @@ export function TimelineView({ workspace: ws, selection, select, href, space }: 
 const EventRow = memo(function EventRow({ e, index, now, active, href, onOpen }: { e: TimelineEvent; index: ChainIndex; now: number; active: boolean; href: string; onOpen: () => void }) {
   const became = becameOf(e, index, now);
   const tail = became[became.length - 1];
+  // The furthest step it reached, named with its problem when the step is past it ("ct-61943 · run completed").
+  const problem = became.find((x) => x.kind === "problem");
   return (
     <a href={href} className="tlv-row" aria-current={active || undefined} data-group={GROUP_OF[e.kind]} data-kind={e.kind} data-timeline-event={e._id}
       onClick={(ev) => { if (!ev.metaKey && !ev.ctrlKey) { ev.preventDefault(); onOpen(); } }}>
@@ -176,7 +185,7 @@ const EventRow = memo(function EventRow({ e, index, now, active, href, onOpen }:
       <span className="tlv-k">{kindWords(e)}</span>
       <span className="tlv-title">{e.kind === "station" && e.node ? `${e.node}: ` : ""}{e.title}</span>
       <span className="tlv-from">{sourceWords(e)}</span>
-      <span className="tlv-to">{tail ? <StepChip s={tail} /> : e.detail && e.kind !== "moment" && e.kind !== "decision_closed" ? <span className="tlv-detail">{e.detail}</span> : null}</span>
+      <span className="tlv-to">{tail ? <StepChip s={tail} problem={tail !== problem && problem?.kind === "problem" ? problem.ref : null} /> : e.detail && e.kind !== "moment" && e.kind !== "decision_closed" ? <span className="tlv-detail">{e.detail}</span> : null}</span>
     </a>
   );
 });
@@ -191,8 +200,8 @@ function stepWords(s: ChainStep): string {
   }
 }
 
-function StepChip({ s }: { s: ChainStep }) {
-  return <span className="tlv-step" data-step={s.kind} data-state={"state" in s ? s.state : undefined}>{stepWords(s)}</span>;
+function StepChip({ s, problem }: { s: ChainStep; problem?: string | null }) {
+  return <span className="tlv-step" data-step={s.kind} data-state={"state" in s ? s.state : undefined}>{problem ? `${problem} · ` : ""}{stepWords(s)}</span>;
 }
 
 /** One event opened: what it is, where it came from down to the raw thing, and what it became, each a link. */
