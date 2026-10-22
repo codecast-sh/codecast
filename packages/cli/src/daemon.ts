@@ -8512,15 +8512,16 @@ async function executeRemoteCommand(
         break;
       }
       case "line_deploy": {
-        // Deploy on the line (deploys.md DP2): the Line page asked for dp-N.
-        // `cast line deploy run` in the checkout that publishes the line runs
-        // the team's deploy path and reports to the deploy row; it can take
-        // many minutes, so the command answers at once. args: { deploy, root }.
+        // Deploy on the line (deploys.md DP2): the Line page or the line's
+        // role asked for dp-N. `cast line deploy run` in the checkout that
+        // publishes the line runs its steps as the line-deploy graph (DP8)
+        // and reports to the deploy row; CI and an eval gate take hours, so
+        // the command answers at once. args: { deploy, root }.
         try {
           const args = commandArgs ? JSON.parse(commandArgs) : {};
           if (typeof args.deploy !== "string" || !/^dp-\d+$/.test(args.deploy)) throw new Error("line_deploy needs the deploy's ref (dp-N)");
           if (typeof args.root !== "string" || !fs.existsSync(args.root)) throw new Error(`No checkout at ${args.root} on this machine`);
-          void runCastCommand(["line", "deploy", "run", args.deploy], { cwd: args.root, env: { CODECAST_CWD: args.root }, timeoutMs: 90 * 60 * 1000 })
+          void runCastCommand(["line", "deploy", "run", args.deploy], { cwd: args.root, env: { CODECAST_CWD: args.root }, timeoutMs: 10 * 60 * 60 * 1000 })
             .then((r) => log(`[LINE] Deploy ${args.deploy}: exit ${r.code}`));
           result = JSON.stringify({ accepted: args.deploy });
         } catch (err) {
@@ -15336,7 +15337,10 @@ function newestPaintedFrame(region: string): string {
 // The time need not lead the parentheses: while hooks run, their progress
 // comes first ("✻ Considering… (running PreToolUse hooks… 1/2 · 36m 18s"),
 // and requiring the time up front read that pane idle mid-turn (jx7f4ks).
-export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽]\s+\S[^\n]*…\s*\([^)\n]*?\b\d+[dhms]\b/m;
+//
+// The glyph cycles, and off macOS one frame is a plain "*" where macOS draws
+// ✳: a read that landed on it settled hands mid tool call on Linux.
+export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽*]\s+\S[^\n]*…\s*\([^)\n]*?\b\d+[dhms]\b/m;
 
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
@@ -15785,7 +15789,7 @@ export type OpenTaskInfo = OpenTaskReport & { openedAt?: number };
 // lost (an interrupted turn) must not leak forever.
 type PendingTaskCall = { name: string; description?: string; command?: string };
 const PENDING_TASK_CALLS_MAX = 200;
-const TASK_ARMING_TOOLS = new Set(["Bash", "Monitor", "Workflow"]);
+const TASK_ARMING_TOOLS = new Set(["Bash", "Monitor", "Workflow", "Agent"]);
 
 function scanOpenBackgroundTasksInto(
   open: Set<string>,
