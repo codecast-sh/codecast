@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
-import { templateLoaderPrompt } from "@codecast/shared/contracts/orgTemplateManifest";
+import { withTemplateLoader } from "@codecast/shared/contracts/orgTemplateManifest";
 import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
 import { diffTemplate, draftRoot, editTemplate, listTools, releaseDraft, runTool } from "./orgTemplateTools";
@@ -123,8 +123,7 @@ class Server {
         if (!row) throw new Error(`No hire of ${body.instance} on this project is awaiting its host step`);
         if (row.role_id !== body.role_id) throw new Error(`The hire ${body.instance} is for another role`);
         const role = this.roles.find((r) => r._id === body.role_id)!;
-        const loader = templateLoaderPrompt(body.dir, body.instance, "charter");
-        if (!(role.charter ?? "").includes(loader)) role.charter = role.charter ? `${role.charter}\n\n${loader}` : loader;
+        role.charter = withTemplateLoader(role.charter ?? "", body.dir, body.instance);
         return { role_id: body.role_id };
       }
       case "/cli/role/provision": {
@@ -1123,5 +1122,44 @@ describe("tools a template ships", () => {
     expect(released).toMatchObject({ to: "growth@2.1.0", class: "structure" });
     expect(server.lessons).toHaveLength(0);
     expect(listTools("acme-growth", options).tools.map((t) => t.id)).toEqual(["hello", "kickoff", "bye"]);
+  });
+});
+
+describe("a hire that left an answer blank, and a bind run from the wrong folder", () => {
+  const asks = (): any => ({ ...manifest(), schemaVersion: 2, version: "2.0.0", instance_file: ".codecast/packs/growth.toml",
+    inputs: [{ key: "product.slug", label: "Short name", kind: "string", required: true }, { key: "product.domain", label: "Apex domain", kind: "string" }],
+    setup: [{ id: "search-console", title: "Verify {{input.product.domain}} in Google Search Console", who: "human", how: "org/setup/search-console.md" }] });
+  async function webHire(m = asks()) {
+    const source = folder(m);
+    fs.mkdirSync(path.join(source, "org/setup"));
+    fs.writeFileSync(path.join(source, "org/setup/search-console.md"), "Add {{input.product.domain}} as a domain property.");
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1" };
+    const published: any = await publishTemplate(server.deps, source, { team: "team-1", status: "stable" });
+    server.roles.push({ _id: "role-1", short_id: "or-1", handle: "acme-cmo", name: "CMO", scope: { project_ids: ["project-1"], plan_ids: [] }, trust: "understand", status: "active" });
+    server.instances.push({ _id: "inst-1", instance_key: "pending:project-1:acme-growth", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: published.digest, project_id: "project-1", role_id: "role-1", phase: "awaiting_host", update_policy: "stable", config: { "product.slug": "acme" }, workspace: "team:team-1" });
+    return { server, options };
+  }
+  test("a missing answer reads as its label and is asked for; one given on the page reaches the host's words and instance file", async () => {
+    const { server, options } = await webHire();
+    const bound = await bindTemplate(server.deps, "acme-growth", options);
+    // Never "Verify  in": the label stands where the answer belongs, and the item names what it needs.
+    expect(server.instances[0].setup_text["search-console"]).toEqual({ title: "Verify [Apex domain] in Google Search Console", guide: "Add [Apex domain] as a domain property.", needs: ["product.domain"] });
+    expect(await templateInstructions(server.deps, "acme-growth", "setup:search-console", options)).toContain("Add [Apex domain] as a domain property.");
+    expect(bound.config).toEqual({ "product.slug": "acme" });
+    // A person answers on the role page (the row's config); the next host step pulls it in.
+    server.instances[0].config = { ...server.instances[0].config, "product.domain": "acme.io" };
+    const again = await bindTemplate(server.deps, "acme-growth", options);
+    expect(again.config).toEqual({ "product.slug": "acme", "product.domain": "acme.io" });
+    expect(server.instances[0].setup_text["search-console"]).toEqual({ title: "Verify acme.io in Google Search Console", guide: "Add acme.io as a domain property." });
+    expect(fs.readFileSync(path.join(server.dir, ".codecast/packs/growth.toml"), "utf8")).toContain('domain = "acme.io"');
+  });
+  test("bind adopting a web hire refuses a folder that is not the project's checkout on this machine, and names the right one", async () => {
+    const { server, options } = await webHire();
+    const parent = tmp();
+    await expect(bindTemplate(server.deps, "acme-growth", { ...options, dir: parent })).rejects.toThrow(new RegExp(`acme-growth works on Product, whose checkout on this machine is ${server.dir}, not ${parent}\\. Run: cast org template bind 'acme-growth' --dir '${server.dir}'`));
+    expect(fs.existsSync(path.join(parent, ".codecast/org-templates/acme-growth.json"))).toBe(false);
+    // Run in the project's folder, it binds.
+    expect((await bindTemplate(server.deps, "acme-growth", options)).project.dir).toBe(server.dir);
   });
 });

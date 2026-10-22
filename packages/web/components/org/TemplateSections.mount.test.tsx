@@ -16,6 +16,7 @@ async function verifyTemplateSections() {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   const { mock } = await import("bun:test");
   const marked: any[] = []; const activated: string[] = []; const binds: any[] = []; const proposed: any[] = [];
+  const answered: string[][] = [];
   const learningSet: boolean[] = []; let learningOn = false;
   const lessonRows = [{ id: "l-1", status: "released", released_in: "2.1.0", body: "The search-console step should say which account owns the property." }, { id: "l-2", status: "open", body: "The weekly review should open with the numbers." }];
   const now = Date.now();
@@ -24,7 +25,7 @@ async function verifyTemplateSections() {
     trust: "understand", handle: "acme-growth-cmo",
     authority: [{ id: "site-write", kind: "write", label: "Ship pages", granted_at: now }, { id: "old", kind: "publish", label: "Expired", granted_at: now, expires_at: now - 1 }],
     // search-console carries the guide the host rendered at bind; measurement names one the page does not hold yet.
-    setup: [{ id: "search-console", title: "Verify the domain", who: "human", status: "open", unlocks: ["seo-weekly"], price: "unlocks SEO weekly", how: "org/setup/search-console.md", guide: "# Verify acme.io\n\n1. Add the TXT record from /src/acme." }, { id: "measurement", title: "See one event", who: "role", status: "open", unlocks: [], how: "org/setup/measurement.md" }, { id: "bing", title: "Verify in Bing", who: "human", status: "done", unlocks: [] }],
+    setup: [{ id: "search-console", title: "Verify the domain", who: "human", status: "open", unlocks: ["seo-weekly"], price: "unlocks SEO weekly", how: "org/setup/search-console.md", guide: "# Verify acme.io\n\n1. Add the TXT record from /src/acme.", needs: [{ key: "product.domain", label: "Apex domain", kind: "string" }] }, { id: "measurement", title: "See one event", who: "role", status: "open", unlocks: [], how: "org/setup/measurement.md" }, { id: "bing", title: "Verify in Bing", who: "human", status: "done", unlocks: [] }],
     ask: { id: "search-console", title: "Verify the domain", unlocks: ["seo-weekly"] },
     readiness: { "cmo-weekly": { ready: true, mode: "propose", missing: [] }, "seo-weekly": { ready: false, mode: "propose", missing: ["evidence technical has no pass"] }, "ads-daily": { ready: true, mode: "propose", missing: ["only recommends: Starts work on its own is off"] } },
     routines: [
@@ -34,7 +35,8 @@ async function verifyTemplateSections() {
     ],
     scoreboard: [{ key: "primary_events_7d", label: "Primary events", value: "7", observed_at: now - 3_600_000, source: "ct-1" }, { key: "cost", label: "Cost per event" }],
     secrets: [{ key: "accounts.ads", label: "Google Ads credentials", bound: false }, { key: "accounts.publora", label: "Publora key", bound: true }],
-    template: { name: "CMO", latest_stable: "2.1.0", changelog: "## 2.1.0\nThe search-console guide names the owning account." }, update_available: "2.1.0", update_digest: "f".repeat(64),
+    tools: [{ id: "gads", kind: "command", path: "scripts/gads.mjs", run: "node", summary: "Ads API" }, { id: "ads-daily", kind: "skill", path: "skills/ads-daily" }],
+    template: { name: "CMO", workspace: "codecast", latest_stable: "2.1.0", changelog: "## 2.1.0\nThe search-console guide names the owning account." }, update_available: "2.1.0", update_digest: "f".repeat(64),
     // The host step from the web (H3): the machine that runs the role, and how the last request went.
     bind_host: { device: { device_id: "dev-mbp", label: "MacBook", online: true, can_receive_secrets: true, pubkey: "PUB" }, dir: "/src/acme", reason: null },
     host_step: { state: "idle" },
@@ -43,7 +45,7 @@ async function verifyTemplateSections() {
   mock.module("../../hooks/useTemplateHire", () => ({
     useTemplateInstance: () => ({ instance: shown, ready: true }),
     useTemplateCatalog: () => ({ templates: [], ready: true }),
-    useTemplateActions: () => ({ propose: async (spec: any) => { proposed.push(spec); return { short_id: "op-4" }; }, setLearning: async (_team: string | undefined, enabled: boolean) => { learningSet.push(enabled); learningOn = enabled; }, markSetup: async (key: string, id: string, status: string) => { marked.push([key, id, status]); }, activate: async (id: string) => { activated.push(id); }, requestBind: async (key: string, secrets: any[]) => { binds.push([key, secrets]); return { command_id: "cmd-1", device: { device_id: "dev-mbp", label: "MacBook" }, already_pending: false }; } }),
+    useTemplateActions: () => ({ answer: async (key: string, input: string, value: string) => { answered.push([key, input, value]); }, propose: async (spec: any) => { proposed.push(spec); return { short_id: "op-4" }; }, setLearning: async (_team: string | undefined, enabled: boolean) => { learningSet.push(enabled); learningOn = enabled; }, markSetup: async (key: string, id: string, status: string) => { marked.push([key, id, status]); }, activate: async (id: string) => { activated.push(id); }, requestBind: async (key: string, secrets: any[]) => { binds.push([key, secrets]); return { command_id: "cmd-1", device: { device_id: "dev-mbp", label: "MacBook" }, already_pending: false }; } }),
     // Sealing is the browser's Web Crypto in the app; here the shape is what matters: never the value.
     useTemplateLearning: () => ({ learning: { enabled: learningOn, can_change: true, changed_by: null }, ready: true }),
     useInstanceLessons: () => ({ lessons: lessonRows, ready: true }),
@@ -62,6 +64,19 @@ async function verifyTemplateSections() {
   assert.match(text, /Waiting on you: Verify the domain \(unlocks seo-weekly\)/);
   assert.match(text, /Allowed outside codecast: write \(Ship pages\)/);
   assert.doesNotMatch(text, /Expired/);
+  // An answer the hire left blank is asked for on the step that needs it; Save sends it as the person's answer.
+  const answerForm = document.querySelector<HTMLFormElement>('[data-template-answer="product.domain"]')!;
+  assert.ok(answerForm, "the blank answer is asked for in place");
+  await act(async () => {
+    const input = answerForm.querySelector("input")!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "acme.io");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => answerForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  assert.deepEqual(answered, [["key-1", "product.domain", "acme.io"]]);
+  // The tools it ships, by name, and whose copy of the template it runs.
+  assert.deepEqual([...document.querySelectorAll("[data-template-tools] span[title], [data-template-tools] span:not(:first-child)")].map((el) => el.textContent), ["gads", "ads-daily"]);
+  assert.match(text, /From Codecast's library/);
   assert.match(text, /Update available: 2\.1\.0/);
   // The learning switch (H12) says in one sentence what leaves and what comes back; off until a person turns it on.
   assert.match(text, /Let Codecast learn from this workspace's template roles/);

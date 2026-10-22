@@ -12,10 +12,10 @@
 //   realtime  A live model hears the people in the room, sees every shared
 //             screen and camera that is on when it answers (vision.mjs), and talks
 //             through the face, or as a plain voice when no face can be
-//             seated (Tavus out of minutes or down). It answers when named, when it is the only
-//             one the person can be talking to, or when someone follows up
-//             on what it just said. It hands real work to the session
-//             (ask_agent) and tells the room what the session found.
+//             seated (Tavus out of minutes or down). It answers only when
+//             named, or when one person is in the call (turns.mjs). It hands
+//             real work to the session (ask_agent) and tells the room what
+//             the session found for a turn someone asked for.
 //
 // It leaves when it is removed from the call, when the face leaves, when the
 // face never comes, or once every person has gone, so an agent never outlives
@@ -30,6 +30,7 @@ import { AutoSubscribe, cli, defineAgent, llm, voice, WorkerOptions } from "@liv
 import * as openai from "@livekit/agents-plugin-openai";
 import { AudioMixer, AudioStream, RoomEvent, TrackKind } from "@livekit/rtc-node";
 import { AccessToken } from "livekit-server-sdk";
+import { nameMatchers, turnVerdict } from "./turns.mjs";
 import { eachTrack, isPerson, people, watchVideo } from "./vision.mjs";
 
 const AGENT_NAME = process.env.FACE_AGENT_NAME || "codecast-face";
@@ -43,8 +44,6 @@ const ALONE_GRACE_MS = 120_000;
 const MAX_CALL_SECONDS = 4 * 3600;
 // How long a reply the face says word for word, ending on a whole sentence.
 const SPOKEN_MAX = 600;
-// A person's next words this soon after the voice spoke are likely for it.
-const FOLLOW_UP_MS = 15_000;
 const SAMPLE_RATE = 24_000;
 
 async function tavus(method, path, body) {
@@ -156,9 +155,7 @@ async function runRealtime(ctx, meta, face) {
   const room = ctx.room;
   const brief = await convex("brief", meta, room);
   if (!brief) throw new Error("no brief: the feed ended or real-time is off for this team");
-  const named = brief.spoken_names.map(
-    (n) => new RegExp(`(?:^|[^\\p{L}\\p{N}])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}])`, "iu"),
-  );
+  const named = nameMatchers(brief.spoken_names);
 
   const mix = new RoomMix();
   eachTrack(room, (track, pub, p) => {
@@ -191,8 +188,8 @@ async function runRealtime(ctx, meta, face) {
     });
   }
   // Quiet holds from the moment the model asks for it until someone names it
-  // again: no follow-ups, no lone-listener turns, no telling the session's
-  // results (they are in the call's chat already).
+  // again: no lone-listener turns, no telling the session's results (they
+  // are in the call's chat already).
   let quiet = false;
   const agent = new voice.Agent({
     instructions: brief.instructions,
@@ -220,7 +217,6 @@ async function runRealtime(ctx, meta, face) {
   // ends the session when they go).
   await session.start({ agent, room, inputOptions: { textEnabled: false, closeOnDisconnect: false }, outputOptions: { transcriptionEnabled: false } });
 
-  let lastSpokeAt = 0;
   let shownImage = null;
   const answer = async (opts = {}) => {
     const views = look(speaker);
@@ -241,7 +237,7 @@ async function runRealtime(ctx, meta, face) {
 
   // A turn is answered once. With one person in the call every turn is for
   // the voice, so it answers the moment the turn ends; with more, it waits
-  // for the words to know whether it was named or followed up on.
+  // for the words to know whether it was named.
   let answered = false;
   const answerTurn = () => {
     answered = true;
@@ -253,23 +249,19 @@ async function runRealtime(ctx, meta, face) {
   });
   session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
     if (!ev.isFinal || answered || !ev.transcript.trim()) return;
-    if (named.some((re) => re.test(ev.transcript))) {
-      quiet = false;
-      return answerTurn();
-    }
-    const followUp = Date.now() - lastSpokeAt < FOLLOW_UP_MS;
-    if (!quiet && (followUp || people(room).length <= 1)) answerTurn();
+    const verdict = turnVerdict({ transcript: ev.transcript, named, quiet, alone: people(room).length <= 1 });
+    quiet = verdict.quiet;
+    if (verdict.answer) answerTurn();
   });
   session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
     if (ev.item.type !== "message" || ev.item.role !== "assistant") return;
-    lastSpokeAt = Date.now();
     const text = ev.item.textContent?.trim();
     if (text) convex("said", meta, room, { text }).catch((e) => console.error("said failed", e));
   });
   onFaceMessage(room, meta.conversation_id, "reply", (text) => {
     if (!text || quiet) return;
     answer({
-      instructions: `Your working session just finished a turn. What it said, already in the call's chat: "${text}". Tell the room the gist in a sentence or two, in your own words.`,
+      instructions: `Your working session just finished what someone asked you for. What it said, already in the call's chat: "${text}". Tell the room the gist in one or two sentences, in your own words, starting with the answer itself.`,
     }).catch((e) => console.error("tell failed", e));
   });
 }

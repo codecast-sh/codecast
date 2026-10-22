@@ -1305,6 +1305,14 @@ export const CLIENT_SYNC_REGISTRY = {
     unprotectedFields: ["rows", "queued", "cancelled", "state"],
     feeds: ["sessionMigrations.listBatches"],
   },
+  // Dry runs of session moves the offload review asked for, the last few
+  // minutes of them (convex/moveRehearsals.ts). The whole recent set each push.
+  moveRehearsals: {
+    persistence: { kind: "meta", key: "moveRehearsals" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "list", rowKey: "_id" },
+    feeds: ["moveRehearsals.listMine"],
+  },
   // Aggregate CPU/memory over the last 2h — a recomputed list, not rows.
   sessionMetricsAggregate: {
     persistence: { kind: "meta", key: "sessionMetricsAggregate" },
@@ -1974,6 +1982,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   machineResources: "shared",
   migrationCandidates: "shared",
   migrationBatches: "shared",
+  moveRehearsals: "shared",
   sessionCommands: "local",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",

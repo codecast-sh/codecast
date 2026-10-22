@@ -2028,7 +2028,7 @@ export default defineSchema({
     // Each setup item's title, price and how-to guide with the instance's
     // values filled in, rendered by the host at bind (it holds the release and
     // the paths): what the role page shows under a setup step.
-    setup_text: v.optional(v.record(v.string(), v.object({ title: v.string(), price: v.optional(v.string()), guide: v.optional(v.string()) }))),
+    setup_text: v.optional(v.record(v.string(), v.object({ title: v.string(), price: v.optional(v.string()), guide: v.optional(v.string()), needs: v.optional(v.array(v.string())) }))),
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),
@@ -6046,7 +6046,7 @@ export default defineSchema({
     created_from_conversation: v.optional(v.id("conversations")),
     created_from_insight: v.optional(v.id("session_insights")),
     // The call this task was pulled from (a transcripts row). Set by `cast
-    // task create --from-call`, `cast task update --call`, or the call page;
+    // task create --from-call`, `cast task update --from-call`, or the call page;
     // the call page lists its tasks through by_from_call.
     from_call: v.optional(v.id("transcripts")),
     last_session_summary: v.optional(v.string()),
@@ -7728,6 +7728,10 @@ export default defineSchema({
     last_mirrored_message_id: v.optional(v.id("messages")),
     // The route's choice, copied: false seats no face or voice for this agent.
     face: v.optional(v.boolean()),
+    // When someone last asked this agent for something (a line naming it, or
+    // its voice handing it work). Only a reply to such a turn is said aloud;
+    // the rest stays in the call's chat (callChat.mirrorAgentTurn).
+    addressed_at: v.optional(v.number()),
   })
     .index("by_conversation", ["conversation_id"])
     .index("by_transcript", ["transcript_id"]),
