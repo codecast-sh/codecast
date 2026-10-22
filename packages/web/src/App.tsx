@@ -36,6 +36,7 @@ const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-requ
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
 const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
 const BlogTurns = lazy(() => import("@/app/(marketing)/blog/the-tree-at-the-end-of-every-turn/page"));
+const BlogUndo = lazy(() => import("@/app/(marketing)/blog/undo-with-a-history/page"));
 const BlogChartReply = lazy(() => import("@/app/(marketing)/blog/the-chart-in-the-reply/page"));
 const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
 const BlogTaskPage = lazy(() => import("@/app/(marketing)/blog/the-task-your-agent-reports-to/page"));
@@ -120,6 +121,7 @@ const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 const Docs = lazy(() => import("@/app/docs/page"));
 const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const AgentFeatures = lazy(() => import("@/app/agent-features/page"));
+const Files = lazy(() => import("@/app/files/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
@@ -234,6 +236,7 @@ export function App() {
               <Route path="blog/what-your-team-sees" element={<E name="BlogTeamSees"><BlogTeamSees /></E>} />
               <Route path="blog/one-repository-twenty-checkouts" element={<E name="BlogWorktrees"><BlogWorktrees /></E>} />
               <Route path="blog/the-tree-at-the-end-of-every-turn" element={<E name="BlogTurns"><BlogTurns /></E>} />
+              <Route path="blog/undo-with-a-history" element={<E name="BlogUndo"><BlogUndo /></E>} />
               <Route path="blog/the-chart-in-the-reply" element={<E name="BlogChartReply"><BlogChartReply /></E>} />
               <Route path="blog/the-questions-your-agents-save-for-you" element={<E name="BlogQuestions"><BlogQuestions /></E>} />
               <Route path="blog/the-task-your-agent-reports-to" element={<E name="BlogTaskPage"><BlogTaskPage /></E>} />
@@ -305,11 +308,10 @@ export function App() {
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />
               <Route path="capabilities" element={<E name="Capabilities"><Capabilities /></E>} />
               <Route path="agent-features" element={<E name="AgentFeatures"><AgentFeatures /></E>} />
-              <Route path="files" element={<E name="Files"><Vault /></E>} />
-              {/* /vault = pre-rename alias for /files. Permanent: `cast vault open`
-                  has printed /vault?f=… deep links into sessions, notes and users'
-                  markdown files since before the rename. Never remove it. */}
-              <Route path="vault" element={<E name="Files"><Vault /></E>} />
+              <Route path="files" element={<E name="Files"><Files /></E>} />
+              {/* /vault is the team Vault; an old /vault?f=… Files link redirects
+                  to /files from inside it (lib/vault/vaultHref.ts). */}
+              <Route path="vault" element={<E name="Vault"><Vault /></E>} />
               <Route path="pages" element={<E name="Pages"><Artifacts /></E>} />
               {/* /artifacts = pre-rename alias for /pages */}
               <Route path="artifacts" element={<E name="Pages"><Artifacts /></E>} />

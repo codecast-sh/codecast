@@ -16,6 +16,7 @@ import { isOpsPath, opsTabLabel } from "../components/ops/opsPaths";
 import { modePageLabel } from "./surfaceRules";
 import { isHostedUi } from "../components/simple/lanePaths";
 import { currentPagePath } from "./renamedPages";
+import { legacyFilesHref } from "./vault/vaultHref";
 
 /** The mode's name for the page at `path` under this client_state.ui, or
  *  null when the page is named the same in both modes. A label that a stored
@@ -110,9 +111,9 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
     } catch {}
     return "Changes";
   }
-  // A Files tab is titled by the open file, not the encoded query string.
-  // /vault is the permanent pre-rename alias, so both prefixes title the same.
-  if (/^\/(files|vault)[?/]/.test(path)) {
+  // A Files tab is titled by the open file, not the encoded query string. An
+  // old /vault?f=… Files link titles the same until it redirects to /files.
+  if (/^\/files[?/]/.test(path) || legacyFilesHref(path)) {
     try {
       const f = new URLSearchParams(path.split("?")[1] ?? "").get("f");
       if (f) {
@@ -157,7 +158,7 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
     "/docs": "Docs",
     "/files": "Files",
     "/memory": "Memory",
-    "/vault": "Files", // pre-rename alias — old saved tabs keep this path
+    "/vault": "Vault",
     "/pages": "Pages",
     "/artifacts": "Pages", // pre-rename alias — old saved tabs keep this path
     "/plans": "Plans",

@@ -42,7 +42,7 @@ import { useLineGraph } from "../components/line/map/useLineGraph";
 import { useProductName } from "./useLoopSteps";
 import { problemOrigins, type ProblemSource } from "../lib/line/stepRuns";
 import { activeProblemCount, isCountedActive, lessonOnlyIds } from "../lib/line/problemTable";
-import { problemOverlaps, type Overlap } from "../lib/line/overlap";
+import { problemOverlaps, type Overlap, type OverlapItem } from "../lib/line/overlap";
 import { heldFrom } from "../lib/line/sourcesView";
 
 const api = _api as any;
@@ -410,13 +410,17 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const inbox = useMemo(() => projectInbox.map((g) => ({ ...g, rows: g.rows.filter((r) => processOf.row(r) === model.graphKey) })).filter((g) => g.rows.length > 0), [projectInbox, processOf, model.graphKey]);
   // Problems that are one problem under two ids (overlap): filed under the oldest, over every active problem in every
   // process and project, so a twin folds the same way whatever the filter or the picker shows.
-  const overlaps = useMemo(() => {
+  const overlapItems = useMemo(() => {
     const rows = new Map((everyRow.tasks as Array<{ _id: string; created_at?: number; _creationTime?: number; cause?: { fingerprints?: string[] } | null }>).map((t) => [t._id, t]));
-    return problemOverlaps(everyProblem.filter((i) => isCountedActive(i, lessons)).map((i) => {
+    return everyProblem.filter((i) => isCountedActive(i, lessons)).map((i): OverlapItem => {
       const t = rows.get(i.id);
       return { id: i.id, ref: i.ref, title: i.title, at: t?.created_at ?? t?._creationTime ?? 0, fingerprints: t?.cause?.fingerprints ?? null };
-    }));
+    });
   }, [everyProblem, lessons, everyRow.tasks]);
+  // Keyed on what it compares, so a push or a clock tick that moves no active problem's ref, title, age or
+  // fingerprints never runs it again.
+  const overlapKey = useMemo(() => overlapItems.map((i) => `${i.id}\u0001${i.ref ?? ""}\u0001${i.title}\u0001${i.at}\u0001${i.fingerprints?.join(",") ?? ""}`).join("\u0002"), [overlapItems]);
+  const overlaps = useMemo(() => problemOverlaps(overlapItems), [overlapKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // What waits on the viewer, over every process and every project: For you has no picker and no project filter (a
   // need names its own process and project), so picking a project on Problems or Line never hides an ask. Only a
   // project's own Line tab (`pinned`) narrows it.
