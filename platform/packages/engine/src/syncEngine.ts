@@ -313,7 +313,10 @@ export function createSyncEngine(config: PlatformConfig): SyncEngine {
 
     // Exclude pending — entire record blocked from sync
     const excludeKey = `${field}:${id}`;
-    if (draft.pending[excludeKey]?.type === "exclude") return;
+    const excluded = draft.pending[excludeKey];
+    // A prune's exclude yields to the server sending the row again (syncProtocol applySyncTable).
+    if (excluded?.type === "exclude" && excluded.pruned) draft.pending = Object.fromEntries(Object.entries(draft.pending).filter(([k]) => k !== excludeKey));
+    else if (excluded?.type === "exclude") return;
 
     const collection = draft[field];
     const existing = collection?.[id];

@@ -40,3 +40,16 @@ describe("one rule for a project's work", () => {
     expect(tasksForSource(rows, "agent").map((r) => r._id)).toEqual(["20", "21"]);
   });
 });
+
+describe("the From calls source", () => {
+  it("lists every live task pulled from a call, whoever filed it", () => {
+    const rows = [
+      t("30", "open", { from_call: "c1" }),
+      t("31", "done", { source: "meeting", from_call: "c1" }),
+      t("32", "open", { source: "agent", from_call: "c2" }),          // agent-filed, unassigned: still the call's
+      t("33", "open", { from_call: "c1", triage_status: "dismissed" }), // dismissed: not live
+      t("34", "open", { source: "meeting" }),                          // a meeting task with no call
+    ];
+    expect(tasksForSource(rows, "calls").map((r) => r._id)).toEqual(["30", "31", "32"]);
+  });
+});

@@ -116,7 +116,7 @@ describe("hire-time input answers", () => {
     expect(parseInputs(m, ["product.domain=acme.io", "budget.monthly_envelope_usd=300"])).toEqual({ "product.domain": "acme.io", "budget.monthly_envelope_usd": "300", voice: "plain" });
     expect(() => parseInputs(m, ["product.domain=acme.io"])).toThrow(/Required input not answered: budget.monthly_envelope_usd/);
     expect(() => parseInputs(m, ["product.domain=acme.io", "budget.monthly_envelope_usd=lots"])).toThrow(/must be a number/);
-    expect(() => parseInputs(m, ["product.domain=acme.io", "budget.monthly_envelope_usd=-5"])).toThrow(/must be a number/);
+    expect(() => parseInputs(m, ["product.domain=acme.io", "budget.monthly_envelope_usd=-5"])).toThrow(/must not be negative/);
     expect(() => parseInputs(m, ["product.domain=acme.io", "budget.monthly_envelope_usd=300", "voice=shouty"])).toThrow(/one of: plain, playful/);
     expect(() => parseInputs(m, ["product.domain=acme.io", "budget.monthly_envelope_usd=300", "accounts.google_ads=~/x.json"])).toThrow(/bound on the host/);
     expect(() => parseInputs(m, ["product.domain=acme.io", "budget.monthly_envelope_usd=300", "tld=io"])).toThrow(/Unknown input: tld/);
