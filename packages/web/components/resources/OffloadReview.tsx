@@ -531,7 +531,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
                         rehearsal={rehearsalOf(c)}
                         bring={bringOf(c)}
                         disabled={!!actionsDisabledReason}
-                        onBring={(path, on) => setChoices((s) => ({ ...s, [c.sessionId]: { checked: isChecked(c), ...s[c.sessionId], bring: { ...s[c.sessionId]?.bring, [path]: on } } }))}
+                        onBring={(path, on) => setChoices((s) => ({ ...s, [c.sessionId]: { ...s[c.sessionId], checked: s[c.sessionId]?.checked ?? isChecked(c), bring: { ...s[c.sessionId]?.bring, [path]: on } } }))}
                       />
                     );
                   })}
