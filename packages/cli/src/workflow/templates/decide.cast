@@ -1,0 +1,16 @@
+// A segment (flows.md FL2): one question to the person who answers for the
+// change, on the decision rail every gate uses (the-line.md L4).
+digraph decide {
+  graph [kind="segment", label="Decide", description="The person who answers for the change says ship, revise or drop", takes="task"]
+  start [shape=Mdiamond]
+  decide [label="Decide", shape=hexagon, category=review,
+    prompt="Ship $task_title?\nThe change passed its checks and review; the branch is $branch.",
+    doc="$review_note"]
+  ship    [shape=Msquare, label="Ship"]
+  revise  [shape=Msquare, label="Revise", stop="Sent back for revision. $human_message"]
+  dropped [shape=Msquare, label="Dropped", stop="Dropped at the gate. $human_message"]
+  start -> decide
+  decide -> ship    [label="[S] Ship :: Land the change"]
+  decide -> revise  [label="[R] Revise :: Your note goes back to the session that made it"]
+  decide -> dropped [label="[D] Drop :: Leave the change unshipped"]
+}
