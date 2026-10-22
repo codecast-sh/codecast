@@ -5,12 +5,13 @@
 // again every HEAD_POLL_MS while the page is visible; older pages are read on
 // demand. Each answer says how far down it is complete (`cutoff`), which the
 // view uses to keep what it shows gap free.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
 import { useServerAuthSettled } from "./useServerAuthSettled";
+import { useWatchEffect } from "./useWatchEffect";
 
 const HEAD_POLL_MS = 30_000;
 const HEAD_ROWS = 40;
@@ -48,7 +49,7 @@ export function useSyncLineTimeline(workspace?: string | null): LineTimelineFeed
   }, [convex, argsKey]);
 
   // The head: now, then on a timer while the page is visible.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!argsKey) return;
     let stopped = false;
     // The first read runs whatever the page's visibility; a repeat waits for the page to be seen. A repeat reads only
