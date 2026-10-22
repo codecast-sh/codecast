@@ -603,6 +603,10 @@ export async function createRunCore(
     fallback_team_id?: Id<"teams">;
     // Start a run even though the task's bound run is still live (LE1.4).
     force?: boolean;
+    // A new line run on a problem proves against unfixed code: the machine sets
+    // the problem's earlier branch aside and starts it again from origin/main
+    // (cli lineTrialBranch.ts). Its fix stays on the set-aside branch, prior art.
+    fresh_branch?: boolean;
     now?: number;
   },
 ): Promise<{ run_id: Id<"workflow_runs">; primary_conversation_id: Id<"conversations"> }> {
@@ -628,6 +632,7 @@ export async function createRunCore(
     node_statuses: [],
     goal_override: opts.goal_override,
     project_path: opts.project_path,
+    ...(opts.fresh_branch && opts.task ? { fresh_branch: true } : {}),
     created_at: now,
     updated_at: now,
   });
@@ -736,6 +741,8 @@ export const createFromCli = mutation({
       const match = wf.find(w => w.name === args.workflow_name);
       if (match) workflowDocId = match._id;
     }
+    // A line run: the shipped line or a role's, or a line version (one that serves a scenario).
+    const lineRun = isLineRunSlug(args.workflow_name) || !!((workflowDocId ? await ctx.db.get(workflowDocId) : null) as any)?.serves?.length;
 
     const { run_id, primary_conversation_id } = await createRunCore(ctx, userId, {
       workflow_name: workflowName,
@@ -747,6 +754,7 @@ export const createFromCli = mutation({
       project_path: args.project_path,
       spawner_conversation_id: spawner?._id,
       force: args.force,
+      fresh_branch: args.detach && lineRun,
       now,
     });
     if (args.detach) await queueRunOnDaemon(ctx, userId, run_id, { device: args.run_on_device, ...(version ? { slug: version.slug } : {}), now });
