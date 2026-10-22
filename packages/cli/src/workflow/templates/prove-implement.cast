@@ -1,0 +1,30 @@
+// A segment (flows.md FL2): proof before the fix (LE8). The miss is shown
+// failing, the change is built, checked, and the same proof shown passing.
+digraph prove_implement {
+  graph [kind="segment", label="Prove, then implement", description="Show the miss failing, build the fix, show it passing", takes="task"]
+  start [shape=Mdiamond]
+  prove [label="Prove", backend=session, agent=claude, isolated=true, max_visits=2, timeout=10800, prompt="@line/prove.md"]
+  red [label="Red", shape=parallelogram, timeout=5400, script="@line/red.sh"]
+  dissolve [label="Dissolve", shape=parallelogram, script="@line/dissolve.sh"]
+  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=10800, prompt="@line/implement.md"]
+  verify [label="Verify", shape=parallelogram, timeout=3600,
+    script="cd \"$(cast ws path $worktree)\" && bash -c $line.commands.check"]
+  green [label="Green", shape=parallelogram, timeout=1800, script="@line/green.sh"]
+  built     [shape=Msquare, label="Built and green"]
+  dissolved [shape=Msquare, label="Dissolved"]
+  unproven  [shape=Msquare, label="Unproven", stop="Prove ended without showing the miss or ruling it out. $prove.output"]
+  stopped   [shape=Msquare, label="Cannot build", stop="$handoff_note"]
+  start -> prove
+  prove -> red       [condition="prove.json.reproduced = true"]
+  prove -> dissolve  [condition="prove.json.reproduced = false"]
+  prove -> unproven  [condition="prove.json.reproduced != true and prove.json.reproduced != false", label="no proof"]
+  red -> implement   [condition="red.json.red = true"]
+  red -> prove       [condition="red.json.red != true", label="no miss shown"]
+  dissolve -> dissolved
+  implement -> verify  [condition="handoff = done"]
+  implement -> stopped [condition="handoff = needs_context or handoff = blocked", label="cannot build"]
+  verify -> green      [condition="outcome = success"]
+  verify -> implement  [condition="outcome = failure", label="checks failed"]
+  green -> built       [condition="outcome = success"]
+  green -> implement   [condition="outcome = failure", label="still red"]
+}

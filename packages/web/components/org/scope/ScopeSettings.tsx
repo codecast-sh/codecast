@@ -41,16 +41,17 @@ const NO_INTENTS: OrgIntent[] = [];
 
 const api = _api as any;
 
-/** A switch whose on position costs something: the ConsequentialSwitch trigger, green when on. */
-function PillSwitch({ on, label, press, reviewing, disabled, data }: { on: boolean; label: string; press: () => void; reviewing: boolean; disabled: boolean; data: Record<string, string> }) {
+/** A switch whose on position costs something: the ConsequentialSwitch trigger, green when on.
+ *  `plain`: a switch that flips at once, with no review to open. */
+function PillSwitch({ on, label, press, reviewing, disabled, data, plain }: { on: boolean; label: string; press: () => void; reviewing: boolean; disabled: boolean; data: Record<string, string>; plain?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
       aria-label={label}
-      aria-haspopup={on ? undefined : "dialog"}
-      aria-expanded={on ? undefined : reviewing}
+      aria-haspopup={on || plain ? undefined : "dialog"}
+      aria-expanded={on || plain ? undefined : reviewing}
       disabled={disabled}
       onClick={press}
       {...data}
@@ -182,7 +183,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   // stale numbers back over the change that just landed.
   useWatchEffect(() => { setCapsDraft(caps); }, [caps.hands_per_day, caps.wakes_per_day, caps.tokens_per_day]);
   const capsDirty = DAILY_CAP_KEYS.some((k) => (capsDraft[k] ?? null) !== (caps[k] ?? null));
-  // The switch (S23.1): on is direct, off is understand; the root stays off.
+  // The switch (S23.1): on is direct, off is understand.
   const startsOnItsOwn = autonomyOn(role.trust);
   const runCost = useRunCost(role.scope.project_ids[0] ?? null);
   const isRoot = isHeadOfPeopleRole(role);
@@ -306,14 +307,14 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
 
       <ReportingPeople tree={tree} role={role} canEdit={canEdit} onUpdate={onUpdate} />
 
-      <Section title={AUTONOMY_LABEL} hint={isRoot ? "The Head of People proposes and you decide, so it never starts work on its own." : autonomySentence(startsOnItsOwn)}>
+      <Section title={AUTONOMY_LABEL} hint={autonomySentence(startsOnItsOwn)}>
         {/* Off, a press opens the review of what the role may then do on its own; on, a press turns it off. */}
         <ConsequentialSwitch
           on={startsOnItsOwn}
           ledger={roleAutonomyLedger({ name: role.name, handle: role.handle, caps, projects: role.scope.project_ids.map((id) => (useInboxStore.getState().projects as Record<string, { title?: string }>)[id]?.title ?? "a project"), cost: runCost, usedToday: counters?.hands ?? null, merges: lineRow?.merge?.on ?? !!role.line_merge })}
           onTurnOn={() => onUpdate({ trust: trustForSwitch(true) })}
           onTurnOff={() => onUpdate({ trust: trustForSwitch(false) })}
-          trigger={({ press, reviewing }) => <PillSwitch on={startsOnItsOwn} label={AUTONOMY_LABEL} press={press} reviewing={reviewing} disabled={!canEdit || isRoot} data={{ "data-autonomy-switch": startsOnItsOwn ? "on" : "off" }} />}
+          trigger={({ press, reviewing }) => <PillSwitch on={startsOnItsOwn} label={AUTONOMY_LABEL} press={press} reviewing={reviewing} disabled={!canEdit} data={{ "data-autonomy-switch": startsOnItsOwn ? "on" : "off" }} />}
         />
       </Section>
 
@@ -326,6 +327,13 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
             onTurnOff={() => onUpdate({ hires_freely: false })}
             trigger={({ press, reviewing }) => <PillSwitch on={!!role.hires_freely} label="Hires without approval" press={press} reviewing={reviewing} disabled={!canEdit} data={{ "data-hire-leeway-switch": role.hires_freely ? "on" : "off" }} />}
           />
+        </Section>
+      )}
+
+      {/* Containment, off by default: a role with no area sets no limit, so the switch shows only where it would hold something. */}
+      {(role.scope.project_ids.length > 0 || role.scope.plan_ids.length > 0) && (
+        <Section title="Reports stay inside its area">
+          <PillSwitch on={!!role.keeps_reports_inside} label="Reports stay inside its area" press={() => onUpdate({ keeps_reports_inside: !role.keeps_reports_inside })} reviewing={false} disabled={!canEdit} plain data={{ "data-keeps-reports-inside-switch": role.keeps_reports_inside ? "on" : "off" }} />
         </Section>
       )}
 

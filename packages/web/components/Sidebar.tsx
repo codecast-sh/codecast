@@ -870,7 +870,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               <LiveNowRail isNarrow={isNarrow} onNavigate={onMobileClose} />
             </Suspense>
           </>)}
-          workAction={<AppPopOutButton app="work" className="mr-1" />}
+          workAction={<AppPopOutButton app="work" className="-my-1" />}
           active={{
             tasks: isTasks,
             docs: isDocs || isPlans,

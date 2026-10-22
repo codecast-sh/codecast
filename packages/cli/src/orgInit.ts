@@ -126,7 +126,7 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
 
   org
     .command("revise")
-    .description("Revise your own open proposal (op-N) from the session that posted it: remove a change, amend one, add one. Authoring, not deciding: a person still accepts each change on the org page, and a change they already decided is refused by name.")
+    .description("Revise your own open proposal (op-N) from the session that posted it: remove a change, amend one (a failed one goes back to the person to decide), add one, or answer a question on one. Authoring, not deciding: a person still accepts each change on the org page, and a change they already decided is refused by name.")
     .argument("<op-N>", "The proposal to revise")
     .option("--remove <seq>", "Remove change #seq (repeat for several)", collectValues, [])
     .option("--amend <seq>", "Amend change #seq with --edits and/or --rationale")
@@ -134,6 +134,8 @@ export function registerOrgInitCommands(program: Command, deps: OrgInitDeps): vo
     .option("--rationale <text>", "For --amend: the new rationale")
     .option("--add <file|->", "Add changes from JSON: one spec change { change, rationale, evidence?, expected_effect?, risk? } or a list of them; '-' reads stdin (repeat for several files)", collectValues, [])
     .option("--note <text>", "One line in your words, shown beside every change this revise touches")
+    .option("--answer <seq>", "Answer the person's question on change #seq with --text; the card shows it under their words")
+    .option("--text <words>", "For --answer: the answer")
     .option("--ops <file|->", "The ops as JSON instead of the flags: [{ op: \"remove\"|\"amend\", seq, edits?, rationale?, note? } | { op: \"add\", change, note? }]")
     .option("--json", "Machine-readable output")
     .action(async (ref: string, options: any) => (await run()).revise(deps, ref, options));

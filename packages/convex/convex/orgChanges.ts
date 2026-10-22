@@ -11,7 +11,7 @@ import { ownerSetOf, removeSessionOwnerRow, setSessionOwnerRows, syncPrimaryOwne
 import { patchTask } from "./agentTasks";
 import { recalcPlanProgress } from "./tasks";
 import { setTaskStatus } from "./orgInit";
-import { scopeOutside, scopeIds } from "./lib/orgScope";
+import { outsideKeptArea, scopeIds } from "./lib/orgScope";
 import { noteOrgChange, openOrgBatch, openBatchId, sessionParent, withOrgChange, type OrgWrite } from "./lib/orgChangeLog";
 import { canonical, dependentBatches, invertRow, type OrgLogEntry, type OrgLogRow, type OrgUndoPreview } from "@codecast/shared/contracts/orgChange";
 
@@ -144,7 +144,7 @@ async function validateRestoredRoles(ctx: Ctx, writes: OrgWrite[], read: (id: st
       if (String(r.team_id ?? r.scope_user_id) !== String(role.team_id ?? role.scope_user_id)) return "Cannot undo across workspaces";
       const planProjectOf = new Map<string, string | null>();
       for (const id of [...(role.scope?.plan_ids ?? []), ...(r.scope?.plan_ids ?? [])]) planProjectOf.set(id, (await read(id))?.project_id ?? null);
-      const outside = scopeOutside(scopeIds(r.scope), scopeIds(role.scope), planProjectOf);
+      const outside = outsideKeptArea(r, scopeIds(role.scope), planProjectOf);
       if (outside.project_ids.length || outside.plan_ids.length) return "Cannot undo: the scope no longer fits its parent";
       parent = r.reports_to;
     }

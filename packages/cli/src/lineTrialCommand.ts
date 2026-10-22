@@ -248,15 +248,19 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
     .command("rerun <task>")
     .description("Run a failed or stopped trial problem again (the review page's Rerun): one that died waiting at its own card picks up at that card; any other starts fresh from main. Under the dispatcher's billed-money cap, its accounts' quota and its run limit")
     .option("--reask", "A run waiting at a card: stop its runner here and ask that card again on the stations as they are now. A change card whose fix no longer answers its problem's findings is not worded again: with the findings changed and under half reached the run reads the problem again and works on; with none reached it ends and the problem is due a run from main")
-    .option("--at <node>", "With --reask, pick the run up at this station whatever its findings (a gate the graph no longer has resumes at the station after it)")
+    .option("--at <node>", "With --reask, pick the run up at this station whatever its findings (a gate the graph no longer has resumes at the station after it). Alone, try a failed run again from this station on its own branch, as a new attempt: each station's visits count again")
+    .option("--onto-main", "With --at on a failed run: first put its branch on the default branch as the remote has it, by the graph's rebase (a conflict resumes where the graph sends it). Run it on the machine that holds the run")
     .option("--fresh", "Start the problem again from main on the line as it is now, wherever its run stands: the run ends and its fix is set aside on its branch")
     .option("--json", "Machine-readable output")
-    .action(async (task: string, opts: { json?: boolean; reask?: boolean; at?: string; fresh?: boolean }) => {
-      if (opts.at && !opts.reask) fail("--at goes with --reask");
+    .action(async (task: string, opts: { json?: boolean; reask?: boolean; at?: string; fresh?: boolean; ontoMain?: boolean }) => {
       if (opts.fresh && opts.reask) fail("--fresh starts from main; --reask picks the run up where it stands");
+      if (opts.fresh && opts.at) fail("--fresh starts from main; --at picks the run up at a station");
+      if (opts.ontoMain && (!opts.at || opts.reask)) fail("--onto-main goes with --at on a failed run");
       let asker: string | undefined;
       let entry: string | undefined;
-      if (opts.reask || opts.fresh) {
+      let note: string | null = null;
+      let at = opts.at;
+      if (opts.reask || opts.fresh || opts.at) {
         const projects: Array<{ title: string }> = trial.opts().project ? [{ title: trial.opts().project }] : await post("/cli/line/trial/projects", {}, true);
         let row: { task: string; run_id: string } | undefined;
         for (const p of projects) row ??= ((await post("/cli/line/trial/runs", { project: p.title }, true)) as Array<{ task: string; run_id: string }>).find((r) => r.task === task);
@@ -264,10 +268,24 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
         const { prepareReask, stopRunner } = await import("./workflow/reask.js");
         // A gate its station asks (`asker=`) is asked again by that station, on the graph as it is now.
         if (opts.reask) ({ asker, entry } = await prepareReask(deps, row.run_id, task, opts.at).catch((e) => fail(e.message)));
-        else await stopRunner(row.run_id, task).catch((e) => fail(e.message));
+        else if (opts.fresh) await stopRunner(row.run_id, task).catch((e) => fail(e.message));
+        else {
+          // A failed run tried again at a station: checked against the graph it will read, its branch first put on main when asked.
+          const { currentRunGraph } = await import("./workflow/reask.js");
+          const { resumeStation } = await import("./workflow/resumeFailed.js");
+          const { deviceId } = await import("./remote/device.js");
+          const { got, graph } = await currentRunGraph(deps, row.run_id);
+          if (got?.run?.status !== "failed") fail(`${task}'s run is ${got?.run?.status ?? "not found"}; --at alone resumes a failed run (a run waiting at a card is asked again with --reask --at)`);
+          try {
+            ({ at, note } = resumeStation(graph, opts.at!, { ontoMain: opts.ontoMain, runId: row.run_id, projectPath: got.run.project_path || process.cwd(), here: got.run.runner_device === deviceId() }));
+          } catch (e) {
+            fail(`${task}: ${(e as Error).message}`);
+          }
+        }
       }
-      const r = await post("/cli/line/trial/rerun", { task, ...(opts.reask ? { reask: true } : {}), ...(opts.fresh ? { fresh: true } : {}), ...(opts.at ? { at: opts.at } : {}), ...(asker ? { asker } : {}), ...(entry ? { entry } : {}) });
-      if (jsonOf(opts)) return console.log(JSON.stringify(r, null, 2));
+      const r = await post("/cli/line/trial/rerun", { task, ...(opts.reask ? { reask: true } : {}), ...(opts.fresh ? { fresh: true } : {}), ...(at ? { at } : {}), ...(asker ? { asker } : {}), ...(entry ? { entry } : {}) });
+      if (jsonOf(opts)) return console.log(JSON.stringify({ ...r, ...(note ? { note } : {}) }, null, 2));
+      if (opts.at && !opts.reask) return console.log(`${r.task}: resumes at ${r.resumed_at} as a new attempt${note ? ` (${note})` : ""} (run ${r.run_id}).`);
       if (r.rebuild === "main") return console.log(`${r.task}: not asked again: ${r.why}. Its run ended, its branch is set aside, and the problem is due a new run from main (cast line trial dispatch --dry).`);
       if (r.rebuild === "investigate") return console.log(`${r.task}: not asked again: ${r.why}. Its run reads the problem again at ${r.resumed_at} and works on from there (run ${r.run_id}).`);
       console.log(r.resumed_at ? `${r.task}: picks up at ${r.resumed_at} with what it already made (run ${r.run_id}).` : `${r.task}: rerun from main (run ${r.run_id}).`);

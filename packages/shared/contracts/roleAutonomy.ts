@@ -7,8 +7,6 @@
 // gate, every surface and every history line reads the switch through this
 // file, so they cannot disagree about what a role may do.
 
-import { isHeadOfPeopleRole } from "./orgLead";
-
 export type StoredTrust = "understand" | "decide" | "direct";
 
 /** The switch as stored: true when the role starts work on its own. */
@@ -31,10 +29,11 @@ export function trustForSwitch(on: boolean): StoredTrust {
   return on ? "direct" : "understand";
 }
 
-/** The switch for a role nothing has set: on for every hire, off for the
- *  Head of People, which proposes and never applies (org-staffing.md S12). */
-export function defaultTrustFor(role: { handle?: string }): StoredTrust {
-  return trustForSwitch(!isHeadOfPeopleRole(role));
+/** The switch for a role nothing has set: on for every role, the Head of
+ *  People included. Its org changes still wait on a person's approval of the
+ *  proposal; the switch only lets it start work. */
+export function defaultTrustFor(_role?: { handle?: string }): StoredTrust {
+  return trustForSwitch(true);
 }
 
 /** A legacy stage word, as the switch it means; null for a word that is neither. */
