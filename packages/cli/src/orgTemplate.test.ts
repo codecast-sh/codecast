@@ -337,8 +337,11 @@ describe("proposal and lifecycle fake API", () => {
     await expect(f.reconcile()).rejects.toThrow("pinned project directory"); expect(f.server.triggers).toHaveLength(0);
     f.server.standingPath = f.dir; f.server.pauseWorks = false; f.server.honorsPausedCreate = false;
     await expect(f.reconcile()).rejects.toThrow("Pause verification failed"); expect(readReceipt(f.dir, "product").phase).toBe("provisioning"); expect(f.server.calls.filter((c) => c.endpoint === "/cli/tasks/pause")).toHaveLength(1);
-    f.server.pauseWorks = true; f.server.honorsPausedCreate = true; await f.reconcile(); f.server.roles[0].scope.project_ids = [];
-    await expect(f.reconcile()).rejects.toThrow("exactly the instance project");
+    f.server.pauseWorks = true; f.server.honorsPausedCreate = true; await f.reconcile();
+    const own = f.server.roles[0].scope.project_ids[0];
+    f.server.roles[0].scope.project_ids = [own, "pj-report-lead"]; await f.reconcile();
+    f.server.roles[0].scope.project_ids = [];
+    await expect(f.reconcile()).rejects.toThrow("include the instance project");
   });
   test("human charter changes are applied once and never overwritten", async () => {
     const f = fixture(); await f.install(); f.server.approve(1); f.server.decisions[0].answer_text = '{"charter":"Only report, never buy", "handle":"approved-cmo"}';

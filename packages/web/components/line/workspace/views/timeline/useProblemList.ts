@@ -27,6 +27,7 @@ import {
 import type { LineSelection } from "../../../../../lib/line/lineWorkspaceUrl";
 import type { LineWorkspace } from "../../../../../hooks/useLineWorkspace";
 
+const __LP = <T,>(k: string, f: () => T): T => { const t = performance.now(); const r = f(); const g = ((globalThis as any).__pl ??= {}); (g[k] ??= []).push(Math.round(performance.now() - t)); return r; }; // __LP temp
 export type ProblemList = ReturnType<typeof useProblemList>;
 
 /** The newest step of a run's trace that failed, past the graph's own start and end steps. */
@@ -67,7 +68,7 @@ export function useProblemList(model: LineModel, workspace: LineWorkspace, selec
   const projectNames = useMemo(() => new Map(workspace.projects.map((p) => [p._id, p.title])), [workspace.projects]);
   const projectName = useMemo(() => (id: string | null) => (id ? projectNames.get(id) ?? "" : ""), [projectNames]);
 
-  const facts = useMemo(() => {
+  const facts = useMemo(() => __LP("facts", () => {
     const labelOf = (id: string | null | undefined) => (id ? model.steps[id]?.label ?? stepLabel({ id, label: id.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) }) : null);
     const need = new Map<string, ProblemNeed>();
     for (const n of workspace.needs) if (n.caseId && !need.has(n.caseId)) need.set(n.caseId, { kind: n.kind, mine: true, step: labelOf(n.fail?.step), runId: n.runId, ask: n.kind === "stopped" || n.kind === "duplicate" ? n.ask : null, why: n.kind === "reask" ? n.why : null, trial: n.trial && !n.publishes });
@@ -123,14 +124,14 @@ export function useProblemList(model: LineModel, workspace: LineWorkspace, selec
         };
       },
     };
-  }, [model.steps, model.runs, workspace.needs, workspace.allInbox, workspace.rows.tasks, workspace.rows.runs, workspace.decisions, workspace.admissions, workspace.trialProjects, workspace.trialHeld, workspace.trialRuns, workspace.problems, workspace.names, workspace.now]);
+  }), [model.steps, model.runs, workspace.needs, workspace.allInbox, workspace.rows.tasks, workspace.rows.runs, workspace.decisions, workspace.admissions, workspace.trialProjects, workspace.trialHeld, workspace.trialRuns, workspace.problems, workspace.names, workspace.now]);
 
   // A problem only a lesson filed is a note to the line, not something wrong with the product: it is not listed.
   const lessons = useMemo(() => lessonOnlyIds(workspace.sources), [workspace.sources]);
   // A model rebuild makes every issue anew: a row whose signature held keeps its object, so the memoized rows redraw only the problems that moved.
   const kept = useRef(new Map<string, ProblemRow & { sig: string }>());
   const process = selection.process && workspace.problems.some((i) => i.process === selection.process) ? selection.process : null;
-  const all = useMemo(() => {
+  const all = useMemo(() => __LP("all", () => {
     const next = new Map<string, ProblemRow & { sig: string }>();
     const out = buildProblemRows(workspace.problems.filter((i) => !lessons.has(i.id) && (!process || i.process === process)), { win, now: workspace.now, facts: facts.of, projectOf: facts.projectOf, projectName, sources: workspace.sources, overlaps: workspace.overlaps }).map((r) => {
       const sig = problemRowSig(r);
@@ -141,15 +142,15 @@ export function useProblemList(model: LineModel, workspace: LineWorkspace, selec
     });
     kept.current = next;
     return out;
-  }, [workspace.problems, process, lessons, win, facts, projectName, workspace.sources, workspace.overlaps, workspace.now]);
+  }), [workspace.problems, process, lessons, win, facts, projectName, workspace.sources, workspace.overlaps, workspace.now]);
 
-  const counts = useMemo(() => statusCounts(all, q, filter.found), [all, q, filter.found]);
+  const counts = useMemo(() => __LP("counts", () => statusCounts(all, q, filter.found)), [all, q, filter.found]);
   // The line's start order (lineStartOrder): Not started lists a project's ready problems in it.
-  const startOrder = useMemo(() => {
+  const startOrder = useMemo(() => __LP("startOrder", () => {
     const goalOf = goalOfRefs(workspace.projects as Array<{ short_id?: string; priority?: string | null }>);
     return new Map(inStartOrder(workspace.rows.tasks as unknown as RankTask[], goalOf).map((t, i) => [t._id, i]));
-  }, [workspace.projects, workspace.rows.tasks]);
-  const sections = useMemo(() => problemSections(all, filter, sort, projectName, startOrder), [all, filter, sort, projectName, startOrder]);
+  }), [workspace.projects, workspace.rows.tasks]);
+  const sections = useMemo(() => __LP("sections", () => problemSections(all, filter, sort, projectName, startOrder)), [all, filter, sort, projectName, startOrder]);
   const order = useMemo(() => problemOrder(sections), [sections]);
   const shown = useMemo(() => shownOrder(sections), [sections]);
   // The figures and the chart read what the search keeps, whatever chip, figure or bar narrows the table: they are the
@@ -157,14 +158,14 @@ export function useProblemList(model: LineModel, workspace: LineWorkspace, selec
   const searched = useMemo(() => searchProblems(all, q), [all, q]);
   // A folded twin's findings are findings all the same: the figures and the chart count them with its older problem's.
   const counted = useMemo(() => searched.flatMap((r) => [r, ...(r.twins ?? [])]), [searched]);
-  const figures = useMemo(() => problemFigures(searched, win), [searched, win]);
-  const overview = useMemo(() => buildOverview(counted.filter((r) => r.series).map((r) => r.issue), win), [counted, win]);
+  const figures = useMemo(() => __LP("figures", () => problemFigures(searched, win)), [searched, win]);
+  const overview = useMemo(() => __LP("overview", () => buildOverview(counted.filter((r) => r.series).map((r) => r.issue), win)), [counted, win]);
   // The finders whose own volume moved the chart (one stopped, one ran far less): named on the bars they affect.
-  const shifts = useMemo(() => {
+  const shifts = useMemo(() => __LP("shifts", () => {
     const ids = new Set(counted.filter((r) => r.series).map((r) => r.id));
     const signals = (workspace.rows.signals as Array<{ source: string; judge?: string | null; created_at: number; observed_at?: number | null; task_id?: string | null }>).filter((s) => !!s.task_id && ids.has(s.task_id));
     return finderShifts(signals, win, workspace.heldFrom);
-  }, [counted, workspace.rows.signals, workspace.heldFrom, win]);
+  }), [counted, workspace.rows.signals, workspace.heldFrom, win]);
 
   return { all, searched, process, filter, sort, range, win, counts, sections, order, shown, figures, overview, shifts, projectName };
 }

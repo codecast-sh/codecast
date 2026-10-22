@@ -28,7 +28,9 @@ export const isLiveRun = (r: { status: string }) => r.status === "running" || r.
 /** "[S] Ship :: Land the change" → "Ship". */
 export const choiceWords = (label: string) => label.replace(/^\[[^\]]*\]\s*/, "").split("::")[0].trim() || label;
 
-export const shortDay = (at: number) => new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+// One formatter, made once: toLocaleDateString with options builds a new one on every call.
+const SHORT_DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+export const shortDay = (at: number) => SHORT_DAY.format(at);
 
 /** "Oct 8", "Oct 8 and Oct 9", "Oct 7, Oct 8 and Oct 9". */
 export const andList = (xs: ReadonlyArray<string>) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
@@ -487,7 +489,17 @@ export function carryingDeploys(merge: AttemptMerge, deploys: ReadonlyArray<Depl
   return [...byTarget.values()];
 }
 
+/** One reading per deploy list: every problem of a line reads the same list, and a line holds thousands of problems. */
+const coverageRead = new WeakMap<ReadonlyArray<DeployRow>, DeployCoverage>();
+
 function coverageOf(all: ReadonlyArray<DeployRow> | undefined): DeployCoverage {
+  if (!all) return readCoverage(all);
+  let read = coverageRead.get(all);
+  if (!read) coverageRead.set(all, (read = readCoverage(all)));
+  return read;
+}
+
+function readCoverage(all: ReadonlyArray<DeployRow> | undefined): DeployCoverage {
   if (!all) return { state: "unread", targets: [], words: "Reading the project's deploys." };
   const deploys = all.filter(deployIsLive);
   if (!deploys.length) {

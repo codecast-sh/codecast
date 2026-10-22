@@ -2192,6 +2192,16 @@ describe("direct messages", () => {
     expect(String(again.channel_id)).toBe(String(first.channel_id));
   });
 
+  test("openDm takes handles, and an unknown handle names the people who answer", async () => {
+    const ctx = context(ALICE);
+    const byId = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    const byHandle = await call(openDm, ctx, { team_id: TEAM, handles: ["@bob"] });
+    expect(String(byHandle.channel_id)).toBe(String(byId.channel_id));
+    expect(byHandle.with).toEqual(["Bob"]);
+    await expect(call(openDm, ctx, { team_id: TEAM, handles: ["nobody"] }))
+      .rejects.toThrow(/No teammate answers to @nobody\. People here: .*@bob/);
+  });
+
   test("a DM refuses bots, outsiders, and an empty set", async () => {
     const ctx = context(ALICE);
     await expect(call(openDm, ctx, { team_id: TEAM, member_ids: [BOT] }))
