@@ -107,6 +107,7 @@ import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import { registerRouteCommand } from "./routeCommand.js";
 import { registerFlowCommands } from "./flowCommand.js";
+import { teamForDirectory } from "./directoryTeam.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -14245,7 +14246,9 @@ registerFlowCommands(program, {
   cliPost, callingSession, realCwd: getRealCwd,
   // The flows published to the workspace this shell reads (flows.md FL2).
   fetchPool: async (team?: string) => {
-    const ws = await readWorkspace(team);
+    // A team named wins; else the team this directory is mapped to; else the active team.
+    const mapped = team ? null : teamForDirectory(await fetchProjectsWithTeams(readConfig() ?? ({} as Config)), getRealCwd());
+    const ws = mapped ? { kind: "team" as const, teamId: mapped } : await readWorkspace(team);
     const r = await cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
     return r?.flows ?? [];
   },
