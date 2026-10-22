@@ -4,7 +4,7 @@
 // shows one flow, runs a change through one, and turns a Claude Code
 // workflow script into a flow of the pool.
 import type { Command } from "commander";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 

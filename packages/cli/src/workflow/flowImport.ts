@@ -6,7 +6,7 @@
 // loops and branches play out. The recording is then shaped into a graph:
 // a station per distinct agent call, calls made side by side as a fan-out,
 // a round that repeats as a loop back, the script's phases as stages.
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vm from "node:vm";

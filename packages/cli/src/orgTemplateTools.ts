@@ -3,7 +3,7 @@
 // loop that edits a tool and releases it as the template's next version.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "./proc.js";
 import { bumpVersion, explainRelease, REQUIRED_BUMP, type ReleaseClass } from "@codecast/shared/contracts/orgTemplateRelease";
 import type { OrgInitDeps } from "./orgInit.js";
 import { canonicalDirectory, compareVersions, noSymlink, readArtifact, toolSummary, type TemplateArtifact, type TemplateTool } from "./orgTemplateArtifact.js";

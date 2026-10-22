@@ -5,13 +5,13 @@
 // would run. Pure but for reading the repo's files and writing published
 // flows to this machine's cache.
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { foldFlow, flowPathWords, type FlowStation, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import { parseWorkflowSource, validateWorkflow } from "./parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 import { DEFAULT_LINE_SLUG } from "@codecast/shared/contracts/orgProposal";
 import type { WorkflowGraph } from "./types.js";
+import { codecastPath } from "../codecastDir.js";
 
 export type PoolWhere = "shipped" | "repo" | "pushed" | "team";
 export type PoolStation = FlowStation;
@@ -48,7 +48,7 @@ export type PushedPoolRow = {
  * checkout. A path that would leave the directory is not written. Returns the
  * graph file.
  */
-export function materializePushedFlow(row: PushedPoolRow, cacheRoot = path.join(os.homedir(), ".codecast", "flows")): string {
+export function materializePushedFlow(row: PushedPoolRow, cacheRoot = codecastPath("flows")): string {
   const dir = path.resolve(cacheRoot, row._id.replace(/[^\w-]/g, ""));
   const write = (rel: string, text: string): string | null => {
     const abs = path.resolve(dir, rel);

@@ -10,7 +10,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 import { evalCondition } from "./condition.js";
 import { expandScriptVars } from "./runner.js";
 import { lineCommandEnv } from "../lineProfile.js";
