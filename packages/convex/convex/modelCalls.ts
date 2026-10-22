@@ -42,6 +42,25 @@ export type CallScope = { workspace: string; team_id?: Id<"teams">; project_id?:
 
 const projectsOf = (scope: CallScope): Id<"projects">[] => scope.project_ids ?? (scope.project_id ? [scope.project_id] : []);
 
+const BUDGET_CONFLICT = /changed while this mutation was being run/;
+
+/**
+ * Takes a hold from the team's budget. Every call contends for the one budget
+ * row, so in a burst the reserve can exhaust Convex's own conflict retries;
+ * nothing has been spent then, so it waits a moment and asks again rather
+ * than failing the caller (a merge pass died mid-list on this, 2026-10-21).
+ */
+async function reserveBudget(ctx: { runMutation: any }, scope: CallScope, held: number): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await ctx.runMutation(internal.modelCalls.reserve, { workspace: scope.workspace, team_id: scope.team_id, amount: held });
+    } catch (err) {
+      if (attempt >= 4 || !BUDGET_CONFLICT.test(String(err))) throw err;
+      await new Promise((r) => setTimeout(r, 250 * 2 ** attempt * (1 + Math.random())));
+    }
+  }
+}
+
 /**
  * Spends from the team's budget around one paid step (LL10): reserves `held`
  * first and answers `{ room: false }` without running `run` when the cap has
@@ -59,7 +78,7 @@ export async function withinBudget<T>(
   held: number,
   run: (charge: (usd: number) => void) => Promise<T>,
 ): Promise<{ room: false } | { room: true; value: T }> {
-  const room: boolean = await ctx.runMutation(internal.modelCalls.reserve, { workspace: scope.workspace, team_id: scope.team_id, amount: held });
+  const room = await reserveBudget(ctx, scope, held);
   if (!room) return { room: false };
   let cost = 0;
   try {
@@ -84,7 +103,7 @@ export async function runModelCall(ctx: { runMutation: any; scheduler: any }, sc
   if (problem) return { ok: false, reason: "failed", error: problem, cost_usd: 0, model: spec.model };
   const held = worstCaseCost(spec.model, (spec.system?.length ?? 0) + spec.prompt.length, spec.max_tokens);
   const spent = await withinBudget(ctx, scope, purpose, held, async (charge): Promise<ModelCallResult> => {
-    const { reply, usage, error } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, label, timeout_ms: timeoutMs });
+    const { reply, usage, error } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms: timeoutMs });
     const cost = modelCost(spec.model, usage ?? estimatedUsage(spec.system, spec.prompt));
     charge(cost);
     if (!reply) return { ok: false, reason: "failed", error: error ?? "the model gave no answer", cost_usd: cost, model: spec.model };

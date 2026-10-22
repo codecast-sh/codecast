@@ -153,6 +153,17 @@ export type DeployView = {
   created_at: number;
   live_at: number | null;
   finished_at: number | null;
+  /** The line-deploy run carrying it, and its steps as that run's stations stand (deploys.md DP8). */
+  run_id?: string;
+  steps?: DeployStepView[];
+};
+
+/** One step of a deploy: a station of its line-deploy run. `returned` is the station that sent a failed step back to the line. */
+export type DeployStepView = {
+  id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  started_at?: number;
+  completed_at?: number;
 };
 
 /** When a deploy counts on a chart: when it went live, else when it was asked for. */

@@ -398,6 +398,11 @@ crons.interval(
 // it), within its slots. Always registered; a line that is off starts nothing.
 crons.interval("start the line for scoped tasks", { minutes: 2 }, (internal as any).orgLine.sweep, {});
 
+// The deploy stage's role trigger (deploys.md DP4): a role holding a deploy
+// grant asks for a deploy of its project's waiting fixes, within the grant's
+// daily limit. Reads only roles with a live deploy grant.
+crons.interval("deploy waiting fixes as the line's role", { minutes: 10 }, (internal as any).deploys.autoDeploy, {});
+
 // Promotions a source's hourly cap held back (ingest.promoteDue): filed as the
 // window has room, so a burst of new groups reaches the line late, never not at all.
 crons.interval("file held-back promotions", { minutes: 10 }, (internal as any).ingest.promoteDue, {});

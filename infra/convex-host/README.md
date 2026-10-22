@@ -11,7 +11,7 @@ that no file in the repo can tell you.
 | Instance | `i-008b985d1d176faa2`, `r7g.8xlarge` (32 vCPU, 247 GB RAM, Graviton) |
 | Account / region | Union AWS `767398104971`, `us-east-1d` |
 | Address | `35.174.124.200`, an Elastic IP (`eipalloc-01460914a27378b22`) |
-| Disk | 1 TB gp3 mounted at `/srv` by filesystem label `codecast-data` |
+| Disk | 1.5 TB gp3 (vol-0c1fb3f658ebb7d8e, 6000 IOPS, 500 MB/s) mounted at `/srv` by filesystem label `codecast-data`; grown from 1 TB online on 2026-10-22 (`aws ec2 modify-volume`, then `resize2fs /dev/nvme1n1`) |
 | SSH | `ssh convex-prod` (alias in `~/.ssh/config`; key `~/.ssh/codecast-union.pem`, `IdentitiesOnly` required) |
 | DNS | `convex.codecast.sh`, an A record in Cloudflare, NOT proxied, TTL 60 |
 
@@ -90,6 +90,6 @@ cold cache, not a fault.
 
 ## Cost
 
-About $1,250 a month for the instance on demand, plus about $80 for the volume.
+About $1,250 a month for the instance on demand, plus about $120 for the volume (1.5 TB since 2026-10-22).
 It was about $625 before the resize. Nothing here is on a reserved instance or a
 savings plan yet, so the whole bill is on demand.

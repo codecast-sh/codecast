@@ -92,6 +92,7 @@ export function batchToRun(b: MigrationBatch, sessionByConversation: Map<string,
   const after = finishedAt !== undefined ? hist.find((p) => p.at > finishedAt) : undefined;
   return {
     batchId: b.batch_id,
+    clientBatchId: b.resource_offload?.client_batch_id,
     createdAt: b.created_at,
     waitForTurnMs: b.wait_for_idle_ms,
     finishedAt,

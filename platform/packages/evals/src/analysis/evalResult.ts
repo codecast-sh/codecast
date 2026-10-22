@@ -47,7 +47,7 @@ export function majorityOf(reps: EvalRep[] | undefined): boolean | undefined {
 
 function runSet(sides: Array<EvalRepsFreeze['base']>): EvalRunSet | null {
   const present = sides.filter((s): s is NonNullable<typeof s> => !!s);
-  const reps = present.flatMap((s) => s.reps);
+  const reps = present.flatMap((s) => s.reps).filter((r) => !r.infra);
   if (!reps.length) return null;
   const scores = scored(reps).map(repScore);
   return {
@@ -122,7 +122,8 @@ export function surfaceResult(s: EvalRepsSurface): EvalSurfaceResult {
   const branchReps = s.freezes.flatMap((f) => f.branch?.reps ?? []);
   const sep = separate(scored(branchReps).map(repScore), scored(baseReps).map(repScore));
   const gatesFailed = [...new Set(branchReps.flatMap((r) => r.gates_failed ?? []))];
-  const crashes = branchReps.filter((r) => r.error).length;
+  // A rep the harness lost (infra) measured nothing: no vote, and not the change's crash.
+  const crashes = branchReps.filter((r) => r.error && !r.infra).length;
   const proven = provenVerdicts(s.freezes);
   const reasons = [
     // Without a base nothing can be called worse and no miss was shown: fail closed.
