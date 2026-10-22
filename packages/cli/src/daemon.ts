@@ -5610,19 +5610,24 @@ function pidAlive(pid: number): boolean {
 }
 
 export function startMigrationRunner(batchId: string): { started: boolean; pid?: number; reason?: string; log?: string } {
-  const running = migrationRunners.get(batchId);
+  return startMigrateChild(batchId, ["migrate", "run", batchId]);
+}
+
+/** A detached `cast migrate …` child keyed by its batch or request id, logging to ~/.codecast/migrations/<key>.log. */
+function startMigrateChild(key: string, args: string[]): { started: boolean; pid?: number; reason?: string; log?: string } {
+  const running = migrationRunners.get(key);
   if (running && pidAlive(running)) return { started: false, pid: running, reason: "already running on this machine" };
   const logDir = path.join(CONFIG_DIR, "migrations");
   let logFd: number | undefined;
   let logPath: string | undefined;
   try {
     fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
-    logPath = path.join(logDir, `${batchId}.log`);
+    logPath = path.join(logDir, `${key}.log`);
     logFd = fs.openSync(logPath, "a", 0o600);
   } catch { /* stdio falls back to ignore */ }
   const { cmd, prefixArgs } = resolveCastInvocation();
   try {
-    const child = spawn(cmd, [...prefixArgs, "migrate", "run", batchId], {
+    const child = spawn(cmd, [...prefixArgs, ...args], {
       env: { ...process.env, PATH: agentSpawnPath() },
       stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
       detached: true,
@@ -5630,7 +5635,7 @@ export function startMigrationRunner(batchId: string): { started: boolean; pid?:
     child.unref();
     if (logFd !== undefined) { try { fs.closeSync(logFd); } catch { /* parent's copy only */ } }
     if (!child.pid) return { started: false, reason: "spawn returned no pid" };
-    migrationRunners.set(batchId, child.pid);
+    migrationRunners.set(key, child.pid);
     return { started: true, pid: child.pid, log: logPath };
   } catch (err) {
     if (logFd !== undefined) { try { fs.closeSync(logFd); } catch { /* */ } }
@@ -8512,15 +8517,16 @@ async function executeRemoteCommand(
         break;
       }
       case "line_deploy": {
-        // Deploy on the line (deploys.md DP2): the Line page asked for dp-N.
-        // `cast line deploy run` in the checkout that publishes the line runs
-        // the team's deploy path and reports to the deploy row; it can take
-        // many minutes, so the command answers at once. args: { deploy, root }.
+        // Deploy on the line (deploys.md DP2): the Line page or the line's
+        // role asked for dp-N. `cast line deploy run` in the checkout that
+        // publishes the line runs its steps as the line-deploy graph (DP8)
+        // and reports to the deploy row; CI and an eval gate take hours, so
+        // the command answers at once. args: { deploy, root }.
         try {
           const args = commandArgs ? JSON.parse(commandArgs) : {};
           if (typeof args.deploy !== "string" || !/^dp-\d+$/.test(args.deploy)) throw new Error("line_deploy needs the deploy's ref (dp-N)");
           if (typeof args.root !== "string" || !fs.existsSync(args.root)) throw new Error(`No checkout at ${args.root} on this machine`);
-          void runCastCommand(["line", "deploy", "run", args.deploy], { cwd: args.root, env: { CODECAST_CWD: args.root }, timeoutMs: 90 * 60 * 1000 })
+          void runCastCommand(["line", "deploy", "run", args.deploy], { cwd: args.root, env: { CODECAST_CWD: args.root }, timeoutMs: 10 * 60 * 60 * 1000 })
             .then((r) => log(`[LINE] Deploy ${args.deploy}: exit ${r.code}`));
           result = JSON.stringify({ accepted: args.deploy });
         } catch (err) {
@@ -8747,6 +8753,21 @@ async function executeRemoteCommand(
         const started = startMigrationRunner(batchId);
         result = JSON.stringify(started);
         log(`[MIGRATE] ${started.started ? `started runner for ${batchId} (pid ${started.pid})` : `runner for ${batchId} not started: ${started.reason}`}`);
+        break;
+      }
+      case "rehearse_moves": {
+        // The offload review asked for dry runs of moving sessions whose files
+        // are here. Each takes a snapshot and an ssh round trip, so they run in
+        // a detached `cast migrate rehearse` child that reports every row itself.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const requestId: string | undefined = typeof parsed.request_id === "string" ? parsed.request_id : undefined;
+        if (!requestId || !/^rh_[a-z0-9]{8,32}$/.test(requestId)) {
+          error = "rehearse_moves: missing or invalid request_id";
+          break;
+        }
+        const started = startMigrateChild(requestId, ["migrate", "rehearse", "--request", requestId]);
+        result = JSON.stringify(started);
+        log(`[MIGRATE] ${started.started ? `rehearsing ${requestId} (pid ${started.pid})` : `rehearsal ${requestId} not started: ${started.reason}`}`);
         break;
       }
       case "quiesce_session": {
@@ -15336,7 +15357,10 @@ function newestPaintedFrame(region: string): string {
 // The time need not lead the parentheses: while hooks run, their progress
 // comes first ("✻ Considering… (running PreToolUse hooks… 1/2 · 36m 18s"),
 // and requiring the time up front read that pane idle mid-turn (jx7f4ks).
-export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽]\s+\S[^\n]*…\s*\([^)\n]*?\b\d+[dhms]\b/m;
+//
+// The glyph cycles, and off macOS one frame is a plain "*" where macOS draws
+// ✳: a read that landed on it settled hands mid tool call on Linux.
+export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽*]\s+\S[^\n]*…\s*\([^)\n]*?\b\d+[dhms]\b/m;
 
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
@@ -15785,7 +15809,7 @@ export type OpenTaskInfo = OpenTaskReport & { openedAt?: number };
 // lost (an interrupted turn) must not leak forever.
 type PendingTaskCall = { name: string; description?: string; command?: string };
 const PENDING_TASK_CALLS_MAX = 200;
-const TASK_ARMING_TOOLS = new Set(["Bash", "Monitor", "Workflow"]);
+const TASK_ARMING_TOOLS = new Set(["Bash", "Monitor", "Workflow", "Agent"]);
 
 function scanOpenBackgroundTasksInto(
   open: Set<string>,

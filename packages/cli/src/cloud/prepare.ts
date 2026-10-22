@@ -65,7 +65,7 @@ import { ensureHostGitReady, grantAccountKey, noPushReason, parseOrigin, type Ho
 import { isGitHubHost, originHost } from "./gitOrigin.js";
 
 const AUTO_GRANT_RETRY_MS = 24 * 3600_000;
-import { requiredHostTools, runHostTools, summarizeHostTools, type HostToolsReport } from "./hostTools.js";
+import { requiredHostTools, runHostTools, summarizeHostTools, type HostToolRequirement, type HostToolsReport } from "./hostTools.js";
 import { readProjectRegistrations } from "./mirror/projectRefresh.js";
 import type { HostCastPlatform } from "../hosts/updateHost.js";
 import {
@@ -375,6 +375,8 @@ export function pushAgentLoginsNow(host: RemoteHost, opts: PushAgentLoginsOption
 
 export interface ToolsForPrepareOptions {
   localGitRoot?: string;
+  /** Commands a moved session ran, wanted on the host too (migrate/footprint.ts). */
+  extraTools?: HostToolRequirement[];
   /** Check only (a non-Linux host, `--check`). */
   install?: boolean;
   /** Injection for tests. */
@@ -389,7 +391,7 @@ export interface ToolsForPrepareOptions {
 export function toolsForPrepare(host: RemoteHost, log: Progress, opts: ToolsForPrepareOptions = {}): HostToolsReport | undefined {
   try {
     // The MCP roster covers the project MCP the mirror ships too, remapped to this host's roots, so a project-only pin is never cleared.
-    const required = opts.deps?.required ? opts.deps.required() : requiredHostTools({ repoRoot: opts.localGitRoot, laptopHome: laptopHome(), hostHome: remoteHome(host), projects: readProjectRegistrations(host) });
+    const required = opts.deps?.required ? opts.deps.required() : requiredHostTools({ repoRoot: opts.localGitRoot, extraTools: opts.extraTools, laptopHome: laptopHome(), hostHome: remoteHome(host), projects: readProjectRegistrations(host) });
     const report = (opts.deps?.run ?? runHostTools)(host, required, { install: opts.install });
     log(`host tools: ${summarizeHostTools(report)}${report.installed.length ? ` (installed ${report.installed.map((i) => i.tool).join(", ")})` : ""}`);
     for (const m of report.missing) log(`host tools: missing ${m.tool}${m.referenced_by ? ` (for ${m.referenced_by})` : ""}${m.error ? ` — ${m.error}` : ""}`);
@@ -407,6 +409,8 @@ export function toolsForPrepare(host: RemoteHost, log: Progress, opts: ToolsForP
 
 export interface ReadyHostHomeOptions {
   localGitRoot?: string;
+  /** Commands a moved session ran, installed on the host when it lacks them (migrate/footprint.ts). */
+  extraTools?: HostToolRequirement[];
   repoPath?: string;
   /** The registry id, for hints in progress lines. */
   cloudId?: string;
@@ -563,7 +567,7 @@ export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions
     } catch (err) {
       log(`agent logins step failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-    tools = toolsForPrepare(host, log, { localGitRoot: opts.localGitRoot, install: opts.toolsInstall, deps: opts.toolsDeps });
+    tools = toolsForPrepare(host, log, { localGitRoot: opts.localGitRoot, extraTools: opts.extraTools, install: opts.toolsInstall, deps: opts.toolsDeps });
   }
   const git = opts.skipGit ? undefined : gitForPrepare(host, cloudId, log, { localGitRoot: opts.localGitRoot, repoPath: opts.repoPath, gitIdentity: opts.gitIdentity });
   const mirror = await mirrorForPrepare(host, cloudId, log, { force: opts.force, localGitRoot: opts.localGitRoot, mirror: opts.mirrorDeps });
