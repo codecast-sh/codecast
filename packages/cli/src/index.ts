@@ -107,6 +107,7 @@ import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import { registerRouteCommand } from "./routeCommand.js";
 import { registerFlowCommands } from "./flowCommand.js";
+import { teamForDirectory } from "./directoryTeam.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -139,7 +140,7 @@ import type { PlanStep } from "@codecast/shared/tasks";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion} from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextFastPathArgv, isTaskContextFastPath, runFastPath } from "./fastPath.js";
@@ -2248,6 +2249,7 @@ const SNIPPET_SECTIONS = {
   limits: snippetSection("limits"),
   computer: snippetSection("computer"),
   sim: snippetSection("sim"),
+  vault: snippetSection("vault"),
   check: snippetSection("check"),
   pr: snippetSection("pr"),
   mods: snippetSection("mods"),
@@ -2413,13 +2415,14 @@ function uninstallSkillsSnippet(): void {
  * refresh and the `cast install` table all derive from this one list, so a new
  * section snippet is its catalog entry, its version and one line here.
  */
-type SectionSnippetSlug = "calls" | "limits" | "pr" | "computer" | "sim" | "check" | "mods";
+type SectionSnippetSlug = "calls" | "limits" | "pr" | "computer" | "sim" | "vault" | "check" | "mods";
 const SECTION_SNIPPET_VERSIONS: Record<SectionSnippetSlug, () => string> = {
   calls: getCallsVersion,
   limits: getLimitsVersion,
   pr: getPrVersion,
   computer: getComputerVersion,
   sim: getSimVersion,
+  vault: getVaultVersion,
   check: getCheckVersion,
   mods: getModsVersion,
 };
@@ -14245,7 +14248,9 @@ registerFlowCommands(program, {
   cliPost, callingSession, realCwd: getRealCwd,
   // The flows published to the workspace this shell reads (flows.md FL2).
   fetchPool: async (team?: string) => {
-    const ws = await readWorkspace(team);
+    // A team named wins; else the team this directory is mapped to; else the active team.
+    const mapped = team ? null : teamForDirectory(await fetchProjectsWithTeams(readConfig() ?? ({} as Config)), getRealCwd());
+    const ws = mapped ? { kind: "team" as const, teamId: mapped } : await readWorkspace(team);
     const r = await cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
     return r?.flows ?? [];
   },
@@ -21511,10 +21516,13 @@ messaging
     }
   });
 
-// Check for updates in background (non-blocking). The SessionStart hook and
-// git's credential helper are output protocols: a cached notice would become
-// part of Claude's prompt in the first case and the credential git reads in
-// the second, so neither enters this lifecycle. Their fast paths claim them
+// Check for updates in background (non-blocking). Everything this lifecycle
+// prints goes to stderr: it runs inside whatever command was typed, and that
+// command's stdout may be read by a program (a line station's
+// `cd "$(cast ws path $worktree)"` failed on every box behind a release). The
+// SessionStart hook and git's credential helper are output protocols too: a
+// cached notice would become part of Claude's prompt in the first case and the
+// credential git reads in the second, so neither enters this lifecycle. Their fast paths claim them
 // before index.ts loads; the guard here is for a wrapper script that still
 // starts at index.ts, which reaches runFastPath only after this line.
 // CODECAST_NO_AUTO_UPDATE is set on the `_build-id` child an update spawns:
@@ -21549,7 +21557,7 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
   // if the new executable carries different daemon code.
   const daemonWasRunning = getDaemonPid() !== null;
 
-  console.log(`\nAuto-updating to v${available}...`);
+  console.error(`\nAuto-updating to v${available}...`);
   autoUpdateInstalling = true;
   const { success } = await performUpdate();
   if (success) {
@@ -21561,9 +21569,9 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
     }
 
     if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
-      console.log(`Updated to v${available} and restarted daemon.\n`);
+      console.error(`Updated to v${available} and restarted daemon.\n`);
     } else {
-      console.log(`Updated to v${available}.\n`);
+      console.error(`Updated to v${available}.\n`);
     }
   } else {
     recordUpdateFailure(available);

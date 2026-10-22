@@ -76,6 +76,8 @@ import { useSharedDraft } from "../hooks/useSharedDraft";
 import { SharedCarets } from "./SharedCarets";
 import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 import { useFileSearch } from "../lib/fsBrowse";
+import { findSecrets, type FoundSecret } from "@codecast/shared/contracts/secretShapes";
+import { ComposerCatch } from "./secrets/ComposerCatch";
 
 const api = _typedApi as any;
 const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({ default: m.ComposeEditor })));
@@ -1610,6 +1612,34 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // dismisses its host on send (the compose popup) can tell a committed send
   // from a refused one without waiting for delivery.
   const submitRefusedRef = useRef(false);
+  // A send whose text holds a credential waits for the person in
+  // ComposerCatch. Checked once per send, never per keystroke (typing budget).
+  // The bar's decision re-runs the same send with catchPassRef set.
+  const [caught, setCaught] = useState<{ text: string; found: FoundSecret[]; resume: () => void } | null>(null);
+  const catchPassRef = useRef(false);
+  useWatchEffect(() => setCaught(null), [conversationId]);
+  const holdForCredential = (text: string, resume: () => void): boolean => {
+    if (catchPassRef.current) return false;
+    const found = findSecrets(text);
+    if (found.length === 0) return false;
+    setCaught({ text, found, resume });
+    submitRefusedRef.current = true;
+    return true;
+  };
+  const releaseCaught = (text: string) => {
+    if (!caught) return;
+    setCaught(null);
+    if (text !== caught.text) {
+      if (composeMode && composeRef.current) composeRef.current.setMarkdown(text);
+      else { setMessage(text); messageRef.current = text; }
+    }
+    catchPassRef.current = true;
+    try { caught.resume(); } finally { catchPassRef.current = false; }
+  };
+  const cancelCaught = () => {
+    setCaught(null);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
   // The hosted assistant reads no images. Intake already refuses a new one,
   // but a restored draft can still carry some: a send holding any is refused
   // whole and the composer keeps everything, so nothing is dropped silently.
@@ -1628,6 +1658,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     let message = composeMode && composeRef.current
       ? composeRef.current.getMarkdown()
       : messageRef.current;
+    if (holdForCredential(message, () => {
+      void handleSubmitRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent, forkTail);
+      if (!submitRefusedRef.current) onSubmitWithIntent?.(false);
+    })) return false;
     suggestionRef.current?.settleSend(message);
     if (onGateSend) {
       // The pending batch rides a gate send the way it rides the main one:
@@ -1970,7 +2004,39 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     setSelectedImageIndex(null);
     setSelectedQueueIndex(null);
   };
+  // ⌘↵ in a session: queue the composer's text behind the running turn.
+  const queueComposerText = () => {
+    const text = messageRef.current.trim();
+    if (!text) return;
+    sendingRef.current = true;
+    try {
+      // A real session queues on the server, in the line everyone in it
+      // sees and steers (SharedQueue). A session still being created, or
+      // a hosted one (its turn engine takes input its own way), keeps the
+      // queue in this window.
+      if (canQueryServer && !hostedConversation) useInboxStore.getState().queueMessage(conversationId, text, `queued_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+      else setQueuedMessages(prev => [...prev, text]);
+    } catch (error) {
+      captureException(error);
+      sendingRef.current = false;
+      toast.error(error instanceof Error ? error.message : "Could not save the queued message.");
+      return;
+    }
+    cancelPendingDraft();
+    setMessage("");
+    messageRef.current = "";
+    useInboxStore.getState().clearDraftFinal(conversationId);
+    sendingRef.current = false;
+    setSelectedQueueIndex(null);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (caught && e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelCaught();
+      return;
+    }
     if (canHandoff && e.altKey && e.shiftKey && e.code === "KeyH") {
       e.preventDefault();
       setHandoffOpen(true);
@@ -2258,29 +2324,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       if (onGateSend) { void handleSubmit(e); return; }
-      const text = message.trim();
-      if (text) {
-        sendingRef.current = true;
-        try {
-          // A real session queues on the server, in the line everyone in it
-          // sees and steers (SharedQueue). A session still being created, or
-          // a hosted one (its turn engine takes input its own way), keeps the
-          // queue in this window.
-          if (canQueryServer && !hostedConversation) useInboxStore.getState().queueMessage(conversationId, text, `queued_${Date.now()}_${Math.random().toString(36).slice(2)}`);
-          else setQueuedMessages(prev => [...prev, text]);
-        } catch (error) {
-          captureException(error);
-          sendingRef.current = false;
-          toast.error(error instanceof Error ? error.message : "Could not save the queued message.");
-          return;
-        }
-        cancelPendingDraft();
-        setMessage("");
-        messageRef.current = "";
-        useInboxStore.getState().clearDraftFinal(conversationId);
-        sendingRef.current = false;
-        setSelectedQueueIndex(null);
-      }
+      if (holdForCredential(message, queueComposerText)) return;
+      queueComposerText();
       return;
     }
     if (e.key === "Enter" && e.altKey && e.shiftKey && onSendAndDismiss && triageShown) {
@@ -2416,6 +2461,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           )}
           {!bareComposer && lightboxImageIndex === null && agentStatus === "compacting" && (
             <LiveCompactionCard conversationId={conversationId} expanded={isExpanded} />
+          )}
+          {caught && (
+            <div className={`mx-auto mb-2 ${inline ? "" : "px-4"} ${colWidth} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+              <ComposerCatch text={caught.text} found={caught.found} teamId={composeTeamId ? String(composeTeamId) : null} onSend={releaseCaught} onCancel={cancelCaught} />
+            </div>
           )}
       </>}
       meta={hostedConversation ? (
