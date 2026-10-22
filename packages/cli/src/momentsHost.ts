@@ -102,7 +102,8 @@ export async function runExtractor(claim: MomentClaim, opts: { bun?: string } = 
     child.on("close", (code: number | null) => {
       clearTimeout(timer);
       if (over) return resolve({ error: `the moment is over ${MOMENT_LIMITS.json_bytes} bytes`, version });
-      if (code !== 0) return resolve({ error: `the extractor exited ${code}: ${err.trim().split("\n").slice(-3).join(" ").slice(0, 400)}`, version });
+      // Its own words, not the stack under them: an error's frames ("    at …") say where, its message says what.
+      if (code !== 0) return resolve({ error: `the extractor exited ${code}: ${err.trim().split("\n").filter((l) => !/^\s+at /.test(l)).slice(-3).join(" ").slice(0, 400)}`, version });
       resolve({ output: out, version });
     });
     child.stdin!.end(JSON.stringify(claim.input));
