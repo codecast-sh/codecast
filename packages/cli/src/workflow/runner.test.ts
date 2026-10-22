@@ -211,6 +211,24 @@ describe("workflow/runner (command nodes)", () => {
     expect(cap.logs.some(l => l.includes("hello-world"))).toBe(true);
   });
 
+  // ct-58757: Verify sent Implement back twice, and both later hands, told
+  // nothing of why, checked their own work again and handed it in unchanged.
+  test("a station the run comes back to is told which station sent it back and what it found", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start  [shape=Mdiamond]
+      impl   [label="Implement", shape=parallelogram, max_visits=3, script="echo impl-sees-[$sent_back]"]
+      verify [label="Verify", shape=parallelogram, script="if [ -f ${tmpDir}/twice ]; then exit 0; fi; touch ${tmpDir}/twice; echo tests-failed-in-a.test.ts; exit 1"]
+      exit   [shape=Msquare]
+      start -> impl -> verify
+      verify -> impl [condition="outcome = failure"]
+      verify -> exit [condition="outcome = success"]
+    }`);
+    expect(await runWorkflow(g, { cwd: tmpDir })).not.toBe("failed");
+    const seen = cap.logs.filter(l => l.includes("impl-sees-") && !l.includes("$ echo"));
+    expect(seen[0]).toContain("impl-sees-[]");
+    expect(seen[1]).toContain("impl-sees-[Verify: tests-failed-in-a.test.ts]");
+  });
+
   test("command node honors a per-node timeout attribute (seconds)", async () => {
     const g = parseWorkflowSource(`digraph g {
       start [shape=Mdiamond]

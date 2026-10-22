@@ -1993,6 +1993,13 @@ async function runNodeLoop(
       break;
     }
 
+    // A station the run comes back to is told what sent it back: the station
+    // that routed here and what it said. A hand reads only what its prompt
+    // names, so without this a builder sent back by a failed check could not
+    // tell that round from its first and checked its own work again (ct-58757).
+    if (state.visitCounts[next.id]) state.context["sent_back"] = `${current.label}: ${state.context[`${current.id}.output`] ?? ""}`.trim();
+    else delete state.context["sent_back"];
+
     checkpoint(next.id);
     console.log();
     current = next;
