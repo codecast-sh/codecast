@@ -59,6 +59,7 @@
     "./contracts/deploys": "./contracts/deploys.ts",
     "./contracts/lineDeploy": "./contracts/lineDeploy.ts",
     "./contracts/linePhases": "./contracts/linePhases.ts",
+    "./contracts/flowPool": "./contracts/flowPool.ts",
     "./contracts/linePriority": "./contracts/linePriority.ts",
     "./contracts/jointMessage": "./contracts/jointMessage.ts",
     "./contracts/changeGuide": "./contracts/changeGuide.ts",

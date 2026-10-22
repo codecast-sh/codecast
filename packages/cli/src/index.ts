@@ -106,6 +106,7 @@ import { registerOrgInitCommands } from "./orgInit.js";
 import { registerOrgTemplateCommands } from "./orgTemplate.js";
 import { registerOrgRoleOpsCommands } from "./orgRoleOps.js";
 import { registerRouteCommand } from "./routeCommand.js";
+import { registerFlowCommands } from "./flowCommand.js";
 import {
   loadWorkspaceRoster,
   resolveWorkspaceForRead,
@@ -2842,6 +2843,17 @@ function failUnknownCommand(operands: string[]): never {
   if (nextStep) console.error(nextStep);
   console.error(`Run 'cast --help' for the list of commands.`);
   process.exit(1);
+}
+
+// `cast <unknown> --help` never reaches the root action: commander answers the
+// help flag first, with the whole root help (a thousand lines) and exit 0, so
+// an agent guessing at a command reads that instead of "no such command".
+function failUnknownCommandBeforeHelp(argv: string[]): void {
+  const first = argv[2];
+  if (!first || first.startsWith("-") || first === "help") return;
+  if (!argv.slice(3).some((a) => a === "--help" || a === "-h")) return;
+  if (commandTree(program).some((node) => node.name === first || node.aliases?.includes(first))) return;
+  failUnknownCommand([first]);
 }
 
 // Groups never reach failUnknownCommand — commander answers their unknown
@@ -6332,18 +6344,20 @@ program
 
 program
   .command("teams")
+  .alias("team")
   .description(
-    "Manage teams and directory mappings\n\n" +
+    "Your teams, their people, and which directories share with them\n\n" +
     "Examples:\n" +
     "  cast teams                      # List your teams\n" +
+    "  cast teams members [team]       # The team's people and their @handles (message one: cast chat dm)\n" +
     "  cast teams mappings             # Show directory-to-team mappings\n" +
     "  cast teams map <path> <team>    # Share a directory with a team (asks about past sessions)\n" +
     "  cast teams map <path> <team> --new-only   # Share sessions from today on\n" +
     "  cast teams lock <path>          # Never share: no rule can share the folder\n" +
     "  cast teams unmap <path>         # Remove a directory mapping or a lock"
   )
-  .argument("[action]", "Action: mappings, map, lock, unmap")
-  .argument("[path]", "Directory path (for map/unmap)")
+  .argument("[action]", "Action: members, mappings, map, lock, unmap")
+  .argument("[path]", "Directory path (for map/lock/unmap), or the team (for members)")
   .argument("[team]", "Team ID or name (for map)")
   .option("--include-past", "Share every session already in the directory (no prompt)")
   .option("--new-only", "Share only sessions started from now on (no prompt)")
@@ -6380,6 +6394,23 @@ program
         console.log(`\n${fmt.muted("No active team — team-scoped commands need --team, and new work is personal.")}`);
       }
       console.log(`\n${fmt.muted("Run 'cast teams mappings' to see which projects share with which teams.")}`);
+      return;
+    }
+
+    if (action === "members" || action === "people") {
+      const ws = await readWorkspace(pathArg);
+      if (ws.kind !== "team") {
+        console.error(`No active team. Name one: cast teams members <team> (${teams.map((t) => t.name).join(", ")})`);
+        process.exit(1);
+      }
+      const { people } = await cliPost("/cli/chat/people", workspaceArgs(ws));
+      console.log(`\n${c.bold}${workspaceLabel(ws)}${c.reset}\n`);
+      for (const p of people) {
+        const handle = p.handle ? `@${p.handle}` : fmt.muted("(no handle)");
+        const role = p.role === "admin" ? fmt.accent("admin") : fmt.muted("member");
+        console.log(`  ${fmt.value(handle.padEnd(20))} ${p.name.padEnd(24)} ${role}${p.is_you ? fmt.muted("  you") : ""}`);
+      }
+      console.log(`\n${fmt.muted("Message someone:")} cast chat dm @handle "<text>"`);
       return;
     }
 
@@ -6493,7 +6524,7 @@ program
     }
 
     console.error(`Unknown action: ${action}`);
-    console.error("Available actions: mappings, map, unmap");
+    console.error("Available actions: members, mappings, map, lock, unmap");
     process.exit(1);
   });
 
@@ -14210,6 +14241,7 @@ registerOrgInitCommands(program, orgDeps);
 registerOrgTemplateCommands(program, orgDeps);
 registerOrgRoleOpsCommands(program, { ...orgDeps, resolveRoleId });
 registerRouteCommand(program, orgDeps);
+registerFlowCommands(program, { cliPost, callingSession, realCwd: getRealCwd });
 
 // ── Team chat ────────────────────────────────────────────────────────────────
 // Channels, flat threads and the anchor answering in one. `cast chat reply` is
@@ -14218,7 +14250,7 @@ registerRouteCommand(program, orgDeps);
 // exist and every mention in chat ends at the ten-minute timeout.
 const chat = program
   .command("chat")
-  .description("Team chat: channels, threads, and the workspace agent's replies")
+  .description("Team chat: channels, direct messages, threads, and the workspace agent's replies")
   .showHelpAfterError(true);
 
 // A `cast` running inside an agent session is an AGENT typing, not the
@@ -14363,13 +14395,15 @@ chat
 
 chat
   .command("read")
-  .description("Read a channel, newest last")
-  .requiredOption("--channel <id>", "Channel id (from cast chat channels)")
+  .description("Read a channel or a direct message, newest last")
+  .requiredOption("--channel <ref>", "#name, @person for a direct message, or a channel id")
+  .option("--team <name|id>", "Team whose #names and people resolve (default: your active team)")
   .option("-n, --limit <n>", "How many messages (default 30)")
   .option("--cursor <cursor>", "Page further back, from a previous next_cursor")
   .option("--since <ts|duration>", "Only lines after this: a ms timestamp, an ISO date, or an age like 2h (compact, one line each)")
   .option("--json", "Machine-readable output")
   .action(async (options: any) => {
+    options.channel = await resolveChatChannelId(options.channel, workspaceArgs(await readWorkspace(options.team)).team_id);
     // The compact view a role's wake frame embeds: threads and replies alike,
     // oldest first, text cut to one short line.
     if (options.since) {
@@ -14446,53 +14480,76 @@ chat
     for (const row of result.replies ?? []) printChatMessage(row, authors);
   });
 
+// Post one line and say what it reached: the mentions it woke, the session a
+// thread reply went back into, the workspace agent. `send` and `dm` both end here.
+async function sendChatLine(channelId: string, content: string, options: { thread?: string; json?: boolean }) {
+  if (!content.trim()) {
+    console.error("Message text is empty");
+    process.exit(1);
+  }
+  const result = await cliPost("/cli/chat/send", {
+    channel_id: channelId,
+    content,
+    thread_root_id: options.thread,
+    ...chatSendOrigin(),
+  });
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`${c.green}✓${c.reset} sent ${c.dim}${result.message_id}${c.reset}`);
+  // Roles and sessions the line named: woken, folded past a cap, or skipped.
+  const wakes = result.mention_wakes;
+  if (wakes && (wakes.roles || wakes.sessions || wakes.folded || wakes.skipped?.length)) {
+    const parts: string[] = [];
+    if (wakes.roles) parts.push(`woke ${wakes.roles} role${wakes.roles === 1 ? "" : "s"}`);
+    if (wakes.sessions) parts.push(`delivered to ${wakes.sessions} session${wakes.sessions === 1 ? "" : "s"}`);
+    if (wakes.folded) parts.push(`${wakes.folded} folded (over the hourly mention cap; read on next wake)`);
+    for (const reason of wakes.skipped ?? []) parts.push(`skipped: ${reason}`);
+    console.log(`${c.dim}  mentions: ${parts.join(" · ")}${c.reset}`);
+  }
+  // A reply on a thread a session started goes back into that session.
+  if (result.session_relay?.delivered) {
+    console.log(`${c.dim}  delivered into session ${result.session_relay.session_short_id} — it can answer in this thread${c.reset}`);
+  } else if (result.session_relay?.skipped && result.session_relay.skipped !== "agent_authored") {
+    console.log(`${c.yellow}•${c.reset} not relayed to the thread's session: ${result.session_relay.skipped}`);
+  }
+  if (result.anchor_thinking_message_id && result.anchor_listening) {
+    console.log(`${c.dim}  the workspace's agent follows this thread and is reading — it answers only if the line was for it${c.reset}`);
+  } else if (result.anchor_thinking_message_id) {
+    console.log(`${c.dim}  the workspace's agent is answering — placeholder ${result.anchor_thinking_message_id}${c.reset}`);
+  } else if (result.anchor_wake_skipped) {
+    console.log(`${c.yellow}•${c.reset} the workspace's agent was not woken: ${result.anchor_wake_skipped}`);
+  }
+}
+
 chat
   .command("send")
-  .description("Post to a channel, or reply on a thread")
+  .description("Post to a channel, reply on a thread, or message people directly")
   .argument("<text>", stdinText("Message text"))
-  .requiredOption("--channel <id>", "Channel id")
+  .requiredOption("--channel <ref>", "#name, @person (comma-separate for a group), or a channel id")
   .option("--thread <root_id>", "Reply on this thread instead of the channel")
+  .option("--team <name|id>", "Team whose #names and people resolve (default: your active team)")
   .option("--json", "Machine-readable output")
   .action(async (text: string, options: any) => {
-    const body = text ?? "";
-    if (!body.trim()) {
-      console.error("Message text is empty");
-      process.exit(1);
-    }
-    const result = await cliPost("/cli/chat/send", {
-      channel_id: options.channel,
-      content: body,
-      thread_root_id: options.thread,
-      ...chatSendOrigin(),
-    });
-    if (options.json) {
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
-    console.log(`${c.green}✓${c.reset} sent ${c.dim}${result.message_id}${c.reset}`);
-    // Roles and sessions the line named: woken, folded past a cap, or skipped.
-    const wakes = result.mention_wakes;
-    if (wakes && (wakes.roles || wakes.sessions || wakes.folded || wakes.skipped?.length)) {
-      const parts: string[] = [];
-      if (wakes.roles) parts.push(`woke ${wakes.roles} role${wakes.roles === 1 ? "" : "s"}`);
-      if (wakes.sessions) parts.push(`delivered to ${wakes.sessions} session${wakes.sessions === 1 ? "" : "s"}`);
-      if (wakes.folded) parts.push(`${wakes.folded} folded (over the hourly mention cap; read on next wake)`);
-      for (const reason of wakes.skipped ?? []) parts.push(`skipped: ${reason}`);
-      console.log(`${c.dim}  mentions: ${parts.join(" · ")}${c.reset}`);
-    }
-    // A reply on a thread a session started goes back into that session.
-    if (result.session_relay?.delivered) {
-      console.log(`${c.dim}  delivered into session ${result.session_relay.session_short_id} — it can answer in this thread${c.reset}`);
-    } else if (result.session_relay?.skipped && result.session_relay.skipped !== "agent_authored") {
-      console.log(`${c.yellow}•${c.reset} not relayed to the thread's session: ${result.session_relay.skipped}`);
-    }
-    if (result.anchor_thinking_message_id && result.anchor_listening) {
-      console.log(`${c.dim}  the workspace's agent follows this thread and is reading — it answers only if the line was for it${c.reset}`);
-    } else if (result.anchor_thinking_message_id) {
-      console.log(`${c.dim}  the workspace's agent is answering — placeholder ${result.anchor_thinking_message_id}${c.reset}`);
-    } else if (result.anchor_wake_skipped) {
-      console.log(`${c.yellow}•${c.reset} the workspace's agent was not woken: ${result.anchor_wake_skipped}`);
-    }
+    const channelId = await resolveChatChannelId(options.channel, workspaceArgs(await readWorkspace(options.team)).team_id);
+    await sendChatLine(channelId, text ?? "", options);
+  });
+
+chat
+  .command("dm")
+  .description("Message people directly: a 1:1 or group conversation, found or opened")
+  .argument("<people>", "@handle, or several comma-separated (cast teams members lists them)")
+  .argument("<text>", stdinText("Message text"))
+  .option("--thread <root_id>", "Reply on a thread in that conversation")
+  .option("--team <name|id>", "Team the people are in (default: your active team)")
+  .option("--json", "Machine-readable output")
+  .action(async (people: string, text: string, options: any) => {
+    const room = await openChatDm(people, workspaceArgs(await readWorkspace(options.team)).team_id);
+    if (!options.json) console.log(`${c.dim}to ${room.with.join(", ")}${c.reset}`);
+    await sendChatLine(room.channel_id, text ?? "", options);
+    const ref = people.split(",").map((h) => `@${h.trim().replace(/^@/, "")}`).join(",");
+    if (!options.json) console.log(`${c.dim}  their replies: cast chat read --channel ${ref}${c.reset}`);
   });
 
 chat
@@ -16012,7 +16069,17 @@ async function listChatChannels(teamId?: string): Promise<any[]> {
   return result?.channels ?? [];
 }
 
+// The direct message room with these people ("@a,@b" or "a,b"), found or
+// opened. Returns the room id and the names of the others in it.
+async function openChatDm(people: string, teamId?: string): Promise<{ channel_id: string; with: string[] }> {
+  const handles = people.split(",").map((h) => h.trim().replace(/^@/, "")).filter(Boolean);
+  return await cliPost("/cli/chat/open-dm", { team_id: teamId, handles });
+}
+
+// A channel by id, by #name, or a direct message by @person[,@person] (found
+// or opened: the room's identity is its member set).
 async function resolveChatChannelId(ref: string, teamId?: string): Promise<string> {
+  if (ref.startsWith("@")) return String((await openChatDm(ref, teamId)).channel_id);
   const name = ref.replace(/^#/, "").trim().toLowerCase();
   if (!ref.startsWith("#") && /^[a-z0-9]{20,}$/i.test(ref)) return ref;
   const match = (await listChatChannels(teamId)).find((ch: any) => String(ch.name).toLowerCase() === name);
@@ -21129,6 +21196,33 @@ workflow
   });
 
 workflow
+  .command("resume <task>")
+  .description("Try a failed line run again from a station of its graph, on its own branch, once what failed it is fixed. A resume is a new attempt: each station's visits count again. A trial problem resumes with cast line trial rerun <task> --at <station>")
+  .requiredOption("--at <station>", "The station to resume at (verify, to check and evaluate the branch again)")
+  .option("--onto-main", "First put the run's branch on the default branch as the remote has it, by the graph's rebase (a conflict resumes at the station the graph sends it to, where a hand resolves it). Run it on the machine that holds the run")
+  .option("--json", "Machine-readable output")
+  .action(async (task: string, options: { at: string; ontoMain?: boolean; json?: boolean }) => {
+    const fail = (message: string): never => { console.error(message); process.exit(2); };
+    const listed = await cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1 });
+    const row = Array.isArray(listed?.runs) ? listed.runs[0] : null;
+    if (!row) fail(`${task} has no run`);
+    // The server's refusals first (a closed or trial problem, a run that is not failed), so nothing is rebased for a run that will not move.
+    await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: options.at, check: true });
+    const { currentRunGraph } = await import("./workflow/reask.js");
+    const { resumeStation } = await import("./workflow/resumeFailed.js");
+    const { graph } = await currentRunGraph({ getCliEndpoint, detectCurrentSessionId }, row._id);
+    let plan: { at: string; note: string | null } = { at: options.at, note: null };
+    try {
+      plan = resumeStation(graph, options.at, { ontoMain: options.ontoMain, runId: row._id, projectPath: row.project_path || process.cwd(), here: row.runner_device === deviceId() });
+    } catch (e) {
+      fail(`${task}: ${(e as Error).message}`);
+    }
+    const r = await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: plan.at });
+    if (options.json) { printJson({ ...r, note: plan.note }); return; }
+    console.log(`${task}: resumes at ${r.resumed_at} as a new attempt${plan.note ? ` (${plan.note})` : ""} (run ${r.run_id}).`);
+  });
+
+workflow
   .command("validate <file>")
   .description("Validate a workflow file (or a shipped template by name) without running it")
   .action(async (file: string) => {
@@ -21537,7 +21631,10 @@ if (runFastPath(process.argv)) {
   activateGroup(program, groupTokenInArgv(process.argv), groupDeps())
     // parseAsync, so an action's own refusal (a thrown Error) lands in the
     // catch below as one line instead of an unhandled rejection's source dump.
-    .then(() => program.parseAsync())
+    .then(() => {
+      failUnknownCommandBeforeHelp(process.argv);
+      return program.parseAsync();
+    })
     .catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
