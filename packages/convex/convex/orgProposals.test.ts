@@ -1797,3 +1797,21 @@ describe("orgProposals hires", () => {
     expect((await performSetHiresFreely(ctxOf(db), ME as any, { role_id: DOCS, on: false })).hires_freely).toBe(false);
   });
 });
+
+describe("a hire carries the answers its template cannot go without", () => {
+  const D = "a".repeat(64);
+  const manifest = { schemaVersion: 2, id: "growth", version: "2.0.0", name: "CMO", description: "d", role: { name: "CMO", handle: "{{instance}}-cmo", charter: "org/charter.md" }, routines: [],
+    inputs: [{ key: "product.domain", label: "Apex domain", kind: "string", required: true }, { key: "metric.window_days", label: "Window", kind: "number", required: true, default: 7 }, { key: "accounts.ads", label: "Ads key", kind: "secret", required: true }] };
+  const templates = [{ _id: "org_templates_growth", template_id: "growth", workspace: "codecast", name: "CMO", description: "d", latest: { version: "2.0.0", digest: D }, releases: [{ version: "2.0.0", digest: D, status: "stable", manifest }], manifest, created_by: ME, created_at: 1, updated_at: 1 }];
+  const hireSpec = (config: Record<string, string>) => spec([
+    change({ kind: "role", name: "CMO", handle: "billing-cmo", scope: { projects: ["pr-2"], plans: [] }, reports_to: "me" }),
+    change({ kind: "hire", handle: "billing-cmo", template: "growth", version: "2.0.0", digest: D, instance: "billing-growth", project: "pr-2", config }),
+  ], { title: "Hire CMO on Billing", mode: "request", asks: [{ title: "Hire CMO on Billing", why: "d", effect: "e", seqs: [1, 2] }] });
+  test("an agent's hire that leaves one blank is refused, naming it, before anything is written; a default or a secret never counts as blank", async () => {
+    const db = fixtures({ org_templates: templates });
+    await expect(performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: hireSpec({}) })).rejects.toThrow("The hire of growth as billing-growth leaves answers it needs blank: Apex domain (product.domain). Ask the person for them and put them in the hire's config.");
+    expect(await db.query("org_proposals").collect()).toEqual([]);
+    const posted = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: hireSpec({ "product.domain": "acme.io" }) });
+    expect(posted.short_id).toMatch(/^op-/);
+  });
+});

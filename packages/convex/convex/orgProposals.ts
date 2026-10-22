@@ -1,4 +1,6 @@
 import { openOrgBatch, orgBatchHead, takeOrgRows, type OrgBatchHead } from "./lib/orgChangeLog";
+import { releaseOf, visibleTemplate } from "./orgTemplates";
+import { missingRequired } from "@codecast/shared/contracts/orgTemplateManifest";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { mutation, query, internalMutation } from "./functions";
 import { internalAction, internalQuery } from "./_generated/server";
@@ -154,6 +156,22 @@ async function checkedRecordChange<T extends OrgChange>(ctx: Ctx, change: T, wsK
   return { ...change, ...title, ...under };
 }
 
+/**
+ * A hire must carry the answers its template cannot go without: asked for
+ * now, of the person, by whoever writes the proposal, rather than discovered
+ * as a blank in the role's setup after it is accepted. Read from the release
+ * the hire pins; an unknown template is left to the apply step to refuse.
+ */
+async function refuseBlankHireAnswers(ctx: Ctx, access: string, spec: OrgProposalSpec): Promise<void> {
+  for (const { change } of spec.changes) {
+    if (change.kind !== "hire") continue;
+    const template = await visibleTemplate(ctx as any, change.template, access as any, { version: change.version, digest: change.digest });
+    const manifest = releaseOf(template, { version: change.version, digest: change.digest })?.manifest;
+    const missing = manifest ? missingRequired(manifest, change.config ?? {}) : [];
+    if (missing.length) throw new Error(`The hire of ${change.template} as ${change.instance} leaves answers it needs blank: ${missing.map((i) => `${i.label} (${i.key})`).join(", ")}. Ask the person for them and put them in the hire's config.`);
+  }
+}
+
 export async function performCreateProposal(
   ctx: Ctx,
   userId: Id<"users">,
@@ -162,6 +180,7 @@ export async function performCreateProposal(
   const parsed = parseOrgProposalSpec(args.spec);
   if (!parsed.spec) throw new Error(`The proposal spec is not valid:\n- ${parsed.errors.join("\n- ")}`);
   const spec: OrgProposalSpec = parsed.spec;
+  await refuseBlankHireAnswers(ctx, args.team_id ? `team:${args.team_id}` : `user:${userId}`, spec);
 
   // The author: the role the calling session speaks for, else the session,
   // else the person. Identity follows the token (lib/actor).
