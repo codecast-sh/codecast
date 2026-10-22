@@ -9,7 +9,7 @@ import type { VaultInfo } from "@codecast/shared/contracts";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 
 /** A project the user works in, offered as a vault without ever being
- *  registered — as opposed to a folder someone ran `cast vault add` on. */
+ *  registered — as opposed to a folder someone ran `cast files add` on. */
 export function isProjectVault(vault: VaultInfo | null | undefined): boolean {
   return vault?.kind === "project";
 }
@@ -53,7 +53,7 @@ function pickLanding(paths: string[], dir: string): string | null {
  * The note a vault opens on when the user picked the vault but not a file.
  *
  * ONLY project vaults get one. A notes vault opening straight into a note would
- * change what `cast vault add` has always done; a repo dropping you on an empty
+ * change what `cast files add` has always done; a repo dropping you on an empty
  * reading pane beside a tree of source directories is the poor first impression
  * this exists to fix.
  *

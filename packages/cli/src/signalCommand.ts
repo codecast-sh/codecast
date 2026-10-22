@@ -16,9 +16,11 @@
 // --issue <its issue's key> instead of --fingerprint: the key is exactly one
 // problem, and merge and split follow the product's own issue edits.
 //
-// Routes: /cli/signal/{add,ls,show} in http.ts (signals.ts). A signal lands in
-// a project (line-profile.md LP1): --project, else the repo profile's
-// `[line] project`, else none (the workspace). The server resolves the ref
+// Routes: /cli/signal/{add,ls,show} in http.ts (signals.ts). A signal's
+// project is decided by what it is about (line-profile.md LP1): the
+// expectation it breaks, else --project, else a single-purpose source's own;
+// the repo profile's `[line] project` rides as default_project, which holds
+// the problem only until Ground places it. The server resolves each ref
 // inside the write workspace, by the rule every --project flag uses.
 import type { Command } from "commander";
 import { readFileSync } from "fs";
@@ -28,7 +30,7 @@ import { commandGroup } from "./commandGroups.js";
 import { formatAge } from "./decideCommand.js";
 import { stdinText } from "./sendBody.js";
 import { slugifyHeading } from "@codecast/shared/vault";
-import { lineProjectFor, scopeFor } from "./lineScope.js";
+import { scopeFor, signalDefaultProject } from "./lineScope.js";
 import { SIGNAL_KINDS } from "@codecast/shared/contracts/signalFingerprint";
 import { DIAGNOSIS_ANSWERS, judgeReviewLine, type JudgeReviewView } from "@codecast/shared/contracts/judgeReview";
 
@@ -156,7 +158,7 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     .option("--judge <name>", "The product's judge that made this finding")
     .option("--judge-version <v>", "That judge's version")
     .option("--severity <n>", "How bad the judge rated it, on the product's scale")
-    .option("--project <ref>", "Project to file it in: id, short id or title (default: the repo profile's [line] project, else none)")
+    .option("--project <ref>", "Project it is about: id, short id or title (default: the expectation it breaks, else its source's own project, else the line's ground step places it)")
     .option("--team <name|id|personal>", "Workspace to file it in (default: the repo profile's [line] team, else the session's team, else the directory's mapping)")
     .option("--json", "Machine-readable output")
     .action(async (options: SignalAddOptions & { team?: string; project?: string; json?: boolean }) => {
@@ -166,8 +168,7 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err));
       }
-      const project = lineProjectFor(options.team, options.project);
-      const result = await apiPost(deps, "/cli/signal/add", { ...body, ...(await scopeFor(deps, options.team, true, project)) });
+      const result = await apiPost(deps, "/cli/signal/add", { ...body, ...(await scopeFor(deps, options.team, true, options.project)), ...signalDefaultProject(options.team, options.project) });
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
         return;
@@ -264,8 +265,7 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
         fail(err instanceof Error ? err.message : String(err));
       }
       const move = (options.move ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-      const project = lineProjectFor(options.team, options.project);
-      const result = await apiPost(deps, "/cli/signal/split", { ...body, from: options.from, ...(move.length ? { move } : {}), ...(await scopeFor(deps, options.team, true, project)) });
+      const result = await apiPost(deps, "/cli/signal/split", { ...body, from: options.from, ...(move.length ? { move } : {}), ...(await scopeFor(deps, options.team, true, options.project)), ...signalDefaultProject(options.team, options.project) });
       if (options.json) console.log(JSON.stringify(result, null, 2));
       else console.log(`${fmt.success(result.short_id)} → ${result.task_short_id} (split off ${result.split_from}${result.moved ? `; ${result.moved} finding${result.moved === 1 ? "" : "s"} moved` : ""})`);
     });

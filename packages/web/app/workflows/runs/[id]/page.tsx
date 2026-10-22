@@ -232,7 +232,7 @@ function RunDetailContent({ runId }: { runId: string }) {
                 </ReportChip>
               )}
               {line && run.task_id && (
-                <ReportChip href={lineHere ? lineHere({ view: "timeline", case: run.task_id }) : lineRefHref(run.task_id)} title="This problem's life on one time axis: its reports, every attempt to fix it, ships, deploys and what came back">
+                <ReportChip href={lineHere ? lineHere({ view: "problems", case: run.task_id }) : lineRefHref(run.task_id)} title="This problem's life on one time axis: its reports, every attempt to fix it, ships, deploys and what came back">
                   Timeline
                 </ReportChip>
               )}

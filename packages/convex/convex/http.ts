@@ -4215,6 +4215,7 @@ cliRoute("/cli/org/template/catalog", async (ctx, body) => ctx.runQuery((api as 
 cliRoute("/cli/org/template/get", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.get, body));
 cliRoute("/cli/org/template/release", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.release, body));
 cliRoute("/cli/org/template/instance", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.upsertInstance, body));
+cliRoute("/cli/org/template/charter", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.writeLoaderCharter, body));
 cliRoute("/cli/org/template/instance-status", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.instanceStatus, body));
 cliRoute("/cli/org/template/instances", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.listInstances, body));
 cliRoute("/cli/org/template/evidence", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.recordEvidenceCheck, body));
@@ -4283,6 +4284,15 @@ cliRoute("/cli/chat/search", async (ctx, body) => {
 });
 cliRoute("/cli/chat/send", async (ctx, body) => {
   return await ctx.runMutation(api.chat.sendMessage, await withChatMessageIds(ctx, body, "thread_root_id"));
+});
+// A direct message room with these people (`cast chat dm`), found or made.
+// body: { api_token, team_id?, handles }.
+cliRoute("/cli/chat/open-dm", async (ctx, body) => {
+  return await ctx.runMutation(api.chat.openDm, body);
+});
+// The team's people and the handle each answers to (`cast teams members`).
+cliRoute("/cli/chat/people", async (ctx, body) => {
+  return await ctx.runQuery(api.chat.listPeople, body);
 });
 cliRoute("/cli/chat/mark-read", async (ctx, body) => {
   return await ctx.runMutation(api.chat.markRead, body);
@@ -4829,6 +4839,8 @@ cliRoute("/cli/workflows/line-version", async (ctx, body) => ctx.runQuery(api.wo
 cliRoute("/cli/workflows/list", async (ctx, body) => {
   return await ctx.runMutation(api.workflows.list, body);
 });
+// The team's published flows (flows.md FL2), for `cast flow ls/show/run`.
+cliRoute("/cli/workflows/pool", async (ctx, body) => ctx.runQuery(api.workflows.poolForCli, body));
 // A Try's case settling on the graph's machine (line-workspace.md LW4, cli lineTry.ts).
 cliRoute("/cli/line-tries/report", async (ctx, body) => ctx.runMutation((api as any).lineActions.reportTry, body));
 
@@ -4856,6 +4868,21 @@ cliRoute("/cli/mods/local-report", async (ctx, body) => ctx.runMutation((api as 
 cliRoute("/cli/mods/local-device", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliSetLocalDevice, body));
 cliRoute("/cli/mods/secret-set", async (ctx, body) => ctx.runAction((api as any).modSecrets.cliSet, body));
 cliRoute("/cli/mods/secrets", async (ctx, body) => ctx.runQuery((api as any).modSecrets.cliList, body));
+// Vault (docs/architecture/vault.md, convex/secrets.ts): `cast vault`. Only
+// read and redaction-values answer with values; the rest with metadata.
+cliRoute("/cli/vault/list", async (ctx, body) => ctx.runQuery((api as any).secrets.list, body));
+cliRoute("/cli/vault/show", async (ctx, body) => ctx.runQuery((api as any).secrets.show, body));
+cliRoute("/cli/vault/events", async (ctx, body) => ctx.runQuery((api as any).secrets.events, body));
+cliRoute("/cli/vault/create", async (ctx, body) => ctx.runAction((api as any).secrets.create, body));
+cliRoute("/cli/vault/rotate", async (ctx, body) => ctx.runAction((api as any).secrets.rotate, body));
+cliRoute("/cli/vault/refresh", async (ctx, body) => ctx.runAction((api as any).secrets.refresh, body));
+cliRoute("/cli/vault/update", async (ctx, body) => ctx.runMutation((api as any).secrets.updateMeta, body));
+cliRoute("/cli/vault/read", async (ctx, body) => ctx.runAction((api as any).secrets.cliRead, body));
+cliRoute("/cli/vault/request", async (ctx, body) => ctx.runMutation((api as any).secrets.request, body));
+cliRoute("/cli/vault/fulfill", async (ctx, body) => ctx.runAction((api as any).secrets.fulfill, body));
+cliRoute("/cli/vault/rm", async (ctx, body) => ctx.runMutation((api as any).secrets.remove, body));
+cliRoute("/cli/vault/redaction-values", async (ctx, body) => ctx.runAction((api as any).secrets.redactionValues, body));
+cliRoute("/cli/vault/redaction-version", async (ctx, body) => ctx.runQuery((api as any).secrets.redactionVersion, body));
 cliRoute("/cli/mods/publish-state", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliPublish, body));
 cliRoute("/cli/mods/claim-calls", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliClaimCalls, body));
 cliRoute("/cli/mods/finish-call", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliFinishCall, body));
@@ -4874,6 +4901,7 @@ cliRoute("/cli/workflow-runs/set-primary", async (ctx, body) => ctx.runMutation(
 cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.respondToGateFromCli, body));
 // `cast workflow reask`: a run's decision asked again by the stations as they are now.
 cliRoute("/cli/workflow-runs/reask", async (ctx, body) => ctx.runMutation(api.workflow_runs.reaskFromCli, body));
+cliRoute("/cli/workflow-runs/resume", async (ctx, body) => ctx.runMutation(api.workflow_runs.resumeFromCli, body));
 cliRoute("/cli/workflow-runs/ingest", async (ctx, body) => ctx.runMutation(api.workflow_runs.ingestSnapshot, body));
 cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api.workflow_runs.getByExternalRun, body));
 // the-line.md L8: `cast workflow runs [--task|--plan]`, one list across workflows.

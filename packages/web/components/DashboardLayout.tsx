@@ -607,10 +607,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
   const isOnCapabilitiesPage = pathname === "/capabilities";
   const isOnFilesPage = pathname === "/files" || (pathname?.startsWith("/files/") ?? false);
-  // /vault = pre-rename alias for /files. Kept as its own flag rather than
-  // folded into the one above because the routes.manifest parity test reads the
-  // FIRST path literal of each isOn* as that flag's base — one flag naming two
-  // bases would leave /vault's full-width claim unguarded.
+  // /vault is the team Vault (and the landing spot of old /vault?f=… Files
+  // links, which redirect to /files).
   const isOnVaultPage = pathname === "/vault" || (pathname?.startsWith("/vault/") ?? false);
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
   const isOnWindowsPage = pathname === "/windows";

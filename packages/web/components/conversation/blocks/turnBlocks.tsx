@@ -1373,7 +1373,7 @@ function AssistantBlockImpl({
     ) : tc.name === "TeamCreate" || tc.name === "TeamDelete" ? (
       <TeamCreateBlock key={tc.id} tool={tc} />
     ) : tc.name === "Workflow" || tc.name === "workflow" ? (
-      <WorkflowToolBlock key={tc.id} tool={tc} result={result} />
+      <WorkflowToolBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} />
     ) : tc.name === "Skill" ? (
       <SkillBlock key={tc.id} tool={tc} />
     ) : tc.name === "Monitor" || tc.name === "monitor" || isBackgroundBashToolCall(tc) ? (

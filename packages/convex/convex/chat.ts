@@ -78,7 +78,8 @@ import {
   notifyLevelAllows,
   oneLine,
   plainPreview,
-  searchSnippet, holdsQueryPhrases, emailLocalHandle } from "./chatText";
+  searchSnippet, holdsQueryPhrases, emailLocalHandle, memberHandle } from "./chatText";
+import { peopleOf } from "@codecast/shared/team/memberKind";
 import { parseQueryTerms } from "@codecast/shared/search";
 import { chatMentionClientId, chatRelayClientId } from "./lib/chatWakeIds";
 
@@ -1389,30 +1390,16 @@ export const openDm = mutation({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
-    // The OTHER parties. The caller is always included.
-    member_ids: v.array(v.id("users")),
+    // The OTHER parties, by id or by handle (`cast chat dm alice`). The
+    // caller is always included.
+    member_ids: v.optional(v.array(v.id("users"))),
+    handles: v.optional(v.array(v.string())),
     client_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const { teamId } = await requireTeamForWrite(ctx, userId, args.team_id);
-
-    const others: Id<"users">[] = [];
-    const seen = new Set<string>([userId.toString()]);
-    for (const id of args.member_ids) {
-      if (seen.has(id.toString())) continue;
-      seen.add(id.toString());
-      const member = await ctx.db.get(id);
-      if (!member || member.is_bot) chatFail("INVALID", "You can only message human teammates");
-      if (!(await isTeamMember(ctx as any, id, teamId))) {
-        chatFail("INVALID", `${displayName(member)} is not a member of this team`);
-      }
-      others.push(id);
-    }
-    if (others.length === 0) chatFail("INVALID", "Pick at least one person to message");
-    if (others.length + 1 > MAX_DM_MEMBERS) {
-      chatFail("INVALID", `A group message holds at most ${MAX_DM_MEMBERS} people`);
-    }
+    const others = await dmOthers(ctx, teamId, userId, args.member_ids ?? [], args.handles ?? []);
 
     await chatRateLimit(ctx, userId, "chat.channel_create", CHANNEL_CREATE_LIMIT);
     const room = await ensureDmRoom(ctx, teamId, [userId, ...others], userId, { client_id: args.client_id });
@@ -1420,7 +1407,78 @@ export const openDm = mutation({
     // chat_added here: an empty DM room is not an event. The first MESSAGE
     // notifies (chat_dm), which is the moment something was actually said.
     await upsertRead(ctx, userId, teamId, room.channel._id, Date.now(), undefined, undefined);
-    return { channel_id: room.channel._id, created: room.created, team_id: teamId };
+    const names = await Promise.all(others.map(async (id) => displayName(await ctx.db.get(id))));
+    return { channel_id: room.channel._id, created: room.created, team_id: teamId, with: names };
+  },
+});
+
+/** The people a direct message reaches besides `selfId`, from ids and handles
+ *  (a GitHub login or email local part, matched against the team's roster the
+ *  way @mentions are). Only human teammates, at least one, at most the group
+ *  cap. A handle nobody answers to fails naming the handles that do, so the
+ *  next try needs no separate lookup. */
+async function dmOthers(
+  ctx: MutationCtx,
+  teamId: Id<"teams">,
+  selfId: Id<"users">,
+  ids: Id<"users">[],
+  handles: string[],
+): Promise<Id<"users">[]> {
+  const targets = [...ids];
+  if (handles.length > 0) {
+    const roster = await teamRoster(ctx, teamId);
+    for (const handle of handles) {
+      const match = matchHandle(roster, handle);
+      if (!match) {
+        const known = peopleOf(roster).map((u) => memberHandle(u)).filter(Boolean).map((h) => `@${h}`);
+        chatFail("INVALID", `No teammate answers to @${handle.replace(/^@/, "")}. People here: ${known.join(", ") || "none"}`);
+      }
+      targets.push(match._id);
+    }
+  }
+  const others: Id<"users">[] = [];
+  const seen = new Set<string>([selfId.toString()]);
+  for (const id of targets) {
+    if (seen.has(id.toString())) continue;
+    seen.add(id.toString());
+    const member = await ctx.db.get(id);
+    if (!member || member.is_bot) chatFail("INVALID", "You can only message human teammates");
+    if (!(await isTeamMember(ctx as any, id, teamId))) {
+      chatFail("INVALID", `${displayName(member)} is not a member of this team`);
+    }
+    others.push(id);
+  }
+  if (others.length === 0) chatFail("INVALID", "Pick at least one person to message (not yourself)");
+  if (others.length + 1 > MAX_DM_MEMBERS) {
+    chatFail("INVALID", `A group message holds at most ${MAX_DM_MEMBERS} people`);
+  }
+  return others;
+}
+
+/** The team's people and the handle each answers to: what `cast chat dm` and
+ *  an @mention accept. */
+export const listPeople = query({
+  args: {
+    api_token: v.optional(v.string()),
+    team_id: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
+    if (!userId) return { team_id: null, people: [] };
+    const teamId = await resolveTeamForRead(ctx, userId, args.team_id);
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+      .collect();
+    const roles = new Map(memberships.map((m) => [m.user_id.toString(), m.role]));
+    const people = peopleOf(await teamRoster(ctx, teamId)).map((u) => ({
+      _id: u._id,
+      name: displayName(u),
+      handle: memberHandle(u),
+      role: roles.get(u._id.toString()) ?? "member",
+      is_you: u._id.toString() === userId.toString(),
+    }));
+    return { team_id: teamId, people };
   },
 });
 
@@ -3354,30 +3412,7 @@ export const sendAsAnchor = mutation({
         ? { teamId: anchor.team_id }
         : await requireTeamForWrite(ctx, userId, args.team_id);
       if (!(await isTeamMember(ctx as any, userId, teamId))) chatFail("FORBIDDEN", "Not a member of that team");
-      const targetIds: Id<"users">[] = [...(args.dm_user_ids ?? [])];
-      if (args.dm_handles && args.dm_handles.length > 0) {
-        const roster = await teamRoster(ctx, teamId);
-        for (const handle of args.dm_handles) {
-          const match = matchHandle(roster, handle);
-          if (!match) chatFail("INVALID", `No teammate matches @${handle.replace(/^@/, "")}`);
-          targetIds.push(match._id);
-        }
-      }
-      const others: Id<"users">[] = [];
-      const seen = new Set<string>([anchor.bot_user_id.toString()]);
-      for (const id of targetIds) {
-        if (seen.has(id.toString())) continue;
-        seen.add(id.toString());
-        const member = await ctx.db.get(id);
-        if (!member || member.is_bot) chatFail("INVALID", "The workspace's agent can only message human teammates");
-        if (!(await isTeamMember(ctx as any, id, teamId))) {
-          chatFail("INVALID", `${displayName(member)} is not a member of this team`);
-        }
-        others.push(id);
-      }
-      if (others.length + 1 > MAX_DM_MEMBERS) {
-        chatFail("INVALID", `A group message holds at most ${MAX_DM_MEMBERS} people`);
-      }
+      const others = await dmOthers(ctx, teamId, anchor.bot_user_id, args.dm_user_ids ?? [], args.dm_handles ?? []);
       await chatRateLimit(ctx, userId, "chat.channel_create", CHANNEL_CREATE_LIMIT);
       const room = await ensureDmRoom(ctx, teamId, [anchor.bot_user_id, ...others], anchor.bot_user_id);
       channel = room.channel;

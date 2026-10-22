@@ -66,7 +66,7 @@ describe("selectVault", () => {
   test("no vaults registered is a not-found", async () => {
     const err = await failure(() => selectVault(configDir));
     expect(err.exitCode).toBe(VAULT_EXIT.notFound);
-    expect(err.message).toContain("cast vault add");
+    expect(err.message).toContain("cast files add");
   });
 
   test("several vaults and a cwd in none of them is ambiguous, and lists them", async () => {

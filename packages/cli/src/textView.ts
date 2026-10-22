@@ -1,5 +1,5 @@
 // Reading a long text body from a terminal: which lines to show, and which
-// lines a pattern hit. `cast doc` and `cast vault` both page and both grep, and
+// lines a pattern hit. `cast doc` and `cast files` both page and both grep, and
 // an agent that learned `100:250` on one must get the same slice from the other
 // — so the rules live here once rather than being retyped per command group.
 //

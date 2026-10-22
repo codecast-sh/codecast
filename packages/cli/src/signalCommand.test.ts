@@ -143,7 +143,7 @@ describe("cast signal on the wire", () => {
     expect(calls[1]).toEqual({ path: "/cli/signal/ls", body: { project: "Agent Quality", project_path: "/repo", conversation_id: "s1" } });
   });
 
-  test("without --project, add takes the repo profile's [line] project and team; ls stays workspace wide", async () => {
+  test("without --project, add sends the repo profile's [line] project as a default and takes its team; ls stays workspace wide", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "signal-profile-"));
     fs.mkdirSync(path.join(repo, ".git"));
     fs.mkdirSync(path.join(repo, ".codecast"));
@@ -153,14 +153,16 @@ describe("cast signal on the wire", () => {
     await run("add", "--source", "person", "--kind", "bug", "--title", "Checkout breaks");
     await run("ls");
     const add = calls.find((c) => c.path === "/cli/signal/add")!;
-    expect(add.body).toMatchObject({ project: "Agent Quality", workspace: "team", team_id: "team1" });
+    // A default, which the server keeps only until Ground places the problem (the-line-model.md LM1).
+    expect(add.body).toMatchObject({ default_project: "Agent Quality", workspace: "team", team_id: "team1" });
+    expect(add.body.project).toBeUndefined();
     const ls = calls.find((c) => c.path === "/cli/signal/ls")!;
     expect(ls.body.project).toBeUndefined();
     expect(ls.body).toMatchObject({ workspace: "team", team_id: "team1" });
     fs.rmSync(repo, { recursive: true, force: true });
   });
 
-  test("--team naming another workspace drops the profile's project; naming the profile's team keeps it", async () => {
+  test("--team naming another workspace drops the profile's default project; naming the profile's team keeps it", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "signal-profile-"));
     fs.mkdirSync(path.join(repo, ".git"));
     fs.mkdirSync(path.join(repo, ".codecast"));
@@ -171,8 +173,9 @@ describe("cast signal on the wire", () => {
     await run("add", "--source", "person", "--kind", "bug", "--title", "y", "--team", "union");
     const adds = calls.filter((c) => c.path === "/cli/signal/add");
     expect(adds[0].body.project).toBeUndefined();
+    expect(adds[0].body.default_project).toBeUndefined();
     expect(adds[0].body).toMatchObject({ workspace: "personal" });
-    expect(adds[1].body).toMatchObject({ project: "Agent Quality", team_id: "team1" });
+    expect(adds[1].body).toMatchObject({ default_project: "Agent Quality", team_id: "team1" });
     fs.rmSync(repo, { recursive: true, force: true });
   });
 

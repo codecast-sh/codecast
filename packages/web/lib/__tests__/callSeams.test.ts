@@ -341,6 +341,46 @@ describe("the ring out is on the row before the invite lands", () => {
   });
 });
 
+// ── the ring stops at the press ─────────────────────────────────────────────
+
+describe("answering a ring stops it before the server answers", () => {
+  const RING = { _id: "in1", room_key: ROOM, from_user: "them", from_name: "Them" };
+
+  for (const [press, act] of [
+    ["Join", () => callManager.acceptInvite("in1", ROOM)],
+    ["Decline", () => callManager.declineInvite("in1")],
+  ] as const) {
+    test(`${press} takes the ring off the list at once and a stale push does not bring it back`, async () => {
+      let answer!: () => void;
+      const held = new Promise<void>((r) => (answer = r));
+      callManager.bindConvex({
+        ...convex,
+        mutation: async (fn: any, args: any) => {
+          if (getFunctionName(fn).endsWith("respondInvite")) await held;
+          return convex.mutation(fn, args);
+        },
+      } as any);
+      S().syncTable("myCalls", { incoming: [RING], outgoing: [], membership: null });
+      const done = act();
+      // The respondInvite round trip is still out: the card and the ring
+      // sound read this list, so it must already be empty.
+      expect(S().myCalls.incoming).toEqual([]);
+      // MUTATION CHECK: take the incoming merge off the myCalls registry
+      // entry and the push that still names the invite rings again.
+      S().syncTable("myCalls", { incoming: [RING], outgoing: [], membership: null });
+      expect(S().myCalls.incoming).toEqual([]);
+      answer();
+      await done;
+      await settle();
+    });
+  }
+
+  test("another ring still rings", () => {
+    S().syncTable("myCalls", { incoming: [{ ...RING, _id: "in2" }], outgoing: [], membership: null });
+    expect(S().myCalls.incoming.map((r: any) => r._id)).toEqual(["in2"]);
+  });
+});
+
 // ── (d) a reconnect is still the call ───────────────────────────────────────
 
 describe("a LiveKit reconnect is still the call", () => {

@@ -23,7 +23,7 @@ export interface VaultInfo {
   added_at: number;
   /** "project" = one of the user's own code projects, discovered rather than
    *  registered by hand (vaultRegistry.projectVaults). Absent means someone ran
-   *  `cast vault add`. The only difference downstream is how it is presented:
+   *  `cast files add`. The only difference downstream is how it is presented:
    *  once opened, a project vault scans, watches and edits identically. */
   kind?: "project";
   /** Vault-relative directory to land in — "docs" for a repo that has one.

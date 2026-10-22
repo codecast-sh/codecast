@@ -8,7 +8,7 @@ import type { SharedObjectKind } from "@codecast/shared/entities";
 import type { CodeAnchorText } from "@codecast/shared/comments";
 import type { GraphRefStatus, TaskWait } from "@codecast/shared/tasks";
 import { addWaitDraft, removeBlockerEdge, removeBlocksEdge, removeWaitDraft, rollbackWaitDraft, setBlockerEdge, setRelatedEdge, type TaskWaitInput } from "./taskGraphDraft";
-import { carryRingStubs } from "../lib/calls/ringStubs";
+import { carryRingStubs, dropSettledRings } from "../lib/calls/ringStubs";
 import { carryNodeSessions } from "../lib/workflowRun";
 import { runFilesOf } from "../lib/calls/callVideo";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
@@ -1971,10 +1971,14 @@ export type ClientUI = {
   // The floating faces' circle size (lib/faces/layout FLOAT_FACE_SIZES).
   // Unstamped: the size that suits a laptop is a stamp on an ultrawide.
   float_face_size?: number;
-  // Which microphone and camera a deliberate join opens (lib/calls/joinPrefs).
-  // Unstamped on purpose: a device id names hardware attached to THIS machine,
-  // so the newest choice must not travel — the laptop's headset id is noise on
-  // the desktop, and switchActiveDevice would simply fail on it.
+  // Which microphone, speaker and camera a join opens: each a ranking of
+  // device names, best first (lib/calls/deviceRank). Stamped, because the
+  // same headphones are the same headphones on every machine.
+  call_mic_rank?: string[];
+  call_speaker_rank?: string[];
+  call_camera_rank?: string[];
+  // The single device id each machine remembered before rankings; read only
+  // as the fallback for an unranked kind (lib/calls/joinPrefs).
   call_mic_device_id?: string;
   call_camera_device_id?: string;
   call_speaker_device_id?: string;
@@ -4624,7 +4628,6 @@ export function groupSessionsByPlan(
 }
 
 export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, sessionProjectId, type OrgLensGroup, type OrgLensMode, type OrgLensSources } from "./orgLens";
-import { inboxViewModes } from "./inboxViewModes";
 import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailable, orgLensSourcesOf, type OrgLensMode, type OrgLensSources, type OrgLensState } from "./orgLens";
 
 // Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
@@ -5496,6 +5499,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // by GlobalSessionPanel from its agentTasks.webList subscription. Ephemeral:
   // never persisted or synced.
   scheduleNavSets: ScheduleNavSets | null;
+  // The groupings the inbox panel offers as tabs, published by
+  // GlobalSessionPanel so Ctrl+, cycles exactly the tabs on screen. Null
+  // while no panel shows them. Ephemeral: never persisted or synced.
+  inboxViewModesShown: readonly InboxViewMode[] | null;
   // One-shot request aimed at the trigger strip above a conversation. A
   // trigger row click (dock row, bar under a card) names its trigger and asks
   // for it expanded, so navigating FROM a trigger lands on that trigger's
@@ -6012,6 +6019,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
   // itself lives in the agentTasks.webList Convex subscription, never the store.
   setScheduleNavSets: (sets: ScheduleNavSets | null) => void;
+  setInboxViewModesShown: (modes: readonly InboxViewMode[] | null) => void;
   setTriggerStripRequest: (req: TriggerStripRequest | null) => void;
   setComposerPrefill: (req: { convId: string; text: string } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
@@ -7481,8 +7489,15 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
   // not these rows). Timestamps are bucketed server-side (calls.ts), so
   // no-change pushes bail on the JSON compare.
   // One exception: a stub ring the engine put up from the press stands
-  // until the server lists the person (lib/calls/ringStubs).
-  myCalls: { kind: "singleton", merge: { outgoing: (local, server) => carryRingStubs(local, server) } },
+  // until the server lists the person, and a ring answered or declined here
+  // stays gone until the server stops listing it (lib/calls/ringStubs).
+  myCalls: {
+    kind: "singleton",
+    merge: {
+      incoming: (_local, server) => dropSettledRings(server),
+      outgoing: (local, server) => carryRingStubs(local, server),
+    },
+  },
   callOccupancy: { kind: "singleton" },
   callConfig: { kind: "singleton" },
   // Live huddles, wholesale-replaced on every push (the server sorts rooms
@@ -8985,6 +9000,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   showDismissed: false,
   collapsedSections: {},
   scheduleNavSets: null,
+  inboxViewModesShown: null,
   triggerStripRequest: null,
   composerPrefill: null,
   recentFreezeOrder: null,
@@ -9802,23 +9818,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (mode !== "recent") state.thawRecentOrder();
     pushInboxViewHistory(prev, snapshotInboxViewFromDraft(get()));
   },
+  // Steps through the tabs the panel shows, so the key never lands on a
+  // grouping without a tab. With no panel showing them there is nothing to
+  // cycle.
   cycleInboxViewMode: () => {
     const state = get();
-    const current = state.inboxViewMode();
-    const hasBuckets = (Object.values(state.buckets) as BucketItem[]).some((b) => !b.archived_at);
-    const hasPlans = (Object.values(state.sessions) as InboxSession[]).some((s) => !!s.active_plan);
-    // Trigger data lives in the panel's Convex subscription; its published nav
-    // bridge is the store's only sight of whether any triggers exist.
-    const hasTriggers = (state.scheduleNavSets?.triggerOrder?.length ?? 0) > 0;
-    const lensSrc = orgLensSourcesOf(state);
-    const lensRows = Object.values(state.sessions) as InboxSession[];
-    const cycle = inboxViewModes({
-      hasLabels: hasBuckets,
-      hasPlans,
-      orgLenses: ORG_LENS_MODES.filter((m) => orgLensAvailable(m, lensRows, lensSrc)),
-      hasTriggers,
-    });
-    state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
+    const cycle = state.inboxViewModesShown;
+    if (!cycle?.length) return;
+    state.setInboxViewMode(cycle[(cycle.indexOf(state.inboxViewMode()) + 1) % cycle.length]);
   },
   setSessionManualOrder: (id: string, key: number) => get().setSessionManualOrders({ [id]: key }),
   setSessionManualOrders: (keys: Record<string, number>) => {
@@ -11966,6 +11973,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // Raw set: ephemeral nav bookkeeping — no draft, no persistence, no dispatch.
   setScheduleNavSets: (sets: ScheduleNavSets | null) =>
     set({ scheduleNavSets: sets }),
+
+  // Raw set: ephemeral, like the nav sets above.
+  setInboxViewModesShown: (modes: readonly InboxViewMode[] | null) =>
+    set({ inboxViewModesShown: modes }),
 
   // Raw set: one-shot trigger strip request (see the state field's comment).
   setTriggerStripRequest: (req: TriggerStripRequest | null) =>

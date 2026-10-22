@@ -89,7 +89,7 @@ describe("vaultLandingPath", () => {
   });
 
   test("a registered vault gets no landing note at all", () => {
-    // Opening straight into a note would change what `cast vault add` has
+    // Opening straight into a note would change what `cast files add` has
     // always done; only project vaults opt in.
     expect(vaultLandingPath(vault(), ["README.md", "index.md"])).toBeNull();
   });

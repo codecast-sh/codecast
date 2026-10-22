@@ -14,6 +14,7 @@ export const lineFinderValidator = v.object({
   fingerprint: v.string(),
   runs: v.optional(v.string()),
   opens_causes: v.optional(v.boolean()),
+  single_purpose: v.optional(v.boolean()),
 });
 
 // The repo's own line (line-map.md LX5): its parsed stations and routes ride
@@ -44,6 +45,11 @@ const factFields = {
     command: nullableString,
     target: nullableString,
     trigger: v.union(v.literal("person"), v.literal("role"), v.literal("schedule"), v.literal("count")),
+    role: v.optional(nullableString),
+    ci: v.optional(nullableString),
+    gate: v.optional(nullableString),
+    rollout: v.optional(nullableString),
+    live: v.optional(nullableString),
   })),
   sources: v.record(v.string(), v.union(v.literal("file"), v.literal("default"))),
   notes: v.array(v.string()),

@@ -301,6 +301,8 @@ export function scanMirroredHelpers(opts: ScanOptions): { tools: HostToolRequire
 
 export interface RequiredHostToolsOptions {
   repoRoot?: string;
+  /** Commands a moved session ran (migrate/footprint.ts), wanted on the host beside what the home and repo name. */
+  extraTools?: HostToolRequirement[];
   laptopHome: string;
   /** The host's home, so MCP definitions are spelled exactly as the mirror writes them there (default `~`). */
   hostHome?: string;
@@ -332,12 +334,12 @@ const npmGlobal = (pkg: string, ver: string | undefined) =>
  * go through npm, not bun, so their postinstall downloads run (the Railway
  * CLI fetches its binary there).
  */
-export const TOOL_CLIS: ReadonlyArray<{ bin: string; install: (version: string | undefined) => string }> = [
-  { bin: "vercel", install: (v) => npmGlobal("vercel", v) },
-  { bin: "railway", install: (v) => npmGlobal("@railway/cli", v) },
-  { bin: "cf", install: (v) => npmGlobal("cf", v) },
-  { bin: "wrangler", install: (v) => npmGlobal("wrangler", v) },
-  { bin: "netlify", install: (v) => npmGlobal("netlify-cli", v) },
+export const TOOL_CLIS: ReadonlyArray<{ bin: string; install: (version: string | undefined) => string; /** Installs on a Mac host too (an npm package). */ portable?: boolean }> = [
+  { bin: "vercel", install: (v) => npmGlobal("vercel", v), portable: true },
+  { bin: "railway", install: (v) => npmGlobal("@railway/cli", v), portable: true },
+  { bin: "cf", install: (v) => npmGlobal("cf", v), portable: true },
+  { bin: "wrangler", install: (v) => npmGlobal("wrangler", v), portable: true },
+  { bin: "netlify", install: (v) => npmGlobal("netlify-cli", v), portable: true },
   { bin: "supabase", install: (v) => v
     ? releaseBinary(`https://github.com/supabase/cli/releases/download/v${v}/supabase_linux_$ga.tar.gz`, "supabase", "supabase")
     : "false" },
@@ -353,6 +355,44 @@ for i in z.infolist():
   { bin: "gcloud", install: (v) => `${ARCH_SH}; [ "$ua" = aarch64 ] && gc=arm || gc=x86_64; tmp=$(mktemp -d); curl ${CURL_LIMITS} "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-${v ? `${v}-` : ""}linux-$gc.tar.gz" | tar -xz -C "$tmp" && rm -rf "$HOME/.local/google-cloud-sdk" && mv "$tmp/google-cloud-sdk" "$HOME/.local/google-cloud-sdk" && mkdir -p "$HOME/.local/bin" && for b in gcloud gsutil bq; do ln -sf "$HOME/.local/google-cloud-sdk/bin/$b" "$HOME/.local/bin/$b"; done; rc=$?; rm -rf "$tmp"; [ $rc = 0 ]` },
   { bin: "kubectl", install: (v) => `${ARCH_SH}; ver=${v ? `v${v}` : "$(curl -fsSL --max-time 30 https://dl.k8s.io/release/stable.txt)"}; mkdir -p "$HOME/.local/bin" && curl ${CURL_LIMITS} -o "$HOME/.local/bin/kubectl" "https://dl.k8s.io/release/$ver/bin/linux/$ga/kubectl" && chmod 755 "$HOME/.local/bin/kubectl"` },
 ];
+
+/**
+ * How a helper command a session ran gets onto a host when no recipe above
+ * covers it: the npm package that ships it (any host with node), else the
+ * Homebrew formula (a Mac host, under its name unless listed here).
+ */
+export const HELPER_PACKAGES: Readonly<Record<string, { npm?: string; brew?: string }>> = {
+  pnpm: { npm: "pnpm" }, yarn: { npm: "yarn" }, tsc: { npm: "typescript" }, eas: { npm: "eas-cli" }, expo: { npm: "expo" },
+  prettier: { npm: "prettier" }, turbo: { npm: "turbo" }, nx: { npm: "nx" }, firebase: { npm: "firebase-tools" },
+  rg: { brew: "ripgrep" }, convert: { brew: "imagemagick" }, magick: { brew: "imagemagick" }, gsed: { brew: "gnu-sed" },
+  psql: { brew: "libpq" }, http: { brew: "httpie" },
+};
+
+/** Whether a host installs `tool` when it lacks it (the same rules hostToolsScript writes). */
+export function hostInstalls(tool: string, host: { mac: boolean; brew: boolean }): boolean {
+  const cli = TOOL_CLIS.find((c) => c.bin === tool);
+  if (cli) return !host.mac || !!cli.portable;
+  if (tool === "uv") return !host.mac || host.brew;
+  if (HELPER_PACKAGES[tool]?.npm) return true;
+  return host.mac && host.brew;
+}
+
+/**
+ * Shell defining `brew_install <formula>` on a Mac host: Homebrew as this
+ * login when it owns the prefix, else as the login that does through sudo
+ * (provisionMac: the AWS image's Homebrew belongs to ec2-user). BREW=1 when
+ * one of the two works.
+ */
+const MAC_BREW_SH = `BREW=0
+if [ "$(uname -s)" = Darwin ]; then
+  [ -x /opt/homebrew/bin/brew ] && export PATH="$PATH:/opt/homebrew/bin"
+  if command -v brew >/dev/null 2>&1; then
+    brew_owner=$(stat -f %Su "$(brew --prefix)" 2>/dev/null)
+    if [ "$brew_owner" = "$(id -un)" ]; then BREW=1; brew_install() { HOMEBREW_NO_AUTO_UPDATE=1 brew install --quiet "$1"; }
+    elif sudo -n true 2>/dev/null; then BREW=1; brew_install() { (cd / && sudo -n -H -u "$brew_owner" env HOMEBREW_NO_AUTO_UPDATE=1 "$(command -v brew)" install --quiet "$1"); }
+    fi
+  fi
+fi`;
 
 const CLI_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/;
 
@@ -392,6 +432,9 @@ export function requiredHostTools(opts: RequiredHostToolsOptions): RequiredHostT
   const tools: HostToolRequirement[] = [{ tool: "gh", version: v.gh ?? GH_DEFAULT_VERSION, referenced_by: "the authorized GitHub workflow" }];
   if (scan.needsUv) tools.push({ tool: "uv", referenced_by: "mirrored hooks/skills" });
   tools.push(...scan.tools);
+  const cli = v.cli ?? (opts.versions ? {} : readLaptopCliVersions());
+  const known = new Set([...tools.map((t) => t.tool), ...Object.keys(cli), ...Object.keys(v.clients ?? {}), "node", "bun"]);
+  for (const t of opts.extraTools ?? []) if (!known.has(t.tool)) { known.add(t.tool); tools.push(t); }
   return {
     node: nodeRequirement(opts.repoRoot, Number.isFinite(nodeMajor) ? nodeMajor : undefined),
     ...(v.bun ? { bun: v.bun } : {}),
@@ -399,7 +442,7 @@ export function requiredHostTools(opts: RequiredHostToolsOptions): RequiredHostT
     tools,
     unsupported: scan.unsupported,
     mcp: mcpChecks(readMcpSources(opts.laptopHome, opts.env ?? process.env, opts.projects), opts.laptopHome, opts.hostHome),
-    cli: v.cli ?? (opts.versions ? {} : readLaptopCliVersions()),
+    cli,
   };
 }
 
@@ -904,6 +947,7 @@ umask 022
 exec </dev/null
 ${HOST_TOOLS_PATH}
 INSTALL=${install ? 1 : 0}
+${install ? MAC_BREW_SH : "BREW=0"}
 [ "$(uname -s)" = Linux ] || INSTALL=0
 ok=""; installed=""; missing=""
 ver_of() { "$1" --version 2>/dev/null </dev/null | head -1 | tr -cd 'A-Za-z0-9._ -' | head -c 40; }
@@ -938,7 +982,9 @@ ${ghWrapperInstallSnippet()}
   rm -rf "$tmp"`)}else miss gh "the authorized GitHub workflow" "not installed"; fi`);
   if (needsUv) {
     lines.push(`if command -v uv >/dev/null 2>&1; then add ok uv
-${inst(`  if err=$( (curl ${CURL_LIMITS} https://astral.sh/uv/install.sh | sh) 2>&1 >/dev/null ) && command -v uv >/dev/null 2>&1; then add installed uv; else miss uv "mirrored hooks/skills" "$err"; fi`)}else miss uv "mirrored hooks/skills" "not installed"; fi`);
+${inst(`  if err=$( (curl ${CURL_LIMITS} https://astral.sh/uv/install.sh | sh) 2>&1 >/dev/null ) && command -v uv >/dev/null 2>&1; then add installed uv; else miss uv "mirrored hooks/skills" "$err"; fi`)}${install ? `elif [ "$BREW" = 1 ]; then
+  if err=$(brew_install uv 2>&1) && command -v uv >/dev/null 2>&1; then add installed uv; else miss uv "mirrored hooks/skills" "$(printf '%s' "$err" | tail -c 160)"; fi
+` : ""}else miss uv "mirrored hooks/skills" "not installed"; fi`);
   }
   for (const client of clients) {
     const ver = required.clients[client];
@@ -950,12 +996,22 @@ ${inst(`  ${clientInstallSnippet(client, ver)}
     const cli = TOOL_CLIS.find((c) => c.bin === bin);
     if (!cli) continue;
     const ver = version && CLI_VERSION_RE.test(version) ? version : undefined;
+    const body = `  if err=$( { ${cli.install(ver)}; } 2>&1 ) && command -v ${bin} >/dev/null 2>&1; then add installed ${bin}; else miss ${bin} "the laptop's ${bin}${ver ? ` ${ver}` : ""}" "$(printf '%s' "$err" | tail -c 160)"; fi`;
     lines.push(`if command -v ${bin} >/dev/null 2>&1; then add ok ${bin}
-${inst(`  if err=$( { ${cli.install(ver)}; } 2>&1 ) && command -v ${bin} >/dev/null 2>&1; then add installed ${bin}; else miss ${bin} "the laptop's ${bin}${ver ? ` ${ver}` : ""}" "$(printf '%s' "$err" | tail -c 160)"; fi`)}else miss ${bin} "the laptop's ${bin}" "not installed"; fi`);
+${install ? `elif [ "$INSTALL" = 1 ]${cli.portable ? ' || [ "$(uname -s)" = Darwin ]' : ""}; then\n${body}\n` : ""}else miss ${bin} "the laptop's ${bin}" "not installed"; fi`);
   }
   for (const h of helpers) {
     const ref = (h.referenced_by ?? "").replace(/["\\\n\r]/g, "");
-    lines.push(`if command -v ${h.tool} >/dev/null 2>&1; then add ok ${h.tool}; else miss ${h.tool} "${ref}" "no portable install known — install it by hand on the host"; fi`);
+    const pkg = HELPER_PACKAGES[h.tool] ?? {};
+    const npm = pkg.npm && TOOL_RE.test(pkg.npm) ? `elif command -v npm >/dev/null 2>&1; then
+  if err=$( { ${npmGlobal(pkg.npm, undefined)}; } 2>&1 ) && command -v ${h.tool} >/dev/null 2>&1; then add installed ${h.tool}; else miss ${h.tool} "${ref}" "$(printf '%s' "$err" | tail -c 160)"; fi
+` : "";
+    const formula = pkg.brew ?? h.tool;
+    const brew = !pkg.npm && TOOL_RE.test(formula) ? `elif [ "$BREW" = 1 ]; then
+  if err=$(brew_install ${formula} 2>&1) && command -v ${h.tool} >/dev/null 2>&1; then add installed ${h.tool}; else miss ${h.tool} "${ref}" "$(printf '%s' "$err" | tail -c 160)"; fi
+` : "";
+    lines.push(`if command -v ${h.tool} >/dev/null 2>&1; then add ok ${h.tool}
+${install ? npm + brew : ""}else miss ${h.tool} "${ref}" "no portable install known — install it by hand on the host"; fi`);
   }
   // MCP: probe what the laptop could not decide, and hand back the host's manifest.
   if (required.mcp) lines.push(mcpScriptLines(required.mcp));
