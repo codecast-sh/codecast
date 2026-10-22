@@ -7,7 +7,7 @@ import { useResourceActions } from "../../hooks/useResourceActions";
 
 function ResourcesView() {
   const data = useResourceMonitor();
-  const { actions, plans } = useResourceActions(data.sessions, data.plans, data.batches, data.now);
+  const { actions, plans } = useResourceActions(data.sessions, data.plans, data.batches, data.now, data.rehearsals);
   const offload = useSearchParams().get("offload") ?? undefined;
   return (
     <div className="h-full min-h-0">

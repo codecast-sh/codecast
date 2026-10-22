@@ -359,6 +359,7 @@ type OrgServerVerbs<R> = {
   provisionOrgRole: (roleId: string) => R;
   /** A template role's setup item (H3): orgTemplates.setup. */
   markOrgTemplateSetup: (instanceKey: string, id: string, status: "done" | "open" | "skipped") => R;
+  answerOrgTemplateInput: (instanceKey: string, key: string, value: string) => R;
   /** A template role's routine (H3): orgTemplates.activateRoutine. */
   activateOrgTemplateRoutine: (taskId: string) => R;
   /** The host step (H3): orgTemplates.requestBind, with secrets already sealed. */
@@ -1491,6 +1492,7 @@ export function createOrgSlice(): OrgSliceImpl {
     resetOrg: asyncAction(function (this: OrgDraft, _teamId?: string) {}),
     provisionOrgRole: asyncAction(function (this: OrgDraft, _roleId: string) {}),
     markOrgTemplateSetup: asyncAction(function (this: OrgDraft, _instanceKey: string, _id: string, _status: "done" | "open" | "skipped") {}),
+    answerOrgTemplateInput: asyncAction(function (this: OrgDraft, _instanceKey: string, _key: string, _value: string) {}),
     activateOrgTemplateRoutine: asyncAction(function (this: OrgDraft, _taskId: string) {}),
     requestOrgTemplateBind: asyncAction(function (this: OrgDraft, _instanceKey: string, _secrets: Parameters<OrgServerVerbs<void>["requestOrgTemplateBind"]>[1], _deviceId?: string) {}),
     setOrgTemplateLearning: asyncAction(function (this: OrgDraft, _teamId: string | undefined, _enabled: boolean) {}),

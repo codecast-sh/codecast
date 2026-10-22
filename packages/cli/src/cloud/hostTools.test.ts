@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RemoteHost } from "../remote/session-move";
 import {
+  hostInstalls,
   commandWords, GH_DEFAULT_VERSION, HOST_TOOLS_REMOTE_COMMAND, hostToolsDetailLines, hostToolsScript, isMachO, minMajorOfRange, NODE_22_VERSION,
   NODE_FLOOR_MAJOR, NODE_INSTALL_MAJOR, nodeRequirement, parseHostToolsOutput, parseHostToolsStamp, requiredHostTools, runHostTools, safeVersion, scanMirroredHelpers,
   settingsHookCommands, shebangInterpreter, summarizeHostTools, type McpSources, type RequiredHostTools,
@@ -166,6 +167,37 @@ cc_secs=$(($1 - cc_epoch))
 shellcheck file.sh
 `);
     expect(scanMirroredHelpers({ laptopHome: home }).tools.map((tool) => tool.tool)).toEqual(["shellcheck"]);
+  });
+});
+
+describe("a moved session's commands on a host", () => {
+  const base: RequiredHostTools = { node: { minMajor: 20, install: NODE_22_VERSION, source: "floor 20" }, clients: {}, tools: [], unsupported: [] };
+  test("each installs the way the laptop got it: a Homebrew formula on a Mac host, a pinned npm package anywhere; nothing is guessed from a bare name", () => {
+    const s = hostToolsScript({ ...base, tools: [
+      { tool: "xcodegen", install: { brew: "xcodegen" }, referenced_by: "this session ran it" },
+      { tool: "desiredb", install: { npm: "desiredb@1.0.0" }, referenced_by: "this session ran it" },
+      { tool: "mystery", referenced_by: "this session ran it" },
+      { tool: "bad", install: { npm: "x; rm -rf /" } },
+    ] });
+    expect(s).toContain("brew_install xcodegen");
+    expect(s).toContain("desiredb@1.0.0");
+    expect(s).toContain('sudo -n -H -u "$brew_owner"');
+    expect(s).not.toContain("brew_install mystery");
+    expect(s).not.toContain("rm -rf /");
+  });
+  test("hostInstalls agrees with the script", () => {
+    const mac = { mac: true, brew: true };
+    expect(hostInstalls({ tool: "xcodegen", install: { brew: "xcodegen" } }, mac)).toBe(true);
+    expect(hostInstalls({ tool: "xcodegen", install: { brew: "xcodegen" } }, { mac: false, brew: false })).toBe(false);
+    expect(hostInstalls({ tool: "desiredb", install: { npm: "desiredb@1.0.0" } }, { mac: false, brew: false })).toBe(true);
+    expect(hostInstalls({ tool: "mystery" }, mac)).toBe(false);
+    expect(hostInstalls({ tool: "cf" }, mac)).toBe(true);
+    expect(hostInstalls({ tool: "supabase" }, mac)).toBe(false);
+  });
+  test("a moved session's commands join what the host needs once, beside the home's own", () => {
+    const req = requiredHostTools({ laptopHome: fs.mkdtempSync(path.join(os.tmpdir(), "ht-")), versions: { node: "22.0.0", cli: { cf: "1.0.0" } }, extraTools: [{ tool: "pnpm" }, { tool: "pnpm" }, { tool: "cf" }] });
+    expect(req.tools.filter((t) => t.tool === "pnpm")).toHaveLength(1);
+    expect(req.tools.some((t) => t.tool === "cf")).toBe(false);
   });
 });
 

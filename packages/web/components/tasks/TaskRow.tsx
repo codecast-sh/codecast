@@ -7,6 +7,7 @@ import { useInboxStore, type TaskItem } from "../../store/inboxStore";
 import { AssigneeFace } from "../identity/AssigneeFace";
 import { LivePulseHalo } from "../LivenessDot";
 import { TaskSessionBadge } from "./TaskSessionBadge";
+import { TaskCallChip } from "./TaskCallChip";
 import { TaskBlockedMark } from "./TaskBlockedMark";
 import { IssueLink } from "./IssueLink";
 import { TaskLineChip } from "./StationStrip";
@@ -229,11 +230,14 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <span className={cls} title={tip}>{body}</span>
         );
       })()}
-      {/* Origin. A meeting task was written by an agent but decided by people,
+      {/* Origin. A task pulled from a call names the call and opens it. A
+          meeting task was written by an agent but decided by people,
           so it gets its own marker — a bot icon here would file real
           commitments in with agent bookkeeping, the confusion decision 4
           exists to remove. */}
-      {!internals ? null : taskOrigin(task) === "meeting" ? (
+      {!internals ? null : task.from_call ? (
+        <TaskCallChip callId={task.from_call} className="cq-hide-compact" />
+      ) : taskOrigin(task) === "meeting" ? (
         <span
           className="flex items-center gap-1 text-[10px] px-1.5 py-0 rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 flex-shrink-0 cq-hide-compact"
           title="Captured from a meeting"
