@@ -39,6 +39,8 @@ export type HistoryInput = {
   occurrences: OccurrenceRow | undefined;
   /** Undefined until read; the project's deploys newest first. */
   deploys: ReadonlyArray<DeployRow> | undefined;
+  /** The deploys' coverage, read once for every problem of a build (shared causeHistory coverageOf). */
+  coverage?: DeployCoverage;
   /** Per run, what its stations found, proposed and built, and a close's argument (the model reads them off the visits). */
   said: (runId: string) => RunSaid;
   /** The line profile's watch days, when known. */
