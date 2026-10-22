@@ -48,7 +48,10 @@
 //
 // The LOCK (call_room_state) is how a huddle opts out. It shuts the open door
 // and leaves membership and the grant working, so a group that wants privacy
-// locks the room exactly like a pair does. The team is the outer wall and
+// locks the room exactly like a pair does. A PRIVATE huddle (chosen at start)
+// is locked and also unlisted: nobody outside sees it or can knock, a session
+// room's team visibility admits nobody but its owner, and its call record
+// stays with the people who were in it (transcripts.canReadCall). The team is the outer wall and
 // nothing on either layer moves it: no door ever admits a non-teammate.
 //
 // Who may WIDEN a room is a third question and it turns on neither layer: the
@@ -324,7 +327,7 @@ export async function upsertRoomState(
   ctx: any,
   roomKey: string,
   seat: { team_id: Id<"teams">; user_id: Id<"users"> },
-  patch: { locked?: boolean; transcribe_off?: boolean; transcribe_off_at?: number; emptied_at?: number; words_public?: boolean },
+  patch: { locked?: boolean; private?: boolean; transcribe_off?: boolean; transcribe_off_at?: number; emptied_at?: number; words_public?: boolean },
   now: number,
 ): Promise<void> {
   const existing = await readRoomState(ctx, roomKey);
@@ -341,6 +344,7 @@ export async function upsertRoomState(
     team_id: seat.team_id,
     locked: patch.locked ?? false,
     locked_by: seat.user_id,
+    private: patch.private,
     transcribe_off: patch.transcribe_off,
     transcribe_off_at: patch.transcribe_off_at,
     emptied_at: patch.emptied_at,
@@ -416,7 +420,10 @@ export async function openRoomDoor(
   if (live.length === 0) return null;
   const teamId = live[0].team_id;
   if (!(await isTeamMember(ctx, userId, teamId))) return null;
-  if (!opts.ignoreLock && (await isRoomLocked(ctx, roomKey))) return null;
+  // A private huddle has no door to knock at: it is not shown to the people
+  // outside it, so `ignoreLock` (would I be let in if I knocked?) is no.
+  const state = await readRoomState(ctx, roomKey);
+  if (state?.private || (!opts.ignoreLock && state?.locked)) return null;
   return teamId;
 }
 
@@ -632,6 +639,13 @@ export async function authorizeRoomMembership(
   }
   if (!conversation.team_id) {
     return { ok: false, reason: "conversation has no team" };
+  }
+  // A private huddle is not the session's to share: seeing the conversation
+  // lets a teammate in only to its ordinary huddles. The one who made it
+  // private keeps their way back in (a dropped connection, a second window).
+  const state = await readRoomState(ctx, roomKey);
+  if (state?.private && String(state.locked_by) !== String(userId)) {
+    return { ok: false, reason: "private huddle" };
   }
   const membership = await ctx.db
     .query("team_memberships")

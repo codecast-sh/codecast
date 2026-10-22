@@ -412,7 +412,7 @@ export async function performInstanceForRole(ctx: Ctx, userId: Id<"users">, args
   // last request went, so the page shows one button and its progress.
   const bind_host = await bindHostOf(ctx, userId, row);
   const host_step = await hostStepOf(ctx, row);
-  return { ...status, routines, secrets, scoreboard, bind_host: { device: bind_host.device, dir: bind_host.dir, reason: bind_host.reason }, host_step, template: template ? { name: template.name, avatar: template.avatar, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, ...updateFields(template, row) };
+  return { ...status, routines, secrets, scoreboard, bind_host: { device: bind_host.device, dir: bind_host.dir, reason: bind_host.reason }, host_step, tools: pinned?.tools ?? [], template: template ? { name: template.name, avatar: template.avatar, workspace: template.workspace, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, ...updateFields(template, row) };
 }
 /**
  * The Update card's data (sd-424: every change waits for a person's click):

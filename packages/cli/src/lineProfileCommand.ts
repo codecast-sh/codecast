@@ -55,14 +55,17 @@ export function runEvalResult(repsPath: string, outPath: string): { code: number
   return { code: result.ok ? 0 : unscored.length ? 2 : 1, lines: evalResultLines(result), result };
 }
 
-export type PublishGroup = { project: string; default: boolean; finders: Array<Omit<LineFinder, "project">> };
+export type PublishGroup = { project: string; default: boolean; finders: Array<Omit<LineFinder, "project"> & { single_purpose?: boolean }> };
 
 /**
  * What `--publish` sends (LP3): the declared finders grouped by the project
  * each files into (its own `project`, else the profile's). The profile's
  * default project is always a group, finders or none, so /line can tell
- * which project a checkout serves. Finders with no project at all are
- * returned apart: they file into the workspace and no project page shows them.
+ * which project a checkout serves. A finder that names its own project is
+ * marked single-purpose: its signals land there, while a finder under the
+ * profile's default only files there until Ground places what it found
+ * (the-line-model.md LM1). Finders with no project at all are returned apart:
+ * they file into the workspace and no project page shows them.
  */
 export function publishGroups(r: ResolvedLineProfile): { groups: PublishGroup[]; unprojected: string[] } {
   const p = r.profile;
@@ -76,7 +79,7 @@ export function publishGroups(r: ResolvedLineProfile): { groups: PublishGroup[];
   const unprojected: string[] = [];
   for (const { project, ...finder } of p.finders) {
     const target = project ?? p.project;
-    if (target) group(target).finders.push(finder);
+    if (target) group(target).finders.push(project ? { ...finder, single_purpose: true } : finder);
     else unprojected.push(finder.id);
   }
   return { groups: [...groups.values()], unprojected };

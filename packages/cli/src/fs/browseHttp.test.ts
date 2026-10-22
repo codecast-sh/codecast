@@ -147,3 +147,19 @@ test("GET /fs/exists answers which absolute paths are directories on this machin
   expect(body.home).toBe(home);
   expect(body.exists).toEqual({ [path.join(home, "src", "codecast")]: true, [path.join(home, "src", "gone")]: false });
 });
+
+test("GET /fs/files matches a folder's files, names before directories, and skips dependency folders", async () => {
+  const root = path.join(home, "src", "notes");
+  for (const f of ["components/MessageInput.tsx", "lib/message.ts", "messages/readme.md", "node_modules/x/message.js", ".cache/message.txt"]) {
+    fs.mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+    fs.writeFileSync(path.join(root, f), "");
+  }
+  const res = await api(`/fs/files?root=${encodeURIComponent("~/src/notes")}&q=message`);
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body).toEqual({ root, exists: true, files: ["lib/message.ts", "components/MessageInput.tsx", "messages/readme.md"] });
+
+  const missing = await (await api(`/fs/files?root=${encodeURIComponent("~/src/gone")}&q=x`)).json();
+  expect(missing.exists).toBe(false);
+  expect((await api("/fs/files?root=relative&q=x")).status).toBe(400);
+});

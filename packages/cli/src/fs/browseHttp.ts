@@ -5,6 +5,7 @@
  *   POST /fs/mkdir {path}      → create a project folder (and `git init` it)
  *   GET  /fs/sessions          → sessions per folder on this machine (localSessions.ts)
  *   GET  /fs/exists?p=…&p=…    → which of those absolute paths are directories here
+ *   GET  /fs/files?root=<dir>&q=<text> → files in a project matching the text (fileSearch.ts)
  *
  * Mounted on the daemon's hook server next to the terminal, vault and browser
  * routes, behind the same envelope of an allowed origin plus the daemon's
@@ -29,6 +30,7 @@ import { execFile } from "../proc.js";
 import { authorizeLocalRequest, corsHeaders, type TerminalServerOptions } from "../terminal/terminalServer.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
 import { summarizeLocalSessions, type LocalSessionsSummary } from "./localSessions.js";
+import { searchProjectFiles } from "./fileSearch.js";
 
 export interface DirEntry {
   name: string;
@@ -217,6 +219,11 @@ export function handleFsBrowseHttp(
       const exists: Record<string, boolean> = {};
       await Promise.all(paths.map(async (p) => { exists[p] = await deps.isDir(p); }));
       return send(200, { home: deps.home(), exists });
+    }
+    if (req.method === "GET" && parsed.pathname === "/fs/files") {
+      const root = resolveBrowsePath(parsed.searchParams.get("root") ?? "", deps.home());
+      if (!root || root === "/") return send(400, { error: "root must be an absolute or ~-relative folder" });
+      return send(200, await searchProjectFiles(root, parsed.searchParams.get("q") ?? ""));
     }
     if (req.method === "GET" && parsed.pathname === "/fs/sessions") {
       return send(200, await deps.localSessions());

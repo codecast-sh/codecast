@@ -20,6 +20,9 @@ export type TemplateEvidenceCheck = { id: string; title: string; max_age: string
 export type TemplateLedger = { id: string; title: string };
 export type TemplateScoreboardKey = { key: string; label: string };
 export type TemplateRoutine = { id: string; title: string; every: string; prompt: string; mode?: "propose" | "apply"; requires?: { authority?: string[]; evidence?: string[] } };
+/** A tool the template ships (org-templates.md "Tools a template ships"): a
+ *  command the role runs, or a skill folder it reads. */
+export type TemplateTool = { id: string; kind: "command" | "skill"; path: string; summary?: string; run?: string; needs?: string[] };
 export type TemplateTenure = { kind: "standing" } | { kind: "program"; then: "retire" | "review" };
 export type OrgTemplate = {
   schemaVersion: 1 | 2;
@@ -40,6 +43,7 @@ export type OrgTemplate = {
   scoreboard?: TemplateScoreboardKey[];
   learn?: { review: "codecast" | "publisher" };
   instance_file?: string;
+  tools?: TemplateTool[];
 };
 const TOKENS = new Set(["instance", "project.ref", "project.name", "project.dir", "template.root", "instance.file"]);
 const INPUT_KINDS = new Set<TemplateInputKind>(["string", "number", "money", "boolean", "choice", "project_ref", "doc_ref", "task_ref", "secret"]);
@@ -49,6 +53,10 @@ export const templateSlug = (value: string) => /^[a-z][a-z0-9-]{0,47}$/.test(val
 export const inputKey = (value: string) => /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/.test(value) && value.length <= 64;
 /** The token an answered input substitutes as: `{{input.<key>}}`. */
 export const inputToken = (key: string) => `input.${key}`;
+/** The token a declared tool substitutes as: `{{tool.<id>}}`, filled to how the role uses it. */
+export const toolToken = (id: string) => `tool.${id}`;
+/** Programs a command tool may name as its runner; anything else runs the file itself. */
+export const TOOL_RUNNERS = ["bun", "node", "python3", "sh", "bash"];
 
 /** Exact shape: every key in `keys` present, keys in `optional` allowed, nothing else. */
 function object(value: unknown, keys: string[], label: string, optional: string[] = []): Record<string, unknown> {
@@ -77,10 +85,11 @@ function slugList(value: unknown, label: string, known: Set<string>): string[] {
  * `input.<key>` for each declared key. A token for an undeclared input is an
  * error at inspect time, never a blank at run time.
  */
-export function validateTokens(text: string, inputs?: Set<string>): void {
+export function validateTokens(text: string, inputs?: Set<string>, tools?: Set<string>): void {
   const rest = text.replace(/\{\{([^{}]+)\}\}/g, (_, token: string) => {
     if (TOKENS.has(token)) return "";
     if (token.startsWith("input.") && inputs?.has(token.slice("input.".length))) return "";
+    if (token.startsWith("tool.") && tools?.has(token.slice("tool.".length))) return "";
     throw new Error(`Unknown template token: ${token}`);
   });
   if (rest.includes("{{") || rest.includes("}}")) throw new Error("Malformed template token");
@@ -88,8 +97,12 @@ export function validateTokens(text: string, inputs?: Set<string>): void {
 export function inputTokens(manifest: Pick<OrgTemplate, "inputs">): Set<string> {
   return new Set((manifest.inputs ?? []).map((input) => input.key));
 }
-export function substitute(text: string, values: Record<string, string>, inputs?: Set<string>): string {
-  validateTokens(text, inputs);
+/** Tool ids a release file may reference as `{{tool.<id>}}`. */
+export function toolIds(manifest: Pick<OrgTemplate, "tools">): Set<string> {
+  return new Set((manifest.tools ?? []).map((tool) => tool.id));
+}
+export function substitute(text: string, values: Record<string, string>, inputs?: Set<string>, tools?: Set<string>): string {
+  validateTokens(text, inputs, tools);
   return text.replace(/\{\{([^{}]+)\}\}/g, (_, token: string) => {
     if (!(token in values)) throw new Error(`Missing template value: ${token}`);
     return values[token];
@@ -113,7 +126,7 @@ export function intervalMs(every: string): number {
   return value;
 }
 export function validateTemplate(value: unknown): OrgTemplate {
-  const V2_KEYS = ["inputs", "authority", "setup", "evidence", "ledgers", "scoreboard", "learn", "instance_file"];
+  const V2_KEYS = ["inputs", "authority", "setup", "evidence", "ledgers", "scoreboard", "learn", "instance_file", "tools"];
   const row = object(value, ["schemaVersion", "id", "version", "name", "description", "role", "routines"], "Template", V2_KEYS);
   if (row.schemaVersion !== 1 && row.schemaVersion !== 2) throw new Error("Unsupported template schemaVersion");
   const v2 = row.schemaVersion === 2;
@@ -257,6 +270,24 @@ export function validateTemplate(value: unknown): OrgTemplate {
   if ("learn" in row) {
     const learn = object(row.learn, ["review"], "Learn");
     if (learn.review !== "codecast" && learn.review !== "publisher") throw new Error("learn.review must be codecast or publisher");
+  }
+  if ("tools" in row) {
+    if (!Array.isArray(row.tools) || row.tools.length > 50) throw new Error("Tools must be an array of at most 50 entries");
+    const ids = new Set<string>();
+    for (const raw of row.tools) {
+      const tool = object(raw, ["id", "kind", "path"], "Tool", ["summary", "run", "needs"]);
+      if (typeof tool.id !== "string" || !templateSlug(tool.id) || ids.has(tool.id)) throw new Error("Invalid or duplicate tool id");
+      if (typeof tool.path !== "string") throw new Error("tool.path must be a release path");
+      templatePath(tool.path);
+      if (tool.kind === "command") {
+        string(tool.summary, "tool.summary");
+        if ("run" in tool && !TOOL_RUNNERS.includes(tool.run as string)) throw new Error(`tool.run must be one of: ${TOOL_RUNNERS.join(", ")}`);
+      } else if (tool.kind === "skill") {
+        if ("summary" in tool || "run" in tool) throw new Error("A skill tool's summary is its SKILL.md description, and it has no run");
+      } else throw new Error("tool.kind must be command or skill");
+      if ("needs" in tool && (!Array.isArray(tool.needs) || tool.needs.length > 20 || tool.needs.some((n) => typeof n !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(n)))) throw new Error("tool.needs must list program names");
+      ids.add(tool.id);
+    }
   }
   if ("instance_file" in row) {
     string(row.instance_file, "instance_file");

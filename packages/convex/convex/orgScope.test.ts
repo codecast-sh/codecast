@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performCreateRole, performReparentRole, performSetRoleScope, performUpdateRole } from "./orgRoles";
+import { performCreateRole, performReparentRole, performSetKeepsReportsInside, performSetRoleScope, performUpdateRole } from "./orgRoles";
 import { computeScopeFeed, computeScopeSummary, resolveScope, decodeFeedCursor } from "./org";
 
 // Scopes and the scope feed (docs/architecture/scopes-and-feed.md F1, F2): the
@@ -89,9 +89,23 @@ async function roleWithScope(db: any, handle: string, scope: { project_ids: any[
 }
 
 describe("F1 scope rules", () => {
-  test("a child's scope must sit inside its parent's, unless the parent owns the whole workspace", async () => {
+  // The org is open by default (2026-10-22): no containment refusal holds
+  // until a person turns keeps_reports_inside on for the parent.
+  test("open by default: a child's scope may reach outside its parent's", async () => {
     const db = fixtures();
     const parent = await roleWithScope(db, "growth", { project_ids: [P], plan_ids: [] });
+    const child = await roleWithScope(db, "landing", { project_ids: [], plan_ids: [] }, { kind: "role", role_id: parent._id });
+    const out = await performUpdateRole(ctxOf(db), ME as any, { role_id: child.short_id, scope: { project_ids: [Q as any], plan_ids: [] } });
+    expect(out.scope.project_ids).toEqual([Q]);
+    // Born outside its parent, too.
+    const born = await roleWithScope(db, "billing", { project_ids: [Q], plan_ids: [] }, { kind: "role", role_id: parent._id });
+    expect(born.scope.project_ids).toEqual([Q]);
+  });
+
+  test("a parent that keeps its reports inside refuses a child's scope outside it, unless it owns the whole workspace", async () => {
+    const db = fixtures();
+    const parent = await roleWithScope(db, "growth", { project_ids: [P], plan_ids: [] });
+    await performSetKeepsReportsInside(ctxOf(db), ME as any, { role_id: parent.short_id, on: true });
     const child = await roleWithScope(db, "landing", { project_ids: [], plan_ids: [] }, { kind: "role", role_id: parent._id });
     // The plan of P is inside P.
     const ok = await performUpdateRole(ctxOf(db), ME as any, { role_id: child.short_id, scope: { project_ids: [], plan_ids: [PLAN as any] } });
@@ -99,24 +113,53 @@ describe("F1 scope rules", () => {
     await expect(
       performUpdateRole(ctxOf(db), ME as any, { role_id: child.short_id, scope: { project_ids: [Q as any], plan_ids: [] } }),
     ).rejects.toThrow(/Outside the scope of @growth.*project Billing/);
-    // A root role (whole workspace) contains anything.
+    await expect(roleWithScope(db, "billing", { project_ids: [Q], plan_ids: [] }, { kind: "role", role_id: parent._id })).rejects.toThrow(/Outside the scope of @growth/);
+    // A root role (whole workspace) contains anything, switch or not.
     const root = await roleWithScope(db, "root", { project_ids: [], plan_ids: [] });
+    await performSetKeepsReportsInside(ctxOf(db), ME as any, { role_id: root.short_id, on: true });
     const under = await roleWithScope(db, "billing", { project_ids: [Q], plan_ids: [] }, { kind: "role", role_id: root._id });
     expect(under.scope.project_ids).toEqual([Q]);
   });
 
-  test("narrowing a parent below a child's scope is refused, and a move must fit the new parent", async () => {
+  // op-83 #1's shape: a lead narrows its area below what its reports look after.
+  test("open by default: a parent narrows below a child's scope and says which reports now reach outside; a move needs no fit", async () => {
     const db = fixtures();
     const parent = await roleWithScope(db, "growth", { project_ids: [P, Q], plan_ids: [] });
     await roleWithScope(db, "billing", { project_ids: [Q], plan_ids: [] }, { kind: "role", role_id: parent._id });
+    const narrowed = await performUpdateRole(ctxOf(db), ME as any, { role_id: parent.short_id, scope: { project_ids: [P as any], plan_ids: [] } });
+    expect(narrowed.scope.project_ids).toEqual([P]);
+    expect(narrowed.reports_outside.map((r: any) => r.handle)).toEqual(["billing"]);
+    const other = await roleWithScope(db, "other", { project_ids: [P], plan_ids: [] });
+    const billing = (await db.query("org_roles").withIndex("by_team_handle", (q: any) => q.eq("team_id", TEAM).eq("handle", "billing")).first())!;
+    const moved = await performReparentRole(ctxOf(db), ME as any, { role_id: billing.short_id, reports_to: { kind: "role", role_id: other._id } });
+    expect(String(moved.reports_to.role_id)).toBe(String(other._id));
+  });
+
+  test("a parent that keeps its reports inside refuses narrowing below a child's scope, and a move must fit it", async () => {
+    const db = fixtures();
+    const parent = await roleWithScope(db, "growth", { project_ids: [P, Q], plan_ids: [] });
+    await roleWithScope(db, "billing", { project_ids: [Q], plan_ids: [] }, { kind: "role", role_id: parent._id });
+    await performSetKeepsReportsInside(ctxOf(db), ME as any, { role_id: parent.short_id, on: true });
     await expect(
       performUpdateRole(ctxOf(db), ME as any, { role_id: parent.short_id, scope: { project_ids: [P as any], plan_ids: [] } }),
-    ).rejects.toThrow(/Narrow @billing first/);
+    ).rejects.toThrow(/^@billing looks after project \S+, and reports to @growth, so @growth has to keep that work\. Take it off @billing, or have it report to someone else, before this change can apply\.$/);
     const other = await roleWithScope(db, "other", { project_ids: [P], plan_ids: [] });
+    await performSetKeepsReportsInside(ctxOf(db), ME as any, { role_id: other.short_id, on: true });
     const billing = (await db.query("org_roles").withIndex("by_team_handle", (q: any) => q.eq("team_id", TEAM).eq("handle", "billing")).first())!;
     await expect(
       performReparentRole(ctxOf(db), ME as any, { role_id: billing.short_id, reports_to: { kind: "role", role_id: other._id } }),
     ).rejects.toThrow(/Outside the scope of @other/);
+  });
+
+  test("the switch is a person's, logged in the role's history, and off for a role nothing set", async () => {
+    const db = fixtures();
+    const role = await roleWithScope(db, "growth", { project_ids: [P], plan_ids: [] });
+    expect(role.keeps_reports_inside).toBeUndefined();
+    await expect(performSetKeepsReportsInside(ctxOf(db), ME as any, { role_id: role.short_id, on: true, from_session: "jx1" })).rejects.toThrow(/human only/);
+    const on = await performSetKeepsReportsInside(ctxOf(db), ME as any, { role_id: role.short_id, on: true });
+    expect(on.keeps_reports_inside).toBe(true);
+    const log = await db.query("org_role_history").withIndex("by_role", (q: any) => q.eq("role_id", role._id)).collect();
+    expect(log.map((r: any) => [r.field, r.old_value, r.new_value])).toContainEqual(["keeps_reports_inside", "false", "true"]);
   });
 
   test("sibling overlap is allowed and reported; the edit is logged; a plan under a listed project folds into it", async () => {
