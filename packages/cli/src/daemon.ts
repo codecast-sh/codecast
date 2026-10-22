@@ -15336,7 +15336,10 @@ function newestPaintedFrame(region: string): string {
 // The time need not lead the parentheses: while hooks run, their progress
 // comes first ("✻ Considering… (running PreToolUse hooks… 1/2 · 36m 18s"),
 // and requiring the time up front read that pane idle mid-turn (jx7f4ks).
-export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽]\s+\S[^\n]*…\s*\([^)\n]*?\b\d+[dhms]\b/m;
+//
+// The glyph cycles, and off macOS one frame is a plain "*" where macOS draws
+// ✳: a read that landed on it settled hands mid tool call on Linux.
+export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽*]\s+\S[^\n]*…\s*\([^)\n]*?\b\d+[dhms]\b/m;
 
 // Classifies the live region only. Ordering matters: more-specific dialogs are
 // matched before more-general ones (e.g. Rewind contains "Interrupted" in its option
@@ -15785,7 +15788,7 @@ export type OpenTaskInfo = OpenTaskReport & { openedAt?: number };
 // lost (an interrupted turn) must not leak forever.
 type PendingTaskCall = { name: string; description?: string; command?: string };
 const PENDING_TASK_CALLS_MAX = 200;
-const TASK_ARMING_TOOLS = new Set(["Bash", "Monitor", "Workflow"]);
+const TASK_ARMING_TOOLS = new Set(["Bash", "Monitor", "Workflow", "Agent"]);
 
 function scanOpenBackgroundTasksInto(
   open: Set<string>,
