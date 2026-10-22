@@ -3,7 +3,7 @@
 // the live runs it drove. Driven against the fake db like the gate tests.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { failStrandedPendingRuns, liveRunsForDevice, reaskRunCore, resumeRunCore, STRANDED_PENDING_MS } from "./workflow_runs";
+import { failStrandedPendingRuns, liveRunsForDevice, reaskRunCore, resumeFailedRunCore, resumeRunCore, STRANDED_PENDING_MS } from "./workflow_runs";
 import { hashToken } from "./apiTokens";
 
 const HOST = "users_host" as any;
@@ -117,6 +117,41 @@ describe("reaskRunCore", () => {
     expect(checked.tables.workflow_runs[0]).toMatchObject({ status: "paused", gate_decision_id: SD });
     for (const w of [mate, working, midway, closed, trial, checked]) expect(w.tables.daemon_commands).toEqual([]);
     expect(trial.tables.session_decisions[0].status).toBe("pending");
+  });
+});
+
+describe("resumeFailedRunCore (cast workflow resume)", () => {
+  async function failed(run: Record<string, any> = {}, task: Record<string, any> = {}) {
+    const w = await seed({ status: "failed", current_node_id: "implement", gate_node_id: undefined, gate_response: undefined, fail_reason: "max_visits=3 exceeded on implement", runner_device: "dev-mini", task_id: "tasks_cause", ...run });
+    w.tables.tasks = [{ _id: "tasks_cause", short_id: "ct-9", title: "A problem", status: "open", execution_status: "blocked", execution_concerns: "max_visits", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, created_at: NOW, updated_at: NOW, ...task }];
+    w.tables.projects = [{ _id: "projects_trial", title: "Trial", line_trial: { by: HOST } }];
+    return w;
+  }
+
+  test("a failed run goes on from the named station on its machine, as a new attempt, its problem unblocked", async () => {
+    const { ctx, tables } = await failed();
+    expect(await resumeFailedRunCore(ctx, HOST, RUN, "verify", {}, NOW + 1)).toEqual({ run_id: RUN, task: "ct-9", resumed_at: "verify" });
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "running", current_node_id: "verify", visits_reset_at: NOW + 1, fresh_branch: true });
+    expect(tables.workflow_runs[0].fail_reason).toBeUndefined();
+    expect(tables.tasks[0].execution_status).toBeUndefined();
+    expect(commandArgs(tables)).toEqual([{ command: "run_workflow", device: "dev-mini", args: { workflow_run_id: RUN } }]);
+  });
+
+  test("refused, or only checked, writes nothing: another person, a run that is not failed, a closed problem, a trial problem, no station", async () => {
+    const mate = await failed();
+    await expect(resumeFailedRunCore(mate.ctx, MATE, RUN, "verify")).rejects.toThrow("owner");
+    const waiting = await failed({ status: "paused", gate_node_id: "decide" });
+    await expect(resumeFailedRunCore(waiting.ctx, HOST, RUN, "verify")).rejects.toThrow("cast workflow reask");
+    const closed = await failed({}, { status: "done" });
+    await expect(resumeFailedRunCore(closed.ctx, HOST, RUN, "verify")).rejects.toThrow("closed problem");
+    const trial = await failed({}, { project_id: "projects_trial" });
+    await expect(resumeFailedRunCore(trial.ctx, HOST, RUN, "verify")).rejects.toThrow("cast line trial rerun ct-9 --at <station>");
+    const blank = await failed();
+    await expect(resumeFailedRunCore(blank.ctx, HOST, RUN, " ")).rejects.toThrow("Name the station");
+    const checked = await failed();
+    expect(await resumeFailedRunCore(checked.ctx, HOST, RUN, "verify", { check: true })).toMatchObject({ resumed_at: "verify" });
+    expect(checked.tables.workflow_runs[0]).toMatchObject({ status: "failed", current_node_id: "implement" });
+    for (const w of [mate, waiting, closed, trial, blank, checked]) expect(w.tables.daemon_commands).toEqual([]);
   });
 });
 
