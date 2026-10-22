@@ -52,6 +52,14 @@ import { join } from "node:path";
 // file newly over the cap (judgeRetire.ts) was split rather than listed. The
 // growth is split work owed: sessionDecisions.ts +200, signals.ts +200,
 // ingest.ts +100 and schema.ts +100 lead it.
+//
+// A fourth reset, same cause. On 2026-10-22 main was pushed as one whole-tree
+// ship with CI red (39851809732), and 25 listed files had grown past their
+// pins in it. The baseline of 2026-10-22 re-pinned those 25 to the committed
+// sizes at 4b3de4795 plus the fix that landed this. The three files newly over
+// the cap (agentReviews.ts, deploys.ts, files/page.tsx) were split rather than
+// listed, and PIN fell to 258. The growth is split work owed: check.ts +250,
+// workflow/runner.test.ts +250 and remote/session-move.ts +200 lead it.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -68,7 +76,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 259;
+const PIN = 258;
 
 const result = checkRatchet({
   name: "max lines",
