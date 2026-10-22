@@ -4,13 +4,14 @@ import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { applyProposalChanges, extractOrgProposal, orgProposalBlock, ORG_PROPOSAL_OPTIONS, type OrgRoleProposal } from "@codecast/shared/contracts/orgProposal";
 import { autonomyOn, autonomySentence, defaultTrustFor } from "@codecast/shared/contracts/roleAutonomy";
+import { keepsReportsInside } from "@codecast/shared/contracts/orgLead";
 import type { OrgInitDeps } from "./orgInit.js";
 import { acquireFileLock } from "./lockFile.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
-import { artifactFromSnapshot, atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, intervalMs, noSymlink, readArtifact, releaseRoot, snapshotArtifact, templateRoleFields, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
+import { artifactFromSnapshot, atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, intervalMs, noSymlink, readArtifact, releaseRoot, snapshotArtifact, templateLoaderPrompt, templateRoleFields, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
 import { writeInstanceFile } from "./orgTemplateInstance.js";
-import { fill, receiptPath, setupText, setupWords } from "./orgTemplateText.js";
-export { receiptPath };
+import { fill, quoteTemplateArg, receiptPath, setupText, setupWords, toolsBlock } from "./orgTemplateText.js";
+export { quoteTemplateArg, receiptPath };
 import { markSetup, nextHumanAsk, readiness, readinessHeader, recordEvidence, recordScores, setupRows, type InstanceState } from "./orgTemplateState.js";
 
 export type TemplateOptions = { dir: string; project?: string; team?: string; personal?: boolean; session?: string; adopt?: string[]; input?: string[]; secret?: string[]; to?: string; reportsTo?: string; apply?: boolean; dryRun?: boolean; status?: string; source?: string; detail?: string[]; evidence?: string; observedAt?: string; done?: boolean; skip?: boolean; open?: boolean };
@@ -53,14 +54,13 @@ type TemplateUpgrade = {
   removed: string[];
   cadence: Record<string, { triggerId: string; before: number; after: number }>;
 };
-export const quoteTemplateArg = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 export function readReceipt(dir: string, instance: string): TemplateReceipt {
   const value = JSON.parse(fs.readFileSync(receiptPath(dir, instance), "utf8")) as TemplateReceipt;
   if (value.schemaVersion !== 1 || value.instance !== instance || !value.key || !value.project?.id || !value.project.ref || value.project.dir !== canonicalDirectory(dir) || !value.workspace?.id || !["team", "user"].includes(value.workspace.kind) || !value.stack?.title || !value.routines || !value.proposal) throw new Error("Invalid template receipt or project directory mismatch");
   if (value.template.root !== releaseRoot(value.project.dir, value.template)) throw new Error("Receipt points outside its pinned release directory");
   return value;
 }
-function verifiedArtifact(receipt: TemplateReceipt): TemplateArtifact {
+export function verifiedArtifact(receipt: TemplateReceipt): TemplateArtifact {
   noSymlink(receipt.template.root);
   const artifact = readArtifact(receipt.template.root);
   if (artifact.hash !== receipt.template.hash || artifact.manifest.id !== receipt.template.id || artifact.manifest.version !== receipt.template.version) throw new Error("Pinned template artifact failed verification");
@@ -99,15 +99,16 @@ export function parseInputs(manifest: OrgTemplate, raw: string[] = []): Record<s
 }
 const key_in = (row: Record<string, string>, key: string) => Object.prototype.hasOwnProperty.call(row, key);
 export function loaderPrompt(receipt: TemplateReceipt, routine: string): string {
-  return `Read the pinned instance receipt ${receiptPath(receipt.project.dir, receipt.instance)}. Run this command before doing any work:\n\ncast org template instructions ${quoteTemplateArg(receipt.instance)} ${quoteTemplateArg(routine)} --dir ${quoteTemplateArg(receipt.project.dir)}\n\nUse only the verified instructions it returns. If verification fails, stop and report the error. The role's human charter, trust, grants and project scope still apply. This loader grants no spending, publishing, credentials or filesystem isolation.`;
+  receiptPath(receipt.project.dir, receipt.instance);
+  return templateLoaderPrompt(receipt.project.dir, receipt.instance, routine);
 }
-async function request(deps: OrgInitDeps, endpoint: string, body: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<any> {
+export async function request(deps: OrgInitDeps, endpoint: string, body: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<any> {
   const result = await deps.cliPost(endpoint, body, opts);
   if (result == null || result.error) throw new Error(result?.error || `${endpoint}: empty response`);
   return result;
 }
 /** The workspace argument a server call takes, from a receipt or a resolved org tree. */
-function boundary(of: { workspace: { kind: string; id: string } }): { team_id?: string } {
+export function boundary(of: { workspace: { kind: string; id: string } }): { team_id?: string } {
   return of.workspace.kind === "team" ? { team_id: of.workspace.id } : {};
 }
 function sameWorkspace(actual: any, expected: TemplateReceipt["workspace"]): void {
@@ -235,16 +236,21 @@ async function prepareInstall(deps: OrgInitDeps, artifact: TemplateArtifact, ins
   const handle = fill(artifact.manifest.role.handle, receipt, artifact.manifest);
   if (!/^[a-z0-9-]{2,32}$/.test(handle)) throw new Error("Expanded role handle is invalid");
   if ((tree.roles ?? []).some((r: any) => r.handle === handle)) throw new Error(`Role @${handle} already exists; refusing to create or silently adopt another seat`);
-  // Every project has one lead (R4, W9 I2). A hire never adds a second role
-  // watching the same project beside its lead: it reports to that lead, or
-  // the person names the lead as the seat instead (org-hire.md H3).
+  // A project's lead (R4, W9 I2). The org is open by default (2026-10-22): a
+  // hire beside the lead is allowed and the decision says so. A lead that
+  // keeps its reports inside its area holds the project: a new role watching
+  // it reports to that lead, or the person names the lead as the seat (H3).
   const leads = (tree.roles ?? []).filter((r: any) => r.status !== "retired" && (r.scope?.project_ids ?? []).some((id: any) => String(id) === String(project.id)));
   const reportsTo = options.reportsTo?.trim() || "me";
   if (reportsTo !== "me") {
     if (!/^@[a-z0-9-]{2,32}$/.test(reportsTo)) throw new Error("--reports-to takes me or @handle");
     if (!(tree.roles ?? []).some((r: any) => r.status !== "retired" && `@${r.handle}` === reportsTo)) throw new Error(`No active role ${reportsTo} in this workspace`);
   }
-  if (leads.length && !leads.some((r: any) => `@${r.handle}` === reportsTo)) throw new Error(`Project ${project.ref} already has a lead, @${leads[0].handle}. Hire under it with --reports-to @${leads[0].handle}, or name that role as the seat; a second role beside a project's lead is refused.`);
+  if (leads.length && !leads.some((r: any) => `@${r.handle}` === reportsTo)) {
+    const holding = leads.find((r: any) => keepsReportsInside(r));
+    if (holding) throw new Error(`Project ${project.ref} already has a lead, @${holding.handle}, which keeps its reports inside its area. Hire under it with --reports-to @${holding.handle}, or name that role as the seat.`);
+    receipt.warnings!.push(`Project ${project.ref} already has a lead, @${leads[0].handle}; this role will watch it beside that lead.`);
+  }
   receipt.proposal = { kind: "role", name: fill(artifact.manifest.role.name, receipt, artifact.manifest), handle, scope: { projects: [project.ref], plans: [] }, reports_to: reportsTo, ...templateRoleFields(artifact.manifest.role, project.ref), trust: defaultTrustFor({ handle }), charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
   checkReleaseVersion(dir, artifact);
   return receipt;
@@ -282,7 +288,10 @@ function verifyRole(tree: any, receipt: TemplateReceipt, handle?: string): any {
   const candidates = (tree.roles ?? []).filter((r: any) => receipt.role ? r._id === receipt.role.id : r.handle === handle);
   if (candidates.length !== 1) throw new Error("Applied role cannot be verified; refusing to adopt an unrelated seat");
   const role = candidates[0];
-  if (role.status === "retired" || role.scope?.project_ids?.length !== 1 || role.scope.project_ids[0] !== receipt.project.id || role.scope?.plan_ids?.length !== 0) throw new Error("Role scope must remain exactly the instance project; no whole-workspace fallback");
+  // The scope must hold the instance project. It may hold more: a lead's area
+  // covers the areas of the roles that report to it, so a role that hired
+  // leads for neighbouring projects keeps those projects too.
+  if (role.status === "retired" || !(role.scope?.project_ids ?? []).some((id: any) => String(id) === String(receipt.project.id))) throw new Error("Role scope must include the instance project; no whole-workspace fallback");
   if (receipt.role && role.handle !== receipt.role.handle) throw new Error("Role handle changed; review the receipt before reconciling");
   return role;
 }
@@ -365,11 +374,15 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
     const tree = await checkContext(deps, receipt, options);
     // The role's charter is the loader that reads the pinned release's charter
     // on this host, as a terminal install proposes it. A web hire cannot write
-    // it (only the host knows the project folder), so it is set here, before
-    // the standing session is seated and briefed.
-    const loader = loaderPrompt(receipt, "charter");
+    // it (only the host knows the project folder), so the host step asks the
+    // server to, before the standing session is seated and briefed. The
+    // server builds the text and adds it under the charter the role already
+    // has, on the person's accept of the hire; once the row is claimed
+    // (instanceId) the charter is the person's alone to change.
     const roleRow = receipt.role ? (tree.roles ?? []).find((r: any) => r._id === receipt.role!.id) : undefined;
-    if (roleRow && roleRow.charter !== loader) await request(deps, "/cli/role/update", { role_id: receipt.role!.id, charter: loader });
+    if (roleRow && !receipt.instanceId && !(roleRow.charter ?? "").includes(loaderPrompt(receipt, "charter"))) {
+      await request(deps, "/cli/org/template/charter", { project_id: receipt.project.id, instance: receipt.instance, role_id: receipt.role!.id, dir: receipt.project.dir, ...boundary(receipt) });
+    }
     // A role applied but not yet seated and armed (a web hire, or a reconcile
     // that stopped after the apply) is finished here; a proposal still open is not.
     if (receipt.phase === "provisioning") await provisionAndArm(deps, receipt, tree);
@@ -728,7 +741,9 @@ export async function reconcileTemplate(deps: OrgInitDeps, instance: string, opt
     if (decision.answer_index === 2) { receipt.phase = "declined"; save(receipt); return receipt; }
     if (![0, 1].includes(decision.answer_index)) throw new Error("Unrecognized template decision answer");
     const proposed = decision.answer_index === 1 ? applyProposalChanges(receipt.proposal, decision.answer_text).proposal : receipt.proposal;
-    if (proposed.scope?.projects?.length !== 1 || ![receipt.project.ref, receipt.project.id].includes(proposed.scope.projects[0]) || (proposed.scope.plans?.length ?? 0) !== 0) throw new Error("Approved scope differs from the explicit instance project; refusing provisioning");
+    // The approved scope must hold the instance project; a person may widen it
+    // with more projects or plans when they approve.
+    if (!(proposed.scope?.projects ?? []).some((p: string) => [receipt.project.ref, receipt.project.id].includes(p))) throw new Error("Approved scope does not include the instance project; refusing provisioning");
     if (!receipt.role) {
       const applied = await request(deps, "/cli/org/apply-decision", { decision: receipt.stack.decisionId, provision: false });
       if (applied.status !== "applied" && !(applied.status === "skipped" && applied.note?.startsWith("already applied:"))) throw new Error(`Role was not applied: ${applied.note || applied.status}`);
@@ -836,12 +851,15 @@ async function adoptHiredInstance(deps: OrgInitDeps, instance: string, dir: stri
   if (!role) throw new Error("The hire's role is not in this workspace");
   const artifact = await releaseArtifact(deps, { template_id: row.template_id, version: row.version, digest: row.digest }, args);
   const key = randomUUID();
+  // No instanceId yet: the web row is still keyed awaiting the host, and the
+  // server finds it by this receipt's key only once registerInstance has
+  // claimed it. Status reads before then would ask for a key it lacks.
   const receipt: TemplateReceipt = {
     schemaVersion: 1, instance, key, project, workspace: tree.workspace, warnings: projectWarnings(project), sourceSession: "web", phase: "provisioning",
     template: { id: artifact.manifest.id, version: artifact.manifest.version, hash: artifact.hash, root: releaseRoot(dir, { ...artifact.manifest, hash: artifact.hash }) },
     stack: { title: `Org template ${instance} for ${project.ref} [${key}]` },
     proposal: { kind: "role", name: role.name, handle: role.handle, scope: { projects: [project.ref], plans: [] }, reports_to: "me", trust: role.trust ?? defaultTrustFor(role) },
-    config: row.config ?? {}, role: { id: role._id, handle: role.handle }, instanceId: String(row._id),
+    config: row.config ?? {}, role: { id: role._id, handle: role.handle },
     routines: Object.fromEntries(artifact.manifest.routines.map((r) => [r.id, { every: r.every, ...(row.routines?.[r.id]?.external ? { triggerId: row.routines[r.id].triggerId, external: true } : {}) }])),
   };
   checkReleaseVersion(dir, artifact);
@@ -903,7 +921,8 @@ export async function templateInstructions(deps: OrgInitDeps, instance: string, 
     const roleRow = verifyRole(tree, receipt);
     header = readinessHeader(routine, readiness(artifact.manifest, { ...receipt, authority: (roleRow.authority ?? []).map((g: any) => ({ id: g.id, expires_at: g.expires_at })) }, roleRow.trust ?? defaultTrustFor(roleRow))[routine]);
   }
-  return `${pinned}\nHuman charter, trust and grants remain authoritative.${header ? `\n${header}` : ""}\n\n${fill(artifact.files.get(file)!.toString("utf8"), receipt, artifact.manifest)}`;
+  const tools = toolsBlock(artifact, receipt);
+  return `${pinned}\nHuman charter, trust and grants remain authoritative.${header ? `\n${header}` : ""}${tools ? `\n${tools}` : ""}\n\n${fill(artifact.files.get(file)!.toString("utf8"), receipt, artifact.manifest)}`;
 }
 export function activationInstructions(receipt: TemplateReceipt, row: { short_id?: string; _id: string; interval_ms: number; precheck?: string }): { note: string; commands: string[] } {
   if (row.precheck && row.precheck !== "exit 1") return { note: "This routine has a custom precheck. Keep it paused and review that gate explicitly; the template activation procedure must not remove a human override.", commands: [] };

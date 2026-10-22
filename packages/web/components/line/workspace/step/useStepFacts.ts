@@ -9,7 +9,7 @@ import { lessonOnlyIds } from "../../../../lib/line/problemTable";
 import { runFactsByStep, stepTable } from "../../../../lib/line/stepTable";
 import type { LineWorkspace } from "../../../../hooks/useLineWorkspace";
 import type { LineSelection } from "../../../../lib/line/lineWorkspaceUrl";
-import { useProblemList } from "../views/timeline/useProblemList";
+import { useProblemRows } from "../views/timeline/useProblemList";
 
 /** The Problems list unfiltered: every process, no chip or search. */
 const UNFILTERED = {} as LineSelection;
@@ -21,7 +21,7 @@ export function useStepFacts(model: LineModel, ws: LineWorkspace) {
   const newest = useMemo(() => newestRuns((ws.rows.runs as unknown as Array<{ _id: string; task_id?: string | null; created_at: number }>).map((r) => ({ id: r._id, caseId: r.task_id ?? null, at: r.created_at }))), [ws.rows.runs]);
   // Where each problem stands on Problems: a step counts a failure only where Problems files it, so a step's Failed and
   // Problems' Failed headings read one number. A lesson for the line is no product problem: Problems never lists it.
-  const list = useProblemList(model, ws, UNFILTERED);
+  const list = useProblemRows(model, ws, UNFILTERED);
   const standing = useMemo(() => {
     const out = new Map<string, Standing>(list.all.map((r) => [r.id, { now: r.stand.phrase, failedAt: r.stand.status === "failed" ? r.stand.cause?.steps ?? [] : undefined }]));
     for (const id of lessonOnlyIds(ws.sources)) out.set(id, { now: "A lesson for the line" });

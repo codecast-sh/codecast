@@ -8,7 +8,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import * as os from "node:os";
-import { checkProject, classifyWatchLine, eventsPath, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { spawnSync } from "node:child_process";
+import { checkProject, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, eventsPath, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 beforeEach(() => {
@@ -113,6 +114,78 @@ describe("checkProject", () => {
     const r = await checkProject({ name: "mobile", tsconfig: "x" }, "/tree", { start });
     expect(r.started).toBe(true);
     expect(r.errors).toBe(0);
+  });
+});
+
+describe("an answer describes the files on disk", () => {
+  /** A tree with one file, and a watcher state whose last pass recorded `recorded` as that file's content. */
+  function treeWithPass(recorded: string, onDisk: string, errors: number) {
+    const tree = fs.mkdtempSync(path.join(os.tmpdir(), "check-disk-"));
+    const file = path.join(tree, "a.ts");
+    fs.writeFileSync(file, onDisk);
+    const dir = watchDir(tree, "app");
+    const pass = (content: string, errorCount: number, finishedAt: number) => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(buildInfoPath(dir), JSON.stringify({ fileNames: [path.relative(dir, file)], fileInfos: [{ version: tscFileVersion(Buffer.from(content)) }] }));
+      writeWatchState(dir, { pid: process.pid, project: "app", tsconfig: "x", root: tree, startedAt: 1, inProgress: false, finishedAt, errors: errorCount });
+    };
+    pass(recorded, errors, Date.now());
+    return { tree, dir, file, pass };
+  }
+
+  test("a file's version is the one tsc records for it", () => {
+    const ts = require("typescript");
+    for (const text of ["export const x = 1;\n", "\ufeffexport const y = 2;\r\n", "export {};\n//# sourceMappingURL=a.js.map\n\n", "export {};\n//# sourceMappingURL=a.js.map\nconst z = 1;\n"]) {
+      expect(tscFileVersion(Buffer.from(text))).toBe(ts.getSourceFileVersionAsHashFromText({ createHash: ts.sys.createHash }, text.replace(/^\ufeff/, "")));
+    }
+  });
+
+  test("the files a pass checked differently from the disk are named, and only those", () => {
+    const { dir, file } = treeWithPass("export const x = 1;\n", "export const x = 1;\nexport const y = 2;\n", 1);
+    expect(filesNotAsChecked(dir)).toEqual([file]);
+    fs.writeFileSync(file, "export const x = 1;\n");
+    expect(filesNotAsChecked(dir)).toEqual([]);
+    // TypeScript before 5.6 nests the program under `program`.
+    fs.writeFileSync(buildInfoPath(dir), JSON.stringify({ program: JSON.parse(fs.readFileSync(buildInfoPath(dir), "utf-8")), version: "5.1.6" }));
+    expect(filesNotAsChecked(dir)).toEqual([]);
+  });
+
+  test("a pass that read a file before its latest change is not the answer; the pass after it is", async () => {
+    const fixed = "export const x = 1;\nexport const y = 2;\n";
+    const { tree, pass } = treeWithPass("export const x = 1;\n", fixed, 1);
+    setTimeout(() => pass(fixed, 0, Date.now()), 400);
+    const r = await checkProject({ name: "app", tsconfig: "x" }, tree, { start: () => {} });
+    expect(r.errors).toBe(0);
+  });
+
+  test("a watcher that never sees the change is named as behind, with the way out, and nothing is stopped", async () => {
+    const { tree } = treeWithPass("export const x = 1;\n", "export const x = 1;\nexport const y = 2;\n", 1);
+    const killed: number[] = [];
+    await expect(checkProject({ name: "app", tsconfig: "x" }, tree, { start: () => {}, kill: (pid) => killed.push(pid), unseenGraceMs: 300 })).rejects.toThrow(/has not checked a\.ts as it is on disk.*cast check --fresh app/);
+    expect(killed).toEqual([]);
+  });
+
+  test("files the pass does not list count too: a new file the globs take in, and a config written since the pass began", () => {
+    const tree = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "check-unlisted-")));
+    const ts = path.dirname(require.resolve("typescript/package.json"));
+    fs.mkdirSync(path.join(tree, "node_modules/.bin"), { recursive: true });
+    fs.symlinkSync(ts, path.join(tree, "node_modules/typescript"));
+    fs.symlinkSync("../typescript/bin/tsc", path.join(tree, "node_modules/.bin/tsc"));
+    const config = path.join(tree, "tsconfig.json");
+    fs.writeFileSync(config, JSON.stringify({ compilerOptions: { noEmit: true }, include: ["*.ts"], exclude: ["*.test.ts"] }));
+    fs.writeFileSync(path.join(tree, "a.ts"), "export {};\n");
+    const dir = watchDir(tree, "app");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(buildInfoPath(dir), JSON.stringify({ fileNames: [path.relative(dir, path.join(tree, "a.ts"))], fileInfos: [], root: [1] }));
+    const passStartedAt = Date.now() + 60_000;
+    expect(unlistedChanges(dir, tree, "tsconfig.json", passStartedAt)).toEqual([]);
+    // A test file the config excludes is not the program's.
+    fs.writeFileSync(path.join(tree, "a.test.ts"), "export {};\n");
+    expect(unlistedChanges(dir, tree, "tsconfig.json", passStartedAt)).toEqual([]);
+    fs.writeFileSync(path.join(tree, "b.ts"), "export {};\n");
+    expect(unlistedChanges(dir, tree, "tsconfig.json", passStartedAt)).toEqual([path.join(tree, "b.ts")]);
+    fs.rmSync(path.join(tree, "b.ts"));
+    expect(unlistedChanges(dir, tree, "tsconfig.json", Date.now() - 60_000)).toEqual([config]);
   });
 });
 
@@ -441,6 +514,38 @@ describe("projectsTouching", () => {
       expect(names(["packages/web/tsconfig.json"])).toEqual(["web"]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("in a checkout no program has built yet, reads each program's files from another checkout of the repository", () => {
+    // A line run verifies in a worktree made for it: asked by folder alone, a
+    // backend file mobile imports would not count for mobile.
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "touching-wt-")));
+    try {
+      const main = path.join(tmp, "main");
+      const run = (cwd: string, ...args: string[]) => spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, encoding: "utf-8" });
+      fs.mkdirSync(main);
+      run(main, "init", "-q", "-b", "main");
+      fs.writeFileSync(path.join(main, "a.txt"), "a\n");
+      run(main, "add", "a.txt");
+      run(main, "commit", "-qm", "base");
+      const wt = path.join(tmp, "line-ct-1");
+      run(main, "worktree", "add", "-q", "-b", "line", wt);
+      const projects = [
+        { name: "backend", tsconfig: "outreach/backend/tsconfig.json" },
+        { name: "mobile", tsconfig: "outreach/mobile/tsconfig.json" },
+      ];
+      const info = (name: string, files: string[]) => {
+        const dir = watchDir(main, name);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(buildInfoPath(dir), JSON.stringify({ fileNames: files.map((f) => path.relative(dir, path.join(main, f))) }));
+      };
+      info("backend", ["outreach/backend/src/needs.ts"]);
+      info("mobile", ["outreach/mobile/app.tsx", "outreach/backend/src/needs.ts"]);
+      expect(projectsTouching(wt, projects, ["outreach/backend/src/needs.ts"]).map((p) => p.name)).toEqual(["backend", "mobile"]);
+      expect(projectsTouching(wt, projects, ["outreach/backend/src/other.ts"]).map((p) => p.name)).toEqual(["backend"]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 });

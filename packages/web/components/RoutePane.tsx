@@ -64,6 +64,7 @@ const ConfigPage = lazyPage("@/app/config/page", () => import("@/app/config/page
 const Memory = lazyPage("@/app/memory/page", () => import("@/app/memory/page"));
 const Evals = lazyPage("@/app/evals/page", () => import("@/app/evals/page"));
 const Ops = lazyPage("@/app/ops/page", () => import("@/app/ops/page"));
+const Files = lazyPage("@/app/files/page", () => import("@/app/files/page"));
 const Vault = lazyPage("@/app/vault/page", () => import("@/app/vault/page"));
 const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts/page"));
 const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
@@ -187,8 +188,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
   { pattern: /^\/repo$/, paramNames: [], component: RepoIndex },
   { pattern: /^\/search$/, paramNames: [], component: Search },
-  { pattern: /^\/files$/, paramNames: [], component: Vault },
-  { pattern: /^\/vault$/, paramNames: [], component: Vault }, // permanent pre-rename alias for /files
+  { pattern: /^\/files$/, paramNames: [], component: Files },
+  { pattern: /^\/vault$/, paramNames: [], component: Vault }, // the team Vault; old /vault?f=… Files links redirect to /files
   { pattern: /^\/pages$/, paramNames: [], component: Artifacts },
   { pattern: /^\/artifacts$/, paramNames: [], component: Artifacts }, // pre-rename alias for /pages
   { pattern: /^\/windows$/, paramNames: [], component: Windows },

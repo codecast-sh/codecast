@@ -7,6 +7,8 @@ import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { stableRefId } from "../store/wakeSig";
 import { isViewersWorkflow } from "../store/lineWorkflowSlice";
+import { useFeederWorkspace } from "./useWorkspaceArgs";
+import { useWorkspaceCollection } from "./useWorkspaceCollection";
 
 const api = _api as any;
 
@@ -28,6 +30,23 @@ export function useWorkflows(): { workflows: any[]; ready: boolean } {
   const where = useMemo(() => (w: any) => isViewersWorkflow(w, viewerId), [viewerId]);
   const workflows = useCollectionRows<any>("workflows", { where, sig: workflowSig, sort: newestFirst });
   return { workflows, ready };
+}
+
+/** Feeder: the flows published to a workspace's pool (flows.md FL2), a
+ *  teammate's included. The active workspace unless one is named. */
+export function useSyncPoolFlows(workspace?: string | null) {
+  const { args } = useFeederWorkspace(workspace);
+  return useSyncCollection("workflows", api.workflows.webPool, args);
+}
+
+/** Reader: the pushed rows a workspace's pool draws from: the viewer's own
+ *  workflows, then each flow published to the workspace, newest first. appPool
+ *  keeps the first of a slug, so the viewer's own copy wins. */
+export function usePoolFlowRows(workspace?: string | null): any[] {
+  useSyncPoolFlows(workspace);
+  const { workflows: own } = useWorkflows();
+  const published = useWorkspaceCollection<any>("workflows", workflowSig, workspace ?? null);
+  return useMemo(() => [...own, ...published.slice().sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))], [own, published]);
 }
 
 /** Feeder: the viewer's workflow of one slug, whatever its age (webList is a

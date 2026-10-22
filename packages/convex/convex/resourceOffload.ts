@@ -5,6 +5,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation } from "./functions";
 import { RESOURCE_STALE_MS, evaluateOffloadRequirements } from "@codecast/shared/contracts";
 import { heldReason, movabilityFacts, performCreateBatch, planMigration } from "./sessionMigrations";
+import { latestRehearsal } from "./moveRehearsals";
+import { invalidBringPaths, rehearsalPending } from "@codecast/shared/contracts/moveRehearsal";
 
 export const start = mutation({
   args: {
@@ -21,7 +23,8 @@ export const start = mutation({
     if (!args.selections.length || args.selections.length > 50) throw new Error("Select between 1 and 50 sessions");
     if (!Number.isFinite(args.wait_for_idle_ms) || args.wait_for_idle_ms < 60_000) throw new Error("Allow at least a minute to reach a safe turn boundary");
     if (new Set(args.selections.map(s => s.session_id)).size !== args.selections.length) throw new Error("A session may only be selected once");
-    if (args.selections.some(s => s.attested.length > 20 || s.attested.some(a => a.length > 500))) throw new Error("Too many prerequisite attestations");
+    if (args.selections.some(s => s.attested.length > 40 || s.attested.some(a => a.length > 500))) throw new Error("Too many prerequisite attestations");
+    for (const s of args.selections) { const bad = invalidBringPaths(s.bring); if (bad) throw new Error(bad); }
     const intent = args.client_batch_id && args.batch_ids ? {
       client_batch_id: args.client_batch_id, source_device_id: args.source_device_id,
       selections: args.selections, wait_for_idle_ms: args.wait_for_idle_ms,
@@ -81,8 +84,13 @@ export const start = mutation({
         targetSample: fresh(targetReport) ? targetReport?.snapshot.sample : undefined, now });
       const plan = planMigration({ conversations: [{ ...conv, held: heldReason(conv, facts) }], devices, targetDeviceId: selection.destination_id, now });
       blockers.push(...policy.blockers, ...plan.skipped.map(s => s.reason));
-      const unconfirmed = policy.pending.filter(p => !selection.attested.includes(p));
-      checks.push({ session_id: selection.session_id, destination_id: selection.destination_id, blockers, pending: policy.pending, passed: policy.passed, unconfirmed });
+      // The source machine's rehearsal, when one is recent: what would stop the
+      // transfer is a blocker, what the session would miss there is confirmed.
+      const rehearsal = await latestRehearsal(ctx, userId, selection.session_id, selection.destination_id, now);
+      if (rehearsal) blockers.push(...rehearsal.blockers);
+      const pending = [...policy.pending, ...(rehearsal ? rehearsalPending(rehearsal, selection.bring ?? []) : [])];
+      const unconfirmed = pending.filter(p => !selection.attested.includes(p));
+      checks.push({ session_id: selection.session_id, destination_id: selection.destination_id, blockers, pending, passed: policy.passed, unconfirmed });
       const ids = groups.get(selection.destination_id) ?? [];
       ids.push(selection.conversation_id);
       groups.set(selection.destination_id, ids);
@@ -157,5 +165,5 @@ async function recordRefusal(ctx: { db: any }, userId: string, intent: ResourceO
 
 function intentKey(intent?: ResourceOffloadIntent) {
   return intent && JSON.stringify([intent.client_batch_id, intent.source_device_id, intent.wait_for_idle_ms,
-    intent.selections.map(s => [s.conversation_id, s.session_id, s.destination_id, s.attested])]);
+    intent.selections.map(s => [s.conversation_id, s.session_id, s.destination_id, s.attested, s.bring ?? []])]);
 }

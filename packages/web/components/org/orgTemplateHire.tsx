@@ -3,7 +3,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { captureException } from "@sentry/react";
 import { ArrowLeft, Copy } from "lucide-react";
 import { TemplateGallery } from "./TemplateGallery";
-import { builtinHires, cannotHireReason, EXECUTIVE_ASSISTANT_HIRE, HEAD_OF_PEOPLE_HIRE, type BuiltinHire, type CatalogTemplate } from "./templateCatalog";
+import { builtinHires, cannotHireReason, templateTools, EXECUTIVE_ASSISTANT_HIRE, HEAD_OF_PEOPLE_HIRE, type BuiltinHire, type CatalogTemplate } from "./templateCatalog";
 // The seat cards live with the conversation surface; loaded on pick, as the
 // header panel loads them, so the hire dialog's graph never reaches the chat.
 const HireHeadOfPeopleCard = lazy(() => import("../anchor/AnchorConversation").then((m) => ({ default: m.HireHeadOfPeopleCard })));
@@ -14,8 +14,9 @@ import { copyToClipboard } from "../../lib/utils";
 import { inWorkspace } from "../../lib/workspaceScope";
 import { SelectBox } from "../ui/select-box";
 import type { OrgRole, OrgTree } from "./orgTypes";
+import type { TemplateInput } from "@codecast/shared/contracts/orgTemplateManifest";
 import { buildOrgTemplateCommand, type TemplateDraft, type TemplateProject } from "./orgTemplateCommand";
-import { DEFAULT_LEAD_TEMPLATE_ID, askedInputs, buildHireSpec, grantsToAsk, hireErrors, humanSetupCount, isDefaultLeadTemplate, resolvedConfig, secretInputs, slugOf, type HireDraft } from "./orgTemplateSpec";
+import { DEFAULT_LEAD_TEMPLATE_ID, defaultInstance, askedInputs, requiredInputs, buildHireSpec, grantsToAsk, hireErrors, humanSetupCount, isDefaultLeadTemplate, resolvedConfig, secretInputs, slugOf, type HireDraft } from "./orgTemplateSpec";
 import { useTemplateActions, useTemplateCatalog } from "../../hooks/useTemplateHire";
 import { LearningSwitch } from "./TemplateSections";
 import { RoleAvatar } from "./avatars";
@@ -66,7 +67,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
   const project = available.find((p) => p._id === projectId) ?? null;
   // The project's lead (R4, W9 I2): a live role whose scope names the project.
   const lead = useMemo(() => project ? roles.find((r) => r.status !== "retired" && ((r.scope as any)?.project_ids ?? []).some((id: string) => id === project._id)) ?? null : null, [roles, project]);
-  const effInstance = instanceTouched ? instance : project && template ? `${slugOf(project.title)}-${template.template_id}` : "";
+  const effInstance = instanceTouched ? instance : project && template ? defaultInstance(project.title, template.manifest) : "";
   const draft: HireDraft = { template, project, instance: effInstance, config, reportsTo: lead && seat === "under" ? `@${lead.handle}` : "me", seatHandle: lead && seat === "lead" ? lead.handle : null, updatePolicy: policy };
   const engLead = templates.find((t) => t.template_id === DEFAULT_LEAD_TEMPLATE_ID) ?? null;
   const errors = hireErrors(draft);
@@ -148,7 +149,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
           <option value="">Choose a project</option>
           {available.map((p) => <option key={p._id} value={p._id}>{p.title}</option>)}
         </SelectBox>
-        <span className="text-[11px] text-sol-text-dim">{available.length ? "One project. The role leads it." : "Create a project in this workspace before hiring from a template."}</span>
+        {!available.length && <span className="text-[11px] text-sol-text-dim">Create a project in this workspace before hiring from a template.</span>}
       </label>
       {lead && (
         <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12px] leading-relaxed" role="group" aria-label="Project lead" data-template-lead={lead.handle}>
@@ -166,56 +167,68 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
           {engLead && <button type="button" onClick={() => { setTemplateId(engLead.template_id); setConfig({}); }} className="mt-1 text-[12px] font-semibold text-sol-violet underline-offset-2 hover:underline" data-template-hire-lead-first>Hire the {engLead.name} first</button>}
         </div>
       )}
-      {manifest && askedInputs(manifest).length > 0 && (
-        <fieldset className="flex flex-col gap-2.5 rounded-lg border border-sol-border/50 p-3" data-template-inputs>
-          <legend className={CAPTION}>Answers</legend>
-          {askedInputs(manifest).map((input) => (
-            <label key={input.key} className={LABEL}>
-              <span className="text-[12px] text-sol-text">{input.label}{input.required && input.default === undefined ? <span className="text-sol-red"> *</span> : null}</span>
-              {input.kind === "choice" ? (
-                <SelectBox value={config[input.key] ?? String(input.default ?? "")} onChange={(e) => setConfig({ ...config, [input.key]: e.target.value })} className="text-[13px]">
-                  {(input.choices ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
-                </SelectBox>
-              ) : input.kind === "boolean" ? (
-                <input type="checkbox" checked={(config[input.key] ?? String(input.default ?? "false")) === "true"} onChange={(e) => setConfig({ ...config, [input.key]: e.target.checked ? "true" : "false" })} />
-              ) : (
-                <input name={`input:${input.key}`} value={config[input.key] ?? ""} onChange={(e) => setConfig({ ...config, [input.key]: e.target.value })} placeholder={input.default !== undefined ? String(input.default) : input.kind === "money" ? "USD" : ""} inputMode={input.kind === "number" || input.kind === "money" ? "decimal" : undefined} className={INPUT} spellCheck={false} />
-              )}
-              {input.help && <span className="text-[11px] text-sol-text-dim">{input.help}</span>}
-            </label>
-          ))}
-        </fieldset>
-      )}
+      {manifest && askedInputs(manifest).length > 0 && (() => {
+        const needed = requiredInputs(manifest);
+        const optional = askedInputs(manifest).filter((i) => !needed.includes(i));
+        const field = (input: TemplateInput) => (
+          <label key={input.key} className={LABEL}>
+            <span className="text-[12px] text-sol-text">{input.label}{needed.includes(input) ? <span className="text-sol-red"> *</span> : null}</span>
+            {input.kind === "choice" ? (
+              <SelectBox value={config[input.key] ?? String(input.default ?? "")} onChange={(e) => setConfig({ ...config, [input.key]: e.target.value })} className="text-[13px]">
+                {(input.choices ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+              </SelectBox>
+            ) : input.kind === "boolean" ? (
+              <input type="checkbox" checked={(config[input.key] ?? String(input.default ?? "false")) === "true"} onChange={(e) => setConfig({ ...config, [input.key]: e.target.checked ? "true" : "false" })} />
+            ) : (
+              <input name={`input:${input.key}`} value={config[input.key] ?? ""} onChange={(e) => setConfig({ ...config, [input.key]: e.target.value })} placeholder={input.default !== undefined ? String(input.default) : input.kind === "money" ? "USD" : ""} inputMode={input.kind === "number" || input.kind === "money" ? "decimal" : undefined} className={INPUT} spellCheck={false} />
+            )}
+            {input.help && <span className="text-[11px] text-sol-text-dim">{input.help}</span>}
+          </label>
+        );
+        return (
+          <fieldset className="flex flex-col gap-2.5 rounded-lg border border-sol-border/50 p-3" data-template-inputs={needed.length}>
+            <legend className={CAPTION}>{needed.length ? "Answers" : "Answers, all optional"}</legend>
+            {needed.map(field)}
+            {optional.length > 0 && (
+              <details open={needed.length === 0 && optional.length <= 3} className="group" data-template-optional={optional.length}>
+                <summary className="cursor-pointer text-[12px] text-sol-text-muted">{optional.length} optional, with defaults or read from the project</summary>
+                <div className="mt-2 flex flex-col gap-2.5">{optional.map(field)}</div>
+              </details>
+            )}
+          </fieldset>
+        );
+      })()}
       {manifest && secretInputs(manifest).length > 0 && (
-        <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12px] leading-relaxed" data-template-secrets>
-          <p className="font-semibold text-sol-text">Secrets come last, and stay on its machine</p>
-          <p className="text-sol-text-muted">After you accept, the role page asks for each one once and seals it to the machine that runs the role; nothing here stores it.</p>
-          <ul className="mt-1 list-disc pl-4 text-sol-text-muted">{secretInputs(manifest).map((s) => <li key={s.key}>{s.label}{s.help ? <span className="text-sol-text-dim">: {s.help}</span> : null}</li>)}</ul>
-        </div>
+        <p className="text-[11.5px] text-sol-text-muted" data-template-secrets={secretInputs(manifest).length}>
+          <span className="text-sol-text">After you accept,</span> on the role page, sealed to its machine: {secretInputs(manifest).map((s) => s.label).join(" · ")}
+        </p>
       )}
       {manifest && (
-        <div className="grid grid-cols-2 gap-3">
-          <label className={LABEL}>
-            <span className={CAPTION}>Instance name</span>
-            <input name="template-instance" value={effInstance} onChange={(e) => { setInstanceTouched(true); setInstance(slugOf(e.target.value)); }} className={INPUT} spellCheck={false} autoCapitalize="none" maxLength={48} />
-          </label>
-          <label className={LABEL}>
-            <span className={CAPTION}>Updates</span>
-            <SelectBox value={policy} onChange={(e) => setPolicy(e.target.value as HireDraft["updatePolicy"])} className="text-[13px]">
-              <option value="stable">Offer stable releases</option>
-              <option value="canary">Canary: the publisher updates it</option>
-              <option value="manual">Manual only</option>
-            </SelectBox>
-          </label>
-        </div>
+        <details className="rounded-lg border border-sol-border/50 px-3 py-2 text-[12px]" data-template-details>
+          <summary className="cursor-pointer text-sol-text-muted">Name <span className="text-sol-text" style={{ fontFamily: "var(--font-mono)" }}>{effInstance || "…"}</span> · {policy === "stable" ? "stable updates" : policy === "canary" ? "canary updates" : "manual updates"}</summary>
+          <div className="mt-2 grid grid-cols-2 gap-3">
+            <label className={LABEL}>
+              <span className={CAPTION}>Instance name</span>
+              <input name="template-instance" value={effInstance} onChange={(e) => { setInstanceTouched(true); setInstance(slugOf(e.target.value)); }} className={INPUT} spellCheck={false} autoCapitalize="none" maxLength={48} />
+            </label>
+            <label className={LABEL}>
+              <span className={CAPTION}>Updates</span>
+              <SelectBox value={policy} onChange={(e) => setPolicy(e.target.value as HireDraft["updatePolicy"])} className="text-[13px]">
+                <option value="stable">Offer stable releases</option>
+                <option value="canary">Canary: the publisher updates it</option>
+                <option value="manual">Manual only</option>
+              </SelectBox>
+            </label>
+          </div>
+        </details>
       )}
-      {manifest && <LearningSwitch teamId={teamId} canEdit compact />}
       {spec && manifest && (
         <div className="rounded-lg border border-sol-border/50 px-3 py-2.5 text-[12px] leading-relaxed" data-template-preview>
           <p className="font-semibold text-sol-text">What you will decide</p>
           <ul className="mt-1 list-disc pl-4 text-sol-text-muted">
             {spec.changes.map((c, i) => <li key={i}>{c.kind === "role" ? `A new role ${c.name} @${c.handle}, reporting to ${c.reports_to}${!lead ? `, leading ${project?.title}` : ""}, that starts work on its own` : c.kind === "authority" ? `Authority outside codecast: ${c.authority.map((g) => `${g.kind} (${g.label})`).join("; ")}` : c.kind === "hire" ? `The hire: ${c.template} ${c.version} as ${c.instance} on ${project?.title}` : ""}</li>)}
             <li>{manifest.routines.length} routine{manifest.routines.length === 1 ? "" : "s"}, created paused; you activate each from the role page once it is ready.</li>
+            {(manifest.tools ?? []).length > 0 && (() => { const { commands, skills } = templateTools(manifest); return <li data-template-preview-tools>Its tools, installed with it on the role&apos;s machine: {[...commands, ...(skills.length ? [`${skills.length} skill${skills.length === 1 ? "" : "s"}`] : [])].join(", ")}</li>; })()}
             {humanSetupCount(manifest) > 0 && <li>{humanSetupCount(manifest)} setup step{humanSetupCount(manifest) === 1 ? "" : "s"} only you can do; the role puts one in front of you at a time.</li>}
           </ul>
           {grantsToAsk(manifest, resolvedConfig(manifest, config)).length === 0 && (manifest.authority ?? []).length > 0 && <p className="mt-1 text-sol-text-dim">Authority is not asked for yet: its inputs are unanswered.</p>}

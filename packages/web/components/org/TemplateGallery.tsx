@@ -5,24 +5,21 @@
 // a project to lead, and a release that can be installed from the record.
 // An empty catalog says so in plain words; nothing here invents a template.
 import { useState } from "react";
-import { ArrowRight, Lock, Search } from "lucide-react";
+import { ArrowRight, Search } from "lucide-react";
 import { RoleAvatar } from "./avatars";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import type { TemplateRoutine } from "@codecast/shared/contracts/orgTemplateManifest";
-import { humanSetupCount, isDefaultLeadTemplate, secretInputs } from "./orgTemplateSpec";
-import { cadenceWords, cannotHireReason, displayTitle, type BuiltinHire, type CatalogTemplate } from "./templateCatalog";
+import { humanSetupCount, isDefaultLeadTemplate, requiredInputs } from "./orgTemplateSpec";
+import { cadenceWords, cannotHireReason, displayTitle, templateTools, type BuiltinHire, type CatalogTemplate } from "./templateCatalog";
 import { Button } from "../ui/button";
 
+/** What a hire costs the person, in counts: answers it cannot go without,
+ *  secrets bound on their machine, permissions outside codecast, and setup
+ *  steps only they can do. */
 function askWords(t: CatalogTemplate): string[] {
   const m = t.manifest;
-  const answers = t.asks.inputs - t.asks.secrets;
-  const out: string[] = [];
-  if (answers) out.push(`${answers} answer${answers === 1 ? "" : "s"}`);
-  if (t.asks.secrets) out.push(`${t.asks.secrets} secret${t.asks.secrets === 1 ? "" : "s"} kept on your machine`);
-  if (t.asks.authority) out.push(`${t.asks.authority} permission${t.asks.authority === 1 ? "" : "s"} outside codecast`);
-  const yours = humanSetupCount(m);
-  if (yours) out.push(`${yours} setup step${yours === 1 ? "" : "s"} only you can do`);
-  return out;
+  const n = (count: number, one: string, many = `${one}s`) => count ? [`${count} ${count === 1 ? one : many}`] : [];
+  return [...n(requiredInputs(m).length, "answer"), ...n(t.asks.secrets, "secret"), ...n(t.asks.authority, "permission"), ...n(humanSetupCount(m), "setup step")];
 }
 
 export function TemplateGallery({ templates, ready, projectCount, onPick, error, builtins = [], onPickBuiltin }: {
@@ -118,7 +115,6 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
   const routines: TemplateRoutine[] = t.manifest.routines;
   const acts = routines.filter((r) => r.mode === "apply").length;
   const byCodecast = t.workspace === "codecast";
-  const status = t.latest_status ?? null;
   const leads = isDefaultLeadTemplate(t.template_id);
   return (
     <article
@@ -139,8 +135,7 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
       </header>
       <ul className="flex flex-wrap gap-1.5" aria-label="What it asks for">
         {leads && <li className="rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold leading-tight text-sol-violet" style={{ background: "color-mix(in srgb, var(--sol-violet) 14%, transparent)" }} data-template-card-leads>Leads the project</li>}
-        {askWords(t).map((w) => <li key={w} className="rounded-md px-1.5 py-0.5 text-[10.5px] leading-tight text-sol-text-muted" style={{ background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>{w}</li>)}
-        {askWords(t).length === 0 && <li className="text-[10.5px] text-sol-text-dim">Asks nothing at hire</li>}
+        <li className="text-[10.5px] leading-[18px] text-sol-text-muted" data-template-asks>{askWords(t).length ? `Asks ${askWords(t).join(" · ")}` : "Asks nothing at hire"}</li>
       </ul>
       <div className="min-w-0">
         <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-sol-text-dim">Runs {routines.length} routine{routines.length === 1 ? "" : "s"}{acts ? ` · ${acts} act${acts === 1 ? "s" : ""} once you allow it` : ""}</p>
@@ -154,14 +149,10 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
           {routines.length > 4 && <li className="text-[11px] text-sol-text-dim">and {routines.length - 4} more</li>}
         </ul>
       </div>
+      <ToolsRow template={t} />
       {reason && <p className="mt-auto rounded-md px-2 py-1.5 text-[11px] leading-snug text-sol-text-muted" style={{ background: "color-mix(in srgb, var(--sol-yellow) 10%, transparent)" }} data-template-card-reason>{reason}</p>}
       <footer className={`flex items-center justify-between gap-2 pt-1 ${reason ? "" : "mt-auto"}`}>
-        <span className="flex items-center gap-1.5 text-[10.5px] text-sol-text-dim">
-          <span>{byCodecast ? "by Codecast" : "this workspace"}</span>
-          {!leads && <span title="Once a project has a lead, this role reports to it">· under the lead</span>}
-          {status && status !== "stable" && <span className="rounded px-1 py-px text-[9.5px] uppercase tracking-wide text-sol-yellow" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)" }}>{status}</span>}
-          {secretInputs(t.manifest).length > 0 && <Lock className="h-3 w-3" aria-label="binds secrets on your machine" />}
-        </span>
+        <span className="text-[10.5px] text-sol-text-dim">{byCodecast ? "" : "Your workspace's copy"}</span>
         {!reason && (
           <Button type="button" variant="violet" size="sm" onClick={onPick} className="rounded-lg" data-template-card-hire>
             Hire <ArrowRight className="transition-transform group-hover:translate-x-0.5" />
@@ -169,5 +160,22 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
         )}
       </footer>
     </article>
+  );
+}
+
+/** What the role brings to the job: the commands it runs and the skills it
+ *  reads, by name, shipped and versioned with the template. */
+export function ToolsRow({ template: t, max = 4 }: { template: Pick<CatalogTemplate, "manifest">; max?: number }) {
+  const { commands, skills } = templateTools(t.manifest);
+  if (!commands.length && !skills.length) return null;
+  return (
+    <div className="min-w-0" data-template-tools={commands.length + skills.length}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-sol-text-dim">Ships {commands.length ? `${commands.length} tool${commands.length === 1 ? "" : "s"}` : ""}{commands.length && skills.length ? " · " : ""}{skills.length ? `${skills.length} skill${skills.length === 1 ? "" : "s"}` : ""}</p>
+      <ul className="mt-1 flex flex-wrap gap-1">
+        {commands.slice(0, max).map((id) => <li key={id} className="rounded px-1.5 py-px text-[10.5px] text-sol-text" style={{ fontFamily: "var(--font-mono)", background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" }} data-template-tool={id}>{id}</li>)}
+        {commands.length > max && <li className="px-0.5 text-[10.5px] text-sol-text-dim">+{commands.length - max}</li>}
+        {!commands.length && skills.slice(0, max).map((id) => <li key={id} className="rounded px-1.5 py-px text-[10.5px] text-sol-text-muted" style={{ fontFamily: "var(--font-mono)", background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>{id}</li>)}
+      </ul>
+    </div>
   );
 }

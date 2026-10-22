@@ -42,6 +42,7 @@ const TYPE_LABEL: Record<EntityType, string> = {
   deploy: 'Deploy',
   role: 'Role',
   person: 'Person',
+  secret: 'Secret',
 };
 
 // Web pill palette: session=blue, plan=cyan, task=violet, doc=green,
@@ -64,6 +65,7 @@ const TYPE_COLOR: Record<EntityType, string> = {
   deploy: Theme.green,
   role: Theme.violet,
   person: Theme.green,
+  secret: Theme.yellow,
 };
 
 const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']> = {
@@ -84,6 +86,7 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   deploy: 'upload-cloud',
   role: 'hexagon',
   person: 'user',
+  secret: 'key',
 };
 
 // Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the

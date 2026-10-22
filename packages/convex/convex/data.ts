@@ -27,6 +27,8 @@ type DataContextOpts = {
 
 const SCOPED_TABLES = new Set([
   "tasks", "plans", "docs", "projects", "initiatives", "decisions", "patterns",
+  // A published flow is the team's (flows.md FL2); the rest are their owner's.
+  "workflows",
 ]);
 
 export type DataContext = Awaited<ReturnType<typeof createDataContext>>;
