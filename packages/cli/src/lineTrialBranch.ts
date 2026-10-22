@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "./proc.js";
+import { stopWatchersIn } from "./check.js";
 import { lineRunDir, runSlug } from "./workflow/runner.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 
@@ -80,8 +81,10 @@ export function runHandsVia(post: (route: string, body: Record<string, unknown>)
  * branch it finds reset, lands: a build hand settled while it worked put its
  * fix back onto the "fresh" branch with `git reset --keep`, and the next run
  * proved against it (ct-60298). A session that is working refuses the fresh
- * run; one that has settled is the earlier run's leftover and is stopped.
- * Anything still running in the tree after that refuses too.
+ * run; one that has settled is the earlier run's leftover and is stopped, as
+ * are the tree's typecheck watchers (`cast check`), which outlive the hands
+ * that asked for them. Anything still running in the tree after that refuses
+ * too.
  */
 async function clearTree(tree: string, hands?: RunHands, waitMs = 15_000): Promise<void> {
   let busy = processesIn(tree);
@@ -90,7 +93,8 @@ async function clearTree(tree: string, hands?: RunHands, waitMs = 15_000): Promi
   const working = live.filter((h) => h.working);
   if (working.length) throw new Error(`${tree} has a session still working in it (${working.map((h) => h.id.slice(0, 7)).join(", ")}): an earlier run's hand is at work there. Let it finish or kill it, then start the run again.`);
   for (const h of live) await hands!.stop(h.id);
-  for (const until = Date.now() + (live.length ? waitMs : 0); ; busy = processesIn(tree)) {
+  const watchers = stopWatchersIn(tree);
+  for (const until = Date.now() + (live.length || watchers.length ? waitMs : 0); ; busy = processesIn(tree)) {
     if (!busy.length) return;
     if (Date.now() >= until) break;
     await new Promise((r) => setTimeout(r, 1000));

@@ -1971,10 +1971,14 @@ export type ClientUI = {
   // The floating faces' circle size (lib/faces/layout FLOAT_FACE_SIZES).
   // Unstamped: the size that suits a laptop is a stamp on an ultrawide.
   float_face_size?: number;
-  // Which microphone and camera a deliberate join opens (lib/calls/joinPrefs).
-  // Unstamped on purpose: a device id names hardware attached to THIS machine,
-  // so the newest choice must not travel — the laptop's headset id is noise on
-  // the desktop, and switchActiveDevice would simply fail on it.
+  // Which microphone, speaker and camera a join opens: each a ranking of
+  // device names, best first (lib/calls/deviceRank). Stamped, because the
+  // same headphones are the same headphones on every machine.
+  call_mic_rank?: string[];
+  call_speaker_rank?: string[];
+  call_camera_rank?: string[];
+  // The single device id each machine remembered before rankings; read only
+  // as the fallback for an unranked kind (lib/calls/joinPrefs).
   call_mic_device_id?: string;
   call_camera_device_id?: string;
   call_speaker_device_id?: string;
