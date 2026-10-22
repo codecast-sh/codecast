@@ -1,5 +1,5 @@
 import type { AreaChange } from "./orgAreas";
-import { envFor, type SecretKind } from "./secrets";
+import type { SecretKind } from "./secrets";
 // Detection of user-role messages that machinery delivered into a session
 // rather than a human typing them: cross-session `cast send` wrappers,
 // inter-agent teammate broadcasts (Claude Code SendMessage), scheduled-task
@@ -841,8 +841,9 @@ export const VAULT_READY_TAG_RE = /<cast-vault-ready\s+id="([^"]*)"\s+name="([^"
 
 export type VaultReadyMessage = { id: string; name: string; text: string };
 
-export function formatVaultReady(s: { short_id: string; name: string; kind: SecretKind; env?: string[]; sites?: string[]; has_otp?: boolean }): string {
-  const vars = envFor(s).map((b) => b.var).join(" and ");
+/** `vars` are the variables `cast vault run` sets for it (secrets envFor). */
+export function formatVaultReady(s: { short_id: string; name: string; kind: SecretKind; vars: string[]; sites?: string[]; has_otp?: boolean }): string {
+  const vars = s.vars.join(" and ");
   const run = `\`cast vault run ${s.name} -- <command>\``;
   const how =
     s.kind === "signin" ? `\`cast browser open ${s.sites?.[0] ?? "<site>"}\` starts signed in.`
