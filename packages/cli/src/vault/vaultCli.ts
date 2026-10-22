@@ -85,7 +85,7 @@ export class VaultCliError extends Error {
 export function selectVault(configDir: string, spec?: string, cwd = process.cwd()): VaultInfo {
   const vaults = listVaults(configDir);
   if (vaults.length === 0) {
-    throw new VaultCliError("No vaults registered. Add one with: cast files add ~/notes");
+    throw new VaultCliError("No folders registered. Add one with: cast files add ~/notes");
   }
 
   if (spec) {
@@ -99,13 +99,13 @@ export function selectVault(configDir: string, spec?: string, cwd = process.cwd(
     if (byName.length === 1) return byName[0];
     if (byName.length > 1) {
       throw new VaultCliError(
-        `"${wanted}" names ${byName.length} vaults.`,
+        `"${wanted}" names ${byName.length} folders.`,
         VAULT_EXIT.ambiguous,
         byName.map((v) => `${v.id}  ${v.name}  ${v.root}`),
       );
     }
     throw new VaultCliError(
-      `No vault matching "${wanted}". List them with: cast files ls`,
+      `No folder matching "${wanted}". List them with: cast files ls`,
       VAULT_EXIT.notFound,
     );
   }
@@ -123,13 +123,13 @@ export function selectVault(configDir: string, spec?: string, cwd = process.cwd(
   if (registered.length === 1) return registered[0];
   if (registered.length === 0) {
     throw new VaultCliError(
-      `No vaults registered, and this directory is not inside a project with notes.\n` +
+      `No folders registered, and this directory is not inside a project with notes.\n` +
         `Add one with: cast files add <dir>   ·   or run this from inside a project.`,
       VAULT_EXIT.ambiguous,
     );
   }
   throw new VaultCliError(
-    `${registered.length} vaults registered and this directory is not in one — name one with --vault.`,
+    `${registered.length} folders registered and this directory is not in one — name one with --vault.`,
     VAULT_EXIT.ambiguous,
     registered.map((v) => `${v.id}  ${v.name}  ${v.root}`),
   );
@@ -203,7 +203,7 @@ export async function openVault(
     files = await scanVault(vault.root);
   } catch (err) {
     throw new VaultCliError(
-      `Cannot read vault "${vault.name}" at ${vault.root}: ${(err as Error).message}`,
+      `Cannot read folder "${vault.name}" at ${vault.root}: ${(err as Error).message}`,
       VAULT_EXIT.unreachable,
     );
   }
@@ -214,7 +214,7 @@ export async function openVault(
       await fsp.access(vault.root);
     } catch {
       throw new VaultCliError(
-        `Vault "${vault.name}" is registered at ${vault.root}, which no longer exists.`,
+        `Folder "${vault.name}" is registered at ${vault.root}, which no longer exists.`,
         VAULT_EXIT.unreachable,
       );
     }
@@ -285,7 +285,7 @@ export interface NoteRef {
 export async function resolveNote(ctx: VaultCtx, input: string): Promise<NoteRef> {
   const norm = normalizeVaultPath(input);
   if (norm === null || norm === "") {
-    throw new VaultCliError(`"${input}" is not a path inside the vault.`);
+    throw new VaultCliError(`"${input}" is not a path inside the folder.`);
   }
 
   let hit = ctx.index.resolveLinkInfo(norm, "");
@@ -306,12 +306,12 @@ export async function resolveNote(ctx: VaultCtx, input: string): Promise<NoteRef
   }
   if (!hit.path) {
     throw new VaultCliError(
-      `No note matching "${input}" in vault "${ctx.vault.name}".`,
+      `No note matching "${input}" in folder "${ctx.vault.name}".`,
       VAULT_EXIT.notFound,
     );
   }
   const abs = resolveVaultPath(ctx.vault.root, hit.path);
-  if (!abs) throw new VaultCliError(`"${hit.path}" is out of the vault's scope.`);
+  if (!abs) throw new VaultCliError(`"${hit.path}" is out of the folder's scope.`);
   return { path: hit.path, abs };
 }
 
@@ -332,14 +332,14 @@ export async function targetNote(ctx: VaultCtx, input: string): Promise<NoteRef 
 
   const norm = normalizeVaultPath(input);
   if (norm === null || norm === "") {
-    throw new VaultCliError(`"${input}" is not a path inside the vault.`);
+    throw new VaultCliError(`"${input}" is not a path inside the folder.`);
   }
   const rel = isVaultDocumentPath(norm) ? norm : `${norm}.md`;
   if (!isVaultDocumentPath(rel)) {
-    throw new VaultCliError(`"${input}" is not a file type the vault holds.`);
+    throw new VaultCliError(`"${input}" is not a file type the folder holds.`);
   }
   const abs = resolveVaultPath(ctx.vault.root, rel);
-  if (!abs) throw new VaultCliError(`"${input}" is out of the vault's scope.`);
+  if (!abs) throw new VaultCliError(`"${input}" is out of the folder's scope.`);
   return { path: rel, abs, exists: false };
 }
 
