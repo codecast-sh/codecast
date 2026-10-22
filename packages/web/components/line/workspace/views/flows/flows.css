@@ -1,0 +1,38 @@
+/* The Flows view (flows.md FL6): the pool on the left, the picked flow on the right. */
+.flv { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 22px; align-items: start; }
+.flv-list { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 16px; }
+.flv-list ul, .flv-runs ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.flv-h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: var(--lw-fs-xs); font-weight: 700; letter-spacing: .02em; color: var(--lw-ink-2); }
+.flv-h .lw-num { color: var(--lw-ink-3); font-weight: 500; }
+.flv-row { width: 100%; display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; column-gap: 8px; text-align: left; padding: 7px 9px; border-radius: 8px; border: 1px solid transparent; background: none; cursor: pointer; }
+.flv-row:hover { background: var(--lw-card-2); }
+.flv-row[aria-current="true"] { background: var(--lw-card); border-color: var(--lw-rule); }
+.flv-row-name { font-size: var(--lw-fs-sm); font-weight: 600; color: var(--lw-ink); }
+.flv-row-path { grid-column: 1; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flv-row-n { grid-column: 2; grid-row: 1 / span 2; align-self: center; display: inline-flex; gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-variant-numeric: tabular-nums; }
+.flv-row-n b[data-live] { color: var(--sol-blue); font-weight: 700; }
+.flv-row-n b[data-live]::before { content: "● "; font-size: 8px; vertical-align: 1px; }
+
+.flv-main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.flv-head { display: flex; align-items: baseline; gap: 10px; }
+.flv-head h1 { margin: 0; font-size: var(--lw-fs-xl); font-weight: 700; color: var(--lw-ink); letter-spacing: -.01em; }
+.flv-where { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.flv-desc { margin: -4px 0 0; font-size: var(--lw-fs-base); color: var(--lw-ink-2); }
+.flv-diagram .fd { padding: 18px 16px 14px; }
+.flv-facts { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+.flv-fact { display: inline-flex; align-items: center; gap: 8px; }
+.flv-fact-k { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.flv-fact-v { display: inline-flex; flex-wrap: wrap; gap: 5px; }
+.flv-chip { font-size: var(--lw-fs-xs); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--lw-rule); color: var(--lw-ink-2); background: var(--lw-card); }
+.flv-chip-btn { cursor: pointer; }
+.flv-chip-btn:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
+
+.flv-runs { margin-top: 6px; }
+.flv-run { width: 100%; display: grid; grid-template-columns: auto 80px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; background: none; text-align: left; cursor: pointer; }
+.flv-run:hover { background: var(--lw-card-2); }
+.flv-run[aria-current="true"] { background: var(--lw-card); border-color: var(--lw-rule); }
+.flv-run-task { font-size: var(--lw-fs-xs); color: var(--lw-ink-2); font-variant-numeric: tabular-nums; }
+.flv-run-why { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flv-run-age { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.flv-none { margin: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
+@media (max-width: 900px) { .flv { grid-template-columns: 1fr; } .flv-list { position: static; } }
