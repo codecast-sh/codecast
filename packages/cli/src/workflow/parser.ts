@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { conditionError } from "./condition";
+import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 
 // --- Tokenizer ---
 
@@ -289,6 +290,11 @@ class Parser {
     if (attrs.max_tokens !== undefined) node.max_tokens = Number(attrs.max_tokens);
     if (attrs.system) node.system = String(attrs.system);
     if (attrs.output) node.output = String(attrs.output) === "text" ? "text" : "json";
+    if (attrs.segment) node.segment = String(attrs.segment);
+    if (attrs.segment_label) node.segment_label = String(attrs.segment_label);
+    if (attrs.segment_flow) node.segment_flow = String(attrs.segment_flow);
+    if (attrs.segment_entry === true || attrs.segment_entry === "true") node.segment_entry = true;
+    if (attrs.segment_exit === "done" || attrs.segment_exit === "stop") node.segment_exit = attrs.segment_exit;
 
     return node;
   }
@@ -330,6 +336,8 @@ const readDisk: ReadFile = (abs) => (fs.existsSync(abs) ? fs.readFileSync(abs, "
 
 export interface ParseOptions {
   read?: ReadFile;
+  /** Where a `flow="<slug>"` node's segment is read from (flows.md FL3); default resolveFlowSource. */
+  resolveFlow?: ResolveFlow;
   /** False keeps each `@file` as an absolute `@/path` instead of its text (where a station's file lives). */
   inline?: boolean;
 }
@@ -361,7 +369,8 @@ export function parseWorkflowFile(filePath: string, opts: ParseOptions = {}): Wo
  */
 export function parseWorkflowSource(src: string, dir?: string, opts: ParseOptions = {}, file?: string): WorkflowGraph {
   const read = opts.read ?? readDisk;
-  const raw = loadRaw(src, dir, read, file ? [file] : []);
+  const loaded = loadRaw(src, dir, read, file ? [file] : []);
+  const raw = expandFlows(loaded, dir, read, opts.resolveFlow ?? resolveFlowSource, opts.inline !== false, []);
   const graph = buildGraph(raw);
   const sources = new Set<string>(raw.files);
   if (dir && opts.inline !== false) {
@@ -447,10 +456,121 @@ function buildGraph(raw: RawGraph): WorkflowGraph {
   if (a.stack) graph.stack = String(a.stack);
   if (a.on_failure === "stop") graph.on_failure = "stop";
   if (a.serves) graph.serves = [...new Set(String(a.serves).split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))];
+  if (a.kind === "segment" || a.kind === "line") graph.kind = a.kind;
+  if (a.label) graph.label = String(a.label);
+  if (a.description) graph.description = String(a.description);
+  if (a.takes) graph.takes = String(a.takes).split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
   for (const [id, attrs] of raw.nodes) graph.nodes.set(id, Parser.buildNode(id, attrs));
   // Ensure nodes referenced in edges exist (as placeholder agent nodes)
   for (const e of raw.edges) for (const id of [e.from, e.to]) if (!graph.nodes.has(id)) graph.nodes.set(id, Parser.buildNode(id, {}));
   return graph;
+}
+
+// --- Segments (docs/architecture/flows.md FL3) ---
+
+/** A segment's source: its text, the directory its `@file` values resolve from, and its file. */
+export type FlowSource = { src: string; dir?: string; file?: string };
+export type ResolveFlow = (slug: string, dir: string | undefined, read: ReadFile) => FlowSource | null;
+
+/** The id prefix a segment's stations take inside the graph that uses it. */
+export const SEGMENT_SEP = "__";
+
+/**
+ * Where a flow's slug is read from: a `<slug>.cast` beside the graph, the
+ * repo's `.codecast/flows/<slug>.cast` (the nearest one above the graph), then
+ * a flow the CLI ships.
+ */
+export function resolveFlowSource(slug: string, dir: string | undefined, read: ReadFile = readDisk): FlowSource | null {
+  const name = slug.replace(/\.cast$/, "");
+  if (dir) {
+    const beside = path.resolve(dir, `${name}.cast`);
+    const own = read(beside);
+    if (own !== null) return { src: own, dir: path.dirname(beside), file: beside };
+    for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+      const f = path.join(d, ".codecast", "flows", `${name}.cast`);
+      const text = read(f);
+      if (text !== null) return { src: text, dir: path.dirname(f), file: f };
+      if (path.dirname(d) === d) break;
+    }
+  }
+  const shipped = Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, name) ? BUILTIN_WORKFLOW_TEMPLATES[name] : undefined;
+  return shipped === undefined ? null : { src: shipped };
+}
+
+const shapeOf = (a: Record<string, Attr>) => String(a.shape ?? "box");
+const isStopExit = (a: Record<string, Attr>) => shapeOf(a) === "Msquare" && !!a.stop;
+const mentionsFailure = (e: WorkflowEdge) => /\boutcome\s*=\s*failure\b/.test(e.condition ?? "");
+const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal"];
+const ID_FIELDS = ["asker", "retry_target"];
+
+/**
+ * Every `flow="<slug>"` node replaced by that segment's stations, named
+ * `<node>__<station>`. Edges into the node enter the segment where its start
+ * leads; each plain exit leaves by the node's own edges with outcome success,
+ * and `<node>.exit` in their conditions names the exit it took.
+ * A stop exit ends the run in the segment's words, unless the node routes
+ * `outcome = failure`: then it leaves by those edges with outcome failure.
+ */
+function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, resolve: ResolveFlow, inline: boolean, chain: string[]): RawGraph {
+  const flowNodes = [...raw.nodes].filter(([, a]) => typeof a.flow === "string" && a.flow);
+  if (!flowNodes.length) return raw;
+  const nodes = new Map(raw.nodes);
+  let edges = [...raw.edges];
+  const files = [...raw.files];
+  for (const [id, attrs] of flowNodes) {
+    const slug = String(attrs.flow);
+    if (chain.includes(slug)) throw new Error(`${raw.name}: flow="${slug}" at ${id} comes back to itself (${[...chain, slug].join(" -> ")})`);
+    const found = resolve(slug, dir, read);
+    if (!found) throw new Error(`${raw.name}: ${id} names flow="${slug}", which is not in the pool (.codecast/flows/${slug}.cast or a shipped flow)`);
+    let seg = loadRaw(found.src, found.dir, read, found.file ? [found.file] : []);
+    seg = expandFlows(seg, found.dir, read, resolve, inline, [...chain, slug]);
+    if (found.file) files.push(found.file);
+    files.push(...seg.files);
+    const starts = [...seg.nodes].filter(([, a]) => shapeOf(a) === "Mdiamond").map(([sid]) => sid);
+    if (starts.length !== 1) throw new Error(`flow "${slug}" needs exactly one start node to be used as a segment`);
+    const start = starts[0];
+    const inner = [...seg.nodes.keys()];
+    const p = `${id}${SEGMENT_SEP}`;
+    const rename = (s: string) => (s === start ? id : `${p}${s}`);
+    // `$station.output` in a prompt or script, `station.json.x` in a condition: the station's new name.
+    const alt = inner.filter((s) => s !== start).map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    const varRefs = new RegExp(`\\$(${alt})(?=\\.)`, "g");
+    const condRefs = new RegExp(`(^|[^\\w.$])(${alt})(?=\\.)`, "g");
+    const rewrite = (text: string) => (alt ? text.replace(varRefs, (_m, sid: string) => `$${p}${sid}`) : text);
+    const rewriteCondition = (c: string) => (alt ? c.replace(condRefs, (_m, pre: string, sid: string) => `${pre}${p}${sid}`) : c);
+    const out = edges.filter((e) => e.from === id);
+    const routesFailure = out.some(mentionsFailure);
+    edges = edges.filter((e) => e.from !== id);
+    nodes.delete(id);
+    const segLabel = String(attrs.label ?? seg.attrs.label ?? slug);
+    for (const [sid, a] of seg.nodes) {
+      if (sid === start) continue;
+      const copy: Record<string, Attr> = { ...a, segment: id, segment_label: segLabel, segment_flow: slug };
+      for (const f of STRING_FIELDS) {
+        const v = copy[f];
+        if (typeof v !== "string") continue;
+        const text = inline && v.startsWith("@") && path.isAbsolute(v.slice(1)) ? inlineRef(v, read, new Set()) : v;
+        copy[f] = rewrite(text);
+      }
+      for (const f of ID_FIELDS) if (typeof copy[f] === "string" && inner.includes(String(copy[f]))) copy[f] = rename(String(copy[f]));
+      if (shapeOf(a) === "Msquare" && !(isStopExit(a) && !routesFailure)) {
+        // An exit the node's own edges leave from: a step that says which exit it took.
+        const failing = isStopExit(a);
+        const said = String(a.label ?? sid).replace(/[^\w .,:()-]/g, "");
+        const exitId = `${p}${sid}`;
+        nodes.set(exitId, { shape: "parallelogram", label: said, script: `echo '{"exit": "${sid}"}'${failing ? "; exit 1" : ""}`, segment: id, segment_label: segLabel, segment_flow: slug, segment_exit: failing ? "stop" : "done" });
+        // `<node>.exit` in the node's own conditions reads which exit the segment took.
+        const which = (c: string) => c.replace(new RegExp(`(^|[^\\w.])${id}\\.exit\\b`, "g"), `$1${exitId}.json.exit`);
+        for (const e of out.filter((e) => (failing ? mentionsFailure(e) : !mentionsFailure(e)))) edges.push({ ...e, from: exitId, ...(e.condition ? { condition: which(e.condition) } : {}) });
+        continue;
+      }
+      nodes.set(`${p}${sid}`, copy);
+    }
+    // The node itself is the segment's entry: a step that passes straight on, named for the segment.
+    nodes.set(id, { shape: "diamond", label: segLabel, segment: id, segment_label: segLabel, segment_flow: slug, segment_entry: true });
+    for (const e of seg.edges) edges.push({ ...e, from: rename(e.from), to: rename(e.to), ...(e.condition ? { condition: rewriteCondition(e.condition) } : {}) });
+  }
+  return { ...raw, nodes, edges, files };
 }
 
 /** An absolute `@/path` value as that file's text, its `@include` lines taken in; any other value as written. */

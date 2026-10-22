@@ -524,42 +524,41 @@ describe("cycleInboxViewMode", () => {
       buckets: {},
       clientState: {},
       pending: {},
+      inboxViewModesShown: ["grouped", "recent", "time"],
     });
   });
+  const cycle = () => {
+    useInboxStore.getState().cycleInboxViewMode();
+    return useInboxStore.getState().inboxViewMode();
+  };
 
-  it("cycles grouped → recent → time → grouped when no buckets exist", () => {
-    const store = useInboxStore.getState();
-    expect(store.inboxViewMode()).toBe("grouped");
-    store.cycleInboxViewMode();
-    expect(useInboxStore.getState().inboxViewMode()).toBe("recent");
-    useInboxStore.getState().cycleInboxViewMode();
-    expect(useInboxStore.getState().inboxViewMode()).toBe("time");
-    useInboxStore.getState().cycleInboxViewMode();
+  it("steps through the published tabs in order and wraps", () => {
     expect(useInboxStore.getState().inboxViewMode()).toBe("grouped");
+    expect([cycle(), cycle(), cycle()]).toEqual(["recent", "time", "grouped"]);
   });
 
-  it("includes the bucket mode when buckets exist and honors the legacy boolean", () => {
+  it("walks only the tabs on screen, whatever else the store could group by", () => {
+    // A goal exists on some session the panel does not list: no Goal tab, so
+    // the cycle goes plan → project → reports without a stop in between.
     useInboxStore.setState({
       buckets: { b1: bucket("b1", "perf") },
-      clientState: { ui: { inbox_flat_view: true } },
+      clientState: { ui: { inbox_view_mode: "plan" } },
+      inboxViewModesShown: ["grouped", "recent", "time", "bucket", "plan", "project", "reports", "trigger"],
     });
-    // Legacy boolean true reads as "time" when the mode is unset.
-    expect(useInboxStore.getState().inboxViewMode()).toBe("time");
-    useInboxStore.getState().cycleInboxViewMode();
-    expect(useInboxStore.getState().inboxViewMode()).toBe("bucket");
-    // The coherence write keeps the boolean false outside "time".
-    expect(useInboxStore.getState().clientState.ui?.inbox_flat_view).toBe(false);
-    useInboxStore.getState().cycleInboxViewMode();
-    expect(useInboxStore.getState().inboxViewMode()).toBe("grouped");
+    expect([cycle(), cycle(), cycle(), cycle()]).toEqual(["project", "reports", "trigger", "grouped"]);
   });
 
-  it("skips an all-archived bucket set", () => {
-    useInboxStore.setState({
-      buckets: { b1: bucket("b1", "perf", { archived_at: 5 }) },
-      clientState: { ui: { inbox_view_mode: "time" } },
-    });
-    useInboxStore.getState().cycleInboxViewMode();
-    expect(useInboxStore.getState().inboxViewMode()).toBe("grouped");
+  it("honors the legacy boolean and keeps it coherent", () => {
+    useInboxStore.setState({ clientState: { ui: { inbox_flat_view: true } } });
+    // Legacy boolean true reads as "time" when the mode is unset.
+    expect(useInboxStore.getState().inboxViewMode()).toBe("time");
+    expect(cycle()).toBe("grouped");
+    expect(useInboxStore.getState().clientState.ui?.inbox_flat_view).toBe(false);
+  });
+
+  it("does nothing while no panel shows the tabs", () => {
+    useInboxStore.setState({ inboxViewModesShown: null });
+    expect(cycle()).toBe("grouped");
   });
 });
 

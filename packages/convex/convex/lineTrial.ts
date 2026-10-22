@@ -1534,6 +1534,16 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
     if (route.to === "investigate") await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: `Asked again (${waiting!.short_id}): ${route.why}. The run reads the problem again and works on the findings as they are now, on its branch.` });
     return { task: task.short_id, run_id: run._id, resumed_at: node, ...(route.to === "investigate" ? { rebuild: "investigate" as const, why: route.why } : {}) };
   }
+  // A failed run tried again at a station its lead names, on its own branch, as a new attempt under the trial's
+  // limits (workflow_runs.resumeFailedRunCore).
+  if (at?.trim()) {
+    if (!run || run.status !== "failed") throw new Error(`${task.short_id}'s run ${run ? `is ${run.status}` : "does not exist"}; --at resumes a failed run (a run waiting at a card is asked again with --reask --at)`);
+    if (!run.runner_device) throw new Error(`${task.short_id}'s run names no machine`);
+    const refused = rerunRefusal(await trialRoom(ctx, project, now, undefined, [run.runner_device]), false);
+    if (refused) throw new Error(refused);
+    await resumeRunAt(ctx as any, userId, run, at.trim(), now, { newAttempt: true });
+    return { task: task.short_id, run_id: run._id, resumed_at: at.trim() };
+  }
   if (!run || !(run.status === "failed" || stopOf(run, task.status))) throw new Error(`${task.short_id}'s run ${run ? `is ${run.status}` : "does not exist"}; only a failed or stopped run is rerun here`);
   // A run no machine ever claimed (the daemon took it and its runner died first) is started the way the dispatcher
   // starts one: from its route's newest run that names a machine.
