@@ -12,7 +12,8 @@ import { useInboxStore } from "../store/inboxStore";
 import { captureError } from "../lib/analytics";
 import type { MigrationBatch } from "../lib/migrationPlan";
 import { useHibernationCommands } from "./useHibernationCommands";
-import type { OffloadPlan, OffloadSelection, ResourceActions, ResourceSession } from "../components/resources/types";
+import type { OffloadPlan, OffloadRehearsal, OffloadSelection, ResourceActions, ResourceSession } from "../components/resources/types";
+import type { MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
 
 const api = _api as any;
 
@@ -52,6 +53,42 @@ export function applyPreflight(plan: OffloadPlan, pre: Preflight | undefined, no
   };
 }
 
+/** One rehearsal row as the review's feed carries it (convex/moveRehearsals.ts listMine). */
+export type RehearsalRow = { _id: string; session_id: string; destination_id: string; status: "pending" | "done" | "failed"; result: MoveRehearsal | null; error: string | null; created_at: number };
+
+/**
+ * Overlay the newest rehearsal of each session's move to each destination.
+ * What it found would fail the transfer blocks that destination; the rest
+ * rides on the destination for the review to show and the person to weigh.
+ */
+export function applyRehearsals(plan: OffloadPlan, rows: RehearsalRow[]): OffloadPlan {
+  if (!rows.length) return plan;
+  const newest = new Map<string, RehearsalRow>();
+  for (const r of rows) {
+    const key = `${r.session_id}:${r.destination_id}`;
+    if ((newest.get(key)?.created_at ?? -1) < r.created_at) newest.set(key, r);
+  }
+  return {
+    ...plan,
+    candidates: plan.candidates.map((c) => {
+      let changed = false;
+      const perDestination = { ...c.perDestination };
+      for (const [dest, was] of Object.entries(c.perDestination)) {
+        const r = newest.get(`${c.sessionId}:${dest}`);
+        if (!r) continue;
+        changed = true;
+        const rehearsal: OffloadRehearsal = r.status === "done" && r.result ? { status: "done", result: r.result }
+          : r.status === "pending" ? { status: "pending" } : { status: "failed", error: r.error ?? "The rehearsal did not finish" };
+        const blockers = rehearsal.status === "done" ? union(was.blockers, rehearsal.result.blockers) : was.blockers;
+        perDestination[dest] = { ...was, rehearsal, blockers, readiness: blockers.length ? "blocked" : was.readiness };
+      }
+      return changed ? { ...c, perDestination } : c;
+    }),
+  };
+}
+
+const rehearsalRequestId = () => `rh_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+
 function report(surface: string) {
   return (e: unknown) => {
     const err = e instanceof Error ? e : new Error(String(e));
@@ -62,16 +99,17 @@ function report(surface: string) {
 
 const clientBatchId = () => `rb_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
-export function useResourceActions(sessions: ResourceSession[], plans: OffloadPlan[], batches: MigrationBatch[], now: number) {
+export function useResourceActions(sessions: ResourceSession[], plans: OffloadPlan[], batches: MigrationBatch[], now: number, rehearsals: RehearsalRow[] = []) {
   const router = useRouter();
   const { request: requestPark } = useHibernationCommands();
   const dryRun = useMutation(api.resourceOffload.start);
+  const rehearse = useMutation(api.moveRehearsals.request);
   const [preflight, setPreflight] = useState<Record<string, Preflight>>({});
   const byId = useMemo(() => new Map(sessions.map((s) => [s.sessionId, s])), [sessions]);
 
   const toServer = (sel: OffloadSelection[]) => sel.flatMap((s) => {
     const conv = byId.get(s.sessionId)?.conversationId;
-    return conv ? [{ conversation_id: conv, session_id: s.sessionId, destination_id: s.destinationId, attested: s.attested }] : [];
+    return conv ? [{ conversation_id: conv, session_id: s.sessionId, destination_id: s.destinationId, attested: s.attested, ...(s.bring?.length ? { bring: s.bring } : {}) }] : [];
   });
   const sourceOf = (sel: OffloadSelection[]) => byId.get(sel[0]?.sessionId)?.deviceId;
   const start = (intent: ResourceOffloadIntent) => {
@@ -101,6 +139,9 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
       dryRun({ source_device_id: source, selections: toServer(sel), wait_for_idle_ms: 10 * 60_000, dry_run: true })
         .then((res: { checks: Check[] }) => setPreflight((m) => ({ ...m, [source]: { at: Date.now(), checks: res.checks } })))
         .catch(report("resources.preflight"));
+      // The machine holding the sessions rehearses each move; its answers arrive through the store.
+      const asked = toServer(sel).map(({ conversation_id, session_id, destination_id }) => ({ conversation_id, session_id, destination_id }));
+      if (asked.length) rehearse({ request_id: rehearsalRequestId(), source_device_id: source, selections: asked }).catch(report("resources.rehearse"));
     },
     onStartOffload: (sel, { waitForTurnMs }) => {
       const source = sourceOf(sel);
@@ -120,6 +161,6 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
     onSetBackground: (deviceId, sessionId, background) => { useInboxStore.getState().setSessionBackground(deviceId, sessionId, background).catch(report("resources.background")); },
   };
 
-  const checkedPlans = useMemo(() => plans.map((p) => applyPreflight(p, preflight[p.deviceId], now)), [plans, preflight, now]);
+  const checkedPlans = useMemo(() => plans.map((p) => applyRehearsals(applyPreflight(p, preflight[p.deviceId], now), rehearsals)), [plans, preflight, now, rehearsals]);
   return { actions, plans: checkedPlans };
 }

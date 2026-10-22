@@ -847,6 +847,10 @@ async function adoptHiredInstance(deps: OrgInitDeps, instance: string, dir: stri
   if (!row) throw new Error(candidates.length > 1 && !options.project ? `Several projects have an instance named ${instance}; pass --project` : `Instance ${instance} is not on project ${options.project}`);
   if (!row.role_id) throw new Error(`The hire ${instance} has no role yet: accept its role change first`);
   const project = await verifiedProject(deps, tree, dir, String(row.project_id));
+  // A web hire names no folder; the project does. When its folder is on this
+  // machine and this is not it, binding here would pin the role to the wrong checkout.
+  const home = project.registeredDir && fs.existsSync(project.registeredDir) ? canonicalDirectory(project.registeredDir) : null;
+  if (home && home !== dir) throw new Error(`${instance} works on ${project.name}, whose checkout on this machine is ${home}, not ${dir}. Run: cast org template bind ${quoteTemplateArg(instance)} --dir ${quoteTemplateArg(home)}`);
   const role = (tree.roles ?? []).find((r: any) => r._id === row.role_id);
   if (!role) throw new Error("The hire's role is not in this workspace");
   const artifact = await releaseArtifact(deps, { template_id: row.template_id, version: row.version, digest: row.digest }, args);

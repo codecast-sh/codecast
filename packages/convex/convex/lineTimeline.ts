@@ -117,12 +117,17 @@ export const page = query({
         });
       }
     }
+    // A judge's read names the conversation it read: its contact, as the moment's own event does.
+    const momentRows = new Map<string, Doc<"moments"> | null>(moments.rows.map((m) => [String(m._id), m]));
     for (const j of judged.rows) {
       if (j.status === "skipped") continue;
+      const k = String(j.moment_id);
+      if (!momentRows.has(k)) momentRows.set(k, await ctx.db.get(j.moment_id));
+      const m = momentRows.get(k);
       events.push({
         _id: `judged:${j._id}`, workspace: ws, at: j.at, kind: "judged", source: `judge:${j.judge}`,
         ...(j.expectations[0] ? { project_id: String(j.expectations[0].project_id) } : {}),
-        title: j.judge, detail: j.status === "failed" ? "failed" : `${j.findings} findings`, moment: j.moment_short_id,
+        title: m?.who ? String(m.who) : m?.subject ?? j.moment_short_id, detail: j.status === "failed" ? "failed" : `${j.findings} findings`, moment: j.moment_short_id,
       });
     }
     for (const s of signals.rows) {
@@ -141,7 +146,9 @@ export const page = query({
     for (const t of tasks.rows) if (t.cause?.merged_into) intoRefs.set(String(t.cause.merged_into), (await taskOf(t.cause.merged_into))?.short_id);
     for (const t of tasks.rows) {
       if (t.source !== "signal" || !t.cause) continue;
-      events.push(...problemEvents(t, ws, (id) => intoRefs.get(String(id))));
+      // A problem comes from where its findings do: its newest finding's source.
+      const first: Doc<"signals"> | null = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", t._id)).order("desc").first();
+      events.push(...problemEvents(t, ws, (id) => intoRefs.get(String(id))).map((e) => (first ? { ...e, source: first.source } : e)));
     }
     for (const r of runs.rows) {
       if (!r.task_id) continue;
