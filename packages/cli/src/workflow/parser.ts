@@ -5,6 +5,7 @@ import { createHash } from "crypto";
 import { conditionError } from "./condition";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 import { SEGMENT_SEP } from "@codecast/shared/contracts/flowPool";
+import { teamFlowFile } from "./teamFlowIndex";
 
 // --- Tokenizer ---
 
@@ -478,8 +479,8 @@ export { SEGMENT_SEP };
 
 /**
  * Where a flow's slug is read from: a `<slug>.cast` beside the graph, the
- * repo's `.codecast/flows/<slug>.cast` (the nearest one above the graph), then
- * a flow the CLI ships.
+ * repo's `.codecast/flows/<slug>.cast` (the nearest one above the graph), a
+ * flow the CLI ships, then a flow the team published (teamFlowIndex.ts).
  */
 export function resolveFlowSource(slug: string, dir: string | undefined, read: ReadFile = readDisk): FlowSource | null {
   const name = slug.replace(/\.cast$/, "");
@@ -495,7 +496,11 @@ export function resolveFlowSource(slug: string, dir: string | undefined, read: R
     }
   }
   const shipped = Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, name) ? BUILTIN_WORKFLOW_TEMPLATES[name] : undefined;
-  return shipped === undefined ? null : { src: shipped };
+  if (shipped !== undefined) return { src: shipped };
+  // Last, a flow the team published, as this machine last read it from the pool.
+  const team = teamFlowFile(name);
+  const text = team ? read(team) : null;
+  return team && text !== null ? { src: text, dir: path.dirname(team), file: team } : null;
 }
 
 const shapeOf = (a: Record<string, Attr>) => String(a.shape ?? "box");
