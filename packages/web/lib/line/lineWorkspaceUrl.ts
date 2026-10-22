@@ -34,7 +34,7 @@
 // write, as the view that holds their job now. Pure, so a test reads and
 // writes addresses.
 
-export const LINE_VIEWS = ["foryou", "problems", "line", "deploys"] as const;
+export const LINE_VIEWS = ["foryou", "problems", "line", "flows", "deploys"] as const;
 export type LineView = (typeof LINE_VIEWS)[number];
 export const DEFAULT_LINE_VIEW: LineView = "foryou";
 
@@ -85,7 +85,7 @@ const VIEW_KEEPS: Record<LineView, ReadonlyArray<(typeof SELECTION_KEYS)[number]
   // A decision rides into Problems only when the move names it: For you's reader settles one on its need, and a
   // problem's band shows its own without it, so a decision kept from another view would follow every later link.
   // For you's list keeps how it is filtered, ordered and grouped.
-  foryou: ["need", "card", "decision", "who", "kind", "area", "order", "group"], problems: ["case", "ask", "run", "step", "source", "finding", "row", "status", "process", "quiet", "found", "q", "sort", "win"], line: ["source", "finding", "stage", "item"], deploys: ["deploy"],
+  foryou: ["need", "card", "decision", "who", "kind", "area", "order", "group"], problems: ["case", "ask", "run", "step", "source", "finding", "row", "status", "process", "quiet", "found", "q", "sort", "win"], line: ["source", "finding", "stage", "item"], flows: ["item", "run"], deploys: ["deploy"],
 };
 /** The view that reads a step of its own (Problems reads one too, as an open run's playhead). */
 const STEP_VIEWS = new Set<LineView>(["line"]);
@@ -276,12 +276,12 @@ export function lineViewHome(view: LineView): LineSelectionPatch {
 }
 
 /** A view's name in the nav, in nav order. */
-export const LINE_VIEW_LABELS: Record<LineView, string> = { foryou: "Decisions", problems: "Problems", line: "Steps", deploys: "Deploys" };
+export const LINE_VIEW_LABELS: Record<LineView, string> = { foryou: "Decisions", problems: "Problems", line: "Steps", flows: "Flows", deploys: "Deploys" };
 export const LINE_MODE_LABELS: Record<LineMode, string> = { table: "Table", map: "Map" };
 
 /** The second key of the go chord (G, then this) for each view. The shell binds no digit: an open decision answers
  *  on bare 1 to 9 (LJ5). */
-export const LINE_VIEW_KEYS: Record<LineView, string> = { foryou: "f", problems: "p", line: "s", deploys: "d" };
+export const LINE_VIEW_KEYS: Record<LineView, string> = { foryou: "f", problems: "p", line: "s", flows: "w", deploys: "d" };
 
 /** The view the second key of the go chord opens; null for any other key. */
 export const lineViewForGoKey = (key: string): LineView | null => LINE_VIEWS.find((v) => LINE_VIEW_KEYS[v] === key.toLowerCase()) ?? null;

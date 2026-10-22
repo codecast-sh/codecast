@@ -256,9 +256,9 @@ test("a proposal whose records all fall in one loose group is All N records, car
   React.act(() => bare.unmount());
 });
 
-test("after the send: Applied, Applying 10 of 18, Rejected with the words, 2 failed with Retry only where a composer can send", () => {
+test("after the send: Applied, Applying 10 of 18, Rejected with the words, 2 failed with Adjust only where a composer can send, never Retry", () => {
   const sent = SENT.short_id;
-  for (const [name, ui, retry] of [["no composer", card(sent), false], ["a composer", inThread(card(sent)), true]] as const) {
+  for (const [name, ui, answerable] of [["no composer", card(sent), false], ["a composer", inThread(card(sent)), true]] as const) {
     const root = mount(ui);
     const c = q(`[data-card='${sent}']`);
     const word = (key: string) => group(c, key).querySelector("[data-subject-state]");
@@ -271,11 +271,12 @@ test("after the send: Applied, Applying 10 of 18, Rejected with the words, 2 fai
     expect(word("plan:pl-911")!.textContent, name).toBe("2 failed");
     expect(group(c, "project:pr-901").querySelector("[data-subject-approve]"), name).toBeNull();
     const p1 = group(c, "plan:pl-911");
-    if (retry) {
-      expect(p1.querySelector("[data-subject-approve]")!.textContent, name).toBe("Retry");
+    expect(p1.querySelector("[data-subject-approve]"), name).toBeNull();
+    if (answerable) {
+      expect(p1.querySelector("[data-subject-reply]"), name).not.toBeNull();
       expect(c.querySelector("[data-proposal-readonly]"), name).toBeNull();
     } else {
-      expect(p1.querySelector("[data-subject-approve]"), name).toBeNull();
+      expect(p1.querySelector("[data-subject-reply]"), name).toBeNull();
       expect(c.querySelector("[data-proposal-readonly]"), name).not.toBeNull();
       expect(c.querySelector("[data-proposal-readonly-line]")!.textContent, name).toBe("Open this in Head of People's thread to answer.");
     }

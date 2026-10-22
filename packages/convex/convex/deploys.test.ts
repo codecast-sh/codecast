@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { backfill, recordDeployMarker, report, request, stage } from "./deploys";
+import { autoDeployCore, backfill, DEPLOY_SETTLE_MS, recordDeployMarker, report, request, stage } from "./deploys";
 
 // Deploys as objects (docs/architecture/deploys.md): a marker records or
 // finishes a deploy, the line's stage sends what waits, and every deploy
@@ -163,6 +163,98 @@ describe("the line's deploy stage (DP2)", () => {
     const t = await seed();
     t.projects[0].line_profile.deploy = { command: null, target: null, trigger: "person" };
     await expect((request as any)._handler(ctxFor(t), { project_id: PROJECT, api_token: TOKEN })).rejects.toThrow("no deploy stage");
+  });
+});
+
+describe("the role trigger (DP4)", () => {
+  const releaseRole = (over: Record<string, any> = {}) => ({
+    _id: "role_rel", short_id: "or-9", handle: "release", name: "Release Captain", team_id: TEAM, host_user_id: ME, status: "active", trust: "direct",
+    authority: [{ id: "deploy", kind: "publish", label: "Deploy", limit: { per_day: 2 }, granted_by: ME, granted_at: NOW - DAY, expires_at: NOW + 30 * DAY }],
+    ...over,
+  });
+  const roleLine = (t: Record<string, any[]>) => { t.projects[0].line_profile.deploy = { command: "./deploy.sh", target: "production", trigger: "role", role: "release" }; t.projects[0].line_profile.publisher_user_id = ME; };
+
+  test("a role holding a deploy grant asks for one deploy of what waits, counted against its daily limit", async () => {
+    const t = await seed({ org_roles: [releaseRole()] });
+    roleLine(t);
+    const r = await autoDeployCore(ctxFor(t), NOW);
+    expect(r.asked).toEqual([{ project_id: PROJECT, deploy: "dp-1", role: "release" }]);
+    expect(t.deploys[0]).toMatchObject({ status: "requested", trigger: "role", started_by: { kind: "role", name: "@release", role_id: "role_rel" } });
+    expect(t.deploys[0].carries).toHaveLength(2);
+    expect(t.daemon_commands[0]).toMatchObject({ command: "line_deploy", target_device_id: "ana-mac", user_id: ME });
+    expect(t.org_roles[0].counters.deploys).toBe(1);
+    // The deploy is going out: the next pass asks for nothing.
+    expect((await autoDeployCore(ctxFor(t), NOW)).asked).toEqual([]);
+  });
+
+  test("the stage says whether the role may deploy and why not", async () => {
+    const t = await seed({ org_roles: [releaseRole({ counters: { day: new Date(NOW).toISOString().slice(0, 10), hands: 0, wakes: 0, tokens: 0, deploys: 2 } })] });
+    roleLine(t);
+    const s = await (stage as any)._handler(ctxFor(t), { project_id: "pj-1", api_token: TOKEN });
+    expect(s.auto).toMatchObject({ role: "release", allowed: false, used: 2, limit: 2 });
+    expect(s.auto.reason).toContain("2 of 2");
+    expect((await autoDeployCore(ctxFor(t), NOW)).asked).toEqual([]);
+    expect(t.deploys).toHaveLength(0);
+  });
+
+  test("no grant, an expired grant, or a role that does not start work on its own deploys nothing", async () => {
+    for (const over of [{ authority: [] }, { authority: [{ ...releaseRole().authority[0], expires_at: NOW - 1 }] }, { trust: "understand" }]) {
+      const t = await seed({ org_roles: [releaseRole(over)] });
+      roleLine(t);
+      expect((await autoDeployCore(ctxFor(t), NOW)).asked).toEqual([]);
+      expect(t.deploys).toHaveLength(0);
+    }
+  });
+
+  test("a fix merged moments ago settles before the role sends it", async () => {
+    const t = await seed({ org_roles: [releaseRole()] });
+    roleLine(t);
+    t.workflow_runs[1].merge.at = NOW - DEPLOY_SETTLE_MS / 2;
+    const r = await autoDeployCore(ctxFor(t), NOW);
+    expect(r.asked).toEqual([]);
+    expect(r.waiting).toEqual([{ project_id: PROJECT, why: "settling" }]);
+  });
+
+  test("after a failed deploy the role waits for a newer fix instead of retrying the same one", async () => {
+    const t = await seed({ org_roles: [releaseRole()] });
+    roleLine(t);
+    t.deploys.push({ _id: "dep_0", short_id: "dp-0", workspace: WS, team_id: TEAM, project_id: PROJECT, target: "production", status: "failed", trigger: "role", source: "line", event_ids: [], carries: [], created_at: NOW - 3600_000, updated_at: NOW - 3600_000 });
+    const r = await autoDeployCore(ctxFor(t), NOW);
+    expect(r.asked).toEqual([]);
+    expect(r.waiting[0].why).toContain("dp-0 failed");
+    t.workflow_runs[1].merge.at = NOW - DEPLOY_SETTLE_MS - 1;
+    expect((await autoDeployCore(ctxFor(t), NOW)).asked).toHaveLength(1);
+  });
+
+  test("the watch station's live report watches every shipped fix from going live", async () => {
+    const t = await seed();
+    t.tasks[0].watch_until = NOW - DAY;
+    t.tasks[1].status = "open";
+    const ctx = ctxFor(t);
+    await (request as any)._handler(ctx, { project_id: PROJECT, api_token: TOKEN, here: true });
+    await (report as any)._handler(ctx, { api_token: TOKEN, deploy: "dp-1", status: "live", watch_days: 7 });
+    expect(t.deploys[0].status).toBe("live");
+    expect(t.tasks[0].watch_until).toBeGreaterThan(NOW + 6 * DAY);
+    expect(t.tasks[1].watch_until).toBeUndefined();
+  });
+
+  test("a person-trigger line is never deployed by a role, whatever it holds", async () => {
+    const t = await seed({ org_roles: [releaseRole()] });
+    expect((await autoDeployCore(ctxFor(t), NOW)).asked).toEqual([]);
+  });
+
+  test("a deploy's run is named once, and its steps read from that run", async () => {
+    const t = await seed();
+    const ctx = ctxFor(t);
+    await (request as any)._handler(ctx, { project_id: PROJECT, api_token: TOKEN, here: true });
+    t.workflow_runs.push({ _id: "run_dp", workspace: WS, status: "running", created_at: NOW, updated_at: NOW, node_statuses: [
+      { node_id: "start", status: "completed" }, { node_id: "ci", status: "completed", started_at: 1, completed_at: 2 }, { node_id: "send", status: "running", started_at: 3 },
+    ] });
+    await (report as any)._handler(ctx, { api_token: TOKEN, deploy: "dp-1", status: "running", run_id: "run_dp" });
+    await (report as any)._handler(ctx, { api_token: TOKEN, deploy: "dp-1", status: "running", run_id: "run_other" });
+    expect(t.deploys[0].run_id).toBe("run_dp");
+    const s = await (stage as any)._handler(ctx, { project_id: PROJECT, api_token: TOKEN });
+    expect(s.open.steps).toEqual([{ id: "ci", status: "completed", started_at: 1, completed_at: 2 }, { id: "send", status: "running", started_at: 3 }]);
   });
 });
 
