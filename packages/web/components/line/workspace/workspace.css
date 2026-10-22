@@ -544,3 +544,22 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 
 /* The decision a run waits on, opened in the Runs view over the run it came from: the pane is the decision's own page. */
 .lw-nav[data-settling] .lw-nav-count { opacity: .4; }
+
+/* A flow of the pool, or a run of one (flows.md FL6): FlowFence, the Flows view. */
+.lw-flow { border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); background: var(--lw-card); overflow: hidden; }
+.lw-flow-cold { height: 132px; background: var(--lw-card-2); }
+.lw-flow-head { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px 7px; border-bottom: 1px solid var(--lw-rule-2); min-width: 0; }
+.lw-flow-kind { flex: none; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--lw-ink-3); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--lw-rule); }
+.lw-flow-kind[data-kind="line"] { color: var(--sol-blue); border-color: color-mix(in srgb, var(--sol-blue) 35%, transparent); }
+.lw-flow-name { flex: none; color: var(--lw-ink); font-weight: 600; font-size: var(--lw-fs-md, 13px); }
+.lw-flow-path { flex: 1 1 auto; min-width: 0; color: var(--lw-ink-3); font-size: var(--lw-fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lw-flow-path em { font-style: normal; color: var(--lw-ink-3); opacity: .8; }
+.lw-flow-state { flex: none; font-size: var(--lw-fs-sm); font-weight: 600; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--sol-blue) 12%, transparent); color: var(--sol-blue); }
+.lw-flow-state[data-tone="passed"] { background: color-mix(in srgb, var(--sol-green) 14%, transparent); color: var(--sol-green); }
+.lw-flow-state[data-tone="stopped"], .lw-flow-state[data-tone="failed"] { background: color-mix(in srgb, var(--sol-red) 12%, transparent); color: var(--sol-red); }
+.lw-flow-state[data-tone="waiting"] { background: color-mix(in srgb, var(--sol-yellow) 16%, transparent); color: var(--sol-yellow); }
+.lw-flow-task { flex: none; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); font-family: var(--font-mono, monospace); text-decoration: none; }
+.lw-flow-task:hover { color: var(--lw-ink); text-decoration: underline; }
+.lw-flow-graph { padding: 4px 6px; background: var(--lw-paper); }
+.lw-flow-graph .lwg-mini { display: block; width: 100%; height: auto; max-height: 240px; }
+.lw-flow-why { padding: 7px 12px 9px; border-top: 1px solid var(--lw-rule-2); font-size: var(--lw-fs-sm); color: var(--lw-ink-2); white-space: pre-wrap; max-height: 5.6em; overflow: hidden; }
