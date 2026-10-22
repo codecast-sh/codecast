@@ -222,3 +222,25 @@ export function sliceForPercent(candidates: OffloadCandidate[], sample: Resource
   }
   return { ids: picked.map((r) => r.c.sessionId), share: sum };
 }
+
+/**
+ * The plan a review opened on, with the live plan's verdicts. Order, load
+ * figures and the set of sessions stay as first shown, so nothing reshuffles
+ * while a person decides; readiness and blockers come from the live plan, and
+ * a session gone from it can no longer move.
+ */
+export function holdPlan(held: OffloadPlan, live: OffloadPlan): OffloadPlan {
+  const current = new Map(live.candidates.map((c) => [c.sessionId, c]));
+  const staying = new Map(live.staying.map((s) => [s.sessionId, s]));
+  return {
+    ...held,
+    incident: live.incident,
+    candidates: held.candidates.map((c) => {
+      const now = current.get(c.sessionId);
+      if (now) return { ...c, perDestination: now.perDestination };
+      const gone = { readiness: "blocked" as const, blockers: ["No longer offered from this machine"], pending: [] };
+      return { ...c, perDestination: Object.fromEntries(Object.entries(c.perDestination).map(([id, r]) => [id, { ...r, ...gone }])) };
+    }),
+    staying: held.staying.map((s) => staying.get(s.sessionId) ?? s),
+  };
+}
