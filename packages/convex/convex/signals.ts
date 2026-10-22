@@ -44,6 +44,7 @@ import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
 import { LINE_SIGNAL_CAP, LINE_SIGNAL_WINDOW_MS, lineProfileContentKey, lineProfileUnchanged } from "@codecast/shared/contracts/lineProfile";
 import { lineFinderValidator, lineProfileFactsValidator } from "./lib/lineProfileValidator";
+import { isPlaced, placeSignal, scopeProject, type Placement } from "./lib/signalPlacement";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { ownDevice } from "./devices";
 import { regroundWhenRegrouped } from "./lineGround";
@@ -111,14 +112,19 @@ const signalArgs = {
 // Where the signal is filed: the workspace the caller named, else the calling
 // session's team when it is team visible, else the directory rule. The same
 // rule a task create follows (createWorkContext). `project` (an id, short id
-// or title substring) names the project inside that workspace (line-profile.md
-// LP1): a new cause is filed under it, and attach looks only inside it.
+// or title substring) is the project the filer names inside that workspace;
+// `default_project` is the repo profile's `[line] project`, which only holds
+// the problem until Ground places it. Which project a signal lands in is
+// lib/signalPlacement's to decide (the-line-model.md LM1): a settled one
+// scopes the attach judge and a new cause to it; a default looks across the
+// workspace.
 const scopeArgs = {
   workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
   team_id: v.optional(v.id("teams")),
   project_path: v.optional(v.string()),
   conversation_id: v.optional(v.string()),
   project: v.optional(v.string()),
+  default_project: v.optional(v.string()),
 };
 
 export type SignalInput = {
@@ -456,8 +462,8 @@ export const attachInputs = internalQuery({
   handler: async (ctx, args) => {
     const userId = await filerOf(ctx, args);
     const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
-    const projectId = (await resolveWorkspaceProject(ctx, db.workspaceKey, args.project))?._id ?? null;
     const signal = normalizeSignal(args.signal);
+    const projectId = scopeProject(await placeSignal(ctx, db.workspaceKey, signal, args));
     // An issue's finding goes where its key says, never where the judge would put it (LL3).
     if (signal.issue) return { fingerprint_hit: true, candidates: [] as CauseCandidate[] };
     const hit = await fingerprintCause(ctx, db.workspaceKey, signal.fingerprint, Date.now());
@@ -482,9 +488,9 @@ export const commit = internalMutation({
   handler: async (ctx, args) => {
     const userId = await filerOf(ctx, args);
     const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
-    const projectId = (await resolveWorkspaceProject(ctx, db.workspaceKey, args.project))?._id ?? null;
     const signal = normalizeSignal(args.signal);
-    const result = await commitSignal(ctx, db, userId, signal, args.judged_task_id ?? null, Date.now(), projectId);
+    const placement = await placeSignal(ctx, db.workspaceKey, signal, args);
+    const result = await commitSignal(ctx, db, userId, signal, args.judged_task_id ?? null, Date.now(), placement);
     return await keepSimilarity(ctx, db.workspaceKey, signal, result, args);
   },
 });
@@ -543,19 +549,20 @@ async function attachDecision(ctx: any, workspace: string, signal: SignalInput, 
  * counts findings beyond the held ones (the new finding commitSignal is
  * about to insert).
  */
-async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { fingerprint: string; observed_at?: number }, projectId: Id<"projects"> | null, o: { now: number; issueKey: string | null; split: { from: string } | null; newCause: NewCause; extra: number }) {
+async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { fingerprint: string; observed_at?: number }, placement: Placement, o: { now: number; issueKey: string | null; split: { from: string } | null; newCause: NewCause; extra: number }) {
   const workspace = db.workspaceKey;
   const observedAt = seed.observed_at ?? o.now;
   const held = o.issueKey ? await heldUnderIssue(ctx, workspace, [seed.fingerprint, o.issueKey]) : await heldSignals(ctx, workspace, seed.fingerprint);
   const seen = [observedAt, ...held.map((r) => r.observed_at)];
   const signalCount = held.length + o.extra;
-  const { taskId, taskShortId } = await openCause(ctx, db, seed, projectId, {
+  const { taskId, taskShortId } = await openCause(ctx, db, seed, placement.project_id, {
     signal_count: signalCount,
     first_seen: Math.min(...seen),
     last_seen: Math.max(...seen),
     fingerprints: [seed.fingerprint],
     ...(o.issueKey ? { issue_key: o.issueKey } : {}),
     ...(o.split ? { split_from: o.split.from } : {}),
+    placed: placement.placed,
   }, o.newCause);
   // The signals held under this key before anything converted it join the
   // cause it opened, so the cause carries their history.
@@ -563,9 +570,18 @@ async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { finge
   return { taskId, taskShortId, signalCount };
 }
 
-export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, projectId: Id<"projects"> | null = null, newCause: NewCause = {}, split: { from: string } | null = null) {
+/**
+ * A signal's project as a caller that already knows it says it: a project it
+ * names is the filer's, and no project leaves the problem to Ground.
+ */
+const filedPlacement = (place: Placement | Id<"projects"> | null): Placement =>
+  place && typeof place === "object" ? place : { project_id: place, placed: place ? "filer" : "none" };
+
+export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, judged: Id<"tasks"> | null, now: number, place: Placement | Id<"projects"> | null = null, newCause: NewCause = {}, split: { from: string } | null = null) {
   const observedAt = signal.observed_at ?? now;
-  const { attach, task, issueKey } = await attachDecision(ctx, db.workspaceKey, signal, judged, projectId, now, split);
+  const placement = filedPlacement(place);
+  const projectId = placement.project_id;
+  const { attach, task, issueKey } = await attachDecision(ctx, db.workspaceKey, signal, judged, scopeProject(placement), now, split);
 
   let reopened = false;
   let taskId: Id<"tasks"> | undefined;
@@ -601,7 +617,7 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
   } else if (attach === "held") {
     signalCount = 0;
   } else {
-    ({ taskId, taskShortId, signalCount } = await openCauseWithHeld(ctx, db, signal, projectId, { now, issueKey, split, newCause, extra: 1 }));
+    ({ taskId, taskShortId, signalCount } = await openCauseWithHeld(ctx, db, signal, placement, { now, issueKey, split, newCause, extra: 1 }));
   }
 
   const shortId = await nextShortId(ctx.db, "sg");
@@ -621,7 +637,9 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
     created_at: now,
     task_id: taskId,
     project_id: task?.project_id ?? projectId ?? undefined,
-    ...(task?.project_id && projectId && task.project_id !== projectId ? { filed_for_project_id: projectId } : {}),
+    // A default says nothing about what the signal is about, so only a settled project is worth recording apart.
+    ...(task?.project_id && projectId && isPlaced(placement.placed) && task.project_id !== projectId ? { filed_for_project_id: projectId } : {}),
+    placed: placement.placed,
     attach,
     reopened: reopened || undefined,
     role_id: signal.role_id ?? (await roleIdByHandle(ctx, signal.role_handle)),
@@ -640,10 +658,11 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
 /**
  * Sources whose signal is itself the decision to work on it: a person filing
  * one (`cast signal add`, a cause filed from the line page), the lesson the
- * line's learn station files from a person's card answer (LE12), and a case
- * against a judge, made from a finding someone found wrong (LL11).
+ * line's learn station files from a person's card answer (LE12), a case
+ * against a judge, made from a finding someone found wrong (LL11), and a step
+ * of the line's deploy stage that failed (deploys.md DP9).
  */
-const CAUSE_OPENING_SOURCES = new Set(["person", "lesson", JUDGE_CASE_SOURCE]);
+const CAUSE_OPENING_SOURCES = new Set(["person", "lesson", JUDGE_CASE_SOURCE, "deploy"]);
 
 /**
  * The explicit conversion step (LE4). A signal no open cause holds opens a new
@@ -1016,7 +1035,7 @@ type IngestResult = {
   reopened: boolean;
   signal_count: number;
 };
-type Scope = { workspace?: "personal" | "team"; team_id?: Id<"teams">; project_path?: string; conversation_id?: string; project?: string };
+type Scope = { workspace?: "personal" | "team"; team_id?: Id<"teams">; project_path?: string; conversation_id?: string; project?: string; default_project?: string };
 
 /** The three steps of LE4 (read, judge, commit), for every caller of the door. */
 async function runIngest(ctx: any, filer: Filer, fields: SignalInput, scope: Scope): Promise<IngestResult> {
@@ -1053,8 +1072,8 @@ async function runIngest(ctx: any, filer: Filer, fields: SignalInput, scope: Sco
 export const ingest = action({
   args: { api_token: v.string(), ...signalArgs, ...scopeArgs },
   handler: async (ctx, args): Promise<IngestResult> => {
-    const { api_token, workspace, team_id, project_path, conversation_id, project, ...fields } = args;
-    return await runIngest(ctx, { api_token }, fields, { workspace, team_id, project_path, conversation_id, project });
+    const { api_token, workspace, team_id, project_path, conversation_id, project, default_project, ...fields } = args;
+    return await runIngest(ctx, { api_token }, fields, { workspace, team_id, project_path, conversation_id, project, default_project });
   },
 });
 
@@ -1106,8 +1125,8 @@ export const regroupProbe = internalAction({
 export const ingestAs = internalAction({
   args: { user_id: v.id("users"), ...signalArgs, ...scopeArgs },
   handler: async (ctx, args): Promise<IngestResult> => {
-    const { user_id, workspace, team_id, project_path, conversation_id, project, ...fields } = args;
-    return await runIngest(ctx, { user_id }, fields, { workspace, team_id, project_path, conversation_id, project });
+    const { user_id, workspace, team_id, project_path, conversation_id, project, default_project, ...fields } = args;
+    return await runIngest(ctx, { user_id }, fields, { workspace, team_id, project_path, conversation_id, project, default_project });
   },
 });
 
@@ -1557,7 +1576,7 @@ export async function mergeIssue(ctx: any, userId: Id<"users">, workspace: strin
 /** One problem folds into another: every report moves to the survivor, the folded one is dropped as its duplicate, and what waited on it waits on the survivor. How many reports moved. */
 export async function foldProblem(ctx: any, userId: Id<"users">, merged: Doc<"tasks">, survivor: Doc<"tasks">, now: number): Promise<number> {
   const all = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", merged._id)).collect();
-  await moveSignalRows(ctx, all, merged, survivor, { now, userId, attach: "fingerprint", released: merged.cause?.fingerprints ?? [] });
+  await moveSignalRows(ctx, all, merged, survivor, { now, userId, attach: "fingerprint", released: merged.cause?.fingerprints ?? [], patch: { folded_from: merged._id } });
   const folded = (await ctx.db.get(merged._id))!;
   await moveTaskStatus(ctx, folded, "dropped", { actorUserId: userId, now, extra: { duplicate_of: survivor.short_id, ...(folded.cause ? { cause: { ...withoutIssue(folded.cause), merged_into: survivor._id } } : {}) } });
   await redirectDependents(ctx, userId, byUser(userId), folded, survivor, `${folded.short_id} merged into ${survivor.short_id}`, { onLoop: "leave" });
@@ -1565,6 +1584,27 @@ export async function foldProblem(ctx: any, userId: Id<"users">, merged: Doc<"ta
   const argued = merged.project_id ? await proposedCause(ctx, merged) : null;
   if (argued) await noteOn(ctx, survivor._id, `Merged in ${merged.short_id}, whose run named its cause: ${argued.line}${argued.where.length ? ` (${argued.where.join(", ")})` : ""}. A fix here answers its findings too.`);
   return all.length;
+}
+
+/**
+ * Undo a merge: the dropped problem opens again and takes back its findings
+ * from the problem it was folded into (or wherever that one was folded
+ * since). Its findings are the ones stamped with it (folded_from); a merge
+ * from before the stamp names them in `rows`. How many moved back.
+ */
+export async function unfoldProblem(ctx: any, userId: Id<"users">, task: Doc<"tasks">, rows: Doc<"signals">[] | null, why: string, now: number): Promise<number> {
+  if (task.status !== "dropped" || !task.cause?.merged_into) throw new Error(`${task.short_id} was not merged into another problem`);
+  let into: Doc<"tasks"> | null = await ctx.db.get(task.cause.merged_into);
+  for (let hops = 0; into?.status === "dropped" && into.cause?.merged_into && hops < 20; hops++) into = await ctx.db.get(into.cause.merged_into);
+  if (!into) throw new Error(`${task.short_id}'s survivor is gone`);
+  const held: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", into!._id)).collect();
+  const back = rows ? held.filter((r) => rows.some((x) => x._id === r._id)) : held.filter((r) => r.folded_from === task._id);
+  const { merged_into: _gone, ...cause } = task.cause;
+  await moveTaskStatus(ctx, task, "open", { actorUserId: userId, now, extra: { duplicate_of: undefined, cause } });
+  await moveSignalRows(ctx, back, into, (await ctx.db.get(task._id))!, { now, userId, attach: "fingerprint", released: [], patch: { folded_from: undefined } });
+  await noteOn(ctx, task._id, `Split back out of ${into.short_id}, ${why.trim()} Its ${plural(back.length)} moved back here.`);
+  await noteOn(ctx, into._id, `Split ${task.short_id} back out: ${plural(back.length)} moved there.`);
+  return back.length;
 }
 
 /** A person merges one problem into another (`cast line dissolve --outcome merged`, or "Merge into" on a twin the
@@ -1859,7 +1899,7 @@ export const dissolveForCli = mutation({
  * signals the product names move there, each re-keyed to the new issue with
  * split_from naming the old one.
  */
-export async function splitIssue(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, from: string, move: string[], now: number, projectId: Id<"projects"> | null) {
+export async function splitIssue(ctx: any, db: WorkDb, userId: Id<"users">, signal: SignalInput, from: string, move: string[], now: number, placement: Placement | Id<"projects"> | null) {
   const workspace = db.workspaceKey;
   const fromChain = await issueChain(ctx, workspace, from.trim());
   const fromKey = fromChain[fromChain.length - 1];
@@ -1871,7 +1911,7 @@ export async function splitIssue(ctx: any, db: WorkDb, userId: Id<"users">, sign
     if (!fromChain.includes(row!.fingerprint)) throw new Error(`${ref} is not a finding of issue ${fromKey}`);
     rows.push(row!);
   }
-  const result = await commitSignal(ctx, db, userId, { ...signal, issue: true }, null, now, projectId, {}, { from: fromKey });
+  const result = await commitSignal(ctx, db, userId, { ...signal, issue: true }, null, now, placement, {}, { from: fromKey });
   let target = (await ctx.db.get(result.task_id!)) as Doc<"tasks">;
   if (!target.cause?.split_from) await ctx.db.patch(target._id, { cause: { ...target.cause!, split_from: fromKey } });
   const byTask = new Map<string, Doc<"signals">[]>();
@@ -1908,11 +1948,11 @@ export const mergeForCli = mutation({
 export const splitForCli = mutation({
   args: { api_token: v.string(), from: v.string(), move: v.optional(v.array(v.string())), ...signalArgs, ...scopeArgs },
   handler: async (ctx, args) => {
-    const { api_token, from, move, workspace, team_id, project_path, conversation_id, project, ...fields } = args;
+    const { api_token, from, move, workspace, team_id, project_path, conversation_id, project, default_project, ...fields } = args;
     const userId = await authed(ctx, api_token);
     const { db } = await createWorkContext(ctx, { userId, workspace, team_id, project_path, conversation_id });
-    const projectId = (await resolveWorkspaceProject(ctx, db.workspaceKey, project))?._id ?? null;
-    return await splitIssue(ctx, db, userId, normalizeSignal({ ...fields, issue: true }), from, move ?? [], Date.now(), projectId);
+    const signal = normalizeSignal({ ...fields, issue: true });
+    return await splitIssue(ctx, db, userId, signal, from, move ?? [], Date.now(), await placeSignal(ctx, db.workspaceKey, signal, { project, default_project }));
   },
 });
 
@@ -2164,10 +2204,14 @@ export const heldInputs = internalQuery({
     const signal = heldAsSignal(row);
     const now = Date.now();
     if (await fingerprintCause(ctx, row.workspace, signal.fingerprint, now)) return { signal, candidates: [] as CauseCandidate[] };
-    if (await messageCause(ctx, row.workspace, signal, row.project_id ?? null, now)) return { signal, candidates: [] as CauseCandidate[] };
-    return { signal, candidates: await nearestCauses(ctx, row.workspace, signal, row.project_id ?? null) };
+    const projectId = scopeProject(heldPlacement(row));
+    if (await messageCause(ctx, row.workspace, signal, projectId, now)) return { signal, candidates: [] as CauseCandidate[] };
+    return { signal, candidates: await nearestCauses(ctx, row.workspace, signal, projectId) };
   },
 });
+
+/** A held signal's placement as it was filed; one from before placements were kept stands as its filer's. */
+const heldPlacement = (row: Doc<"signals">): Placement => ({ project_id: row.project_id ?? null, placed: row.placed ?? (row.project_id ? "filer" : "none") });
 
 /** Place every finding held under one key: the problem the ladder names, a new one, or held still. `dry_run` writes nothing. */
 export const placeHeldKey = internalMutation({
@@ -2179,8 +2223,8 @@ export const placeHeldKey = internalMutation({
     if (!ws) return { decision: "no workspace" as const };
     const now = Date.now();
     const signal = heldAsSignal(row);
-    const projectId = row.project_id ?? null;
-    const { attach, task } = await attachDecision(ctx, row.workspace, signal, args.judged_task_id ?? null, projectId, now);
+    const placement = heldPlacement(row);
+    const { attach, task } = await attachDecision(ctx, row.workspace, signal, args.judged_task_id ?? null, scopeProject(placement), now);
     const rows = await heldSignals(ctx, row.workspace, row.fingerprint);
     if (args.dry_run) return { decision: attach, task_short_id: task?.short_id ?? null, findings: rows.length };
     if (task) {
@@ -2190,7 +2234,7 @@ export const placeHeldKey = internalMutation({
     }
     if (attach !== "new") return { decision: attach, task_short_id: null, findings: rows.length };
     const { db } = await createWorkContext(ctx, ws.type === "team" ? { userId: row.user_id, workspace: "team", team_id: ws.teamId } : { userId: row.user_id, workspace: "personal" });
-    const opened = await openCauseWithHeld(ctx, db, signal, projectId, { now, issueKey: null, split: null, newCause: {}, extra: 0 });
+    const opened = await openCauseWithHeld(ctx, db, signal, placement, { now, issueKey: null, split: null, newCause: {}, extra: 0 });
     return { decision: attach, task_short_id: opened.taskShortId, findings: opened.signalCount };
   },
 });

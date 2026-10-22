@@ -7,12 +7,13 @@
 import { useCallback, useRef, useState } from "react";
 import { Check, ChevronUp, Mic, Video, type LucideIcon } from "lucide-react";
 import { grantDeviceNames, listDevices, switchDevice } from "../../lib/calls/callManager";
-import { DEVICE_PREF_KEY } from "../../lib/calls/joinPrefs";
+import { chosenDevice } from "../../lib/calls/joinPrefs";
+import { DEVICE_RANK_KEY, type DeviceKind } from "../../lib/calls/deviceRank";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 
-type Kind = keyof typeof DEVICE_PREF_KEY;
+type Kind = DeviceKind;
 type Lists = Record<Kind, MediaDeviceInfo[]>;
 
 const KIND_WORD: Record<Kind, string> = { audioinput: "Microphone", audiooutput: "Speaker", videoinput: "Camera" };
@@ -39,14 +40,13 @@ function useDeviceLists() {
   return { lists, refresh };
 }
 
-// The device a join will open for this kind: the remembered pick while it is
-// still plugged in, else the system default, else whatever the browser lists
-// first. Subscribed, so a pick made in a second window shows here too.
+// The device a join will open for this kind: the best-ranked one plugged in,
+// else the system default. Subscribed, so a pick made in another window shows
+// here too.
 function useChosenId(kind: Kind, devices: MediaDeviceInfo[] | undefined): string {
-  const remembered = useInboxStore((s) => (s.clientState?.ui as any)?.[DEVICE_PREF_KEY[kind]] ?? "");
+  useInboxStore((s) => (s.clientState?.ui as any)?.[DEVICE_RANK_KEY[kind]]);
   if (!devices?.length) return "";
-  if (devices.some((d) => d.deviceId === remembered)) return remembered;
-  return (devices.find((d) => d.deviceId === "default") ?? devices[0]).deviceId;
+  return chosenDevice(kind, devices) ?? "";
 }
 
 // Chrome names the system default "Default - AirPods Pro (Bluetooth)" and USB

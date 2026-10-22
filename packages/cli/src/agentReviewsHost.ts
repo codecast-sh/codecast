@@ -28,12 +28,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { TOOL_PATH, findOnPath, spawn, spawnSync } from "./proc.js";
+import { TOOL_PATH, execFileAsync, findOnPath, spawn } from "./proc.js";
 import { codecastPath } from "./codecastDir.js";
 import { bunPath } from "./momentsHost.js";
-import { accountTokenFilePath } from "./ccAccounts.js";
-import { loadLocalUsageProfiles } from "./usageCommand.js";
-import { isUsageExhausted, switchUsagePercent } from "@codecast/shared/contracts";
+import { accountTokenFilePath, readActiveCredentialAsync } from "./ccAccounts.js";
+import { loadLocalUsageProfiles, type UsageProfile } from "./usageCommand.js";
+import { isUsageExhausted, livePercent, worstUsagePercent } from "@codecast/shared/contracts";
 import { transcriptFromStream, type ReviewTranscript } from "@codecast/shared/contracts/agentJudges";
 
 /** What `cast line reviews run` sets on this machine. */
@@ -42,15 +42,36 @@ export type ReviewsConfig = {
   slots: number;
   /** Saved profiles reviews may run on; every profile with a setup token when absent. */
   accounts?: string[];
-  /** A profile above this share of its worst window takes no new review. */
+  /** A profile whose week is at or above this share takes no new review: the headroom it keeps is the account's. */
   max_percent: number;
+  /** A profile whose 5-hour window is at or above this share takes no new review, so those already running finish before its limit. */
+  session_max_percent?: number;
   /** Reviews one profile runs at once. */
   per_account: number;
   /** Where the judge's repo sits on this machine, by source, when not where it was published. */
   roots?: Record<string, string>;
+  /** While the machine's CPU is idle less than busy_idle_percent of the time, no more than this many run. */
+  slots_when_busy?: number;
+  busy_idle_percent?: number;
 };
 
-export const REVIEWS_DEFAULTS: ReviewsConfig = { slots: 0, max_percent: 85, per_account: 3 };
+export const REVIEWS_DEFAULTS: ReviewsConfig = { slots: 0, max_percent: 85, session_max_percent: 95, per_account: 3, busy_idle_percent: 15 };
+
+/** CPU idle share since the previous reading, from the kernel's per-core counters; null on the first reading. */
+let cpuBefore: { idle: number; total: number } | null = null;
+export function cpuIdleShare(): number | null {
+  const now = os.cpus().reduce((a, c) => ({ idle: a.idle + c.times.idle, total: a.total + c.times.idle + c.times.user + c.times.sys + c.times.nice + c.times.irq }), { idle: 0, total: 0 });
+  const before = cpuBefore;
+  cpuBefore = now;
+  if (!before || now.total <= before.total) return null;
+  return (now.idle - before.idle) / (now.total - before.total);
+}
+
+/** The slots a pass fills: the configured ones, or fewer while the machine is busy (other work shares its CPU, and a starved review only runs longer). */
+export function slotsNow(cfg: ReviewsConfig, idle: number | null): number {
+  if (cfg.slots_when_busy == null || idle == null) return cfg.slots;
+  return idle * 100 < (cfg.busy_idle_percent ?? 15) ? Math.min(cfg.slots, cfg.slots_when_busy) : cfg.slots;
+}
 export const REVIEWS_TICK_MS = 30_000;
 
 export const reviewsConfigFile = () => codecastPath("agent-reviews.json");
@@ -104,48 +125,65 @@ export function reviewEnv(base: NodeJS.ProcessEnv = process.env, add: Record<str
 
 /**
  * The saved profiles a new review may start on now, best first: each has a
- * setup token (the harness signs in with it), is allowed by the config (by
- * default every profile but the one this machine's sessions run on), is
+ * setup token (the harness signs in with it), is not the one this machine's
+ * sessions run on (whichever that is now), is allowed by the config, is
  * under its share and under its own cap of running reviews, and has not hit a
  * limit lately. Fewest running first, then most room.
  */
 export function pickAccounts(cfg: ReviewsConfig, running: Map<string, number>, cooling: Map<string, number>, now = Date.now()): string[] {
+  return rankAccounts(tokenProfiles(), cfg, running, cooling, now);
+}
+
+/** The saved profiles with a setup token; `credential` is the active login when already read. */
+const tokenProfiles = (credential?: string | null) =>
+  loadLocalUsageProfiles(credential).filter((p) => fs.existsSync(accountTokenFilePath(p.name)));
+
+/** pickAccounts over profiles already read, those with a setup token. */
+export function rankAccounts(profiles: Pick<UsageProfile, "name" | "active" | "usage">[], cfg: ReviewsConfig, running: Map<string, number>, cooling: Map<string, number>, now: number): string[] {
   const allowed = cfg.accounts?.length ? new Set(cfg.accounts) : null;
-  return loadLocalUsageProfiles()
-    // The profile this machine's sessions run on is left to them unless the config names it.
-    .filter((p) => p.name !== "(active login)" && (allowed ? allowed.has(p.name) : !p.active) && fs.existsSync(accountTokenFilePath(p.name)))
+  return profiles
+    // The profile this machine's sessions run on is left to them, even when the config names it.
+    .filter((p) => !p.active && (!allowed || allowed.has(p.name)))
     .filter((p) => (cooling.get(p.name) ?? 0) <= now && !isUsageExhausted(p.usage, now))
-    .map((p) => ({ name: p.name, percent: switchUsagePercent(p.usage, now), busy: running.get(p.name) ?? 0 }))
-    .filter((p) => p.busy < cfg.per_account && (p.percent ?? 0) < cfg.max_percent)
+    // Each window as it stands now: one rolled since the last probe counts as empty, the others keep their measured share,
+    // so a week at its stop still stops the account when its 5-hour window rolls.
+    .map((p) => ({ name: p.name, week: p.usage?.weekly ? livePercent(p.usage.weekly, now) : 0, session: p.usage?.session ? livePercent(p.usage.session, now) : 0, percent: worstUsagePercent(p.usage, now), busy: running.get(p.name) ?? 0 }))
+    .filter((p) => p.busy < cfg.per_account && p.week < cfg.max_percent && p.session < (cfg.session_max_percent ?? REVIEWS_DEFAULTS.session_max_percent!))
     .sort((a, b) => a.busy - b.busy || (a.percent ?? 50) - (b.percent ?? 50))
     .map((p) => p.name);
 }
 
 // ── Checkouts and gateways ──
 
-const git = (cwd: string, args: string[]) => spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+// Off the loop: these run in the daemon, where a synchronous git under load
+// blocked it for seconds at a time and starved every other timer.
+const git = (cwd: string, args: string[]): Promise<{ status: number; stdout: string; stderr: string }> =>
+  execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).then(
+    ({ stdout, stderr }) => ({ status: 0, stdout, stderr }),
+    (err: { code?: unknown; stdout?: string; stderr?: string }) => ({ status: typeof err.code === "number" ? err.code : 1, stdout: err.stdout ?? "", stderr: err.stderr ?? String(err) }),
+  );
 
 let fetchedAt = new Map<string, number>();
 
 /** A worktree of `root`'s repository at its origin's default branch as of now, made once per commit; older ones no run uses are removed. */
-export function checkoutFor(root: string, inUse: Set<string>, now = Date.now()): string {
+export async function checkoutFor(root: string, inUse: Set<string>, now = Date.now()): Promise<string> {
   if ((fetchedAt.get(root) ?? 0) < now - 30 * 60_000) {
-    git(root, ["fetch", "--quiet", "origin"]);
+    await git(root, ["fetch", "--quiet", "origin"]);
     fetchedAt.set(root, now);
   }
-  const head = git(root, ["rev-parse", "origin/HEAD"]).stdout.trim() || git(root, ["rev-parse", "origin/main"]).stdout.trim();
+  const head = (await git(root, ["rev-parse", "origin/HEAD"])).stdout.trim() || (await git(root, ["rev-parse", "origin/main"])).stdout.trim();
   if (!head) throw new Error(`no origin default branch in ${root}`);
   const name = `${path.basename(root)}-${head.slice(0, 10)}`;
   const dir = path.join(checkoutsDir(), name);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(checkoutsDir(), { recursive: true });
-    const r = git(root, ["worktree", "add", "--detach", "--quiet", dir, head]);
+    const r = await git(root, ["worktree", "add", "--detach", "--quiet", dir, head]);
     if (r.status !== 0) throw new Error(`could not check out ${head.slice(0, 10)} of ${root}: ${r.stderr.trim().slice(0, 300)}`);
   }
   for (const other of fs.readdirSync(checkoutsDir())) {
     const p = path.join(checkoutsDir(), other);
     if (other === name || !other.startsWith(`${path.basename(root)}-`) || inUse.has(p)) continue;
-    git(root, ["worktree", "remove", "--force", p]);
+    await git(root, ["worktree", "remove", "--force", p]);
   }
   return dir;
 }
@@ -156,7 +194,7 @@ const gateways = new Map<string, Gateway>();
 /** The judge's gateway, started once from its repo and kept while it lives: its {"env": …} line is what every review session gets. */
 export async function gatewayFor(root: string, rel: string, log: (l: string) => void): Promise<Record<string, string>> {
   const file = path.join(root, ".codecast", "judges", rel);
-  const version = spawnSync("git", ["hash-object", file], { encoding: "utf8" }).stdout.trim();
+  const version = (await git(path.dirname(file), ["hash-object", file])).stdout.trim();
   const key = `${file}@${version}`;
   const known = gateways.get(file);
   if (known && known.key === key && known.child.exitCode === null) return known.env;
@@ -251,7 +289,7 @@ export function startRun(claim: ReviewClaim, account: string, o: { checkout: str
   return { dir, claim, account, started, checkout: o.checkout };
 }
 
-const LIMIT_WORDS = /usage limit|limit reached|rate limit|429|overloaded|out of extra usage|hit your limit/i;
+const LIMIT_WORDS = /usage limit|limit reached|rate limit|429|overloaded|out of extra usage|hit your (?:\w+ )?limit/i;
 
 /** What a finished (or dead) run hands back to `/cli/reviews/done`. */
 export function handBack(files: RunFiles, now = Date.now()): Record<string, unknown> {
@@ -368,16 +406,23 @@ export async function tickReviews(deps: ReviewsTickDeps): Promise<{ handed: numb
     }
     held = held.filter((r) => !lost.includes(r.claim.review));
   }
-  const free = Math.max(0, cfg.slots - held.length);
+  const idle = cpuIdleShare();
+  const slots = slotsNow(cfg, idle);
+  if (slots < cfg.slots) deps.log(`[REVIEWS] CPU ${Math.round((idle ?? 0) * 100)}% idle: filling ${slots} of ${cfg.slots} slots`);
+  const free = Math.max(0, slots - held.length);
   const harness = harnessScript();
   const castDir = realCastDir();
   if (!free || !harness) return { handed, started: 0, running: held.length };
   if (!castDir) { deps.log("[REVIEWS] no cast on this machine for the harness's guard to hand reads to; starting none"); return { handed, started: 0, running: held.length }; }
   const busy = new Map<string, number>();
   for (const r of held) busy.set(r.account, (busy.get(r.account) ?? 0) + 1);
+  // Read once per tick, with the keychain read off the loop: a synchronous one
+  // here held the daemon for over a second every tick under load.
+  const profiles = tokenProfiles(await readActiveCredentialAsync());
+  const pick = () => rankAccounts(profiles, cfg, busy, cooling, now());
   const room = (() => {
     let n = 0;
-    for (const name of pickAccounts(cfg, busy, cooling, now())) n += cfg.per_account - (busy.get(name) ?? 0);
+    for (const name of pick()) n += cfg.per_account - (busy.get(name) ?? 0);
     return n;
   })();
   const want = Math.min(free, room);
@@ -386,12 +431,12 @@ export async function tickReviews(deps: ReviewsTickDeps): Promise<{ handed: numb
   let started = 0;
   const inUse = new Set(held.map((r) => r.checkout));
   for (const claim of claims) {
-    const account = pickAccounts(cfg, busy, cooling, now())[0];
+    const account = pick()[0];
     try {
       if (!account) throw new Error("no saved profile has room");
       const root = cfg.roots?.[claim.source] ?? claim.judge.root;
       if (!root || !fs.existsSync(root)) throw new Error(`the judge's repo is not on this machine (${root || "no root"}); set it with cast line reviews run --root ${claim.source}=<path>`);
-      const checkout = checkoutFor(root, inUse, now());
+      const checkout = await checkoutFor(root, inUse, now());
       inUse.add(checkout);
       const gatewayEnv = claim.judge.agent.gateway ? await gatewayFor(root, claim.judge.agent.gateway, deps.log) : {};
       startRun(claim, account, { checkout, gatewayEnv, harness, castDir });

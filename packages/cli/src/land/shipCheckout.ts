@@ -25,7 +25,7 @@ import { readSessionLinkCache } from "../localConversationMap.js";
 import { git, gitTry } from "../wipSnapshot.js";
 import { MANIFEST_REL_PATH, parseManifest } from "../workspace/manifest.js";
 import type { ShipDeployStep, ShipSpec } from "../workspace/types.js";
-import { attributeEdits, isMidTurn, type SessionEdits } from "./attribute.js";
+import { attributeEdits, isMidTurn, type Attribution, type SessionEdits } from "./attribute.js";
 import { buildCommits, freezeWorktree, type Frozen } from "./commitGroups.js";
 import { levelCheckout, treeDiff, type LevelResult } from "./level.js";
 import { isAncestor, linearCommits, replayOnto } from "./replay.js";
@@ -171,6 +171,28 @@ function shipSession(s: SessionEdits, roster: Map<string, RosterRow>): ShipSessi
   };
 }
 
+/**
+ * The working tree frozen as one git tree, each changed file's writers read
+ * from the transcripts, and the files held as credentials (with why). The
+ * first half of a ship plan, and what a flow's session freeze reads
+ * (workflow/flowChange.ts).
+ */
+export async function freezeAndAttribute(root: string, log: Log = () => {}): Promise<{ frozen: Frozen; paths: string[]; attribution: Attribution; credentials: Map<string, string> }> {
+  const frozen = await freezeWorktree(root);
+  const paths = frozen.changes.map((c) => c.path);
+  log(`froze ${paths.length} changed file(s) at ${frozen.tree.slice(0, 9)}`);
+  const since = Math.max(oldestMtime(root, paths) - 60_000, Date.now() - ATTRIBUTION_HORIZON_MS);
+  const attribution = attributeEdits(root, paths, { since });
+  log(`attributed ${attribution.owners.size}/${paths.length} to ${attribution.sessions.length} session(s) in ${attribution.tookMs}ms`);
+  const texts = await readBlobs(root, frozen.changes.map((c) => c.blob ?? ""));
+  const credentials = new Map<string, string>();
+  for (const change of frozen.changes) {
+    const reason = credentialReason(change.path, change.blob ? texts.get(change.blob) ?? null : null);
+    if (reason) credentials.set(change.path, reason);
+  }
+  return { frozen, paths, attribution, credentials };
+}
+
 export async function makePlan(root: string, opts: { roster?: (ids: string[]) => Promise<RosterRow[] | null>; fetch?: boolean; log?: Log } = {}): Promise<ShipPlan> {
   const log = opts.log ?? (() => {});
   const spec = shipSpec(root);
@@ -180,13 +202,7 @@ export async function makePlan(root: string, opts: { roster?: (ids: string[]) =>
     await gitTry(root, ["fetch", "--quiet", remote, branch]);
   }
 
-  const frozen = await freezeWorktree(root);
-  const paths = frozen.changes.map((c) => c.path);
-  log(`froze ${paths.length} changed file(s) at ${frozen.tree.slice(0, 9)}`);
-
-  const since = Math.max(oldestMtime(root, paths) - 60_000, Date.now() - ATTRIBUTION_HORIZON_MS);
-  const attribution = attributeEdits(root, paths, { since });
-  log(`attributed ${attribution.owners.size}/${paths.length} to ${attribution.sessions.length} session(s) in ${attribution.tookMs}ms`);
+  const { frozen, paths, attribution, credentials: held } = await freezeAndAttribute(root, log);
   const owning = [...new Set([...attribution.owners.values()].map((s) => s.conversationId?.slice(0, 7)).filter((id): id is string => !!id))];
   const rows = opts.roster && owning.length ? await opts.roster(owning).catch(() => null) : null;
   const roster = new Map((rows ?? []).filter((r) => r.short_id).map((r) => [r.short_id!, r]));
@@ -195,9 +211,8 @@ export async function makePlan(root: string, opts: { roster?: (ids: string[]) =>
   const byKey = new Map<string, ShipGroup>();
   const credentials: ShipGroup = { id: "credentials", session: null, message: "", paths: [], ship: false, note: "", stat: { files: 0, added: 0, removed: 0 }, last_edit: null };
   const reasons: string[] = [];
-  const texts = await readBlobs(root, frozen.changes.map((c) => c.blob ?? ""));
   for (const change of frozen.changes) {
-    const reason = credentialReason(change.path, change.blob ? texts.get(change.blob) ?? null : null);
+    const reason = held.get(change.path);
     if (reason) {
       credentials.paths.push(change.path);
       reasons.push(`${change.path}: ${reason}`);

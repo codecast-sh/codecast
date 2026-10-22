@@ -15,13 +15,13 @@ import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId, reachableRole, tellRole } from "./pendingMessages";
 import { canAccessProject, requireTeamAdmin, requireTeamMembership, resolveWorkspaceKey, workspaceGrantsAccess, workspaceKey, type WorkspaceKey } from "./lib/access";
-import { compareVersions, validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
+import { compareVersions, templateLoaderPrompt, validateTemplate, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
 import { type ReleaseChanges, type ReleaseClass, type UpdateNames, updateNames, bumpRefusal, changelogBetween, classifyRelease, jumpBetween, previousRelease, releaseNote, updateOffer, withClasses } from "@codecast/shared/contracts/orgTemplateRelease";
 import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState, type SetupText } from "@codecast/shared/contracts/orgTemplateState";
 import { routineState, type RoutineReadiness } from "@codecast/shared/contracts/orgTemplateReadiness";
 import type { LessonKind } from "@codecast/shared/contracts/orgTemplateLearning";
 import { applyActivate, getArmableTask } from "./agentTasks";
-import { refuseUnlessHuman, standingConversationOf } from "./orgRoles";
+import { performUpdateRole, refuseUnlessHuman, standingConversationOf } from "./orgRoles";
 import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
 import { seatPlace } from "./lib/seatPlace";
 import { trustOf } from "./lib/orgCaps";
@@ -256,6 +256,29 @@ export async function performUpsertInstance(ctx: Ctx, userId: Id<"users">, args:
   return row;
 }
 
+/** The key of the row a hire accepted on the web writes (orgInit.applyHire): the only writer of it, since the wire refuses it. */
+export const hiredRowKey = (projectId: string, instance: string) => `pending:${projectId}:${instance}`;
+
+/**
+ * The host step of a web hire writes its role's charter: the loader that
+ * reads the pinned release's charter on that host. The charter is human only
+ * (orgRoles.refuseUnlessHuman), and the person's authority here is their
+ * accept of the hire: the row it wrote, still awaiting its host, names this
+ * role. The server builds the text from the instance and the folder, so the
+ * call cannot choose the words, and the write closes once the host claims
+ * the row; any other charter goes through the role page or a proposal.
+ */
+export async function performWriteLoaderCharter(ctx: Ctx, userId: Id<"users">, args: { project_id: Id<"projects">; instance: string; role_id: Id<"org_roles">; dir: string }) {
+  const project = await ctx.db.get(args.project_id);
+  if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new Error("Project not found");
+  const row = await ctx.db.query("org_template_instances").withIndex("by_instance_key", (q: any) => q.eq("instance_key", hiredRowKey(String(args.project_id), args.instance))).first();
+  if (!row || row.phase !== "awaiting_host" || row.workspace !== (await resolveWorkspaceKey(ctx as any, project))) throw new Error(`No hire of ${args.instance} on this project is awaiting its host step; change the charter from the role page`);
+  if (String(row.role_id) !== String(args.role_id)) throw new Error(`The hire ${args.instance} is for another role`);
+  if (!/^\/[^\n']*[^/\n']$/.test(args.dir)) throw new Error("dir must be the project's absolute folder on the host");
+  await performUpdateRole(ctx, userId, { role_id: String(args.role_id), charter: templateLoaderPrompt(args.dir, args.instance, "charter"), human_decision: `hire:${String(row._id)}` });
+  return { role_id: args.role_id };
+}
+
 type RoutineRow = { id: string; title: string; every: string; mode: "propose" | "apply"; external: boolean; retired: boolean; trigger: { id: string; short_id?: string; status: string; run_at?: number; precheck?: string; interval_ms?: number; run_count?: number; last_run_at?: number; last_run_failed?: boolean } | null };
 /** The pinned release's routines with the trigger each is bound to: the role page's Triggers rows, and the list a role hears after a bind. */
 export async function routineRows(ctx: Ctx, row: any, manifest: OrgTemplate | undefined): Promise<RoutineRow[]> {
@@ -412,7 +435,7 @@ export async function performInstanceForRole(ctx: Ctx, userId: Id<"users">, args
   // last request went, so the page shows one button and its progress.
   const bind_host = await bindHostOf(ctx, userId, row);
   const host_step = await hostStepOf(ctx, row);
-  return { ...status, routines, secrets, scoreboard, bind_host: { device: bind_host.device, dir: bind_host.dir, reason: bind_host.reason }, host_step, template: template ? { name: template.name, avatar: template.avatar, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, ...updateFields(template, row) };
+  return { ...status, routines, secrets, scoreboard, bind_host: { device: bind_host.device, dir: bind_host.dir, reason: bind_host.reason }, host_step, tools: pinned?.tools ?? [], template: template ? { name: template.name, avatar: template.avatar, workspace: template.workspace, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, ...updateFields(template, row) };
 }
 /**
  * The Update card's data (sd-424: every change waits for a person's click):
@@ -704,7 +727,16 @@ export const upsertInstance = mutation({
     setup_text: v.optional(v.record(v.string(), v.object({ title: v.string(), price: v.optional(v.string()), guide: v.optional(v.string()) }))),
     from_session: v.optional(v.string()),
   },
-  handler: async (ctx, { api_token, ...args }) => performUpsertInstance(ctx, await requireCaller(ctx, api_token), args),
+  handler: async (ctx, { api_token, ...args }) => {
+    // A row awaiting its host is a hire a person accepted (orgInit.applyHire),
+    // and it authorises the loader charter: the wire never writes one.
+    if (args.phase === "awaiting_host" || args.instance_key.startsWith("pending:")) throw new Error("A hire awaiting its host is written by accepting the hire, not by the host");
+    return performUpsertInstance(ctx, await requireCaller(ctx, api_token), args);
+  },
+});
+export const writeLoaderCharter = mutation({
+  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), project_id: v.id("projects"), instance: v.string(), role_id: v.id("org_roles"), dir: v.string(), from_session: v.optional(v.string()) },
+  handler: async (ctx, { api_token, team_id: _team, from_session: _session, ...args }) => performWriteLoaderCharter(ctx, await requireCaller(ctx, api_token), args),
 });
 export const recordEvidenceCheck = mutation({
   args: { api_token: v.optional(v.string()), instance_key: v.string(), check: v.string(), status: v.string(), source: v.optional(v.string()), detail: v.optional(v.array(v.string())) },

@@ -80,9 +80,19 @@ describe("performSetProjectLead", () => {
     expect(await scopeOf(db, ops._id)).toEqual([P]);
   });
 
-  test("a role under a parent that does not look after the project leads it and keeps its scope", async () => {
+  test("open by default: a role under a parent that does not look after the project leads it and gains it", async () => {
     const db = fixtures();
     const head = await role(db, "head", [Q]);
+    const child = await role(db, "child", [Q], { kind: "role", role_id: head._id });
+    const out = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(child._id) });
+    expect(out.scope).toBe("added");
+    expect((await scopeOf(db, child._id)).sort()).toEqual([P, Q].sort());
+  });
+
+  test("a role under a parent that keeps its reports inside, and does not look after the project, leads it and keeps its scope", async () => {
+    const db = fixtures();
+    const head = await role(db, "head", [Q]);
+    await db.patch(head._id, { keeps_reports_inside: true });
     const child = await role(db, "child", [Q], { kind: "role", role_id: head._id });
     const out = await performSetProjectLead(ctxOf(db), ME as any, { project_id: P as any, role_id: String(child._id) });
     expect(out.scope).toBe("outside_parent");

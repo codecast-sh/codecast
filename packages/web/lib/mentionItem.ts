@@ -37,6 +37,9 @@ export type MentionItem = {
   channelKind?: string;
   unread?: number;
   idleSummary?: string;
+  /** A session with a process behind it right now (lib/liveness
+   *  sessionAwakeAt): the one someone is most likely reaching for. */
+  awake?: boolean;
   /** A session another session spawned. Found by name like ⌘K finds it, but
    *  never offered as a bare recent. */
   worker?: boolean;
