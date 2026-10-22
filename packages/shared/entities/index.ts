@@ -18,7 +18,7 @@ import { callAnchorHref, callFrameHref, parseCallMomentParam } from "../contract
 import { CALL_TIME_SOURCE, formatCallTime, parseCallTime } from "../contracts/callRecordings";
 import { parseReplayRef, replayRefId, type ReplayRef } from "../contracts/replayPlayer";
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "role" | "person" | "deploy";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "role" | "person" | "deploy" | "secret";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -81,6 +81,9 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   replay: "/ops/replays",
   // A deploy opens on the Line app's Deploys view (`/line?view=deploys&deploy=dp-N`, see entityRoute).
   deploy: "/line",
+  // A Vault secret opens on the Vault page with its panel (`/vault?s=sec-N`):
+  // a path under /vault is a Files note, never a secret.
+  secret: "/vault",
 };
 
 /**
@@ -103,6 +106,7 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   dp: "deploy",
   or: "role",
   pj: "project",
+  sec: "secret",
 };
 
 /**
@@ -113,7 +117,7 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
  * followed by base 36 (`pj-mf3k2a`), and "pj" is no word. Every matcher below derives
  * from this, so the rule holds on every surface at once.
  */
-const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src", "rp", "or", "dp"]);
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src", "rp", "or", "dp", "sec"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -148,6 +152,7 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   calls: "call",
   call: "call",
   ops: "source",
+  vault: "secret",
 };
 
 /**
@@ -158,10 +163,10 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
  * `?task=<id>`, and those links are still live in old messages — so new
  * trigger links always use the path route (`/triggers/<id>`).
  */
-const QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task", proposal: "proposal", source: "source" };
+const QUERY_PARAM: Partial<Record<EntityType, string>> = { trigger: "task", proposal: "proposal", source: "source", secret: "s" };
 /** Types whose page is the query form alone: a path under their route is
  *  another object's page (`/org/<or-N>` is a role), never one of theirs. */
-const QUERY_ONLY: ReadonlySet<EntityType> = new Set(["proposal", "source"]);
+const QUERY_ONLY: ReadonlySet<EntityType> = new Set(["proposal", "source", "secret"]);
 /** Path segments under a type's route that are other pages, never an id of
  *  that type: `/decisions/stacks/<ds-N>` is a decision stack. */
 const NOT_AN_ID: Partial<Record<EntityType, ReadonlySet<string>>> = { decision: new Set(["stacks"]) };

@@ -34,3 +34,25 @@ export function carryRingStubs(local: any[] | undefined, incoming: any[] | undef
   const carried = (local ?? []).filter((r) => isRingStub(r) && r.until > now && !rows.some((s) => names(r, s)));
   return carried.length ? [...kept, ...carried] : kept;
 }
+
+// The answered ring: the other half of the same problem, on the callee's side.
+// myCalls.incoming lists an invite until respondInvite lands and the query
+// re-pushes, and the card, the toast and the ring sound all read that list, so
+// a Join or Decline left the call ringing for the whole round trip. The press
+// settles the ring here and drops it from the list at once; the list's merge
+// keeps it dropped across a push that still names it, for as long as the
+// server could take to stop listing it.
+export const RING_SETTLED_MS = 30_000;
+const settledRings = new Map<string, number>();
+
+export function settleRingIn(inviteId: string, now = Date.now()): void {
+  settledRings.set(inviteId, now + RING_SETTLED_MS);
+}
+
+/** The merge for myCalls.incoming: the server's list, less every ring this
+ *  window answered or declined that the server has not caught up on. */
+export function dropSettledRings(incoming: any[] | undefined, now = Date.now()): any[] {
+  for (const [id, until] of settledRings) if (until <= now) settledRings.delete(id);
+  const rows = incoming ?? [];
+  return settledRings.size ? rows.filter((r) => !settledRings.has(String(r._id))) : rows;
+}

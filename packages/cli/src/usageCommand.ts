@@ -25,7 +25,7 @@ import {
   type CcUsage,
   type RecoveryMode,
 } from "@codecast/shared/contracts";
-import { activeAccountSummary, launchProfileName, listProfiles, readUsageCache } from "./ccAccounts.js";
+import { activeAccountSummary, launchProfileName, listProfiles, readActiveCredential, readUsageCache } from "./ccAccounts.js";
 import type { UsageRetryState } from "./usageRetry.js";
 
 export interface UsageProfile {
@@ -88,20 +88,20 @@ export { USAGE_WARN_PERCENT };
 /** This machine's saved profiles joined with the daemon's usage cache. The
  * active login need not be a saved profile — it still has a cache entry, so
  * it is synthesized as one when no profile covers it. */
-export function loadLocalUsageProfiles(): UsageProfile[] {
+export function loadLocalUsageProfiles(credential: string | null = readActiveCredential()): UsageProfile[] {
   const { accounts: cache, retries } = readUsageCache();
   // "active" here is the account sessions run on: the launch profile after a
   // token switch, else the keychain login (fallbacks exclude it, meters lead
   // with it).
   const launch = launchProfileName();
-  const profiles: UsageProfile[] = listProfiles().map((p) => ({
+  const profiles: UsageProfile[] = listProfiles(credential).map((p) => ({
     name: p.name,
     email: p.email,
     active: launch ? p.name === launch : p.active,
     usage: cache[p.uuid || p.email || ""],
     retry: retries?.[p.uuid || p.email || ""],
   }));
-  const active = activeAccountSummary();
+  const active = activeAccountSummary(credential);
   const activeKey = active?.uuid || active?.email;
   if (active && activeKey && !profiles.some((p) => p.active)) {
     profiles.push({

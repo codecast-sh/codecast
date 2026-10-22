@@ -23,6 +23,7 @@ import { CODECAST_BASE_URL, sharePath } from '@codecast/shared/entities';
 import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
+import { parsePollAnswers } from '@codecast/web/lib/pollPayload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { ImageGallery } from '@/components/ImageGallery';
 import { isTrustedImageSrc } from '@/lib/convex';
@@ -52,7 +53,7 @@ import { beginLocalFork } from '@codecast/web/store/beginLocalFork';
 import { useMissingSessionLookup } from '@codecast/web/hooks/useMissingSessionRow';
 import { useAckActiveSession } from '@/hooks/useAckActiveSession';
 import { PermissionCard } from '@/components/PermissionCard';
-import { SuggestionPills } from '@/components/SuggestionPills';
+import { useComposerSuggestion } from '@codecast/web/hooks/useComposerSuggestion';
 import { SlashCommandPills } from '@/components/session/SlashCommandPills';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
@@ -506,12 +507,8 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
   let answers: Record<string, string> = {};
   if (parsedInput.answers && typeof parsedInput.answers === 'object') {
     answers = parsedInput.answers;
-  } else if (result?.content) {
-    const regex = /"([^"]+)"="([^"]+)"/g;
-    let match;
-    while ((match = regex.exec(result.content)) !== null) {
-      answers[match[1]] = match[2];
-    }
+  } else {
+    answers = parsePollAnswers(questions, result?.content);
   }
 
   // Interactive while the agent is still waiting: no answer yet, a live
@@ -2837,6 +2834,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     if (!trimmedMessage && selectedImages.length === 0) return;
     if (allowanceOut) return;
     setError(null);
+    suggestion.settleSend(trimmedMessage);
 
     const sendImages = images.optimisticImages();
     const content = trimmedMessage || IMAGE_ONLY_CONTENT;
@@ -2908,12 +2906,16 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     ? allowanceOut ?? hostedComposerWords(hostedLast, waitsOnAnswer)
     : isActive ? MOBILE_COMPOSER_PLACEHOLDER.active : MOBILE_COMPOSER_PLACEHOLDER.idle;
 
-  // Suggestion pills (off-by-default pref, same stamped key as web). Idle =
-  // the agent is not actively producing; a pill tap sends its text directly
-  // through the shared dispatch, long-press fills the composer instead.
+  // The suggested reply (off-by-default pref, same stamped key as web) shows
+  // in the empty box where the words would go; Use fills the box with it.
   // Hosted mode has no reply suggestion (surface composer.suggestion).
   const suggestionsOn = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
-  const suggestionsEnabled = useSurface('composer.suggestion') && suggestionsOn;
+  const suggestion = useComposerSuggestion({
+    conversationId: conversationId as string,
+    idle: !agentWorking,
+    hidden: !!message.trim() || selectedImages.length > 0,
+    enabled: useSurface('composer.suggestion') && suggestionsOn,
+  });
 
   return (
     <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
@@ -2930,18 +2932,17 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
         attach={!hosted}
         error={error}
         onDismissError={() => setError(null)}
-        above={<>
-          {suggestionsEnabled && (
-            <SuggestionPills
-              conversationId={conversationId}
-              idle={!agentWorking}
-              hidden={!!message.trim() || selectedImages.length > 0}
-              onSend={(t) => dispatchComposerSend(conversationId, t)}
-              onEdit={(t) => { setMessage(t); inputRef.current?.focus(); }}
-            />
-          )}
-          {hosted ? null : <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />}
-        </>}
+        suggestion={suggestion.text === null ? null : {
+          text: suggestion.text,
+          index: suggestion.index,
+          count: suggestion.count,
+          onUse: () => {
+            const t = suggestion.accept();
+            if (t !== null) { setMessage(t); inputRef.current?.focus(); }
+          },
+          onNext: () => { suggestion.cycle(1); },
+        }}
+        above={hosted ? null : <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />}
       />
     </RNView>
   );

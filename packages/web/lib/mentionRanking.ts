@@ -15,8 +15,10 @@ import { mentionContextPosition, type MentionContext } from "./mentionContext";
 //
 // So: once the reader has typed, how directly the words NAME the item leads,
 // and recency only breaks ties. With nothing typed there is no naming signal,
-// recency alone orders the list, and the dropdown's "recently viewed" header
-// tells the truth.
+// and recency orders the list. Either way a session that is awake right now
+// leads the equally named ones that are not: a running agent is what someone
+// reaches for with @, and a view clock cannot see that (a session opened once
+// yesterday would otherwise outrank one working this minute).
 
 export function score(label: string, q: string): number {
   const l = label.toLowerCase();
@@ -176,6 +178,7 @@ export function mergeMentionSuggestions(local: MentionItem[], remote: MentionIte
   const counts = new Map<string, number>();
   const sorted = ranked
     .sort((a, b) => (ranks ? ranks.get(a)! - ranks.get(b)! : Number(Boolean(b.contextAt)) - Number(Boolean(a.contextAt))) || (b.contextAt ?? 0) - (a.contextAt ?? 0)
+      || Number(Boolean(b.awake)) - Number(Boolean(a.awake))
       || (hasQuery ? typeOrder(a.type) - typeOrder(b.type) : 0) || compareMentionRecency(a, b));
   // Workers spawned round after round share their brief's title: offer the
   // freshest one, not a page of copies.

@@ -38,6 +38,7 @@ import { useLineNav } from "../../../widgets/parts";
 import { LineDecisionPrefetch } from "../../../widgets/LineDecision";
 import type { LineViewProps } from "../types";
 import { ProblemBand } from "./ProblemBand";
+import { OriginTrail } from "../../../widgets/OriginTrail";
 import { ProblemFindings, type FixMark } from "./ProblemFindings";
 import { ProblemWork } from "./ProblemWork";
 import { TimelineChart, TimeRangeSeg, useTimelineDomain, type TimelinePick } from "../timeline/TimelineChart";
@@ -270,6 +271,8 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
       {/* One name on every page (the list's, the reader's, this one); the statement it names follows whole. */}
       <h2 className="pp-title">{heading}</h2>
       {errorLine ? <p className="pp-statement" data-pp-error><code>{errorLine}</code></p> : statementAdds(statement, heading, signals) && <p className="pp-statement">{statement}</p>}
+      {/* Where it came from, down to the raw thing: the newest finding's conversation, error or report. */}
+      <div className="pp-origin" data-pp-origin><OriginTrail task={issue.id} folded onProblem /></div>
       <ProblemTimeline history={h} labelOf={labelOf} now={now} offTopic={offTopic} signals={signals} selectedRun={selection.run ?? null}
         onRun={(runId) => onRun(runId, issue.id)} onFinding={(ref) => select({ finding: ref }, undefined, { push: true })} />
       {/* A closed problem's band states when and how in its facts: the line would only say it twice. */}

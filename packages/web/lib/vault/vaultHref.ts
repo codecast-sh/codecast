@@ -1,25 +1,38 @@
 // The ONE place the Files surface's URL shape lives. Eleven call sites used to
 // build `/vault?f=<path>` by hand, which is how a rename turns into a hunt.
 //
-// ROUTE HISTORY, and why /vault can never be deleted: the surface was called
-// "Vault" and lived at /vault. `cast vault open` printed /vault?f=… deep links
-// into sessions and notes, and entity-link authoring writes real codecast URLs
-// into users' markdown files on disk. Those links are already out there. /files
-// is what we mint now; /vault stays routable forever so nothing already written
-// goes dead. Both patterns are registered in all four route lists (App.tsx,
-// TabContent.tsx, src/compat/tabRouting.ts, src/routes.manifest.ts).
+// ROUTE HISTORY: Files was first called "Vault" and lived at /vault. The CLI's
+// `open` printed /vault?f=… deep links into sessions and notes, and entity-link
+// authoring writes real codecast URLs into users' markdown files on disk, so
+// those links are out there for good. /files is what we mint. /vault now
+// belongs to the team Vault (secrets), split by query: a /vault URL carrying
+// anything filesHref mints (`f`, `path`, `l`, `view`) is an old Files link and
+// redirects to /files with the same query (`legacyFilesHref`); a bare /vault,
+// or one with any other query (`?s=sec-N`), is the Vault page. Both routes are
+// registered in all four route lists (App.tsx, RoutePane.tsx,
+// src/compat/tabRouting.ts, src/routes.manifest.ts).
 
 import { inferHomeDir, resolveCustomPath } from "../utils";
 
 /** Canonical route for the Files surface. */
 export const FILES_ROUTE = "/files";
 
-/** Permanent alias — see the route-history note above. Never remove. */
-export const FILES_LEGACY_ROUTE = "/vault";
+/** The query keys filesHref mints. One of them on a /vault URL marks an old
+ *  Files link rather than the Vault. */
+const FILES_QUERY_KEYS = ["f", "path", "l", "view"];
 
-/** True for a path on the Files surface, under either route. */
+/** The /files URL an old `/vault?f=…` Files link stands for, query intact, or
+ *  null when the path is not one (a bare /vault is the Vault page). */
+export function legacyFilesHref(path: string): string | null {
+  const m = path.match(/^\/vault\/?\?([^#]*)/);
+  if (!m) return null;
+  const query = new URLSearchParams(m[1]);
+  return FILES_QUERY_KEYS.some((k) => query.has(k)) ? `${FILES_ROUTE}?${m[1]}` : null;
+}
+
+/** True for a path on the Files surface: /files, or an old /vault Files link. */
 export function isFilesPath(path: string): boolean {
-  return /^\/(files|vault)(\?|\/|$)/.test(path);
+  return /^\/files(\?|\/|$)/.test(path) || legacyFilesHref(path) !== null;
 }
 
 /**

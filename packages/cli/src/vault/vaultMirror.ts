@@ -250,7 +250,7 @@ export class VaultMirror {
   }
 
   /** Registered vaults with mirroring explicitly turned on. Read fresh every
-   *  time: `cast vault mirror --on` edits config.json under a running daemon.
+   *  time: `cast files mirror --on` edits config.json under a running daemon.
    *  Registered, not discovered: a project vault the user merely browsed has
    *  not opted into leaving this machine, and mirroring is opt-in by design. */
   private mirroredVaults(): VaultInfo[] {
@@ -300,7 +300,7 @@ export class VaultMirror {
 
   /**
    * Keep one watch subscription per mirrored vault. Done here, on every cycle,
-   * rather than once at boot: `cast vault mirror --on` edits config.json under
+   * rather than once at boot: `cast files mirror --on` edits config.json under
    * a running daemon and has no way to tell it, so a subscription list built at
    * startup would leave a freshly mirrored vault waiting for the next half-hour
    * scan before it ever pushed a live edit.
@@ -320,8 +320,8 @@ export class VaultMirror {
   }
 
   /**
-   * Tear down mirrors the user turned off. `cast vault mirror --off` (and
-   * `cast vault rm`) only edit config.json — they cannot reach the network, and
+   * Tear down mirrors the user turned off. `cast files mirror --off` (and
+   * `cast files rm`) only edit config.json — they cannot reach the network, and
    * a CLI process that tried would leave the job half done if it were killed.
    * So the ledger is the to-do list: any vault it remembers pushing that is no
    * longer mirrored gets deleted from Convex, and only then forgotten here.

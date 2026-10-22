@@ -131,6 +131,8 @@ export type OffloadRunRow = {
 
 export type OffloadRun = {
   batchId: string;
+  /** The Move press that started it; one press makes a batch per destination. */
+  clientBatchId?: string;
   createdAt: number;
   waitForTurnMs: number;
   rows: OffloadRunRow[];
@@ -158,8 +160,9 @@ export type ResourceActions = {
   onPark?: (sessionIds: string[]) => void;
   onResume?: (sessionIds: string[]) => void;
   onPreflight?: (selections: OffloadSelection[]) => void;
-  /** Always the safe mode: waits for a turn boundary, never interrupts. */
-  onStartOffload?: (selections: OffloadSelection[], opts: { waitForTurnMs: number }) => void;
+  /** Always the safe mode: waits for a turn boundary, never interrupts. Returns the
+   *  launch's client batch id, which its runs carry, or nothing when it did not start. */
+  onStartOffload?: (selections: OffloadSelection[], opts: { waitForTurnMs: number }) => string | undefined;
   onRetry?: (batchId: string, sessionId: string) => void;
   onCancel?: (batchId: string) => void;
   /** Background priority for a session's processes on one machine, or back. */

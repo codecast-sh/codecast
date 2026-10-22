@@ -29,6 +29,11 @@ export const DAEMON_COMMANDS = [
   "run_workflow",
   "reinstall",
   "move_to_device",
+  // The offload review asked this machine to rehearse moves of its sessions
+  // (move_rehearsals rows of one request). Runs as a detached
+  // `cast migrate rehearse --request <id>` child that reports each row itself.
+  // args: { request_id }.
+  "rehearse_moves",
   // The web asked for a session on the cloud host. Targeted at an online LOCAL
   // daemon (the one with the host registry + SSH key): it wakes the host,
   // refreshes the checkout there, copies the manifest's secret files, acquires
