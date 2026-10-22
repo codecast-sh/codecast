@@ -260,4 +260,16 @@ describe("$node.json.<path>", () => {
     expect(expandScriptVars("cp $file.bak", { file: "x" })).toBe("cp 'x'.bak");
     expect(expandScriptVars("echo $nothing.here", {})).toBe("echo $nothing.here");
   });
+
+  test("script vars are quoted for where they land: bare, inside double quotes, inside single quotes", () => {
+    const ctx = { default_branch: "main", title: `it's "$x"`, worktree: "line-ct-1" };
+    expect(expandScriptVars(`git rev-parse "origin/$default_branch"`, ctx)).toBe(`git rev-parse "origin/main"`);
+    expect(expandScriptVars(`echo "$title" $title '$title'`, ctx)).toBe(`echo "it's \\"\\$x\\"" 'it'\\''s "$x"' 'it'\\''s "$x"'`);
+    expect(expandScriptVars(`cd "$(cast ws path $worktree)"`, ctx)).toBe(`cd "$(cast ws path 'line-ct-1')"`);
+    expect(expandScriptVars(`# the branch's $worktree\necho $worktree`, ctx)).toBe(`# the branch's $worktree\necho 'line-ct-1'`);
+    for (const s of [`echo "$title" $title '$title'`, `x="a$(echo "$title")b"; echo "$x"`]) {
+      const r = Bun.spawnSync(["bash", "-c", expandScriptVars(s, ctx)]);
+      expect(r.stdout.toString()).toBe(s.startsWith("x=") ? `a${ctx.title}b\n` : `${ctx.title} ${ctx.title} ${ctx.title}\n`);
+    }
+  });
 });

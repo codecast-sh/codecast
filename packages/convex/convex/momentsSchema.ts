@@ -227,6 +227,19 @@ export const momentsTables = {
     .index("by_judge_created", ["judge_id", "created_at"])
     .index("by_short_id", ["short_id"]),
 
+  // LL9. One answer of the problem merge pass (problemMerge.ts) on a pair of
+  // problems, so a pass run again asks only about new pairs.
+  problem_merge_checks: defineTable({
+    workspace: v.string(),
+    /** The two problems' short ids, sorted, joined by "|". */
+    pair: v.string(),
+    same: v.boolean(),
+    why: v.string(),
+    score: v.number(),
+    model: v.string(),
+    at: v.number(),
+  }).index("by_workspace", ["workspace"]),
+
   // LL9. What a finding said happened, embedded, so a new finding can be
   // grouped with the problem whose findings read the same. Kept off the
   // signals row: Convex reads whole documents. `scope` is workspace|subject,
