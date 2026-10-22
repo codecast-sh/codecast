@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CastFlowBlock } from "./CastFlowBlock";
 import { useRouter } from "next/navigation";
 import { useState, useMemo, useContext } from "react";
 import { useChatMessageRow, useEnsureChatMessage } from "../../../hooks/useChatSync";
@@ -843,6 +844,10 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
   }
   // `cast state` — the pinned panel already shows the full text, so the row is
   // a one-line status + headline instead of the generic body render.
+  // `cast flow`: a run draws the run it started, live (flows.md FL6).
+  if (cat === "flow") {
+    return <CastFlowBlock subcommand={subcommand} args={args} rawCmd={cast.raw} output={output} isError={!!isError} />;
+  }
   if (cat === "state") {
     return <CastStateBlock subcommand={subcommand} args={args} rawCmd={cast.raw} output={output} isError={!!isError} />;
   }

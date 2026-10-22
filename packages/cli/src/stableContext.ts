@@ -20,6 +20,8 @@ import {
   type StableMode,
 } from "@codecast/shared/contracts";
 import { formatFeedResults } from "./formatter.js";
+import { poolFlows } from "./workflow/flowPool.js";
+import { flowPathWords } from "@codecast/shared/contracts/flowPool";
 import { orgContextBlock } from "@codecast/shared/contracts/orgWhere";
 import { formatModGuide } from "./mods/guide.js";
 import { STABLE_FEED_HOOK_FILE } from "./codecastOwned.js";
@@ -112,7 +114,7 @@ export async function buildStableContext(
 
     // What agents must act on (the org, the mods' objects and blocks) leads;
     // the feed is background and gives up its oldest conversations to fit.
-    const lead = `${await orgBlock}${await modsBlock}`.trim();
+    const lead = `${await orgBlock}${await modsBlock}${flowsLine(opts.cwd)}`.trim();
     const render = () => {
       const feed = stripAnsi(formatFeedResults({ ...result, conversations }, { projectPath }));
       return `${lead ? `${lead}\n\n` : ""}<stable-context mode="${opts.mode}">\n${instruction}\n\n${feed}\n</stable-context>`;
@@ -168,6 +170,22 @@ async function fetchOrgContext(siteUrl: string, apiToken: string, session?: stri
  * org context, or "" when none apply or the read fails. A team's mod applies
  * only in that team's projects.
  */
+/**
+ * One line naming the flows a change made here can run through (docs/architecture/flows.md FL7), read from this
+ * checkout's pool with no network. Kept to one line: it rides the same 9000-byte budget the feed gives way to.
+ */
+export function flowsLine(cwd?: string): string {
+  try {
+    const pool = poolFlows(cwd ?? process.cwd()).filter((f) => f.takes.includes("branch") && !f.errors.length);
+    if (!pool.length) return "";
+    const lead = pool.find((f) => f.slug === "change") ?? pool[0];
+    const others = pool.filter((f) => f !== lead).map((f) => f.slug);
+    return `\n\n<flows>A finished change goes through a flow from the pool before it ships; the standard one is ${lead.slug} (${flowPathWords(lead).path})${others.length ? `, and ${others.join(", ")} run one part of it` : ""}. \`cast flow run <flow>\` sends this session's own edits through one, and \`cast flow show <flow>\` says what each step does.</flows>`;
+  } catch {
+    return "";
+  }
+}
+
 async function fetchModsGuide(siteUrl: string, apiToken: string, cwd?: string): Promise<string> {
   try {
     const response = await fetch(`${siteUrl}/cli/mods/guide`, {

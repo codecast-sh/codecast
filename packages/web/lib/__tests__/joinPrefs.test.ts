@@ -9,6 +9,9 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
 import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic, rememberMicAutoOpen } from "../calls/joinPrefs";
+import { noteDevices } from "../calls/deviceRank";
+
+const mic = (deviceId: string, label: string) => ({ deviceId, label });
 
 function setUI(ui: Record<string, unknown>) {
   useInboxStore.setState((s: any) => ({ clientState: { ...(s.clientState ?? {}), ui } }) as any);
@@ -60,11 +63,22 @@ describe("join prefs", () => {
     }
   });
 
-  test("devices are remembered per kind", () => {
-    rememberDevice("audioinput", "mic-1");
-    rememberDevice("videoinput", "cam-1");
-    expect(readJoinPrefs()).toMatchObject({ micDeviceId: "mic-1", cameraDeviceId: "cam-1" });
+  test("devices are remembered per kind, by name, across a device id change", () => {
+    noteDevices("audioinput", [mic("default", "Default - MacBook Pro Microphone"), mic("m1", "MacBook Pro Microphone"), mic("h1", "WH-1000XM6")]);
+    noteDevices("videoinput", [mic("c1", "Studio Display Camera")]);
+    rememberDevice("audioinput", "h1");
+    rememberDevice("videoinput", "c1");
+    expect(readJoinPrefs()).toMatchObject({ micDeviceId: "h1", cameraDeviceId: "c1" });
+    // Another origin (the desktop app) salts ids differently; the name still matches.
+    noteDevices("audioinput", [mic("default", "Default - WH-1000XM6"), mic("m2", "MacBook Pro Microphone"), mic("h2", "WH-1000XM6")]);
+    expect(readJoinPrefs().micDeviceId).toBe("h2");
     rememberDevice("audioinput", "");
-    expect(readJoinPrefs().micDeviceId).toBe("mic-1");
+    expect(readJoinPrefs().micDeviceId).toBe("h2");
+  });
+
+  test("an unranked kind falls back to the id this machine remembered", () => {
+    noteDevices("audioinput", [mic("default", "Default - X"), mic("usb-1", "USB Mic")]);
+    setUI({ call_mic_device_id: "usb-1" });
+    expect(readJoinPrefs().micDeviceId).toBe("usb-1");
   });
 });
