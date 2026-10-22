@@ -59,7 +59,7 @@ export type TreeVerdict =
   | "ready"
   /** Finished recently, and its changes collide with newer work on main. */
   | "review"
-  /** A line run made it and it holds work main lacks: the run ships that work after its decision, never a hand. */
+  /** A line run made it and it holds work main lacks, in use or not: the run ships that work after its decision, never a hand. */
   | "run";
 
 /** Verdicts whose tree `cast land prune` archives and removes. */
@@ -326,13 +326,14 @@ export function treeVerdict(f: VerdictFacts): { verdict: TreeVerdict; reason: st
   const quiet = f.now - f.lastActivity;
   const inUse = inUseReason(f);
   if (f.primary) return { verdict: "primary", reason: `the repo's main checkout${inUse ? `, in use: ${inUse}` : ""}` };
-  if (inUse) return { verdict: "live", reason: inUse };
   const { same, absorbed, only, both } = f.counts;
+  const open = `${only} files only it changed, ${both} where main lacks its change`;
+  // A run's own work is the run's to ship, while a hand is in it as much as while it waits on a person.
+  if (f.run && only + both > 0 && (inUse || quiet < STALE_MS)) return { verdict: "run", reason: `a line run's change, which the run ships after its decision; ${open}` };
+  if (inUse) return { verdict: "live", reason: inUse };
   if (same + absorbed + only + both === 0) return { verdict: "empty", reason: "no changes of its own" };
   if (only + both === 0) return { verdict: "landed", reason: `main already holds all ${same + absorbed} files it changed${absorbed ? ` (${absorbed} reworked since)` : ""}` };
-  const open = `${only} files only it changed, ${both} where main lacks its change`;
   if (quiet >= STALE_MS) return { verdict: "stale", reason: `untouched for ${Math.floor(quiet / 86_400_000)}d; ${open}` };
-  if (f.run) return { verdict: "run", reason: `a line run's change, which the run ships after its decision; ${open}` };
   if (only > 0) return { verdict: "ready", reason: open };
   return { verdict: "review", reason: open };
 }

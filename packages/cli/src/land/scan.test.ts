@@ -38,11 +38,13 @@ describe("treeVerdict", () => {
     // Nothing of its own left: it is landed however old.
     expect(treeVerdict(facts({ lastActivity: NOW - STALE_MS - 1, counts: { same: 2, absorbed: 0, only: 0, both: 0 } })).verdict).toBe("landed");
   });
-  test("a line run's tree holding work main lacks is the run's to ship, never ready or review", () => {
+  test("a line run's tree holding work main lacks is the run's to ship, in use or not", () => {
     expect(treeVerdict(facts({ run: true, counts: { same: 0, absorbed: 0, only: 2, both: 1 } })).verdict).toBe("run");
     expect(treeVerdict(facts({ run: true, counts: { same: 0, absorbed: 3, only: 0, both: 2 } })).verdict).toBe("run");
-    // In use, holding nothing of its own, or past the stale line, it reads as any tree does.
-    expect(treeVerdict(facts({ run: true, processInside: true, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("live");
+    expect(treeVerdict(facts({ run: true, processInside: true, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("run");
+    expect(treeVerdict(facts({ run: true, lastActivity: NOW - 60_000, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("run");
+    // Holding nothing of its own, or idle past the stale line, it reads as any tree does.
+    expect(treeVerdict(facts({ run: true, processInside: true })).verdict).toBe("live");
     expect(treeVerdict(facts({ run: true })).verdict).toBe("empty");
     expect(treeVerdict(facts({ run: true, counts: { same: 2, absorbed: 0, only: 0, both: 0 } })).verdict).toBe("landed");
     expect(treeVerdict(facts({ run: true, lastActivity: NOW - STALE_MS - 1, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("stale");
