@@ -166,6 +166,20 @@ describe("initAnalytics (web)", () => {
     }
   });
 
+  it("drops an event whose every frame is injected text", () => {
+    web.initAnalytics(base);
+    const [options] = last(sentryCalls, "init") as [Record<string, any>];
+    const beforeSend = options.beforeSend as (e: any) => any;
+    const event = (filenames: string[]) => ({
+      exception: { values: [{ type: "TypeError", value: "boom", stacktrace: { frames: filenames.map((filename) => ({ filename })) } }] },
+    });
+    expect(beforeSend(event(["<anonymous>", "<anonymous>", "<anonymous>"]))).toBeNull();
+    const app = event(["<anonymous>", "https://codecast.sh/assets/index-abc.js"]);
+    expect(beforeSend(app)).toBe(app);
+    const bare = { exception: { values: [{ type: "TypeError", value: "boom" }] } };
+    expect(beforeSend(bare)).toBe(bare);
+  });
+
   it("disables Sentry in development", () => {
     web.initAnalytics({ ...base, environment: "development" });
     const [options] = last(sentryCalls, "init") as [Record<string, any>];
@@ -426,6 +440,31 @@ describe("setupErrorToasts", () => {
     expect(toasts[0][0]).toBe("Uncaught: cannot read properties of undefined");
     expect(toasts[0][1]).toContain("caused by: cannot read properties of undefined");
     expect(last(sentryCalls, "captureException")).toEqual([cause, { extra: { source: "window.onerror" } }]);
+  });
+
+  it("leaves an error thrown by injected text to the console", () => {
+    // The stack a script run through executeJavaScript threw when it sorted
+    // a frozen array: no frame names a file, so the app's code never ran.
+    install();
+    const injected = new TypeError("Cannot assign to read only property '0' of object '[object Array]'");
+    injected.stack = [
+      `TypeError: ${injected.message}`,
+      "    at Array.sort (<anonymous>)",
+      "    at <anonymous>:21:259",
+      "    at Array.map (<anonymous>)",
+      "    at <anonymous>:24:5",
+    ].join("\n");
+    let prevented = false;
+    handlers.unhandledrejection({ reason: injected, preventDefault: () => (prevented = true) });
+    expect(toasts.length).toBe(0);
+    expect(count(sentryCalls, "captureException")).toBe(0);
+    expect(prevented).toBe(false);
+
+    // One frame from the bundle makes it the app's error.
+    const app = new TypeError("x is not a function");
+    app.stack = ["TypeError: x is not a function", "    at Array.sort (<anonymous>)", "    at render (https://codecast.sh/assets/index-abc.js:1:2)"].join("\n");
+    handlers.unhandledrejection({ reason: app, preventDefault: () => {} });
+    expect(toasts.length).toBe(1);
   });
 
   it("claimErrorKey shares one 30s window with the listeners", () => {

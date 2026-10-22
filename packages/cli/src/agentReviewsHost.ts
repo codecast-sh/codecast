@@ -32,8 +32,8 @@ import { TOOL_PATH, findOnPath, spawn, spawnSync } from "./proc.js";
 import { codecastPath } from "./codecastDir.js";
 import { bunPath } from "./momentsHost.js";
 import { accountTokenFilePath } from "./ccAccounts.js";
-import { loadLocalUsageProfiles } from "./usageCommand.js";
-import { isUsageExhausted, switchUsagePercent } from "@codecast/shared/contracts";
+import { loadLocalUsageProfiles, type UsageProfile } from "./usageCommand.js";
+import { isUsageExhausted, livePercent, worstUsagePercent } from "@codecast/shared/contracts";
 import { transcriptFromStream, type ReviewTranscript } from "@codecast/shared/contracts/agentJudges";
 
 /** What `cast line reviews run` sets on this machine. */
@@ -42,15 +42,36 @@ export type ReviewsConfig = {
   slots: number;
   /** Saved profiles reviews may run on; every profile with a setup token when absent. */
   accounts?: string[];
-  /** A profile above this share of its worst window takes no new review. */
+  /** A profile whose week is at or above this share takes no new review: the headroom it keeps is the account's. */
   max_percent: number;
+  /** A profile whose 5-hour window is at or above this share takes no new review, so those already running finish before its limit. */
+  session_max_percent?: number;
   /** Reviews one profile runs at once. */
   per_account: number;
   /** Where the judge's repo sits on this machine, by source, when not where it was published. */
   roots?: Record<string, string>;
+  /** While the machine's CPU is idle less than busy_idle_percent of the time, no more than this many run. */
+  slots_when_busy?: number;
+  busy_idle_percent?: number;
 };
 
-export const REVIEWS_DEFAULTS: ReviewsConfig = { slots: 0, max_percent: 85, per_account: 3 };
+export const REVIEWS_DEFAULTS: ReviewsConfig = { slots: 0, max_percent: 85, session_max_percent: 95, per_account: 3, busy_idle_percent: 15 };
+
+/** CPU idle share since the previous reading, from the kernel's per-core counters; null on the first reading. */
+let cpuBefore: { idle: number; total: number } | null = null;
+export function cpuIdleShare(): number | null {
+  const now = os.cpus().reduce((a, c) => ({ idle: a.idle + c.times.idle, total: a.total + c.times.idle + c.times.user + c.times.sys + c.times.nice + c.times.irq }), { idle: 0, total: 0 });
+  const before = cpuBefore;
+  cpuBefore = now;
+  if (!before || now.total <= before.total) return null;
+  return (now.idle - before.idle) / (now.total - before.total);
+}
+
+/** The slots a pass fills: the configured ones, or fewer while the machine is busy (other work shares its CPU, and a starved review only runs longer). */
+export function slotsNow(cfg: ReviewsConfig, idle: number | null): number {
+  if (cfg.slots_when_busy == null || idle == null) return cfg.slots;
+  return idle * 100 < (cfg.busy_idle_percent ?? 15) ? Math.min(cfg.slots, cfg.slots_when_busy) : cfg.slots;
+}
 export const REVIEWS_TICK_MS = 30_000;
 
 export const reviewsConfigFile = () => codecastPath("agent-reviews.json");
@@ -104,19 +125,26 @@ export function reviewEnv(base: NodeJS.ProcessEnv = process.env, add: Record<str
 
 /**
  * The saved profiles a new review may start on now, best first: each has a
- * setup token (the harness signs in with it), is allowed by the config (by
- * default every profile but the one this machine's sessions run on), is
+ * setup token (the harness signs in with it), is not the one this machine's
+ * sessions run on (whichever that is now), is allowed by the config, is
  * under its share and under its own cap of running reviews, and has not hit a
  * limit lately. Fewest running first, then most room.
  */
 export function pickAccounts(cfg: ReviewsConfig, running: Map<string, number>, cooling: Map<string, number>, now = Date.now()): string[] {
+  return rankAccounts(loadLocalUsageProfiles().filter((p) => fs.existsSync(accountTokenFilePath(p.name))), cfg, running, cooling, now);
+}
+
+/** pickAccounts over profiles already read, those with a setup token. */
+export function rankAccounts(profiles: Pick<UsageProfile, "name" | "active" | "usage">[], cfg: ReviewsConfig, running: Map<string, number>, cooling: Map<string, number>, now: number): string[] {
   const allowed = cfg.accounts?.length ? new Set(cfg.accounts) : null;
-  return loadLocalUsageProfiles()
-    // The profile this machine's sessions run on is left to them unless the config names it.
-    .filter((p) => p.name !== "(active login)" && (allowed ? allowed.has(p.name) : !p.active) && fs.existsSync(accountTokenFilePath(p.name)))
+  return profiles
+    // The profile this machine's sessions run on is left to them, even when the config names it.
+    .filter((p) => !p.active && (!allowed || allowed.has(p.name)))
     .filter((p) => (cooling.get(p.name) ?? 0) <= now && !isUsageExhausted(p.usage, now))
-    .map((p) => ({ name: p.name, percent: switchUsagePercent(p.usage, now), busy: running.get(p.name) ?? 0 }))
-    .filter((p) => p.busy < cfg.per_account && (p.percent ?? 0) < cfg.max_percent)
+    // Each window as it stands now: one rolled since the last probe counts as empty, the others keep their measured share,
+    // so a week at its stop still stops the account when its 5-hour window rolls.
+    .map((p) => ({ name: p.name, week: p.usage?.weekly ? livePercent(p.usage.weekly, now) : 0, session: p.usage?.session ? livePercent(p.usage.session, now) : 0, percent: worstUsagePercent(p.usage, now), busy: running.get(p.name) ?? 0 }))
+    .filter((p) => p.busy < cfg.per_account && p.week < cfg.max_percent && p.session < (cfg.session_max_percent ?? REVIEWS_DEFAULTS.session_max_percent!))
     .sort((a, b) => a.busy - b.busy || (a.percent ?? 50) - (b.percent ?? 50))
     .map((p) => p.name);
 }
@@ -251,7 +279,7 @@ export function startRun(claim: ReviewClaim, account: string, o: { checkout: str
   return { dir, claim, account, started, checkout: o.checkout };
 }
 
-const LIMIT_WORDS = /usage limit|limit reached|rate limit|429|overloaded|out of extra usage|hit your limit/i;
+const LIMIT_WORDS = /usage limit|limit reached|rate limit|429|overloaded|out of extra usage|hit your (?:\w+ )?limit/i;
 
 /** What a finished (or dead) run hands back to `/cli/reviews/done`. */
 export function handBack(files: RunFiles, now = Date.now()): Record<string, unknown> {
@@ -368,7 +396,10 @@ export async function tickReviews(deps: ReviewsTickDeps): Promise<{ handed: numb
     }
     held = held.filter((r) => !lost.includes(r.claim.review));
   }
-  const free = Math.max(0, cfg.slots - held.length);
+  const idle = cpuIdleShare();
+  const slots = slotsNow(cfg, idle);
+  if (slots < cfg.slots) deps.log(`[REVIEWS] CPU ${Math.round((idle ?? 0) * 100)}% idle: filling ${slots} of ${cfg.slots} slots`);
+  const free = Math.max(0, slots - held.length);
   const harness = harnessScript();
   const castDir = realCastDir();
   if (!free || !harness) return { handed, started: 0, running: held.length };
