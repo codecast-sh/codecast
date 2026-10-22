@@ -24,7 +24,7 @@ import { ASK_LINE } from "@codecast/shared/contracts/personAsk";
 import { NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
 import type { SwitchLedger } from "../../components/consequential/ConsequentialSwitch";
 
-export const dayWords = (at: number) => new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+export { shortDay as dayWords } from "./runReport";
 export const dayTimeWords = (at: number) => new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 /** A span in a person's units: "42m", "2h", "3d". */
 export function spanShort(ms: number): string {

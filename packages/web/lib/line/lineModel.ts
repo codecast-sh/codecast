@@ -1078,6 +1078,17 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
   // A problem no run has taken yet waits under the process its project runs (processIndex), never under every one.
   const process = processIndex(rows.runs as ReadonlyArray<GraphRun>, (id) => (taskById.get(id) as { project_id?: string | null } | undefined)?.project_id);
   const causeIds = [...runsByTask.keys(), ...rows.tasks.filter((t) => t.cause && !anyRunByTask.has(t._id) && process.task(t._id) === key).map((t) => t._id)];
+  // A problem's decisions: those naming it, and those any of its runs asked, in the order the rows hold them.
+  const allDecisions = rows.decisions ?? [];
+  const decisionAt = { task: new Map<string, number[]>(), run: new Map<string, number[]>() };
+  allDecisions.forEach((d, n) => {
+    for (const [by, k] of [[decisionAt.task, d.task_id], [decisionAt.run, d.workflow_run_id]] as const) if (k) { const at = by.get(k); if (at) at.push(n); else by.set(k, [n]); }
+  });
+  const decisionsOf = (taskId: string, taskRuns: ReadonlyArray<MapRun>) => {
+    const at = new Set(decisionAt.task.get(taskId));
+    for (const r of taskRuns) for (const n of decisionAt.run.get(r._id) ?? []) at.add(n);
+    return [...at].sort((a, b) => a - b).map((n) => allDecisions[n]);
+  };
   const issues: LineIssue[] = [];
   // The line's own machine faults: a problem that names the same identifier is happening again each time one fails.
   const faults = stepFaults(steps);
@@ -1107,7 +1118,7 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
       ...(rows.forYou ? { forYou: rows.forYou.get(taskId) ?? null } : {}),
       lineFaults: faultsNaming(`${task?.title ?? ""}\n${(task as { description?: string | null } | undefined)?.description ?? ""}`, faults),
       history: causeHistory({
-        task, runs: allRuns, decisions: (rows.decisions ?? []).filter((d) => d.task_id === taskId || (!!d.workflow_run_id && allRuns.some((r) => r._id === d.workflow_run_id))),
+        task, runs: allRuns, decisions: decisionsOf(taskId, allRuns),
         signals: own, occurrences, deploys: rows.deploys, said, foldFixAt, handMerge: rows.handMerges?.get(taskId) ?? null, watchDays: rows.watchDays ?? null, now,
       }),
     });
