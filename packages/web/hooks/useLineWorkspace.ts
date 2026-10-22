@@ -83,6 +83,17 @@ export function useSyncLineHistory(projectId: string | null, repositories: strin
   return { deploysReady: deploys.ready };
 }
 
+/** An issue as Problems lists it, with the process it is read in: one object per issue and process, so an issue the
+ *  model kept across a push keeps its listed row too, and what is drawn from it reads it as unchanged. */
+const listed = new WeakMap<LineIssue, { process: string; issue: LineIssue & { process: string } }>();
+function inProcess(i: LineIssue, process: string): LineIssue & { process: string } {
+  const was = listed.get(i);
+  if (was?.process === process) return was.issue;
+  const issue = { ...i, process };
+  listed.set(i, { process, issue });
+  return issue;
+}
+
 // ── the model ────────────────────────────────────────────────────────────────
 
 /** The repositories a project's merges name, sorted, as one stable key. */
@@ -334,7 +345,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const mergesOf = useMemo(() => {
     let read: { prs: unknown; sig: string } | null = null;
     return (prs: Record<string, FixPullRequest> | undefined) => {
-      if (read?.prs !== prs) read = { prs, sig: fixMergesSig(prs, (id) => refOfTask.get(id), everyRow.tasks as LandedTask[]) };
+      if (!read || read.prs !== prs) read = { prs, sig: fixMergesSig(prs, (id) => refOfTask.get(id), everyRow.tasks as LandedTask[]) };
       return read.sig;
     };
   }, [refOfTask, everyRow.tasks]);
@@ -379,7 +390,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
     const out: Array<LineIssue & { process: string }> = [];
     for (const key of [...keys].sort()) {
       const issues = key === allModel.graphKey ? allModel.issues : modelOf(everyRow, null, allForYouByCase, true, key).issues;
-      for (const i of issues) if (idx.task(i.id, projectOf(i.id)) === key) out.push({ ...i, process: key });
+      for (const i of issues) if (idx.task(i.id, projectOf(i.id)) === key) out.push(inProcess(i, key));
     }
     return out.sort((a, b) => b.history.lastActivity - a.history.lastActivity);
   }, [everyRow, everyTaskProject, allModel, modelOf, allForYouByCase]);
