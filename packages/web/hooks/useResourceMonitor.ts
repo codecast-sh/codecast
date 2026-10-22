@@ -10,7 +10,7 @@ import { useIsSyncHost } from "./useSyncRole";
 import { useCollectionRows } from "./useCollectionRows";
 import { useCoarseNow } from "./useCoarseNow";
 import { useManagedSessions } from "./useSyncManagedSessions";
-import { useMigrationBatches, useMigrationCandidates } from "./useSyncMigrations";
+import { useMigrationBatches, useMigrationCandidates, useMoveRehearsals } from "./useSyncMigrations";
 import { useDevices, deviceDisplayName, type Device } from "../components/DeviceBadge";
 import { buildOffloadPlan } from "../lib/resourceOffload";
 import { batchAwaitingEcho, effectiveRowStatus, isRowTerminal, type MigrationBatch } from "../lib/migrationPlan";
@@ -117,6 +117,7 @@ export function useResourceMonitor() {
   const { sessions: managed } = useManagedSessions();
   const { candidates } = useMigrationCandidates();
   const { batches } = useMigrationBatches();
+  const { rehearsals } = useMoveRehearsals();
   const pinnedIds = useCollectionRows<any>("sessions", { where: (r: any) => !!r.inbox_pinned_at, sig: (r: any) => r._id });
 
   const machines = useMemo(() => joinMachines(devices, rows), [devices, rows]);
@@ -145,6 +146,6 @@ export function useResourceMonitor() {
       .map((b) => batchToRun(b, byConv, machines));
   }, [batches, sessions, machines, now]);
 
-  return { machines, sessions, plans, runs, batches: batches ?? [], now, ready: loaded || rows.length > 0 };
+  return { machines, sessions, plans, runs, batches: batches ?? [], rehearsals: rehearsals ?? [], now, ready: loaded || rows.length > 0 };
 }
 

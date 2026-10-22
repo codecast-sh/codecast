@@ -37,8 +37,6 @@ import {
   secretNameProblem,
   signinExpiresAt,
   validatePayload,
-  SECRET_KINDS,
-  SECRET_READ_PURPOSES,
   type LoginPayload,
   type SecretKind,
   type SecretMeta,
@@ -48,8 +46,8 @@ import {
 
 type SecretRow = Doc<"secrets">;
 
-const kindValidator = v.union(...SECRET_KINDS.map((k) => v.literal(k))) as any;
-const purposeValidator = v.union(...SECRET_READ_PURPOSES.map((p) => v.literal(p))) as any;
+const kindValidator = v.union(v.literal("key"), v.literal("login"), v.literal("signin"), v.literal("file"));
+const purposeValidator = v.union(v.literal("get"), v.literal("run"), v.literal("env"), v.literal("otp"), v.literal("signin"));
 
 /** Where a write lands: a team (membership checked) or the caller's personal workspace. Exactly one. */
 const workspaceArgs = { team_id: v.optional(v.id("teams")), personal: v.optional(v.boolean()) };
@@ -593,6 +591,7 @@ export const request = mutation({
     const conversation = await resolveConversation(ctx, userId, args.conversation);
     const now = Date.now();
     const fields = {
+      kind: args.kind,
       env,
       sites,
       request_why: why,
@@ -613,7 +612,6 @@ export const request = mutation({
         team_id: where.team_id,
         short_id,
         name,
-        kind: args.kind,
         status: "requested",
         created_by: userId,
         created_at: now,

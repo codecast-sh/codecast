@@ -19,3 +19,10 @@ export function useMigrationBatches(enabled = true) {
   const batches = useInboxStore((s) => s.migrationBatches);
   return { batches: batches ?? (ready ? [] : undefined), ready, error };
 }
+
+/** Recent rehearsals of session moves (registry: moveRehearsals), the offload review's evidence from the machine holding each session. */
+export function useMoveRehearsals(enabled = true) {
+  const { ready } = useSyncCollection("moveRehearsals", api.moveRehearsals.listMine, enabled ? {} : "skip");
+  const rows = useInboxStore((s) => s.moveRehearsals);
+  return { rehearsals: rows ?? (ready ? [] : undefined) };
+}

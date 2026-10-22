@@ -52,6 +52,7 @@ const restoreGlobals = replaceGlobals({
   Node: dom.window.Node,
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   ResizeObserver: TestResizeObserver,
+  MutationObserver: dom.window.MutationObserver,
   // useFrameTheme posts the theme to a framed page on the next frame.
   requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
   cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
