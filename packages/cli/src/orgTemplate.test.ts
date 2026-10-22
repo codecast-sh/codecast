@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
-import { templateLoaderPrompt } from "@codecast/shared/contracts/orgTemplateManifest";
+import { withTemplateLoader } from "@codecast/shared/contracts/orgTemplateManifest";
 import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
 import { diffTemplate, draftRoot, editTemplate, listTools, releaseDraft, runTool } from "./orgTemplateTools";
@@ -123,8 +123,7 @@ class Server {
         if (!row) throw new Error(`No hire of ${body.instance} on this project is awaiting its host step`);
         if (row.role_id !== body.role_id) throw new Error(`The hire ${body.instance} is for another role`);
         const role = this.roles.find((r) => r._id === body.role_id)!;
-        const loader = templateLoaderPrompt(body.dir, body.instance, "charter");
-        if (!(role.charter ?? "").includes(loader)) role.charter = role.charter ? `${role.charter}\n\n${loader}` : loader;
+        role.charter = withTemplateLoader(role.charter ?? "", body.dir, body.instance);
         return { role_id: body.role_id };
       }
       case "/cli/role/provision": {
