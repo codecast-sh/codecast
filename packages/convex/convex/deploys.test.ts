@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { autoDeployCore, backfill, DEPLOY_SETTLE_MS, recordDeployMarker, report, request, stage } from "./deploys";
+import { autoDeployCore, DEPLOY_SETTLE_MS, recordDeployMarker, report, request, stage } from "./deploys";
+import { backfill } from "./deploysBackfill";
 
 // Deploys as objects (docs/architecture/deploys.md): a marker records or
 // finishes a deploy, the line's stage sends what waits, and every deploy

@@ -199,7 +199,7 @@ describe("agent reviews", () => {
     await filing(t);
     expect((await t.run((ctx) => ctx.db.query("signals").collect())).map((x) => [x.attach, x.task_id])).toEqual([["held", undefined], ["held", undefined]]);
     await t.run((ctx) => ctx.db.patch(ids.project, { line_profile: { finders: [{ id: "review", source: "judge:review", kind: ["prompt_miss", "bug"], fingerprint: "agent:<contact>", opens_causes: true }], changed_at: T0 } } as any));
-    const out = await t.action(internal.agentReviews.refileHeld, { workspace: ids.workspace, judge: "review" });
+    const out = await t.action(internal.agentReviewsRepair.refileHeld, { workspace: ids.workspace, judge: "review" });
     expect(out).toMatchObject({ refiled: 2, left: false });
     expect(out.tasks).toHaveLength(2);
     const rows = await t.run((ctx) => ctx.db.query("signals").collect());
@@ -222,15 +222,15 @@ describe("agent reviews", () => {
     const [mixed] = await t.run((ctx) => ctx.db.query("signals").collect());
     const item = (what: string, cause: string) => ({ what, evidence: [{ quote: "q" }], hurt: "h", severity: 5, layer: "software", cause, cause_checked: false });
 
-    expect(await t.action(internal.agentReviews.relistFinding, { signal: mixed!.short_id, findings: JSON.stringify({ findings: [item("A reminder opened a new thread.", "chatId passed as thread id")] }) })).toMatchObject({ relisted: [] });
-    const out = await t.action(internal.agentReviews.relistFinding, { signal: mixed!.short_id, findings: JSON.stringify({ findings: [item("A reminder opened a new thread.", "chatId passed as thread id"), item("A heads-up came from another address.", "heads-up sends from the canonical domain")] }) });
+    expect(await t.action(internal.agentReviewsRepair.relistFinding, { signal: mixed!.short_id, findings: JSON.stringify({ findings: [item("A reminder opened a new thread.", "chatId passed as thread id")] }) })).toMatchObject({ relisted: [] });
+    const out = await t.action(internal.agentReviewsRepair.relistFinding, { signal: mixed!.short_id, findings: JSON.stringify({ findings: [item("A reminder opened a new thread.", "chatId passed as thread id"), item("A heads-up came from another address.", "heads-up sends from the canonical domain")] }) });
     expect(out.relisted).toHaveLength(2);
     const rows = await t.run((ctx) => ctx.db.query("signals").collect());
     expect(rows.find((x) => x._id === mixed!._id)!.retired!.reason).toBe(`listed again one cause per finding: ${out.relisted.join(", ")}`);
     const live = rows.filter((x) => !x.retired);
     expect(live.map((x) => x.short_id).sort()).toEqual([...out.relisted].sort());
     expect(live.every((x) => x.moment === mixed!.moment && x.subject === mixed!.subject)).toBe(true);
-    await expect(t.action(internal.agentReviews.relistFinding, { signal: mixed!.short_id, findings: "{}" })).rejects.toThrow(/not a live judge finding/);
+    await expect(t.action(internal.agentReviewsRepair.relistFinding, { signal: mixed!.short_id, findings: "{}" })).rejects.toThrow(/not a live judge finding/);
   }, 120_000);
 
   test("an agent judge is refused on a source that keeps its moments on the host, and a bulk start needs one", async () => {

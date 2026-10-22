@@ -151,11 +151,11 @@ groups of its source (or workspace) that started (`first_seen`) or came back
 
 ## DP6. Backfill
 
-`deploys:backfill` records every deploy marker already in `external_events`
+`deploysBackfill:backfill` records every deploy marker already in `external_events`
 as a deploy object, oldest first, one source or repository per call, paged by
 `since`/`next`; a marker whose `meta.deploy` is set is skipped, so a rerun
-writes nothing. `deploys:backfillTargets` lists the sources and repositories
-to walk. `deploys:recarry` recomputes the carries of deploys recorded from
+writes nothing. `deploysBackfill:backfillTargets` lists the sources and repositories
+to walk. `deploysBackfill:recarry` recomputes the carries of deploys recorded from
 markers, ten per call, after the merges the rule reads change. Run them
 through `packages/convex/run.sh`.
 

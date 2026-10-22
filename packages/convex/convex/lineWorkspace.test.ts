@@ -8,7 +8,8 @@ import { anyApi } from "convex/server";
 import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { stationSaid } from "./lineWorkspace";
-import { markerOfEvent, recordDeployMarker } from "./deploys";
+import { recordDeployMarker } from "./deploys";
+import { markerOfEvent } from "./deploysBackfill";
 
 const api = anyApi as any;
 // convex-test loads the schema and modules on first use, slow on a busy machine.
