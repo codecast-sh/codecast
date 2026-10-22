@@ -1,0 +1,21 @@
+// A segment (flows.md FL2): the line's last two stations. The branch is put on
+// the default branch and checked there, then the project's ship command lands
+// it, or Ship opens the pull request (docs/architecture/ship.md).
+digraph ship {
+  graph [kind="segment", label="Ship", description="Rebase on the default branch, check, and land the change", takes="task,branch"]
+  start [shape=Mdiamond]
+  rebase [label="Rebase", shape=parallelogram, max_visits=3, timeout=3600, script="@line/rebase.sh"]
+  ship [label="Land", shape=parallelogram, timeout=3600, script="@line/ship.sh"]
+  shipped  [shape=Msquare, label="Shipped"]
+  landed   [shape=Msquare, label="Already landed"]
+  conflict [shape=Msquare, label="Conflict", stop="The change does not rebase cleanly or fails the check on the default branch. $rebase.output"]
+  unshipped [shape=Msquare, label="Not shipped", stop="The change was not shipped. $ship.output"]
+  start -> rebase
+  rebase -> ship     [condition="outcome = success and rebase.json.landed != true"]
+  rebase -> landed   [condition="outcome = success and rebase.json.landed = true"]
+  rebase -> conflict [condition="outcome = failure and rebase.exit_code = 1"]
+  rebase -> ship     [condition="outcome = failure and rebase.exit_code != 1"]
+  ship -> shipped    [condition="outcome = success"]
+  ship -> rebase     [condition="outcome = failure and ship.exit_code = 3", label="default branch moved"]
+  ship -> unshipped  [condition="outcome = failure and ship.exit_code != 3"]
+}
