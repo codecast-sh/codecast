@@ -632,6 +632,27 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     await expect(rerunCore(broke.ctx, HOST, "ct-lost", NOW)).rejects.toThrow("billed $1000 of $1000: the cap is reached");
   });
 
+  test("a failed run resumes at a named station on its own branch, as a new attempt, inside the spend cap (cast line trial rerun --at)", async () => {
+    const w = world(1000);
+    w.tables.tasks.find((t: any) => t._id === "tasks_stale").workflow_run_id = "workflow_runs_stale";
+    Object.assign(w.tables.workflow_runs.find((x: any) => x._id === "workflow_runs_stale"), { runner_device: "dev-mac", current_node_id: "implement", fail_reason: "max_visits=3 exceeded on implement" });
+    const before = w.tables.workflow_runs.length;
+    expect(await rerunCore(w.ctx, HOST, "ct-stale", NOW, false, "verify")).toEqual({ task: "ct-stale", run_id: "workflow_runs_stale", resumed_at: "verify" });
+    expect(w.tables.workflow_runs.find((x: any) => x._id === "workflow_runs_stale")).toMatchObject({ status: "running", current_node_id: "verify", visits_reset_at: NOW, fail_reason: undefined });
+    expect(w.tables.workflow_runs.length).toBe(before);
+    expect(w.tables.daemon_commands.map((c: any) => [JSON.parse(c.args).workflow_run_id, c.target_device_id])).toEqual([["workflow_runs_stale", "dev-mac"]]);
+    // Only a failed run, and never past the cap.
+    const waiting = world(1000);
+    lostAt(waiting, "lost", "decide", "card");
+    waiting.tables.workflow_runs.find((x: any) => x._id === "workflow_runs_lost").status = "paused";
+    await expect(rerunCore(waiting.ctx, HOST, "ct-lost", NOW, false, "verify")).rejects.toThrow("--at resumes a failed run");
+    const broke = world(1000);
+    broke.tables.tasks.find((t: any) => t._id === "tasks_stale").workflow_run_id = "workflow_runs_stale";
+    broke.tables.workflow_runs.find((x: any) => x._id === "workflow_runs_stale").runner_device = "dev-mac";
+    broke.tables.projects[0].line_trial.outside = [{ usd: 1000, what: "x", billed_by: "evals key", at: NOW, by: HOST }];
+    await expect(rerunCore(broke.ctx, HOST, "ct-stale", NOW, false, "verify")).rejects.toThrow("the cap is reached");
+  });
+
   test("a run no machine ever claimed reruns on its route's newest machine, as the dispatcher would start it (ct-59568)", async () => {
     const w = world(1000);
     lostAt(w, "lost", "decide", "card");

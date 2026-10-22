@@ -8,6 +8,8 @@ import React from "react";
 import { ChevronDown, ChevronRight, ChevronUp, ExternalLink, Moon, Play, Share2, Square } from "lucide-react";
 import type { ResourceProcess } from "@codecast/shared/contracts";
 import { cn } from "../../lib/utils";
+import type { MigrationRowStatus } from "../../lib/migrationPlan";
+import { MigrationStatusPill } from "../MigrationStatusPill";
 import { KIND_LABEL, fmtAgo, fmtBytes, fmtCpu, outsideLabel, projectName, type Sort, type SortBy, type TableRow, type Usage } from "./resourceModel";
 import type { ResourceActions, ResourceMachine, ResourceSession, ResourceSessionState } from "./types";
 
@@ -132,6 +134,8 @@ export type ResourceTableProps = {
   machines: ResourceMachine[];
   now: number;
   selected: Set<string>;
+  /** Sessions in a move that has not finished: where each stands and where it goes. */
+  moving?: Map<string, { status: MigrationRowStatus; to: string }>;
   onToggle: (sessionId: string) => void;
   actions?: ResourceActions;
   actionsDisabledReason?: string;
@@ -140,7 +144,7 @@ export type ResourceTableProps = {
   onSort: (by: SortBy) => void;
 };
 
-export function ResourceTable({ rows, sharedRows, totals, machines, now, selected, onToggle, actions, actionsDisabledReason, showMachine, sort, onSort }: ResourceTableProps) {
+export function ResourceTable({ rows, sharedRows, totals, machines, now, selected, moving, onToggle, actions, actionsDisabledReason, showMachine, sort, onSort }: ResourceTableProps) {
   const [open, setOpen] = React.useState<Set<string>>(new Set());
   const toggleOpen = (k: string) => setOpen((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const machineName = (id: string) => machines.find((m) => m.deviceId === id)?.name ?? id;
@@ -150,6 +154,7 @@ export function ResourceTable({ rows, sharedRows, totals, machines, now, selecte
     const isOpen = open.has(r.key);
     const s = r.session;
     const st = s ? STATE_STYLE[s.state] : undefined;
+    const move = s ? moving?.get(s.sessionId) : undefined;
     const canSelect = r.type === "session" && !!s;
     return (
       <React.Fragment key={r.key}>
@@ -195,7 +200,8 @@ export function ResourceTable({ rows, sharedRows, totals, machines, now, selecte
             </span>
           </button>
           <div className="hidden items-center gap-1.5 text-[11px] text-sol-text-muted sm:flex">
-            {st ? <><span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", st.dot, s!.state === "working" && "animate-pulse")} />{st.label}</> : <span className="text-sol-text-dim">{r.type === "shared" ? "shared" : r.type === "unattributed" ? "unowned" : `${r.usage.count.toLocaleString()} ${r.usage.count === 1 ? "proc" : "procs"}`}</span>}
+            {move ? <span title={`Moving to ${move.to}`}><MigrationStatusPill status={move.status} /></span>
+              : st ? <><span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", st.dot, s!.state === "working" && "animate-pulse")} />{st.label}</> : <span className="text-sol-text-dim">{r.type === "shared" ? "shared" : r.type === "unattributed" ? "unowned" : `${r.usage.count.toLocaleString()} ${r.usage.count === 1 ? "proc" : "procs"}`}</span>}
           </div>
           {r.unmeasured ? (
             <span className="col-span-2 text-right text-[11px] text-sol-text-dim sm:col-span-3" title="No processes for this session appeared in the latest sample, so there is nothing to measure">
