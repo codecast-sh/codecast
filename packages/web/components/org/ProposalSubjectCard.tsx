@@ -16,7 +16,7 @@ import React, { useRef, useState, type ButtonHTMLAttributes } from "react";
 import Link from "next/link";
 import { AlertTriangle, Check, CheckSquare, Flag, FolderClosed, ListChecks, PencilLine, Sparkles, X } from "lucide-react";
 import { passageDiff, type ChangeField, type PassagePart } from "@codecast/shared/contracts/orgChangeWords";
-import { isOrgChangeDecidable, ORG_REPLY_WORDS, type OrgChangeReply, type OrgChangeStatus, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
+import { isOrgChangeApprovable, isOrgChangeDecidable, ORG_REPLY_WORDS, type OrgChangeAnswer, type OrgChangeReply, type OrgChangeStatus, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { EntityIdPill } from "../EntityIdPill";
 import { useOverflows } from "../../hooks/useOverflows";
@@ -32,7 +32,7 @@ import { CHIP_STATUS, GHOST } from "./orgMeta";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import { useOrgHover } from "./proposalContexts";
 import { lightChanges, useChangeLit } from "./lines/changeLight";
-import { changeReply, fieldText, subjectStatusWords, type SubjectCard, type SubjectStatus } from "./proposalSubjects";
+import { changeAnswer, changeReply, fieldText, subjectStatusWords, type SubjectCard, type SubjectStatus } from "./proposalSubjects";
 import type { ProposalTreeFace } from "./proposalTree";
 import { StagedBand, stagedWash } from "./StagedBand";
 import { Added, StatusMove } from "./ChangeChips";
@@ -261,10 +261,11 @@ export function useAnswerField(answer: SubjectAnswer | null | undefined, onAnswe
 
 /** The two answers on an entry that waits: Accept, the filled face, and
  *  Adjust, which opens the field for the person's own words (Reject is in
- *  there). A press only stages; the composer's send acts. */
-export function AnswerControls({ answer, retry, dense, onAnswer, onOpen, open }: {
+ *  there). A press only stages; the composer's send acts. A failed entry has
+ *  Adjust alone: as written it fails the same way, so it waits on a revise. */
+export function AnswerControls({ answer, canAccept = true, dense, onAnswer, onOpen, open }: {
   answer: SubjectAnswer | null | undefined;
-  retry: boolean;
+  canAccept?: boolean;
   /** Tighter faces, for a strip that must fit a chart card. */
   dense?: boolean;
   onAnswer: (answer: SubjectAnswer | null) => void;
@@ -281,10 +282,12 @@ export function AnswerControls({ answer, retry, dense, onAnswer, onOpen, open }:
         <PencilLine aria-hidden />
         {ORG_REPLY_WORDS.note.act}
       </Button>
-      <Button variant="green" size="xs" className={tight} aria-pressed={accepted} onClick={() => { onAnswer(accepted ? null : { verdict: "approve", ...(answer?.text ? { text: answer.text } : {}) }); onOpen(false); }} data-subject-approve>
-        <Check aria-hidden />
-        {retry ? "Retry" : ORG_REPLY_WORDS.approve.act}
-      </Button>
+      {canAccept && (
+        <Button variant="green" size="xs" className={tight} aria-pressed={accepted} onClick={() => { onAnswer(accepted ? null : { verdict: "approve", ...(answer?.text ? { text: answer.text } : {}) }); onOpen(false); }} data-subject-approve>
+          <Check aria-hidden />
+          {ORG_REPLY_WORDS.approve.act}
+        </Button>
+      )}
     </span>
   );
 }
@@ -496,10 +499,11 @@ export function StateWord({ status, words, className }: { status: OrgChangeStatu
   return <span className={cn("org-pop-in whitespace-nowrap text-[12.5px] leading-[21px] transition-colors [transition-duration:400ms] motion-reduce:transition-none", meta[1], className)} data-subject-state={status}>{words ?? meta[0]}</span>;
 }
 
-/** Under an entry once the send went: "Noted, waiting for a revision" on a
- *  card the person wrote back on, which the agent has yet to amend. */
-export function NotedLine({ className }: { className?: string }) {
-  return <p className={cn("m-0 text-[11px] leading-[18px]", QUIET, className)} data-subject-noted>{ORG_REPLY_WORDS.note.done}, waiting for a revision</p>;
+/** Under the person's words once the send went: the author's answer when it
+ *  came, else that the words reached the author, who answers or revises. */
+export function NotedLine({ answer, author, className }: { answer: OrgChangeAnswer | null; author?: string; className?: string }) {
+  if (answer) return <p className={cn("m-0 max-w-[70ch] whitespace-pre-line text-[12.5px] leading-[1.55] [overflow-wrap:anywhere]", className)} data-subject-answer-text><span className={QUIET}>{author ?? "Author"}: </span><span className={TEXT}>{answer.text}</span></p>;
+  return <p className={cn("m-0 text-[11px] leading-[18px]", QUIET, className)} data-subject-noted>Sent{author ? ` to ${author}` : ""}, waiting for a reply</p>;
 }
 
 export function FailNote({ note, className }: { note: string; className?: string }) {
@@ -578,6 +582,8 @@ export type ProposalSubjectCardProps = {
   focused?: boolean;
   /** Draw the author's reason for each change (default). Off where something above already says it. */
   why?: boolean;
+  /** The proposal author's name, beside its answers. */
+  author?: string;
   className?: string;
 };
 
@@ -614,7 +620,7 @@ export function useFocusScroll(ref: React.RefObject<HTMLElement | null>, focused
   }, [focused, ref]);
 }
 
-export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, takeover, revisedNew, focused, why: showWhy = true, className }: ProposalSubjectCardProps) {
+export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, takeover, revisedNew, focused, why: showWhy = true, author, className }: ProposalSubjectCardProps) {
   const hover = useOrgHover();
   // A ghost line on the company document points at one of this card's
   // changes, or this card points at its line (lightChanges on hover).
@@ -639,7 +645,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
   const put = (a: SubjectAnswer | null) => onAnswer?.(a && a.verdict === "approve" && leave ? { ...a, leave_sessions: true } : a);
   const { open, setOpen: setFieldOpen, field: replyField } = useAnswerField(answer, onAnswer && put, card.waiting > 0);
   const onLeave = (v: boolean) => { setLeaveLocal(v); if (answer?.verdict === "approve") onAnswer?.(v ? { ...answer, leave_sessions: true } : { verdict: answer.verdict, ...(answer.text ? { text: answer.text } : {}) }); };
-  const controls = (retry: boolean) => <AnswerControls answer={answer} retry={retry} onAnswer={put} open={open} onOpen={setFieldOpen} />;
+  const controls = (canAccept: boolean) => <AnswerControls answer={answer} canAccept={canAccept} onAnswer={put} open={open} onOpen={setFieldOpen} />;
   const words = <span className={cn("text-[12.5px] leading-[21px]", MUTED)} data-subject-state={state}>{subjectStatusWords(card)}</span>;
   // The stored answer the row still carries (a rejection's words, a note), once the send went.
   const stored = (change: OrgProposalChange | null) => (change ? changeReply(change) : card.reply);
@@ -673,7 +679,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
     : card.waiting === 0 ? <StateWord status={card.status} />
     : !onAnswer ? words
     : staged ? null
-    : controls(card.status === "failed");
+    : controls(members.some((c) => isOrgChangeApprovable(c.status)));
   const revisionKind = (seq: number) => card.changes.find((c) => c.seq === seq)?.revision?.kind;
   const field = replyField({});
   // The fields, why, and where the record sits share one gutter.
@@ -729,22 +735,22 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
                 {split && group.change && (
                   <>
                     {reply?.text?.trim() && <LedgerYou text={reply.text} className="mt-1.5" data-subject-you={reply.verdict} />}
-                    {noted(reply, status) && <NotedLine className="mt-1" />}
+                    {noted(reply, status) && <NotedLine answer={changeAnswer(group.change)} author={author} className="mt-1" />}
                   </>
                 )}
               </div>
               {split && group.change && (
                 <div className={cn(SLOT, AT.groupState[mode])} {...LEDGER_STOP} data-subject-group-state={group.change.status}>
-                  {!isOrgChangeDecidable(group.change.status) ? <StateWord status={group.change.status} /> : onAnswer && !staged ? controls(group.change.status === "failed") : null}
+                  {!isOrgChangeDecidable(group.change.status) ? <StateWord status={group.change.status} /> : onAnswer && !staged ? controls(isOrgChangeApprovable(group.change.status)) : null}
                 </div>
               )}
             </React.Fragment>
           );
         })}
 
-        {/* The stored words on the card once the send went, and "Noted" while the author has yet to amend. */}
+        {/* The stored words on the card once the send went, and the author's answer or that it is awaited. */}
         {!split && !staged && (() => { const you = storedYou(null); return you && <div className="col-start-2 min-w-0">{you}</div>; })()}
-        {!split && !pendingText && noted(card.reply, card.status) && <NotedLine className="col-start-2 mt-1" />}
+        {!split && !pendingText && noted(card.reply, card.status) && <NotedLine answer={card.answer} author={author} className="col-start-2 mt-1" />}
 
         {!settled && card.depends.map((line) => <p key={line} className={cn("col-start-2 m-0 mt-1.5 text-[11px] leading-[18px]", QUIET)} data-subject-depends>{line}</p>)}
         {!settled && card.revisions.map((rev) => (
@@ -767,7 +773,6 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
               <StagedBand
                 key="band"
                 answer={answer}
-                retry={card.status === "failed"}
                 onUndo={() => { put(null); setFieldOpen(false); }}
                 you={!open && pendingText ? <LedgerYou text={pendingText} onEdit={() => setFieldOpen(true)} data-subject-you={answer.verdict} /> : undefined}
                 takeover={takeover ? { phrase: takeover.phrase, leave, onLeave } : undefined}

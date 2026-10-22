@@ -32,7 +32,7 @@ import {
 import { applyPersonMove, orgRoleReparentMakesCycle, personMoveApplies, personMoveSatisfied, type MovePersonIntent } from "./orgTreeMoves";
 export { orgPersonReparentMakesCycle, orgRoleReparentMakesCycle } from "./orgTreeMoves";
 import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, type OrgChangeStatus, type OrgHealth, type OrgProposalChange, type OrgProposalListRow } from "../components/org/orgStaffingTypes";
-import { andList, changeSentence, describeOrgChange, isOrgChangeDecidable, proposalReplyText, ORG_VERDICT_REVISED, type OrgChangeReply, type OrgProposalReply, type OrgReplyVerdict, type OrgTenureSpec, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import { andList, changeSentence, describeOrgChange, isOrgChangeApprovable, isOrgChangeDecidable, proposalReplyText, ORG_VERDICT_REVISED, type OrgChangeReply, type OrgProposalReply, type OrgReplyVerdict, type OrgTenureSpec, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { hasThreadState, clearedThreadStateFields, type ThreadStateFields } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
 import { leadScopeChange, type LeadScopeChange } from "@codecast/shared/contracts/orgLead";
@@ -269,6 +269,8 @@ export type OrgUpdateRoleInput = {
   reports_user_ids?: string[];
   // Leeway to hire; dispatch routes it to orgRoles.setHiresFreely.
   hires_freely?: boolean;
+  // Containment; dispatch routes it to orgRoles.setKeepsReportsInside.
+  keeps_reports_inside?: boolean;
 };
 
 export type OrgSliceActions = {
@@ -747,6 +749,8 @@ function applyRoleFields(role: OrgRole, fields: OrgUpdateRoleInput, keys: (keyof
 function decideWaitingChanges(draft: OrgDraft, proposalId: string, to: "accepted" | "skipped", match: (c: OrgProposalChange) => boolean, reply?: (c: OrgProposalChange) => OrgChangeReply | undefined, now = Date.now()): void {
   for (const c of Object.values(draft.orgProposalChanges)) {
     if (c.proposal_id !== proposalId || !isOrgChangeDecidable(c.status) || !match(c)) continue;
+    // The server applies an approval to proposed rows only; a failed row waits on its author's revise.
+    if (to === "accepted" && !isOrgChangeApprovable(c.status)) continue;
     const stamp = reply?.(c);
     const intent: OrgIntent = {
       kind: "decideChange", id: intentId(), change_id: c._id, proposal_id: proposalId, from: c.status, to, line: describeOrgChange(c.change),

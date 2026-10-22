@@ -154,6 +154,13 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
       <Part sheet={inSheet} label="Template" name="template-release">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
           <li>{instance.template?.name ?? instance.template_id} {instance.version}{behind && <span className="text-sol-yellow" data-template-behind={instance.releases_behind}> · {behind}</span>} <span className="text-sol-text-dim">sha256 {String(instance.digest).slice(0, 12)}</span>{instance.host ? <span className="text-sol-text-dim"> · on {instance.host.machine}</span> : null}</li>
+          {instance.template?.workspace && <li data-template-publisher={instance.template.workspace}>{instance.template.workspace === "codecast" ? "From Codecast's library" : "This workspace's own copy"}</li>}
+          {((instance.tools ?? []) as any[]).length > 0 && (
+            <li className="flex flex-wrap items-baseline gap-1" data-template-tools={(instance.tools as any[]).length}>
+              <span>Tools:</span>
+              {(instance.tools as any[]).map((t) => <span key={t.id} className={`rounded px-1 py-px text-[11px] ${t.kind === "command" ? "text-sol-text" : "text-sol-text-muted"}`} style={{ fontFamily: "var(--font-mono)", background: t.kind === "command" ? "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" : "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} title={t.summary ?? undefined}>{t.id}</span>)}
+            </li>
+          )}
           {((instance.secrets ?? []) as any[]).map((s) => <li key={s.key} data-template-secret={s.key} data-bound={s.bound}>{s.label}: {s.bound ? <span className="text-sol-green">set</span> : <span className="text-sol-yellow">missing</span>}</li>)}
         </ul>
         {card && (

@@ -305,6 +305,29 @@ describe("withdrawing a gate (the-line.md L4)", () => {
     expect(tables.workflow_runs[0].fail_reason).toBe("Cancelled by user");
   });
 
+  test("a run that ends takes back a decision its presenter posted that no gate took up, and nothing else", async () => {
+    // sd-1072 on ct-61115: Present posted it, the card refused the report until
+    // the run failed on max_visits, and the decision stayed in the queue linked
+    // to nothing, so an answer to it would have driven nothing.
+    const { ctx, tables } = await seed({
+      conversations: [
+        { _id: "conversations_spawner", session_id: "sess-spawner", user_id: HOST, team_id: TEAM, message_count: 2 },
+        { _id: "conversations_primary", session_id: `wf-${RUN}`, user_id: HOST, team_id: TEAM, message_count: 1, workflow_run_id: RUN, is_workflow_primary: true },
+        { _id: "conversations_present", session_id: "sess-present", short_id: "jx7pres", user_id: HOST, team_id: TEAM, message_count: 9, parent_conversation_id: "conversations_primary" },
+      ],
+    });
+    const ask = (session_id: string) => askCore(ctx, { userId: HOST }, { session_id, question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }], blocking: true } as any);
+    const presented = await ask("sess-present");
+    const unrelated = await ask("sess-spawner");
+    tables.workflow_runs[0].node_statuses = [{ node_id: "card_write", status: "completed", session_id: "jx7pres" }];
+    tables.workflow_runs[0].current_node_id = "card_write";
+    await (cancel as any)._handler(asUser(ctx, HOST), { id: RUN });
+    const row = (id: string) => tables.session_decisions.find((d) => String(d._id) === String(id));
+    expect(row((presented as any).id).status).toBe("withdrawn");
+    expect(row((presented as any).id).withdrawn_reason).toContain("stopped (Cancelled by user)");
+    expect(row((unrelated as any).id).status).toBe("pending");
+  });
+
   test("withdraw on the gate decision fails the run with 'gate withdrawn'", async () => {
     const { ctx, tables } = await seed();
     await pause(ctx);
@@ -406,6 +429,21 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     expect(JSON.parse(tables.daemon_commands[0].args)).toEqual({ workflow_run_id: r.run_id });
     await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", force: true });
     expect(tables.daemon_commands).toHaveLength(1);
+  });
+
+  test("a line run the daemon starts on a problem proves against unfixed code (fresh_branch)", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].status = "failed";
+    const line = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", detach: true, run_on_device: "dev-box" });
+    expect(tables.workflow_runs.find((w: any) => w._id === line.run_id)?.fresh_branch).toBe(true);
+    const other = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "review", task_id: "ct-7", detach: true, force: true });
+    expect(tables.workflow_runs.find((w: any) => w._id === other.run_id)?.fresh_branch).toBeUndefined();
+    // A line version the CLI chose names itself; it is a line run by what it serves.
+    tables.workflows.push({ _id: "workflows_v", user_id: HOST, name: "agentwatch", slug: "agentwatch", serves: ["union.desk"] });
+    const version = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "agentwatch", task_id: "ct-7", detach: true, force: true });
+    expect(tables.workflow_runs.find((w: any) => w._id === version.run_id)?.fresh_branch).toBe(true);
+    const here = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", force: true });
+    expect(tables.workflow_runs.find((w: any) => w._id === here.run_id)?.fresh_branch).toBeUndefined();
   });
 
   test("createFromCli starts a new attempt once the cause's run has ended", async () => {

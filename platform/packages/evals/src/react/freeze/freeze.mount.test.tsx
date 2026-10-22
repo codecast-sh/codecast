@@ -49,7 +49,7 @@ afterAll(async () => {
 
 const { act } = await import('react');
 const { createRoot } = await import('react-dom/client');
-const { evalsPaths, localTransport, defaultFreezePair, shownRep, surfaceColumns } = await import('../../client');
+const { evalsPaths, localTransport, defaultFreezePair, shownRep, surfaceColumns, ledgerPlate } = await import('../../client');
 const { createEvalsHandler } = await import('../../query');
 const R = await import('..');
 
@@ -372,7 +372,7 @@ describe("the surface page's plate, drawer and sheet", () => {
     const columns = surfaceColumns(surface.batches, 'ordinal', 900).list.filter((c) => !c.stats.dry);
     const picks: Array<[string, boolean]> = [];
     const flips = new Map([[BREAKS, 'broke' as const]]);
-    const m = await mount(provider(<R.FreezeLedger rows={surface.ledger} columns={columns} pinned={NIGHT(3)} compare={NIGHT(4)} hover={null} onHover={() => {}} onPick={(b, second) => picks.push([b, second])} pairFlips={flips} />));
+    const m = await mount(provider(<R.FreezeLedger plate={ledgerPlate(surface.ledger, columns)} pinned={NIGHT(3)} compare={NIGHT(4)} hover={null} onHover={() => {}} onPick={(b, second) => picks.push([b, second])} pairFlips={flips} />));
     expect(m.all('[data-ev-ledger-row]').map((r) => r.getAttribute('data-ev-ledger-row'))).toEqual([BREAKS, HOLDS]);
     expect(m.q(`[data-ev-ledger-row="${BREAKS}"]`)!.getAttribute('data-ev-pair-flip')).toBe('broke');
     expect(m.all('.ev-sf-plate-pin').map((p) => p.textContent)).toEqual(['1', '2']);

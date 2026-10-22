@@ -3,7 +3,10 @@
 // for more than the box: page-wide work on every key, store writes that woke
 // every subscriber, DOM changes that made the browser re-layer the page. This
 // test pins what a keystroke may do once the box holds text: one React
-// commit, no store write, and no DOM change outside the textarea itself.
+// commit, no store write, no DOM change at all (the box's value changes; its
+// text node, which React mirrors the value into, must not), and no read of
+// layout (each one forces the browser to lay out the whole page,
+// which beside a long transcript cost tens of ms per key).
 // A failure names the budget that broke; look at what the keystroke reaches.
 import { dom, w, restoreGlobals } from "./fixtures/composeDom";
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
@@ -54,7 +57,33 @@ function syntheticSessions(n: number): Record<string, any> {
   return out;
 }
 
-type Tally = { commits: number; storeWrites: number; outsideMutations: string[] };
+// jsdom has no canvas; the composer measures its draft on one, so give it a
+// context that answers, or the measuring path never runs here.
+(w.HTMLCanvasElement.prototype as any).getContext = () => ({ font: "", measureText: (t: string) => ({ width: t.length * 7 }) });
+
+// Chrome (web and desktop) sizes the box with CSS field-sizing; the Safari
+// fallback that measures scrollHeight per key is not what this budget holds.
+(globalThis as any).CSS = { supports: (prop: string) => prop === "field-sizing" };
+
+// Every read that makes the browser lay out the page when it is dirty, named
+// with the app line that made it.
+const readSite = (name: string) => `${name} ${new Error().stack!.split("\n").find((l) => l.includes("/packages/web/") && !l.includes("__tests__"))?.trim() ?? "?"}`;
+const LAYOUT_GETTERS: Array<[any, string]> = [
+  [w.HTMLElement.prototype, "offsetWidth"], [w.HTMLElement.prototype, "offsetHeight"],
+  [w.Element.prototype, "clientWidth"], [w.Element.prototype, "clientHeight"],
+  [w.Element.prototype, "scrollWidth"], [w.Element.prototype, "scrollHeight"],
+];
+let layoutReads: string[] = [];
+for (const [proto, name] of LAYOUT_GETTERS) {
+  const desc = Object.getOwnPropertyDescriptor(proto, name)!;
+  Object.defineProperty(proto, name, { ...desc, get() { layoutReads.push(readSite(name)); return desc.get!.call(this); } });
+}
+for (const [owner, name] of [[w.Element.prototype, "getBoundingClientRect"], [w, "getComputedStyle"], [globalThis, "getComputedStyle"]] as Array<[any, string]>) {
+  const real = owner[name];
+  owner[name] = function (this: unknown, ...args: unknown[]) { layoutReads.push(readSite(name)); return real.apply(this, args); };
+}
+
+type Tally = { commits: number; storeWrites: number; outsideMutations: string[]; layoutReads: string[] };
 let measure: (fn: () => void) => Promise<Tally>;
 let totalCommits = 0;
 let textarea: HTMLTextAreaElement;
@@ -86,18 +115,19 @@ beforeAll(async () => {
     const record = (records: MutationRecord[]) => {
       for (const r of records) {
         const target = r.target as Node;
-        if (target === textarea || textarea.contains(target)) continue;
         const el = (target.nodeType === 1 ? target : target.parentNode) as Element;
         outsideMutations.push(`${r.type}${r.attributeName ? `:${r.attributeName}` : ""} on <${el?.tagName?.toLowerCase()} class="${String(el?.getAttribute?.("class") ?? "").slice(0, 60)}">`);
       }
     };
     const mo = new w.MutationObserver(record);
     mo.observe(container, { subtree: true, childList: true, attributes: true, characterData: true });
+    layoutReads = [];
     await act(async () => { fn(); });
+    const reads = layoutReads;
     record(mo.takeRecords());
     mo.disconnect();
     unsub();
-    return { commits, storeWrites, outsideMutations };
+    return { commits, storeWrites, outsideMutations, layoutReads: reads };
   };
 });
 
@@ -124,7 +154,7 @@ function typeChar(ch: string) {
   props.onChange?.({ target: textarea, currentTarget: textarea, nativeEvent: new w.Event("input") });
 }
 
-test("a keystroke into a box with text commits once, writes nothing to the store, and changes nothing outside the textarea", async () => {
+test("a keystroke into a box with text commits once, writes nothing to the store, changes nothing in the DOM tree, and reads no layout", async () => {
   expect(textarea).toBeTruthy();
   // The first characters change what an empty box shows (the ghost suggestion
   // hides, send turns on), and that settles one commit later. Then the budget.
@@ -135,15 +165,18 @@ test("a keystroke into a box with text commits once, writes nothing to the store
   let worstCommits = 0;
   let storeWrites = 0;
   const outside = new Set<string>();
+  const reads = new Set<string>();
   for (const ch of text) {
     const t = await measure(() => typeChar(ch));
     worstCommits = Math.max(worstCommits, t.commits);
     storeWrites += t.storeWrites;
     for (const m of t.outsideMutations) outside.add(m);
+    for (const r of t.layoutReads) reads.add(r);
   }
   expect(textarea.value.startsWith("hello there")).toBe(true);
   expect({ worstCommitsPerKey: worstCommits }).toEqual({ worstCommitsPerKey: 1 });
   expect({ storeWritesWhileTyping: storeWrites }).toEqual({ storeWritesWhileTyping: 0 });
   expect([...outside]).toEqual([]);
+  expect({ layoutReadsWhileTyping: [...reads] }).toEqual({ layoutReadsWhileTyping: [] });
   expect(draftWritesScheduled).toBeGreaterThan(0);
 });

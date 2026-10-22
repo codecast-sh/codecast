@@ -4,20 +4,34 @@ How the line fits the rest of codecast, in one place. The other line docs
 (`the-line.md`, `the-line-end-to-end.md`, `line-profile.md`) specify parts;
 this one says what the parts are and how they relate. Sections are LM1 onward.
 
-## LM1. One line per project
+## LM1. Projects hold problems; sources and flows belong to the team
 
-A line is a project's way of changing itself: what it listens to, what it is
-trying to move, what it expects to see, what it holds work to, how it proves
-and ships a change, and who answers. The project is the unit because goals,
-expectations, owners and feedback all belong to a project.
+A project is a home for problems: what the team is trying to move in one area
+(its goals), how that area should behave (its expectations), and who answers
+for it (its owner). Everything that judges or answers a problem reads these
+from the project the problem belongs to.
 
-- A team has as many lines as it has projects. Union's eight projects are
-  eight lines; they share one repo and so one set of commands, and differ in
-  their sources, goals, expectations and owners.
-- A project has exactly one line. Different kinds of change (a prompt, code,
-  a UX fix) are branches inside the one graph, chosen by the cause's category,
-  so each project tells one story and its versions can be compared.
-- The team has a default line; a project uses it until it forks its own.
+Two things are the team's, not a project's:
+
+- **Sources.** A source says what it watches, how it fingerprints what it
+  sees, and whether its signals open problems. It has no fixed project: one
+  source (an error tracker, the nightly evals, the invariants) sees problems
+  in every area.
+- **Flows.** How a change is proven, checked, reviewed, decided and shipped is
+  a flow from the team's pool (flows.md): whole lines and segments, chosen per
+  change by what the change is, never by its project.
+
+A problem's project is decided by what the problem is about, in this order:
+the expectation its signal breaks (`ex-<project>-<n>` names its project); the
+project a single-purpose source names as its default; otherwise Ground places
+it, reading every project's charter beside the problem. A problem Ground moves
+keeps its signals and records where it was first filed.
+
+A change's flow is chosen the same way for every project: a finding runs the
+flow its source serves (a version's `serves`), a session's own change runs
+`change`, and a repo can name its default flow in its profile, since the
+commands a flow runs live there. Projects stay a filter wherever problems are
+listed; the pool of flows is listed across all of them.
 
 ## LM2. Objects, each with one home
 
