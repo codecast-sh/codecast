@@ -516,8 +516,31 @@ async function waitOnStation(
   let askedOnce = false;
   let heldDormant = false;
   let emptySince = 0;
+  // A station whose edges route on the handoff is answered by the task, not by
+  // how the hand's session reads. A hand that handed off is done even while a
+  // dormant pin from an earlier wait or a background check it left running
+  // keeps its session parked: three Implement hands handed off and were killed
+  // 180 minutes later (ct-58311, ct-61013, ct-58686, 2026-10-22). And a session
+  // that reads finished without a handoff has not answered: four Implement
+  // hands read idle in the middle of a tool call routed on an empty handoff
+  // (ct-60376, ct-57854, ct-61269, ct-58286). Such a hand is asked once to
+  // finish with its handoff; one that settles again without it fails the station.
+  const answersByHandoff = !!options.taskId && graph.edges.some((e) => e.from === node.id && /\bhandoff\b/.test(e.condition ?? ""));
+  // The work is open again at this station: a task still in review from the
+  // last round's handoff goes back to in progress, so only this hand's
+  // handoff can put it in review (a check that sent the round back leaves
+  // the old one standing).
+  if (answersByHandoff && !reattach && await handedOff(options)) {
+    await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "in_progress" });
+  }
+  let askedForHandoffAt = 0;
   while (Date.now() - startMs < timeout) {
     await new Promise(r => setTimeout(r, pollInterval));
+    if (answersByHandoff && await handedOff(options)) {
+      console.log(`  ${c.green}✓ handed off${c.reset}`);
+      recordNodeOutput(context, node.id, "handed off");
+      return "success";
+    }
     const inbox = await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 });
     const row = (inbox?.sessions || []).find((r: any) => r.id === conversationId);
     if (!row) {
@@ -641,6 +664,26 @@ async function waitOnStation(
       context["station_blocked"] = node.id;
       return "failure";
     }
+    if (answersByHandoff) {
+      if (!askedForHandoffAt && !row.is_killed) {
+        askedForHandoffAt = Date.now();
+        console.log(`${c.yellow}  ${shortId}: read as finished without a handoff; asking it to finish with one${c.reset}`);
+        await cliCall(options, "/cli/messages/send", {
+          to: conversationId,
+          ...(options.runSession ? { from: options.runSession } : {}),
+          body: `The run reads this session as finished, but ${options.taskId} has no handoff from it, and this station's next step routes on the handoff. If you are still working, carry on. When the work is done, or cannot be done, end with \`cast task handoff ${options.taskId} --status done|blocked|needs_context\` as your brief says.`,
+          wake: true,
+        });
+        askedOnce = false;
+        heldDormant = false;
+        continue;
+      }
+      if (askedForHandoffAt && !row.is_killed && Date.now() - askedForHandoffAt < (options.handoffAskGraceMs ?? HANDOFF_ASK_GRACE_MS)) continue;
+      console.log(`  ${c.red}✗ ${shortId} ended without a handoff${c.reset}`);
+      context["last_error"] = `hand ${shortId} at ${node.id} ended its turn without a handoff${askedForHandoffAt ? ", also after being asked for one" : ""}`;
+      context["station_dead"] = node.id;
+      return "failure";
+    }
     console.log(`  ${c.green}✓ settled${c.reset} ${c.dim}(${state})${c.reset}`);
     return "success";
   }
@@ -650,6 +693,16 @@ async function waitOnStation(
   context["killed_hand"] = shortId;
   context["station_dead"] = node.id;
   return "failure";
+}
+
+// How long a hand asked for its missing handoff has to start answering before
+// a finished reading counts again: the message lands at its next turn.
+const HANDOFF_ASK_GRACE_MS = 3 * 60_000;
+
+/** Whether the run's task stands handed off: in review, with how the hand ended. */
+async function handedOff(options: RunOptions): Promise<boolean> {
+  const task = await cliCall(options, "/cli/work/get", { short_id: options.taskId });
+  return String(task?.status || "") === "in_review" && !!task?.execution_status;
 }
 
 // The watchdog revives a hand that died mid-work on its first pass after a
@@ -1146,6 +1199,8 @@ export interface RunOptions {
   pollIntervalMs?: number;
   /** How long a resumed run waits for the hand it left to be revived (REVIVE_GRACE_MS; tests shorten it). */
   reviveGraceMs?: number;
+  /** How long a hand asked for its missing handoff has before a finished reading counts (HANDOFF_ASK_GRACE_MS; tests shorten it). */
+  handoffAskGraceMs?: number;
   /** Continue this run row from where it stands instead of from start (runResume.ts). */
   resume?: ResumeRow;
   /** Set by runWorkflow on a resume: the gate and the hand the node it resumes at left open, each taken once. */
@@ -1989,9 +2044,18 @@ async function runNodeLoop(
       // A dead end short of exit is not a completion: nothing routed, so the
       // run (and any bound task) must not read as delivered.
       state.failed = true;
-      state.failReason = deadEndReason(graph, current.id, outcome, state.context);
+      // A dead station says why it left no answer; a routable outcome no edge
+      // takes names the fields its edges route on.
+      state.failReason = stationDead && state.context["last_error"] ? state.context["last_error"] : deadEndReason(graph, current.id, outcome, state.context);
       break;
     }
+
+    // A station the run comes back to is told what sent it back: the station
+    // that routed here and what it said. A hand reads only what its prompt
+    // names, so without this a builder sent back by a failed check could not
+    // tell that round from its first and checked its own work again (ct-58757).
+    if (state.visitCounts[next.id]) state.context["sent_back"] = `${current.label}: ${state.context[`${current.id}.output`] ?? ""}`.trim();
+    else delete state.context["sent_back"];
 
     checkpoint(next.id);
     console.log();
