@@ -76,6 +76,7 @@ import { latestSessionCommand, requestAccountSwitchCommand, requestSessionRestar
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, ArrowUpRight, Zap, ZapOff, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { InboxViewTabs } from "./InboxViewTabs";
+import { inboxViewModes } from "../store/inboxViewModes";
 import { SessionCard, hostedRowTitle } from "./inbox/SessionCard";
 import { SectionHeader } from "./inbox/SectionHeader";
 import { AssistantScopeSwitch, MoreInEverything } from "./AssistantScopeSwitch";
@@ -2947,6 +2948,21 @@ function SessionListPanelImpl({
     () => (favoritesView ? selectFavoriteSessions(s.sessions, undefined, s.favorites) : EMPTY_FAVORITES),
     [favoritesView, s.sessions, s.favorites],
   );
+
+  // The groupings offered as tabs, published so Ctrl+, cycles exactly these.
+  const showViewTabs = (!hostedMode || !assistantOnly) && !favoritesView;
+  const viewModes = useMemo(
+    () => inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0 }),
+    [visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length],
+  );
+  const viewModesKey = showViewTabs ? viewModes.join(",") : "";
+  useWatchEffect(() => {
+    if (!viewModesKey) return;
+    useInboxStore.getState().setInboxViewModesShown(viewModes);
+    return () => useInboxStore.getState().setInboxViewModesShown(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewModesKey]);
+
   const favoriteGroups = useMemo(() => {
     if (!favoritesView) return null;
     const projectFilters = chipProjectFilters(s);
@@ -3792,15 +3808,8 @@ function SessionListPanelImpl({
         </div>}
         </div>
       </div>
-      {(!hostedMode || !assistantOnly) && !favoritesView && (
-        <InboxViewTabs
-          value={viewMode}
-          onChange={s.setInboxViewMode}
-          hasLabels={visibleBuckets.length > 0}
-          hasPlans={hasPlanSessions}
-          orgLenses={orgLenses}
-          hasTriggers={scheduleRowsView.length > 0}
-        />
+      {showViewTabs && (
+        <InboxViewTabs value={viewMode} onChange={s.setInboxViewMode} modes={viewModes} />
       )}
       {/* Relative wrapper so the out-of-view beacon can float over the list
           edges without joining the scroll flow. */}

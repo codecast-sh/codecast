@@ -182,7 +182,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   // stale numbers back over the change that just landed.
   useWatchEffect(() => { setCapsDraft(caps); }, [caps.hands_per_day, caps.wakes_per_day, caps.tokens_per_day]);
   const capsDirty = DAILY_CAP_KEYS.some((k) => (capsDraft[k] ?? null) !== (caps[k] ?? null));
-  // The switch (S23.1): on is direct, off is understand; the root stays off.
+  // The switch (S23.1): on is direct, off is understand.
   const startsOnItsOwn = autonomyOn(role.trust);
   const runCost = useRunCost(role.scope.project_ids[0] ?? null);
   const isRoot = isHeadOfPeopleRole(role);
@@ -306,14 +306,14 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
 
       <ReportingPeople tree={tree} role={role} canEdit={canEdit} onUpdate={onUpdate} />
 
-      <Section title={AUTONOMY_LABEL} hint={isRoot ? "The Head of People proposes and you decide, so it never starts work on its own." : autonomySentence(startsOnItsOwn)}>
+      <Section title={AUTONOMY_LABEL} hint={autonomySentence(startsOnItsOwn)}>
         {/* Off, a press opens the review of what the role may then do on its own; on, a press turns it off. */}
         <ConsequentialSwitch
           on={startsOnItsOwn}
           ledger={roleAutonomyLedger({ name: role.name, handle: role.handle, caps, projects: role.scope.project_ids.map((id) => (useInboxStore.getState().projects as Record<string, { title?: string }>)[id]?.title ?? "a project"), cost: runCost, usedToday: counters?.hands ?? null, merges: lineRow?.merge?.on ?? !!role.line_merge })}
           onTurnOn={() => onUpdate({ trust: trustForSwitch(true) })}
           onTurnOff={() => onUpdate({ trust: trustForSwitch(false) })}
-          trigger={({ press, reviewing }) => <PillSwitch on={startsOnItsOwn} label={AUTONOMY_LABEL} press={press} reviewing={reviewing} disabled={!canEdit || isRoot} data={{ "data-autonomy-switch": startsOnItsOwn ? "on" : "off" }} />}
+          trigger={({ press, reviewing }) => <PillSwitch on={startsOnItsOwn} label={AUTONOMY_LABEL} press={press} reviewing={reviewing} disabled={!canEdit} data={{ "data-autonomy-switch": startsOnItsOwn ? "on" : "off" }} />}
         />
       </Section>
 

@@ -129,9 +129,10 @@ export const CATCH_UP_QUIET_MS = 2_500;
 // The shortest gap between two context deliveries to one session. A line
 // that names the agent still goes at once and carries everything unsent with
 // it; the rest of the room's talk waits and arrives as one catch up. Each
-// delivery costs the agent a whole turn over its context, and most unnamed
-// chunks end in a pass (agent comms study, 2026-10-06).
-export const CONTEXT_MIN_GAP_MS = 3 * 60_000;
+// delivery costs the agent a whole turn over its context, so the gap stays,
+// but at a minute: an agent that is meant to check what the room says as it
+// goes cannot hear it three minutes late.
+export const CONTEXT_MIN_GAP_MS = 60_000;
 // deliverRoutes reschedules itself at most this many times per run: a failed
 // final delivery backs off from DELIVER_RETRY_MS, a catch up that found the
 // room talking waits one more quiet window.
@@ -450,7 +451,11 @@ export async function beginCallRecord(
   },
 ): Promise<Id<"transcripts">> {
   const startedAt = Date.now();
-  const ownRoute = args.ownRoute !== false;
+  // A private huddle's words stay in its record: the room's own session
+  // route would post them into a conversation the team may be able to read,
+  // so its agent joins only when someone inside adds it.
+  const isPrivate = !!(await readRoomState(ctx, args.roomKey))?.private;
+  const ownRoute = args.ownRoute !== false && !isPrivate;
   const id = await ctx.db.insert("transcripts", {
     room_key: args.roomKey,
     team_id: args.teamId,
@@ -463,7 +468,8 @@ export async function beginCallRecord(
       added_by: args.userId,
     })),
     last_seq: 0,
-    ...(!ownRoute && ownRoomTarget(args.roomKey) ? { own_route_owed: true } : {}),
+    ...(isPrivate ? { private: true } : {}),
+    ...(args.ownRoute === false && !isPrivate && ownRoomTarget(args.roomKey) ? { own_route_owed: true } : {}),
     ...(args.scribeOpen ? { scribe_open: true } : {}),
   });
   // A new record has no public link, whatever the room's last one had.
@@ -1844,7 +1850,8 @@ export async function canReadCall(
       (await teamHasFeature(ctx, t.team_id, "calls"))
     );
   }
-  // The people in it: whoever spoke, and whoever a recording of it showed
+  // The people in it: whoever spoke, whoever scribed it (started_by), and
+  // whoever a recording of it showed
   // (recorded_people: seated while it was filmed, the presser included,
   // even when they came in on an invite grant, never spoke, or transcription
   // was off). Still only while they are on the team with calls on. The scope
@@ -1853,14 +1860,24 @@ export async function canReadCall(
   // speaker always could.
   if (
     (t.participants ?? []).some((p) => String(p.id) === String(userId)) ||
-    (t.recorded_people ?? []).some((id) => String(id) === String(userId))
+    (t.recorded_people ?? []).some((id) => String(id) === String(userId)) ||
+    String(t.started_by) === String(userId)
   ) {
     return (
       (await isTeamMember(ctx, userId, t.team_id)) &&
       (await teamHasFeature(ctx, t.team_id, "calls"))
     );
   }
-  return (await authorizeRoomNoGrant(ctx, userId, t.room_key)).ok;
+  // A private huddle's record is the people in it. The room's membership
+  // reaches the team (a team-visible session, a public channel) everywhere
+  // but a people room, whose key names exactly the people it was for.
+  const membershipReads = !t.private || parseRoomKey(t.room_key)?.kind === "dm";
+  if (membershipReads && (await authorizeRoomNoGrant(ctx, userId, t.room_key)).ok) return true;
+  // The huddle running now reads like the huddle: whoever its door admits
+  // (the open door, a ring) may read the words being said in it, the way they
+  // could walk in and hear them. That is this run only. Once it ends, the
+  // doors above decide, so a walk-in who never spoke loses it as before.
+  return t.status === "live" && (await authorizeRoom(ctx, userId, t.room_key)).ok;
 }
 
 function shapeCallRow(t: Doc<"transcripts">) {

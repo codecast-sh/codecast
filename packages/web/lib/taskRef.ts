@@ -6,6 +6,15 @@ export function taskByRef<T extends RefRow>(tasks: Record<string, T> | null | un
   if (!tasks || !ref) return null;
   const byId = tasks[ref];
   if (byId) return byId;
-  for (const id in tasks) if (tasks[id]?.short_id === ref) return tasks[id];
-  return null;
+  let refs = refIndexes.get(tasks);
+  if (!refs) {
+    refs = new Map();
+    for (const id in tasks) { const r = tasks[id]?.short_id; if (r && !refs.has(r)) refs.set(r, tasks[id]); }
+    refIndexes.set(tasks, refs);
+  }
+  return (refs.get(ref) as T | undefined) ?? null;
 }
+
+/** Each task record's rows by ref, read once per record: a list of controls that each name a task by its ref reads
+ *  one index, not one scan of every task each. */
+const refIndexes = new WeakMap<object, Map<string, RefRow>>();

@@ -1,0 +1,14 @@
+// A segment (flows.md FL2): the line's independent reviewer (LE9) reads the
+// branch against the task's title and criteria and gives one verdict.
+digraph review {
+  graph [kind="segment", label="Review", description="An independent session reads the diff against the intent", takes="task,branch"]
+  start [shape=Mdiamond]
+  review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@line/review.md"]
+  approved [shape=Msquare, label="Approved"]
+  changes  [shape=Msquare, label="Changes asked", stop="The reviewer asked for changes. $review_note"]
+  rejected [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
+  start -> review
+  review -> approved [condition="review_verdict = approve"]
+  review -> changes  [condition="review_verdict = changes"]
+  review -> rejected [condition="review_verdict = reject"]
+}
