@@ -1931,6 +1931,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(id)) return;
     await (ctx as any).runMutation(api.agentDefinitions.removeChain, { id });
   },
+  // Vault metadata edits and deletes; no value ever rides this rail. A stub
+  // that never reached the server has nothing to change there.
+  updateSecretMeta: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    if (!isServerId(id)) return;
+    return await (ctx as any).runMutation(api.secrets.updateMeta, { ref: id, ...fields });
+  },
+  removeSecret: async (ctx, userId, [id]: [string]) => {
+    if (!isServerId(id)) return;
+    return await (ctx as any).runMutation(api.secrets.remove, { ref: id });
+  },
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,
