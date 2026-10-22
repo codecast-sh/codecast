@@ -24,6 +24,13 @@ const CASES: Array<{ args: Parameters<typeof callModel>[0]; request: SurfaceRequ
     golden:
       '{"model":"claude-haiku-5-5","max_tokens":1200,"thinking":{"type":"disabled"},"system":"Be brief.","messages":[{"role":"user","content":"Brief the next session."}]}',
   },
+  {
+    // An answer of a fixed shape is generated under its schema (structured outputs).
+    args: { prompt: "Ground this.", max_tokens: 2000, model: "claude-sonnet-5-5", output_schema: { type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false }, label: "d" },
+    request: { model: "claude-sonnet-5-5", prompt: "Ground this.", max_tokens: 2000, output_schema: { type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false } },
+    golden:
+      '{"model":"claude-sonnet-5-5","max_tokens":2000,"messages":[{"role":"user","content":"Ground this."}],"output_config":{"format":{"type":"json_schema","schema":{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"additionalProperties":false}}}}',
+  },
 ];
 
 describe("anthropicBody", () => {
