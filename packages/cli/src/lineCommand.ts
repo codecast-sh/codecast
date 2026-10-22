@@ -61,7 +61,7 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
     .option("--go", "Ask for the deploy and run the deploy path here")
     .option("--json", "Machine-readable output")
     .action(async (options: any) => {
-      const { formatStage, runDeploy } = await import("./lineDeploy.js");
+      const { formatStage, runDeployGraph } = await import("./lineDeploy.js");
       const { lineProjectFor, scopeFor } = await import("./lineScope.js");
       const { loadLineProfile } = await import("./lineProfile.js");
       const root = process.env.CODECAST_CWD || process.cwd();
@@ -80,9 +80,10 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
       if (!command) { console.error("No [line.deploy] command in this checkout's .codecast/line.toml"); process.exit(1); }
       const asked = await apiPost(deps, "/cli/line/deploy/request", { ...ref, here: true });
       console.log(`${asked.short_id}: sending ${asked.carries} fix${asked.carries === 1 ? "" : "es"}`);
-      const result = await runDeploy({ root: profileRoot ?? root, deploy: asked.short_id, command, actor: process.env.USER ?? "cast", post: (path, body) => apiPost(deps, path, body) });
-      console.log(`${asked.short_id}: ${result.status}${result.sha ? ` at ${result.sha.slice(0, 10)}` : ""}`);
-      if (result.status !== "live") process.exit(1);
+      const code = runDeployGraph(asked.short_id, profileRoot ?? root);
+      const after = await apiPost(deps, "/cli/deploys/get", { ref: asked.short_id }, { read: true });
+      console.log(`${asked.short_id}: ${after?.status ?? "unknown"}${after?.sha ? ` at ${String(after.sha).slice(0, 10)}` : ""}`);
+      if (after?.status !== "live") process.exit(code || 1);
     });
   deploy
     .command("show")
@@ -97,16 +98,15 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
     });
   deploy
     .command("run")
-    .description("Run a deploy the Line page asked for (dp-N) through this checkout's [line.deploy] command; the daemon's line_deploy runs this")
+    .description("Run a deploy that was asked for (dp-N) through its steps, each a station of the line-deploy graph, in this checkout; the daemon's line_deploy runs this")
     .argument("<deploy>", "The deploy (dp-N)")
     .action(async (ref: string) => {
-      const { runDeploy } = await import("./lineDeploy.js");
       const { loadLineProfile } = await import("./lineProfile.js");
+      const { runDeployGraph } = await import("./lineDeploy.js");
       const root = process.env.CODECAST_CWD || process.cwd();
       const { profile, root: profileRoot } = loadLineProfile(root);
-      const command = profile.deploy?.command;
       const post = (path: string, body: Record<string, unknown>) => apiPost(deps, path, body);
-      if (!command) {
+      if (!profile.deploy?.command) {
         await post("/cli/line/deploy/report", { deploy: ref, status: "failed", note: "No [line.deploy] command in the checkout that publishes this line" });
         console.error("No [line.deploy] command in this checkout's .codecast/line.toml");
         process.exit(1);
@@ -114,9 +114,82 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
       const d = await apiPost(deps, "/cli/deploys/get", { ref }, { read: true });
       if (!d) { console.error(`No deploy ${ref}`); process.exit(1); }
       if (d.status !== "requested") { console.log(`${ref} is ${d.status}; nothing to run`); return; }
-      const result = await runDeploy({ root: profileRoot ?? root, deploy: ref, command, actor: d.started_by?.name ?? "cast", post });
-      console.log(`${ref}: ${result.status}`);
-      if (result.status !== "live") process.exit(1);
+      const code = runDeployGraph(ref, profileRoot ?? root);
+      const after = await apiPost(deps, "/cli/deploys/get", { ref }, { read: true });
+      console.log(`${ref}: ${after?.status ?? "unknown"}`);
+      if (after?.status !== "live") process.exit(code || 1);
+    });
+  deploy
+    .command("step")
+    .description("Run one step of a deploy (ci, send, gate, rollout, live) through this checkout's [line.deploy] command for it; a station of the line-deploy graph")
+    .argument("<step>", "ci, send, gate, rollout or live")
+    .argument("<deploy>", "The deploy (dp-N)")
+    .option("--run <id>", "The line-deploy run carrying it")
+    .action(async (step: string, ref: string, options: any) => {
+      const { runDeployStep } = await import("./lineDeploy.js");
+      const { LINE_DEPLOY_STEPS } = await import("@codecast/shared/contracts/lineDeploy");
+      const { loadLineProfile } = await import("./lineProfile.js");
+      if (!(LINE_DEPLOY_STEPS as readonly string[]).includes(step)) { console.error(`A deploy's steps are ${LINE_DEPLOY_STEPS.join(", ")}`); process.exit(2); }
+      const root = process.env.CODECAST_CWD || process.cwd();
+      const { profile, root: profileRoot } = loadLineProfile(root);
+      const r = await runDeployStep({
+        step: step as any, deploy: ref, root: profileRoot ?? root, profile: profile.deploy, runId: options.run || undefined,
+        read: (d) => apiPost(deps, "/cli/deploys/get", { ref: d }, { read: true }),
+        post: (path, body) => apiPost(deps, path, body),
+      });
+      if (r.code !== 0) { if (r.note) console.error(r.note); process.exit(r.code); }
+    });
+  deploy
+    .command("watch")
+    .description("The deploy is live: report it, and watch its shipped fixes for the profile's watch days from now (the line-deploy graph's last station)")
+    .argument("<deploy>", "The deploy (dp-N)")
+    .action(async (ref: string) => {
+      const { watchDeploy } = await import("./lineDeploy.js");
+      const { loadLineProfile } = await import("./lineProfile.js");
+      const { profile } = loadLineProfile(process.env.CODECAST_CWD || process.cwd());
+      console.log(await watchDeploy({ deploy: ref, watchDays: profile.watch_days, read: (d) => apiPost(deps, "/cli/deploys/get", { ref: d }, { read: true }), post: (path, body) => apiPost(deps, path, body) }));
+    });
+  deploy
+    .command("return")
+    .description("A deploy step failed: mark the deploy failed and file the failure as a finding on the project's line, one problem per target and step (the line-deploy graph's Returned station)")
+    .argument("<deploy>", "The deploy (dp-N)")
+    .option("--run <id>", "The line-deploy run, to name the step that failed")
+    .option("--note <text>", "What the step said")
+    .action(async (ref: string, options: any) => {
+      const { returnDeploy } = await import("./lineDeploy.js");
+      const { scopeFor } = await import("./lineScope.js");
+      const read = (d: string) => apiPost(deps, "/cli/deploys/get", { ref: d }, { read: true });
+      const d = await read(ref);
+      const scope: any = await scopeFor(deps, undefined, true, d?.project_id ?? undefined);
+      const { conversation_id: _c, project_path: _p, ...where } = scope ?? {};
+      const r = await returnDeploy({
+        deploy: ref, runId: options.run || undefined, note: options.note, scope: where, read,
+        readRun: (id) => apiPost(deps, "/cli/workflow-runs/get", { run_id: id }, { read: true }),
+        post: (path, body) => apiPost(deps, path, body),
+      });
+      console.log(`${ref} stopped at ${r.step ?? "a step"}; ${r.signal?.task_short_id ? `the line has it as ${r.signal.task_short_id}` : `filed as ${r.signal?.short_id ?? "a finding"}`}`);
+    });
+  deploy
+    .command("follow")
+    .description("Wait for jobs of the deploy path's GitHub Actions run (the one the send step named) and pass when they pass; for a path whose gate and rollout are jobs of one run")
+    .requiredOption("--jobs <names>", "Comma-separated job names, e.g. gate,evals")
+    .option("--url <url>", "The run (default: CAST_DEPLOY_URL, which the step sets)")
+    .action(async (options: any) => {
+      const { followJobs } = await import("./lineDeploy.js");
+      const jobs = String(options.jobs).split(",").map((j) => j.trim()).filter(Boolean);
+      process.exit(await followJobs({ url: options.url || process.env.CAST_DEPLOY_URL, jobs }));
+    });
+  deploy
+    .command("ci")
+    .description("Wait for CI's verdict on the deploy sha (CAST_DEPLOY_SHA, which the step sets): pass when green, fail when red")
+    .option("--workflow <file>", "The workflow whose newest finished run on the sha decides (default: every check run on it)")
+    .option("--sha <sha>", "The commit (default: CAST_DEPLOY_SHA)")
+    .option("--repo <owner/name>", "The repository (default: this checkout's)")
+    .action(async (options: any) => {
+      const { waitForCi } = await import("./lineDeploy.js");
+      const sha = options.sha || process.env.CAST_DEPLOY_SHA;
+      if (!sha) { console.error("No sha: pass --sha, or run this as a deploy step"); process.exit(2); }
+      process.exit(await waitForCi({ sha, workflow: options.workflow, repo: options.repo }));
     });
 
   // A station measured on frozen past cases before an edit reaches a run (learning-loop.md LL14).

@@ -20,6 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "undo-with-a-history",
+    title: "Undo, with a history you can see",
+    dek: "Running several agents means a lot of small moves: pin this one, file that one as done, rename a third, stash a fourth. In Codecast every one of them can be taken back with ⌘Z, and ⌘⌥Z opens the list of what you did in this window, with a button to go back to any point in it.",
+    author: "the codecast team",
+    date: "2026-10-21",
+    dateLabel: "October 21, 2026",
+    readingMinutes: 5,
+    cover: { src: "/blog/undo-with-a-history/timeline-three.png", alt: "The Undo history card in codecast: three changes to a session, newest first, under a line marked NOW" },
+  },
+  {
     slug: "the-chart-in-the-reply",
     title: "The chart in the reply",
     dek: "Some findings are a shape: sixteen numbers where four stand out, five versions of one line of UI. In Codecast an agent can put that shape in its reply as a chart, a table or a mockup, drawn right in the conversation, so you see it before you read the paragraph explaining it.",
