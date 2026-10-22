@@ -85,7 +85,7 @@ function unionFind(sorted: ReadonlyArray<{ id: string }>) {
   };
   const sets = () => {
     const out = new Map<string, string[]>();
-    for (const i of sorted) { const r = find(i.id); out.set(r, [...(out.get(r) ?? []), i.id]); }
+    for (const i of sorted) { const r = find(i.id); const set = out.get(r); if (set) set.push(i.id); else out.set(r, [i.id]); }
     return out;
   };
   return { find, join, sets };
@@ -98,8 +98,26 @@ const expectationText = (t: string) => t.toLowerCase().replace(/^not met:\s*/, "
  *  expectation (whole, or cut short), one the start of the other. Long enough that a stray short title never matches. */
 export function sameExpectation(a: string, b: string): boolean {
   if (!/^not met:/i.test(a) && !/^not met:/i.test(b)) return false;
-  const [x, y] = [expectationText(a), expectationText(b)].sort((p, q) => p.length - q.length);
-  return x.length >= 24 && y.startsWith(x);
+  return quotesSame(expectationText(a), expectationText(b));
+}
+
+/** The shortest expectation text that can match: two shorter never name one expectation. */
+const EXPECTATION_MIN = 24;
+const quotesSame = (a: string, b: string) => {
+  const [x, y] = a.length <= b.length ? [a, b] : [b, a];
+  return x.length >= EXPECTATION_MIN && y.startsWith(x);
+};
+
+/** The indexes holding each non-null key, in order: the groups a pairwise pass runs inside. */
+function groupIndexes(keys: ReadonlyArray<string | null>): number[][] {
+  const by = new Map<string, number[]>();
+  keys.forEach((k, i) => { if (k === null) return; const at = by.get(k); if (at) at.push(i); else by.set(k, [i]); });
+  return [...by.values()];
+}
+
+/** Every pair i < j of a group, in order. */
+function eachPair(at: ReadonlyArray<number>, f: (i: number, j: number) => void) {
+  for (let a = 0; a < at.length; a++) for (let b = a + 1; b < at.length; b++) f(at[a], at[b]);
 }
 
 /** Each problem's duplicate set, its rule, and the wider set of problems that are the same defect. A problem joins a
@@ -111,20 +129,30 @@ export function problemOverlaps(items: ReadonlyArray<OverlapItem>): Map<string, 
   const words = sorted.map((i) => titleWords(i.title, common));
   const dup = unionFind(sorted);
   const defect = unionFind(sorted);
-  for (let i = 0; i < sorted.length; i++) {
-    for (let j = i + 1; j < sorted.length; j++) {
-      if (jaccard(words[i], words[j]) < SAME_TITLE && !sameExpectation(sorted[i].title, sorted[j].title)) continue;
-      dup.join(sorted[i].id, sorted[j].id);
-      defect.join(sorted[i].id, sorted[j].id);
+  const same = (i: number, j: number) => { dup.join(sorted[i].id, sorted[j].id); defect.join(sorted[i].id, sorted[j].id); };
+  // Only pairs that can match are compared, never every pair (seconds of main thread over thousands of problems).
+  // Titles at SAME_TITLE share at least that share of each title's words, so each shares one of the other's rarest
+  // |words| - ceil(SAME_TITLE * |words|) + 1 words: only those are indexed, and each candidate is checked in full.
+  const df = new Map<string, number>();
+  for (const ws of words) for (const w of ws) df.set(w, (df.get(w) ?? 0) + 1);
+  const holders = new Map<string, number[]>();
+  const seen = new Int32Array(sorted.length).fill(-1);
+  words.forEach((ws, i) => {
+    const rare = [...ws].sort((a, b) => df.get(a)! - df.get(b)! || (a < b ? -1 : 1)).slice(0, ws.size - Math.ceil(SAME_TITLE * ws.size) + 1);
+    for (const w of rare) {
+      const at = holders.get(w);
+      if (!at) { holders.set(w, [i]); continue; }
+      for (const j of at) if (seen[j] !== i) { seen[j] = i; if (jaccard(words[i], words[j]) >= SAME_TITLE) same(j, i); }
+      at.push(i);
     }
-  }
+  });
+  const quoted = sorted.map((i) => ({ notMet: /^not met:/i.test(i.title), text: expectationText(i.title) }));
+  const byStart = groupIndexes(quoted.map((q) => (q.text.length >= EXPECTATION_MIN ? q.text.slice(0, EXPECTATION_MIN) : null)));
+  for (const at of byStart) eachPair(at, (i, j) => { if ((quoted[i].notMet || quoted[j].notMet) && quotesSame(quoted[i].text, quoted[j].text)) same(i, j); });
   // One rule covers many defects: two problems under it are one defect only when their titles also name the same thing.
   const rules = sorted.map((i) => ruleOf(i.fingerprints));
   const stems = words.map(stemmed);
-  for (let i = 0; i < sorted.length; i++) {
-    if (!rules[i]) continue;
-    for (let j = i + 1; j < sorted.length; j++) if (rules[j] === rules[i] && overlapShare(stems[i], stems[j]) >= SAME_DEFECT) defect.join(sorted[i].id, sorted[j].id);
-  }
+  for (const at of groupIndexes(rules)) eachPair(at, (i, j) => { if (overlapShare(stems[i], stems[j]) >= SAME_DEFECT) defect.join(sorted[i].id, sorted[j].id); });
   const sets = dup.sets();
   const defects = defect.sets();
   const byId = new Map(sorted.map((i) => [i.id, i]));

@@ -1,7 +1,9 @@
 # The rebase station (the-line.md L12): a card waits hours for its answer and
 # the default branch moves under it, so a Ship answer first puts the branch on
 # the default branch as the remote has it and runs the project's check on what
-# that makes. Prints {"rebased", "landed", "why"}.
+# that makes. A failed run resumed onto the default branch (cast workflow
+# resume --onto-main) runs it too, with the check left to the station it
+# resumes at. Prints {"rebased", "landed", "why"}.
 #   exit 0: on the default branch and checked, or nothing of the change is left
 #           on the branch because it is already there (landed: true, the run
 #           goes to watch rather than shipping it twice)
@@ -32,7 +34,7 @@ if ! git rebase --autostash "$upstream" > "$dir/rebase.log" 2>&1; then
   files="$(git diff --name-only --diff-filter=U | head -20 | tr '\n' ' ')"
   git rebase --abort > /dev/null 2>&1
   said="$(tail -n 5 "$dir/rebase.log" | tr '\n' ' ')"
-  cast task comment $task_id "Shipping stopped: rebasing $br onto $upstream conflicted${files:+ in $files}. The branch is as it was before the rebase. Rebase it onto $upstream, resolve the conflict keeping the approved change, run the check, and hand off again. Git said: $said" -t review > /dev/null
+  cast task comment $task_id "Rebasing $br onto $upstream conflicted${files:+ in $files}. The branch is as it was before the rebase. Rebase it onto $upstream, resolve the conflict keeping the approved change, run the check, and hand off again. Git said: $said" -t review > /dev/null
   answer false false "rebase onto $upstream conflicted${files:+ in $files}"
   exit 1
 fi
@@ -60,7 +62,7 @@ if [ "$(git rev-parse HEAD)" != "$was" ]; then
   if [ -n "$cmd" ] && ! bash -c "$cmd" > "$dir/rebase-check.log" 2>&1; then
     said="$(tail -n 30 "$dir/rebase-check.log")"
     git reset -q --keep "$was"
-    cast task comment $task_id "Shipping stopped: after rebasing $br onto $upstream the project's check fails, so the change no longer fits the default branch as it is now. The branch is as it was before the rebase. Rebase it, make the check pass, and hand off again. The check said:
+    cast task comment $task_id "After rebasing $br onto $upstream the project's check fails, so the change no longer fits the default branch as it is now. The branch is as it was before the rebase. Rebase it, make the check pass, and hand off again. The check said:
 $said" -t review > /dev/null
     answer true false "the check fails on the branch rebased onto $upstream"
     exit 1
