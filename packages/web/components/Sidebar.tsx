@@ -460,8 +460,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
-  const isVault = pathname === "/files" || pathname?.startsWith("/files/") ||
-    pathname === "/vault" || pathname?.startsWith("/vault/"); // /vault = pre-rename alias
+  const isVault = pathname === "/files" || pathname?.startsWith("/files/");
   const isPages = pathname === "/pages" || pathname?.startsWith("/pages/") ||
     pathname === "/artifacts" || pathname?.startsWith("/artifacts/"); // /artifacts = pre-rename alias
   // One Workflows entry, at /routines (the-line.md L10); /workflows is the older address of the same page.
@@ -870,7 +869,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               <LiveNowRail isNarrow={isNarrow} onNavigate={onMobileClose} />
             </Suspense>
           </>)}
-          workAction={<AppPopOutButton app="work" className="mr-1" />}
+          workAction={<AppPopOutButton app="work" className="-my-1" />}
           active={{
             tasks: isTasks,
             docs: isDocs || isPlans,

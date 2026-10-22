@@ -83,3 +83,16 @@ export function cadenceWords(every: string): string {
   if (unit === "day" && n === 14) return "every two weeks";
   return n === 1 ? `every ${unit}` : `every ${n} ${unit}s`;
 }
+
+/** The catalog a person picks from: one entry per template, the workspace's own
+ *  copy over Codecast's, the same row the server's visibleTemplate reads. */
+export function visibleCatalog(templates: CatalogTemplate[]): CatalogTemplate[] {
+  const own = new Set(templates.filter((t) => t.workspace !== "codecast").map((t) => t.template_id));
+  return templates.filter((t) => t.workspace !== "codecast" || !own.has(t.template_id));
+}
+
+/** The tools a release ships, by kind: commands the role runs and skills it reads. */
+export function templateTools(m: Pick<OrgTemplate, "tools">): { commands: string[]; skills: string[] } {
+  const tools = m.tools ?? [];
+  return { commands: tools.filter((t) => t.kind === "command").map((t) => t.id), skills: tools.filter((t) => t.kind === "skill").map((t) => t.id) };
+}

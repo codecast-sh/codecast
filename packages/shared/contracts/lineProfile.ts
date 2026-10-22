@@ -49,8 +49,14 @@ export interface LineProfile {
   finders: LineFinder[];
 }
 
-/** A finder as a project row holds it: the project it files into is the row. Kinds are stored as written. */
-export type LineFinderDecl = Omit<LineFinder, "project" | "kind"> & { kind: "any" | string[] };
+/**
+ * A finder as a project row holds it: the project it files into is the row.
+ * Kinds are stored as written. `single_purpose` says the finder named that
+ * project itself, so every signal it files is about it and lands there unless
+ * the expectation it breaks or its filer says otherwise (the-line-model.md
+ * LM1); without it the row is only the profile's default.
+ */
+export type LineFinderDecl = Omit<LineFinder, "project" | "kind"> & { kind: "any" | string[]; single_purpose?: boolean };
 
 /**
  * The resolved profile apart from its finders (which are published per

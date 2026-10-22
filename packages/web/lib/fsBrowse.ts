@@ -1,11 +1,12 @@
-// The project picker's window onto the local disk.
+// The web's window onto the local disk: the project picker's folders and the
+// composer's @ file completion.
 //
-// The daemon's loopback hook server exposes GET /fs/dirs and POST /fs/mkdir
+// The daemon's loopback hook server exposes the /fs routes
 // (packages/cli/src/fs/browseHttp.ts). We reach it through the same discovery
 // the integrated terminal uses — getTerminalEndpoint — so it answers exactly
 // when the viewer is on the machine whose daemon will run the session. Every
 // failure (other machine, daemon down, old daemon without the route) collapses
-// to "no listing", and the picker falls back to recents alone.
+// to "no answer", and the surfaces fall back to what they know without it.
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useMemo, useState } from "react";
@@ -24,9 +25,13 @@ const DEBOUNCE_MS = 90;
 const listings = new Map<string, { at: number; listing: DiskListing }>();
 let endpointMissAt = 0;
 
-async function endpointFor(convex: ConvexReactClient, deviceId?: string | null): Promise<TerminalEndpoint | null> {
+// The request itself is the probe: a cached endpoint is used as is, and only a
+// failed request pays for discovery. Revalidating first cost a /term/sessions
+// round trip per listing (a second or more on a busy daemon), long enough that
+// the picker settled on its fallback row before the folders arrived.
+async function endpointFor(convex: ConvexReactClient, deviceId: string | null | undefined, force: boolean): Promise<TerminalEndpoint | null> {
   if (Date.now() - endpointMissAt < ENDPOINT_MISS_TTL_MS) return null;
-  const ep = await getTerminalEndpoint(convex).catch(() => null);
+  const ep = await getTerminalEndpoint(convex, force ? { force: true } : { trustCache: true }).catch(() => null);
   if (!ep) {
     endpointMissAt = Date.now();
     return null;
@@ -35,6 +40,38 @@ async function endpointFor(convex: ConvexReactClient, deviceId?: string | null):
   // disk is not this one's.
   if (deviceId && ep.deviceId !== deviceId && !isOverrideEndpoint(ep)) return null;
   return ep;
+}
+
+/** One request to this machine's daemon, re-discovering the endpoint once when
+ *  the cached one no longer answers. Null when the daemon can't be asked. */
+async function daemonFetch(
+  convex: ConvexReactClient,
+  pathAndQuery: string,
+  opts: { deviceId?: string | null; timeoutMs?: number; init?: RequestInit } = {},
+): Promise<Response | null> {
+  for (const force of [false, true]) {
+    const ep = await endpointFor(convex, opts.deviceId, force);
+    if (!ep) return null;
+    try {
+      const res = await fetch(`${termHttpBase(ep)}${pathAndQuery}`, {
+        ...opts.init,
+        headers: { Authorization: `Bearer ${ep.token}`, ...(opts.init?.headers ?? {}) },
+        signal: AbortSignal.timeout(opts.timeoutMs ?? REQUEST_TIMEOUT_MS),
+      });
+      // A refused token or a port another process now holds means the cached
+      // endpoint is stale; anything else is the route's own answer.
+      if (res.status !== 401 && res.status !== 403) return res;
+    } catch (err) {
+      if ((err as Error)?.name === "TimeoutError") return null;
+    }
+  }
+  return null;
+}
+
+async function daemonJson<T>(convex: ConvexReactClient, pathAndQuery: string, opts?: Parameters<typeof daemonFetch>[2]): Promise<T | null> {
+  const res = await daemonFetch(convex, pathAndQuery, opts);
+  if (!res?.ok) return null;
+  return (await res.json().catch(() => null)) as T | null;
 }
 
 function cacheKey(dir: string, hidden: boolean): string {
@@ -55,23 +92,11 @@ export async function fetchDirListing(
   hidden: boolean,
   deviceId?: string | null,
 ): Promise<DiskListing | null> {
-  const key = cacheKey(dir, hidden);
   const cached = peekDirListing(dir, hidden);
   if (cached) return cached;
-  const ep = await endpointFor(convex, deviceId);
-  if (!ep) return null;
-  try {
-    const res = await fetch(
-      `${termHttpBase(ep)}/fs/dirs?path=${encodeURIComponent(dir)}${hidden ? "&hidden=1" : ""}`,
-      { headers: { Authorization: `Bearer ${ep.token}` }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
-    );
-    if (!res.ok) return null;
-    const listing = (await res.json()) as DiskListing;
-    listings.set(key, { at: Date.now(), listing });
-    return listing;
-  } catch {
-    return null;
-  }
+  const listing = await daemonJson<DiskListing>(convex, `/fs/dirs?path=${encodeURIComponent(dir)}${hidden ? "&hidden=1" : ""}`, { deviceId });
+  if (listing) listings.set(cacheKey(dir, hidden), { at: Date.now(), listing });
+  return listing;
 }
 
 /** One folder's sessions on this machine (packages/cli/src/fs/localSessions.ts). */
@@ -97,18 +122,8 @@ export type LocalFolder = {
  * folders that did not sync never reaches the server.
  */
 export async function fetchLocalSessions(convex: ConvexReactClient): Promise<LocalFolder[] | null> {
-  const ep = await endpointFor(convex);
-  if (!ep) return null;
-  try {
-    const res = await fetch(`${termHttpBase(ep)}/fs/sessions`, {
-      headers: { Authorization: `Bearer ${ep.token}` },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!res.ok) return null;
-    return ((await res.json()) as { folders: LocalFolder[] }).folders;
-  } catch {
-    return null;
-  }
+  const body = await daemonJson<{ folders: LocalFolder[] }>(convex, "/fs/sessions", { timeoutMs: 30_000 });
+  return body?.folders ?? null;
 }
 
 /**
@@ -117,18 +132,8 @@ export async function fetchLocalSessions(convex: ConvexReactClient): Promise<Loc
  */
 export async function fetchPathsExist(convex: ConvexReactClient, paths: string[]): Promise<{ home: string; exists: Record<string, boolean> } | null> {
   if (paths.length === 0) return null;
-  const ep = await endpointFor(convex);
-  if (!ep) return null;
-  try {
-    const q = paths.slice(0, 300).map((p) => `p=${encodeURIComponent(p)}`).join("&");
-    const res = await fetch(`${termHttpBase(ep)}/fs/exists?${q}`, {
-      headers: { Authorization: `Bearer ${ep.token}` },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS * 2),
-    });
-    return res.ok ? ((await res.json()) as { home: string; exists: Record<string, boolean> }) : null;
-  } catch {
-    return null;
-  }
+  const q = paths.slice(0, 300).map((p) => `p=${encodeURIComponent(p)}`).join("&");
+  return daemonJson(convex, `/fs/exists?${q}`, { timeoutMs: REQUEST_TIMEOUT_MS * 2 });
 }
 
 /** Create a project folder (the daemon also `git init`s it). Resolves to the
@@ -138,14 +143,12 @@ export async function createProjectFolder(
   path: string,
   deviceId?: string | null,
 ): Promise<string> {
-  const ep = await endpointFor(convex, deviceId);
-  if (!ep) throw new Error("This machine's daemon isn't reachable, so the folder can't be created here");
-  const res = await fetch(`${termHttpBase(ep)}/fs/mkdir`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${ep.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ path }),
-    signal: AbortSignal.timeout(10_000),
+  const res = await daemonFetch(convex, "/fs/mkdir", {
+    deviceId,
+    timeoutMs: 10_000,
+    init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) },
   });
+  if (!res) throw new Error("This machine's daemon isn't reachable, so the folder can't be created here");
   if (!res.ok) throw new Error(`Couldn't create ${path}`);
   const made = (await res.json()) as { path: string };
   // The parent's cached listing no longer knows about the new folder.
@@ -171,10 +174,14 @@ export function useDirListing(
   const split = useMemo(() => (opts.enabled ? splitDirQuery(query, home, base) : undefined), [opts.enabled, query, home, base]);
   const dir = split?.dir;
   const hidden = split?.hidden ?? false;
-  const [state, setState] = useState<{ listing: DiskListing | null; home: string | undefined }>({
+  const [state, setState] = useState<{ listing: DiskListing | null; home: string | undefined; failed?: string }>({
     listing: null,
     home: undefined,
   });
+  // A directory whose listing failed (daemon busy, endpoint stale) is asked
+  // again on the next keystroke; one that answered is not asked again while
+  // the text stays inside it.
+  const retry = state.failed === dir ? query : "";
 
   useWatchEffect(() => {
     if (!dir) {
@@ -184,21 +191,74 @@ export function useDirListing(
     // Already known → paint now; the debounce only guards the network.
     const cached = peekDirListing(dir, hidden);
     if (cached) {
-      setState({ listing: cached, home: cached.home });
+      setState((s) => (s.listing === cached ? s : { listing: cached, home: cached.home }));
       return;
     }
     let live = true;
     const timer = setTimeout(() => {
       void fetchDirListing(convex, dir, hidden, opts.deviceId).then((listing) => {
         if (!live) return;
-        setState((s) => ({ listing, home: listing?.home ?? s.home }));
+        setState((s) => ({ listing, home: listing?.home ?? s.home, failed: listing ? undefined : dir }));
       });
     }, DEBOUNCE_MS);
     return () => {
       live = false;
       clearTimeout(timer);
     };
-  }, [convex, dir, hidden, opts.deviceId]);
+  }, [convex, dir, hidden, opts.deviceId, retry]);
 
   return state;
+}
+
+export type FileMatches = { root: string; query: string; files: string[] };
+
+const FILES_TTL_MS = 15_000;
+const fileMatches = new Map<string, { at: number; matches: FileMatches }>();
+
+/**
+ * Files in the project at `root` (on this machine) that match `query`, best
+ * first, as paths relative to `root`: the composer's @ file completion. Null
+ * until the daemon answers, and whenever it can't be asked. A previous
+ * answer stays up while the next one is in flight, so the list narrows
+ * instead of flickering.
+ */
+export function useFileSearch(
+  convex: ConvexReactClient,
+  root: string | null | undefined,
+  query: string | null,
+): FileMatches | null {
+  const [matches, setMatches] = useState<FileMatches | null>(null);
+  const enabled = !!root && query !== null;
+
+  useWatchEffect(() => {
+    if (!enabled) {
+      setMatches(null);
+      return;
+    }
+    const key = `${root}\0${query}`;
+    const hit = fileMatches.get(key);
+    if (hit && Date.now() - hit.at < FILES_TTL_MS) {
+      setMatches(hit.matches);
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      void daemonJson<{ exists: boolean; files: string[] }>(
+        convex,
+        `/fs/files?root=${encodeURIComponent(root!)}&q=${encodeURIComponent(query!)}`,
+      ).then((body) => {
+        if (!body || !live) return;
+        const next = { root: root!, query: query!, files: body.files };
+        if (fileMatches.size > 200) fileMatches.clear();
+        fileMatches.set(key, { at: Date.now(), matches: next });
+        setMatches(next);
+      });
+    }, DEBOUNCE_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [convex, enabled, root, query]);
+
+  return enabled && matches?.root === root ? matches : null;
 }

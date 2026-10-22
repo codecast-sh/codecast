@@ -1,4 +1,5 @@
 import { query } from "./functions";
+import { memberHandle } from "@codecast/shared/chat";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
@@ -317,6 +318,7 @@ function orgPersonRow(user: any, uid: Id<"users">, userId: Id<"users">, roleById
   return {
     user_id: uid,
     name: user.name ?? user.email ?? "",
+    handle: memberHandle(user) ?? undefined,
     image: user.image ?? undefined,
     role: roleById.get(uid.toString()) ?? "member",
     is_me: uid.toString() === userId.toString(),

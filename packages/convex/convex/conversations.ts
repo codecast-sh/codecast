@@ -119,6 +119,7 @@ import { narrowByOperators, type OperatorCandidate, type OperatorScope } from ".
 import { requireUser } from "./lib/auth";
 import { isDaemonManagedRow, liveConversationIdSet } from "./lib/liveSessions";
 import { isDeletedSession } from "./lib/deletedSessions";
+import { conversationMovedAwayFrom } from "./lib/movedSessions";
 import { touchDaemonLastSeen } from "./lib/daemonLiveness";
 import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { claimShareToken } from "./publicShare";
@@ -1300,6 +1301,15 @@ export const createConversation = mutation({
       .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id))
       .filter((q) => q.eq(q.field("user_id"), args.user_id))
       .first();
+
+    if (!existing) {
+      const movedTo = await conversationMovedAwayFrom(ctx, args.user_id.toString(), args.session_id,
+        (c) => isSessionOwner(ctx, c._id, args.user_id));
+      if (movedTo) {
+        const shortId = movedTo.short_id ?? movedTo._id.toString().slice(0, 7);
+        throw new Error(`Session moved to another account as ${shortId}; run \`cast pull ${shortId}\` to bring it back here`);
+      }
+    }
 
     if (existing) {
       const patch: Record<string, any> = {};

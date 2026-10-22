@@ -1,0 +1,84 @@
+/* The Timeline view (TimelineView): the event list beside the reader, the
+   same two-column frame as Deploys and For you. A row is one line: time, what
+   happened, its words, where from, what it became. */
+.lw-stage-in:has(> .tlv) { height: 100%; }
+.tlv { display: grid; grid-template-columns: minmax(0, 1fr); height: 100%; min-height: 0; }
+/* An event open: the list narrows beside its reader. */
+.tlv[data-open] { grid-template-columns: minmax(520px, 46%) minmax(0, 1fr); }
+.tlv:not([data-open]) .tlv-list { border-right: 0; }
+.tlv:not([data-open]) .tlv-row { grid-template-columns: 4.4rem 7.4rem minmax(0, 1fr) minmax(0, 14rem) minmax(0, 16rem); }
+.tlv-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--lw-rule); }
+.tlv-reader { min-height: 0; overflow: auto; padding: var(--lw-s3) var(--lw-s5) var(--lw-s6); }
+
+/* The filters: what kind, then where from. */
+.tlv-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: var(--lw-s2) var(--lw-s2) 0; }
+.tlv-sources { padding-bottom: var(--lw-s2); border-bottom: 1px solid var(--lw-rule-2); }
+.tlv-bar:not(.tlv-sources):last-of-type { padding-bottom: var(--lw-s2); }
+.tlv-f {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border: 1px solid var(--lw-rule); border-radius: 999px;
+  background: var(--lw-card); color: var(--lw-ink-2); font: inherit; font-size: var(--lw-fs-xs); font-weight: 600; cursor: pointer;
+  transition: border-color var(--lw-fast), background var(--lw-fast), color var(--lw-fast);
+}
+.tlv-f:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
+.tlv-f[aria-pressed="true"] { background: var(--lw-ink); border-color: var(--lw-ink); color: var(--lw-paper); }
+.tlv-f[aria-pressed="true"] .tlv-n { color: inherit; opacity: 0.7; }
+.tlv-src { font-weight: 550; }
+.tlv-n { font-variant-numeric: tabular-nums; color: var(--lw-ink-3); font-weight: 600; }
+
+.tlv-scroll { flex: 1; min-height: 0; overflow: auto; }
+.tlv-vrow { position: absolute; top: 0; left: 0; width: 100%; }
+.tlv-day {
+  display: flex; align-items: flex-end; gap: 8px; height: 100%; padding: 0 12px 4px; font-size: var(--lw-fs-xs); font-weight: 700; color: var(--lw-ink-2);
+  border-bottom: 1px solid var(--lw-rule-2);
+}
+.tlv-row {
+  display: grid; grid-template-columns: 4.4rem 7.4rem minmax(0, 1fr) minmax(0, 9rem) minmax(0, 11rem); align-items: center; gap: 8px; height: 100%;
+  padding: 0 12px; font-size: var(--lw-fs-sm); color: var(--lw-ink); text-decoration: none; border-left: 3px solid transparent;
+}
+.tlv-row:hover { background: var(--lw-paper-2); }
+.tlv-row[aria-current="true"] { background: var(--lw-person-soft); border-left-color: var(--lw-person); }
+.tlv-t { font-variant-numeric: tabular-nums; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
+.tlv-k { font-size: var(--lw-fs-xs); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--tlv-c, var(--lw-ink-2)); }
+.tlv-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tlv-from { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.tlv-to { min-width: 0; display: flex; justify-content: flex-end; }
+.tlv-detail { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Each kind of thing has its color, on the row's kind word and the reader's. */
+[data-group="conversations"] { --tlv-c: var(--sol-cyan); }
+[data-group="findings"] { --tlv-c: var(--sol-yellow); }
+[data-group="problems"] { --tlv-c: var(--sol-orange); }
+[data-group="errors"] { --tlv-c: var(--sol-red); }
+[data-group="runs"] { --tlv-c: var(--sol-blue); }
+[data-group="decisions"] { --tlv-c: var(--sol-magenta); }
+[data-group="deploys"] { --tlv-c: var(--sol-green); }
+.tlv-f[data-group][aria-pressed="false"] span:first-child::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 999px; background: var(--tlv-c); vertical-align: 1px;
+}
+
+/* What it became: a small chip, its state colored. */
+.tlv-step {
+  display: inline-flex; align-items: center; max-width: 100%; height: 20px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--lw-rule);
+  font-size: var(--lw-fs-2xs); font-weight: 600; color: var(--lw-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tlv-step[data-state="waiting on you"] { background: var(--lw-person-soft); color: var(--lw-person-deep); border-color: transparent; }
+.tlv-step[data-state="fixed"], .tlv-step[data-state="live"], .tlv-step[data-state="completed"], .tlv-step[data-state="answered"] { color: var(--lw-ok); }
+.tlv-step[data-state="failed"] { color: var(--lw-bad); }
+.tlv-step[data-state="watching"], .tlv-step[data-state="being fixed"], .tlv-step[data-state="running"] { color: var(--lw-live); }
+
+.tlv-foot { display: flex; align-items: center; justify-content: center; gap: 10px; padding: var(--lw-s3) 0 var(--lw-s5); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.tlv-older { border: 1px solid var(--lw-rule); background: var(--lw-card); border-radius: 999px; height: 24px; padding: 0 10px; font: inherit; font-size: var(--lw-fs-xs); cursor: pointer; color: var(--lw-ink-2); }
+
+/* One event opened. */
+.tlv-ev { display: flex; flex-direction: column; gap: var(--lw-s2); max-width: 900px; }
+.tlv-ev-h { display: flex; align-items: baseline; gap: 10px; }
+.tlv-ev-title { margin: 0; font-size: var(--lw-fs-lg, 1.05rem); font-weight: 650; color: var(--lw-ink); line-height: 1.35; }
+.tlv-sec { display: flex; flex-direction: column; gap: 6px; margin-top: var(--lw-s2); }
+.tlv-sec > h3 { margin: 0; font-size: var(--lw-fs-xs); font-weight: 700; color: var(--lw-ink-3); }
+.tlv-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.tlv-chain > li { display: inline-flex; align-items: center; }
+.tlv-chain-a { text-decoration: none; }
+.tlv-chain-a:hover .tlv-step { border-color: var(--lw-ink-3); color: var(--lw-ink); }
+
+/* A card closed with nobody answering it reads quieter than one answered. */
+.tlv-row[data-kind="decision_closed"] .tlv-k, .tlv-row[data-kind="decision_closed"] .tlv-title { color: var(--lw-ink-3); }

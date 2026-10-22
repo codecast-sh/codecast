@@ -71,6 +71,10 @@ export interface ReorientationFacts {
   /** Processes the session started on the previous machine outside its own
    *  process tree (tmux panes, backgrounded jobs), which the move stops there. */
   stoppedOnSource?: Array<{ name: string; via?: string }>;
+  /** Other repositories and folders the move brought, where they landed, or why one did not. */
+  brought?: Array<{ local: string; remote: string; kind: "repo" | "folder"; error?: string }>;
+  /** What a rehearsal before the move found this machine lacks (rehearse.ts rehearsalNotice). */
+  missingHere?: string[];
 }
 
 /**
@@ -132,10 +136,21 @@ export function reorientationNotice(f: ReorientationFacts): string | null {
     );
   }
 
+  const landed = f.brought?.filter((b) => !b.error) ?? [];
+  const failed = f.brought?.filter((b) => b.error) ?? [];
+  if (landed.length) {
+    lines.push(`Also brought from the previous machine, the same way as the working tree: ${landed.map((b) => `${b.local} → ${b.remote} (${b.kind === "repo" ? "repository" : "folder, without what git ignores"})`).join("; ")}.`);
+  }
+  if (failed.length) {
+    lines.push(`Asked to bring these too, but they did not come across: ${failed.map((b) => `${b.local} (${b.error})`).join("; ")}.`);
+  }
   if (f.machineChanged) {
     lines.push(
-      `Processes, ports, and any files outside the working tree from the previous machine are not here.`,
+      `Processes, ports, and any files outside the working tree${landed.length ? " and the paths above" : ""} from the previous machine are not here.`,
     );
+  }
+  if (f.missingHere?.length) {
+    lines.push(`Checked before the move: ${f.missingHere.join("; ")}.`);
   }
   if (f.stoppedOnSource?.length) {
     const named = f.stoppedOnSource.slice(0, 8).map((p) => `${p.name}${p.via === "tmux" ? " (in a tmux pane)" : p.via === "background" ? " (backgrounded)" : ""}`);

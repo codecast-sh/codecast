@@ -6,12 +6,15 @@ import { tryRenderCastDiff } from "../components/InlineDiff";
 import { ModFence } from "../components/mods/ModSurface";
 import { LINE_FENCE_LANG } from "./line/lineFence";
 import { VIEW_FENCE_LANG } from "./productViewRefs";
+import { FLOW_FENCE_LANG } from "./line/flowFence";
 
 // A line widget (docs/architecture/line-workspace.md LW3) reads a project's
 // line from the store, so its code loads only where a ```line block appears.
 const LineFence = lazy(() => import("../components/line/widgets/LineFence"));
 // A connected app's own screen (```view, external-data.md X8 views), framed only where one appears.
 const ViewFence = lazy(() => import("../components/line/widgets/ViewFence"));
+// A flow of the pool, or one run of it (docs/architecture/flows.md FL6).
+const FlowFence = lazy(() => import("../components/line/widgets/FlowFence"));
 
 // The one place a fenced block becomes something richer than code. Every
 // markdown pipeline (messages, docs, cards, comments, a mod's own Markdown)
@@ -32,6 +35,7 @@ export function renderFence(language: string | undefined, code: string, opts: { 
   const castDiff = tryRenderCastDiff(language, code);
   if (castDiff) return castDiff;
   if (language === LINE_FENCE_LANG) return <Suspense fallback={<div className="my-2 h-24 max-w-[860px] rounded-xl border border-sol-border/30 bg-sol-bg-alt/40" aria-busy />}><LineFence code={code} /></Suspense>;
+  if (language === FLOW_FENCE_LANG) return <Suspense fallback={<div className="my-2 h-24 max-w-[860px] rounded-xl border border-sol-border/30 bg-sol-bg-alt/40" aria-busy />}><FlowFence code={code} /></Suspense>;
   if (language === VIEW_FENCE_LANG) return <Suspense fallback={<div className="my-2 h-24 max-w-[860px] rounded-xl border border-sol-border/30 bg-sol-bg-alt/40" aria-busy />}><ViewFence code={code} /></Suspense>;
   // Any other language may be one an enabled mod draws, now or once mods load:
   // ModFence follows the running set and stays a plain code block otherwise.

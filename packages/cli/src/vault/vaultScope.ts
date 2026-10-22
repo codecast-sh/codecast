@@ -74,7 +74,7 @@ export function isVaultDocumentPath(relPath: string): boolean {
 // and walking them is expensive enough to matter on its own. The rule keys off
 // the ROOT rather than off a vault "kind" flag, so scan, watch and resolve all
 // reach the same conclusion from the one argument they all already have — and
-// so a repo someone registered by hand with `cast vault add` is scoped the same
+// so a repo someone registered by hand with `cast files add` is scoped the same
 // way a discovered project vault is.
 // ---------------------------------------------------------------------------
 

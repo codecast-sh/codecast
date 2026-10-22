@@ -8,7 +8,15 @@ cast workflow run flow.cast --task ct-N     # or --plan pl-N
 cast workflow list | runs | push
 ```
 
-`cast guide workflows` shows the graph syntax and the line commands.
+Flows are the team's shared pool of these graphs: lines that take a change to done, and segments (check, review, eval, decide, ship) that run one part of the path alone or inside a line. A finished change goes through a flow before it ships, and the run shows live where the change is.
+
+```bash
+cast flow ls                        # the pool, each flow with its steps
+cast flow run change                # this session's own edits through the standard line (or --task, --branch, --pr)
+cast flow import <wf_id>            # a Workflow-tool run becomes a flow: your draft until you make it general, then cast flow publish
+```
+
+`cast guide workflows` shows the graph syntax, segments and the line commands.
 <!-- cast @VERSION@ -->
 <!-- /codecast-workflows -->
 

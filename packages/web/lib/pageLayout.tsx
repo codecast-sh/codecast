@@ -56,7 +56,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   // The daily edition sets its own 1180px column and scrolls itself.
   /^\/changes$/,
   /^\/goals(\/|$)/,
-  // /vault = pre-rename alias for /files; both stay full-width.
+  // /vault is the team Vault; its old /vault?f=… Files links redirect to /files.
   /^\/files(\/|$)/,
   /^\/vault(\/|$)/,
   /^\/projects(\/|$)/,

@@ -13,7 +13,7 @@ describe("isFullWidthRoute", () => {
     expect(isFullWidthRoute("/crosstalk-other")).toBe(false);
   });
 
-  test("/files and its pre-rename /vault alias are full-width, subpaths included", () => {
+  test("/files and /vault are full-width, subpaths included", () => {
     expect(isFullWidthRoute("/files")).toBe(true);
     expect(isFullWidthRoute("/files/some-vault")).toBe(true);
     expect(isFullWidthRoute("/vault")).toBe(true);
