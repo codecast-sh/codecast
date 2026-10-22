@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assignDestinations, buildOffloadPlan, holdPlan, loadShareOf, loadShift, sliceForPercent, SPREAD_CEILING, type OffloadPlanInput } from "./resourceOffload";
+import { applyRehearsals, assignDestinations, buildOffloadPlan, holdPlan, loadShareOf, loadShift, sliceForPercent, SPREAD_CEILING, type OffloadPlanInput } from "./resourceOffload";
 import type { OffloadCandidate, OffloadPlan } from "../components/resources/types";
 import type { ResourcePoint } from "@codecast/shared/contracts";
 const point = (at: number): ResourcePoint => ({ at, cpuPercent: 95, memoryTotal: 1000, memoryAvailable: 500, memoryAvailableIsEstimate: true, pressure: "normal", load1: 20, logicalCpus: 8, processCount: 1 });
@@ -142,4 +142,19 @@ test("a held review keeps its order and numbers and takes only verdicts from new
   expect(view.candidates[0].relief.cpu).toBe(10);
   expect(view.candidates[0].perDestination.linux.blockers).toEqual(["Host is full"]);
   expect(view.candidates[1].perDestination.linux.readiness).toBe("blocked");
+});
+test("a rehearsal rides on its destination: the newest wins, what would fail the transfer blocks, a pending or failed one only shows", () => {
+  const plan = buildOffloadPlan(input())!;
+  const row = (status: "pending" | "done" | "failed", at: number, blockers: string[] = []) => ({
+    _id: `r${at}`, session_id: "s", destination_id: "linux", status, created_at: at, error: status === "failed" ? "no answer" : null,
+    result: status === "done" ? { session_id: "s", destination_id: "linux", at, blockers, transfer: { method: "git" as const }, missing: [], services: [], tools: { missing: [], installs: [] }, machine: [] } : null,
+  });
+  const ready = plan.candidates[0].perDestination.linux.readiness;
+  expect(applyRehearsals(plan, [row("pending", 1)]).candidates[0].perDestination.linux.rehearsal).toEqual({ status: "pending" });
+  expect(applyRehearsals(plan, [row("pending", 1)]).candidates[0].perDestination.linux.readiness).toBe(ready);
+  const blocked = applyRehearsals(plan, [row("pending", 1), row("done", 2, ["both changed a.ts"])]).candidates[0].perDestination.linux;
+  expect(blocked.readiness).toBe("blocked");
+  expect(blocked.blockers).toContain("both changed a.ts");
+  expect(applyRehearsals(plan, [row("done", 2, ["x"]), row("failed", 3)]).candidates[0].perDestination.linux.rehearsal).toEqual({ status: "failed", error: "no answer" });
+  expect(applyRehearsals(plan, [])).toBe(plan);
 });
