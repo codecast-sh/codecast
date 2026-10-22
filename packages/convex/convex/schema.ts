@@ -1607,6 +1607,9 @@ export default defineSchema({
       // Merges the line made today (the-line.md L12), read against the
       // role's merge authority limit (per_day).
       merges: v.optional(v.number()),
+      // Deploys the role asked for today (deploys.md DP4), read against its
+      // deploy authority limit (per_day).
+      deploys: v.optional(v.number()),
     })),
     // When the role last read its brief from its own session (orgRoles
     // .markBriefRead): `cast brief` shows what changed since (org-staffing.md S25).
@@ -3763,6 +3766,9 @@ export default defineSchema({
     })),
     // Why it failed, or the deploy command's last words.
     note: v.optional(v.string()),
+    // The line-deploy run that carries it through its steps (DP8): each
+    // step's state is that run's station, read from the run, never copied here.
+    run_id: v.optional(v.id("workflow_runs")),
     created_at: v.number(),
     live_at: v.optional(v.number()),
     finished_at: v.optional(v.number()),
@@ -6224,6 +6230,9 @@ export default defineSchema({
     // moved it off (its fingerprint is then the new issue's key).
     merged_into: v.optional(v.string()),
     split_from: v.optional(v.string()),
+    // The problem a merge moved this finding off (signals.foldProblem), so the
+    // merge can be undone exactly (signals.unfoldProblem).
+    folded_from: v.optional(v.id("tasks")),
     // A judge's finding marked wrong, and what diagnosing it found
     // (learning-loop.md LL11, convex/judgeReview.ts). The finding stays where
     // it was filed; the case it became is a signal of its own (case_of).
@@ -7908,6 +7917,9 @@ export default defineSchema({
     // A rerun from the trial page: its runner sets the earlier run's branch
     // aside and starts from origin/main (cli lineTrialBranch.ts).
     fresh_branch: v.optional(v.boolean()),
+    // When a failed run was last resumed at a station as a new attempt: its
+    // runner counts each station's visits again from then (cli runResume.ts).
+    visits_reset_at: v.optional(v.number()),
   })
     .index("by_share_token", ["share_token"])
     // A daemon's sweep for its own live runs whose runner is gone.

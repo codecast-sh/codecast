@@ -84,6 +84,12 @@ export interface EvalRep {
   judge_note: string;
   cost_usd: number;
   error?: string;
+  /**
+   * The rep crashed on the harness, not on the change (a world that could not
+   * be copied in, a dropped connection): it measured nothing, so it is no
+   * vote, no crash and no rep in either side's tally.
+   */
+  infra?: boolean;
   /** Gate ids this rep failed, when the eval grades gates per rep. */
   gates_failed?: string[];
 }
