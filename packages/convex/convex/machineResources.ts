@@ -21,13 +21,22 @@ export function validateResourceSnapshot(snapshot: MachineResourceSnapshot, now:
   if (snapshot.sample.processCount === undefined && (snapshot.processes.length || snapshot.groups.length || snapshot.omittedProcessCount)) throw new Error("Unavailable process measurements cannot carry attribution");
 }
 
+// The shortest gap between two stored reports from one machine. Each stored
+// report rewrites the whole row (snapshot, up to 256 processes, and the
+// history), about 65 KB, and Convex keeps every version for its retention
+// window: at the daemon's 15 s cadence that was 27% of all bytes the backend
+// wrote on 2026-10-22, about 7 GB a day (ct-60898). A minute keeps every reader
+// whole: sustainedResourcePressure tolerates 90 s between points and a reading
+// goes stale at RESOURCE_STALE_MS (2 minutes).
+export const RESOURCE_REPORT_MIN_MS = 60_000;
+
 export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users">, snapshot: MachineResourceSnapshot, now = Date.now()) {
   validateResourceSnapshot(snapshot, now);
   const device = await ctx.db.query("devices").withIndex("by_user_device", q => q.eq("user_id", userId).eq("device_id", snapshot.deviceId)).unique();
   if (!device) throw new Error("Machine is not registered to this user");
   const existing = await ctx.db.query("machine_resources").withIndex("by_user_device", q => q.eq("user_id", userId).eq("device_id", snapshot.deviceId)).unique();
   const background_sessions = existing?.background_sessions ?? [];
-  if (existing && (snapshot.sample.at <= existing.snapshot.sample.at || now - existing.received_at < 15_000)) return { accepted: false, background_sessions };
+  if (existing && (snapshot.sample.at <= existing.snapshot.sample.at || now - existing.received_at < RESOURCE_REPORT_MIN_MS)) return { accepted: false, background_sessions };
   const history = [...(existing?.history ?? []).filter(p => now - p.at <= 2 * 3600_000), snapshot.sample].slice(-RESOURCE_HISTORY_LIMIT);
   const data = { user_id: userId, device_id: snapshot.deviceId, received_at: now, snapshot, history };
   const incident = device.is_remote ? null : sustainedResourcePressure(history, now);

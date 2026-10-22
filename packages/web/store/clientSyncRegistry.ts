@@ -781,17 +781,20 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   // Workflow definitions. webList is a 50-newest window, so delta; webGet
   // and webGetBySlug overlay one row each (a project's customized line is
-  // fed by slug, so it arrives whatever its age). The fork is written here
-  // (saveLineWorkflow): it paints a stub that the server row supersedes by
-  // slug, unique per user.
+  // fed by slug, so it arrives whatever its age). webPool overlays the flows
+  // published to a workspace's pool, teammates' included (flows.md FL2), so
+  // rows carry an access key and list through the workspace chokepoint. The
+  // fork is written here (saveLineWorkflow): it paints a stub that the server
+  // row supersedes by slug, unique per user.
   workflows: {
     persistence: { kind: "collection", key: "workflows" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    workspaceScoped: true,
     sync: { isDelta: true, altKey: "slug" },
     // The server's clock; a client cannot predict it.
     unprotectedFields: ["created_at", "updated_at"],
-    feeds: ["workflows.webList", "workflows.webGet", "workflows.webGetBySlug", "workflow_runs.graphOfRun"],
+    feeds: ["workflows.webList", "workflows.webGet", "workflows.webGetBySlug", "workflows.webPool", "workflow_runs.graphOfRun"],
   },
   // Workflow runs, fed by four windows (listDynamicRuns, listForWorkflow,
   // get, listRuns) that overlay into one collection, last push wins. Every
@@ -878,6 +881,20 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, project_id",
     sync: { isDelta: true, altKey: "client_key", deepFields: ["carries", "after", "commits"] },
     feeds: ["lineWorkspace.deploys"],
+  },
+  // Everything that entered a workspace's line, one row per event (convex
+  // lineTimeline.page): a moment, a judge's read, a finding, a problem opened or
+  // merged or closed, an error, a replay, a run and its stations, a deploy. A
+  // derived read model like lineOccurrences: each event names the rows it
+  // touches and the web resolves them live. Polled and paged, never
+  // subscribed (its reads churn with every finding), so delta.
+  lineTimeline: {
+    persistence: { kind: "collection", key: "lineTimeline" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    indexes: "_id, at",
+    sync: { isDelta: true },
+    feeds: ["lineTimeline.page"],
   },
   // The viewer's chat with a project's line (convex lineChat.thread): who
   // answers it and each ask with its reply, one row per project, keyed by
@@ -1915,6 +1932,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   stationInputs: "shared",
   lineOccurrences: "shared",
   lineDeploys: "shared",
+  lineTimeline: "shared",
   lineCards: "shared",
   lineChats: "shared",
   lineTries: "shared",

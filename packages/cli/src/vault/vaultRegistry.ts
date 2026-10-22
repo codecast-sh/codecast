@@ -4,7 +4,7 @@
 // makes it addressable by id over the loopback bridge, so the browser never
 // sends a raw filesystem path.
 //
-// PROJECT VAULTS. Requiring `cast vault add` was the wrong shape for the main
+// PROJECT VAULTS. Requiring `cast files add` was the wrong shape for the main
 // case: codecast already knows every project the user works in, and those repos
 // already hold READMEs, docs/ and design notes. So the registry reports the
 // user's projects as vaults too, discovered rather than registered.
@@ -62,7 +62,7 @@ export function registeredVaults(configDir: string): VaultInfo[] {
 // Project vaults
 //
 // Every project on this machine is already a directory of markdown — READMEs,
-// design docs, a docs/ folder — and asking people to run `cast vault add` for
+// design docs, a docs/ folder — and asking people to run `cast files add` for
 // each one is a step nobody would take. So the registry OFFERS them, and one is
 // written to config.json the first time it is actually opened.
 //
@@ -206,7 +206,7 @@ export interface VaultLocation {
 
 /**
  * The vault for a file or directory someone linked to — a path in a
- * conversation, a `cast vault open` argument — and never "no vault contains
+ * conversation, a `cast files open` argument — and never "no vault contains
  * that". The machine that has the file is the machine answering, so refusing
  * to show it was the wrong shape: the only honest failure is a path that does
  * not exist.
@@ -216,7 +216,7 @@ export interface VaultLocation {
  * addressing it by id would. A path no vault holds gets one: the git checkout
  * it sits in when there is one (the same root discovery would have offered),
  * otherwise the directory the path is in. Registration goes through addVault,
- * so it is the row `cast vault add <dir>` would have written and `cast vault rm`
+ * so it is the row `cast files add <dir>` would have written and `cast files rm`
  * removes it the same way.
  */
 export function locateVault(configDir: string, localPath: string): VaultLocation | null {
@@ -270,7 +270,7 @@ function gitRootAbove(dir: string): string | null {
 }
 
 /** Register a directory as a vault. Re-registering an existing root is a no-op
- *  apart from an explicit rename, so `cast vault add` is safe to repeat. */
+ *  apart from an explicit rename, so `cast files add` is safe to repeat. */
 export function addVault(configDir: string, dir: string, name?: string): VaultInfo {
   const root = path.resolve(dir);
   let stat: fs.Stats;
@@ -301,7 +301,7 @@ export function addVault(configDir: string, dir: string, name?: string): VaultIn
     added_at: Date.now(),
   };
   config.vaults = [...vaults, vault];
-  // Adding a root by hand un-hides it: `cast vault add` is a clearer statement
+  // Adding a root by hand un-hides it: `cast files add` is a clearer statement
   // of intent than whatever removal put it on the hidden list.
   config.vaults_hidden = [...hiddenRoots(configDir)].filter((r) => r !== root);
   writeConfig(configDir, config);

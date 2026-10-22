@@ -30,6 +30,7 @@ import { useSharedDraft, useSharedDraftStatus, inSharedDraft, typingEditors } fr
 import { SharedCarets } from "./SharedCarets";
 import { ConversationChat } from "./conversation/ConversationChat";
 import { useConversationChatPeople } from "../hooks/useConversationChatPeople";
+import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 // ── Live composer co-presence ────────────────────────────────────────────────
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
@@ -241,7 +242,7 @@ export const CollabComposer = memo(function CollabComposer({
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [sentHint, setSentHint] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = useHeldTextareaRef();
 
   useMountEffect(() => { if (autoFocusInput) textareaRef.current?.focus(); });
   useWatchEffect(() => {

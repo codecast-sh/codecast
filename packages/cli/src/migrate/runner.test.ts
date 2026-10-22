@@ -47,6 +47,8 @@ function world(opts: {
   transferError?: string;
   hostLoginGap?: string;
   hostRoom?: { refuse?: string; small?: string };
+  rehearsalBlockers?: string[];
+  rehearsalMissing?: string[];
   cancelAfterPolls?: number;
   deviceOnline?: boolean;
 }) {
@@ -93,8 +95,13 @@ function world(opts: {
     prepareHost: async (d) => { calls.push(["prepareHost", d]); },
     hostLoginGap: async () => opts.hostLoginGap ?? null,
     hostRoom: async () => opts.hostRoom ?? {},
+    rehearse: async (f, bring) => {
+      calls.push(["rehearse", bring]);
+      return { session_id: f.session_id, destination_id: f.to_device_id, at: now, blockers: opts.rehearsalBlockers ?? [], transfer: { method: "git" }, missing: (opts.rehearsalMissing ?? []).map((p) => ({ path: p, kind: "folder", writes: 1, uses: 0 })), services: [], tools: { missing: [], installs: [] }, machine: [] };
+    },
     transferToCloud: async (f, o) => {
       calls.push(["transferToCloud", f.session_id, o.skipTree, o.pushedHead]);
+      if (o.bring.length) calls.push(["bring", o.bring]);
       if (opts.transferError) throw new Error(opts.transferError);
       return { destinationPath: `/home/ubuntu/work/${f.worktree_name}`, gitRoot: `/home/ubuntu/work/${f.worktree_name}`, sourcePath: f.project_path!, verification: "heads match", localCwd: f.project_path!, ...(o.skipTree ? {} : { pushedHead: `snap-${f.session_id}` }) };
     },
@@ -103,9 +110,10 @@ function world(opts: {
       if (opts.transferError) throw new Error(opts.transferError);
       return { destinationPath: `/Users/me/src/repo/.codecast/worktrees/${f.worktree_name}`, sourcePath: f.project_path!, verification: "pulled" };
     },
-    notice: (_f, _t, stopped) => { calls.push(["noticeFacts", stopped]); return "you moved"; },
+    notice: (_f, _t, stopped, rehearsal) => { calls.push(["noticeFacts", stopped]); if (rehearsal?.missing.length) calls.push(["noticeMissing", rehearsal.missing.map((m) => m.path)]); return "you moved"; },
   };
-  const kinds = () => calls.filter((c) => c[0] !== "log" && c[0] !== "sleep" && c[0] !== "commandStatus" && c[0] !== "noticeFacts").map((c) => c[0]);
+  // The rehearsal and its stage line run on every move to the cloud; the tests that care about it look for them by name.
+  const kinds = () => calls.filter((c) => !["log", "sleep", "commandStatus", "noticeFacts", "noticeMissing", "rehearse", "bring"].includes(c[0] as string) && !(c[0] === "report" && c[3] === "rehearsing the move")).map((c) => c[0]);
   return { io, batch, calls, kinds, clock: () => now };
 }
 
@@ -246,6 +254,24 @@ describe("migrateRow — a session to the cloud", () => {
 
   // jx758nr: moved to a host whose login had lapsed, it lost its background
   // workflow to the stop and resumed on "Login expired".
+  test("a rehearsal that finds the transfer would fail refuses the move before the session is stopped", async () => {
+    const w = world({ statuses: ["idle"], rehearsalBlockers: ["this folder and the host checkout both changed a.ts; nothing was moved"] });
+    const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+    expect(out.outcome).toBe("failed");
+    expect(out.detail).toContain("both changed a.ts");
+    expect(out.detail).toContain("left running here");
+    expect(w.calls.some((c) => c[0] === "quiesce" || c[0] === "transferToCloud")).toBe(false);
+  });
+
+  test("the row's paths to bring reach the rehearsal and the transfer, and what is still missing reaches the notice", async () => {
+    const w = world({ statuses: ["idle"], rehearsalMissing: ["/Users/me/.data"] });
+    const out = await migrateRow(w.io, w.batch, row({ bring_paths: ["/Users/me/src/other"] }), new SharedTreeLedger());
+    expect(out.outcome).toBe("done");
+    expect(w.calls.find((c) => c[0] === "rehearse")).toEqual(["rehearse", ["/Users/me/src/other"]]);
+    expect(w.calls.find((c) => c[0] === "bring")).toEqual(["bring", ["/Users/me/src/other"]]);
+    expect(w.calls.find((c) => c[0] === "noticeMissing")).toEqual(["noticeMissing", ["/Users/me/.data"]]);
+  });
+
   test("a host with no Claude login is refused before the session is stopped", async () => {
     const w = world({ statuses: ["idle"], hostLoginGap: "this machine has none to give it: logged-out stub (empty tokens)" });
     const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());

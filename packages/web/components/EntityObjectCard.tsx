@@ -19,6 +19,7 @@ import {
   Zap,
   Hexagon,
   UserRound,
+  KeyRound,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
@@ -97,6 +98,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   source: Radio,
   role: Hexagon,
   person: UserRound,
+  secret: KeyRound,
 };
 
 /** An object's mark as its card and every list of it draw it: a task's

@@ -10,6 +10,8 @@ import { ageShort } from "../../../../../lib/lineFlow";
 import { SwitchReview, type SwitchLedger } from "../../../../consequential/ConsequentialSwitch";
 import { activityChart, carriedRows, carriesOf, isOpenDeploy, waitingToGoOut, type ActivityChart, type WaitingGroup } from "../../../../../lib/line/deploysView";
 import { deployState, deployTitle, deployTone } from "../../../../../lib/line/deployWords";
+import { deployAllowance, LINE_DEPLOY_STEP_LABELS, normalizeRoleHandle, type LineDeployProfile } from "@codecast/shared/contracts/lineDeploy";
+import type { DeployStepView } from "@codecast/shared/contracts/deploys";
 import { lineRefHref } from "../../../../../lib/line/lineWorkspaceUrl";
 import type { LineDeploy } from "../../../../../hooks/useLineWorkspace";
 import type { LineViewProps } from "../types";
@@ -77,7 +79,7 @@ export function DeploysView({ workspace, selection, select, href }: LineViewProp
 
 /** What waits to go out on one project's line, and the press that sends it. */
 function WaitingBlock({ group, projectTitle, profileDeploy, showProject, now, onOpen }: {
-  group: WaitingGroup; projectTitle: string | null; profileDeploy: { command: string | null; target: string | null } | null; showProject: boolean; now: number; onOpen: (d: LineDeploy) => void;
+  group: WaitingGroup; projectTitle: string | null; profileDeploy: Partial<LineDeployProfile> | null; showProject: boolean; now: number; onOpen: (d: LineDeploy) => void;
 }) {
   const [reviewing, setReviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -142,6 +144,7 @@ function WaitingBlock({ group, projectTitle, profileDeploy, showProject, now, on
           ))}
         </ul>
       )}
+      {profileDeploy?.trigger === "role" && <RoleSends handle={profileDeploy.role ?? null} waiting={fixes.length > 0 && !group.open} now={now} />}
       {fixes.length === 0 && !group.open && <p className="dpv-none" data-line-deploy-none>Every shipped fix is live{profileDeploy?.command ? "" : " · no deploy path"}</p>}
       {fixes.length > 0 && !group.open && (
         <div className="dpv-go-row">
@@ -154,6 +157,50 @@ function WaitingBlock({ group, projectTitle, profileDeploy, showProject, now, on
       {error && <p className="dpv-error" role="alert">{error}</p>}
       {reviewing && <SwitchReview ledger={ledger} onClose={() => setReviewing(false)} onConfirm={() => void go()} />}
     </section>
+  );
+}
+
+/**
+ * The role that sends this line's fixes on its own (deploys.md DP4): its
+ * handle, today's deploys against its limit, and when it cannot send, why,
+ * on a link to the role, where a person grants or changes its authority.
+ */
+function RoleSends({ handle, waiting, now }: { handle: string | null; waiting: boolean; now: number }) {
+  const want = normalizeRoleHandle(handle);
+  const role = useInboxStore((s) => (want ? ((s.orgTree?.roles ?? []) as Array<{ handle: string; status: string; short_id: string }>).find((r) => r.handle === want && r.status !== "retired") ?? null : null));
+  if (!want) return null;
+  const a = role ? deployAllowance(role as Parameters<typeof deployAllowance>[0], now) : null;
+  const tone = a?.allowed ? "ok" : "warn";
+  return (
+    <div className="dpv-role" data-line-deploy-role={want} data-tone={tone}>
+      {role ? <Link href={`/org/${role.short_id}`} className="dpv-role-h lw-num">@{want}</Link> : <span className="dpv-role-h lw-num">@{want}</span>}
+      <span className="dpv-role-what">{!role ? "no such role" : a!.allowed ? (waiting ? "sends these" : "sends what ships") : `waits: ${a!.reason}`}</span>
+      {a?.limit != null && <span className="dpv-role-n lw-num" title="Deploys today, of its daily limit">{a.used}/{a.limit} today</span>}
+    </div>
+  );
+}
+
+/** A deploy's steps as its run's stations stand (deploys.md DP8), in order, with the station that sent a failure back. */
+function DeploySteps({ steps, now }: { steps: DeployStepView[]; now: number }) {
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  const order = Object.keys(LINE_DEPLOY_STEP_LABELS) as Array<keyof typeof LINE_DEPLOY_STEP_LABELS>;
+  const returned = byId.get("returned");
+  return (
+    <ol className="dpv-steps" data-line-deploy-steps>
+      {order.map((id) => {
+        const s = byId.get(id);
+        const state = s?.status ?? (returned ? "skipped" : "pending");
+        const took = s?.started_at ? (s.completed_at ?? now) - s.started_at : null;
+        return (
+          <li key={id} className="dpv-step" data-state={state} data-step={id}>
+            <span className="dpv-step-dot" aria-hidden />
+            <span className="dpv-step-name">{LINE_DEPLOY_STEP_LABELS[id]}</span>
+            {took !== null && took >= 1000 && <span className="dpv-step-t lw-num">{ageShort(took)}</span>}
+          </li>
+        );
+      })}
+      {returned && <li className="dpv-step" data-state="failed" data-step="returned"><span className="dpv-step-dot" aria-hidden /><span className="dpv-step-name">Back to the line</span></li>}
+    </ol>
   );
 }
 
@@ -214,11 +261,12 @@ function DeployDetail({ d, issues, now, problemHref }: { d: LineDeploy; issues: 
       </header>
       <dl className="dpv-facts">
         <div><dt>When</dt><dd className="lw-num">{when(d.at)}</dd></div>
-        <div><dt>Started by</dt><dd>{d.started_by && d.started_by.kind !== "source" ? d.started_by.name : "The team's deploy path"}{d.trigger === "outside" ? <span className="dpv-dim"> · outside the line</span> : d.trigger === "person" ? <span className="dpv-dim"> · from the line</span> : null}</dd></div>
+        <div><dt>Started by</dt><dd>{d.started_by && d.started_by.kind !== "source" ? d.started_by.name : "The team's deploy path"}{d.trigger === "outside" ? <span className="dpv-dim"> · outside the line</span> : d.trigger === "person" ? <span className="dpv-dim"> · from the line</span> : d.trigger === "role" ? <span className="dpv-dim"> · the line's role</span> : null}</dd></div>
         <div><dt>Reported by</dt><dd>{d.source}</dd></div>
         {d.sha && <div><dt>Commit</dt><dd><code className="dpv-sha">{d.sha.slice(0, 10)}</code>{d.previous_sha && <span className="dpv-dim"> from <code className="dpv-sha">{d.previous_sha.slice(0, 7)}</code></span>}</dd></div>}
         {a && <div><dt>Watched</dt><dd className="lw-num">{ageShort(a.to - a.from)}{a.open ? " so far" : ", to the next deploy"}</dd></div>}
       </dl>
+      {d.steps && d.steps.length > 0 && <DeploySteps steps={d.steps} now={now} />}
       {d.note && d.status === "failed" && <pre className="dpv-note">{d.note}</pre>}
 
       <section className="dpv-sec">
