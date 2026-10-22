@@ -24,6 +24,7 @@
 
 import { mapLimit } from "@codecast/shared/async";
 import { MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
+import type { MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
 
 export type RowDirection = "to_cloud" | "to_local";
 
@@ -40,6 +41,8 @@ export interface RunnerRow {
   position: number;
   source_path: string | null;
   destination_path: string | null;
+  /** Other repositories and folders the move brings (a rehearsal found the session works in them). */
+  bring_paths?: string[];
 }
 
 export interface RunnerBatch {
@@ -97,6 +100,8 @@ export type TransferResult = {
   sourcePath: string;
   /** One line stating what the transfer proved. */
   verification: string;
+  /** The extra paths a move to the cloud brought, or why one did not cross. */
+  brought?: Array<{ local: string; remote: string; kind: "repo" | "folder"; error?: string }>;
 };
 
 export interface RunnerIo {
@@ -126,10 +131,12 @@ export interface RunnerIo {
    *  `refuse` when it is out of memory, `small` when it has room but less memory
    *  than the session's repo declares it needs to typecheck and run its dev server. */
   hostRoom(deviceId: string, facts: Extract<BeginResult, { ok: true }>): Promise<{ refuse?: string; small?: string }>;
-  transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean; pushedHead?: string }): Promise<TransferResult & { localCwd: string; pushedHead?: string }>;
+  /** A dry run of the move on this machine (rehearse.ts), while the session still runs here. */
+  rehearse(facts: Extract<BeginResult, { ok: true }>, bring: string[]): Promise<MoveRehearsal>;
+  transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean; pushedHead?: string; bring: string[] }): Promise<TransferResult & { localCwd: string; pushedHead?: string }>;
   transferToLocal(facts: Extract<BeginResult, { ok: true }>): Promise<TransferResult>;
-  /** The reorientation notice for the moved agent, from what the transfer proved. */
-  notice(facts: Extract<BeginResult, { ok: true }>, transfer: TransferResult, stoppedOnSource?: Array<{ name: string; via?: string }>): string | null;
+  /** The reorientation notice for the moved agent, from what the transfer proved and what the rehearsal found. */
+  notice(facts: Extract<BeginResult, { ok: true }>, transfer: TransferResult, stoppedOnSource?: Array<{ name: string; via?: string }>, rehearsal?: MoveRehearsal): string | null;
 }
 
 /** Statuses that mean "a turn is being produced"; the wait is for these to end. */
@@ -277,6 +284,19 @@ export async function migrateRow(
       }
     }
 
+    // A dry run of the transfer while the session still runs here: what would
+    // fail it refuses the move now, and what the host lacks goes in the notice.
+    let rehearsal: MoveRehearsal | undefined;
+    if (facts.direction === "to_cloud") {
+      await io.report(id, { status: "waiting_idle", stage: "rehearsing the move" });
+      try {
+        rehearsal = await io.rehearse(facts, row.bring_paths ?? []);
+      } catch (err) {
+        io.log(`${tag}: rehearsal could not run (${err instanceof Error ? err.message : String(err)}); moving without it`);
+      }
+      if (rehearsal?.blockers.length) return fail(`${rehearsal.blockers.join("; ")}; the session was left running here`);
+    }
+
     // ── 2. quiesce the current owner so the transcript is final ─────────────
     // For a move back, the owner is the cloud host: wake it and wait for its
     // daemon before asking, or the command dies in the queue unclaimed.
@@ -331,7 +351,7 @@ export async function migrateRow(
       }
       await io.report(id, { status: "transferring", stage: owner ? "pushing worktree + transcript" : "pushing transcript (worktree already there)" });
       try {
-        const t = await io.transferToCloud(facts, { skipTree: !owner, pushedHead });
+        const t = await io.transferToCloud(facts, { skipTree: !owner, pushedHead, bring: row.bring_paths ?? [] });
         transfer = t;
         if (owner) ledger.settle(key, t.pushedHead);
       } catch (err) {
@@ -356,7 +376,7 @@ export async function migrateRow(
       source_path: transfer.sourcePath,
     });
     if (!fin.ok) return fail(`handoff refused: ${fin.reason}`);
-    const notice = io.notice(facts, transfer, outside);
+    const notice = io.notice(facts, transfer, outside, rehearsal);
     if (notice) await io.sendNotice(facts.conversation_id, notice);
 
     // ── 5. confirm the resume landed ────────────────────────────────────────
