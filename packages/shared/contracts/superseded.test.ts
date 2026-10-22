@@ -101,8 +101,8 @@ test("currentOnly keeps current rows unless asked for all", () => {
 describe("gateOutdated (a line iteration)", () => {
   const ran = [{ id: "build", h: "b1" }, { id: "card_write", h: "p1" }, { id: "decide", h: "d1" }];
   const current = (nodes: Array<{ id: string; h: string }>, gates: Record<string, { asker?: string }> = { decide: { asker: "card_write" } }) => ({ nodes, gates });
-  test("the presenter's prompt changed: its open decision is outdated", () => {
-    expect(gateOutdated({ gate: "decide", ran, current: current([{ id: "build", h: "b1" }, { id: "card_write", h: "p2" }, { id: "decide", h: "d1" }]) })).toBe(true);
+  test("the presenter's prompt changed: the card it wrote stays current (reask refreshes it)", () => {
+    expect(gateOutdated({ gate: "decide", ran, current: current([{ id: "build", h: "b1" }, { id: "card_write", h: "p2" }, { id: "decide", h: "d1" }]) })).toBe(false);
   });
   test("an unrelated station changed: the decision stays current", () => {
     expect(gateOutdated({ gate: "decide", ran, current: current([{ id: "build", h: "b2" }, { id: "card_write", h: "p1" }, { id: "decide", h: "d1" }]) })).toBe(false);
@@ -116,9 +116,9 @@ describe("gateOutdated (a line iteration)", () => {
   test("a decision made on the current version is current", () => {
     expect(gateOutdated({ gate: "decide", ran, current: current(ran) })).toBe(false);
   });
-  test("asked with no presenting session where the line now has one", () => {
+  test("asked with no presenting session where the line now has one: still current", () => {
     const old = [{ id: "decide", h: "d1" }];
-    expect(gateOutdated({ gate: "decide", ran: old, current: current([{ id: "decide", h: "d1" }, { id: "present", h: "x" }], { decide: { asker: "present" } }) })).toBe(true);
+    expect(gateOutdated({ gate: "decide", ran: old, current: current([{ id: "decide", h: "d1" }, { id: "present", h: "x" }], { decide: { asker: "present" } }) })).toBe(false);
   });
   test("unknown facts hide nothing", () => {
     expect(gateOutdated({ gate: "decide", ran: null, current: current([{ id: "decide", h: "d9" }]) })).toBe(false);

@@ -115,20 +115,17 @@ export interface GateVersionFacts {
 
 /**
  * Whether the line has moved past what a waiting gate was made by: the gate
- * is no longer a person's gate in the published graph, or the station that
- * presents it there (its asker) has a different hash than the run recorded (a
- * presenter the run's graph did not have counts: it was asked with no
- * presenting session). The gate's own wording, and any other station,
- * changing leaves it current. Unknown facts never hide anything.
+ * is no longer a person's gate in the published graph. Any station changing,
+ * the one that presents the gate included, leaves it current: the card already
+ * written still asks a question its run routes on, and the graph read as
+ * current is the one the newest run recorded, on whichever machine it ran, so a
+ * presenter edited in one checkout hid every card asked from the others (the
+ * whole Line inbox emptied on Oct 22). `cast workflow reask` refreshes a card
+ * on the new presenter. Unknown facts never hide anything.
  */
 export function gateOutdated(f: GateVersionFacts): boolean {
   if (!f.current || !f.current.nodes.length) return false;
-  const gate = f.current.gates[f.gate];
-  if (!gate) return true;
-  if (!f.ran || !f.ran.length) return false;
-  const ran = new Map(f.ran.map((n) => [n.id, n.h]));
-  const now = new Map(f.current.nodes.map((n) => [n.id, n.h]));
-  return !!gate.asker && now.has(gate.asker) && ran.get(gate.asker) !== now.get(gate.asker);
+  return !f.current.gates[f.gate];
 }
 
 export interface CardFacts {
