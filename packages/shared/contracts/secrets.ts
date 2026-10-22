@@ -301,7 +301,7 @@ export function parseOtpauth(uri: string): TotpParams | null {
   const secret = (u.searchParams.get("secret") ?? "").toUpperCase().replace(/[\s=-]/g, "");
   if (!secret || !base32Decode(secret)) return null;
   const label = decodeURIComponent(u.pathname.replace(/^\//, ""));
-  const [labelIssuer, account] = label.includes(":") ? label.split(/:(.*)/s, 2).map((s) => s.trim()) : [undefined, label.trim()];
+  const [labelIssuer, account] = label.includes(":") ? label.split(/:([\s\S]*)/, 2).map((s) => s.trim()) : [undefined, label.trim()];
   const digits = Number(u.searchParams.get("digits") ?? 6);
   const period = Number(u.searchParams.get("period") ?? 30);
   const algorithm = ALGORITHMS[(u.searchParams.get("algorithm") ?? "SHA1").toUpperCase()];
