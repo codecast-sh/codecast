@@ -939,6 +939,7 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   settleOrgHandoff: org((ctx) => `${ctx.args[1] === "close" ? "Closed" : "Ran"} the handoff of ${roleName(ctx.before, ctx.args[0] as string)}`),
   setOrgLineMerge: org((ctx) => `Turned the merge step ${ctx.args[1] ? "on" : "off"} for ${roleName(ctx.before, ctx.args[0] as string)}`),
   markOrgTemplateSetup: org((ctx) => `Marked a setup item ${String(ctx.args[2])}`),
+  answerOrgTemplateInput: org(() => "Answered a template role's setup question"),
   activateOrgTemplateRoutine: org(() => "Turned on a template role's routine"),
   setOrgTemplateLearning: org((ctx) => `${ctx.args[1] ? "Let" : "Stopped"} Codecast learn${ctx.args[1] ? "" : "ing"} from template roles`),
   // Not in the record: a reset wipes the chart the record describes, and

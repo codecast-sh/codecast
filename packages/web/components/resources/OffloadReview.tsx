@@ -17,7 +17,8 @@ import { cn } from "../../lib/utils";
 import { WAIT_PRESETS, isRowActive, isRowTerminal } from "../../lib/migrationPlan";
 import { MigrationStatusPill } from "../MigrationStatusPill";
 import { fmtAgo, fmtBytes, fmtCpu, memoryUsed, namedStops, projectName } from "./resourceModel";
-import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRun, OffloadSelection, ResourceActions, ResourceSession, StayingSession } from "./types";
+import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRehearsal, OffloadRun, OffloadSelection, ResourceActions, ResourceSession, StayingSession } from "./types";
+import { bringsByDefault, rehearsalPending, type MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
 import { SPREAD_CEILING, assignDestinations, holdPlan, loadShareOf, loadShift, sliceForPercent } from "../../lib/resourceOffload";
 import { Button } from "../ui/button";
 
@@ -95,7 +96,14 @@ function LoadBar({ label, before, after }: { label: string; before?: number; aft
 }
 
 /** `destinationId` is set only when the user sent this one session somewhere other than the batch. */
-type Choice = { checked: boolean; destinationId?: string };
+type Choice = { checked: boolean; destinationId?: string; /** Paths the person turned on or off, over the defaults. */ bring?: Record<string, boolean> };
+
+/** The paths a move brings for this rehearsal: the defaults, then the person's own picks. */
+function bringFor(r: MoveRehearsal | undefined, picks: Record<string, boolean> | undefined): string[] {
+  return (r?.missing ?? []).filter((m) => picks?.[m.path] ?? bringsByDefault(m)).map((m) => m.path);
+}
+
+const homeShort = (p: string) => p.replace(/^\/(Users|home)\/[^/]+/, "~");
 
 const movableHere = (plan: OffloadPlan) => plan.candidates.filter((c) => plan.destinations.some((d) => movable(c.perDestination[d.deviceId])));
 const round5 = (n: number) => Math.round(n / 5) * 5;
@@ -148,10 +156,58 @@ function LoadDial({ value, count, freed, onChange }: { value: number; count: num
   );
 }
 
-function CandidateRow({ c, title, checked, elsewhere, onCheck }: { c: OffloadCandidate; title: string; checked: boolean; elsewhere?: OffloadDestination; onCheck: (checked: boolean) => void }) {
+/**
+ * What the source machine's dry run found for one move, on the session's row:
+ * each repository or folder the host lacks as a toggle that brings it along,
+ * then what stays behind or differs. A pressed path crosses with the move.
+ */
+function RehearsalLine({ rehearsal, bring, onBring, disabled }: { rehearsal?: OffloadRehearsal; bring: string[]; onBring: (path: string, on: boolean) => void; disabled?: boolean }) {
+  if (!rehearsal) return null;
+  if (rehearsal.status === "pending") return <div className="pb-2 pl-10 pr-3.5 text-[10px] text-sol-text-dim" data-rehearsal="pending">checking the move on this machine</div>;
+  if (rehearsal.status === "failed") return <div className="truncate pb-2 pl-10 pr-3.5 text-[10px] text-sol-text-dim" title={rehearsal.error} data-rehearsal="failed">not checked: {rehearsal.error}</div>;
+  const r = rehearsal.result;
+  const running = r.services.filter((sv) => sv.running);
+  const lacks = r.tools.missing.filter((t) => !r.tools.installs.includes(t));
+  if (!r.missing.length && !running.length && !lacks.length && !r.tools.installs.length && !r.machine.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1 pb-2 pl-10 pr-3.5 text-[10px]" data-rehearsal="done">
+      {r.missing.map((m) => {
+        const on = bring.includes(m.path);
+        return (
+          <button
+            key={m.path}
+            type="button"
+            aria-pressed={on}
+            disabled={disabled}
+            title={`${m.path}: ${m.kind === "repo" ? "repository" : "folder"} the host lacks; ${m.writes ? `${m.writes} files written` : `used ${m.uses} times`}`}
+            onClick={() => onBring(m.path, !on)}
+            className={cn(
+              "inline-flex max-w-[14rem] items-center gap-1 rounded-full border px-2 py-0.5 tabular-nums transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+              on ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-orange/50 text-sol-orange line-through decoration-sol-orange/60",
+            )}
+          >
+            {on ? <Check className="h-3 w-3 shrink-0 text-sol-cyan" /> : null}
+            <span className="truncate">{homeShort(m.path)}</span>
+            <span className="shrink-0 text-sol-text-dim no-underline">{m.bytes !== undefined ? fmtBytes(m.bytes) : ""}</span>
+          </button>
+        );
+      })}
+      {running.map((sv) => <span key={sv.label} className="rounded-full border border-sol-orange/40 px-2 py-0.5 text-sol-orange" title="A launchd service from this session's work: it keeps running on this machine">{sv.label} stays here</span>)}
+      {r.tools.installs.length > 0 && <span className="px-1 text-sol-text-dim" title="The host lacks these and installs them on the move">installs {r.tools.installs.join(", ")}</span>}
+      {lacks.length > 0 && <span className="px-1 text-sol-orange" title="Commands this session ran that the host lacks and cannot install">lacks {lacks.join(", ")}</span>}
+      {r.machine.map((m) => <span key={m} className="px-1 text-sol-orange">{m.replace(" here, ", " → ").replace(" on the host", "")}</span>)}
+    </div>
+  );
+}
+
+function CandidateRow({ c, title, checked, elsewhere, onCheck, rehearsal, bring, onBring, disabled }: {
+  c: OffloadCandidate; title: string; checked: boolean; elsewhere?: OffloadDestination; onCheck: (checked: boolean) => void;
+  rehearsal?: OffloadRehearsal; bring: string[]; onBring: (path: string, on: boolean) => void; disabled?: boolean;
+}) {
   const outside = c.stops.filter((p) => p.detached);
   return (
-    <label className={cn("flex cursor-pointer items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-sol-bg-highlight/40", !checked && "opacity-55")} data-candidate={c.sessionId}>
+    <div className={cn(!checked && "opacity-55")}>
+    <label className="flex cursor-pointer items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-sol-bg-highlight/40" data-candidate={c.sessionId}>
       <input
         type="checkbox"
         aria-label={`Move ${title}`}
@@ -173,6 +229,8 @@ function CandidateRow({ c, title, checked, elsewhere, onCheck }: { c: OffloadCan
         {[c.relief.cpu !== undefined ? fmtCpu(c.relief.cpu) : undefined, c.relief.rssHigh !== undefined ? fmtBytes(c.relief.rssHigh) : undefined].filter(Boolean).join(" · ")}
       </span>
     </label>
+    <RehearsalLine rehearsal={rehearsal} bring={bring} onBring={onBring} disabled={disabled || !checked} />
+    </div>
   );
 }
 
@@ -297,8 +355,15 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
   const auto = assignDestinations(plan, picked.filter((c) => !pinned(c)), mode);
   const destOf = (c: OffloadCandidate) => pinned(c) ?? auto.get(c.sessionId) ?? c.suggestedDestinationId ?? plan.destinations.find((d) => movable(c.perDestination[d.deviceId]))?.deviceId ?? "";
   const going = picked.filter((c) => movable(c.perDestination[destOf(c)]));
-  // Pressing Move confirms the items no check can prove, shown once below for the whole batch.
-  const selections: OffloadSelection[] = going.map((c) => ({ sessionId: c.sessionId, destinationId: destOf(c), attested: [...c.perDestination[destOf(c)].pending] }));
+  const rehearsalOf = (c: OffloadCandidate) => c.perDestination[destOf(c)]?.rehearsal;
+  const resultOf = (c: OffloadCandidate) => { const r = rehearsalOf(c); return r?.status === "done" ? r.result : undefined; };
+  const bringOf = (c: OffloadCandidate) => bringFor(resultOf(c), edited[c.sessionId]?.bring);
+  // Pressing Move confirms the items no check can prove, and what the rehearsal shows on each row: the paths left behind, services staying here, missing commands.
+  const selections: OffloadSelection[] = going.map((c) => {
+    const result = resultOf(c);
+    const bring = bringOf(c);
+    return { sessionId: c.sessionId, destinationId: destOf(c), attested: [...new Set([...c.perDestination[destOf(c)].pending, ...(result ? rehearsalPending(result, bring) : [])])], ...(bring.length ? { bring } : {}) };
+  });
 
   // The server's dry run runs once on open, so its blockers show before anyone presses Move.
   const preflight = actions?.onPreflight;
@@ -463,6 +528,10 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
                         checked={checked}
                         elsewhere={checked && host && (hostsUsed > 1 || !!pinned(c)) ? host : undefined}
                         onCheck={(v) => handEdit((s) => ({ ...s, [c.sessionId]: { ...s[c.sessionId], checked: v } }))}
+                        rehearsal={rehearsalOf(c)}
+                        bring={bringOf(c)}
+                        disabled={!!actionsDisabledReason}
+                        onBring={(path, on) => setChoices((s) => ({ ...s, [c.sessionId]: { checked: isChecked(c), ...s[c.sessionId], bring: { ...s[c.sessionId]?.bring, [path]: on } } }))}
                       />
                     );
                   })}

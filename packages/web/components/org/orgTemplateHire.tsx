@@ -17,7 +17,7 @@ import type { OrgRole, OrgTree } from "./orgTypes";
 import type { TemplateInput } from "@codecast/shared/contracts/orgTemplateManifest";
 import { buildOrgTemplateCommand, type TemplateDraft, type TemplateProject } from "./orgTemplateCommand";
 import { DEFAULT_LEAD_TEMPLATE_ID, defaultInstance, askedInputs, requiredInputs, buildHireSpec, grantsToAsk, hireErrors, humanSetupCount, isDefaultLeadTemplate, resolvedConfig, secretInputs, slugOf, type HireDraft } from "./orgTemplateSpec";
-import { useTemplateActions, useTemplateCatalog } from "../../hooks/useTemplateHire";
+import { useTemplateActions, useTemplateCatalog, useTemplateInstance } from "../../hooks/useTemplateHire";
 import { LearningSwitch } from "./TemplateSections";
 import { RoleAvatar } from "./avatars";
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
@@ -56,7 +56,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
   const [config, setConfig] = useState<Record<string, string>>({});
   // With a lead in place the hire reports to it (the lead rule, H3); "lead"
   // names the lead as the seat instead. "new" only stands while no lead exists.
-  const [seat, setSeat] = useState<"under" | "lead">("under");
+  const [seatChoice, setSeat] = useState<"under" | "lead" | null>(null);
   const [policy, setPolicy] = useState<HireDraft["updatePolicy"]>("stable");
   const [posting, setPosting] = useState(false);
   const [posted, setPosted] = useState<{ short_id: string; link?: string } | null>(null);
@@ -67,10 +67,17 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
   const project = available.find((p) => p._id === projectId) ?? null;
   // The project's lead (R4, W9 I2): a live role whose scope names the project.
   const lead = useMemo(() => project ? roles.find((r) => r.status !== "retired" && ((r.scope as any)?.project_ids ?? []).some((id: string) => id === project._id)) ?? null : null, [roles, project]);
+  // A lead hired from this same template already does this job: the hire
+  // starts as giving the template's work to it, never a duplicate under it.
+  const { instance: leadInstance } = useTemplateInstance(lead?._id);
+  const leadRunsIt = !!lead && !!template && leadInstance?.template_id === template.template_id;
+  // Already running it on this very project: there is nothing to hire.
+  const leadRunsItHere = leadRunsIt && String(leadInstance?.project_id) === project?._id;
+  const seat = seatChoice ?? (leadRunsIt ? "lead" : "under");
   const effInstance = instanceTouched ? instance : project && template ? defaultInstance(project.title, template.manifest) : "";
   const draft: HireDraft = { template, project, instance: effInstance, config, reportsTo: lead && seat === "under" ? `@${lead.handle}` : "me", seatHandle: lead && seat === "lead" ? lead.handle : null, updatePolicy: policy };
   const engLead = templates.find((t) => t.template_id === DEFAULT_LEAD_TEMPLATE_ID) ?? null;
-  const errors = hireErrors(draft);
+  const errors = leadRunsItHere ? [`@${lead!.handle} already runs ${template!.name} on ${project!.title}`] : hireErrors(draft);
   const spec = errors.length ? null : buildHireSpec(draft);
   const manifest = template?.manifest;
 
@@ -152,13 +159,14 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
         {!available.length && <span className="text-[11px] text-sol-text-dim">Create a project in this workspace before hiring from a template.</span>}
       </label>
       {lead && (
-        <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12px] leading-relaxed" role="group" aria-label="Project lead" data-template-lead={lead.handle}>
-          <p className="text-sol-text"><span className="font-semibold">@{lead.handle}</span> leads {project?.title}. This role is hired under it and reports to it.</p>
-          <div className="mt-1.5 flex flex-col gap-1">
+        <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12px] leading-relaxed" role="group" aria-label="Project lead" data-template-lead={lead.handle} data-lead-runs={leadRunsItHere ? "here" : leadRunsIt ? "elsewhere" : undefined}>
+          <p className="text-sol-text"><span className="font-semibold">@{lead.handle}</span> leads {project?.title}{leadRunsIt ? <> and already runs <span className="font-semibold">{template.name}</span> {leadInstance?.version}{leadRunsItHere ? " here" : ""}</> : null}.</p>
+          {leadRunsItHere && <a href={`/org/${lead.short_id ?? lead._id}`} className="mt-1 inline-block text-[12px] font-semibold text-sol-violet underline-offset-2 hover:underline" data-template-open-lead>Open @{lead.handle}</a>}
+          {!leadRunsItHere && <div className="mt-1.5 flex flex-col gap-1">
             {([["under", `Hire under @${lead.handle}: a new role that reports to it; it stays the lead`], ["lead", `Give it to @${lead.handle} instead: no new role; it takes on the template's triggers and record`]] as const).map(([value, label]) => (
               <label key={value} className="flex items-start gap-2 text-sol-text-muted"><input type="radio" name="template-seat" checked={seat === value} onChange={() => setSeat(value)} className="mt-0.5" />{label}</label>
             ))}
-          </div>
+          </div>}
         </div>
       )}
       {project && !lead && !isDefaultLeadTemplate(template.template_id) && (
@@ -167,7 +175,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
           {engLead && <button type="button" onClick={() => { setTemplateId(engLead.template_id); setConfig({}); }} className="mt-1 text-[12px] font-semibold text-sol-violet underline-offset-2 hover:underline" data-template-hire-lead-first>Hire the {engLead.name} first</button>}
         </div>
       )}
-      {manifest && askedInputs(manifest).length > 0 && (() => {
+      {manifest && !leadRunsItHere && askedInputs(manifest).length > 0 && (() => {
         const needed = requiredInputs(manifest);
         const optional = askedInputs(manifest).filter((i) => !needed.includes(i));
         const field = (input: TemplateInput) => (
@@ -198,12 +206,12 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
           </fieldset>
         );
       })()}
-      {manifest && secretInputs(manifest).length > 0 && (
+      {manifest && !leadRunsItHere && secretInputs(manifest).length > 0 && (
         <p className="text-[11.5px] text-sol-text-muted" data-template-secrets={secretInputs(manifest).length}>
           <span className="text-sol-text">After you accept,</span> on the role page, sealed to its machine: {secretInputs(manifest).map((s) => s.label).join(" · ")}
         </p>
       )}
-      {manifest && (
+      {manifest && !leadRunsItHere && (
         <details className="rounded-lg border border-sol-border/50 px-3 py-2 text-[12px]" data-template-details>
           <summary className="cursor-pointer text-sol-text-muted">Name <span className="text-sol-text" style={{ fontFamily: "var(--font-mono)" }}>{effInstance || "…"}</span> · {policy === "stable" ? "stable updates" : policy === "canary" ? "canary updates" : "manual updates"}</summary>
           <div className="mt-2 grid grid-cols-2 gap-3">
@@ -234,11 +242,11 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
           {grantsToAsk(manifest, resolvedConfig(manifest, config)).length === 0 && (manifest.authority ?? []).length > 0 && <p className="mt-1 text-sol-text-dim">Authority is not asked for yet: its inputs are unanswered.</p>}
         </div>
       )}
-      {!spec && template && project && errors.length > 0 && <p role="status" className="text-[11.5px] text-sol-text-muted">{errors[0]}</p>}
+      {!spec && template && project && errors.length > 0 && !leadRunsItHere && <p role="status" className="text-[11.5px] text-sol-text-muted">{errors[0]}</p>}
       {error && <p role="alert" className="text-[11.5px] text-sol-red">{error}</p>}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button type="button" onClick={onClose} className="h-8 shrink-0 rounded-lg px-3 text-[12.5px] text-sol-text-muted hover:bg-sol-bg-highlight">Close</button>
-        <Button type="submit" variant="violet" size="sm" disabled={!spec || posting} className="shrink-0 rounded-lg">{posting ? "Proposing…" : "Propose the hire"}</Button>
+        {!leadRunsItHere && <Button type="submit" variant="violet" size="sm" disabled={!spec || posting} className="shrink-0 rounded-lg">{posting ? "Proposing…" : "Propose the hire"}</Button>}
       </div>
     </form>
   );

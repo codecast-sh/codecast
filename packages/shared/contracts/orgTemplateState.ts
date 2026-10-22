@@ -4,7 +4,7 @@
 // (orgTemplateRun.ts, which hold the lock and the receipt) and the server
 // (convex/orgTemplates.ts, which holds the instance row).
 import { instanceReadiness, type EvidenceRecord, type HeldAuthority, type RoutineReadiness } from "./orgTemplateReadiness";
-import { intervalMs, type OrgTemplate } from "./orgTemplateManifest";
+import { fillAnswers, intervalMs, type OrgTemplate, type TemplateInput } from "./orgTemplateManifest";
 
 export type EvidenceState = { status: "pass" | "fail"; observed_at: number; source: string; detail?: Record<string, string> };
 export type ScoreState = { value: string; observed_at: number; source: string };
@@ -15,6 +15,8 @@ export type InstanceState = {
   setup?: Record<string, SetupState>;
   /** Authority a person granted, cached from the role row; absent until granted. */
   authority?: HeldAuthority[];
+  /** The hire's answers (H2), so a setup item's words are filled from what is answered now. */
+  config?: Record<string, string>;
 };
 
 const href = (value: string | undefined, label: string): string => {
@@ -85,10 +87,25 @@ export function markSetup(manifest: OrgTemplate, state: InstanceState, id: strin
  * release and the receipt (one renderer: the CLI's substitute), and the
  * instance row carries them for the role page. Absent before the host step.
  */
-export type SetupText = Record<string, { title: string; price?: string; guide?: string }>;
-export type SetupRow = { id: string; title: string; who: "human" | "role"; status: SetupState["status"]; unlocks: string[]; price?: string; how?: string; guide?: string; evidence?: string };
+/** A setup item's words as its host filled them at bind; `needs` names the answers its guide is missing. */
+export type SetupText = Record<string, { title: string; price?: string; guide?: string; needs?: string[] }>;
+/** `needs`: the hire's answers this item's words are missing, which the page asks for in place. */
+export type SetupRow = { id: string; title: string; who: "human" | "role"; status: SetupState["status"]; unlocks: string[]; price?: string; how?: string; guide?: string; evidence?: string; needs: SetupNeed[] };
+/** An answer a setup item's words are missing: the field the page shows in place. */
+export type SetupNeed = { key: string; label: string; kind: TemplateInput["kind"]; choices?: string[] };
 export function setupRows(manifest: OrgTemplate, state: InstanceState, text: SetupText = {}): SetupRow[] {
-  return (manifest.setup ?? []).map((item) => ({ id: item.id, title: text[item.id]?.title ?? item.title, who: item.who, status: state.setup?.[item.id]?.status ?? "open", unlocks: item.unlocks ?? [], price: text[item.id]?.price ?? item.price, how: item.how, guide: text[item.id]?.guide, evidence: state.setup?.[item.id]?.evidence }));
+  return (manifest.setup ?? []).map((item) => {
+    // The title and price are filled here from the answers as they stand, so an
+    // answer given after the hire shows at once and a missing one is marked;
+    // the host's text is used only for words with tokens the host alone knows.
+    const hostOnly = (t: string) => /\{\{(?!input\.)[^{}]+\}\}/.test(t);
+    const title = hostOnly(item.title) && text[item.id]?.title ? { text: text[item.id]!.title, needs: [] } : fillAnswers(item.title, manifest, state.config);
+    const price = item.price === undefined ? undefined : hostOnly(item.price) && text[item.id]?.price ? { text: text[item.id]!.price!, needs: [] } : fillAnswers(item.price, manifest, state.config);
+    const inputs = new Map((manifest.inputs ?? []).map((i) => [i.key, i]));
+    const needs = [...new Set([...title.needs, ...(price?.needs ?? []), ...(text[item.id]?.needs ?? []).filter((k) => !state.config?.[k])])]
+      .flatMap((key) => { const i = inputs.get(key); return i && i.kind !== "secret" ? [{ key, label: i.label, kind: i.kind, ...(i.choices ? { choices: i.choices } : {}) }] : []; });
+    return { id: item.id, title: title.text, who: item.who, status: state.setup?.[item.id]?.status ?? "open", unlocks: item.unlocks ?? [], price: price?.text, how: item.how, guide: text[item.id]?.guide, evidence: state.setup?.[item.id]?.evidence, needs };
+  });
 }
 /** The one ask (H5): the first open human item in the manifest's order, which is the author's value order. A skipped item is not open, so the ask moves past it. */
 export function nextHumanAsk(manifest: OrgTemplate, state: InstanceState, text?: SetupText): SetupRow | undefined {

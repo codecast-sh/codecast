@@ -65,3 +65,20 @@ describe("computeFootprint", () => {
     expect(readToolCalls([file])).toEqual({ writes: ["/a/b"], reads: [], commands: ["ls"] });
   });
 });
+
+describe("installSource", () => {
+  test("a Homebrew keg names its formula; a global npm package its name at the installed version; a link or a script nothing", async () => {
+    const { installSource } = await import("./footprint.js");
+    const h = home();
+    const keg = path.join(h, "brew/Cellar/pnpm/10.1/bin"); fs.mkdirSync(keg, { recursive: true }); fs.writeFileSync(path.join(keg, "pnpm"), "");
+    const mod = path.join(h, "brew/lib/node_modules/cf"); fs.mkdirSync(path.join(mod, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(mod, "package.json"), JSON.stringify({ name: "cf", version: "1.2.3" })); fs.writeFileSync(path.join(mod, "bin/cf"), "");
+    const proj = path.join(h, "proj"); fs.mkdirSync(path.join(proj, "bin"), { recursive: true }); fs.writeFileSync(path.join(proj, "package.json"), JSON.stringify({ name: "mine", version: "0.0.1" })); fs.writeFileSync(path.join(proj, "bin/mine"), "");
+    fs.symlinkSync(proj, path.join(h, "brew/lib/node_modules/mine"));
+    const script = path.join(h, "bin-script"); fs.writeFileSync(script, "");
+    expect(installSource(path.join(keg, "pnpm"))).toEqual({ brew: "pnpm" });
+    expect(installSource(path.join(mod, "bin/cf"))).toEqual({ npm: "cf@1.2.3" });
+    expect(installSource(path.join(h, "brew/lib/node_modules/mine/bin/mine"))).toBeUndefined();
+    expect(installSource(script)).toBeUndefined();
+  });
+});

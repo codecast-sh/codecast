@@ -63,6 +63,7 @@ export function useTemplateActions() {
   return {
     propose: (args: { team_id?: string; title: string; summary_md: string; mode: string; changes: unknown[]; asks: unknown[] }) => propose({ ...args, team_id: args.team_id as Id<"teams"> | undefined }) as Promise<any>,
     markSetup: (instanceKey: string, id: string, status: "done" | "open" | "skipped") => store().markOrgTemplateSetup(instanceKey, id, status),
+    answer: (instanceKey: string, key: string, value: string) => store().answerOrgTemplateInput(instanceKey, key, value) as Promise<unknown>,
     activate: (taskId: string) => store().activateOrgTemplateRoutine(taskId),
     setLearning: (teamId: string | undefined, enabled: boolean) => store().setOrgTemplateLearning(teamId, enabled) as Promise<any>,
     /** The host step (H3): the daemon on the machine with the checkout runs bind. Secrets are sealed
