@@ -26,7 +26,8 @@ const createLookupCtx = ({
 
           const single = () => {
             if (table === "conversations" && indexName === "by_session_id") {
-              return conversationsBySessionId[matchedValue] ?? null;
+              const v = conversationsBySessionId[matchedValue];
+              return (Array.isArray(v) ? v[0] : v) ?? null;
             }
             if (table === "managed_sessions" && indexName === "by_session_id") {
               return managedSessionsBySessionId[matchedValue] ?? null;
@@ -49,6 +50,10 @@ const createLookupCtx = ({
             async take(_n: number) {
               if (table === "conversations" && indexName === "by_short_id") {
                 return shortIdMatches();
+              }
+              const bySession = conversationsBySessionId[matchedValue];
+              if (table === "conversations" && indexName === "by_session_id" && Array.isArray(bySession)) {
+                return bySession;
               }
               const one = single();
               return one ? [one] : [];
@@ -114,6 +119,24 @@ describe("findConversationBySessionReference", () => {
 // scan — short_id is _id.slice(0,7), so a full id's prefix can collide with a
 // DIFFERENT conversation's short_id, and the scan would let a newer accepted
 // collision shadow the id's true target (the ct-40176 device-move hazard).
+describe("a session id shared by rows of different owners", () => {
+  // A session moved to Cam's host keeps its row (now Cam's); the transcript
+  // left on Ashot's laptop synced into a second row under Ashot. Cam's row
+  // sits first in the index (jx7cvd9: `cast state` said "No session found").
+  const cams = { _id: "conv-cam", user_id: "user-cam", session_id: "s-1" };
+  const ashots = { _id: "conv-ashot", user_id: "user-ashot", session_id: "s-1" };
+  const ctx = () => createLookupCtx({ conversationsBySessionId: { "s-1": [cams, ashots] } });
+
+  test("findConversationByAnyRef finds the caller's row behind another owner's", async () => {
+    expect(await findConversationByAnyRef(ctx(), "s-1", "user-ashot")).toEqual(ashots);
+    expect(await findConversationByAnyRef(ctx(), "s-1", "user-cam")).toEqual(cams);
+  });
+
+  test("findConversationBySessionReference finds the caller's row behind another owner's", async () => {
+    expect(await findConversationBySessionReference(ctx(), "s-1", "user-ashot")).toEqual(ashots);
+  });
+});
+
 describe("findConversationByAnyRefWhere full-id-wins (normalizeId present)", () => {
   const withNormalizeId = (ctx: any, conversationsById: Record<string, any>) => {
     ctx.db.normalizeId = (_table: string, id: string) => (conversationsById[id] ? id : null);

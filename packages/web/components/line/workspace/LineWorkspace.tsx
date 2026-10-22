@@ -14,7 +14,7 @@ import { Fragment, memo, useCallback, useMemo, useRef, useState, type ComponentT
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useStageScroll } from "./useStageScroll";
-import { Check, ChevronDown, Inbox, SlidersHorizontal, Workflow, AlertCircle, Rocket, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, Inbox, SlidersHorizontal, Workflow, AlertCircle, Rocket, Route, type LucideIcon } from "lucide-react";
 import { lineFilterParam, useLineProjectId, useLineSelection, useLineWorkspace, useSyncLineHistory } from "../../../hooks/useLineWorkspace";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -43,6 +43,7 @@ import { ProblemsView } from "./views/ProblemsView";
 import { RunPage as RunPageView } from "./views/run/RunPage";
 import { ProcessView } from "./views/ProcessView";
 import { DeploysView } from "./views/deploys/DeploysView";
+import { FlowsView } from "./views/flows/FlowsView";
 import { LineSettingsStage } from "../settings/LineSettingsStage";
 import "./workspace.css";
 
@@ -58,15 +59,17 @@ const RunPage = memo(RunPageView);
 const Finder = memo(FinderPage);
 const Line = memo(ProcessView);
 const Deploys = memo(DeploysView);
+const Flows = memo(FlowsView);
 // ROUTES: the page a selection opens. A run is read under its problem (view=problems + run); a finder is a step of
 // the line (view=line + source). A builder whose page replaces one of these swaps its line here.
 function pageFor(s: LineSelection): ComponentType<LineViewProps> {
   if (s.view === "foryou") return ForYou;
   if (s.view === "problems") return s.run ? RunPage : Problems;
   if (s.view === "deploys") return Deploys;
+  if (s.view === "flows") return Flows;
   return s.source ? Finder : Line;
 }
-const ICONS: Record<LineView, LucideIcon> = { foryou: Inbox, problems: AlertCircle, line: Workflow, deploys: Rocket };
+const ICONS: Record<LineView, LucideIcon> = { foryou: Inbox, problems: AlertCircle, line: Workflow, flows: Route, deploys: Rocket };
 /** How long after G the second key of the go chord still counts. */
 const GO_MS = 1200;
 

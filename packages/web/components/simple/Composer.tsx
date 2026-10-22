@@ -4,6 +4,7 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp } from "lucide-react";
 import { LANE_COPY } from "./lane";
+import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 
 export function Composer({
   placeholder,
@@ -21,7 +22,7 @@ export function Composer({
 }) {
   const [text, setText] = useState("");
   const [seededAt, setSeededAt] = useState<number | null>(null);
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const ref = useHeldTextareaRef();
 
   if (seed && seed.at !== seededAt) {
     setSeededAt(seed.at);

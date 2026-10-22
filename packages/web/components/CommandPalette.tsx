@@ -218,6 +218,7 @@ import { Button } from "./ui/button";
 
 const api = _api as any;
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
+import { useHeldTextareaRef } from "lib/holdTextareaTextNode";
 
 /** A relation pick's leading glyph, as every other palette mode has one: the
  *  task's status, or the hourglass of a wait parsed from the query. */
@@ -481,7 +482,7 @@ export function ActionSubmenu({
   const bulkMove = useBulkMoveSessions();
   const [selectedAgentKey, setSelectedAgentKey] = useState<string | null>(null);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_RUN_MESSAGE);
-  const messageRef = useRef<HTMLTextAreaElement>(null);
+  const messageRef = useHeldTextareaRef();
 
   // Rename is the other two-step mode: once a layout is picked the SAME search
   // input becomes the name field, so the row list collapses to one create-shaped
