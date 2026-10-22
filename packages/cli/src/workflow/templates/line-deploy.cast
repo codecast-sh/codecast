@@ -1,0 +1,56 @@
+// A deploy's steps as stations (docs/architecture/deploys.md DP8, DP9).
+//
+//   cast line deploy run dp-N     (the daemon's line_deploy runs this)
+//
+// The line's last stage sends a project's shipped fixes out together as one
+// deploy (dp-N, the run's goal). Each step is a command of the profile's
+// [line.deploy] (line-profile.md LP2), run from the checkout's root by
+// `cast line deploy step`, which reads the deploy's sha (the default
+// branch's head on origin, fixed at the first step) and runs the command with
+// $sha, $deploy, $actor and CAST_DEPLOY_* set and no model keys. A step the
+// profile leaves out passes with a note. This file names no repository path
+// and no tool of any one project.
+//
+// Stations, in order:
+//   ci       the deploy sha's CI verdict, before anything goes out
+//   send     the team's deploy path ([line.deploy] command)
+//   gate     the eval gate's verdict on what went out
+//   rollout  the rollout finishing
+//   live     production answering with the deploy sha
+//   watch    the deploy goes live; its fixes are watched from now
+//   returned a step that failed comes back to the line: the deploy is
+//            marked failed and the failure files a finding that opens, or
+//            joins, the project's problem for that step (DP9)
+digraph line_deploy {
+  graph [goal="A deploy", on_failure=stop]
+  rankdir=LR
+
+  start [shape=Mdiamond, label="Start"]
+  exit  [shape=Msquare,  label="Exit"]
+
+  // A team's CI and its eval gate take hours, not minutes (Union's gate
+  // alone runs about two); the timeouts are sized for that.
+  ci      [label="CI",       shape=parallelogram, timeout=3600,  script="cast line deploy step ci $goal --run $run_id"]
+  send    [label="Send",     shape=parallelogram, timeout=5400,  script="cast line deploy step send $goal --run $run_id"]
+  gate    [label="Gate",     shape=parallelogram, timeout=14400, script="cast line deploy step gate $goal --run $run_id"]
+  rollout [label="Roll out", shape=parallelogram, timeout=5400,  script="cast line deploy step rollout $goal --run $run_id"]
+  live    [label="Live",     shape=parallelogram, timeout=1800,  script="cast line deploy step live $goal --run $run_id"]
+  watch   [label="Watch",    shape=parallelogram, timeout=300,   script="cast line deploy watch $goal"]
+
+  returned [label="Back to the line", shape=parallelogram, timeout=300,
+    script="cast line deploy return $goal --run $run_id --note $last_error"]
+
+  start -> ci
+  ci      -> send     [condition="outcome = success"]
+  send    -> gate     [condition="outcome = success"]
+  gate    -> rollout  [condition="outcome = success"]
+  rollout -> live     [condition="outcome = success"]
+  live    -> watch    [condition="outcome = success"]
+  ci      -> returned [condition="outcome = failure", label="CI red"]
+  send    -> returned [condition="outcome = failure", label="not sent"]
+  gate    -> returned [condition="outcome = failure", label="gate refused"]
+  rollout -> returned [condition="outcome = failure", label="rollout failed"]
+  live    -> returned [condition="outcome = failure", label="not live"]
+  watch   -> exit
+  returned -> exit
+}
