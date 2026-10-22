@@ -98,7 +98,8 @@ export const footingWith = <R extends VerdictRun>(r: R, ruler: RulerOf<R>): Foot
 export const footingChange = (a: Footing, b: Footing): 'model' | 'judge' | null => (a.model !== b.model ? 'model' : a.ruler !== b.ruler ? 'judge' : null);
 
 /** The one majority rule: a freeze passes when more than half its graded reps passed (a tie is no pass). */
-export const passesByMajority = (passes: boolean[]): boolean => passes.filter(Boolean).length * 2 > passes.length;
+export const majorityOfCount = (passed: number, reps: number): boolean => passed * 2 > reps;
+export const passesByMajority = (passes: boolean[]): boolean => majorityOfCount(passes.filter(Boolean).length, passes.length);
 
 /** The one flip rule: which way a freeze's verdict moved between two sides, or null when it held. */
 export const flipDirection = (before: boolean, after: boolean): 'fixed' | 'broke' | null => (before === after ? null : after ? 'fixed' : 'broke');

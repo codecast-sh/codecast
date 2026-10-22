@@ -25,6 +25,7 @@ import {
 } from "@codecast/shared/contracts";
 import { formatJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
+import { FLOW_FENCE_LANG } from "./line/flowFence";
 import { DIFF_FENCE } from "./castDiff";
 
 /** Every gallery row's id starts with this, so a loader can replace an earlier copy. */
@@ -170,6 +171,12 @@ A line widget:
 
 \`\`\`${LINE_FENCE_LANG}
 {"widget":"step","project":"pr-12","graph":"agentwatch","step":"dissolve"}
+\`\`\`
+
+A flow from the pool:
+
+\`\`\`${FLOW_FENCE_LANG}
+{"flow":"change"}
 \`\`\`
 
 A connected app's view:
@@ -363,6 +370,7 @@ export function renderGalleryMessages(now: number): Row[] {
   sh('cast chat reply j17zg9kjy1sk58qwqgnzcecme58cdmsp "Deploy is green."', "replied");
   sh("cast publish report.html", "https://codecast.sh/a/k3j9x2m4q8");
   sh("cast diff jx7bm3n", "2 files changed");
+  sh("cast flow show change", "Change  line · shipped");
 
   section("Failures and progress");
   asst(`${LIMIT_BANNER_PREFIX} · resets 11:30pm (America/New_York)`);
