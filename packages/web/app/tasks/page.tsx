@@ -28,6 +28,7 @@ import { GenericListView, ListGroup, ItemRowState } from "../../components/Gener
 import { TaskMenuItems } from "../../components/menus/ObjectContextMenus";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { TaskRow, KanbanCard } from "../../components/tasks/TaskRow";
+import { CallListFeeder } from "../../components/tasks/TaskCallChip";
 
 // The personal space has no roster; a stable empty list keeps the memos quiet.
 const NO_MEMBERS: RosterIdentity[] = [];
@@ -50,7 +51,6 @@ import { gestureToast } from "../../store/undoStack";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
 import { CALLS_SOURCE, tasksForSource } from "../../lib/taskSource";
-import { useCallList } from "../../hooks/useSyncCalls";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { callTitle } from "../../lib/calls/roomLabels";
 import { isReadyInStore, readySig, UNBLOCKED_VIEW } from "../../lib/taskBlockers";
@@ -90,13 +90,6 @@ import {
 // The Huddles pill: every task pulled from a call, grouped by its call. It is
 // a source and a grouping rather than a status, so it has its own tab key.
 const HUDDLES_TAB = "huddles";
-
-/** Keeps the call list live while the board groups by call, so a group is
- *  named by its call even before the Calls page was ever opened. */
-function CallListSync() {
-  useCallList(200);
-  return null;
-}
 
 const callRefSig = (c: any) => `${c.title ?? ""}|${c.short_id ?? ""}|${c.started_at ?? ""}`;
 
@@ -1004,6 +997,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // so an added axis or pairing costs a descriptor rather than a memo.
   // What the Call axis names its groups by (the cached call list).
   const groupsByCall = parseTaskGroup(group).includes("call");
+  const showsCallChips = useMemo(() => filteredTasks.some((t) => !!t.from_call), [filteredTasks]);
   const callRows = useCollectionRows<any>("callList", { sig: callRefSig });
   const calls = useMemo(() => {
     const s = useInboxStore.getState();
@@ -1271,7 +1265,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
 
   return (
     <>
-    {groupsByCall && <CallListSync />}
+    {(showsCallChips || groupsByCall) && <CallListFeeder />}
     <GenericListView<TaskItem>
           banner={
             <FeatureUpsell
