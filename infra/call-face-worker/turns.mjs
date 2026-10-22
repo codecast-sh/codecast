@@ -15,9 +15,16 @@ export function nameMatchers(names) {
     .map((n) => new RegExp(`(?:^|[^\\p{L}\\p{N}])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}])`, "iu"));
 }
 
+/** Whether a turn is the voice's without hearing its words: one person is in
+ *  the call (`alone`), and it is not holding a quiet. Then it answers the
+ *  moment the person stops talking. */
+export function turnIsForVoice({ quiet, alone }) {
+  return !quiet && alone;
+}
+
 /** What to do with one finished line from the room: "answer" it, and whether
- *  it lifts a quiet. `alone` is whether one person is in the call. */
+ *  it lifts a quiet. */
 export function turnVerdict({ transcript, named, quiet, alone }) {
   if (named.some((re) => re.test(transcript))) return { answer: true, quiet: false };
-  return { answer: !quiet && alone, quiet };
+  return { answer: turnIsForVoice({ quiet, alone }), quiet };
 }
