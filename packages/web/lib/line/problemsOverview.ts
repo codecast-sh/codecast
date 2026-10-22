@@ -3,7 +3,9 @@
 // (24h, 7d, 30d) shared by the figures, the chart and the table's Findings
 // column; findings per bucket, each bar a day (or hour) a person picks to list
 // its problems; and a mark where a fix was merged or reached production. Pure.
-import { alignDown, bucketCounts, DAY, HOUR, lowerBound, neverShipped } from "./timeline";
+import { shortDay } from "@codecast/shared/contracts/causeHistory";
+import { alignDown, bucketCounts, comebackAt, DAY, HOUR, lowerBound, neverShipped, notDeployed } from "./timeline";
+import type { CauseHistory } from "./causeHistory";
 import type { LineIssue } from "./lineModel";
 import type { ProblemStand } from "./problemStatus";
 
@@ -88,6 +90,69 @@ export function buildOverview(issues: ReadonlyArray<IssueLike>, win: OverviewWin
 export function bucketAt(win: OverviewWindow, at: number | null): { from: number; to: number } | null {
   if (at == null || !Number.isFinite(at) || at < win.d0 || at >= win.d1 || (at - win.d0) % win.step !== 0) return null;
   return { from: at, to: at + win.step };
+}
+
+// ── a row's strip ────────────────────────────────────────────────────────────
+
+/** Where a row's problem stands against its newest fix: it came back after a close (red), the fix is live and nothing
+ *  came back (green), the fix is merged and no deploy carried it (amber), or no fix ever went out. */
+export type StripState = "back" | "quiet" | "unlive" | "nofix";
+/** One row's strip over the page's window: its findings per bucket (`back` of them after a close that did not hold), its
+ *  newest fix where it went live (`at` may fall before the window: the whole strip is after it then), and the closes
+ *  without a change inside the window. */
+export type RowStrip = {
+  d0: number; d1: number; step: number; n: number;
+  bars: Array<{ i: number; n: number; back: number }>;
+  max: number;
+  fix: { at: number; kind: "production" | "merged" | "unlive" } | null;
+  closes: number[];
+  state: StripState;
+};
+
+/** A strip's bucket: finer than the trend's bars, so a day's findings before and after a deploy that day fall apart. */
+const STRIP_STEP: Record<OverviewRange, number> = { "24h": HOUR, "7d": 6 * HOUR, "30d": DAY };
+
+/** The newest fix that went out (never one that only went past an unanswered card), with when it went live. */
+export function newestFix(h: Pick<CauseHistory, "ships" | "attempts" | "coverage">): RowStrip["fix"] {
+  let best: RowStrip["fix"] = null;
+  for (const s of h.ships) {
+    if (neverShipped(h.attempts.find((a) => a.runId === s.runId), s)) continue;
+    if (best && s.liveAt < best.at) continue;
+    best = { at: s.liveAt, kind: s.deploys.length ? "production" : notDeployed(s.runId, h) ? "unlive" : "merged" };
+  }
+  return best;
+}
+
+export function rowStrip(h: CauseHistory, win: OverviewWindow): RowStrip {
+  const step = STRIP_STEP[win.range];
+  const { d0, d1 } = win;
+  const n = Math.max(1, Math.round((d1 - d0) / step));
+  const times = h.occurrences.map((o) => o.at);
+  const all = bucketCounts(times, d0, d1, step);
+  const isBack = (at: number) => !!comebackAt(at, h);
+  const back = bucketCounts(h.occurrences.filter((o) => isBack(o.at)).map((o) => o.at), d0, d1, step);
+  const bars = all.flatMap((c, i) => (c ? [{ i, n: c, back: back[i] }] : []));
+  const fix = newestFix(h);
+  const closes = h.closes.filter((c) => c.kind !== "shipped" && c.at >= d0 && c.at < d1).map((c) => c.at);
+  const state: StripState = h.regressed || h.cameBack ? "back" : fix ? (fix.kind === "unlive" ? "unlive" : "quiet") : "nofix";
+  return { d0, d1, step, n, bars, max: Math.max(1, ...all), fix, closes, state };
+}
+
+/** A strip's hover line: its findings in the window, and its fix with what came after it ("Fix deployed Oct 8 · 3 since"). */
+export function stripWords(s: RowStrip, h: Pick<CauseHistory, "occurrences">, range: OverviewRange): string {
+  const inWin = s.bars.reduce((t, b) => t + b.n, 0);
+  const lead = `${inWin} ${inWin === 1 ? "finding" : "findings"} in ${range}`;
+  if (!s.fix) return s.state === "back" ? `${lead} · came back after a close` : `${lead} · no fix yet`;
+  const since = h.occurrences.filter((o) => o.at > s.fix!.at).length;
+  const verb = s.fix.kind === "production" ? "deployed" : s.fix.kind === "unlive" ? "merged, not deployed" : "merged";
+  return `${lead} · fix ${verb} ${shortDay(s.fix.at)} · ${since} since`;
+}
+
+/** What a row's strip draws, as one string: a model rebuild keeps the row while it holds. */
+export function stripSig(h: CauseHistory): string {
+  const o = h.occurrences;
+  return [o.length, o[0]?.at ?? 0, o[o.length - 1]?.at ?? 0, h.regressed ? 1 : 0, h.cameBack ? 1 : 0, h.regressions.length, h.recurrences.length,
+    h.ships.map((s) => `${s.runId}:${s.liveAt}:${s.deploys.length}`).join(","), h.closes.map((c) => `${c.kind}${c.at}`).join(",")].join(";");
 }
 
 // ── the three figures ────────────────────────────────────────────────────────

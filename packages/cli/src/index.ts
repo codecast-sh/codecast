@@ -89,8 +89,6 @@ import {
   foreignProse,
   renderFencedPlanRecord,
   renderFencedPlanTasks,
-  graphChange,
-  graphChangeText,
   isTerminalTaskStatus,
   openBlockerLabels,
   parkingLine,
@@ -7087,6 +7085,11 @@ program
     const { ConvexClient } = await import("convex/browser");
     const stateClient = new ConvexClient(config.convex_url!);
     process.on("SIGINT", () => { try { stateClient.close(); } catch {} process.exit(0); });
+    // A watch belongs to whoever started it. When that process dies we are
+    // reparented, and nothing reads us anymore; a quiet watch never writes, so
+    // EPIPE never comes. Leftover ones piled up by the dozen for days.
+    const startedUnder = process.ppid;
+    setInterval(() => { if (process.ppid !== startedUnder) { try { stateClient.close(); } catch {} process.exit(0); } }, 15_000);
 
     const narrowed = [
       ids.length ? `${ids.length} id${ids.length === 1 ? "" : "s"}` : "",
@@ -12420,12 +12423,13 @@ program
     if (success) {
       await refreshEnabledSnippets(config);
 
+      const installed = available ?? getVersion();
       if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
-        console.log(`Updated to v${available} and restarted daemon`);
+        console.log(`Updated to v${installed} and restarted daemon`);
       } else if (daemonWasRunning) {
-        console.log(`Updated to v${available}; daemon code unchanged, left it running`);
+        console.log(`Updated to v${installed}; daemon code unchanged, left it running`);
       } else {
-        console.log(`Updated to v${available}`);
+        console.log(`Updated to v${installed}`);
       }
     } else {
       process.exit(1);
@@ -14103,7 +14107,7 @@ org
   .description("Move a role or a session under another role or person")
   .argument("<subject>", "A role (or-N or @handle) or a session (id or short id)")
   .requiredOption("--to <target>", "A role (or-N or @handle) or a person (name, id, or me)")
-  .option("--note <text>", stdinText("A line the agent reads with the move (\"You now report to X. <note>\")"))
+  .option("--note <text>", stdinText("A line the agent reads with the move, after \"You now report to X\""))
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (subject: string, options: any) => {
@@ -14204,7 +14208,7 @@ org
 const orgDeps = { cliPost, readWorkspace, workspaceArgs, workspaceLabel, webUrl: () => readConfig()?.web_url || WEB_URL, callingSession, realCwd: getRealCwd };
 registerOrgInitCommands(program, orgDeps);
 registerOrgTemplateCommands(program, orgDeps);
-registerOrgRoleOpsCommands(program, { ...orgDeps, resolveRoleId, publishDeps: { getCliEndpoint, detectCurrentSessionId } });
+registerOrgRoleOpsCommands(program, { ...orgDeps, resolveRoleId });
 registerRouteCommand(program, orgDeps);
 
 // ── Team chat ────────────────────────────────────────────────────────────────
@@ -16708,27 +16712,9 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   }
   for (const l of offFrontierLines(t, t.not_ready)) console.log(`  ${c.dim}${l}${c.reset}`);
   if (t.execution_concerns) console.log(`  ${c.yellow}Concerns: ${t.execution_concerns}${c.reset}`);
-  // Linked sessions by short id — the handle `cast read` / `cast diff` take —
-  // so a task's working session is one line away, not a regex over comments.
-  if (t.sessions?.length) {
-    console.log(`\n  ${c.bold}Sessions (${t.sessions.length})${c.reset} ${c.dim}newest last · cast read <id>${c.reset}`);
-    for (const sess of t.sessions) {
-      console.log(`  ${c.cyan}${sess.short_id}${c.reset}  ${sess.title || c.dim + "(untitled)" + c.reset}`);
-    }
-  }
-  if (t.history?.length) {
-    console.log(`\n  ${c.bold}History (${t.history.length})${c.reset}`);
-    for (const h of t.history) {
-      // Graph changes in the web timeline's words (task-graph.md TG11).
-      const graph = graphChange(h);
-      const what = h.action === "created"
-        ? "created this task"
-        : graph ? graphChangeText(graph) : `${h.field}: ${h.old_value || "none"} to ${h.new_value || "none"}`;
-      const from = h.session ? ` ${c.dim}in ${h.session}${c.reset}` : "";
-      const actor = !h.actor || h.actor === "system" ? "codecast" : h.actor;
-      console.log(`  ${c.dim}${new Date(h.created_at).toLocaleString()}${c.reset}  ${actor} ${what}${from}`);
-    }
-  }
+  const show = await import("./taskShow.js");
+  for (const l of show.formatTaskSessions(t.sessions ?? [])) console.log(l);
+  for (const l of show.formatTaskHistory(t.history ?? [])) console.log(l);
   if (t.comments?.length) {
     const COMMENT_TYPE_ICONS: Record<string, string> = {
       progress: `${c.blue}↳${c.reset}`,
@@ -16748,11 +16734,10 @@ async function printTaskShow(t: any, options: any, line?: import("./taskShow.js"
   }
   // The line (the-line.md L10): decisions, runs, evidence. Empty sections are skipped.
   if (line) {
-    const { formatTaskDecisions, formatTaskRuns, formatTaskEvidence } = await import("./taskShow.js");
     const now = Date.now();
-    for (const l of formatTaskDecisions(line.decisions, t, now)) console.log(l);
-    for (const l of formatTaskRuns(line.runs, now)) console.log(l);
-    for (const l of formatTaskEvidence(line.evidence, readConfig()?.web_url || WEB_URL)) console.log(l);
+    for (const l of show.formatTaskDecisions(line.decisions, t, now)) console.log(l);
+    for (const l of show.formatTaskRuns(line.runs, now)) console.log(l);
+    for (const l of show.formatTaskEvidence(line.evidence, readConfig()?.web_url || WEB_URL)) console.log(l);
   }
   console.log();
 }
@@ -20856,15 +20841,20 @@ workflow
     // No file: a run bound to a task in a checkout with its own line runs
     // that (line-map.md LX5); else the calling session's role owns a line
     // (the-line.md L2); a session outside a role runs the shipped "line".
-    const { chooseLineSource } = await import("./repoLine.js");
+    const { chooseLineSource, lineVersionFile } = await import("./repoLine.js");
+    // A problem runs its scenario's line version (workflows.lineVersionFor); in this process, from its file here.
+    const taskRef = typeof options.task === "string" ? options.task : null;
+    const causeLine = !fileArg && taskRef
+      ? lineVersionFile((await cliPost("/cli/workflows/line-version", { task: taskRef }).catch(() => null))?.version, deviceId())
+      : null;
     const choice = chooseLineSource({
-      file: fileArg, taskBound: !!options.task, cwd: process.cwd(),
+      file: fileArg, taskBound: !!options.task, cwd: process.cwd(), causeLine,
       roleSlug: fileArg ? null : (await ownRole().catch(() => null))?.line_workflow_slug,
     });
-    const file = choice.kind === "repo" ? choice.resolved.label : choice.name;
+    const file = "resolved" in choice ? choice.resolved.label : choice.name;
     // A path on disk, or a shipped template by name (line, feature, ...),
     // else one of the caller's own pushed workflows by slug (L2).
-    let resolved = choice.kind === "repo" ? choice.resolved : resolveWorkflowSource(file);
+    let resolved = "resolved" in choice ? choice.resolved : resolveWorkflowSource(file);
     if (!resolved) {
       const own = (await cliPost("/cli/workflows/list", {}).catch(() => null))?.workflows?.find((w: any) => w.slug === file && w.source);
       if (own) resolved = { source: own.source, label: `workflow:${own.slug}` };
@@ -20947,7 +20937,7 @@ workflow
       // the-line.md L8 node fidelity: the one serializer carries definition,
       // reviewer, timeout, temperature, doc and category per node.
       const { graphToPushPayload, runRegistrationIsFatal } = await import("./workflow/runner.js");
-      const { nodes, edges, stack } = graphToPushPayload(graph);
+      const { nodes, edges, stack, serves } = graphToPushPayload(graph);
       // A graph read from a file in a checkout says where it lives, so the
       // app can edit and try its steps on this machine (line-workspace.md LW4).
       const origin = resolved.dir ? (await import("./lineGraphEdit.js")).graphOrigin(resolved.label, graph, deviceId()) : null;
@@ -20956,6 +20946,7 @@ workflow
         const pushResult = await cliPost("/cli/workflows/upsert", {
           name: graph.name, slug, goal: graph.goal, source,
           nodes, edges, stack, model_stylesheet: graph.model_stylesheet,
+          ...(serves ? { serves } : {}),
           ...(origin ? { origin } : {}),
         });
         const workflowId = pushResult?.id;
@@ -21031,8 +21022,12 @@ workflow
     // a person has answered.
     const { isMidRun, handOffRun } = await import("./workflow/runResume.js");
     const resume = isMidRun(run);
-    const { graphForDaemonRun } = await import("./workflow/daemonGraph.js");
-    const graph = graphForDaemonRun(run, wf, projectPath, deviceId(), resume);
+    const { daemonRunGraph, publishDaemonGraph } = await import("./workflow/daemonGraph.js");
+    const { graph, file: graphFile } = daemonRunGraph(run, wf, projectPath, deviceId(), resume);
+    if (graphFile) {
+      await publishDaemonGraph(graphFile, wf, deviceId(), (route, body) => cliPost(route, body, { throwOnError: true }))
+        .catch((err) => console.error(`Could not publish ${graphFile}: ${err instanceof Error ? err.message : err}`));
+    }
     if (!graph) {
       console.error(`Workflow has no nodes — cannot execute. "${run.workflow_name ?? wf.name}" is neither a pushed workflow nor a shipped template.`);
       process.exit(1);
@@ -21047,9 +21042,23 @@ workflow
     }
     // A rerun asked from the trial page proves against unfixed code (lineTrialBranch.ts).
     if (!resume && run.fresh_branch && run.task_short_id) {
-      const { freshRunBranch } = await import("./lineTrialBranch.js");
-      const fresh = await freshRunBranch(projectPath, graph, run.task_short_id);
-      console.log(`On ${fresh.branch} from ${fresh.base}${fresh.set_aside ? `; the earlier run's branch is codecast/${fresh.set_aside}` : ""}`);
+      const { freshRunBranch, runHandsVia } = await import("./lineTrialBranch.js");
+      const post = async (route: string, body: Record<string, unknown>) => (await fetch(`${siteUrl}${route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: config.auth_token, ...body }),
+      })).json();
+      try {
+        const fresh = await freshRunBranch(projectPath, graph, run.task_short_id, new Date(), runHandsVia(post));
+        console.log(`On ${fresh.branch} from ${fresh.base}${fresh.set_aside ? `; the earlier run's branch is codecast/${fresh.set_aside}` : ""}`);
+      } catch (err) {
+        // Refused (an earlier run's hand still works in the worktree): the run
+        // ends here with why, rather than waiting as pending with no runner.
+        const why = err instanceof Error ? err.message : String(err);
+        console.error(why);
+        await post("/cli/workflow-runs/progress", { run_id: runId, current_node_id: "start", node_id: "start", node_status: "failed", run_status: "failed", fail_reason: why.slice(0, 1500) }).catch(() => {});
+        process.exit(1);
+      }
     }
     const { runWorkflow, stopRunOnSignals } = await import("./workflow/runner.js");
     const runOpts = {
@@ -21100,10 +21109,30 @@ workflow
   });
 
 workflow
+  .command("reask <task>")
+  .description("Ask a line run's decision again on the stations as they are now: the run picks up at the station that presents the decision (the one its gate names as asker), which posts its own question, and the old decision is withdrawn. For a run waiting on a decision, or one that failed while standing at it. Run it on the machine that holds the run")
+  .option("--at <node>", "Pick the run up at this station instead (needed when the gate it waits at is gone from the graph)")
+  .option("--json", "Machine-readable output")
+  .action(async (task: string, options: { at?: string; json?: boolean }) => {
+    const fail = (message: string): never => { console.error(message); process.exit(2); };
+    const listed = await cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1 });
+    const row = Array.isArray(listed?.runs) ? listed.runs[0] : null;
+    if (!row) fail(`${task} has no run`);
+    if (row.runner_device && row.runner_device !== deviceId()) fail(`${task}'s run lives on another machine (${row.runner_device}): ask it again there, so its runner is stopped and its station reads that machine's work`);
+    // The server's refusals first (a closed or trial problem, a run not at a decision), so a runner is stopped only for a run that will move.
+    await cliPost("/cli/workflow-runs/reask", { run_id: row._id, check: true });
+    const { prepareReask } = await import("./workflow/reask.js");
+    const plan = await prepareReask({ getCliEndpoint, detectCurrentSessionId }, row._id, task, options.at).catch((e: Error) => fail(e.message));
+    const r = await cliPost("/cli/workflow-runs/reask", { run_id: row._id, ...(options.at ? { at: options.at } : {}), ...(plan.asker ? { asker: plan.asker } : {}) });
+    if (options.json) { printJson(r); return; }
+    console.log(`${task}: asked again from ${r.resumed_at}${r.replaced ? `; ${r.replaced} is withdrawn` : ""} (run ${r.run_id}).`);
+  });
+
+workflow
   .command("validate <file>")
   .description("Validate a workflow file (or a shipped template by name) without running it")
   .action(async (file: string) => {
-    const { parseWorkflowSource, validateWorkflow } = await import("./workflow/parser.js");
+    const { graphDiff, graphExtends, parseWorkflowFile, parseWorkflowSource, validateWorkflow } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
 
     const resolved = resolveWorkflowSource(file);
@@ -21112,12 +21141,25 @@ workflow
       process.exit(1);
     }
 
-    const graph = parseWorkflowSource(resolved.source, resolved.dir);
+    let graph: ReturnType<typeof parseWorkflowSource>;
+    try {
+      graph = parseWorkflowSource(resolved.source, resolved.dir);
+    } catch (err) {
+      console.error(`  ✗ ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
     const errors = validateWorkflow(graph);
 
     console.log(`Workflow: ${graph.name}`);
     if (graph.goal) console.log(`Goal: ${graph.goal}`);
     console.log(`Nodes: ${graph.nodes.size}, Edges: ${graph.edges.length}`);
+    // A variant: the base it is read on top of, and what it does differently.
+    const ext = resolved.dir ? graphExtends(resolved.source) : undefined;
+    if (ext) {
+      const d = graphDiff(parseWorkflowFile(path.resolve(resolved.dir!, ext)), graph);
+      console.log(`Extends: ${ext}`);
+      for (const [k, ids] of Object.entries(d)) if (ids.length) console.log(`  ${k.padEnd(8)} ${ids.join(", ")}`);
+    }
     console.log();
 
     for (const [id, node] of graph.nodes) {
@@ -21263,7 +21305,7 @@ workflow
     // the-line.md L8 node fidelity: the same serializer `cast workflow run`
     // pushes with, so a daemon run of this graph matches a local run.
     const { graphToPushPayload } = await import("./workflow/runner.js");
-    const { nodes, edges, stack } = graphToPushPayload(graph);
+    const { nodes, edges, stack, serves } = graphToPushPayload(graph);
     // Where the graph lives, so the app can edit and try its steps here (line-workspace.md LW4).
     const origin = (await import("./lineGraphEdit.js")).graphOrigin(filePath, graph, deviceId());
 
@@ -21279,6 +21321,7 @@ workflow
         nodes,
         edges,
         stack,
+        ...(serves ? { serves } : {}),
         model_stylesheet: graph.model_stylesheet,
         ...(origin ? { origin } : {}),
       }),
@@ -21398,7 +21441,7 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
   // if the new executable carries different daemon code.
   const daemonWasRunning = getDaemonPid() !== null;
 
-  console.log(`\nAuto-updating to v${available}...`);
+  console.error(`\nAuto-updating to v${available}...`);
   autoUpdateInstalling = true;
   const { success } = await performUpdate();
   if (success) {
@@ -21410,9 +21453,9 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
     }
 
     if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
-      console.log(`Updated to v${available} and restarted daemon.\n`);
+      console.error(`Updated to v${available} and restarted daemon.\n`);
     } else {
-      console.log(`Updated to v${available}.\n`);
+      console.error(`Updated to v${available}.\n`);
     }
   } else {
     recordUpdateFailure(available);

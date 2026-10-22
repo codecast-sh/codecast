@@ -652,8 +652,10 @@ export function ConversationMetadata({
         </div>
       )}
       {/* The hosted assistant's plan picks its model, and it has no machine
-          to move or local agent to switch to: nothing for this control. */}
-      {!isHostedAgentType(resolvedAgent) && (
+          to move or local agent to switch to: nothing for this control. An
+          owner's blank session picks its agent and model in the composer
+          foot (NewSessionView), so the header leaves it there. */}
+      {!isHostedAgentType(resolvedAgent) && !(canEditModel && !messageCount) && (
         <HeaderModelControl
           conversationId={conversationId}
           agentType={resolvedAgent}

@@ -129,6 +129,9 @@ export function createCodecastUpdater(overrides: Partial<UpdaterConfig> = {}): U
     manifestSigning: RELEASE_MANIFEST_SIGNING,
     download: makeCurlDownload(),
     verifyPlatformSignature: makeDarwinSignatureCheck(),
+    // Update chatter is not a command's output: on stdout it lands in front of
+    // `--json` replies and breaks every program that parses them.
+    log: (line) => console.error(line),
     ...overrides,
   });
 }
