@@ -41,7 +41,7 @@ const realMissingRow = await import("../../../hooks/useMissingSessionRow");
 mock.module("../../../hooks/useMissingSessionRow", () => ({ ...realMissingRow, useMissingSessionRow: () => null }));
 
 const realChatSync = await import("../../../hooks/useChatSync");
-mock.module("../../../hooks/useChatSync", () => ({ ...realChatSync, useChannelMessagesSync: () => ({}) }));
+mock.module("../../../hooks/useChatSync", () => ({ ...realChatSync, useChannelMessagesSync: () => ({}), useThreadSync: () => ({ loading: false, unavailable: false }) }));
 
 // Where the card sent the reader in chat.
 const openedChat: string[] = [];
@@ -418,6 +418,39 @@ describe("a face opens one card", () => {
       openedChat.length = 0;
       await h.click(seps[0]);
       expect(openedChat).toEqual([`/chat/${TEAM}?m=t1`]);
+    } finally {
+      off();
+      faceChat.__resetFaceChat();
+    }
+  });
+
+  test("the card shows my own lines where they spoke, though I sent them from elsewhere", async () => {
+    const TEAM = "chatchannels:team";
+    const now = Date.now();
+    useInboxStore.setState({
+      chatChannels: { [TEAM]: { _id: TEAM, kind: "channel", name: "team" } },
+      chatMessages: {
+        old: { _id: "old", channel_id: TEAM, user_id: ME, content: "from this morning", created_at: now - 6 * 3600_000 },
+        a1: { _id: "a1", channel_id: TEAM, user_id: ANN, content: "it's the team login", created_at: now - 600_000 },
+        m1: { _id: "m1", channel_id: TEAM, user_id: ME, content: "nope thats not it", created_at: now - 300_000 },
+        a2: { _id: "a2", channel_id: TEAM, user_id: ANN, content: "will find it", created_at: now - 60_000 },
+      },
+      chatReads: {},
+    } as any);
+    const off = faceChat.registerFaceChatLayer({ canShow: () => true } as any);
+    for (const [id, at] of [["a1", now - 600_000], ["a2", now - 60_000]] as const) {
+      faceChat.deliverChatToFace(ANN, { messageId: id, channelId: TEAM, channelName: "team", isDm: false, preview: "…", at, loud: false, count: 1 }, () => {});
+    }
+    try {
+      const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+      await h.click(h.circle(ANN));
+      const read = () => h.all(".fc-row").map((r) => [r.dataset.me ? "me" : "them", r.querySelector(".fc-text")?.textContent]);
+      expect(read()).toEqual([
+        ["them", "it's the team login"],
+        ["me", "nope thats not it"],
+        ["them", "will find it"],
+      ]);
+      expect(h.q<HTMLInputElement>(".fc-reply input")!.placeholder).toBe("Reply in #team…");
     } finally {
       off();
       faceChat.__resetFaceChat();
