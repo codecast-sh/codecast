@@ -86,6 +86,10 @@ export type PendingEntry = {
   // was purged for, so a rejoin can lift exactly those (the rows are gone, so
   // nothing else can name them).
   scope?: string;
+  // An exclude a scoped prune planted (pruneAbsentScope): the server's word at
+  // one moment that the row was gone. A later push that carries the row is the
+  // server's newer word, and lifts it.
+  pruned?: true;
 };
 
 export type OutboxEntry = {

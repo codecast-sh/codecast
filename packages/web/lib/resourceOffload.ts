@@ -1,6 +1,7 @@
 import { sustainedResourcePressure, evaluateOffloadRequirements, type HostReadiness, type CloudHostReport, type ResourcePoint } from "@codecast/shared/contracts";
 import { freshness, memoryUsed } from "../components/resources/resourceModel";
-import type { OffloadPlan, OffloadCandidate, ResourceMachine, ResourceSession } from "../components/resources/types";
+import type { OffloadPlan, OffloadCandidate, OffloadRehearsal, ResourceMachine, ResourceSession } from "../components/resources/types";
+import type { MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
 import { eligibilityFor, type MigrationCandidate, type MigrationDevice } from "./migrationPlan";
 
 export type OffloadDeviceEvidence = MigrationDevice & { platform?: string; host_readiness?: HostReadiness; cloud_host?: CloudHostReport };
@@ -242,5 +243,39 @@ export function holdPlan(held: OffloadPlan, live: OffloadPlan): OffloadPlan {
       return { ...c, perDestination: Object.fromEntries(Object.entries(c.perDestination).map(([id, r]) => [id, { ...r, ...gone }])) };
     }),
     staying: held.staying.map((s) => staying.get(s.sessionId) ?? s),
+  };
+}
+
+/** One rehearsal row as the review's feed carries it (convex/moveRehearsals.ts listMine). */
+export type RehearsalRow = { _id: string; session_id: string; destination_id: string; status: "pending" | "done" | "failed"; result: MoveRehearsal | null; error: string | null; created_at: number };
+
+/**
+ * Overlay the newest rehearsal of each session's move to each destination.
+ * What it found would fail the transfer blocks that destination; the rest
+ * rides on the destination for the review to show and the person to weigh.
+ */
+export function applyRehearsals(plan: OffloadPlan, rows: RehearsalRow[]): OffloadPlan {
+  if (!rows.length) return plan;
+  const newest = new Map<string, RehearsalRow>();
+  for (const r of rows) {
+    const key = `${r.session_id}:${r.destination_id}`;
+    if ((newest.get(key)?.created_at ?? -1) < r.created_at) newest.set(key, r);
+  }
+  return {
+    ...plan,
+    candidates: plan.candidates.map((c) => {
+      let changed = false;
+      const perDestination = { ...c.perDestination };
+      for (const [dest, was] of Object.entries(c.perDestination)) {
+        const r = newest.get(`${c.sessionId}:${dest}`);
+        if (!r) continue;
+        changed = true;
+        const rehearsal: OffloadRehearsal = r.status === "done" && r.result ? { status: "done", result: r.result }
+          : r.status === "pending" ? { status: "pending" } : { status: "failed", error: r.error ?? "The rehearsal did not finish" };
+        const blockers = rehearsal.status === "done" ? [...new Set([...was.blockers, ...rehearsal.result.blockers])] : was.blockers;
+        perDestination[dest] = { ...was, rehearsal, blockers, readiness: blockers.length ? "blocked" : was.readiness };
+      }
+      return changed ? { ...c, perDestination } : c;
+    }),
   };
 }

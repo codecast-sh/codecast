@@ -6228,6 +6228,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   sessionMetricsAggregate: Array<{ collected_at: number; cpu: number; memory: number; pid_count: number }> | null;
   migrationCandidates: import("../lib/migrationPlan").MigrationCandidate[] | null;
   migrationBatches: import("../lib/migrationPlan").MigrationBatch[] | null;
+  moveRehearsals: import("../lib/resourceOffload").RehearsalRow[] | null;
   // Trigger verbs. Local-first: flip the agent_tasks row on the draft, ride a
   // named dispatch side effect to the real mutation.
   triggerAction: (
@@ -6610,7 +6611,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   relateTasks: (shortId: string, other: string) => Promise<any>;
   unrelateTasks: (shortId: string, other: string) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; status_id?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string; parent?: string; client_key?: string; from_call?: string }) => Promise<any>;
-  clearTombstones: (table: "savedViews" | "signals") => void;
+  clearTombstones: (table: "savedViews" | "signals" | "sessionDecisions") => void;
   removeTaskStub: (clientKey: string) => void;
   createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[]; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
@@ -9447,6 +9448,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   sessionMetricsAggregate: null,
   migrationCandidates: null,
   migrationBatches: null,
+  moveRehearsals: null,
 
   // Trigger verbs mirror the server's applyPause/Resume/RunNow/Cancel/
   // Reactivate on the draft; the same-named dispatch side effects run them.
@@ -13180,7 +13182,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // becomes a no-op for everyone else.
   // The same repair for signals: a short-lived dev build pruned them with
   // pruneAbsentScope too, and nothing else tombstones that table.
-  clearTombstones: sync(function (this: Draft, table: "savedViews" | "signals") {
+  // And for sessionDecisions: a queue answer that wrongly left out open line
+  // cards pruned them for good before a prune's exclude yielded to a later
+  // push (useSyncSessionDecisions).
+  clearTombstones: sync(function (this: Draft, table: "savedViews" | "signals" | "sessionDecisions") {
     for (const key of Object.keys(this.pending)) {
       if (key.startsWith(`${table}:`)) delete (this.pending as any)[key];
     }

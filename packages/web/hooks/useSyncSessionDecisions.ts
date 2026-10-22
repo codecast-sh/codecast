@@ -4,6 +4,7 @@ import { useInboxStore, type SessionDecisionItem } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useSyncCollection } from "./useSyncCollection";
+import { useWatchEffect } from "./useWatchEffect";
 
 const api = _api as any;
 
@@ -20,6 +21,11 @@ const QUEUE_SYNC = { isDelta: true, pruneAbsentScope: (r: SessionDecisionItem) =
 // useQueryNoThrow because the queue only enriches the inbox — the app must
 // keep rendering if the function is missing (deploy gap) or errors.
 export function useSyncSessionDecisions() {
+  // One-time repair: before a prune's exclude yielded to a later push (platform engine `pruned`), a queue answer that
+  // wrongly left out open line cards (superseded by a presenter prompt change, 2026-10-20) hid them from the Line's
+  // decision inbox for good. Only this table's prunes tombstone it, and a cleared one brings a row back only when a
+  // feed sends it again, so clearing them is safe; afterwards each prune's exclude carries `pruned` and needs none.
+  useWatchEffect(() => { useInboxStore.getState().clearTombstones("sessionDecisions"); }, []);
   const { data: result } = useQueryNoThrow(api.sessionDecisions.listForUser, {});
   const syncTable = useInboxStore((s) => s.syncTable);
 

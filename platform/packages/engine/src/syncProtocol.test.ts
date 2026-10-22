@@ -326,9 +326,24 @@ describe("pruneAbsentScope", () => {
       pruneAbsentScope: inScope,
     });
     expect(table.b).toBeUndefined();
-    expect(pending["items:b"]).toEqual({ type: "exclude", ts: expect.any(Number) } as any);
+    expect(pending["items:b"]).toEqual({ type: "exclude", ts: expect.any(Number), pruned: true } as any);
     // Out-of-scope rows keep the normal delta behavior.
     expect(table.c).toBe(prev.c);
+  });
+
+  it("a pruned row a later push carries again comes back, from this feed or another", () => {
+    const first = applySyncTable("items", [row("a", { status: "in" })], {}, prev, { isDelta: true, pruneAbsentScope: inScope });
+    expect(first.table.b).toBeUndefined();
+    // Another feed (plain delta, no scope) sends b: the prune's word is older than this one.
+    const back = applySyncTable("items", [row("b", { status: "in" })], first.pending, first.table, { isDelta: true });
+    expect(back.table.b).toEqual(row("b", { status: "in" }));
+    expect(back.pending["items:b"]).toBeUndefined();
+  });
+
+  it("an exclude a person's delete planted still holds against a push that carries the row", () => {
+    const pending: Record<string, PendingEntry> = { "items:b": { type: "exclude", ts: 1 } };
+    const { table } = applySyncTable("items", [row("b", { status: "in" })], pending, prev, { isDelta: true });
+    expect(table.b).toBeUndefined();
   });
 
   it("never prunes a row with local pending state", () => {
