@@ -11,6 +11,7 @@ import { hashToken } from "./apiTokens";
 import { GROUND_FIELDS, GROUND_PURPOSE } from "@codecast/shared/contracts/goalsBrief";
 import { HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { admissionWait, cardLoadFor, lineCandidates, personCardLoad } from "./orgLine";
+import { setBudgetCap } from "./lib/teamBudget";
 
 setDefaultTimeout(60_000);
 
@@ -51,6 +52,7 @@ async function setup() {
   "./syncOutbox.ts": () => import("./syncOutbox"),
     "./signals.ts": () => import("./signals"),
     "./lineGround.ts": () => import("./lineGround"),
+    "./modelCalls.ts": () => import("./modelCalls"),
   });
   const ids = await t.run(async (ctx) => {
     const person = await ctx.db.insert("users", { name: "Founder" } as any);
@@ -58,6 +60,8 @@ async function setup() {
     const team = await ctx.db.insert("teams", { name: "Acme", features: { org: true } } as any);
     await ctx.db.insert("team_memberships", { user_id: person, team_id: team, role: "admin", joined_at: T0 } as any);
     const workspace = `team:${team}`;
+    // Ground spends from the workspace's model budget, which is off until a person sets a cap.
+    await setBudgetCap(ctx, workspace, team, 100, person, Date.now());
     const project = (short_id: string, title: string, goal: string) =>
       ctx.db.insert("projects", { user_id: person, team_id: team, workspace, short_id, title, goal, status: "active", created_at: T0, updated_at: T0 } as any);
     const checkout = await project("pr-1", "Checkout", "Every cart that reaches checkout becomes an order");
@@ -146,6 +150,28 @@ describe("lineGround.sweep (LE5)", () => {
     const before = stub.state.calls.length;
     await sweep();
     expect(stub.state.calls.length).toBe(before);
+  });
+
+  test("each call is charged to the workspace's budget and the cause's project, and a full cap leaves the cause for a later pass", async () => {
+    const { add, task, sweep, t, workspace, team, person, checkout } = await setup();
+    const filed = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", project: "pr-1" });
+    stub.state.replies.push(ground({ goal_ref: "pr-1" }));
+    expect(await sweep()).toMatchObject({ grounded: 1 });
+    const { budget, spend } = await t.run(async (ctx) => ({
+      budget: await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).first(),
+      spend: await ctx.db.query("model_spend_hours").collect(),
+    }));
+    expect(budget!.by_purpose.grouping).toBeGreaterThan(0);
+    expect(budget!.held_usd).toBe(0);
+    expect(spend.map((r: any) => r.project_id)).toEqual([checkout]);
+
+    const next = await add({ fingerprint: "err-2", title: "Checkout drops the coupon", project: "pr-1" });
+    await t.run(async (ctx) => setBudgetCap(ctx, workspace, team, 0, person, Date.now()));
+    const before = stub.state.calls.length;
+    expect(await sweep()).toMatchObject({ grounded: 0, unbudgeted: 1 });
+    expect(stub.state.calls.length).toBe(before);
+    expect((await task(next.task_id)).readiness).toBeUndefined();
+    expect((await task(filed.task_id)).readiness).toBe("ready");
   });
 
   test("no reply at all leaves the cause untouched for the next pass", async () => {

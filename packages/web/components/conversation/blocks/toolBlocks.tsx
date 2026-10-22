@@ -256,7 +256,12 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
 // the same card language as DynamicRunCard, and resolve the live run by its wf_ id so
 // the card shows real status/progress instead of the raw blob.
 
-export function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
+/** What the session that ran a workflow is asked: make its shape a flow of the pool, its prompts free of this one task. */
+export function addToFlowsMessage(name: string, runId: string): string {
+  return `Add the ${name} workflow you ran (${runId}) to the pool of flows: \`cast flow import ${runId}\`, then rewrite the prompts it writes so they name no single task, and check it with \`cast flow validate\`. Tell me what the flow does and when to use it.`;
+}
+
+export function WorkflowToolBlock({ tool, result, conversationId }: { tool: ToolCall; result?: ToolResult; conversationId?: string | null }) {
   const [expanded, setExpanded] = useState(false);
 
   let parsedInput: Record<string, unknown> = {};
@@ -382,7 +387,19 @@ export function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: T
               </div>
             </div>
           )}
-          <div className={`border-t ${frame.divider} px-3 py-1.5 flex justify-end`}>
+          <div className={`border-t ${frame.divider} px-3 py-1.5 flex justify-end items-center gap-3`}>
+            {/* A finished run's shape can join the pool of flows (flows.md FL5): the session that ran it imports it,
+                since it knows which of its prompts' words were this task's. */}
+            {conversationId && externalRunId && run?.status === "completed" && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); useInboxStore.getState().sendMessage(String(conversationId), addToFlowsMessage(name, externalRunId)); }}
+                className="text-[10px] text-sol-blue hover:underline underline-offset-2"
+                data-add-to-flows={externalRunId}
+              >
+                add to flows
+              </button>
+            )}
             <Link
               href="/workflows"
               onClick={(e) => e.stopPropagation()}
