@@ -288,11 +288,10 @@ test("Adjust opens the field with no verdict; the first keystroke mounts the ban
   m.done();
 });
 
-test("the band's words per verdict, a retry, and an approval that leaves the sessions where they are", () => {
+test("the band's words per verdict, and an approval that leaves the sessions where they are", () => {
   const root = createRoot(document.getElementById("root")!);
   const bands = [
     h(StagedBand, { key: "a", answer: { verdict: "approve" }, onUndo() {} }),
-    h(StagedBand, { key: "b", answer: { verdict: "approve" }, retry: true, onUndo() {} }),
     h(StagedBand, { key: "c", answer: { verdict: "approve", leave_sessions: true }, onUndo() {} }),
     h(StagedBand, { key: "d", answer: { verdict: "reject" }, onUndo() {} }),
     h(StagedBand, { key: "e", answer: { verdict: "note", text: "x" }, onUndo() {} }),
@@ -300,15 +299,14 @@ test("the band's words per verdict, a retry, and an approval that leaves the ses
   React.act(() => root.render(h("div", null, bands)));
   expect(qa("[data-staged]").map((b) => [b.getAttribute("data-staged"), b.textContent])).toEqual([
     ["approve", "Accepted. Applies when you send.Undo"],
-    ["approve", "Retry. Runs again when you send.Undo"],
     ["approve", "Accepted, and the sessions stay where they are. Applies when you send.Undo"],
     ["reject", "Rejected. Sent when you send.Undo"],
     ["note", "Adjust. Your words go back when you send.Undo"],
   ]);
   // The first word carries the verdict's ink; the rest is quiet.
-  expect(qa("[data-staged] b").map((b) => b.textContent)).toEqual(["Accepted.", "Retry.", "Accepted,", "Rejected.", "Adjust."]);
-  expect(qa("[data-staged]")[3].querySelector("b")!.className).toContain("--ink-red");
-  expect(qa("[data-staged] svg").length).toBe(4);
+  expect(qa("[data-staged] b").map((b) => b.textContent)).toEqual(["Accepted.", "Accepted,", "Rejected.", "Adjust."]);
+  expect(qa("[data-staged]")[2].querySelector("b")!.className).toContain("--ink-red");
+  expect(qa("[data-staged] svg").length).toBe(3);
   React.act(() => root.unmount());
 });
 
@@ -444,7 +442,7 @@ test("a new role with what rides along is one entry whose members are the card's
   m.done();
 });
 
-test("a failed entry: the note under the sentence, a red number, Retry in Accept's place; staged, the band says it runs again", () => {
+test("a failed entry: the note under the sentence, a red number, and Adjust alone, since as written it fails the same way", () => {
   const failed = { ...RAISE, status: "failed" as const, applied_note: "The project was renamed while this waited." };
   const card = cardOf([FIRST, failed], "Private Network");
   const m = mount({ card, ordinal: 4, onAnswer });
@@ -453,18 +451,16 @@ test("a failed entry: the note under the sentence, a red number, Retry in Accept
   expect(q("[data-subject-ordinal]").className).toContain("--ink-red");
   // A failed apply wrote nothing, so the field still reads the live record.
   expect(field("priority").getAttribute("data-field-before")).toBe("P2");
-  // Retry is an approve answer like any other: the filled green face.
-  expect(q("[data-subject-approve]").textContent).toBe("Retry");
-  expect(q("[data-subject-approve]").className).toContain("cc-btn-green");
-  click(q("[data-subject-approve]"));
-  expect(sent.splice(0)).toEqual([APPROVE]);
-  // A failed entry can still be adjusted or rejected: Reject waits in the Adjust field.
+  // No Accept and no Retry: the author's revise puts it back to decide.
+  expect(q("[data-subject-approve]")).toBeNull();
+  // It can still be adjusted or rejected: Reject waits in the Adjust field.
   expect(q("[data-subject-reject]")).toBeNull();
   click(q("[data-subject-reply]"));
   expect(q("[data-subject-reply-field] [data-subject-reject]")).not.toBeNull();
   key(fieldOf()!, "Escape");
-  m.update({ card, ordinal: 4, onAnswer, answer: APPROVE });
-  expect(band()!.textContent).toBe("Retry. Runs again when you send.Undo");
+  // Amended by its author, it is proposed again and Accept is back.
+  m.update({ card: cardOf([FIRST, { ...RAISE, revision: { kind: "amended", note: "Renamed project.", at: 12 } }], "Private Network"), ordinal: 4, onAnswer });
+  expect(q("[data-subject-approve]").textContent).toBe("Accept");
   m.done();
 });
 
@@ -522,10 +518,18 @@ test("rejected and noted after the send: the stored words under the entry, and a
   const noted = mount({ card: notedCard, ordinal: 4, onAnswer });
   expect(q("[data-subject]").getAttribute("data-subject-status")).toBe("proposed");
   expect(q("[data-subject-you]").textContent).toBe("You: Cameron owns this, not Samvit.");
-  expect(q("[data-subject-noted]").textContent).toBe("Noted, waiting for a revision");
+  expect(q("[data-subject-noted]").textContent).toBe("Sent, waiting for a reply");
   expect(q("[data-subject-approve]").textContent).toBe("Accept");
   click(q("[data-subject-you]"));
   expect(fieldOf()).not.toBeNull();
+  // The author's answer, once it came, stands under the words in its place.
+  noted.update({ card: cardOf([FIRST, { ...RAISE, reply: { verdict: "note", text: "Cameron owns this, not Samvit.", at: 9, by: "u1" }, answer: { text: "Samvit runs it day to day; Cameron signs off.", at: 11 } }], "Private Network"), ordinal: 4, onAnswer, author: "Head of People" });
+  expect(q("[data-subject-noted]")).toBeNull();
+  expect(q("[data-subject-answer-text]").textContent).toBe("Head of People: Samvit runs it day to day; Cameron signs off.");
+  // New words after the answer: waiting again, by name.
+  noted.update({ card: cardOf([FIRST, { ...RAISE, reply: { verdict: "note", text: "Then say so.", at: 13 }, answer: { text: "Samvit runs it day to day.", at: 11 } }], "Private Network"), ordinal: 4, onAnswer, author: "Head of People" });
+  expect(q("[data-subject-answer-text]")).toBeNull();
+  expect(q("[data-subject-noted]").textContent).toBe("Sent to Head of People, waiting for a reply");
   // Read only, the gutter says Noted.
   noted.update({ card: notedCard, ordinal: 4 });
   expect(q("[data-subject-verdicts]").textContent).toBe("Noted");
@@ -556,20 +560,20 @@ test("mounted already decided an entry is settled: an approved one keeps its fie
   React.act(() => root.unmount());
 });
 
-test("changes that ended differently: each group carries its own word or its own Adjust and Retry, and its own words", () => {
+test("changes that ended differently: each group carries its own word or its own Adjust, and its own words", () => {
   const card = cardOf([G1, { ...G9, status: "applied", reply: { verdict: "approve", text: "Good.", at: 3 } }, { ...G10, status: "failed", applied_note: "Agent Quality was archived while this waited." }], "Proud relationships");
   const m = mount({ card, ordinal: 9, onAnswer });
   expect(q("[data-subject-verdicts]").textContent).toBe("1 of 2 accepted, 1 failed");
   expect(qa("[data-subject-group]").map((g) => g.getAttribute("data-subject-group"))).toEqual(["9", "10"]);
-  expect(qa("[data-subject-group-state]").map((g) => [g.getAttribute("data-subject-group-state"), g.textContent])).toEqual([["applied", "Applied"], ["failed", "AdjustRetry"]]);
+  expect(qa("[data-subject-group-state]").map((g) => [g.getAttribute("data-subject-group-state"), g.textContent])).toEqual([["applied", "Applied"], ["failed", "Adjust"]]);
   expect(qa("[data-subject-you]").map((y) => y.textContent)).toEqual(["You: Good."]);
   const [first, second] = qa("[data-subject-group]");
   expect(first.querySelector("[data-failed-note]")).toBeNull();
   expect(second.querySelector("[data-failed-note]")!.textContent).toBe("Failed: Agent Quality was archived while this waited.");
   // The answer is the card's: one answer per card, whichever group's control was pressed; staged, the band stands for all of it.
-  click(q("[data-subject-group-state='failed'] [data-subject-approve]"));
-  expect(sent.splice(0)).toEqual([APPROVE]);
-  m.update({ card, ordinal: 9, onAnswer, answer: APPROVE });
+  expect(q("[data-subject-group-state='failed'] [data-subject-approve]")).toBeNull();
+  const NOTE = { verdict: "note" as const, text: "why archived?" };
+  m.update({ card, ordinal: 9, onAnswer, answer: NOTE });
   expect(qa("[data-staged]").length).toBe(1);
   expect(q("[data-subject-approve]")).toBeNull();
   m.done();
