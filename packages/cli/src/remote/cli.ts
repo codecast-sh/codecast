@@ -97,9 +97,12 @@ function parseJson(out: string): { result?: string; session_id?: string } {
   try { return JSON.parse(out); } catch { return { result: out.slice(0, 200) }; }
 }
 
+/** What a move that copied a folder as files can say: outside a repository, or in one with no commit yet, git has nothing to compare. */
+export const FOLDER_COPY_VERIFICATION = "copied as files with rsync (no git commit to verify against); files git ignores stay where they were";
+
 /** One line stating what the transfer verification proved (or couldn't). */
 export function describeVerification(v: SyncVerification | undefined): string {
-  if (!v) return "no git verification available (non-git directory, synced via rsync)";
+  if (!v) return FOLDER_COPY_VERIFICATION;
   if (!v.headsMatch) {
     return `WARNING: destination HEAD ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} does not match source ${v.localHead.slice(0, 8)} on branch ${v.branch} — the transfer may be incomplete`;
   }
