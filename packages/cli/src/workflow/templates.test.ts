@@ -126,7 +126,7 @@ describe("line.cast template", () => {
       "task_id", "task_title", "task_description", "acceptance_criteria", "task_status", "execution_status",
       "review_verdict", "review_note", "handoff", "handoff_note", "goal_ref", "category", "risk", "readiness", "readiness_note",
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
-      "run_dir", "cause_history", "last_error", ...Object.keys(EMPTY_VARS),
+      "run_dir", "cause_history", "last_error", "sent_back", ...Object.keys(EMPTY_VARS),
     ]);
     const nodeVar = /^(\w+)\.(output|outcome|json(\.\w+)*)$/;
     const texts = [graph.stack!, ...[...graph.nodes.values()].flatMap((n) => [n.prompt, n.script, n.doc, n.card])].filter(Boolean) as string[];
@@ -716,7 +716,10 @@ describe("line.cast offline run through the session path", () => {
         out = { ok: true, status: pinnedStatus[stationOf[body.session]] ?? "done", state: pinned[stationOf[body.session]] ?? null };
       } else if (route === "/cli/workflow-runs/poll-gate") {
         out = { status: "paused", gate_response: gateAnswers.shift() ?? null };
-      } else if (route === "/cli/work/update" || route === "/cli/work/comment" || route === "/cli/decide") out = { success: true, id: "sd-1" };
+      } else if (route === "/cli/work/update" || route === "/cli/work/comment" || route === "/cli/decide") {
+        if (route === "/cli/work/update" && body.status) task = { ...task, status: body.status };
+        out = { success: true, id: "sd-1" };
+      }
       return new Response(JSON.stringify(out), { status: 200 });
     }) as typeof fetch;
   });
@@ -999,11 +1002,12 @@ describe("line.cast offline run through the session path", () => {
       .toBe("Stopped: No record says which billing provider the new plan uses.");
   }, 30000);
 
-  test("a hand that ends with no handoff returns the task to open", async () => {
+  test("a hand that ends with no handoff is asked for one once, then returns the task to open", async () => {
     effects.implement = () => { task = { ...task, status: "in_progress", execution_status: undefined }; };
-    const outcome = await runWorkflow(offlineLine(tmpDir), opts());
+    const outcome = await runWorkflow(offlineLine(tmpDir), opts({ handoffAskGraceMs: 20 }));
     expect(outcome).toBe("failed");
     expect(stations()).toEqual(["ground", "analyze", "prove", "implement"]);
+    expect(calls.filter((c) => c.route === "/cli/messages/send").map((c) => c.body.to)).toEqual(["conv_4"]);
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
   }, 30000);
 
@@ -1027,7 +1031,8 @@ describe("line.cast offline run through the session path", () => {
     expect(outcome).toBe("failed");
     expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "implement", "implement"]);
     expect(calls.some((c) => c.route === "/cli/decide")).toBe(false);
-    expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
+    // Each round back at Implement reopens the work; the run's end leaves it open.
+    expect(calls.filter((c) => c.route === "/cli/work/update").map((c) => c.body.status)).toEqual(["in_progress", "in_progress", "open"]);
     const blocker = calls.find((c) => c.route === "/cli/work/comment")?.body;
     expect(blocker?.comment_type).toBe("blocker");
     expect(blocker?.text).toContain("ran the most rounds this line allows");

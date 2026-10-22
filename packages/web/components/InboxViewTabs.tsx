@@ -19,7 +19,8 @@ const VIEW_OPTIONS: Record<InboxViewMode, Omit<ViewOption, "key">> = {
 };
 
 // The inbox's grouping as a row of tabs under the rail header: the current
-// grouping is named, every other one is a click away. When the rail is too
+// grouping is named, every other one is a click away, and the tabs share the
+// row's width evenly. When the rail is too
 // narrow for every name, the other tabs fold to their icons (named on hover)
 // and only the current one keeps its word.
 export function InboxViewTabs({ value, onChange, hasLabels, hasPlans, orgLenses = [], hasTriggers }: {
@@ -87,8 +88,8 @@ export function InboxViewTabs({ value, onChange, hasLabels, hasPlans, orgLenses 
               aria-label={`By ${option.label.toLowerCase()}`}
               tabIndex={active ? 0 : -1}
               onClick={() => onChange(option.key)}
-              className={`flex items-center gap-1 h-[22px] rounded-[5px] text-[10px] font-medium whitespace-nowrap transition-colors ${
-                compact && !active ? "flex-1 justify-center min-w-[22px] px-1" : "px-1.5"
+              className={`flex items-center justify-center gap-1 h-[22px] rounded-[5px] text-[10px] font-medium whitespace-nowrap transition-colors ${
+                !compact ? "flex-1 px-1.5" : active ? "px-1.5" : "flex-1 min-w-[22px] px-1"
               } ${
                 active
                   ? "bg-sol-cyan/15 text-sol-cyan"

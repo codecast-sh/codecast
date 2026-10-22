@@ -1557,7 +1557,7 @@ export async function mergeIssue(ctx: any, userId: Id<"users">, workspace: strin
 /** One problem folds into another: every report moves to the survivor, the folded one is dropped as its duplicate, and what waited on it waits on the survivor. How many reports moved. */
 export async function foldProblem(ctx: any, userId: Id<"users">, merged: Doc<"tasks">, survivor: Doc<"tasks">, now: number): Promise<number> {
   const all = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", merged._id)).collect();
-  await moveSignalRows(ctx, all, merged, survivor, { now, userId, attach: "fingerprint", released: merged.cause?.fingerprints ?? [] });
+  await moveSignalRows(ctx, all, merged, survivor, { now, userId, attach: "fingerprint", released: merged.cause?.fingerprints ?? [], patch: { folded_from: merged._id } });
   const folded = (await ctx.db.get(merged._id))!;
   await moveTaskStatus(ctx, folded, "dropped", { actorUserId: userId, now, extra: { duplicate_of: survivor.short_id, ...(folded.cause ? { cause: { ...withoutIssue(folded.cause), merged_into: survivor._id } } : {}) } });
   await redirectDependents(ctx, userId, byUser(userId), folded, survivor, `${folded.short_id} merged into ${survivor.short_id}`, { onLoop: "leave" });
@@ -1565,6 +1565,28 @@ export async function foldProblem(ctx: any, userId: Id<"users">, merged: Doc<"ta
   const argued = merged.project_id ? await proposedCause(ctx, merged) : null;
   if (argued) await noteOn(ctx, survivor._id, `Merged in ${merged.short_id}, whose run named its cause: ${argued.line}${argued.where.length ? ` (${argued.where.join(", ")})` : ""}. A fix here answers its findings too.`);
   return all.length;
+}
+
+/**
+ * Undo a merge: the dropped problem opens again and takes back its findings
+ * from the problem it was folded into (or wherever that one was folded
+ * since). Its findings are the ones stamped with it (folded_from); a merge
+ * from before the stamp names them in `rows`. How many moved back.
+ */
+export async function unfoldProblem(ctx: any, userId: Id<"users">, task: Doc<"tasks">, rows: Doc<"signals">[] | null, why: string, now: number): Promise<number> {
+  if (task.status !== "dropped" || !task.cause?.merged_into) throw new Error(`${task.short_id} was not merged into another problem`);
+  let into: Doc<"tasks"> | null = await ctx.db.get(task.cause.merged_into);
+  for (let hops = 0; into?.status === "dropped" && into.cause?.merged_into && hops < 20; hops++) into = await ctx.db.get(into.cause.merged_into);
+  if (!into) throw new Error(`${task.short_id}'s survivor is gone`);
+  const held: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", into!._id)).collect();
+  const back = rows ? held.filter((r) => rows.some((x) => x._id === r._id)) : held.filter((r) => r.folded_from === task._id);
+  const { merged_into: _gone, ...cause } = task.cause;
+  await moveTaskStatus(ctx, task, "open", { actorUserId: userId, now, extra: { duplicate_of: undefined, cause } });
+  await moveSignalRows(ctx, back, into, (await ctx.db.get(task._id))!, { now, userId, attach: "fingerprint", released: [], patch: { folded_from: undefined } });
+  await ctx.db.patch(into._id, { cause: { ...into.cause!, signal_count: Math.max(0, (into.cause?.signal_count ?? 0) - back.length) } });
+  await noteOn(ctx, task._id, `Split back out of ${into.short_id}, ${why.trim()} Its ${plural(back.length)} moved back here.`);
+  await noteOn(ctx, into._id, `Split ${task.short_id} back out: ${plural(back.length)} moved there.`);
+  return back.length;
 }
 
 /** A person merges one problem into another (`cast line dissolve --outcome merged`, or "Merge into" on a twin the
