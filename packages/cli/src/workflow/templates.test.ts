@@ -126,7 +126,7 @@ describe("line.cast template", () => {
       "task_id", "task_title", "task_description", "acceptance_criteria", "task_status", "execution_status",
       "review_verdict", "review_note", "handoff", "handoff_note", "goal_ref", "category", "risk", "readiness", "readiness_note",
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
-      "run_dir", "cause_history", "last_error", ...Object.keys(EMPTY_VARS),
+      "run_dir", "cause_history", "last_error", "sent_back", ...Object.keys(EMPTY_VARS),
     ]);
     const nodeVar = /^(\w+)\.(output|outcome|json(\.\w+)*)$/;
     const texts = [graph.stack!, ...[...graph.nodes.values()].flatMap((n) => [n.prompt, n.script, n.doc, n.card])].filter(Boolean) as string[];

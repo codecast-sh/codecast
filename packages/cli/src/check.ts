@@ -665,14 +665,32 @@ export function listWatchers(): Array<WatchState & { dir: string }> {
 }
 
 /**
- * Every watcher start, eviction and idle exit on this machine, one line each.
+ * Stop every watcher on `tree` or a tree inside it. A watcher outlives the
+ * session that asked for it by up to IDLE_EXIT_MS, and its tsc works inside
+ * the tree all that time: a tree being set aside or released has nobody left
+ * to ask, and its watchers would keep it in use. Returns what was stopped.
+ */
+export function stopWatchersIn(tree: string, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM")): Array<WatchState & { dir: string }> {
+  const stopped = listWatchers().filter((w) => w.root === tree || w.root.startsWith(`${tree}/`));
+  for (const w of stopped) {
+    try {
+      kill(w.pid);
+    } catch {}
+    fs.rmSync(statePath(w.dir), { force: true });
+    logWatcherEvent("stop", w, "its tree was released");
+  }
+  return stopped;
+}
+
+/**
+ * Every watcher start, eviction, stop and idle exit on this machine, one line each.
  * A program stopped to make room is rebuilt whole on its next ask, so this is
  * the cost the cap trades against memory, and the record that shows a cap
  * too small for the trees sharing it.
  */
 export const eventsPath = (): string => path.join(checkHome(), "events.log");
 
-export function logWatcherEvent(event: "start" | "evict" | "idle-exit", w: { project: string; root: string }, detail = ""): void {
+export function logWatcherEvent(event: "start" | "evict" | "stop" | "idle-exit", w: { project: string; root: string }, detail = ""): void {
   try {
     fs.mkdirSync(checkHome(), { recursive: true });
     fs.appendFileSync(eventsPath(), `${new Date().toISOString()} ${event} ${w.project} ${w.root}${detail ? ` ${detail}` : ""}\n`);
