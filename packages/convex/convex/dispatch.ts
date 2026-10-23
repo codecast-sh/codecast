@@ -7,7 +7,7 @@ import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
 import { relateCore } from "./taskLinks";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
-import { guardClientResolution, hostedAnswerRefusal, passCore, type PassTarget, unassignCore, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
+import { answerRefusal, guardClientResolution, passCore, type PassTarget, unassignCore, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { discussCore } from "./decisionDiscussion";
 import { sendLineChatCore } from "./lineChat";
@@ -484,11 +484,11 @@ export async function applyPatches(
         }
         if (!permitted) continue;
         if (table === "session_decisions" && safe.status !== "answered" && safe.status !== "dismissed") continue;
-        // A hosted assistant's question is answered by its owner only. The
-        // refusal throws, so the outbox treats it as permanent and the client
+        // A hosted assistant's question is answered by its owner only, and a
+        // Vault Ask first one by the asking session's owner. The refusal throws, so the outbox treats it as permanent and the client
         // takes its painted answer back instead of showing it as answered.
         if (table === "session_decisions") {
-          const refusal = await hostedAnswerRefusal(ctx as any, doc as any, { kind: "user", id: String(userId), user_id: userId });
+          const refusal = await answerRefusal(ctx as any, doc as any, { kind: "user", id: String(userId), user_id: userId, signed_in: true });
           if (refusal) throw new Error(refusal);
         }
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
@@ -696,6 +696,13 @@ async function linkConversationToObject(
     await addConversationToWorkItem(ctx, userId, "plan", plan, conversationId);
     return;
   }
+}
+
+/** A side effect whose function answers a refusal as { error }: throw it, so the rail reads it as refused. */
+function refuseOnError<T>(res: T): T {
+  const error = (res as { error?: unknown } | null)?.error;
+  if (typeof error === "string") throw new Error(error);
+  return res;
 }
 
 const SIDE_EFFECTS: Record<string, HandlerFn> = {
@@ -1931,6 +1938,22 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(id)) return;
     await (ctx as any).runMutation(api.agentDefinitions.removeChain, { id });
   },
+  // Vault metadata edits and deletes; no value ever rides this rail. A stub
+  // that never reached the server has nothing to change there. The secrets
+  // functions answer a refusal as { error } for the CLI; here it throws, so the
+  // outbox reads it as permanent and the client takes its paint back.
+  updateSecretMeta: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    if (!isServerId(id)) return;
+    return refuseOnError(await (ctx as any).runMutation(api.secrets.updateMeta, { ref: id, ...fields }));
+  },
+  removeSecret: async (ctx, userId, [id]: [string]) => {
+    if (!isServerId(id)) return;
+    return refuseOnError(await (ctx as any).runMutation(api.secrets.remove, { ref: id }));
+  },
+  setSecretAskFirst: async (ctx, userId, [id, askFirst]: [string, boolean]) => {
+    if (!isServerId(id)) return;
+    return refuseOnError(await (ctx as any).runMutation(api.secrets.setAskFirst, { ref: id, ask_first: askFirst }));
+  },
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,
@@ -3074,6 +3097,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // conversation_id as its first arg; per-command extras ride extraArgs.
   startResourceOffload: async (ctx, _userId, [args], result) => {
     return ctx.runMutation!(api.resourceOffload.start, { ...args, batch_ids: result.batch_ids });
+  },
+  requestMoveRehearsals: async (ctx, _userId, [args]) => {
+    return ctx.runMutation!(api.moveRehearsals.request, args);
   },
   cancelResourceOffload: async (ctx, _userId, [batch_id], result) => {
     return ctx.runMutation!(api.sessionMigrations.cancelBatch, { batch_id, requested_at: result.requested_at });

@@ -9,6 +9,7 @@
 // slots are busy and how many hands it started today come from the sweep's
 // own count (orgLine.queue), an enrichment that may be late or missing.
 import { useCallback, useMemo } from "react";
+import { useSharedMemos } from "../../../hooks/useSharedMemos";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { autonomyOn, lineStartsOn, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
@@ -125,12 +126,14 @@ export function useLineAdmission(projectId: string | null): {
 export function useLineAdmissions(projects: ReadonlyArray<{ _id: string; workspace?: string | null }>): ReadonlyMap<string, LineAdmission> {
   useSyncOrgTreeFeeder();
   const sig = useInboxStore(orgTreeSig);
-  return useMemo(() => {
+  // Kept outside the fiber (useSharedMemos), so a discarded render of the line reads the same map back.
+  const { useShared } = useSharedMemos("lineAdmissions");
+  return useShared(() => {
     const tree = useInboxStore.getState().orgTree;
     const out = new Map<string, LineAdmission>();
     if (!tree) return out;
     const ws = orgWorkspaceOf(tree);
     for (const p of projects) if (p.workspace === ws) out.set(p._id, admissionOf(lineRoleOf(tree.roles, p._id)));
     return out;
-  }, [sig, projects]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sig, projects]);
 }

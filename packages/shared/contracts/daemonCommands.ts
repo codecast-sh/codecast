@@ -221,6 +221,22 @@ export const DAEMON_COMMANDS = [
   // the card checks until it lands. Old daemons: "Unknown command" (the card
   // says to update codecast there).
   "agent_tool_setup",
+  // The Vault's Save sign-in "From my Chrome on <device>", targeted at that
+  // online laptop. args: { site, name?, team_id? | personal: true } — a host,
+  // never a cookie. The daemon runs `cast vault save-signin <site>
+  // --from-chrome --json` in a child, which reads the site's cookies out of
+  // the person's Chrome and stores them in the Vault itself. Result JSON: {
+  // ok, action, short_id, name, host, cookies, account_hint? }; the error is
+  // the sentence the dialog shows (not signed in, Keychain locked). Old
+  // daemons: "Unknown command" (the dialog says to update codecast there).
+  "vault_capture_signin",
+  // The same press, before anything is stored: `cast vault save-signin <site>
+  // --from-chrome --check --json` counts the site's cookies in that Chrome.
+  // Result JSON: { ok, check, host, cookies, account_hint? }, cookies 0 when
+  // Chrome is not signed in there. The dialog opens the share review only on
+  // a count. A distinct command so an old daemon answers "Unknown command"
+  // instead of saving.
+  "vault_check_signin",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
