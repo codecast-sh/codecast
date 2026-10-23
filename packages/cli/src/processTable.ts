@@ -198,6 +198,52 @@ export function descendantRows(procs: ProcRow[], root: number): ProcRow[] {
   return out;
 }
 
+/** One process as the ancestry walk reads it: its parent, `ps` comm and full command line. */
+export type AncestryRow = { ppid: number; comm: string; args: string };
+
+/** The agent client a process is (agentBinaryFromPsRow, or the claude launcher's versioned binary), else null. */
+function agentOfRow(row: AncestryRow): string | null {
+  return agentBinaryFromPsRow(row.comm, row.args) ?? (CLAUDE_VERSIONED_BINARY_RE.test(row.args.trim().split(/\s+/)[0] ?? "") ? "claude" : null);
+}
+
+/**
+ * The nearest agent process at or above `from`: the agent whose shell, tool
+ * or script this process runs under. The walk ends empty at pid 1, a row it
+ * cannot read, a loop, or `stopAt`.
+ */
+export function agentAncestor(
+  from: number,
+  rowOf: (pid: number) => AncestryRow | null,
+  stopAt?: number | null,
+): { pid: number; bin: string; args: string } | null {
+  const seen = new Set<number>();
+  for (let pid = from; pid > 1 && pid !== stopAt && !seen.has(pid); ) {
+    seen.add(pid);
+    const row = rowOf(pid);
+    if (!row) return null;
+    const bin = agentOfRow(row);
+    if (bin) return { pid, bin, args: row.args };
+    pid = row.ppid;
+  }
+  return null;
+}
+
+/** One `ps -p` row for the ancestry walk; null when the process is gone or ps fails. */
+export function psAncestryRow(pid: number): AncestryRow | null {
+  try {
+    const out = execFileSync("ps", ["-o", "ppid=,comm=,args=", "-p", String(pid)], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 }) as string;
+    const m = out.trim().match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
+    return m ? { ppid: Number(m[1]), comm: m[2], args: m[3] } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The agent this command runs under, read from the live process tree; the walk stops at `stopAt`. */
+export function findAgentAncestor(stopAt?: number | null): { pid: number; bin: string; args: string } | null {
+  return agentAncestor(process.ppid, psAncestryRow, stopAt);
+}
+
 /** A terminal device path (tmux `#{pane_tty}`) as ps prints it: `tdev`'s
  *  major/minor on macOS, the name under /dev elsewhere. Undefined when the
  *  device is gone. */

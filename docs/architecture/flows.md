@@ -32,7 +32,12 @@ code and published to the app on push, so anyone on the team can read it.
 Resolution of a flow name, in order: a path on disk; the repo's
 `.codecast/flows/<slug>.cast`; a flow the CLI ships
 (`packages/cli/src/workflow/templates/`); a flow published to the workspace's
-pool, by slug.
+pool, by slug. The same order holds for a segment named inside another flow:
+each published flow the CLI reads from the pool is written under
+`~/.codecast/flows/<row id>/` and indexed by slug (`teamFlowIndex.ts`), so the
+parser finds a team segment on this machine for a local run and a daemon run
+alike. A read that names no team reads the pool of the team this directory is
+mapped to (`cast teams map`), else the active team (`directoryTeam.ts`).
 
 The pool is the team's. `cast flow publish` files the flow's `workflows` row
 under the publisher's team workspace (`workspace` is `team:<id>`, `team_id`
@@ -194,6 +199,7 @@ and its passing path (`Check → Review → Decide → Ship`, side routes counte
 work, a fan-out's branches under it. The Workflows section of the agent
 instructions (`shared/contracts/snippetsWorkflow.ts`, also `cast guide
 workflows`) carries the commands and the segment syntax. Session start adds
-one `<flows>` line naming this checkout's pool (`flowsLine` in
-`stableContext.ts`, about 320 bytes inside the 9000-byte budget the feed gives
-way to).
+one `<flows>` line naming the flows a session's own edits can run through:
+this checkout's and its mapped team's (`flowsLine` in `stableContext.ts`,
+about 320 bytes inside the 9000-byte budget the feed gives way to). Reading
+the team pool there also refreshes this machine's copies of the team's flows.

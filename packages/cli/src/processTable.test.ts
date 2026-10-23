@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { descendantRows, findOtherDaemonPids, findStaleTmuxServers, isAgentCommand, isDaemonCommand, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan, tmuxServerRows } from "./processTable.js";
+import { agentAncestor, descendantRows, findOtherDaemonPids, findStaleTmuxServers, isAgentCommand, isDaemonCommand, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan, tmuxServerRows } from "./processTable.js";
 import { hasTmux } from "./tmux.js";
 
 const table = parseProcessTable(`
@@ -192,6 +192,33 @@ const bunRunScriptTable = parseProcessTable(`
  80101  1234 /Users/x/.bun/bin/bun run daemon
  80102  1234 /Users/x/.bun/bin/bun run scripts/stamp-daemon-build-id.ts
 `);
+
+describe("agentAncestor", () => {
+  // pid -> [ppid, comm (clipped the way macOS clips it), args]
+  const rows: Record<number, [number, string, string]> = {
+    50: [40, "/bin/bash", "/bin/bash -c cast vault save-signin x --from-chrome"],
+    40: [30, "/Users/x/.co", "/Users/x/.codecast/bin/claude --session-id abc"],
+    30: [1, "tmux", "tmux new-session -d"],
+    60: [55, "/bin/zsh", "-zsh"],
+    55: [1, "Terminal", "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"],
+    70: [65, "cast", "cast vault save-signin x --from-chrome"],
+    65: [40, "bun", "bun /Users/x/src/codecast/packages/cli/src/daemon.ts"],
+    80: [75, "/bin/sh", "/bin/sh -c x"],
+    75: [1, "2.1.237", "/Users/x/.local/share/claude/versions/2.1.237 --resume abc"],
+  };
+  const rowOf = (pid: number) => (rows[pid] ? { ppid: rows[pid][0], comm: rows[pid][1], args: rows[pid][2] } : null);
+
+  test("finds the agent above a shell, by argv when comm is clipped", () => {
+    expect(agentAncestor(50, rowOf)).toEqual({ pid: 40, bin: "claude", args: "/Users/x/.codecast/bin/claude --session-id abc" });
+    expect(agentAncestor(80, rowOf)?.bin).toBe("claude");
+  });
+
+  test("a person's terminal has none, and the walk stops at stopAt", () => {
+    expect(agentAncestor(60, rowOf)).toBeNull();
+    expect(agentAncestor(70, rowOf)?.pid).toBe(40);
+    expect(agentAncestor(70, rowOf, 65)).toBeNull();
+  });
+});
 
 describe("isDaemonCommand", () => {
   test("matches every install shape", () => {

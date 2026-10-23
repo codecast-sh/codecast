@@ -4,6 +4,7 @@
 // so the line does not spend runs twice and a reviewer does not read the same
 // fix twice. Problems whose findings mostly cite one expectation share a rule:
 // a weaker tie, used to group asks that read alike. Pure.
+import { drain, yieldEvery, type Sliced } from "../slicedWork";
 
 export type OverlapItem = { id: string; ref: string | null; title: string; at: number; fingerprints?: ReadonlyArray<string> | null };
 
@@ -137,9 +138,17 @@ function eachPair(at: ReadonlyArray<number>, f: (i: number, j: number) => void) 
  *  duplicate set when its title reads like any member's; it joins a defect when it is a duplicate or its findings
  *  cite the same rule. */
 export function problemOverlaps(items: ReadonlyArray<OverlapItem>): Map<string, Overlap> {
+  return drain(problemOverlapsSteps(items));
+}
+
+/** problemOverlaps, stopping every few hundred problems (lib/slicedWork). */
+export function* problemOverlapsSteps(items: ReadonlyArray<OverlapItem>): Sliced<Map<string, Overlap>> {
   const sorted = [...items].sort((a, b) => a.at - b.at);
   const common = commonWords(sorted.map((i) => i.title));
-  const words = sorted.map((i) => titleWords(i.title, common));
+  yield;
+  const tick = yieldEvery(400);
+  const words: Array<Set<string>> = [];
+  for (const i of sorted) { if (tick()) yield; words.push(titleWords(i.title, common)); }
   const dup = unionFind(sorted);
   const defect = unionFind(sorted);
   const same = (i: number, j: number) => { dup.join(sorted[i].id, sorted[j].id); defect.join(sorted[i].id, sorted[j].id); };
@@ -153,7 +162,9 @@ export function problemOverlaps(items: ReadonlyArray<OverlapItem>): Map<string, 
   const ranks = words.map((ws) => Int32Array.from(ws, (w) => rank.get(w)!).sort());
   const holders = new Map<number, number[]>();
   const seen = new Int32Array(sorted.length).fill(-1);
-  ranks.forEach((x, i) => {
+  for (let i = 0; i < ranks.length; i++) {
+    if (tick()) yield;
+    const x = ranks[i];
     for (let k = 0; k < x.length - Math.ceil(SAME_TITLE * x.length) + 1; k++) {
       const at = holders.get(x[k]);
       if (!at) { holders.set(x[k], [i]); continue; }
@@ -164,14 +175,17 @@ export function problemOverlaps(items: ReadonlyArray<OverlapItem>): Map<string, 
       }
       at.push(i);
     }
-  });
+  }
+  yield;
   const quoted = sorted.map((i) => ({ notMet: /^not met:/i.test(i.title), text: expectationText(i.title) }));
   const byStart = groupIndexes(quoted.map((q) => (q.text.length >= EXPECTATION_MIN ? q.text.slice(0, EXPECTATION_MIN) : null)));
   for (const at of byStart) eachPair(at, (i, j) => { if ((quoted[i].notMet || quoted[j].notMet) && quotesSame(quoted[i].text, quoted[j].text)) same(i, j); });
   // One rule covers many defects: two problems under it are one defect only when their titles also name the same thing.
+  yield;
   const rules = sorted.map((i) => ruleOf(i.fingerprints));
   const stems = words.map((w, n) => (rules[n] ? stemmed(w) : w));
   for (const at of groupIndexes(rules)) eachPair(at, (i, j) => { if (overlapShare(stems[i], stems[j]) >= SAME_DEFECT) defect.join(sorted[i].id, sorted[j].id); });
+  yield;
   const sets = dup.sets();
   const defects = defect.sets();
   const byId = new Map(sorted.map((i) => [i.id, i]));
