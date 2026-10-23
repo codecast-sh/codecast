@@ -1,0 +1,2 @@
+import{j as s}from"./vendor-BRSpyZc9.js";import{R as t}from"./RecordingMark-B9hxeK_W.js";import{cK as i}from"./index-oKYuP8e-.js";function l({row:e,className:a=""}){return s.jsxs("span",{className:`flex min-w-0 items-center gap-1 ${a}`,children:[e.locked&&s.jsx(i,{className:"h-3 w-3 shrink-0 text-sol-text-dim","aria-label":"Locked"}),s.jsx("span",{className:`min-w-0 truncate ${e.redacted?"italic text-sol-text-muted":""}`,children:e.label}),e.recording&&s.jsx(t,{size:"dot",className:"ml-0.5"})]})}export{l as L};
+//# sourceMappingURL=LiveRoomLabel-Bdrx1fhS.js.map

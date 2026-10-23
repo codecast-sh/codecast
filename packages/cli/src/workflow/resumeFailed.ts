@@ -10,10 +10,11 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 import { evalCondition } from "./condition.js";
 import { expandScriptVars } from "./runner.js";
 import { lineCommandEnv } from "../lineProfile.js";
+import { findCheckpointFile } from "./runDirs.js";
 import type { RunCheckpoint } from "./runResume.js";
 import type { WorkflowGraph } from "./types.js";
 
@@ -22,23 +23,13 @@ export const CATCH_UP_STATION = "rebase";
 
 /** This machine's checkpoint of `runId`, wherever under the checkout's run files its graph put it; null when the run was driven elsewhere. */
 export function findCheckpoint(projectPath: string, runId: string): RunCheckpoint | null {
-  const common = spawnSync("git", ["-C", projectPath, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf-8" });
-  if (common.status !== 0) return null;
-  const root = path.join(common.stdout.trim(), "cast-line");
-  let dirs: string[];
+  const file = findCheckpointFile(projectPath, runId);
   try {
-    dirs = fs.readdirSync(root);
+    const cp = file ? JSON.parse(fs.readFileSync(file, "utf-8")) as RunCheckpoint : null;
+    return cp?.run_id === runId && cp.context ? cp : null;
   } catch {
     return null;
   }
-  const name = `${runId.replace(/[^\w-]/g, "")}.json`;
-  for (const dir of dirs) {
-    try {
-      const cp = JSON.parse(fs.readFileSync(path.join(root, dir, "runs", name), "utf-8")) as RunCheckpoint;
-      if (cp?.run_id === runId && cp.context) return cp;
-    } catch {}
-  }
-  return null;
 }
 
 export type CatchUp =

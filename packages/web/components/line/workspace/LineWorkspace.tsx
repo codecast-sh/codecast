@@ -15,7 +15,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useStageScroll } from "./useStageScroll";
 import { Check, ChevronDown, Inbox, SlidersHorizontal, Workflow, AlertCircle, Rocket, Route, History, type LucideIcon } from "lucide-react";
-import { lineFilterParam, useLineProjectId, useLineSelection, useLineWorkspace, useSyncLineHistory } from "../../../hooks/useLineWorkspace";
+import { lineFilterParam, useLineProjectId, useLineSelection, useLineStageA, useLineStageB, useLineStageC, useLineStageD, useSyncLineHistory, type LineStageA, type LineStageB, type LineStageC, type LineWorkspace as LineWorkspaceModel } from "../../../hooks/useLineWorkspace";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useTabActive } from "../../../hooks/usePagePresence";
@@ -76,6 +76,9 @@ const ICONS: Record<LineView, LucideIcon> = { foryou: Inbox, timeline: History, 
 /** How long after G the second key of the go chord still counts. */
 const GO_MS = 1200;
 
+/** Whether the document is on screen now (the page's entrance animates only then). */
+const documentShown = () => typeof document === "undefined" || document.visibilityState === "visible";
+
 function Skeleton() {
   return <div className="lw-skeleton" aria-busy>{[70, 92, 54, 80].map((w, i) => <i key={i} style={{ width: `${w}%` }} />)}</div>;
 }
@@ -93,21 +96,54 @@ export type LineWorkspaceProps = {
   settings?: boolean;
 };
 
-type LineWorkspaceModel = ReturnType<typeof useLineWorkspace>;
 
-export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space, settings = false }: LineWorkspaceProps) {
+/** What the address asks the line for: the project (pinned, else the address's once the store can name it) and the case
+ *  being read (the address's, else the open run's, so its runs and findings are fed whatever their age). */
+function useLineAddress(pinned: string | null) {
   // The address names a problem by its ref (ct-N); every view below reads its row id (caseRefs), and every write
   // through `select`/`href` names it by its ref again.
   const { selection: address, select: go, href: link } = useLineSelection();
   const asked = useLineProjectId(pinned ? null : address.project);
   const projectId = pinned ?? asked ?? null;
-  // The case being read: the address's, else the open run's, so its runs and findings are fed whatever their age.
   const runCase = useInboxStore((st) => (address.run ? ((st as unknown as { workflowRuns?: Record<string, { task_id?: string }> }).workflowRuns?.[address.run]?.task_id ?? null) : null));
+  return { address, go, link, asked, projectId, runCase };
+}
+
+type Stages = { a: LineStageA; b?: LineStageB; c?: LineStageC; children: (ws: LineWorkspaceModel) => ReactNode };
+
+// The line's four stages, one component each (useLineWorkspace runs the same four in one hook). Opening the page is a
+// transition, which React renders in slices and yields between components, never inside one: as four components the
+// first build of the line is four tasks, each about a quarter of it, so the page answers input while it builds.
+function LineStages({ projectId, graphKey, caseId, pinned, children }: { projectId: string | null; graphKey: string | null; caseId: string | null; pinned: boolean; children: Stages["children"] }) {
+  const a = useLineStageA(projectId, graphKey, caseId, { pinned, everySpace: true });
+  return <LineStageModel a={a}>{children}</LineStageModel>;
+}
+function LineStageModel({ a, children }: Stages) {
+  return <LineStageProblems a={a} b={useLineStageB(a)}>{children}</LineStageProblems>;
+}
+function LineStageProblems({ a, b, children }: Stages) {
+  return <LineStageNeeds a={a} b={b} c={useLineStageC(a, b!)}>{children}</LineStageNeeds>;
+}
+function LineStageNeeds({ a, b, c, children }: Stages) {
+  return <>{children(useLineStageD(a, b!, c!))}</>;
+}
+
+export function LineWorkspace(props: LineWorkspaceProps) {
+  const pinned = props.projectId ?? null;
+  const { address, projectId, runCase } = useLineAddress(pinned);
   // With no process in the address, the one the person last picked on this device (lineGraphs pickGraph).
   const [lastProcess, setLastProcess] = useState(readLastProcess);
+  return (
+    <LineStages projectId={projectId} graphKey={address.graph ?? lastProcess} caseId={address.case ?? runCase} pinned={!!pinned}>
+      {(ws) => <LineWorkspaceApp {...props} ws={ws} lastProcess={lastProcess} setLastProcess={setLastProcess} />}
+    </LineStages>
+  );
+}
+
+function LineWorkspaceApp({ projectId: pinned = null, embedded, Frame, space, settings = false, ws, lastProcess, setLastProcess }: LineWorkspaceProps & { ws: LineWorkspaceModel; lastProcess: string | null; setLastProcess: (key: string) => void }) {
+  const { address, go, link, asked, projectId, runCase } = useLineAddress(pinned);
   // A line the picked project has no runs in clears the project rather than refusing the pick: the line is what was asked for.
-  const pickProcess = useCallback((key: string, clearProject = false) => { rememberProcess(key); setLastProcess(key); go(clearProject ? { graph: key, project: null } : { graph: key }); }, [go]);
-  const ws = useLineWorkspace(projectId, address.graph ?? lastProcess, address.case ?? runCase, { pinned: !!pinned, everySpace: true });
+  const pickProcess = useCallback((key: string, clearProject = false) => { rememberProcess(key); setLastProcess(key); go(clearProject ? { graph: key, project: null } : { graph: key }); }, [go, setLastProcess]);
   const trialSpaces = useLineSpaceKeys();
   const { refs } = ws;
   const selection = useMemo(() => (address.case ? { ...address, case: refs.id(address.case) } : address), [address, refs]);
@@ -315,7 +351,9 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
               {settings && model && !unresolved ? (
                 <LineSettingsStage projectId={projectId} line={drawnLine} lines={picks} projects={ws.projects} rollups={ws.allRollups} processOf={ws.process.project} href={settingsAt} />
               ) : !model || unresolved ? <Skeleton /> : (
-                <div className="lw-stage-in" key={scoped ? `${selection.view}:${selection.mode}:${model.graphKey}:${projectId ?? "all"}` : `foryou:${projectId ?? "all"}`}>
+                // The page rises in only while the tab is on screen: a hidden tab runs no frames, so an entrance never
+                // finishes there, and Chrome keeps every page it replaced (and all that page read) until it would.
+                <div className="lw-stage-in" data-enter={documentShown() ? "" : undefined} key={scoped ? `${selection.view}:${selection.mode}:${model.graphKey}:${projectId ?? "all"}` : `foryou:${projectId ?? "all"}`}>
                   {/* An open step is a page of its own (LJ8.6), in place of the view it was opened from. */}
                   {drawerOpen && !stepSlides
                     ? <StepPage model={model} workspace={ws} selection={drawerSelection} select={select} href={href} pinned={!!pinned} />
@@ -462,7 +500,7 @@ function HistoryFeed({ projectId, repositories }: { projectId: string; repositor
 }
 
 /** The project filter: every project by default; a dropdown of the projects with work on the line, each with its problems not yet done. */
-function ProjectFilter({ selected, rollups, projects, byProject, open: openCount, onPick }: { selected: string | null; rollups: RollupRow[]; projects: ReturnType<typeof useLineWorkspace>["projects"]; byProject: ReturnType<typeof useLineWorkspace>["byProject"]; open: number; onPick: (param: string | null) => void }) {
+function ProjectFilter({ selected, rollups, projects, byProject, open: openCount, onPick }: { selected: string | null; rollups: RollupRow[]; projects: LineWorkspaceModel["projects"]; byProject: LineWorkspaceModel["byProject"]; open: number; onPick: (param: string | null) => void }) {
   const { open, setOpen, ref } = usePopover();
   const has = (k: string) => (byProject.get(k)?.open ? 0 : 1);
   const rows = rollups.filter((r) => r.key !== NO_PROJECT).sort((a, b) => has(a.key) - has(b.key) || a.title.localeCompare(b.title));

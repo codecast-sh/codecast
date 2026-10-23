@@ -37,6 +37,8 @@ export const DESTRUCTIVE_COMMANDS: readonly DestructiveCommand[] = [
   { path: ["workspace", "destroy"] },
   { path: ["keys", "rm"] },
   { path: ["files", "rm"] },
+  // Asks on a terminal and needs --yes elsewhere, in its own words (secrets/command.ts).
+  { path: ["vault", "rm"] },
   { path: ["label", "rm"] },
   { path: ["accounts", "rm"] },
   { path: ["anchor", "rm"] },
@@ -128,11 +130,8 @@ export async function requireDestructiveConfirm(
     for (const line of gate.lines) console.error(line);
     process.exit(1);
   }
-  const readline = await import("node:readline");
-  const iface = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise<string>((resolve) => iface.question(gate.question, resolve));
-  iface.close();
-  if (!/^y(es)?$/i.test(answer.trim())) {
+  const { askYesNo } = await import("./terminalAsk.js");
+  if (!(await askYesNo(gate.question))) {
     console.log("Aborted");
     process.exit(0);
   }
