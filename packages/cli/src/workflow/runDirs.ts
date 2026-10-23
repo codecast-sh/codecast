@@ -35,3 +35,8 @@ export function findCheckpointFile(cwd: string, runId: string): string | null {
   }
   return best?.file ?? null;
 }
+
+/** The names under a checkout's run dirs, each the name of the worktree its run's hands work in. */
+export function runTreeNames(root: string): Set<string> {
+  try { return new Set(fs.readdirSync(lineRunsRoot(root))); } catch { return new Set(); }
+}

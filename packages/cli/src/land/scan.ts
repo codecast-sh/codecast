@@ -33,7 +33,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileAsync, spawn } from "../proc.js";
-import { lineRunsRoot } from "../workflow/runDirs.js";
 
 /** A tree touched this recently is treated as in use whatever the roster says. */
 export const ACTIVE_MS = 2 * 60 * 60_000;
@@ -349,10 +348,6 @@ export interface ScanContext {
   now: number;
 }
 
-/** The names under a checkout's run dirs, each the name of the worktree its run's hands work in. */
-export function runTreeNames(root: string): Set<string> {
-  try { return new Set(fs.readdirSync(lineRunsRoot(root))); } catch { return new Set(); }
-}
 
 export async function scanTree(entry: WorktreeEntry, ctx: ScanContext): Promise<TreeReport> {
   const base = await worktreeBase(entry, ctx.mainRef);
@@ -461,7 +456,7 @@ export async function scanRepo(root: string, opts: { roster: RosterRow[] | null;
     mainBlobs: await treeBlobs(root, mainRef),
     roster: opts.roster,
     processCwds: opts.processCwds,
-    runTrees: runTreeNames(root),
+    runTrees: (await import("../workflow/runDirs.js")).runTreeNames(root),
     now,
   };
   // `only`: the named trees and those nested above or below them, whose verdicts decide whether a named one may go.
