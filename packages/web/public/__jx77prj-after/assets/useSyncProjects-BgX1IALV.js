@@ -1,0 +1,2 @@
+import{m as a,ak as p,G as c,al as i,am as n}from"./index-DcUHIs2h.js";import{r as m}from"./vendor-BRSpyZc9.js";import{u}from"./useBootstrapCollection-Dfse6GOq.js";const r=c;function d(){const s=a();u("projects",r.projects.webList,s==="skip"?"skip":p(s),{liveLoadingScope:"projects"})}function f(s){const{args:o}=i(s),e=o==="skip"?"skip":o.team_id??"",t=m.useMemo(()=>!s||e==="skip"?"skip":e?{workspace:"team",team_id:e}:{workspace:"personal"},[s,e]);return n("projects",r.projects.webList,t)}export{d as a,f as u};
+//# sourceMappingURL=useSyncProjects-BgX1IALV.js.map
