@@ -58,6 +58,19 @@ describe("cast dev engine", () => {
     if (status.state === "failed") expect(status.logTail).toContain("boom on 473");
   }, 30_000);
 
+  test("the [vault] env reaches the server; a refusal fails the start before anything runs", async () => {
+    const checkout = fs.mkdtempSync(path.join(tmp, "repo-"));
+    const m = manifest({ web: { mode: "isolated", start: "echo key=$STRIPE_KEY; exit 3" } }, 47320);
+    let asked = 0;
+    const status = await ensureService(devServices(m)[0], { checkout, manifest: m, timeoutSec: 20, secretEnv: async () => (asked++, { STRIPE_KEY: "fake-value" }) });
+    expect(asked).toBe(1);
+    if (status.state === "failed") expect(status.logTail).toContain("key=fake-value");
+    else throw new Error(`expected failed, got ${status.state}`);
+
+    const refused = await ensureService(devServices(m)[0], { checkout, manifest: m, timeoutSec: 20, secretEnv: async () => { throw new Error("required in [vault]: STRIPE_KEY"); } });
+    expect(refused).toEqual({ name: "web", state: "failed", reason: "required in [vault]: STRIPE_KEY" });
+  }, 30_000);
+
   test("names, expansion and probes", () => {
     expect(portNameOf("web", { mode: "isolated", port: "$PORT_WEB" })).toBe("web");
     expect(portNameOf("api", { mode: "isolated" })).toBe("api");
