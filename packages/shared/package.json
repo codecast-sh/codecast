@@ -133,6 +133,7 @@
     "./changes": "./changes/index.ts",
     "./contracts/mods": "./contracts/mods.ts",
     "./contracts/secrets": "./contracts/secrets.ts",
+    "./contracts/secretShapes": "./contracts/secretShapes.ts",
     "./contracts/theme": "./contracts/theme.ts",
     "./mods/sdk": "./mods/sdk.ts",
     "./mods/inspect": "./mods/inspect.ts"

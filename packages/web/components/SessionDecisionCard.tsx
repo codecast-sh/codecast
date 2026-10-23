@@ -27,9 +27,8 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
-import { ChevronUp, ChevronDown, Link2 } from "lucide-react";
-import { toast } from "sonner";
-import { copyToClipboard, shareOrigin } from "../lib/utils";
+import { ChevronUp, ChevronDown } from "lucide-react";
+import { ShareControl } from "./ShareControl";
 import "./decisions/decisions.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -646,15 +645,8 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             )}
             {/* A hosted approval is the person's own: no link to share it, and
                 its conversation is one tap away in the escape hatch. */}
-            {shareHref && !hosted && (
-              <button
-                onClick={() => copyToClipboard(`${shareOrigin()}${shareHref}`).then(() => toast.success("Link copied"))}
-                className="shrink-0 flex items-center gap-1 px-2.5 py-0.5 rounded-full border border-sol-border text-[11px] text-sol-text-muted hover:text-sol-text hover:bg-sol-card transition-colors"
-                title="Copy a link to this decision"
-              >
-                <Link2 className="w-3.5 h-3.5" />
-                <span className="decision-head-wide">Copy link</span>
-              </button>
+            {shareHref && decideId && !hosted && (
+              <ShareControl label="decision" path={shareHref} publicShare={{ kind: "decision", id: decideId, token: ((decisionRow ?? detail?.decision) as any)?.share_token }} className="shrink-0" />
             )}
             {!hosted && <button
               onClick={shrink}

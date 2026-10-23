@@ -128,6 +128,10 @@ export const ccAccountsValidator = v.object({
       // (invalid_grant): dead until the account signs in again. Never a
       // switch target (fallbackProfiles); the UI says "login expired".
       login_expired_at: v.optional(v.number()),
+      // Kept on this machine for one job (`cast accounts reserve <name> --for
+      // reviews`): auto-switch never moves the machine's sessions onto it
+      // (fallbackProfiles), so the job keeps the account's windows.
+      reserved_for: v.optional(v.string()),
     }),
   ),
 });

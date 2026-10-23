@@ -11,7 +11,6 @@ import {
   fetchUsageSnapshot,
   isLivePollOverdue,
   isLiveUsageFresh,
-  isOrgAccessRefusal,
   markLoginExpired,
   noteActiveAccount,
   parseProfile,
@@ -23,11 +22,11 @@ import {
   refreshActiveCredential,
   refreshProfileCredential,
   resnapshotActiveProfile,
-  setAccessRefused,
   usageCachePath,
   type CcProfile,
   type CcUsageSnapshot,
 } from "./ccAccounts.js";
+import { isOrgAccessRefusal, setAccessRefused } from "./ccProfileFlags.js";
 import { nextUsageRetry, type UsageRetryState } from "./usageRetry.js";
 
 export interface UsageRefreshSummary {
