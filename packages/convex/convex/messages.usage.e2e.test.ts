@@ -97,3 +97,54 @@ test("concurrent transcript batches keep status probes local to each conversatio
   expect(db._tables.sync_actions ?? []).toEqual([]);
   expect(scheduled.filter(({ ref }) => getFunctionName(ref) === "messages:projectAgentStatusOnAddMessages")).toHaveLength(24);
 });
+
+// The check only ever moves an idle or permission-blocked session to working,
+// and in prod 14,040 of 14,046 checks an hour found the session already
+// working (2026-10-23). A batch on a working session schedules none.
+test("transcript batches schedule a status check only for a session the check could move", async () => {
+  const userId = "users_probe";
+  const statuses = ["working", "idle", "permission_blocked"] as const;
+  const conversations = statuses.map((status) => ({
+    _id: `conversations_probe_${status}`, user_id: userId, agent_type: "claude", owner_device_id: "device",
+    message_count: 0, updated_at: 1, status: "active", skip_title_generation: true,
+  }));
+  const db = makeFakeDb({
+    users: [{ _id: userId }],
+    conversations,
+    managed_sessions: statuses.map((status) => ({
+      _id: `managed_sessions_probe_${status}`, conversation_id: `conversations_probe_${status}`,
+      agent_status: status, agent_status_updated_at: 1,
+    })),
+  });
+  const scheduled: Array<{ ref: any; args: any }> = [];
+  const ctx = {
+    db,
+    auth: { getUserIdentity: async () => ({ subject: `${userId}|session` }) },
+    scheduler: { runAfter: async (_delay: number, ref: any, args: any) => { scheduled.push({ ref, args }); return "scheduled"; } },
+    storage: { getUrl: async () => null },
+  };
+  const checks = () => scheduled.filter(({ ref }) => getFunctionName(ref) === "messages:projectAgentStatusOnAddMessages");
+  const realNow = Date.now;
+  // Twenty assistant batches 15 s apart: every one opens a new probe window.
+  for (const c of conversations) {
+    for (let i = 0; i < 20; i++) {
+      Date.now = () => 1_000_000 + i * 15_000;
+      await (addMessages as any)._handler(ctx, { conversation_id: c._id, messages: [
+        { role: "assistant", message_uuid: `${c._id}-a${i}`, content: `Step ${i}`, timestamp: 10 + i },
+      ] });
+    }
+  }
+  Date.now = realNow;
+  expect(checks().map(({ args }) => args.conversation_id)).toEqual(Array(20).fill("conversations_probe_idle"));
+  // A tool result answers the blocked session: that one gets its check, and
+  // the check still moves it.
+  await (addMessages as any)._handler(ctx, { conversation_id: "conversations_probe_permission_blocked", messages: [
+    { role: "user", message_uuid: "blocked-tool", content: "", timestamp: 100, tool_results: [{ tool_use_id: "t", content: "ok" }] },
+  ] });
+  expect(checks()).toHaveLength(21);
+  await (projectAgentStatusOnAddMessages as any)._handler(ctx, { conversation_id: "conversations_probe_permission_blocked" });
+  await (projectAgentStatusOnAddMessages as any)._handler(ctx, { conversation_id: "conversations_probe_idle" });
+  expect(await db.get("managed_sessions_probe_permission_blocked")).toMatchObject({ agent_status: "working" });
+  expect(await db.get("managed_sessions_probe_idle")).toMatchObject({ agent_status: "working" });
+  expect(await db.get("managed_sessions_probe_working")).toMatchObject({ agent_status: "working", agent_status_updated_at: 1 });
+});

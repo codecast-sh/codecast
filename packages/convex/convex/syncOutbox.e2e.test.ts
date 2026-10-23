@@ -12,9 +12,39 @@ function fixture() {
     strictPatch: true, indexes: schemaIndexes(schema), mintId: (table, n) => `${table}_${n}`,
     creationTime: () => Date.now(),
   });
+  // The scheduler as convex keeps it: each job is a row whose state moves from
+  // pending to success, failed or canceled.
   const scheduled: any[] = [];
-  const ctx: any = { db, scheduler: { runAfter: async (...args: any[]) => { scheduled.push(args); return "scheduled"; } } };
-  return { db, ctx, scheduled };
+  const jobs = new Map<string, { args: any[]; state: { kind: string } }>();
+  const ctx: any = {
+    db,
+    scheduler: {
+      runAfter: async (...args: any[]) => {
+        scheduled.push(args);
+        const id = `job_${jobs.size + 1}`;
+        jobs.set(id, { args, state: { kind: "pending" } });
+        return id;
+      },
+      cancel: async (id: string) => {
+        const job = jobs.get(id);
+        if (job?.state.kind === "pending") job.state = { kind: "canceled" };
+      },
+    },
+  };
+  db.system = { get: async (id: string) => jobs.get(id) ?? null };
+  /** Run every due drain the way the scheduler would, oldest first; returns how many ran. */
+  const runJobs = async () => {
+    let ran = 0;
+    for (let i = 0; i < 1000; i++) {
+      const next = [...jobs.values()].find((j) => j.state.kind === "pending");
+      if (!next) return ran;
+      next.state = { kind: "success" };
+      await drainSyncOutbox(ctx, next.args[2].id);
+      ran++;
+    }
+    throw new Error("drain jobs did not settle");
+  };
+  return { db, ctx, scheduled, jobs, runJobs };
 }
 const save = (mutation({
   args: {},
@@ -71,7 +101,7 @@ describe("durable sync delivery through wrapped application saves", () => {
   });
 
   test("worker rollback leaves saved data and pending delivery recoverable", async () => {
-    const { ctx, db, scheduled } = fixture();
+    const { ctx, db, scheduled, jobs } = fixture();
     const a = await save(ctx, { fields: { title: "Saved" } });
     const patch = db.patch.bind(db);
     db.__beginJournal();
@@ -85,6 +115,7 @@ describe("durable sync delivery through wrapped application saves", () => {
     expect((await db.get(a.id))?.title).toBe("Saved");
     expect(db._tables.sync_actions ?? []).toHaveLength(0);
     expect((await db.get(a.receipts[0].id))?.pending).toBe(true);
+    jobs.get("job_1")!.state = { kind: "failed" };
     scheduled.length = 0;
     await (recover as any)._handler(ctx, {});
     expect(scheduled).toHaveLength(1);
@@ -174,6 +205,34 @@ describe("durable sync delivery through wrapped application saves", () => {
     expect(scheduled.map((args) => args[2].id)).toHaveLength(2);
     await deliverAll(ctx);
     expect(db._tables.sync_actions).toHaveLength(11);
+  });
+
+  // Saves in separate transactions each schedule a drain, and the first one
+  // to run delivers the whole scope. On 2026-10-23 86% of prod drains found
+  // nothing to do; the delivered slots' drains are now canceled instead.
+  test("saves in separate transactions run one drain for the scope", async () => {
+    const { ctx, db, scheduled, jobs, runJobs } = fixture();
+    for (let i = 0; i < 10; i++) await save(ctx, { fields: { title: `Session ${i}` } });
+    expect(scheduled).toHaveLength(10);
+    expect(await runJobs()).toBe(1);
+    expect(db._tables.sync_actions).toHaveLength(10);
+    expect([...jobs.values()].filter((j) => j.state.kind === "canceled")).toHaveLength(9);
+    expect(db._tables.sync_outbox.every((r: any) => !r.pending && r.drain_job === undefined)).toBe(true);
+  });
+
+  test("recover leaves a scope whose drain is still waiting alone", async () => {
+    const { ctx, db, scheduled, jobs, runJobs } = fixture();
+    await save(ctx, { fields: { title: "Waiting" } });
+    await enqueueSyncAction(ctx, "team:t1", "tasks", "task", "upsert", { cargo: { partial: true } } as any);
+    scheduled.length = 0;
+    for (let minute = 0; minute < 5; minute++) await (recover as any)._handler(ctx, {});
+    expect(scheduled).toHaveLength(0);
+    // A drain that died without delivering leaves its scope to recover.
+    jobs.get("job_1")!.state = { kind: "failed" };
+    await (recover as any)._handler(ctx, {});
+    expect(scheduled.map((args) => args[2].id)).toEqual([db._tables.sync_outbox[0]._id]);
+    expect(await runJobs()).toBe(2);
+    expect(db._tables.sync_actions).toHaveLength(2);
   });
 
   test("a lifecycle slot past one pass's event cap gets exactly one follow-up drain", async () => {

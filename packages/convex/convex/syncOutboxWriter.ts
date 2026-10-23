@@ -5,6 +5,12 @@ import {
 } from "./syncLog";
 import type { ChangeEntity } from "./changeLog";
 
+/** Schedule a drain of this slot's scope and record it on the slot. */
+export async function scheduleDrain(ctx: any, id: string, delay = 0): Promise<void> {
+  const drain_job = await ctx.scheduler.runAfter(delay, (internal as any).syncOutbox.drain, { id });
+  await ctx.db.patch(id, { drain_job });
+}
+
 export function attachSyncOutbox(ctx: any, collector: SyncAckCollector): void {
   collector.receipts = [];
   // One drain per scope per transaction: a drain delivers up to 32 of the
@@ -54,7 +60,7 @@ export async function enqueueSyncAction(
   if (existing) await ctx.db.patch(id, fields);
   if (!existing?.pending && ctx.scheduler && !scheduled?.has(scopeKey)) {
     scheduled?.add(scopeKey);
-    await ctx.scheduler.runAfter(25, (internal as any).syncOutbox.drain, { id });
+    await scheduleDrain(ctx, id, 25);
   }
   return { id: String(id), revision, scope_key: scopeKey, entity_type: entityType, entity_id: entityId };
 }

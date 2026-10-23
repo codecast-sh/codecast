@@ -1640,6 +1640,27 @@ export function nextAgentStatusProbe(
   return { schedule: true, probe: { ...projection, due_at: now + AGENT_STATUS_PROBE_WINDOW_MS, at: now } };
 }
 
+/**
+ * Whether a check could change anything: the projection only moves an idle
+ * session (on an assistant turn) or a permission-blocked one (on a tool result)
+ * back to working. A working session has neither, so no probe opens and no
+ * check is scheduled; nearly every check found exactly that (14,040 of 14,046
+ * in an hour, 2026-10-23). A status written after this batch is newer than its
+ * evidence, which the check would refuse anyway, and the next batch asks again.
+ */
+export async function sessionAwaitsAgentStatusProjection(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  projection: AddMessagesAgentStatusProjection,
+): Promise<boolean> {
+  const inStatus = async (status: string) => !!(await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("agent_status", status))
+    .first());
+  return (projection.has_assistant_message && (await inStatus("idle")))
+    || (projection.has_tool_result_reply && (await inStatus("permission_blocked")));
+}
+
 export function shouldApplyAddMessagesAgentStatusProjection(
   agentStatusUpdatedAt: number | undefined,
   scheduledAt: number,
@@ -2101,9 +2122,12 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     const nextActivity = deriveActivity(args.messages, conversation.activity, Date.now());
     if (nextActivity) convPatch.activity = nextActivity;
     const agentStatusProjection = getAddMessagesAgentStatusProjection(args.messages);
-    const agentStatusProbe = agentStatusProjection
+    let agentStatusProbe = agentStatusProjection
       ? nextAgentStatusProbe(conversation.agent_status_probe, agentStatusProjection, Date.now())
       : null;
+    if (agentStatusProbe?.schedule && !(await sessionAwaitsAgentStatusProjection(ctx, args.conversation_id, agentStatusProjection!))) {
+      agentStatusProbe = null;
+    }
     if (agentStatusProbe) convPatch.agent_status_probe = agentStatusProbe.probe;
     await ctx.db.patch(args.conversation_id, convPatch);
 

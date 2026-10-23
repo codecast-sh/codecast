@@ -455,26 +455,39 @@ describe("performLiveActivityRefresh", () => {
 });
 
 describe("scheduleLiveActivityRefresh", () => {
-  test("status writers enqueue without reading the shared phone row", async () => {
+  test("status writers read the shared phone row but never write it", async () => {
+    freezeTime(NOW);
     const w = world();
-    const ctx = { scheduler: w.ctx.scheduler, get db(): never { throw new Error("shared phone row read inside status transaction"); } };
+    const ctx = { scheduler: w.ctx.scheduler, db: { ...w.ctx.db, patch: () => { throw new Error("phone row written inside status transaction"); } } };
     await scheduleLiveActivityRefresh(ctx, "u1" as any, { urgent: true });
     expect(w.scheduled).toHaveLength(1);
     expect(w.scheduled[0]).toMatchObject({ delay: 0, args: { user_id: "u1", urgent: true } });
     expect(getFunctionName(w.scheduled[0].fn as any)).toBe("liveActivity:requestRefresh");
   });
 
-  test("a burst of status transactions coalesces into one refresh and push", async () => {
+  test("a status write schedules nothing when no refresh could follow", async () => {
+    freezeTime(NOW);
+    for (const row of [null, { push_to_start_token: undefined }, { refresh_due_at: NOW - 1 }]) {
+      const w = world({ row });
+      await scheduleLiveActivityRefresh(w.ctx, "u1" as any, { urgent: true });
+      expect(w.scheduled).toHaveLength(0);
+    }
+  });
+
+  test("a burst of status writes coalesces into one request, one refresh and one push", async () => {
     freezeTime(NOW);
     const w = world();
-    await Promise.all(Array.from({ length: 20 }, () => scheduleLiveActivityRefresh({ scheduler: w.ctx.scheduler }, "u1" as any, { urgent: true })));
-    expect(w.scheduled).toHaveLength(20);
-    const requests = w.scheduled.splice(0);
-    for (let i = 0; i < requests.length; i++) {
-      freezeTime(NOW + i);
-      await (requestRefresh as any)._handler(w.ctx, requests[i].args);
+    // One heartbeat batch moving many of the user's sessions at once.
+    for (let i = 0; i < 5; i++) await scheduleLiveActivityRefresh(w.ctx, "u1" as any, { urgent: true });
+    expect(w.scheduled).toHaveLength(1);
+    // Then separate transactions, each before and after the refresh is armed.
+    await (requestRefresh as any)._handler(w.ctx, w.scheduled.splice(0)[0].args);
+    for (let i = 0; i < 20; i++) {
+      freezeTime(NOW + 1 + i);
+      await scheduleLiveActivityRefresh({ db: { ...w.ctx.db }, scheduler: w.ctx.scheduler }, "u1" as any, { urgent: true });
     }
     expect(sweeps(w)).toHaveLength(1);
+    expect(w.scheduled).toHaveLength(1);
     expect(await performLiveActivityRefresh(w.ctx, "u1" as any, sweeps(w)[0].args.due)).toEqual({ action: "start" });
     expect(pushes(w)).toHaveLength(1);
   });

@@ -40,6 +40,7 @@ import { BACKFILL_DAYS, RECONCILE_DAYS, changesZone } from "./lib/changesDirty";
 import { addDays, dayBounds, localDate, teamDayBounds } from "./lib/teamDay";
 import { hasEditionProse, releaseArg } from "./changes";
 import { HEADLINE_SLACK, hasModelKey, sentences, spend, str, usageArg, usageOf, type Usage } from "./changesProse";
+import { pendingJob } from "./lib/pendingJob";
 
 export const WEEK_PROMPT_VERSION = "week-2";
 
@@ -319,11 +320,7 @@ export function parseWeekReply(text: string, load: Pick<WeekLoad, "keys">, fallb
 // ── Scheduling ───────────────────────────────────────────────────────────
 
 /** The row's scheduled build while it has not started. */
-async function pendingBuild(ctx: { db: any }, row: Doc<"digests"> | null): Promise<boolean> {
-  if (!row?.scheduled_id) return false;
-  const job = await ctx.db.system.get(row.scheduled_id);
-  return job?.state?.kind === "pending";
-}
+const pendingBuild = async (ctx: { db: any }, row: Doc<"digests"> | null) => !!(await pendingJob(ctx, row?.scheduled_id));
 
 /** Queue one build of a week unless one is waiting. The row starts as an empty facts row when the week has none yet. */
 async function queueWeek(ctx: MutationCtx, teamId: Id<"teams">, repository: string, week: string, row: Doc<"digests"> | null, delay: number): Promise<boolean> {

@@ -507,3 +507,34 @@ describe("a hosted conversation's title pass", () => {
     expect(coding.prompt).toStartWith("Generate a title and subtitle for this session.");
   });
 });
+
+// While the scheduler is behind, a row stays unnamed until its job runs, so
+// every cron tick picked the same rows again (2026-10-23: 1,656 of 1,721
+// short-title calls an hour were for rows already named).
+describe("fillShortTitles while the scheduler is behind", () => {
+  const fetchStub = captureFetch('{"short_title": "Chokidar"}');
+  beforeEach(() => fetchStub.install());
+  afterEach(() => fetchStub.restore());
+
+  test("five ticks queue five jobs and ask the model once per row", async () => {
+    const { t } = await seedTitleFixture(titleFixtures()[2]);
+    await t.run(async (ctx) => {
+      const user_id = (await ctx.db.query("users").first())!._id;
+      for (let i = 0; i < 10; i++) {
+        await ctx.db.insert("tasks", {
+          user_id, short_id: `ct-${i + 2}`, title: `Task ${i}`, task_type: "task", priority: "medium", source: "human",
+          created_at: T0, updated_at: T0,
+        } as any);
+      }
+    });
+    for (let tick = 0; tick < 5; tick++) await t.mutation(internal.titleGeneration.fillShortTitles, {});
+    const jobs = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(jobs.map((j) => j.name)).toEqual(Array(5).fill("titleGeneration:generateShortTitles"));
+    expect(jobs[0].args[0].ids).toHaveLength(12);
+    fetchStub.bodies.length = 0;
+    for (const job of jobs) await t.action(internal.titleGeneration.generateShortTitles, job.args[0]);
+    expect(fetchStub.bodies).toHaveLength(12);
+    const named = await t.run(async (ctx) => [...await ctx.db.query("tasks").collect(), ...await ctx.db.query("plans").collect()]);
+    expect(named.map((r) => r.short_title)).toEqual(Array(12).fill("Chokidar"));
+  });
+});

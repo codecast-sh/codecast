@@ -3209,6 +3209,9 @@ export default defineSchema({
     // daemon heartbeat is one seek even for a user whose rows are all hosted.
     .index("by_user_hosted_heartbeat", ["user_id", "hosted", "last_heartbeat"])
     .index("by_user_status", ["user_id", "agent_status"])
+    // addMessages asks whether its session is idle or blocked here: while the
+    // session works the range is empty, so heartbeats never conflict with it.
+    .index("by_conversation_status", ["conversation_id", "agent_status"])
     .index("by_heartbeat", ["last_heartbeat"]),
 
   session_metrics: defineTable({

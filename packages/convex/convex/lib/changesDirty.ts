@@ -22,6 +22,7 @@ import { teamHasFeature } from "./teamFeatureGuard";
 import { addDays, dayBounds, localDate, teamTimezone } from "./teamDay";
 import { isHarnessScratch, normalizeRepository } from "./gitRefs";
 import { teamVisibleInputs } from "./changesAccess";
+import { pendingJob } from "./pendingJob";
 
 /** A mutation's ctx. The scheduler is optional only so helpers typed `{ db }`
  *  can pass theirs through; every real mutation has one. A mark without a
@@ -76,11 +77,7 @@ async function dirtyRow(ctx: { db: any }, key: DayKey): Promise<Doc<"change_dirt
 }
 
 /** The row's scheduled rebuild while it has not started. */
-async function pendingRun(ctx: { db: any }, row: Doc<"change_dirty"> | null): Promise<{ scheduledTime: number } | null> {
-  if (!row?.scheduled_id) return null;
-  const job = await ctx.db.system.get(row.scheduled_id);
-  return job?.state?.kind === "pending" ? job : null;
-}
+const pendingRun = (ctx: { db: any }, row: Doc<"change_dirty"> | null) => pendingJob(ctx, row?.scheduled_id);
 
 /**
  * Mark one team day dirty. A pending rebuild that fires within `delay` covers

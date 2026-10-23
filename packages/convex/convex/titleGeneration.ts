@@ -1,8 +1,8 @@
 import { FOREIGN_TEXT_CAPS, escapeForeignControlChars, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
-import { internalMutation, internalAction, internalQuery, type MutationCtx } from "./functions";
+import { internalMutation, internalAction, internalQuery, type ActionCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { isRefusalProse } from "./idleSummary";
 import { isHostedAgentType, isToolResultCarrier, parseWorkflowHarnessFrame } from "@codecast/shared/contracts";
 import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
@@ -152,28 +152,42 @@ const shortTitleTarget = v.union(v.id("conversations"), v.id("tasks"), v.id("pla
 
 export const generateShortTitle = internalAction({
   args: { id: shortTitleTarget },
+  handler: (ctx, args) => nameRow(ctx, args.id),
+});
+
+/** One cron tick's rows in one job, a few model calls at a time. */
+export const SHORT_TITLE_CONCURRENCY = 8;
+export const generateShortTitles = internalAction({
+  args: { ids: v.array(shortTitleTarget) },
   handler: async (ctx, args) => {
-    if (!process.env.ANTHROPIC_API_KEY) return;
-    const row = await ctx.runQuery(internal.titleGeneration.getRowForShortTitle, { id: args.id });
-    if (!row?.title) return;
-    try {
-      const reply = await callModel({
-        ...shortTitleRequest({ kind: row.kind, title: row.title, context: row.context }),
-        label: "Short title generation",
-      });
-      if (!reply) return;
-      // An answer that fails the name rule is stored as "" (asked, no usable
-      // name), which readers treat as absent and the cron's index skips. Asking
-      // again mostly gets the same answer: leaving the field unset re-asked
-      // the same 80 rows every two minutes and held the scheduler's slots
-      // doing it.
-      const shortTitle = cleanShortTitle(extractTitleJson(reply.text)?.short_title) ?? "";
-      await ctx.runMutation(internal.titleGeneration.setShortTitle, { id: args.id, short_title: shortTitle });
-    } catch (error) {
-      console.error("Failed to generate short title:", error);
+    for (let i = 0; i < args.ids.length; i += SHORT_TITLE_CONCURRENCY) {
+      await Promise.all(args.ids.slice(i, i + SHORT_TITLE_CONCURRENCY).map((id) => nameRow(ctx, id)));
     }
   },
 });
+
+async function nameRow(ctx: ActionCtx, id: Id<"conversations"> | Id<"tasks"> | Id<"plans">): Promise<void> {
+  if (!process.env.ANTHROPIC_API_KEY) return;
+  const row = await ctx.runQuery(internal.titleGeneration.getRowForShortTitle, { id });
+  // Named since it was queued (by an earlier tick's job, or a title pass).
+  if (!row?.title || row.short_title !== undefined) return;
+  try {
+    const reply = await callModel({
+      ...shortTitleRequest({ kind: row.kind, title: row.title, context: row.context }),
+      label: "Short title generation",
+    });
+    if (!reply) return;
+    // An answer that fails the name rule is stored as "" (asked, no usable
+    // name), which readers treat as absent and the cron's index skips. Asking
+    // again mostly gets the same answer: leaving the field unset re-asked
+    // the same 80 rows every two minutes and held the scheduler's slots
+    // doing it.
+    const shortTitle = cleanShortTitle(extractTitleJson(reply.text)?.short_title) ?? "";
+    await ctx.runMutation(internal.titleGeneration.setShortTitle, { id, short_title: shortTitle });
+  } catch (error) {
+    console.error("Failed to generate short title:", error);
+  }
+}
 
 export const getRowForShortTitle = internalQuery({
   args: { id: shortTitleTarget },
@@ -182,13 +196,14 @@ export const getRowForShortTitle = internalQuery({
     if (!row) return null;
     // Which kind the id names is in the id itself; the row's shape tells it
     // apart without a second read.
+    const short_title = row.short_title as string | undefined;
     if ("goal" in row || "acceptance_criteria" in row) {
-      return { kind: "plan" as const, title: row.title as string | undefined, context: row.goal as string | undefined };
+      return { kind: "plan" as const, title: row.title as string | undefined, context: row.goal as string | undefined, short_title };
     }
     if ("session_id" in row && "agent_type" in row) {
-      return { kind: "session" as const, title: row.title as string | undefined, context: row.subtitle as string | undefined };
+      return { kind: "session" as const, title: row.title as string | undefined, context: row.subtitle as string | undefined, short_title };
     }
-    return { kind: "task" as const, title: row.title as string | undefined, context: (row.description as string | undefined)?.slice(0, 300) };
+    return { kind: "task" as const, title: row.title as string | undefined, context: (row.description as string | undefined)?.slice(0, 300), short_title };
   },
 });
 
@@ -225,24 +240,25 @@ Output ONLY the JSON object, no markdown, no preamble:
 // The cron: tasks and plans without a name, oldest-unnamed first. Bounded per
 // run so a backlog drains at a steady, cheap pace; new rows are named within
 // a few minutes of creation. A title edit clears the field, so edited rows
-// come back through here.
+// come back through here. A row stays unnamed until its job runs, so while
+// the scheduler is behind every tick picks the same rows again: one job per
+// tick, which skips rows an earlier tick named, keeps that from multiplying
+// (a per-row job made 1,656 of 1,721 calls an hour for rows already named,
+// 2026-10-23).
 export const FILL_SHORT_TITLES_BATCH = 40;
 export const fillShortTitles = internalMutation({
   args: {},
   handler: async (ctx) => {
-    let scheduled = 0;
+    const ids: Array<Id<"tasks"> | Id<"plans">> = [];
     for (const table of ["tasks", "plans"] as const) {
       const rows = await ctx.db
         .query(table)
         .withIndex("by_short_title", (q) => q.eq("short_title", undefined))
         .take(FILL_SHORT_TITLES_BATCH);
-      for (const row of rows) {
-        if (!row.title?.trim()) continue;
-        await ctx.scheduler.runAfter(scheduled * 1000, internal.titleGeneration.generateShortTitle, { id: row._id });
-        scheduled++;
-      }
+      for (const row of rows) if (row.title?.trim()) ids.push(row._id);
     }
-    return { scheduled };
+    if (ids.length) await ctx.scheduler.runAfter(0, internal.titleGeneration.generateShortTitles, { ids });
+    return { scheduled: ids.length };
   },
 });
 

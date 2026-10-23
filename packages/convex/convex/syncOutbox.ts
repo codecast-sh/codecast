@@ -1,9 +1,10 @@
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, internalQuery, query } from "./functions";
-import { internal } from "./_generated/api";
 import { appendSyncAction, isLifecycleEntity, makeSyncAckCollector, syncLogDisabled } from "./syncLog";
 import { heldKeysFor } from "./lib/accessKeys";
+import { pendingJob } from "./lib/pendingJob";
+import { scheduleDrain } from "./syncOutboxWriter";
 
 export async function drainSyncOutbox(ctx: any, id: string) {
   if (syncLogDisabled()) return;
@@ -36,14 +37,19 @@ export async function drainSyncOutbox(ctx: any, id: string) {
     await ctx.db.patch(row._id, {
       delivered_revision: deliveredRevision, position, pending,
       cargo: undefined, access: undefined, events: pending ? remaining : undefined,
+      drain_job: pending ? row.drain_job : undefined,
     });
+    // Another save's drain for a slot this pass delivered would wake to find
+    // nothing: cancel it. The running drain is the one scheduled for `id`.
+    if (!pending && row._id !== id && (await pendingJob(ctx, row.drain_job))) await ctx.scheduler.cancel(row.drain_job);
   }
   // One follow-up for the scope, which also covers a lifecycle slot whose
-  // events ran past this pass's cap: it is still pending.
+  // events ran past this pass's cap: it is still pending. A slot whose own
+  // drain is still waiting already has one.
   const next = await ctx.db.query("sync_outbox")
     .withIndex("by_scope_pending", (q: any) => q.eq("scope_key", first.scope_key).eq("pending", true))
     .first();
-  if (next) await ctx.scheduler.runAfter(0, (internal as any).syncOutbox.drain, { id: next._id });
+  if (next && (next._id === id || !(await pendingJob(ctx, next.drain_job)))) await scheduleDrain(ctx, next._id);
 }
 
 export const drain = internalMutation({
@@ -57,11 +63,14 @@ export const recover = internalMutation({
     if (syncLogDisabled()) return;
     const rows = await ctx.db.query("sync_outbox")
       .withIndex("by_pending", (q) => q.eq("pending", true)).take(100);
-    const scopes = new Set<string>();
+    // A scope with a drain still waiting needs no other; one runs late when
+    // the scheduler is behind, and a new one every minute only adds to that.
+    const waiting = new Set<string>();
+    for (const row of rows) if (await pendingJob(ctx, row.drain_job)) waiting.add(row.scope_key);
     for (const row of rows) {
-      if (scopes.has(row.scope_key)) continue;
-      scopes.add(row.scope_key);
-      await ctx.scheduler.runAfter(0, (internal as any).syncOutbox.drain, { id: row._id });
+      if (waiting.has(row.scope_key)) continue;
+      waiting.add(row.scope_key);
+      await scheduleDrain(ctx, row._id);
     }
   },
 });
