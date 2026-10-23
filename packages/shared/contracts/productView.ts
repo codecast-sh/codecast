@@ -105,6 +105,12 @@ export function isProductViewHostMessage(d: unknown): d is ProductViewHostMessag
 /** Second-level labels that are a public suffix's own ("example.co.uk"): a site under one is its three last labels. */
 const SHARED_SECOND = new Set(["co", "com", "org", "net", "gov", "edu", "ac"]);
 
+/** Is the host a public suffix rather than a site: one label ("com", "localhost") or a shared second level ("co.uk")? */
+export function isPublicSuffix(host: string): boolean {
+  const labels = host.toLowerCase().split(".").filter(Boolean);
+  return labels.length < 2 || (labels.length === 2 && SHARED_SECOND.has(labels[0]) && labels[1].length === 2);
+}
+
 /** The site a host belongs to: the host's registrable part as far as a frame check needs it ("admin.union.example" is "union.example"). */
 export function siteOf(host: string): string {
   const labels = host.toLowerCase().split(".").filter(Boolean);

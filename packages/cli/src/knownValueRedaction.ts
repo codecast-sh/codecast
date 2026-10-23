@@ -6,8 +6,9 @@
 // module closes that gap the way Delta does: the daemon collects the real
 // secret values present on this machine (its environment, codecast's own
 // config, the standard credential files, and the .env files of live sessions'
-// working directories) and replaces every exact occurrence before a transcript
-// syncs.
+// working directories), plus every Vault value its user can read
+// (secrets/redactionSource.ts), and replaces every exact occurrence before a
+// transcript syncs.
 //
 // Rules:
 //  - Values live only in memory. Nothing here logs, persists or sends a value;
@@ -16,32 +17,42 @@
 //    `.env` / `.env.*` in a tracked cwd (and its git root) are ever read.
 //  - Length floors keep common words from being "secrets": 8 chars minimum,
 //    12 when the value is all digits, 16 when it is letters only (a plain word
-//    or identifier like `development` or `postgres_user`).
+//    or identifier like `development` or `postgres_user`). A Vault value skips
+//    them and needs only VAULT_MIN_LENGTH: a person put it there, which says it
+//    is secret whatever its shape.
+//  - Each value is matched as written and as a JSON string carries it (once
+//    and twice escaped), since tool call input syncs JSON-stringified and a
+//    quote, backslash or newline inside a value would otherwise hide it.
 //  - Matches are exact, longest first, never overlapping, and each becomes
-//    `[redacted:known]` or `[redacted:known:NAME]`. Markers cannot contain a
-//    known value (values must clear the floors above and markers are built from
-//    the fixed prefix plus a variable name), so a second pass is a no-op.
+//    `[redacted:known]` or `[redacted:known:NAME]`. A value that occurs inside
+//    a marker is dropped, so a second pass is a no-op.
 //
 // The store is empty until the daemon calls startKnownValueRedaction, so
 // redactKnownValues is a pass-through in every other process.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { parseDotenv } from "@codecast/shared/contracts/secrets";
 
-export type KnownValue = { value: string; name?: string };
+/** `vault`: a Vault value, held to VAULT_MIN_LENGTH only (qualifiesAsKnownValue). */
+export type KnownValue = { value: string; name?: string; vault?: true };
 
 /** Variable names whose values are credentials. AUTH excludes AUTHOR (GIT_AUTHOR_NAME). */
 const SECRET_NAME_RE = /SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|API[_-]?KEY|PRIVATE[_-]?KEY|AUTH(?!OR)/i;
 
 const MIN_LENGTH = 8;
+// Below this even a Vault value would redact ordinary text (a 4-digit PIN in
+// every port number and year). The matcher's prefix hash also needs 4 chars.
+const VAULT_MIN_LENGTH = 6;
 const MIN_DIGITS_ONLY = 12;
 const MIN_LETTERS_ONLY = 16;
 // A credential is one token. Anything this long is a document, not a secret
 // worth exact-matching (a kubeconfig cert blob is the usual case).
 const MAX_LENGTH = 8192;
 
-/** True if `value` is long and varied enough to be redacted wherever it appears. */
-export function qualifiesAsKnownValue(value: string): boolean {
+/** True if `value` is long and varied enough to be redacted wherever it appears. A Vault value only needs VAULT_MIN_LENGTH. */
+export function qualifiesAsKnownValue(value: string, vault = false): boolean {
+  if (vault) return value.length >= VAULT_MIN_LENGTH && value.length <= MAX_LENGTH;
   if (value.length < MIN_LENGTH || value.length > MAX_LENGTH) return false;
   if (/^\d+$/.test(value)) return value.length >= MIN_DIGITS_ONLY;
   if (/^[A-Za-z_.-]+$/.test(value)) return value.length >= MIN_LETTERS_ONLY;
@@ -55,20 +66,21 @@ export function isSecretName(name: string): boolean {
 }
 
 /** The password (and user:password pair) inside a URL's userinfo, if any. */
-function urlCredentials(value: string, name: string | undefined, out: KnownValue[]): void {
+function urlCredentials(value: string, name: string | undefined, out: KnownValue[], vault = false): void {
   const m = /^[a-z][a-z0-9+.-]*:\/\/([^/\s:@]+):([^/\s@]+)@/i.exec(value);
   if (!m) return;
   let password = m[2];
   try { password = decodeURIComponent(password); } catch {}
-  out.push({ value: m[2], name }, { value: password, name });
+  const from = vault ? ({ name, vault: true } as const) : { name };
+  out.push({ value: m[2], ...from }, { value: password, ...from });
 }
 
-function add(out: KnownValue[], value: string | undefined | null, name?: string): void {
+function add(out: KnownValue[], value: string | undefined | null, name?: string, vault = false): void {
   if (typeof value !== "string") return;
   const v = value.trim();
   if (!v) return;
-  out.push({ value: v, name });
-  urlCredentials(v, name, out);
+  out.push(vault ? { value: v, name, vault: true } : { value: v, name });
+  urlCredentials(v, name, out, vault);
 }
 
 // ---------------------------------------------------------------------------
@@ -84,24 +96,6 @@ export function collectFromEnv(env: Record<string, string | undefined>): KnownVa
     else urlCredentials(value.trim(), name, out);
   }
   return out;
-}
-
-/** Parse dotenv text into [name, value] pairs (export prefix, quotes, inline comments). */
-export function parseDotenv(text: string): Array<[string, string]> {
-  const pairs: Array<[string, string]> = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/.exec(raw);
-    if (!m) continue;
-    let value = m[2].trim();
-    const q = value[0];
-    if ((q === '"' || q === "'" || q === "`") && value.indexOf(q, 1) > 0) {
-      value = value.slice(1, value.indexOf(q, 1));
-    } else {
-      value = value.replace(/\s+#.*$/, "");
-    }
-    pairs.push([m[1], value]);
-  }
-  return pairs;
 }
 
 /** A value that looks generated rather than written: long, mixed letters and digits, no spaces. */
@@ -227,7 +221,19 @@ const markerFor = (name?: string) => {
 };
 
 type Entry = { value: string; marker: string };
-export type KnownValueMatcher = { size: number; buckets: Map<number, Entry[]> };
+/** `size` counts distinct values; `minLength` is the shortest text form any of them takes. */
+export type KnownValueMatcher = { size: number; minLength: number; buckets: Map<number, Entry[]> };
+
+/** A value as text can carry it: as written, then escaped once and twice for a JSON string. */
+function textForms(value: string): string[] {
+  const forms = [value];
+  for (let i = 0; i < 2; i++) {
+    const escaped = JSON.stringify(forms[forms.length - 1]).slice(1, -1);
+    if (escaped === forms[forms.length - 1]) break;
+    forms.push(escaped);
+  }
+  return forms;
+}
 
 // Kept in small-integer range so Map probes stay on V8's fast path.
 const prefixKey = (s: string, i: number) =>
@@ -235,28 +241,34 @@ const prefixKey = (s: string, i: number) =>
 
 export function buildMatcher(values: KnownValue[]): KnownValueMatcher {
   const byValue = new Map<string, string | undefined>();
-  for (const { value, name } of values) {
-    if (!qualifiesAsKnownValue(value)) continue;
+  for (const { value, name, vault } of values) {
+    if (!qualifiesAsKnownValue(value, vault)) continue;
     // First name wins, but a named source beats an anonymous one.
     if (!byValue.has(value) || (byValue.get(value) === undefined && name)) byValue.set(value, name);
   }
+  const markers = ["[redacted:known]", ...new Set([...byValue.values()].map(markerFor))].join("\n");
+  for (const value of byValue.keys()) if (markers.includes(value)) byValue.delete(value);
   const buckets = new Map<number, Entry[]>();
+  let minLength = Infinity;
   for (const [value, name] of byValue) {
-    const key = prefixKey(value, 0);
-    const list = buckets.get(key) ?? [];
-    list.push({ value, marker: markerFor(name) });
-    buckets.set(key, list);
+    for (const form of textForms(value)) {
+      const key = prefixKey(form, 0);
+      const list = buckets.get(key) ?? [];
+      list.push({ value: form, marker: markerFor(name) });
+      buckets.set(key, list);
+    }
+    minLength = Math.min(minLength, value.length);
   }
   for (const list of buckets.values()) list.sort((a, b) => b.value.length - a.value.length);
-  return { size: byValue.size, buckets };
+  return { size: byValue.size, minLength, buckets };
 }
 
 export function redactWithMatcher(text: string, matcher: KnownValueMatcher): string {
-  if (!matcher.size || text.length < MIN_LENGTH) return text;
+  if (!matcher.size || text.length < matcher.minLength) return text;
   const { buckets } = matcher;
   let out = "";
   let last = 0;
-  const end = text.length - MIN_LENGTH + 1;
+  const end = text.length - matcher.minLength + 1;
   for (let i = 0; i < end; i++) {
     const list = buckets.get(prefixKey(text, i));
     if (!list) continue;
@@ -295,6 +307,8 @@ export type KnownValueSources = {
   cwds?: () => Iterable<string>;
   /** Decrypted codecast credentials (config.json's auth_token is encrypted at rest). */
   codecastSecrets?: () => Array<string | undefined>;
+  /** Named values held in memory and refreshed off the network: the Vault (secrets/redactionSource.ts). */
+  vault?: { values: () => KnownValue[]; refresh: () => Promise<boolean> };
   log?: (line: string) => void;
 };
 
@@ -336,6 +350,9 @@ export class KnownValueStore {
   private watched = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private rebuildQueued = false;
+  // Set by stop(): a Vault refresh or file poll already in flight then lands
+  // on nothing instead of reinstalling a matcher and its file watches.
+  private stopped = false;
   // Parsed values per file, reused while the file's mtime and size hold, so a
   // boot that tracks many cwds one by one rereads only what changed.
   private parsed = new Map<string, { mtimeMs: number; size: number; values: KnownValue[] }>();
@@ -360,7 +377,11 @@ export class KnownValueStore {
   }
 
   collect(): KnownValue[] {
-    const values = collectFromEnv(this.src.env());
+    // Vault values first: the first name wins, so a value also held in an env
+    // var or a .env file still reads as the secret's Vault name.
+    const values: KnownValue[] = [];
+    for (const { value, name } of this.src.vault?.values() ?? []) add(values, value, name, true);
+    values.push(...collectFromEnv(this.src.env()));
     for (const secret of this.src.codecastSecrets?.() ?? []) add(values, secret, "codecast");
     const seen = new Set<string>();
     for (const { file, collect } of this.files()) {
@@ -389,7 +410,7 @@ export class KnownValueStore {
     }
     const before = active?.size ?? -1;
     active = matcher;
-    if (matcher.size !== before) this.src.log?.(`[KNOWN-VALUES] ${matcher.size} values from env, credential files and ${this.cwds.size} session dirs`);
+    if (matcher.size !== before) this.src.log?.(`[KNOWN-VALUES] ${matcher.size} values from env, credential files, the Vault and ${this.cwds.size} session dirs`);
     this.watchFiles();
     return matcher;
   }
@@ -402,15 +423,28 @@ export class KnownValueStore {
   }
 
   start(intervalMs = 60_000): void {
+    this.stopped = false;
     this.rebuild();
+    this.refreshVault();
     this.timer = setInterval(() => {
       for (const cwd of this.src.cwds?.() ?? []) if (cwd) this.cwds.add(cwd);
       this.rebuild();
+      this.refreshVault();
     }, intervalMs);
     (this.timer as any).unref?.();
   }
 
+  /** Poll the Vault source and rebuild once its values arrive or change. */
+  refreshVault(): Promise<void> {
+    if (!this.src.vault) return Promise.resolve();
+    return this.src.vault.refresh().then(
+      (changed) => { if (changed && !this.stopped) this.rebuild(); },
+      (e) => this.src.log?.(`[KNOWN-VALUES] vault refresh failed: ${(e as Error)?.message ?? e}`),
+    );
+  }
+
   stop(): void {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     for (const file of this.watched) fs.unwatchFile(file);
@@ -428,7 +462,7 @@ export class KnownValueStore {
         if (cur.mtimeMs === prev.mtimeMs && cur.size === prev.size) return;
         if (this.rebuildQueued) return;
         this.rebuildQueued = true;
-        setTimeout(() => { this.rebuildQueued = false; this.rebuild(); }, 250).unref?.();
+        setTimeout(() => { this.rebuildQueued = false; if (!this.stopped) this.rebuild(); }, 250).unref?.();
       });
     }
   }
@@ -448,4 +482,9 @@ export function startKnownValueRedaction(src: KnownValueSources): KnownValueStor
 /** Tell the running store about a session's working directory. No-op outside the daemon. */
 export function trackKnownValueCwd(cwd: string | undefined | null): void {
   store?.trackCwd(cwd);
+}
+
+/** Poll the Vault now and rebuild when its values moved; resolves once that landed. No-op outside the daemon. */
+export function refreshKnownVault(): Promise<void> {
+  return store?.refreshVault() ?? Promise.resolve();
 }

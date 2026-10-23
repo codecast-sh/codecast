@@ -24,7 +24,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { huddleChatLineHeader, isHuddlePass, isRecRoomKey, isToolResultCarrier } from "@codecast/shared/contracts";
+import { huddleChatLineHeader, isHuddlePass, isRecRoomKey, isRoomTalkDelivery, isToolResultCarrier } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
@@ -44,8 +44,8 @@ const MIRROR_RETRY_MS = 15_000;
 const MIRROR_ATTEMPTS = 2;
 // The most rows one mirror walks past the watermark: a few turns of tool calls.
 const MIRROR_SCAN = 200;
-// How long an ask waits for the reply its voice says. Past it the room has
-// moved on, and the reply is in the chat.
+// How long an ask stays open: what the session posts for it in that time is
+// said aloud. Past it the room has moved on, and the reply is in the chat.
 const ASKED_TELL_MS = 10 * 60_000;
 
 export const list = query({
@@ -318,18 +318,20 @@ export function agentLineText(m: { content?: string; is_encrypted?: boolean } | 
 /** Each turn's reply, oldest first: the last assistant words before the next
  *  thing said to the session. A user row that only carries tool results is
  *  the harness, not a new turn, so narration between tool calls never posts. */
-export function turnReplies<M extends { role: string; content?: string; is_encrypted?: boolean; tool_results?: readonly unknown[] }>(rows: M[]): M[] {
-  const out: M[] = [];
+export function turnReplies<M extends { role: string; content?: string; is_encrypted?: boolean; tool_results?: readonly unknown[] }>(rows: M[]): { reply: M; prompt: M | null }[] {
+  const out: { reply: M; prompt: M | null }[] = [];
   let last: M | null = null;
+  let prompt: M | null = null;
   for (const m of rows) {
     if (m.role === "assistant") {
       if (agentLineText(m)) last = m;
     } else if (m.role === "user" && !isToolResultCarrier(m)) {
-      if (last) out.push(last);
+      if (last) out.push({ reply: last, prompt });
       last = null;
+      prompt = m;
     }
   }
-  if (last) out.push(last);
+  if (last) out.push({ reply: last, prompt });
   return out;
 }
 
@@ -378,7 +380,8 @@ export const mirrorAgentTurn = internalMutation({
       )
       .order("asc")
       .take(MIRROR_SCAN);
-    const replies = turnReplies(after);
+    const turns = turnReplies(after);
+    const replies = turns.map((t) => t.reply);
     const attempt = args.attempt ?? 0;
     if (replies.length === 0) {
       if (attempt + 1 < MIRROR_ATTEMPTS) {
@@ -402,15 +405,16 @@ export const mirrorAgentTurn = internalMutation({
         transcript_id: feed.transcript_id,
       });
     }
-    // Its voice says only what answers someone who asked (callFace.ts tell),
-    // once: the ask is spent on the first reply that posts.
-    const asked = posted.length > 0 && (feed.addressed_at ?? 0) > Date.now() - ASKED_TELL_MS;
-    await ctx.db.patch(feed._id, {
-      last_mirrored_message_id: replies[replies.length - 1]._id,
-      ...(asked ? { addressed_at: undefined } : {}),
-    });
+    await ctx.db.patch(feed._id, { last_mirrored_message_id: replies[replies.length - 1]._id });
     if (posted.length === 0) return { mirrored: false, reason: "passed" };
-    if (asked) await scheduleFaceTell(ctx, feed, posted.map((m) => m.content ?? ""));
+    // Its voice says only what answers someone who asked (callFace.ts tell):
+    // while an ask is open, every reply but one to room talk nobody addressed
+    // to it. A first "on it" line and the result that follows both count.
+    const askOpen = (feed.addressed_at ?? 0) > Date.now() - ASKED_TELL_MS;
+    const spoken = askOpen
+      ? turns.filter((t) => !isHuddlePass(t.reply.content) && !isRoomTalkDelivery(t.prompt?.content)).map((t) => t.reply.content ?? "")
+      : [];
+    if (spoken.length) await scheduleFaceTell(ctx, feed, spoken);
     return { mirrored: true };
   },
 });
