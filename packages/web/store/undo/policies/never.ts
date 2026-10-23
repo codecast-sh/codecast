@@ -152,6 +152,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   rotateOpsSourceKey: never("key rotation: the old ingest key stops working at once and cannot be restored"),
   upsertAgentDefinition: CREATE,
   upsertAgentChain: CREATE,
+  stageSecret: never("create: paints a Vault create whose value went straight to the server; delete the secret to take it back"),
+  settleSecretStub: never("create: settles that painted row onto the server's answer"),
 
   // Deletes
   deleteCallRecording: DELETE,
@@ -171,6 +173,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   dispatchDeleteTeam: DELETE,
   removeAgentChain: DELETE,
   removeAgentDefinition: DELETE,
+  removeSecret: DELETE,
+  setSecretAskFirst: never("access guard: turning Ask first off goes through a confirm, so an undo must not flip it without one"),
   removeFromStack: never("delete: re-adding to a stack needs an addToStack server verb (follow-up)"),
   removeIssueSyncSource: DELETE,
   removeOpsSource: DELETE,
@@ -245,6 +249,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   markKilling: MACHINE,
   startResourceOffload: MACHINE,
   cancelResourceOffload: MACHINE,
+  requestMoveRehearsals: MACHINE,
   setSessionBackground: MACHINE,
   markBlockedReviveRequested: MACHINE,
   clearBlockedReviveRequested: MACHINE,

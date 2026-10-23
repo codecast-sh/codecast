@@ -20,7 +20,8 @@ import {
   type StableMode,
 } from "@codecast/shared/contracts";
 import { formatFeedResults } from "./formatter.js";
-import { poolFlows } from "./workflow/flowPool.js";
+import { poolFlows, type PushedPoolRow } from "./workflow/flowPool.js";
+import { fetchMappedProjects, teamForDirectory } from "./directoryTeam.js";
 import { flowPathWords } from "@codecast/shared/contracts/flowPool";
 import { orgContextBlock } from "@codecast/shared/contracts/orgWhere";
 import { formatModGuide } from "./mods/guide.js";
@@ -79,6 +80,7 @@ export async function buildStableContext(
   const siteUrl = config.convex_url.replace(".cloud", ".site");
   const orgBlock = fetchOrgContext(siteUrl, config.auth_token, opts.session);
   const modsBlock = fetchModsGuide(siteUrl, config.auth_token, opts.cwd);
+  const poolBlock = fetchDirectoryPool(siteUrl, config.auth_token, opts.cwd);
 
   try {
     const response = await fetch(`${siteUrl}/cli/feed`, {
@@ -114,7 +116,7 @@ export async function buildStableContext(
 
     // What agents must act on (the org, the mods' objects and blocks) leads;
     // the feed is background and gives up its oldest conversations to fit.
-    const lead = `${await orgBlock}${await modsBlock}${flowsLine(opts.cwd)}`.trim();
+    const lead = `${await orgBlock}${await modsBlock}${flowsLine(opts.cwd, await poolBlock)}`.trim();
     const render = () => {
       const feed = stripAnsi(formatFeedResults({ ...result, conversations }, { projectPath }));
       return `${lead ? `${lead}\n\n` : ""}<stable-context mode="${opts.mode}">\n${instruction}\n\n${feed}\n</stable-context>`;
@@ -174,15 +176,39 @@ async function fetchOrgContext(siteUrl: string, apiToken: string, session?: stri
  * One line naming the flows a change made here can run through (docs/architecture/flows.md FL7), read from this
  * checkout's pool with no network. Kept to one line: it rides the same 9000-byte budget the feed gives way to.
  */
-export function flowsLine(cwd?: string): string {
+export function flowsLine(cwd?: string, pushed: ReadonlyArray<PushedPoolRow> = []): string {
   try {
-    const pool = poolFlows(cwd ?? process.cwd()).filter((f) => f.takes.includes("branch") && !f.errors.length);
+    const pool = poolFlows(cwd ?? process.cwd(), null, pushed).filter((f) => f.takes.includes("branch") && !f.errors.length);
     if (!pool.length) return "";
     const lead = pool.find((f) => f.slug === "change") ?? pool[0];
-    const others = pool.filter((f) => f !== lead).map((f) => f.slug);
-    return `\n\n<flows>A finished change goes through a flow from the pool before it ships; the standard one is ${lead.slug} (${flowPathWords(lead).path})${others.length ? `, and ${others.join(", ")} run one part of it` : ""}. \`cast flow run <flow>\` sends this session's own edits through one, and \`cast flow show <flow>\` says what each step does.</flows>`;
+    const segments = pool.filter((f) => f !== lead && f.kind === "segment").map((f) => f.slug);
+    const lines = pool.filter((f) => f !== lead && f.kind === "line").map((f) => f.slug);
+    const parts = [
+      `the standard one is ${lead.slug} (${flowPathWords(lead).path})`,
+      ...(segments.length ? [`the segments ${segments.join(", ")} each run one part of a change`] : []),
+      ...(lines.length ? [`${lines.join(", ")} ${lines.length === 1 ? "is another whole line" : "are other whole lines"}`] : []),
+    ];
+    return `\n\n<flows>A finished change goes through a flow from the pool before it ships: ${parts.join("; ")}. \`cast flow run <flow>\` sends this session's own edits through one, and \`cast flow show <flow>\` says what each step does.</flows>`;
   } catch {
     return "";
+  }
+}
+
+/** The team pool's published flows for a directory: its mapped team's, else none (session start reads no other team's). */
+async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: string): Promise<PushedPoolRow[]> {
+  try {
+    const team = teamForDirectory(await fetchMappedProjects(siteUrl, apiToken), cwd ?? process.cwd());
+    if (!team) return [];
+    const response = await fetch(`${siteUrl}/cli/workflows/pool`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, team_id: team }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const data = (await response.json()) as { flows?: PushedPoolRow[] };
+    return response.ok ? data.flows ?? [] : [];
+  } catch {
+    return [];
   }
 }
 

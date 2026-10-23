@@ -18,7 +18,9 @@ import {
   extractDecideArgs,
   extractSendBody,
   extractStateArgs,
+  extractVaultArgs,
   normalizeCastCategory,
+  vaultShortIdIn,
   type ParsedCastCommand,
 } from '@codecast/web/components/castCommand';
 import { decideOutputId } from '@codecast/web/components/conversation/classify';
@@ -52,6 +54,7 @@ const CATEGORY: Record<string, { icon: FeatherName; tone: Tone }> = {
   summary: { icon: 'align-left', tone: 'magenta' },
   handoff: { icon: 'repeat', tone: 'magenta' },
   context: { icon: 'compass', tone: 'magenta' },
+  vault: { icon: 'lock', tone: 'yellow' },
 };
 
 const STATUS_VERBS = new Set(['start', 'done', 'drop', 'pause', 'activate', 'bind', 'unbind']);
@@ -93,11 +96,14 @@ export function CastCommandBlock({ cast, output, isError, image }: {
   const meta = CATEGORY[cat] ?? { icon: 'terminal' as FeatherName, tone: 'textDim' as Tone };
   const color = Theme[meta.tone];
   const body = useMemo(() => extractCastBodyParts(category, subcommand, args), [category, subcommand, args]);
+  const vault = cat === 'vault' ? extractVaultArgs(subcommand, args) : null;
 
   const raw = open && (
     <RNView style={styles.raw}>
       <RNText style={styles.rawCmd} selectable>$ {cast.raw}</RNText>
-      {output.trim()
+      {vault?.hidesOutput
+        ? <RNText style={styles.rawOut}>Value not shown</RNText>
+        : output.trim()
         ? <AnsiText text={output.replace(/\s+$/, '')} style={[styles.rawOut, isError && { color: Theme.red }]} />
         : <RNText style={styles.rawOut}>No output</RNText>}
     </RNView>
@@ -228,6 +234,16 @@ export function CastCommandBlock({ cast, output, isError, image }: {
           <RNText style={[styles.chip, { color: Theme[tone], borderColor: Theme[tone] + '55', backgroundColor: Theme[tone] + '14' }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{sm.label}</RNText>
         )}
         {!!st?.headline && <RNText style={styles.summaryText} numberOfLines={1}>{st.headline}</RNText>}
+      </>
+    );
+  } else if (vault) {
+    // Names only: get/env/otp printed a value, so their output is never read.
+    const id = vault.hidesOutput ? null : vaultShortIdIn(stripAnsiCodes(output));
+    summary = (
+      <>
+        {id && <EntityPill shortId={id} type="secret" />}
+        {vault.names.length > 0 && <RNText style={styles.summaryText} numberOfLines={1}>{vault.names.join(', ')}</RNText>}
+        {!!vault.command && <RNText style={styles.summaryMuted} numberOfLines={1}>{vault.command}</RNText>}
       </>
     );
   } else {
