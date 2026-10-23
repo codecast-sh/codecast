@@ -218,7 +218,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
 
   line
     .command("unset <key>")
-    .description("Remove one value from this repo's .codecast/line.toml, so the line uses its default; then publish")
+    .description("Remove one value from this repo's .codecast/line.toml, so the flow uses its default; then publish")
     .option("--no-publish", "Write the file only")
     .option("--json", "Machine-readable output")
     .action(async (key: string, options: { publish?: boolean; json?: boolean }) => {
@@ -226,7 +226,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
       await run([{ op: "remove", key }], options, [key]);
     });
 
-  const finder = line.command("finder").description("Add, change or remove a finder (a source that files findings into this line) in this repo's .codecast/line.toml");
+  const finder = line.command("finder").description("Add, change or remove a finder (a source that files findings into this flow) in this repo's .codecast/line.toml");
   finder
     .command("set <id>")
     .description("Add a finder, or change the one with this id; only the parts given change")
@@ -259,7 +259,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
 
   // The repo's own line (line-map.md LX5): one station's prompt, script or
   // timeout, through the same checked edit as the app's, then published.
-  const station = line.command("station").description("Change one station of this repo's own line (.codecast/line/), written out from the shipped line the first time; checked before it is written, then published");
+  const station = line.command("station").description("Change one station of this repo's own steps (.codecast/line/), written out from the Standard steps the first time; checked before it is written, then published");
   station
     .command("set <id>")
     .description("Set a station's prompt, script or timeout; only the parts given change")
@@ -283,7 +283,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
     });
   station
     .command("reset <id>")
-    .description("Put a station back to the shipped line's prompt, script and timeout")
+    .description("Put a station back to the Standard steps' prompt, script and timeout")
     .option("--no-publish", "Write the files only")
     .option("--json", "Machine-readable output")
     .action(async (id: string, options: { publish?: boolean; json?: boolean }) => {
@@ -292,7 +292,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
 
   line
     .command("profile")
-    .description("The line profile for this directory (.codecast/line.toml merged with the defaults), each value with where it came from")
+    .description("The flow profile for this directory (.codecast/line.toml merged with the defaults), each value with where it came from")
     .option("--json", "Machine-readable output")
     .option("--publish", "Publish this profile onto the projects its finders file into, so the app shows the whole line and /line says when a finder goes silent")
     .option("--starter", "Print a starter .codecast/line.toml for a repository that has none: the defaults written out, the project filled in")
@@ -342,7 +342,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
 
   line
     .command("proof-check <file>")
-    .description("Check the proof for a problem in the line itself (line-proof.json, written by the prove station) against the runs it names: each run must be recorded, and the station's status, outcome and fail reason must be what the proof says; exits 0 when every claim holds, 1 when one does not")
+    .description("Check the proof for a problem in the flow itself (line-proof.json, written by the prove station) against the runs it names: each run must be recorded, and the station's status, outcome and fail reason must be what the proof says; exits 0 when every claim holds, 1 when one does not")
     .option("--json", "Print { ok, why, checks }")
     .action(async (file: string, options: { json?: boolean }) => {
       let raw: unknown = null;

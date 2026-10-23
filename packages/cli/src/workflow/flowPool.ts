@@ -7,9 +7,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { foldFlow, flowPathWords, type FlowStation, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
-import { parseWorkflowSource, validateWorkflow } from "./parser.js";
+import { graphExtends, parseWorkflowSource, validateWorkflow } from "./parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
-import { DEFAULT_LINE_SLUG } from "@codecast/shared/contracts/orgProposal";
+import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
 import type { WorkflowGraph } from "./types.js";
 import { codecastPath } from "../codecastDir.js";
 
@@ -24,6 +24,8 @@ export type PoolFlow = PoolFlowSummary & {
   errors: string[];
   /** Who published it, for a flow from the workspace's pool. */
   by?: string | null;
+  /** The flow it extends (a variant), by slug. */
+  extends: string | null;
 };
 
 /** A flow published to the workspace's pool, as /cli/workflows/pool returns it. */
@@ -48,7 +50,7 @@ export type PushedPoolRow = {
  * checkout. A path that would leave the directory is not written. Returns the
  * graph file.
  */
-export function materializePushedFlow(row: PushedPoolRow, cacheRoot = codecastPath("flows")): string {
+export function materializePushedFlow(row: PushedPoolRow, cacheRoot = codecastPath("flows"), base?: PushedPoolRow): string {
   const dir = path.resolve(cacheRoot, row._id.replace(/[^\w-]/g, ""));
   const write = (rel: string, text: string): string | null => {
     const abs = path.resolve(dir, rel);
@@ -58,13 +60,19 @@ export function materializePushedFlow(row: PushedPoolRow, cacheRoot = codecastPa
     fs.writeFileSync(abs, text);
     return abs;
   };
+  const files = (r: PushedPoolRow) => {
+    const byId = new Map(r.nodes.map((n) => [n.id, n]));
+    for (const f of r.origin?.files ?? []) {
+      const n = byId.get(f.node);
+      if (f.prompt && n?.prompt !== undefined) write(f.prompt, n.prompt);
+      if (f.script && n?.script !== undefined) write(f.script, n.script);
+    }
+  };
   const file = write(row.origin?.file ?? `${row.slug}.cast`, row.source) ?? write(`${row.slug}.cast`, row.source)!;
-  const byId = new Map(row.nodes.map((n) => [n.id, n]));
-  for (const f of row.origin?.files ?? []) {
-    const n = byId.get(f.node);
-    if (f.prompt && n?.prompt !== undefined) write(f.prompt, n.prompt);
-    if (f.script && n?.script !== undefined) write(f.script, n.script);
-  }
+  // A variant's base sits where its `extends` reads it, with its stations' files, so the variant parses here.
+  const ext = graphExtendsOf(row.source);
+  if (base && ext && write(path.relative(dir, path.resolve(path.dirname(file), ext)), base.source)) files(base);
+  files(row);
   return file;
 }
 
@@ -101,10 +109,13 @@ export function poolFlows(cwd: string, session?: string | null, pushed: Readonly
     out.push(describeFlow(slug, src, "shipped", null, dir ?? undefined));
   }
   const named = new Set(out.map((f) => f.slug));
+  const newest = new Map<string, PushedPoolRow>();
+  for (const row of pushed) if (!newest.has(row.slug)) newest.set(row.slug, row);
   for (const row of pushed) {
     if (named.has(row.slug) || !row.source) continue;
     named.add(row.slug);
-    const file = materializePushedFlow(row, cacheRoot);
+    const base = newest.get(extendsSlug(graphExtendsOf(row.source)) ?? "");
+    const file = materializePushedFlow(row, cacheRoot, base);
     const where = row.workspace?.startsWith("team:") ? "team" : "pushed";
     out.push({ ...describeFlow(row.slug, row.source, where, file), by: row.mine ? null : row.by ?? null });
   }
@@ -126,21 +137,31 @@ export function describeFlow(slug: string, src: string, where: PoolWhere, file: 
   try {
     graph = parseWorkflowSource(src, file ? path.dirname(file) : dir);
   } catch (err) {
-    return { slug, kind: "line", label: slug, description: null, takes: [], draft: null, where, file, stations: [], ends: [], uses: [], errors: [err instanceof Error ? err.message : String(err)] };
+    return { slug, kind: "line", label: slug, description: null, takes: [], draft: null, where, file, extends: extendsSlug(graphExtendsOf(src)), stations: [], ends: [], uses: [], errors: [err instanceof Error ? err.message : String(err)] };
   }
   return {
     slug,
     kind: graph.kind ?? "line",
-    label: graph.label ?? titleOf(slug),
+    // The shipped template's graph names no label; people read it as the Standard steps.
+    label: graph.label ?? (slug === DEFAULT_LINE_SLUG ? DEFAULT_STEPS_LABEL : titleOf(slug)),
     description: graph.description ?? null,
     takes: graph.takes ?? ["task"],
     draft: graph.draft ?? null,
     where,
     file,
+    extends: extendsSlug(graphExtendsOf(src)),
     ...foldFlow([...graph.nodes.values()], graph.edges),
     errors: validateWorkflow(graph),
   };
 }
+
+/** A graph's `extends` as written, or undefined when it names none or does not parse. */
+function graphExtendsOf(src: string): string | undefined {
+  try { return graphExtends(src); } catch { return undefined; }
+}
+
+/** The flow an `extends` path names, by slug: `agentwatch.cast` and `../line/agentwatch.cast` are `agentwatch`. */
+export const extendsSlug = (ext: string | null | undefined): string | null => (ext ? path.basename(ext).replace(/\.cast$/, "") : null);
 
 const titleOf = (slug: string) => slug.replace(/[-_]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 
@@ -148,5 +169,5 @@ const titleOf = (slug: string) => slug.replace(/[-_]+/g, " ").replace(/^\w/, (c)
 export function flowLine(f: PoolFlow): string {
   const { path: main, side } = flowPathWords(f);
   const path = main || "(no stations)";
-  return `${f.slug.padEnd(16)} ${f.kind.padEnd(8)} ${f.takes.join(",").padEnd(12)} ${path}${side ? `  (+${side} on side routes)` : ""}`;
+  return `${f.slug.padEnd(16)} ${(f.kind === "line" ? "flow" : f.kind).padEnd(8)} ${f.takes.join(",").padEnd(12)} ${path}${side ? `  (+${side} on side routes)` : ""}`;
 }

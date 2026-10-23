@@ -383,7 +383,7 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
 
   trial
     .command("rebuild <card>")
-    .description("Send a waiting change card whose branch is stale against main back to the line's fresh station: rebased and proven again, or rebuilt with the clashes named; it reads Rebuilding until its next card")
+    .description("Send a waiting change card whose branch is stale against main back to the flow's fresh station: rebased and proven again, or rebuilt with the clashes named; it reads Rebuilding until its next card")
     .option("--from <station>", "verify: the branch is already on main and only needs proving again (default: fresh)")
     .option("--json", "Machine-readable output")
     .action(async (card: string, options: { json?: boolean; from?: string }) => {

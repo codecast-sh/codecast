@@ -1,21 +1,32 @@
-// `cast flow`: the pool of structured flows every change can run through
-// (docs/architecture/flows.md). A flow is a .cast graph; a line takes a change
-// to done, a segment does one part of the path. This file lists the pool,
-// shows one flow, runs a change through one, and turns a Claude Code
-// workflow script into a flow of the pool.
+// `cast flow` (docs/architecture/flows.md): the team's library of structured
+// flows and its live flows. A flow is a .cast graph; a whole flow takes a
+// change to done, a variant extends a flow and changes only what differs, a
+// segment does one part of the path. A live flow is a flow switched on, with
+// sources feeding one queue. This file lists the library and the live flows,
+// shows one, runs a change through one, switches a live flow, and turns a
+// Claude Code workflow script into a flow (lineCommand.ts adds the flows'
+// working commands).
 import type { Command } from "commander";
 import { commandGroup } from "./commandGroups.js";
 import { spawnSync } from "./proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { holdUntil, libraryTree, liveFlowLines, namesLiveFlow, variantChangeLines, variantChanges, variantSummary, type LibraryNode, type LiveFlow, type VariantChanges } from "./flowLibrary.js";
+import type { WorkflowGraph } from "./workflow/types.js";
+import { graphExtends, parseWorkflowSource } from "./workflow/parser.js";
+import { describeFlow, flowLine, poolFlows, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
+import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
+import type { Workspace } from "./resolveWorkspace.js";
 
 export interface FlowDeps {
   cliPost: (urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number; throwOnError?: boolean }) => Promise<any>;
   /** The session this `cast` runs inside (its codecast id or agent session id), or undefined at a plain shell. */
   callingSession: () => string | undefined;
   realCwd: () => string;
-  /** The flows published to the workspace's pool (/cli/workflows/pool); nothing when it cannot be read. */
-  fetchPool: (team?: string) => Promise<import("./workflow/flowPool.js").PushedPoolRow[]>;
+  /** The workspace a read names: the team given, else the one this shell reads. */
+  readWorkspace: (team?: string) => Promise<Workspace>;
+  /** The workspace a write names outright (a team, or it stops with why). */
+  writeWorkspace: (team?: string) => Promise<Workspace>;
 }
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -29,7 +40,7 @@ async function cast(args: string[], cwd: string): Promise<{ code: number; out: s
   return { code: r.status ?? 1, out: r.stdout ?? "", err: r.stderr ?? "" };
 }
 
-export function registerFlowCommands(program: Command, deps: FlowDeps): void {
+export function registerFlowCommands(program: Command, deps: FlowDeps): Command {
   const flow = program
     .command("flow")
     .description(commandGroup("flow").description)
@@ -37,43 +48,85 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
 
   flow
     .command("ls")
-    .description("List the pool: each flow's kind, what it takes, and its stations in order")
-    .option("--kind <kind>", "Only lines or only segments (line, segment)")
-    .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
-    .option("--json", "Print the pool as JSON")
+    .description("The library as a tree (the spine, whole flows with their variants, segments) and the team's live flows")
+    .option("--kind <kind>", "Only whole flows or only segments (line, segment)")
+    .option("--team <name>", "Read this team's library (default: the workspace this directory reads)")
+    .option("--json", "Print { library, live } as JSON")
     .action(async (opts: { kind?: string; json?: boolean; team?: string }) => {
-      const { flowLine } = await import("./workflow/flowPool.js");
-      const pool = (await readPool(teamDeps(deps, opts.team))).filter((f) => !opts.kind || f.kind === opts.kind);
-      if (opts.json) { console.log(JSON.stringify(pool, null, 2)); return; }
-      const group = (kind: string, title: string) => {
-        const rows = pool.filter((f) => f.kind === kind);
-        if (!rows.length) return;
+      const tdeps = teamDeps(deps, opts.team);
+      const [pool, live] = await Promise.all([readPool(tdeps), readLive(deps, opts.team)]);
+      const library = pool.filter((f) => !opts.kind || f.kind === opts.kind);
+      const tree = libraryTree(library, live.flows);
+      if (opts.json) {
+        const spines = new Set(tree.spine.map((n) => n.flow.slug));
+        console.log(JSON.stringify({ library: library.map((f) => ({ ...f, spine: spines.has(f.slug) })), live: live.flows }, null, 2));
+        return;
+      }
+      const home = (f: typeof pool[number]) => (f.draft ? dim("  (your draft)") : f.where === "repo" ? dim("  (this repo)") : f.where === "team" ? dim(`  (the team's${f.by ? `, from ${f.by}` : ""})`) : f.where === "pushed" ? dim("  (yours)") : "");
+      const print = (n: LibraryNode, depth: number) => {
+        const f = n.flow;
+        const lead = depth ? `${"  ".repeat(depth)}└ ` : "  ";
+        console.log(`${lead}${flowLine(f)}${home(f)}${f.errors.length ? `  ✗ ${f.errors[0]}` : ""}`);
+        const pad = `${" ".repeat(lead.length)}${"".padEnd(16)} `;
+        if (depth) {
+          const base = graphOf(pool.find((p) => p.slug === f.extends));
+          const own = graphOf(f);
+          if (base && own) console.log(dim(`${pad}extends ${f.extends}: ${variantSummary(variantChanges(base, own))}`));
+        } else if (f.description) console.log(dim(`${pad}${f.description}`));
+        for (const v of n.variants) print(v, depth + 1);
+      };
+      const group = (nodes: LibraryNode[], title: string) => {
+        if (!nodes.length) return;
         console.log(bold(title));
-        for (const f of rows) {
-          console.log(`  ${flowLine(f)}${f.draft ? dim("  (your draft)") : f.where === "repo" ? dim("  (this repo)") : f.where === "team" ? dim(`  (the team's${f.by ? `, from ${f.by}` : ""})`) : f.where === "pushed" ? dim("  (yours)") : ""}${f.errors.length ? `  ✗ ${f.errors[0]}` : ""}`);
-          if (f.description) console.log(dim(`  ${"".padEnd(16)} ${f.description}`));
-        }
+        for (const n of nodes) print(n, 0);
         console.log("");
       };
       console.log(dim(`  ${"flow".padEnd(16)} ${"kind".padEnd(8)} ${"takes".padEnd(12)} stations`));
-      group("line", "Lines: take a change all the way to done");
-      group("segment", "Segments: one part of the path, run alone or inside a line");
+      group(tree.spine, "Spine: the flow the team's live flow runs");
+      group(tree.flows, "Whole flows: take a change all the way to done");
+      group(tree.segments, "Segments: one part of the path, run alone or inside a flow");
+      if (live.flows.length) {
+        console.log(bold("Live flows"));
+        for (const l of live.flows) for (const line of liveFlowLines(l, { top: 3, bold, dim })) console.log(`  ${line}`);
+        console.log("");
+      } else if (live.error) console.log(dim(`Live flows: ${live.error}\n`));
       console.log(dim("Run this session's change through one:  cast flow run <flow>"));
       console.log(dim("See a flow's stations and routes:        cast flow show <flow>"));
     });
 
   flow
     .command("show <flow>")
-    .description("A flow's stations, what each does, and where each sends the work")
-    .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
-    .option("--json", "Print the flow as JSON")
+    .description("A flow's stations, what each does, and where each sends the work; for a variant, what it changes from the flow it extends; for a live flow, its switch, sources and queue first")
+    .option("--team <name>", "Read this team's library (default: the workspace this directory reads)")
+    .option("--json", "Print the flow as JSON (with its live flow, and a variant's changes)")
     .action(async (slug: string, opts: { json?: boolean; team?: string }) => {
-      const found = await findFlow(slug, teamDeps(deps, opts.team));
-      if (opts.json) { console.log(JSON.stringify(found, null, 2)); return; }
+      const tdeps = teamDeps(deps, opts.team);
+      // A live flow is named by its flow (slug, label or id) or its own id; the flow it runs prints after it.
+      const [lives, pool] = await Promise.all([readLive(deps, opts.team), readPool(tdeps)]);
+      const live = lives.flows.find((l) => namesLiveFlow(l, slug)) ?? null;
+      const name = live ? live.flow.slug : slug;
+      if (live && !pool.some((p) => p.slug === name)) {
+        if (opts.json) { console.log(JSON.stringify({ live }, null, 2)); return; }
+        for (const line of liveFlowLines(live, { top: 10, bold, dim })) console.log(line);
+        console.log(dim(`\nIts flow ${name} is not in this team's library, so its stations cannot be read here.`));
+        return;
+      }
+      const found = await findFlow(name, tdeps, pool);
+      const spineLive = live ?? lives.flows.find((l) => l.flow.slug === found.slug) ?? null;
+      const base = found.extends ? pool.find((p) => p.slug === found.extends) ?? baseBeside(found) : null;
+      const baseGraph = graphOf(base);
+      const ownGraph = baseGraph ? graphOf(found) : null;
+      const changes = baseGraph && ownGraph ? variantChanges(baseGraph, ownGraph) : null;
+      if (opts.json) { console.log(JSON.stringify({ ...found, ...(spineLive ? { live: spineLive } : {}), ...(changes ? { changes } : {}) }, null, 2)); return; }
+      if (spineLive) {
+        for (const line of liveFlowLines(spineLive, { top: 10, bold, dim })) console.log(line);
+        console.log("");
+      }
       const home = found.where === "team" ? `the team's${found.by ? `, from ${found.by}` : ""}` : found.where === "pushed" ? "yours, published" : found.file ? `${found.where} · ${path.relative(deps.realCwd(), found.file)}` : found.where;
-      console.log(`${bold(found.label)}  ${dim(`${found.kind} · ${home}`)}`);
+      console.log(`${bold(found.label)}  ${dim(`${found.kind === "line" ? "flow" : found.kind} · ${home}`)}`);
       if (found.description) console.log(found.description);
       console.log(dim(`takes: ${found.takes.join(", ")}`));
+      if (found.extends) printVariantChanges(found.extends, base, changes);
       console.log("");
       // A fan-out's branches print under it, and the routes after its join are its own.
       const byId = new Map(found.stations.map((x) => [x.id, x]));
@@ -100,7 +153,6 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
     .command("validate <file>")
     .description("Read a flow file (segments expanded) and name what is missing")
     .action(async (file: string) => {
-      const { describeFlow } = await import("./workflow/flowPool.js");
       const abs = path.resolve(deps.realCwd(), file);
       const f = describeFlow(path.basename(abs).replace(/\.cast$/, ""), fs.readFileSync(abs, "utf-8"), "repo", abs);
       if (f.errors.length) { for (const e of f.errors) console.error(`✗ ${e}`); process.exit(1); }
@@ -110,7 +162,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
 
   flow
     .command("publish <flow>")
-    .description("Publish a repo flow to the team's pool, where every member sees and runs it (cast flow ls, the Line page's Flows view)")
+    .description("Publish a repo flow to the team's pool, where every member sees and runs it (cast flow ls, the Flows page)")
     .option("--team <name>", "The team whose pool it joins (default: your active team; personal keeps it yours)")
     .action(async (slug: string, opts: { team?: string }) => {
       const found = await findFlow(slug, deps);
@@ -169,7 +221,6 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
       }
 
       // The task the run binds to: the one named, else a new one for this change.
-      const { parseWorkflowSource } = await import("./workflow/parser.js");
       const { runSlug, lineRunDir } = await import("./workflow/runner.js");
       const graph = parseWorkflowSource(found.source, found.file ? path.dirname(found.file) : cwd);
       let task = opts.task;
@@ -266,6 +317,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
   // process so a script that never yields cannot hold the daemon.
   flow
     .command("trace <script>", { hidden: true })
+    .description("Print the graph a Claude Code workflow script would run, as JSON (the daemon's tracer)")
     .action(async (script: string) => {
       const { traceScriptGraph } = await import("./workflow/flowImport.js");
       const text = fs.readFileSync(script, "utf-8");
@@ -293,9 +345,88 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
       for (const n of out.notes) console.log(`  ${n}`);
       console.log(`\nThis is your draft: it still carries the task it ran for, so only this session sees it in the pool. To publish it, make it general: name each station and the flow for what it does in any change, give it a description that names no one task, rewrite the prompts above the same way (the task's words become $task_title, $task_description, $acceptance_criteria, $branch), delete draft= from its graph line, then: cast flow publish ${out.slug}`);
     });
+
+  // A hold parks every new run of a live flow while a wait no person needs to answer runs out (a spent budget until
+  // its roll-over). A hand or the watcher sets one; only a person clears it, in the browser.
+  flow
+    .command("hold <until> <why>")
+    .description("Hold a live flow's new runs until a time (90m, 6h, 2d or a date and time, at most 48h): a second hold keeps the later end; a person clears it in the browser")
+    .option("--flow <flow>", "The live flow (default: the team's one)")
+    .option("--team <name>", "The team whose live flow it is (default: the workspace this directory reads)")
+    .option("--json", "Print the hold as JSON")
+    .action(async (until: string, why: string, opts: { flow?: string; team?: string; json?: boolean }) => {
+      const at = holdUntil(until);
+      if (typeof at !== "number") { console.error(at.error); process.exit(1); }
+      if (!why.trim()) { console.error("Say why the flow waits"); process.exit(1); }
+      const ws = await deps.writeWorkspace(opts.team);
+      const r = await deps.cliPost("/cli/flow/live/hold", { ...(ws.kind === "team" ? { team_id: ws.teamId } : {}), ...(opts.flow ? { flow: opts.flow } : {}), why: why.trim(), until: at, from_session: deps.callingSession() });
+      if (opts.json) { console.log(JSON.stringify(r, null, 2)); return; }
+      const hold = r?.hold as LiveFlow["hold"];
+      console.log(hold ? `✓ held until ${new Date(hold.until).toLocaleString()}: ${hold.why}${hold.until > at ? dim("  (an earlier hold ends later, so it stands)") : ""}` : "✓ held");
+      if (r?.waiting) console.log(dim(`  waiting: ${r.waiting}`));
+    });
+
+  // A live flow's switch: the server holds who may turn it, and refuses everyone else in its own words.
+  for (const on of [true, false]) {
+    flow
+      .command(`${on ? "on" : "off"} [flow]`)
+      .description(on ? "Switch a live flow on: its queue starts problems by itself (a person's switch; the server refuses agents)" : "Switch a live flow off: nothing starts from its queue until it is on again (a person's switch)")
+      .option("--team <name>", "The team whose live flow it is (default: the workspace this directory reads)")
+      .option("--json", "Print the live flow as JSON")
+      .action(async (name: string | undefined, opts: { team?: string; json?: boolean }) => {
+        // A switch is a write: it names its team outright, and the server decides who may turn it.
+        const ws = await deps.writeWorkspace(opts.team);
+        const l: LiveFlow | null = await deps.cliPost(`/cli/flow/live/${on ? "on" : "off"}`, { ...(ws.kind === "team" ? { team_id: ws.teamId } : {}), ...(name ? { flow: name } : {}), from_session: deps.callingSession() });
+        if (opts.json) { console.log(JSON.stringify(l, null, 2)); return; }
+        if (!l) { console.error("No live flow to switch"); process.exit(1); }
+        for (const line of liveFlowLines(l, { top: 3, bold, dim })) console.log(line);
+      });
+  }
+  return flow;
 }
 
-type FoundFlow = import("./workflow/flowPool.js").PoolFlow & { source: string };
+/** What a variant changes from the flow it extends, under its header. */
+function printVariantChanges(slug: string, base: PoolFlow | null, changes: VariantChanges | null): void {
+  if (!base) { console.log(dim(`extends ${slug}, which this library does not hold`)); return; }
+  const lines = changes ? variantChangeLines(changes) : [];
+  console.log(`extends ${bold(base.label)} ${dim(`(${slug})`)}${lines.length ? ", changing:" : changes ? ", changing nothing" : ""}`);
+  for (const l of lines) console.log(`  ${l}`);
+}
+
+/** A graph file's base read from where its `extends` points, for a variant whose base is not in the library. */
+function baseBeside(f: FoundFlow): PoolFlow | null {
+  let ext: string | undefined;
+  try { ext = f.file ? graphExtends(f.source) : undefined; } catch { return null; }
+  const file = ext ? path.resolve(path.dirname(f.file!), ext) : null;
+  if (!file || !fs.existsSync(file)) return null;
+  return describeFlow(path.basename(file).replace(/\.cast$/, ""), fs.readFileSync(file, "utf-8"), "repo", file);
+}
+
+/** A pool flow's parsed graph, or null when it has none or does not parse. */
+function graphOf(f: (PoolFlow & { source?: string }) | null | undefined): WorkflowGraph | null {
+  if (!f || f.errors.length) return null;
+  const source = f.source ?? (f.file ? fs.readFileSync(f.file, "utf-8") : BUILTIN_WORKFLOW_TEMPLATES[f.slug]);
+  if (!source) return null;
+  try { return parseWorkflowSource(source, f.file ? path.dirname(f.file) : undefined); } catch { return null; }
+}
+
+/** The team's live flows, or why they could not be read (the pool still lists without them). */
+async function readLive(deps: FlowDeps, team?: string): Promise<{ flows: LiveFlow[]; error: string | null }> {
+  try {
+    // A personal workspace has no live flow, and a server from before them answers 404 (convex liveFlows.ts).
+    const ws = await deps.readWorkspace(team);
+    if (ws.kind !== "team") return { flows: [], error: null };
+    const r = await deps.cliPost("/cli/flow/live/show", { team_id: ws.teamId }, { throwOnError: true }).catch((err: Error) => {
+      if (err.message.includes("/cli/flow/live/show route")) return null;
+      throw err;
+    });
+    return { flows: Array.isArray(r) ? r : r ? [r] : [], error: null };
+  } catch (err) {
+    return { flows: [], error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+type FoundFlow = PoolFlow & { source: string };
 
 /** A session's 7-character codecast id, from whatever id the caller holds (its codecast id, or its agent's session id). */
 async function shortSessionId(session: string | null, deps: FlowDeps): Promise<string | null> {
@@ -307,28 +438,32 @@ async function shortSessionId(session: string | null, deps: FlowDeps): Promise<s
 }
 
 /** The deps with the pool read from a named team's workspace. */
-const teamDeps = (deps: FlowDeps, team?: string): FlowDeps => (team ? { ...deps, fetchPool: () => deps.fetchPool(team) } : deps);
+const teamDeps = (deps: FlowDeps, team?: string): FlowDeps => (team ? { ...deps, readWorkspace: () => deps.readWorkspace(team) } : deps);
+
+/** The flows published to the workspace's pool (/cli/workflows/pool, flows.md FL2). */
+async function fetchPool(deps: FlowDeps): Promise<PushedPoolRow[]> {
+  const ws = await deps.readWorkspace();
+  const r = await deps.cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
+  return r?.flows ?? [];
+}
 
 /** The pool as this session sees it: the repo's, the shipped, and the workspace's published flows. */
 async function readPool(deps: FlowDeps) {
-  const { poolFlows } = await import("./workflow/flowPool.js");
-  const pushed = await deps.fetchPool().catch(() => []);
+  const pushed = await fetchPool(deps).catch(() => []);
   return poolFlows(deps.realCwd(), await shortSessionId(deps.callingSession() ?? null, deps), pushed);
 }
 
-async function findFlow(slug: string, deps: FlowDeps): Promise<FoundFlow> {
-  const { describeFlow } = await import("./workflow/flowPool.js");
+async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[]): Promise<FoundFlow> {
   const abs = path.resolve(deps.realCwd(), slug);
   if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
     const source = fs.readFileSync(abs, "utf-8");
     return { ...describeFlow(path.basename(abs).replace(/\.cast$/, ""), source, "repo", abs), source };
   }
-  const f = (await readPool(deps)).find((p) => p.slug === slug.replace(/\.cast$/, ""));
+  const f = (pool ?? (await readPool(deps))).find((p) => p.slug === slug.replace(/\.cast$/, ""));
   if (!f) {
     console.error(`No flow "${slug}" in the pool. cast flow ls lists them.`);
     process.exit(1);
   }
-  const { BUILTIN_WORKFLOW_TEMPLATES } = await import("./workflow/templates.js");
   return { ...f, source: f.file ? fs.readFileSync(f.file, "utf-8") : BUILTIN_WORKFLOW_TEMPLATES[f.slug] };
 }
 

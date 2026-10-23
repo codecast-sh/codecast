@@ -99,4 +99,12 @@ describe("the fence and the command", () => {
     expect(flowCommandTarget("run", "change --dry-run", "Nothing started", false)).toEqual({ flow: "change", runId: null, dryRun: true });
     expect(flowCommandTarget("run", "check", '{"run_id":"th7xyzxyzxyzxyzxyzxyzxyz","task":"ct-2"}', false).runId).toBe("th7xyzxyzxyzxyzxyzxyzxyz");
   });
+  test("a cast flow show names the flow it drew: a live flow by its block's slug, an older CLI's @handle by none", () => {
+    const live = "\x1b[2m\x1b[0m● on   \x1b[1mUnion fix flow\x1b[0m  \x1b[2magentwatch\x1b[0m\n       sources  every source";
+    expect(flowCommandTarget("show", '"Union fix flow"', live, false).flow).toBe("agentwatch");
+    expect(flowCommandTarget("show", "change --team Codecast", "Change  flow · shipped", false).flow).toBe("change");
+    expect(flowCommandTarget("show", "--team Codecast change", "Change  flow · shipped", false).flow).toBe("change");
+    expect(flowCommandTarget("show", "@calling", "Calling  @calling · or-3", false).flow).toBeNull();
+    expect(flowCommandTarget("on", "", "", true).flow).toBeNull();
+  });
 });

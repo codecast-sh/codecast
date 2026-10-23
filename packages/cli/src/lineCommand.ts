@@ -1,7 +1,9 @@
-// `cast line` (docs/architecture/the-line.md): the merge step the shipped line
-// runs, the fix trace, and the repo's line profile, moments, trials, dissolves
-// and judges. A command group (commandGroups.ts), so none of it loads for any
-// other command.
+// A flow's working commands (docs/architecture/flows.md FL0): the merge step the
+// shipped steps run, the fix trace, deploys, replays, and the repo's profile,
+// moments, trials, dissolves and judges. `cast flow` carries them
+// (flowCommand.ts); `cast line` is their older name, hidden, with the same
+// subcommands and output. Command groups (commandGroups.ts), so none of it
+// loads for any other command.
 
 import type { Command } from "commander";
 import { cliErrorMessage } from "@codecast/shared/contracts";
@@ -15,11 +17,16 @@ import { registerLineDissolveCommand } from "./lineDissolveCommand.js";
 import { registerJudgingCommands } from "./judgingCommand.js";
 
 export function registerLineCommand(program: Command, deps: GroupDeps): void {
-  // The merge step (L12), run by the shipped line's merge node.
-  const line = program.command("line").description(commandGroup("line").description);
+  const line = program.command("line", { hidden: true }).description(commandGroup("line").description);
+  registerLineSubcommands(line, deps);
+}
+
+/** Every working subcommand of a flow, under `parent` (`cast flow`, or `cast line`). */
+export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
+  // The merge step (L12), run by the shipped steps' merge node.
   line
     .command("fixloop")
-    .description("Trace each fix commit to the commit, session, line run and role that introduced the lines it changed (SZZ: parent-revision blame)")
+    .description("Trace each fix commit to the commit, session, flow run and role that introduced the lines it changed (SZZ: parent-revision blame)")
     .option("--since <window>", "How far back to look for fix commits (git --since)", "7d")
     .option("--cwd <path>", "The repository checkout (default: the current directory)")
     .option("--json", "Machine-readable output")
@@ -52,7 +59,7 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
     });
   line
     .command("merge")
-    .description("Merge an approved run's branch into the default branch when the role's line allows it (the shipped line's merge node)")
+    .description("Merge an approved run's branch into the default branch when the role's flow allows it (the Standard steps' merge node)")
     .requiredOption("--run <id>", "The workflow run")
     .requiredOption("--branch <name>", "The branch the implementer pushed")
     .option("--into <branch>", "The default branch (default: origin HEAD, else main)")
@@ -74,7 +81,7 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
   // The deploy stage (deploys.md DP2): the shipped fixes waiting to go out, sent together in one deploy.
   const deploy = line
     .command("deploy")
-    .description("The line's deploy stage: the shipped fixes no live deploy has carried yet; --go sends them together through [line.deploy] command and records the deploy (dp-N)")
+    .description("The flow's deploy stage: the shipped fixes no live deploy has carried yet; --go sends them together through [line.deploy] command and records the deploy (dp-N)")
     .option("--project <ref>", "The project (default: the repo profile's [line] project)")
     .option("--go", "Ask for the deploy and run the deploy path here")
     .option("--json", "Machine-readable output")
@@ -170,7 +177,7 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
     });
   deploy
     .command("return")
-    .description("A deploy step failed: mark the deploy failed and file the failure as a finding on the project's line, one problem per target and step (the line-deploy graph's Returned station)")
+    .description("A deploy step failed: mark the deploy failed and file the failure as a finding in the project's flow, one problem per target and step (the line-deploy graph's Returned station)")
     .argument("<deploy>", "The deploy (dp-N)")
     .option("--run <id>", "The line-deploy run, to name the step that failed")
     .option("--note <text>", "What the step said")
@@ -215,7 +222,7 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
   // A station measured on frozen past cases before an edit reaches a run (learning-loop.md LL14).
   line
     .command("replay")
-    .description("Replay one station of a line graph on past runs this machine holds, on the graph's files at a revision and as they are on disk, in the dry-run sandbox (nothing written, no connection but the model's); each case passes on its pinned fields or a blind yes/no grade")
+    .description("Replay one station of a flow's steps on past runs this machine holds, on the graph's files at a revision and as they are on disk, in the dry-run sandbox (nothing written, no connection but the model's); each case passes on its pinned fields or a blind yes/no grade")
     .argument("<graph>", "The .cast file, from the directory its runs start in")
     .argument("<station>", "The station's id")
     .argument("[runs...]", "Runs to replay (default: the station's cases in cases.json beside the graph)")

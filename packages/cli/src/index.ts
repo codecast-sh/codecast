@@ -2909,12 +2909,8 @@ function groupDeps(): GroupDeps {
     getCliEndpoint, detectCurrentSessionId, resolveProjectId,
     flow: {
       cliPost, callingSession, realCwd: getRealCwd,
-      // The flows published to the workspace this shell reads (flows.md FL2).
-      fetchPool: async (team?: string) => {
-        const ws = await readWorkspace(team);
-        const r = await cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
-        return r?.flows ?? [];
-      },
+      // Where a flow command reads (the team named, else the one this shell reads) and where a switch writes.
+      readWorkspace, writeWorkspace: (team?: string) => writeWorkspace(team, { teamRequired: true }),
     },
   };
 }

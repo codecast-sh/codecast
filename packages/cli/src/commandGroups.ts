@@ -119,8 +119,11 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
   },
   {
     token: "flow",
-    description: "The pool of structured flows a change runs through: whole lines and segments (check, review, eval, decide, ship)",
-    load: () => import("./flowCommand.js").then((m) => (program: Command, deps: GroupDeps) => m.registerFlowCommands(program, deps.flow)),
+    description: "Flows: the team's library (ls, show, run, import, publish, validate), its live flows (show, on, off), and a flow's profile, finders, steps, trials, deploys, judges and moments",
+    load: () => Promise.all([import("./flowCommand.js"), import("./lineCommand.js")]).then(([f, l]) => (program: Command, deps: GroupDeps) => {
+      const flow = f.registerFlowCommands(program, deps.flow);
+      l.registerLineSubcommands(flow, deps);
+    }),
   },
   {
     token: "migrate",
@@ -229,7 +232,8 @@ Examples:
   },
   {
     token: "line",
-    description: "The line a role's tasks run on (docs/architecture/the-line.md)",
+    hidden: true,
+    description: "The older name for cast flow's working commands: the same subcommands, the same output",
     load: () => import("./lineCommand.js").then((m) => m.registerLineCommand),
   },
   {
