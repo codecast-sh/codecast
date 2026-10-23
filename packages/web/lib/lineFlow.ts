@@ -29,6 +29,7 @@ import { isConvexId } from "./entityLinks";
 import { runHref } from "./decisionLinks";
 import { lineForkIndex, lineRunKind, type LineRunKind } from "./line/lineStations";
 import { projectGraphs, type ProjectGraph } from "./line/lineGraphs";
+import { drain, type Sliced } from "./slicedWork";
 import { judgeReviewLine, type JudgeReviewView } from "@codecast/shared/contracts/judgeReview";
 
 export const HOUR = 60 * 60 * 1000;
@@ -932,22 +933,50 @@ export type RollupRow = {
  * projects holding a cause or a signal in the window, projects whose profile
  * declares finders, and the work filed under no project. Most open causes first.
  */
+/** Each project's roll-up row as the last roll-up read it, with every input it read. */
+type RollupRead = { deps: unknown[]; row: RollupRow };
+let rollupReads = new Map<string, RollupRead>();
+
+/** Every project's rows at once, by the rules scopeLine applies to one: one pass over the rows, not one per project. */
+function groupLine<D extends LineDecision>(rows: LineRows<D>, taskKey: ReadonlyMap<string, string>): Map<string, LineRows<D>> {
+  const by = new Map<string, LineRows<D>>();
+  const at = (key: string) => { let g = by.get(key); if (!g) by.set(key, (g = { tasks: [], signals: [], runs: [], decisions: [] })); return g; };
+  for (const t of rows.tasks) at(projectKey(t.project_id)).tasks.push(t);
+  for (const s of rows.signals) at(s.project_id ? s.project_id : taskKey.get(s.task_id) ?? NO_PROJECT).signals.push(s);
+  for (const r of rows.runs) { const k = r.task_id ? taskKey.get(r.task_id) : undefined; if (k) at(k).runs.push(r); }
+  for (const d of rows.decisions) { const k = d.task_id ? taskKey.get(d.task_id) : undefined; if (k) at(k).decisions.push(d); }
+  return by;
+}
+
 export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: LineProject[], now: number, cardsCap?: number, admissions?: ReadonlyMap<string, LineAdmission>): RollupRow[] {
+  return drain(lineRollupSteps(rows, projects, now, cardsCap, admissions));
+}
+
+/** lineRollup, stopping between projects (lib/slicedWork). */
+export function* lineRollupSteps<D extends LineDecision>(rows: LineRows<D>, projects: LineProject[], now: number, cardsCap?: number, admissions?: ReadonlyMap<string, LineAdmission>): Sliced<RollupRow[]> {
   const keys = new Set<string>();
   for (const t of rows.tasks) if (isCause(t)) keys.add(projectKey(t.project_id));
   const causeKey = projectKeysOf(rows.tasks);
   for (const s of rows.signals) keys.add(s.project_id || causeKey.get(s.task_id) || NO_PROJECT);
   for (const p of projects) if (p.line_profile) keys.add(p._id);
   const byId = new Map(projects.map((p) => [p._id, p]));
+  const grouped = groupLine(rows, causeKey);
   const out: RollupRow[] = [];
+  const kept = new Map<string, RollupRead>();
+  yield;
   for (const key of keys) {
+    yield;
     const project = byId.get(key);
     // A project the viewer cannot see (another workspace's) is not a line here.
     if (key !== NO_PROJECT && !project) continue;
-    const scoped = scopeLine(rows, key, causeKey);
+    const scoped = { ...rows, ...(grouped.get(key) ?? { tasks: [], signals: [], runs: [], decisions: [] }) };
     const admission = key === NO_PROJECT ? NO_PROJECT_ADMISSION : admissions?.get(key);
+    // A push moves a few projects' rows: a project whose rows, clock and settings are the ones its last row read keeps it.
+    const deps: unknown[] = [now, cardsCap, project, admission, scoped.tasks.length, ...scoped.tasks, "|", ...scoped.signals, "|", ...scoped.runs, "|", ...scoped.decisions];
+    const was = rollupReads.get(key);
+    if (was && was.deps.length === deps.length && was.deps.every((d, n) => d === deps[n])) { kept.set(key, was); out.push(was.row); continue; }
     const f = buildLineFlow({ ...scoped, initiatives: [], projects: [], now, cardsCap, finders: project?.line_profile?.finders, findersSince: project?.line_profile?.changed_at, admission });
-    out.push({
+    const row: RollupRow = {
       key,
       title: project?.title ?? "No project",
       short_id: project?.short_id,
@@ -968,8 +997,11 @@ export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: 
       unapproved: unapprovedShips(scoped.tasks.filter(isCause), scoped.runs, now).length,
       ...waitingReadiness([...f.causes.items, ...f.causes.parked].map((r) => r.task)),
       startingOff: f.causes.count > 0 && f.causes.state.kind === "paused" && !!admission?.role && !admission.role.paused && !admission.on,
-    });
+    };
+    kept.set(key, { deps, row });
+    out.push(row);
   }
+  rollupReads = kept;
   return out.sort((a, b) => Number(a.key === NO_PROJECT) - Number(b.key === NO_PROJECT) || b.causes - a.causes || b.awaiting - a.awaiting || b.signalsDay - a.signalsDay || a.title.localeCompare(b.title));
 }
 
