@@ -56,11 +56,12 @@ export function TimelineView({ workspace: ws, selection, select, href, space }: 
   }, [ws.rows.tasks]);
 
   const events = useMemo(() => {
-    // A problem comes from where its findings came from (problemOrigins); the server names only the line.
+    // A problem comes from where its findings came from (problemOrigins, else its findings here); the server names only the line.
     const findingFrom = new Map<string, string>();
     for (const e of stored) if (e.kind === "finding" && e.task && !findingFrom.has(e.task)) findingFrom.set(e.task, e.source);
     const out: TimelineEvent[] = stored.map((e) => {
-      if (GROUP_OF[e.kind] !== "problems" || !e.task) return e;
+      // Opened by its findings, so from their source; a merge or a close is the line's own act.
+      if (e.kind !== "problem_opened" || !e.task) return e;
       const from = ws.sources.get(e.task)?.source ?? findingFrom.get(e.task);
       return from ? { ...e, source: from } : e;
     });
