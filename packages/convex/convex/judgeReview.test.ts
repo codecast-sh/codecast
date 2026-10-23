@@ -9,6 +9,7 @@ import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { findingLabeled, markFindingWrong, sweepJudgeReviews } from "./judgeReview";
 import { JUDGE_REVIEW_ATTEMPTS, JUDGE_REVIEW_GRAPH } from "@codecast/shared/contracts/judgeReview";
+import { LINE_RUNS_PER_RUNNER, type LineLoads } from "./orgLine";
 
 const TOKEN = "cast_judge_review_token";
 const T0 = Date.now();
@@ -302,6 +303,68 @@ describe("the dissolve hand off and the sweep", () => {
     expect(f.judge_review.waiting_on).toContain(`${JUDGE_REVIEW_ATTEMPTS} diagnosis runs ended without an answer`);
     // Marking it wrong again starts over.
     expect((await s.mark(s.f1)).state).toBe("diagnosing");
+  });
+});
+
+describe("diagnoses take the line's run slots", () => {
+  // Findings beyond the three setup files, on the same problem.
+  const more = (s: any, n: number) => s.t.run(async (ctx: any) => {
+    const f1 = await ctx.db.get(s.f1);
+    const out = [];
+    for (let i = 0; i < n; i++) out.push(await ctx.db.insert("signals", { ...f1, _id: undefined, _creationTime: undefined, short_id: `sg-2${i}`, fingerprint: `union:cluster:9${i}` }));
+    return out;
+  });
+  const roomy = (s: any) => s.t.run(async (ctx: any) => { await ctx.db.patch(s.role, { trust: "direct", caps: { hands_per_day: 100, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true } }); });
+
+  test("a hand-off of more defects than there is room for starts as many as fit, and the rest wait, saying why, for the sweep", async () => {
+    const s = await setup();
+    await roomy(s);
+    const ids = [s.f1, s.f2, s.f3, ...await more(s, LINE_RUNS_PER_RUNNER)];
+    const reviews = await s.t.run(async (ctx) => {
+      const loads: LineLoads = new Map();
+      const out = [];
+      for (const id of ids) out.push(await markFindingWrong(ctx, (await ctx.db.get(id))!, { trigger: "dissolve", now: Date.now(), loads }));
+      return out;
+    });
+    expect(reviews.filter((r) => r.state === "diagnosing")).toHaveLength(LINE_RUNS_PER_RUNNER);
+    const waiting = reviews.filter((r) => r.state === "waiting");
+    expect(waiting).toHaveLength(3);
+    expect(waiting[0].waiting_on).toBe(`${LINE_RUNS_PER_RUNNER} runs are working on @quality's machine; the diagnosis starts when one finishes.`);
+    // A mark on its own, outside that pass, reads the runs the pass started.
+    const late = await s.t.run(async (ctx: any) => {
+      const f1 = await ctx.db.get(s.f1);
+      return await ctx.db.insert("signals", { ...f1, _id: undefined, _creationTime: undefined, short_id: "sg-300", fingerprint: "union:cluster:300", judge_review: undefined });
+    });
+    expect((await s.mark(late)).state).toBe("waiting");
+
+    // One run finishing frees a slot: the sweep starts one more, and the rest keep waiting.
+    await s.t.run(async (ctx) => {
+      const run = (await ctx.db.query("workflow_runs").collect())[0];
+      await ctx.db.patch(run._id, { status: "completed" } as any);
+    });
+    expect(await s.t.run(async (ctx) => await sweepJudgeReviews(ctx, Date.now()))).toMatchObject({ started: 1 });
+  });
+
+  test("with a pool host offering the checkout, diagnoses go to the host, in its checkout", async () => {
+    const s = await setup();
+    await roomy(s);
+    await s.t.run(async (ctx) => {
+      await ctx.db.insert("devices", { user_id: s.user, device_id: "laptop", last_seen: Date.now(), git_plane: [{ root: "/src/union", origin: "git@github.com:Acme/Union.git", origin_ok: true }] } as any);
+      await ctx.db.insert("devices", { user_id: s.user, device_id: "host-1", last_seen: Date.now(), line_slots: [{ root: "/home/ubuntu/union", origin: "github.com/acme/union", runs: 2 }] } as any);
+    });
+    const ids = [s.f1, s.f2, s.f3];
+    const reviews = await s.t.run(async (ctx) => {
+      const loads: LineLoads = new Map();
+      const out = [];
+      for (const id of ids) out.push(await markFindingWrong(ctx, (await ctx.db.get(id))!, { trigger: "dissolve", now: Date.now(), loads }));
+      return out;
+    });
+    expect(reviews.map((r) => r.state)).toEqual(["diagnosing", "diagnosing", "waiting"]);
+    expect(reviews[2].waiting_on).toBe("2 runs are working on @quality's machines; the diagnosis starts when one finishes.");
+    const runs = await s.t.run(async (ctx) => await ctx.db.query("workflow_runs").collect());
+    expect(runs.map((r: any) => [r.runner_device, r.project_path])).toEqual([["host-1", "/home/ubuntu/union"], ["host-1", "/home/ubuntu/union"]]);
+    const commands = await s.t.run(async (ctx) => await ctx.db.query("daemon_commands").collect());
+    expect(commands.map((c: any) => c.target_device_id)).toEqual(["host-1", "host-1"]);
   });
 });
 

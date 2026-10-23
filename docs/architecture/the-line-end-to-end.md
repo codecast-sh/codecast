@@ -209,7 +209,11 @@ candidates it can start: open ready causes by index, at most `CAUSE_WINDOW`
 (200) per scope project, oldest first, ranked within that window. A cause
 that waits shows "4 runs working on its machine" on the line page.
 `orgLine:explain` runs the same pass dry and says what it would start,
-where, and each load it read.
+where, and each load it read. A run a role starts outside the sweep takes a
+slot the same way (`orgLine.admitRoleRun`): a judge diagnosis
+(learning-loop.md LL11) counts against the same slots though it has no task,
+and when they are full its finding waits, saying so, for the judge-review
+sweep to start it.
 
 Candidates are the role's assigned tasks plus causes (`source: "signal"`,
 `readiness: "ready"`, `goal_ref` set, unassigned) it owns. `orgLine.queue`

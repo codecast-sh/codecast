@@ -343,20 +343,23 @@ describe("orgLine admission (LE6)", () => {
     expect(res.skipped_busy).toEqual([]);
   });
 
-  test("runs working on the runner's machine hold at the cap; paused, waiting on a person, finished or taskless runs do not count", async () => {
+  test("runs working on the runner's machine hold at the cap, a role's taskless run among them; paused, waiting on a person, finished or another workflow's runs do not count", async () => {
     const { ctx, tables } = fixtures({
       role: caps({ hands_per_day: 50 }),
       extra: {
         initiatives,
         tasks: [cause({ _id: "tasks_p0" })],
         workflow_runs: [
-          ...working(LINE_RUNS_PER_RUNNER - 1),
+          ...working(LINE_RUNS_PER_RUNNER - 2),
           workRun(90, { status: "pending" }),
+          // A judge diagnosis the role started: no task, still a session on the machine.
+          workRun(95, { task_id: undefined }),
           cardRun(1),
           workRun(91, { status: "running" }),
           workRun(92, { status: "completed" }),
           workRun(93, { status: "failed" }),
-          workRun(94, { task_id: undefined }),
+          // The standing session ran some other workflow with no task.
+          workRun(94, { task_id: undefined, org_role_id: undefined, spawner_conversation_id: STANDING }),
         ],
         // Run 91 is running but blocked on a person's answer at a gate other than the card.
         session_decisions: [card(1), card(91, { workflow_run_id: "workflow_runs_w91", gate_node_id: "plan" })],

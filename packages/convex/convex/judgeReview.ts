@@ -37,7 +37,7 @@ import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { isExpectationId } from "@codecast/shared/contracts/expectations";
 import { latestExpectations } from "./lib/expectationsApply";
 import { leadRoleOf } from "./lineCause";
-import { roleMayStartHands, startRoleRun } from "./orgLine";
+import { admitRoleRun, roleMayStartHands, startRoleRun, type LineLoads } from "./orgLine";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
 import { isLiveRunStatus } from "./workflow_runs";
 import {
@@ -95,7 +95,7 @@ async function signalByRef(ctx: any, ref: string): Promise<Doc<"signals"> | null
 export async function markFindingWrong(
   ctx: any,
   finding: Doc<"signals">,
-  o: { trigger: Trigger; by?: Id<"users">; run_id?: Id<"workflow_runs">; note?: string; sentence?: string; now: number },
+  o: { trigger: Trigger; by?: Id<"users">; run_id?: Id<"workflow_runs">; note?: string; sentence?: string; now: number; loads?: LineLoads },
 ): Promise<Review> {
   if (!finding.judge) throw new ConvexError(`${finding.short_id} was not made by a judge, so there is no judge to improve`);
   if (finding.case_of) throw new ConvexError(`${finding.short_id} is a case against a judge, not a judge's finding`);
@@ -118,7 +118,7 @@ export async function markFindingWrong(
     attempts: 0,
   };
   await ctx.db.patch(finding._id, { judge_review: review });
-  return await startDiagnosis(ctx, { ...finding, judge_review: review }, o.now);
+  return await startDiagnosis(ctx, { ...finding, judge_review: review }, o.now, undefined, o.loads);
 }
 
 /**
@@ -206,9 +206,13 @@ async function diagnosingRole(ctx: any, finding: Doc<"signals">, now: number): P
 /**
  * Start the diagnosis run for a waiting finding, or record why it waits.
  * `waits` carries, through one sweep pass, why each project's findings wait:
- * a line that is off, or a role out of hands, stays so for the pass.
+ * a line that is off, a role out of hands, or its machines full, stays so for
+ * the pass. The run takes a slot by the line's own admission (orgLine
+ * admitRoleRun), so a Dissolve that hands over dozens of defects starts as
+ * many as there is room for and the rest wait for the sweep; `loads` carries
+ * the room through the pass.
  */
-async function startDiagnosis(ctx: any, finding: Doc<"signals">, now: number, waits?: Map<string, string>): Promise<Review> {
+async function startDiagnosis(ctx: any, finding: Doc<"signals">, now: number, waits?: Map<string, string>, loads: LineLoads = new Map()): Promise<Review> {
   const review = finding.judge_review!;
   if (review.state !== "waiting") return review;
   const project = String(finding.project_id ?? "");
@@ -220,7 +224,14 @@ async function startDiagnosis(ctx: any, finding: Doc<"signals">, now: number, wa
     if (next.waiting_on !== review.waiting_on) await ctx.db.patch(finding._id, { judge_review: next });
     return next;
   }
-  const { runId } = await startRoleRun(ctx, place.role, { slug: JUDGE_REVIEW_GRAPH, goal: finding.short_id, now });
+  const room = await admitRoleRun(ctx, place.role, now, loads);
+  if ("waiting" in room) {
+    waits?.set(project, room.waiting);
+    const next = { ...review, waiting_on: room.waiting };
+    if (next.waiting_on !== review.waiting_on) await ctx.db.patch(finding._id, { judge_review: next });
+    return next;
+  }
+  const { runId } = await startRoleRun(ctx, place.role, { slug: JUDGE_REVIEW_GRAPH, goal: finding.short_id, now, place: room.place });
   const { waiting_on: _w, ...rest } = review;
   const next: Review = { ...rest, state: "diagnosing", attempts: review.attempts + 1, diagnosis_run_id: runId };
   await ctx.db.patch(finding._id, { judge_review: next });
@@ -367,8 +378,9 @@ export async function sweepJudgeReviews(ctx: any, now: number): Promise<{ starte
   const waiting: Doc<"signals">[] = await ctx.db.query("signals")
     .withIndex("by_judge_review_state", (q: any) => q.eq("judge_review.state", "waiting")).take(WAITING_SCAN);
   const waits = new Map<string, string>();
+  const loads: LineLoads = new Map();
   for (const f of waiting) {
-    if ((await startDiagnosis(ctx, f, now, waits)).state === "diagnosing") started++;
+    if ((await startDiagnosis(ctx, f, now, waits, loads)).state === "diagnosing") started++;
   }
   return { started, retried, failed };
 }
@@ -410,6 +422,8 @@ export const defectsForCli = mutation({
     const runId = args.run_id ? ctx.db.normalizeId("workflow_runs", args.run_id.trim()) : null;
     const run: Doc<"workflow_runs"> | null = runId ? await ctx.db.get(runId) : null;
     const now = Date.now();
+    // One admission for the whole hand-off: the defects start as far as there is room.
+    const loads: LineLoads = new Map();
     const out: Array<{ finding: string; short_id?: string; state?: string; waiting_on?: string; skipped?: string }> = [];
     for (const d of args.defects.slice(0, 100)) {
       const finding = await defectFinding(ctx, d.finding, run?.task_id);
@@ -420,6 +434,7 @@ export const defectsForCli = mutation({
         ...(run ? { run_id: run._id } : {}),
         sentence: d.sentence,
         now,
+        loads,
       });
       if (!finding.retired) await retireSignals(ctx, [finding], { reason: `found wrong by a line run's proof${d.sentence ? `: ${d.sentence.slice(0, 300)}` : ""}`, actor: userId });
       out.push({ finding: d.finding, short_id: finding.short_id, state: review.state, ...(review.waiting_on ? { waiting_on: review.waiting_on } : {}) });

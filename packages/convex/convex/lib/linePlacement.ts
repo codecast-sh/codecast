@@ -57,7 +57,8 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
         .query("workflow_runs")
         .withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", String(d.device_id)).eq("status", status))
         .collect();
-      working += runs.filter((r) => r.task_id && !waiting.has(String(r._id))).length;
+      // A role's run (a cause's, or a judge diagnosis with no task) or any run with a task.
+      working += runs.filter((r) => (r.org_role_id || r.task_id) && !waiting.has(String(r._id))).length;
     }
     slots.push({ device: String(d.device_id), root: slot.root, runs: slot.runs, working });
   }

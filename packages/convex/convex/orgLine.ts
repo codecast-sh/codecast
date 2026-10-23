@@ -206,9 +206,10 @@ async function seatOf(ctx: Ctx, role: any): Promise<{ runner: string; project_pa
   return { runner: String(place.runner_user_id), project_path: place.project_path };
 }
 
-// LE6: the line runs working now on `runner`'s own machine: runs with a task
-// that a role run by `runner` started (or, from before org_role_id, its
-// standing session spawned), minus those waiting on a blocking decision and
+// LE6: the line runs working now on `runner`'s own machine: every run a role
+// run by `runner` started (a cause's, or one with no task, like a judge
+// diagnosis), plus runs with a task its standing session spawned (from before
+// org_role_id), minus those waiting on a blocking decision and
 // those on a pool machine, which its slots count. Every role counts, paused
 // and retired ones too: their runs still use the machine.
 export async function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promise<RunnerLoad> {
@@ -232,20 +233,51 @@ export async function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promi
           .collect());
       }
       for (const run of runs) {
-        if (run.task_id && !waiting.has(String(run._id)) && !pooled.has(String(run.runner_device ?? ""))) working.add(String(run._id));
+        const lineRun = run.org_role_id || run.task_id;
+        if (lineRun && !waiting.has(String(run._id)) && !pooled.has(String(run.runner_device ?? ""))) working.add(String(run._id));
       }
     }
   }
   return { runner, working: working.size, cap: LINE_RUNS_PER_RUNNER };
 }
 
+export type LineLoad = RunnerLoad & { pool: LinePool | null };
+/** Loads read once per pass and shared by every start in it, keyed by runner and folder. */
+export type LineLoads = Map<string, LineLoad>;
+
 /** The load a role's next run meets: its pool's slots when a machine offers its checkout, else its runner's own machine. */
-export async function lineLoadFor(ctx: Ctx, role: any, now: number): Promise<RunnerLoad & { pool: LinePool | null }> {
+export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), roles?: any[]): Promise<LineLoad> {
   const seat = await seatOf(ctx, role);
+  const key = `${seat.runner}|${seat.project_path ?? ""}`;
+  const known = loads.get(key);
+  if (known) return known;
   const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now);
-  if (pool) return { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool };
-  return { ...await runnerLoad(ctx, seat.runner), pool: null };
+  const load: LineLoad = pool
+    ? { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool }
+    : { ...await runnerLoad(ctx, seat.runner, roles), pool: null };
+  loads.set(key, load);
+  return load;
 }
+
+export const freeSlots = (load: LineLoad): number => (load.pool ? poolFree(load.pool) : load.cap - load.working);
+
+/** Takes a slot for one run: the pool machine it goes to, or none (the runner's own machine). Counts the run on the load. */
+export function claimSlot(load: LineLoad): RunPlace | undefined {
+  load.working++;
+  return load.pool ? takeSlot(load.pool) ?? undefined : undefined;
+}
+
+/**
+ * A run the role starts outside the sweep (a judge diagnosis, learning-loop.md
+ * LL11) goes through the same admission: a slot where its runs work, or the
+ * reason it waits, for its own sweep to start it later.
+ */
+export async function admitRoleRun(ctx: Ctx, role: any, now: number, loads: LineLoads): Promise<{ place?: RunPlace } | { waiting: string }> {
+  const load = await lineLoadFor(ctx, role, now, loads);
+  if (freeSlots(load) <= 0) return { waiting: `${load.working} runs are working on @${role.handle}'s machine${load.pool ? "s" : ""}; the diagnosis starts when one finishes.` };
+  return { place: claimSlot(load) };
+}
+
 
 // LP6: the person who answers a role's cards is the person at the top of its
 // reporting chain; a chain that ends without one falls back to its host.
@@ -363,25 +395,17 @@ export async function sweepCore(ctx: Ctx, now = Date.now(), o: { dry?: boolean }
   const roles: any[] = await ctx.db.query("org_roles").collect();
   // One load per runner and folder, shared by every role that runs there in
   // this pass: a pool's slots, else the runner's own machine.
-  const loads = new Map<string, RunnerLoad & { pool: LinePool | null }>();
+  const loads: LineLoads = new Map();
   for (const seed of roles) {
     if (result.started.length >= MAX_STARTS_PER_SWEEP) break;
     if (seed.status !== "active" || !lineStartsOn(seed)) continue;
     let role = seed;
-    const seat = await seatOf(ctx, role);
-    const key = `${seat.runner}|${seat.project_path ?? ""}`;
-    let load = loads.get(key);
-    if (!load) {
-      const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now);
-      load = pool
-        ? { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool }
-        : { ...await runnerLoad(ctx, seat.runner, roles), pool: null };
-      loads.set(key, load);
-      if (o.dry) (result.loads ??= []).push({ runner: seat.runner, project_path: seat.project_path ?? "", working: load.working, cap: load.cap, pool: pool ? pool.slots.map((sl) => ({ ...sl })) : null });
-    }
+    const before = loads.size;
+    const load = await lineLoadFor(ctx, role, now, loads, roles);
+    if (o.dry && loads.size > before) (result.loads ??= []).push({ runner: load.runner, project_path: (await seatOf(ctx, role)).project_path ?? "", working: load.working, cap: load.cap, pool: load.pool ? load.pool.slots.map((sl) => ({ ...sl })) : null });
     const handsCap = capsFor(role).hands_per_day;
     const handsLeft = handsCap == null ? Infinity : handsCap - countersFor(role, now).hands;
-    const slots = load.pool ? poolFree(load.pool) : load.cap - load.working;
+    const slots = freeSlots(load);
     const sweepLeft = MAX_STARTS_PER_SWEEP - result.started.length;
     const wait = admissionWait(role, load.cap - slots, now, load.cap);
     const room = wait ? 0 : Math.min(sweepLeft, slots, handsLeft);
@@ -389,11 +413,9 @@ export async function sweepCore(ctx: Ctx, now = Date.now(), o: { dry?: boolean }
     const candidates = await lineCandidates(ctx, role, room + 1);
     for (const task of candidates.slice(0, room)) {
       // A pool run goes to the machine with the most free slots, in its checkout.
-      const place = load.pool ? takeSlot(load.pool) ?? undefined : undefined;
+      const place = claimSlot(load);
       const runId = o.dry ? `dry${place ? `@${place.device}` : ""}` : await startLineRun(ctx, role, task, now, place);
       result.started.push({ role_id: String(role._id), task_id: String(task._id), run_id: String(runId) });
-      // The new run is pending, so it works on the runner's machine.
-      load.working++;
       // recordHandStart counts from the row it is given: read it back.
       if (!o.dry) role = await ctx.db.get(role._id);
     }
