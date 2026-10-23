@@ -1,0 +1,2 @@
+import{s as r,b as e,a,S as s}from"./chunk-OYMX7WX6-DZhSFbe-.js";import{_ as i}from"./mermaid.core-DfpYAR0O.js";import"./transform-Bze3wRRv.js";import"./chunk-55IACEB6-CKLjt4Y3.js";import"./chunk-EDXVE4YY-Bbx52cRq.js";import"./index-i_nOKPY2.js";import"./vendor-BRSpyZc9.js";import"./step-B3CtORNg.js";var b={parser:a,get db(){return new s(2)},renderer:e,styles:r,init:i(t=>{t.state||(t.state={}),t.state.arrowMarkerAbsolute=t.arrowMarkerAbsolute},"init")};export{b as diagram};
+//# sourceMappingURL=stateDiagram-v2-QKLJ7IA2-DxI3zcaM.js.map

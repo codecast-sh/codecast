@@ -11,6 +11,7 @@ import {
   type CauseHistory as SharedCauseHistory,
   type HistoryAttempt as SharedHistoryAttempt,
   type HistoryDecisionRow,
+  type DeployCoverage,
   type DeployRow,
   type HandMerge,
   type OccurrenceRow,
@@ -21,7 +22,7 @@ import type { MapDecision, MapRun, MapSignal } from "./lineMap";
 import { runOutcome, type ReportRun, type ReportTask, type RunOutcome } from "./runReport";
 
 export {
-  backTimes, carryingDeploys, historyBrief, earlierFixes, closesSummary, closesArgument, closedAtStep, unshippedGuard,
+  backTimes, carryingDeploys, coverageOf, historyBrief, earlierFixes, closesSummary, closesArgument, closedAtStep, unshippedGuard,
   type OccurrenceRow, type DeployRow, type RunMergeRow, type Occurrence, type AttemptCard, type AttemptMerge, type CarriedHow,
   type HistoryDeploy, type FixBasis, type HistoryShip, type WatchState, type HistoryWatch, type HistoryRegression, type DeployCoverage,
   type EarlierFix, type HandMerge, type HistoryClose, type CloseFold, foldTarget, type HistoryRecurrence, type CloseKind, type CloseArgument, type RunSaid,
@@ -39,6 +40,8 @@ export type HistoryInput = {
   occurrences: OccurrenceRow | undefined;
   /** Undefined until read; the project's deploys newest first. */
   deploys: ReadonlyArray<DeployRow> | undefined;
+  /** The deploys' coverage, read once for every problem of a build (shared causeHistory coverageOf). */
+  coverage?: DeployCoverage;
   /** Per run, what its stations found, proposed and built, and a close's argument (the model reads them off the visits). */
   said: (runId: string) => RunSaid;
   /** The line profile's watch days, when known. */
