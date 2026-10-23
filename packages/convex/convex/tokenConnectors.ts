@@ -54,6 +54,13 @@ export function connectionSecretsKey(): string | null {
   return process.env[CONNECTION_SECRETS_KEY_ENV] || null;
 }
 
+/** The key for a feature that cannot work without it (the Vault, mod secrets); a deployment without one throws, naming the feature and the var. */
+export function connectionKey(feature: string): string {
+  const key = connectionSecretsKey();
+  if (!key) throw new Error(`${feature} is not configured on this deployment: set ${CONNECTION_SECRETS_KEY_ENV} in its environment`);
+  return key;
+}
+
 export function encryptConnectionSecret(plaintext: string, key: string): Promise<string> {
   return encryptRefreshToken(plaintext, key, TOKEN_CONNECTION_HKDF_INFO);
 }

@@ -365,4 +365,22 @@ describe("withAgentConfigCopies", () => {
     expect(copyOf(m)).toEqual([".env", ".claude/skills/x/SKILL.md"]);
     expect(AGENT_CONFIG_COPY_CANDIDATES).toContain(".mcp.json");
   });
+
+  test("a path in the user's cloud_mirror_exclude stays out of the worktree copy list", () => {
+    commit(".gitignore", ".sim/\n");
+    write(".sim/run/notes.md");
+    write(".sim/assets/frame.png");
+    write("CLAUDE.local.md");
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-config-"));
+    const previous = process.env.CODECAST_DIR;
+    process.env.CODECAST_DIR = configDir;
+    try {
+      expect(copyOf(withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false }))).toContain(".sim/run/notes.md");
+      fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({ cloud_mirror_exclude: ".sim" }));
+      expect(copyOf(withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false }))).toEqual(["CLAUDE.local.md"]);
+    } finally {
+      if (previous === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = previous;
+      fs.rmSync(configDir, { recursive: true, force: true });
+    }
+  });
 });

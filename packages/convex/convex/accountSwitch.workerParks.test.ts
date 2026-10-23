@@ -77,3 +77,31 @@ describe("workers parked on a limit recover through their parent", () => {
     expect(f.tables.daemon_commands).toHaveLength(0);
   });
 });
+
+// A workflow run's stations nest under the run's log (parent_session), so a
+// station parked on a limit looked like a worker whose parent could take its
+// place. The log has no agent: the continue woke a fresh one in it that
+// explored and asked what it was for (jx73gnf, jx78264, 2026-10-23).
+describe("a workflow run's log is never revived", () => {
+  test("stations parked under a run log are continued as themselves, never the log", async () => {
+    const f = fixture();
+    Object.assign(f.row("conversations_parent"), { is_workflow_primary: true, workflow_run_id: "workflow_runs_1", session_id: "wf-workflow_runs_1" });
+    expect(await f.run()).toMatchObject({ acted: "switch", profile: "roomy", conversations: 2 });
+    const args = JSON.parse(f.tables.daemon_commands[0].args);
+    // Each station is a process of its own: it follows the store and gets the continue.
+    expect(args).toMatchObject({ profile: "roomy", conversation_ids: [] });
+    expect([...args.follow_ids].sort()).toEqual(["conversations_w1", "conversations_w2"]);
+    expect(JSON.stringify(f.tables.daemon_commands)).not.toContain("conversations_parent");
+    expect(f.tables.pending_messages).toHaveLength(0);
+  });
+
+  test("a run log carrying a limit flag of its own is not in the blocked set", async () => {
+    const f = fixture();
+    f.tables.conversations.splice(1);
+    Object.assign(f.row("conversations_parent"), {
+      is_workflow_primary: true, pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: f.now - 20_000,
+    });
+    expect(await f.run()).toMatchObject({ acted: "nothing_blocked" });
+    expect(f.tables.daemon_commands).toHaveLength(0);
+  });
+});

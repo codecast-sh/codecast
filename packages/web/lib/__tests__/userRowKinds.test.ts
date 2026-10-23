@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { formatDecisionAnswer, formatVaultReady } from "@codecast/shared/contracts";
 import { classifyUserRows, pairCommandExpansions } from "../userRowKinds";
 
 let ts = 1;
@@ -36,5 +37,17 @@ describe("user row kinds", () => {
       row("user", "<command-name>/deploy</command-name>"),
     ];
     expect(kindsOf(msgs).kinds.get(msgs[1]._id)?.kind).toBe("poll_response");
+  });
+
+  // A hosted retry fold counts only normal and direct_user rows as a person's turn.
+  test("a vault-ready line and a decision answer are not typed by a person", () => {
+    const msgs = [
+      row("assistant", "Need a key."),
+      row("user", formatVaultReady({ short_id: "sec-1", name: "zz-stripe", kind: "key", vars: ["STRIPE_KEY"] })),
+      row("user", formatDecisionAnswer({ id: "ds-1", question: "Ship?", answer: "Yes" })),
+      row("user", "go on"),
+    ];
+    const { kinds } = kindsOf(msgs);
+    expect(msgs.slice(1).map((m) => kinds.get(m._id)?.kind)).toEqual(["vault_ready", "decision_answer", "normal"]);
   });
 });
