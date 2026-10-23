@@ -745,7 +745,7 @@ export const reclaimAutoClaimedRemoteSessions = internalMutation({
 export async function performReassignToDevice(
   ctx: { db: any },
   userId: Id<"users">,
-  args: { conversation_id: Id<"conversations">; device_id: string; request_id?: string },
+  args: { conversation_id: Id<"conversations">; device_id: string; request_id?: string; allow_cross_user?: boolean },
 ): Promise<{ ok: true; command_id: any; device_id: string; label: string; cross_user?: boolean }> {
   const conv = await ctx.db.get(args.conversation_id);
   if (!conv) throw new Error("not your conversation");
@@ -757,6 +757,11 @@ export async function performReassignToDevice(
   // daemon runs under another account, so the account must follow the device.
   // Route it through the cross-user reparent, which authorizes itself.
   if (conv.user_id.toString() !== userId.toString() || !device) {
+    if (args.allow_cross_user === false) {
+      throw new Error(device
+        ? "another account runs this session: moving it here makes it run and bill under yours and stops it where it runs now"
+        : "that is a team machine: the session would run and bill under the machine's account");
+    }
     return performReparentSessionToDevice(ctx, userId, {
       session_id: args.conversation_id,
       device_id: args.device_id,
@@ -846,6 +851,11 @@ export const reassignToDevice = mutation({
     device_id: v.string(),
     // The web store's id for this move (moveSessionToDevice); rides the resume.
     request_id: v.optional(v.string()),
+    // false refuses a move that would change the account a session runs and
+    // bills under (a session a teammate runs, or a team machine). The web's
+    // button is a deliberate press on the session in view; a script naming a
+    // short id passes false unless its person asked to take the session.
+    allow_cross_user: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -864,6 +874,7 @@ export const reassignToDevice = mutation({
       conversation_id: conv._id,
       device_id: args.device_id,
       request_id: args.request_id,
+      allow_cross_user: args.allow_cross_user,
     });
   },
 });

@@ -61,3 +61,8 @@ test("String(err) of a wrapped server error, with its own name first", () => {
   const text = String(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught ConvexError: That machine is not yours"));
   expect(humanizeConvexError(text)).toBe("That machine is not yours");
 });
+
+test("strips the HTTP client's wrapper, which has no [CONVEX] tag", () => {
+  const err = new Error("[Request ID: 1f5cc6d540fd07a5] Server Error\nUncaught Error: not your conversation\n    at handler (../convex/devices.ts:1:1)");
+  expect(humanizeConvexError(err)).toBe("not your conversation");
+});

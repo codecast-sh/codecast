@@ -326,6 +326,28 @@ describe("performReassignToDevice", () => {
     expect(JSON.parse(commands(db)[0].args).reparented).toBe(true);
   });
 
+  test("allow_cross_user false refuses a move that would change the account, and writes nothing", async () => {
+    const db = fixtures();
+    await expect(performReassignToDevice({ db }, ME as any, {
+      conversation_id: "conv1" as any,
+      device_id: "mydev",
+      allow_cross_user: false,
+    })).rejects.toThrow("another account runs this session");
+    expect(conv(db).user_id).toBe(JASON);
+    expect(commands(db)).toHaveLength(0);
+  });
+
+  test("allow_cross_user false still moves a session the caller runs onto their own machine", async () => {
+    const db = fixtures({ user_id: ME });
+    const result = await performReassignToDevice({ db }, ME as any, {
+      conversation_id: "conv1" as any,
+      device_id: "mydev",
+      allow_cross_user: false,
+    });
+    expect(result.cross_user).toBeUndefined();
+    expect(conv(db).owner_device_id).toBe("mydev");
+  });
+
   test("a teammate's move on a team-visible session delegates to the reparent and succeeds", async () => {
     const db = fixtures({ team_id: "team1", is_private: false, owner_user_id: undefined }, []);
     db._tables.team_memberships = [

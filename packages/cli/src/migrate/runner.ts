@@ -159,7 +159,7 @@ export function describeRow(row: RunnerRow): string {
 }
 
 /** Poll a daemon command until it reports or the TTL has surely killed it. */
-export async function awaitCommand(io: RunnerIo, commandId: string, timeoutMs = COMMAND_TIMEOUT_MS): Promise<CommandStatus | null> {
+export async function awaitCommand(io: Pick<RunnerIo, "commandStatus" | "now" | "sleep">, commandId: string, timeoutMs = COMMAND_TIMEOUT_MS): Promise<CommandStatus | null> {
   const deadline = io.now() + timeoutMs;
   for (;;) {
     const st = await io.commandStatus(commandId);

@@ -5,8 +5,9 @@
  *   cast migrate start --to <device> <session…>   create a batch (the web's
  *                                                 Settings → Migration does the same)
  *   cast migrate move <session> --to <device>     re-home one session onto another
- *                                                 laptop that has the checkout (the
- *                                                 web's Run on this device)
+ *                                                 of your laptops and resume it in
+ *                                                 its checkout there (the web's Run
+ *                                                 on this device)
  *   cast migrate ls                               recent batches
  *   cast migrate show <batch>                     one batch, row by row
  *   cast migrate cancel <batch>                   cancel its queued rows
@@ -27,11 +28,12 @@ import * as path from "node:path";
 import type { MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
 import type { BroughtPath } from "../remote/session-move.js";
 import { bringsByDefault } from "@codecast/shared/contracts/moveRehearsal";
+import { humanizeConvexError } from "@codecast/shared/contracts/convexErrors";
 import { createRunnerIo } from "./io.js";
 import { hostResolver } from "./hosts.js";
 import { matchDevices } from "./pickDevice.js";
 import { formatBytes, rehearseMove } from "./rehearse.js";
-import { runBatch } from "./runner.js";
+import { awaitCommand, runBatch } from "./runner.js";
 
 function ago(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -49,6 +51,9 @@ function deviceName(devices: any[], id: string | null | undefined): string {
 }
 
 /** The one device `needle` names; otherwise say why not, list the candidates, and exit. */
+// How long `move` waits for an online destination to answer its resume.
+const MOVE_ANSWER_MS = 60_000;
+
 function pickDevice(devices: any[], needle: string, what: string): any {
   const matches = matchDevices(devices, needle);
   if (matches.length === 1) return matches[0];
@@ -148,20 +153,49 @@ export function registerMigrateCommand(program: Command): void {
 
   migrate
     .command("move <session>")
-    .description("Re-home one session onto another laptop that already has the checkout, and resume it there (the web's Run on this device). Interrupts a turn in progress; for a cloud host use `start`")
+    .description("Re-home one session onto another of your laptops and resume it there in its checkout of the same repo (the web's Run on this device). Interrupts a turn in progress; for a cloud host use `start`")
     .requiredOption("--to <device>", "Destination: a device id (prefix) or label substring")
+    .option("--take", "Also move a session another account runs, or onto a team machine: it then runs and bills under the destination's account")
     .option("--json", "Machine-readable")
-    .action(async (session: string, opts: { to: string; json?: boolean }) => {
+    .action(async (session: string, opts: { to: string; take?: boolean; json?: boolean }) => {
       const { client, token, api } = await convexClient();
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
       const to = pickDevice(devices, opts.to, "--to");
+      const name = deviceName(devices, to.device_id);
       if (to.is_remote) {
-        console.error(`${deviceName(devices, to.device_id)} is a cloud host: its files must be transferred, so use \`cast migrate start --to ${opts.to} ${session}\``);
+        console.error(`${name} is a cloud host: its files must be transferred, so use \`cast migrate start --to ${opts.to} ${session}\``);
         process.exit(1);
       }
-      const r = await client.mutation(api.devices.reassignToDevice, { api_token: token, conversation_id: session, device_id: to.device_id });
-      if (opts.json) { console.log(JSON.stringify(r, null, 2)); return; }
-      console.log(`${session} → ${deviceName(devices, to.device_id)}${to.online ? "" : " (offline)"}`);
+      let moved: { command_id: string; cross_user?: boolean };
+      try {
+        moved = await client.mutation(api.devices.reassignToDevice, { api_token: token, conversation_id: session, device_id: to.device_id, allow_cross_user: opts.take === true });
+      } catch (err) {
+        const message = humanizeConvexError(err);
+        console.error(`${session}: ${message}${/another account|team machine/.test(message) ? " (pass --take to move it anyway)" : ""}`);
+        process.exit(1);
+      }
+      // The destination answers the resume when it runs it; an offline one
+      // runs it when it comes back.
+      const outcome = to.online
+        ? await awaitCommand({
+            commandStatus: (id) => client.query(api.sessionMigrations.commandStatus, { api_token: token, command_id: id }),
+            now: () => Date.now(),
+            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+          }, moved.command_id, MOVE_ANSWER_MS)
+        : null;
+      const state = !to.online ? "queued" : !outcome ? "sent" : outcome.error ? "failed" : "resumed";
+      if (opts.json) {
+        console.log(JSON.stringify({ ...moved, device_id: to.device_id, state, ...(outcome?.error ? { error: outcome.error } : {}) }, null, 2));
+      } else {
+        const tail = {
+          queued: `queued: ${name} is offline and resumes it when it comes back`,
+          sent: `${name} has not answered within ${MOVE_ANSWER_MS / 1000}s`,
+          failed: `moved, but ${name} could not resume it: ${outcome?.error}`,
+          resumed: `resumed on ${name}`,
+        }[state];
+        console.log(`${session} → ${tail}${moved.cross_user ? " (now runs under the destination's account)" : ""}`);
+      }
+      if (state === "failed") process.exit(1);
     });
 
   migrate
@@ -256,15 +290,13 @@ export function registerMigrateCommand(program: Command): void {
       }
       if (!opts.to || !sessions.length) { console.error("name sessions and --to <device> (or --request <id>)"); process.exit(1); }
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
-      const n = opts.to.toLowerCase();
-      const to = devices.filter((d) => d.device_id.toLowerCase().startsWith(n) || String(d.label ?? "").toLowerCase().includes(n));
-      if (to.length !== 1) { console.error(`--to "${opts.to}" matches ${to.length} devices`); process.exit(1); }
-      const plan = await client.mutation(api.sessionMigrations.createBatch, { api_token: token, conversation_ids: sessions, to_device_id: to[0].device_id, dry_run: true });
+      const to = pickDevice(devices, opts.to, "--to");
+      const plan = await client.mutation(api.sessionMigrations.createBatch, { api_token: token, conversation_ids: sessions, to_device_id: to.device_id, dry_run: true });
       for (const s of plan.skipped) console.error(`skip ${s.conversation_id}: ${s.reason}`);
-      const { cloud, host } = await resolve(to[0].device_id);
+      const { cloud, host } = await resolve(to.device_id);
       const out: MoveRehearsal[] = [];
       for (const r of plan.rows.filter((x: any) => x.session_id)) {
-        const result = await rehearseMove(r.session_id, { host, cloud, destinationId: to[0].device_id, bring: opts.bring?.map((p) => path.resolve(p)) });
+        const result = await rehearseMove(r.session_id, { host, cloud, destinationId: to.device_id, bring: opts.bring?.map((p) => path.resolve(p)) });
         out.push(result);
         if (!opts.json) printRehearsal(result, `${r.short_id ?? r.conversation_id} ${r.title ?? ""}`.trim());
       }

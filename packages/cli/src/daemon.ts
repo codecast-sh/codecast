@@ -741,13 +741,16 @@ async function refuseResumeNoLocalCheckout(
   sessionId: string,
   conversationId: string | undefined,
   recordedCwd: string | undefined,
-): Promise<void> {
+): Promise<string> {
   const short = sessionId.slice(0, 8);
+  // What the refused command reports as its error, so whoever sent it (a move,
+  // a migration) learns the session did not resume here.
+  const refused = `no checkout here for ${recordedCwd ?? "the session's project"}`;
   if (conversationId && syncServiceRef) {
     const owner = await syncServiceRef.getConversationOwner(conversationId).catch(() => null);
     if (owner && owner !== deviceId()) {
       log(`[REMOTE] resume ${short}: no local checkout for ${recordedCwd ?? "<unknown>"}, owned by ${owner.slice(0, 8)} — staying silent`);
-      return;
+      return refused;
     }
     const info = await syncServiceRef.getProjectInfo(conversationId).catch(() => null);
     const remote = info?.git_remote_url ?? null;
@@ -756,14 +759,15 @@ async function refuseResumeNoLocalCheckout(
     if (!noLocalCheckoutBannerActionable({ remote, recordedPath: recordedCwd })) {
       syncServiceRef.setSessionError(conversationId).catch(() => {});
       log(`[REMOTE] resume ${short}: no local checkout and no remote/path to act on — staying silent (cleared any stale banner)`);
-      return;
+      return refused;
     }
     const err = noLocalCheckoutError(remote, recordedCwd);
     syncServiceRef.setSessionError(conversationId, err).catch(() => {});
     log(`[REMOTE] resume refused for ${short}: ${err}`);
-  } else {
-    log(`Cannot auto-resume ${short}: recorded cwd ${recordedCwd ?? "<unknown>"} not found locally; refusing (no $HOME fallback)`);
+    return err;
   }
+  log(`Cannot auto-resume ${short}: recorded cwd ${recordedCwd ?? "<unknown>"} not found locally; refusing (no $HOME fallback)`);
+  return refused;
 }
 
 // Deterministic per-remote checkout dir for a reparented session. Keyed by a
@@ -8137,7 +8141,7 @@ async function executeRemoteCommand(
           // would reconstitute/spawn in the home dir and mislabel the project.
           const cwd = await resolveResumeCwdOrRefuse({ recordedCwd: projectPath, cwdOverride: projectPath, conversationId });
           if (!cwd) {
-            await refuseResumeNoLocalCheckout(sessionId, conversationId, projectPath);
+            error = await refuseResumeNoLocalCheckout(sessionId, conversationId, projectPath);
             restartingSessionIds.delete(sessionId);
             break;
           }
