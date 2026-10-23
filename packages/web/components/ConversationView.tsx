@@ -154,7 +154,8 @@ import { PlanBlock } from "./conversation/blocks/planBlock";
 import { CastBrowserRowContext, ChatWakeContext, HostedAskingContext, HostedCardShownContext } from "../lib/conversationBlockContexts";
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
-import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, SlashCommandChip, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ReviveDivider, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
+import { VaultReadyLine } from "./conversation/blocks/VaultRequestCard";
+import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, SlashCommandChip, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ReviveDivider, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock, WorkflowTaskBlock } from "./conversation/blocks/systemBlocks";
 import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
 import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
@@ -1558,6 +1559,7 @@ const ConversationViewInner = (
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
         case 'role_brief': return 44;
+        case 'workflow_frame': return kind.frame === 'user request' ? 44 : 100;
         case 'teammate_events': return 80;
         case 'task_prompt': return 0;
         case 'compaction_prompt': return 0;
@@ -3586,6 +3588,11 @@ const ConversationViewInner = (
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} hosted={isHostedAgentType(conversation?.agent_type)} />;
         case 'role_brief':
           return <FoldedPromptBlock key={msg._id} label="Role brief" preview={stripSystemTags(msg.content!).trim().split("\n")[0].replace(/\*\*/g, "")} content={stripSystemTags(msg.content!).trim()} timestamp={msg.timestamp} />;
+        case 'workflow_frame':
+          // The launching session's ask is context, folded; the computed task
+          // is this agent's brief from the workflow script, not the person's words.
+          if (kind.frame === 'user request') return <FoldedPromptBlock key={msg._id} label="Request" preview={kind.body.split("\n")[0]} content={kind.body} timestamp={msg.timestamp} />;
+          return <WorkflowTaskBlock key={msg._id} body={kind.body} timestamp={msg.timestamp} />;
         case 'session_message':
           // A hosted conversation reads a message sent into it as words in
           // the thread: no sender header, no jump to the sending turn, which
@@ -3598,6 +3605,8 @@ const ConversationViewInner = (
           return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':
           return <ChatWakeBlock key={msg._id} wake={kind.wake} timestamp={msg.timestamp} />;
+        case 'vault_ready':
+          return <VaultReadyLine key={msg._id} vault={kind.vault} timestamp={msg.timestamp} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
@@ -4673,6 +4682,10 @@ const ConversationViewInner = (
                       return <><Bot className="w-4 h-4 text-sol-violet" /><span className="text-sol-violet text-xs">Report from</span><span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap.purple}`}>{kind.from}</span></>;
                     }
                     return <><CornerDownRight className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">Message from</span><EntityIdPill shortId={kind.from} /></>;
+                  }
+                  // A workflow agent's brief came from the script, not the person.
+                  if (kind?.kind === "workflow_frame") {
+                    return <><Workflow className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">{kind.frame === "user request" ? "Request" : "Workflow task"}</span></>;
                   }
                   const stickySender = activeStickyMsg.fromUserId ? senderById.get(String(activeStickyMsg.fromUserId)) : undefined;
                   const stickyDirectFrom = kind?.kind === "direct_user" ? kind.from : undefined;

@@ -23,6 +23,7 @@ type RunMessage = {
 const CARD_TOOLS = new Set([
   'Task', 'AskUserQuestion', 'TodoWrite', 'TaskList', 'TaskCreate', 'TaskUpdate', 'TaskGet',
   'SendUserFile', 'SendMessage', 'TeamCreate', 'TeamDelete', 'Skill', 'EnterPlanMode', 'ExitPlanMode',
+  'StructuredOutput',
 ]);
 
 export const isFoldableToolCall = (tc: ToolCallLike) => !CARD_TOOLS.has(tc.name) && !isPlanWriteToolCall(tc);

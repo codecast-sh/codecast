@@ -3,12 +3,13 @@
 // that decide it (line-map.md LX3, LX5; the-line-end-to-end.md LE6). The sweep
 // admits for a ROLE: the role whose area holds the project, the line's start
 // switch on it (learning-loop.md LL5: caps.line_on, under the role's own
-// switch) and the answering person's card slots (caps.cards).
-// The switch and the cap paint from the org tree in the store, so an edit
-// shows at once (updateOrgRole is an intent with its own optimism); how many
-// slots are busy and how many hands it started today come from the sweep's
-// own count (orgLine.queue), an enrichment that may be late or missing.
+// switch) and the run slots on the machine its runner's sessions run on.
+// The switch paints from the org tree in the store, so an edit shows at once
+// (updateOrgRole is an intent with its own optimism); the slots, how many are
+// working and how many hands it started today come from the sweep's own
+// count (orgLine.queue), an enrichment that may be late or missing.
 import { useCallback, useMemo } from "react";
+import { useSharedMemos } from "../../../hooks/useSharedMemos";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { autonomyOn, lineStartsOn, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
@@ -55,10 +56,11 @@ const orgTreeSig = (s: ReturnType<typeof useInboxStore.getState>) => {
 };
 const orgWorkspaceOf = (t: { workspace: { kind: string; id: string } }) => `${t.workspace.kind}:${t.workspace.id}`;
 
-type LineQueue = { items: unknown[]; cards_cap?: number | null; open_cards?: number | null; hands?: number | null; hands_cap?: number | null };
+// cards_cap and open_cards are what a backend from before the runs cap returns.
+type LineQueue = { items: unknown[]; runs_cap?: number | null; working?: number | null; cards_cap?: number | null; open_cards?: number | null; hands?: number | null; hands_cap?: number | null };
 
-/** A project's admission from the role that starts its line: the switch and the slots paint from the role, the
- *  sweep's counts (orgLine.queue) fill in when they arrive and stay unknown without them. */
+/** A project's admission from the role that starts its line: the switch paints from the role, the sweep's
+ *  counts (orgLine.queue) fill in when they arrive and stay unknown without them. */
 export function admissionOf(role: OrgRole | null, queue?: LineQueue | null): LineAdmission {
   if (!role) return { role: null, on: false, slots: DEFAULT_LINE_CARDS_CAP, busy: null, hands: null, handsCap: null };
   const caps = role.caps;
@@ -66,9 +68,8 @@ export function admissionOf(role: OrgRole | null, queue?: LineQueue | null): Lin
     role: { id: role._id, handle: role.handle, paused: role.status !== "active" },
     on: lineStartsOn(role),
     queued: queue?.items.length ?? null,
-    // The role's own cap paints first, so an edit shows before the sweep's count echoes it.
-    slots: caps?.cards ?? queue?.cards_cap ?? DEFAULT_LINE_CARDS_CAP,
-    busy: queue?.open_cards ?? null,
+    slots: queue?.runs_cap ?? queue?.cards_cap ?? caps?.cards ?? DEFAULT_LINE_CARDS_CAP,
+    busy: queue?.working ?? queue?.open_cards ?? null,
     hands: queue?.hands ?? null,
     handsCap: queue?.hands_cap ?? caps?.hands_per_day ?? null,
   };
@@ -125,12 +126,14 @@ export function useLineAdmission(projectId: string | null): {
 export function useLineAdmissions(projects: ReadonlyArray<{ _id: string; workspace?: string | null }>): ReadonlyMap<string, LineAdmission> {
   useSyncOrgTreeFeeder();
   const sig = useInboxStore(orgTreeSig);
-  return useMemo(() => {
+  // Kept outside the fiber (useSharedMemos), so a discarded render of the line reads the same map back.
+  const { useShared } = useSharedMemos("lineAdmissions");
+  return useShared(() => {
     const tree = useInboxStore.getState().orgTree;
     const out = new Map<string, LineAdmission>();
     if (!tree) return out;
     const ws = orgWorkspaceOf(tree);
     for (const p of projects) if (p.workspace === ws) out.set(p._id, admissionOf(lineRoleOf(tree.roles, p._id)));
     return out;
-  }, [sig, projects]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sig, projects]);
 }

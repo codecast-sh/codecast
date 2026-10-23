@@ -29,8 +29,8 @@ Sources and flows are the team's.
 - `/line` lists every project's problems with a project filter. Flows are
   listed across all projects.
 - Admission is per role (the-line.md L9), and a role's scope names projects,
-  so a cause with a project is seen by the role that owns it. The cards cap is
-  counted per person across every project they answer for (LP6).
+  so a cause with a project is seen by the role that owns it. How many runs
+  work at once is counted per runner machine, across every line it runs (LE6).
 
 ## LP2. The profile file
 
@@ -54,7 +54,7 @@ eval  = "bun outreach/backend/scripts/line.ts eval --base $default_branch --dir 
 ship  = "bun outreach/backend/scripts/line.ts ship --task $task_id --branch $branch"
 
 [line.caps]
-cards = 5                            # open cards per person, across their lines
+cards = 5                            # read by nothing: open cards limit no starts (LE6)
 
 [line.merge]                         # what Ship does once a pull request is green
 auto = false                         # true: Ship on a task or session merges too
@@ -158,11 +158,12 @@ project's sessions and files `lesson:<id>` signals into that project.
 ## LP6. Who answers
 
 A card goes to the person the owning role reports to, unless the cause is in a
-protected category, where it goes to the workspace owner. `caps.cards` counts a
-person's open cards across every line they answer for, so nine roles do not
-mean forty-five open cards. Operational asks (a call to make, a document to
-send) are not change cards and never count against the cap; a recurring class
-of them is a signal.
+protected category, where it goes to the workspace owner. A person may hold any
+number of open cards: unanswered cards never hold back a start, and
+`caps.cards` limits nothing. What a line starts is bounded by the runs working
+on its runner's machine (the-line-end-to-end.md LE6). Operational asks (a call
+to make, a document to send) are not change cards; a recurring class of them
+is a signal.
 
 ## LP7. Shipping a default
 
@@ -182,8 +183,8 @@ cast org template install packages/cli/org-templates/line --instance <name> \
 - **The role** is the Line lead (`<instance>-line`), scoped to exactly the
   instance project. Its charter gives it four jobs: ground the causes the
   ground sweep could not place (LE5) from the project's goals and the evidence
-  on the cause; keep the queue worth admitting and never route around the
-  cards cap (LE6); keep the declared finders honest (LP3); and answer nothing
+  on the cause; keep the queue worth admitting and never route around
+  admission (LE6); keep the declared finders honest (LP3); and answer nothing
   on the line. Cards go to the person it reports to, protected causes to the
   workspace owner (LP6), and profile, principle and repository changes are
   proposals a person accepts.
