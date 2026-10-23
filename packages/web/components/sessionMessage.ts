@@ -32,6 +32,7 @@ import {
   isMachineDeliveredMessage,
   isPollResponsePayload,
   parseUnwrappedSessionReport,
+  parseVaultReady,
   CHAT_WAKE_HEADER,
 } from "@codecast/shared/contracts";
 import { LRUCache } from "../lib/lruCache";
@@ -494,6 +495,13 @@ export function cleanUserMessage(raw: string | null | undefined): string | null 
   return out;
 }
 
+const VAULT_READY_PREVIEW_RE = /^Vault: (\S+) is ready\. `cast (?:vault|browser) /;
+
+/** The secret a filled vault request's wake line (formatVaultReady) names, or null. The server's 200-character preview slice usually cuts the tag off, so the first line's own opening identifies it too. */
+export function vaultReadyName(raw: string): string | null {
+  return parseVaultReady(raw)?.name ?? raw.match(VAULT_READY_PREVIEW_RE)?.[1] ?? null;
+}
+
 function cleanUserMessageUncached(raw: string): string | null {
   raw = stripPastedContent(raw);
   if (raw.trimStart().startsWith("<turn_aborted>")) return null;
@@ -510,6 +518,9 @@ function cleanUserMessageUncached(raw: string): string | null {
   // A skill body stands for the command the human typed; preview that command.
   const skill = extractSkillInfo(raw);
   if (skill) return `/${skill.name}`;
+  // A filled vault request previews as its name alone.
+  const vault = vaultReadyName(raw);
+  if (vault) return `Vault: ${vault} is ready`;
   const cleaned = raw
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     // The server truncates this preview slice, so a notification's closing tag
