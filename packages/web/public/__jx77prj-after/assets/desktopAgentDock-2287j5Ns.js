@@ -1,0 +1,2 @@
+import{bB as o,aZ as l}from"./lineWorkspaceUrl-Cn9e_eGj.js";function t(e,...r){const n=l("call");return n?n(`agentDock.${e}`,...r).catch(()=>null):Promise.resolve(null)}function c(){return o()?t("get"):Promise.resolve(null)}function u(e){return t("set",e)}export{c as g,u as s};
+//# sourceMappingURL=desktopAgentDock-2287j5Ns.js.map

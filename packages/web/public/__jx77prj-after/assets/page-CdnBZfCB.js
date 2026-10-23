@@ -1,0 +1,2 @@
+import{j as o}from"./vendor-BRSpyZc9.js";import{c as t}from"./lineWorkspaceUrl-Cn9e_eGj.js";import{R as i}from"./ReviewView-CH9jdQYG.js";import"./index-DLR9oOLI.js";import"./dexie-BEFYTs6O.js";import"./convex-pL9slGJ3.js";import"./sentry-C0kWfPzV.js";import"./index-DEE-N2nV.js";import"./highlight-9pfC9kl-.js";import"./ui-DVb64tq5.js";import"./diff-05CVVOnl.js";import"./markdown-B7kiGmIT.js";import"./useFollowSurface-DJ7nZe2P.js";function v(){const r=t().id;return o.jsx(i,{prId:r})}export{v as default};
+//# sourceMappingURL=page-CdnBZfCB.js.map

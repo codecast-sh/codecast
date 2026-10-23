@@ -30,7 +30,7 @@ import { formatAgo, headroomScore, describeDecision, planTypeLabel } from "@code
 import { planAgentType, resolveAccountChip } from "../lib/accountUsageChip";
 import { machineSwitchBlock, machineSwitchPendingCopy, profileIsCurrentLogin } from "../lib/machineAccountSwitch";
 import { usageTone } from "../lib/usageTone";
-import { AccountUsageBars, LoginExpiredBadge, ProfileSignInButton, UsageRefreshButton } from "./AccountUsageMeter";
+import { AccountUsageBars, LoginExpiredBadge, ProfileSignInButton, ReservedBadge, UsageRefreshButton } from "./AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge } from "./MintTokenDialog";
 import { TopbarChip } from "./TopbarButton";
 
@@ -346,6 +346,7 @@ export function AccountUsageChip() {
                 nothing to say, so the line collapses when all are absent. */}
             <div className="mb-1 flex flex-wrap items-center gap-1 empty:hidden">
               <LoginExpiredBadge profile={e.p} />
+              <ReservedBadge profile={e.p} />
               {e.provider === "claude" && !!device.launch_profile && !e.isActive && profileIsCurrentLogin(e.p, device.active_email) && (
                 <span
                   className="rounded bg-sol-bg-alt px-1 py-px text-[9px] text-sol-text-dim"
