@@ -30,6 +30,13 @@ export const SECRET_EVENT_KINDS = [
   "requested",
   "fulfilled",
   "deleted",
+  "ask_first_on",
+  "ask_first_off",
+  "approval_requested",
+  "approved",
+  "denied",
+  "restored",
+  "redaction_sync",
 ] as const;
 export type SecretEventKind = (typeof SECRET_EVENT_KINDS)[number];
 
@@ -156,6 +163,18 @@ export function fingerprint(value: string | undefined | null): string | undefine
   const v = (value ?? "").trim();
   if (v.length < 20) return undefined;
   return `${v.slice(0, 4)}…${v.slice(-4)}`;
+}
+
+/** A list of names as stored: trimmed, blanks and repeats dropped. Every
+ *  writer cleans with this, and the web's optimistic edit too, so the server's
+ *  echo equals what the person sees. */
+export function cleanSecretList(xs?: string[]): string[] | undefined {
+  return xs ? [...new Set(xs.map((x) => x.trim()).filter(Boolean))] : undefined;
+}
+
+/** Sites as stored: bare lowercase hostnames, whatever URL was pasted. */
+export function cleanSecretSites(xs?: string[]): string[] | undefined {
+  return cleanSecretList(xs?.map((s) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "")));
 }
 
 /** The fingerprint a row shows for its payload: a key's value; nothing else has one. */
@@ -301,7 +320,7 @@ export function parseOtpauth(uri: string): TotpParams | null {
   const secret = (u.searchParams.get("secret") ?? "").toUpperCase().replace(/[\s=-]/g, "");
   if (!secret || !base32Decode(secret)) return null;
   const label = decodeURIComponent(u.pathname.replace(/^\//, ""));
-  const [labelIssuer, account] = label.includes(":") ? label.split(/:(.*)/s, 2).map((s) => s.trim()) : [undefined, label.trim()];
+  const [labelIssuer, account] = label.includes(":") ? label.split(/:([\s\S]*)/, 2).map((s) => s.trim()) : [undefined, label.trim()];
   const digits = Number(u.searchParams.get("digits") ?? 6);
   const period = Number(u.searchParams.get("period") ?? 30);
   const algorithm = ALGORITHMS[(u.searchParams.get("algorithm") ?? "SHA1").toUpperCase()];
@@ -379,4 +398,59 @@ export type SecretMeta = {
   requested_by_name?: string;
   requested_from_conversation?: string;
   request_why?: string;
+  updated_by_name?: string;
+  /** A login with a 2FA seed (`cast vault otp` works). */
+  has_otp?: boolean;
+  /** An agent's read needs a person's approval per session. */
+  ask_first?: boolean;
+  /** Previous values kept for restore (`versions`). */
+  version_count?: number;
 };
+
+/** One previous value of a secret, as `versions` lists it: metadata only. */
+export type SecretVersionMeta = {
+  _id: string;
+  rotated_at: number;
+  rotated_by_name?: string;
+  fingerprint?: string;
+  expires_at: number;
+};
+
+/** How long rotate keeps the previous value for restore. */
+export const SECRET_VERSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** What `cliRead` answers for an Ask first secret this session has no approval for. */
+export type SecretNeedsApproval = {
+  needs_approval: { decision: string; secret: string };
+  /** Every gated secret of the read, when it named more than one. */
+  approvals: { decision: string; secret: string }[];
+  message: string;
+};
+
+/** What `refresh` answers when the row changed since this machine read it. */
+export type SecretStaleWrite = { stale: true; updated_at: number; message: string };
+
+/** What about a ready secret needs a look, most urgent first. */
+export type SecretHealth = "expired" | "expiring" | "stale" | "unused";
+
+const DAY_MS = 86_400_000;
+
+/**
+ * A ready secret's health from its metadata alone: a sign-in past or within
+ * 3 days of its expiry, a secret no agent read in a day since it was added,
+ * or one last read over 90 days ago. Null when nothing needs a look, and for
+ * requests, which have a section of their own. The web list and detail and
+ * `cast vault ls|show` all say it this way.
+ */
+export function secretHealth(
+  row: Pick<SecretMeta, "status" | "signin_expires_at" | "use_count" | "created_at" | "last_used_at">,
+  now: number,
+): SecretHealth | null {
+  if (row.status !== "ready") return null;
+  const exp = row.signin_expires_at;
+  if (exp !== undefined && exp <= now) return "expired";
+  if (exp !== undefined && exp - now < 3 * DAY_MS) return "expiring";
+  if (!row.use_count && now - row.created_at > DAY_MS) return "unused";
+  if (row.last_used_at !== undefined && now - row.last_used_at > 90 * DAY_MS) return "stale";
+  return null;
+}
