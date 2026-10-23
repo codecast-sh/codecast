@@ -504,3 +504,112 @@ describe("applyLogPage: review findings (sessions twins, seeds, project counts)"
     expect(s.syncLogFloorEpoch).toBe(2);
   });
 });
+
+describe("catchUp: the legacy upgrade bridge", () => {
+  const { scopeMetaKey, catchUp } = require("../../hooks/useSyncChangeFeed");
+  const HOUR = 60 * 60 * 1000;
+  const TEAM_TASKS = 'tasks:v2:{"team_id":"T","workspace":"team"}';
+  // getChangesSince is the only call that carries `since`; the legacy feed
+  // answers every page with more to come, the way a two-week backlog does.
+  const convexWith = (heads: any[]) => {
+    const calls: any[] = [];
+    return {
+      calls,
+      legacyCalls: () => calls.filter((a) => "since" in a),
+      query: async (_fn: any, args: any) => {
+        calls.push(args);
+        if ("since" in args) return { changes: [], nextSince: args.since + 148_000, hasMore: true };
+        if (args && "ids" in args) return [];
+        return { heads };
+      },
+    };
+  };
+  const seed = (legacyCursor: number, extra: Record<string, any> = {}) =>
+    useInboxStore.setState({
+      syncMeta: { "changefeed:v1": { cursor: legacyCursor }, [TEAM_TASKS]: { cursor: 99, backfilledAt: 1 }, ...extra },
+      syncLogScopeStamps: {},
+      syncLogLag: {},
+      syncLogFloorEpoch: 0,
+      pending: {},
+    } as any);
+
+  test("a cursor from before the cutover skips the drain and cold-starts every scope at head", async () => {
+    seed(Date.now() - 14 * 24 * HOUR);
+    const convex = convexWith([
+      { scope_key: "user:u1", position: 40, floor: 0 },
+      { scope_key: "team:T", position: 156024, floor: 25515 },
+    ]);
+    await catchUp(convex);
+    expect(convex.legacyCalls()).toHaveLength(0);
+    const s = useInboxStore.getState() as any;
+    expect(s.syncMeta[scopeMetaKey("user:u1")].cursor).toBe(40);
+    expect(s.syncMeta[scopeMetaKey("team:T")].cursor).toBe(156024);
+    expect(s.syncMeta[TEAM_TASKS]).toBeUndefined(); // the crawl backfills in full
+    expect(s.syncMeta["changefeed:v1"]).toBeUndefined();
+    expect(s.syncLogScopeStamps["team:T"]).toBeDefined();
+    expect(s.syncLogFloorEpoch).toBeGreaterThan(0); // the one-shot floors recut
+  });
+
+  test("a stale cursor beside a scope cursor an earlier partial run stamped still resyncs that scope", async () => {
+    seed(Date.now() - 3 * 24 * HOUR, { [scopeMetaKey("team:T")]: { cursor: 120000 } });
+    const convex = convexWith([{ scope_key: "team:T", position: 156024, floor: 25515 }]);
+    await catchUp(convex);
+    expect(convex.calls.filter((a) => "scope_key" in a)).toHaveLength(0); // no range replay over an unproven gap
+    const s = useInboxStore.getState() as any;
+    expect(s.syncMeta[scopeMetaKey("team:T")].cursor).toBe(156024);
+    expect(s.syncMeta[TEAM_TASKS]).toBeUndefined();
+  });
+
+  test("an empty heads answer (auth blip) keeps a stale cursor and drains nothing", async () => {
+    const legacy = Date.now() - 14 * 24 * HOUR;
+    seed(legacy);
+    const convex = convexWith([]);
+    await catchUp(convex);
+    expect(convex.legacyCalls()).toHaveLength(0);
+    const s = useInboxStore.getState() as any;
+    expect(s.syncMeta["changefeed:v1"].cursor).toBe(legacy);
+    expect(s.syncMeta[TEAM_TASKS]).toBeDefined();
+  });
+
+  test("a young cursor still drains through the bridge before the scopes", async () => {
+    const legacy = Date.now() - 10 * 60 * 1000;
+    seed(legacy);
+    const convex = convexWith([{ scope_key: "team:T", position: 7, floor: 0 }]);
+    await catchUp(convex);
+    expect(convex.legacyCalls().length).toBeGreaterThan(0);
+    expect(convex.legacyCalls()[0].since).toBe(legacy - 10_000);
+    const s = useInboxStore.getState() as any;
+    expect(s.syncMeta[scopeMetaKey("team:T")].cursor).toBe(7); // cold-stamped as before
+    expect(s.syncMeta[TEAM_TASKS]).toBeDefined(); // no full backfill
+    expect(s.syncMeta["changefeed:v1"]).toBeDefined(); // page cap hit: resumes next run
+  });
+});
+
+describe("tasks: a cause write that leaves updated_at alone", () => {
+  const { catchUpScope, scopeMetaKey } = require("../../hooks/useSyncChangeFeed");
+  const cause = { signal_count: 3, first_seen: 1, last_seen: 2, fingerprints: ["f1"] };
+  const task = { _id: "t1", short_id: "ct-1", title: "a", status: "open", updated_at: 100, cause };
+
+  test("a byIds refetch with a new cause.scored lands on the held row", async () => {
+    useInboxStore.setState({
+      syncMeta: { [scopeMetaKey("team:T")]: { cursor: 0 } },
+      tasks: { t1: task },
+      pending: {},
+      syncLogApplyStats: { direct: 0, refetch: 0 },
+    } as any);
+    const scored = { score: 7, harm: 3, reach: 2, fixability: 1, reason: "r", root_cause: "c", at: 5, version: "1" };
+    const pages: any[] = [
+      { actions: [{ position: 1, entity_type: "tasks", entity_id: "t1", op: "upsert" }], nextFrom: 1, hasMore: false },
+      { items: [{ ...task, cause: { ...cause, scored } }] },
+    ];
+    await catchUpScope({ query: async () => pages.shift() }, { scope_key: "team:T", position: 1, floor: 0 }, new Set());
+    expect((useInboxStore.getState() as any).tasks.t1.cause.scored).toEqual(scored);
+  });
+
+  test("an unchanged row keeps its identity", () => {
+    useInboxStore.setState({ tasks: { t1: task }, pending: {} } as any);
+    const held = (useInboxStore.getState() as any).tasks.t1;
+    useInboxStore.getState().syncTable("tasks", [{ ...task, cause: { ...cause, fingerprints: ["f1"] } }] as any, { isDelta: true } as any);
+    expect((useInboxStore.getState() as any).tasks.t1).toBe(held);
+  });
+});

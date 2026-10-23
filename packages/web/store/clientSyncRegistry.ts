@@ -176,6 +176,10 @@ export const CLIENT_SYNC_REGISTRY = {
     // server stamps created_at, resolves a bare #42, may meet it at once),
     // and a lock would hide every later settle of the wait.
     unprotectedFields: ["comments", "waits"],
+    // `cause` is rewritten by passes that leave updated_at alone (problem
+    // scores and families, titles, names, merges), so a row whose scalars are
+    // unchanged must still compare it by content or those writes are dropped.
+    sync: { deepFields: ["cause"] },
     // Real tasks always carry a ct- short_id (required by schema, asserted by
     // webGetTaskDetail's lookup guard). Conversations masquerading as tasks
     // carry a session short id (jx…) or none. A non-array `comments` is a row
