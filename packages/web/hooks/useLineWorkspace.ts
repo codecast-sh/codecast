@@ -10,7 +10,8 @@
 //   useStationInput(sessionId, runId)      a station's brief, fed when opened
 //   store action labelDecision(runId, nodeId, verdict, note)
 import type { DeployAfter, DeployView } from "@codecast/shared/contracts/deploys";
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useWatchEffect } from "./useWatchEffect";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { parsePrRef } from "@codecast/shared/contracts";
@@ -35,7 +36,7 @@ import type { HandMerge } from "../lib/line/causeHistory";
 import { lineModelSteps, type DeployRow, type LineGraphSource, type LineIssue, type LineLabelRow, type LineModel, type LineModelRows, type OccurrenceRow } from "../lib/line/lineModel";
 import type { MapDecision, MapRun, MapSignal } from "../lib/line/lineMap";
 import { graphPickOrder, processIndex, projectGraphs, type GraphRun, type ProjectGraph } from "../lib/line/lineGraphs";
-import { buildLineInbox, inboxByGraph, inboxKindByCase, inboxProcessOf, lineProjectCounts, type InboxGroup } from "../lib/line/lineInbox";
+import { buildLineInbox, inboxByGraph, inboxKindByCase, inboxProcessOf, lineProjectCounts, type InboxGroup, type TrialInboxCard } from "../lib/line/lineInbox";
 import { foldDuplicateNeeds, lineNeeds, needCount, unlandedNeed, type LineNeed } from "../lib/line/lineNeeds";
 import { unlandedFix } from "../lib/line/approvedFix";
 import { fixMergesSig, landingOutput, newestRuns, type FixPullRequest, type LandedTask } from "../lib/line/problemPage";
@@ -429,7 +430,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   const job = jobOf(`lw:${pinned}:${everySpace}`);
   const view = useSyncExternalStore(job.subscribe, job.read, job.read);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the deps are every input, by value
-  useEffect(() => job.start(inputs, deps, scope), [job, scope, ...deps]);
+  useWatchEffect(() => job.start(inputs, deps, scope), [job, scope, ...deps]);
   const result = view.scope === scope ? view.result : null;
   const cold = useShared(() => (result ? null : assemble(inputs, null)), [result, ...deps]);
   const ws = result ?? cold!;
@@ -444,7 +445,7 @@ type WorkspaceInputs = {
   projectId: string | null; pinned: boolean; project: LineProject | null; projects: LineProject[];
   lineRows: LineScopedRows; scoped: LineScopedRows; everyRow: LineScopedRows; now: number;
   admissions: ReadonlyMap<string, LineAdmission>; allDecisions: MapDecision[]; decisionsComplete: boolean;
-  allTrialCards: Parameters<typeof buildLineInbox>[0]["trialCards"]; trialProjects: ReadonlySet<string>; trialHeld: ReadonlyMap<string, string>;
+  allTrialCards: ReadonlyArray<TrialInboxCard> | undefined; trialProjects: ReadonlySet<string>; trialHeld: ReadonlyMap<string, string>;
   trialRuns: ReadonlySet<string>; viewerId: string | null; otherTasks: Parameters<typeof buildLineInbox>[0]["otherTasks"];
   modelOf: ReturnType<typeof modelBuilder>; deploysReady: boolean; everyTaskProject: ReadonlyMap<string, string | null>;
   taskProject: ReadonlyMap<string, string | null>; names: ReadonlyMap<string, string>; bots: ReadonlySet<string>;

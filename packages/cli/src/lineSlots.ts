@@ -11,7 +11,7 @@
  * checkout and normalized (normalizeGitOrigin), so the laptop's clone and the
  * host's clone of one repo match whatever protocol cloned them.
  */
-import { execFileSync } from "child_process";
+import { execFileSync } from "./proc.js";
 import { normalizeGitOrigin } from "@codecast/shared/contracts";
 import type { Config } from "./config/types.js";
 
