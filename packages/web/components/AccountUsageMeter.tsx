@@ -173,6 +173,20 @@ export function LoginExpiredBadge({ profile }: { profile: { login_expired_at?: n
   );
 }
 
+/** "kept for reviews" next to a profile its machine reserved for one job: auto-switch never moves that machine's
+ * sessions onto it. Renders nothing for an unreserved profile. */
+export function ReservedBadge({ profile }: { profile: { reserved_for?: string | null } }) {
+  if (!profile.reserved_for) return null;
+  return (
+    <span
+      className="shrink-0 rounded bg-sol-violet/10 px-1.5 py-0.5 text-[10px] text-sol-violet"
+      title={`Kept for ${profile.reserved_for}: auto-switch never moves this machine's sessions onto it`}
+    >
+      kept for {profile.reserved_for}
+    </span>
+  );
+}
+
 export type { ProfileLoginFlow } from "./ProfileSignInDialog";
 
 /**
