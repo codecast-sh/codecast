@@ -20,7 +20,7 @@ import { querySplitWhole, useSplitQueryNoThrow } from "./useSplitQuery";
 import { useFeederError } from "./useSyncCollection";
 import { onSyncWake } from "./syncWake";
 import { useWatchEffect } from "./useWatchEffect";
-import { cancelReconcileCrawl, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { cancelReconcileCrawl, crawlResetsFor, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { inboxCrawlWsKey, inboxFloorStamped } from "./syncMetaKeys";
 import { collectGhostSweepCandidates } from "./ghostSweep";
 import { applyEntityIds, emptyIdsByCollection } from "./useSyncChangeFeed";
@@ -491,11 +491,14 @@ export function useSyncInboxSessions() {
   const sessWsKey = inboxCrawlWsKey(principalId);
   const floorStamped = useInboxStore((s) => inboxFloorFlags(s, principalId).floorStamped);
   const logStamped = useInboxStore((s) => inboxFloorFlags(s, principalId).logStamped);
+  // A resync supersedes a floor in flight even when it had not stamped yet
+  // (floorStamped stays false): relaunch on the reset itself.
+  const floorReset = useInboxStore((s) => crawlResetsFor(s, syncMetaKey("sessions", sessWsKey)));
   // eslint-disable-next-line no-restricted-syntax -- cleanup keyed to the principal; cancels an in-flight floor on wsKey change
   useWatchEffect(() => () => cancelReconcileCrawl("sessions"), [sessWsKey]);
   useWatchEffect(() => {
     runInboxFloorStep(convex, { wsKey: sessWsKey, principalId, hydrated, floorStamped, logStamped });
-  }, [convex, sessWsKey, principalId, hydrated, floorStamped, logStamped]);
+  }, [convex, sessWsKey, principalId, hydrated, floorStamped, logStamped, floorReset]);
 
   // THE STUB SWEEP — local cruft only. An optimistic create that never landed
   // server-side exists in this cache alone; a stub the user typed into is a

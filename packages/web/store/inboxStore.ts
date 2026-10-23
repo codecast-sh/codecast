@@ -4,7 +4,7 @@ import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceO
 import type { CloudPlacementProgress } from "@codecast/shared/contracts";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
-import { inboxCrawlWsKey, syncMetaKey } from "../hooks/syncMetaKeys";
+import { crawlScopesClearedBy, crawlWatermarkScope } from "../hooks/syncMetaKeys";
 import type { SharedObjectKind } from "@codecast/shared/entities";
 import type { CodeAnchorText } from "@codecast/shared/comments";
 import type { GraphRefStatus, TaskWait } from "@codecast/shared/tasks";
@@ -5955,6 +5955,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // principal can never apply into the next one's store. Ephemeral.
   syncLogFloorEpoch: number;
   bumpSyncLogFloorEpoch: () => void;
+  // Crawl scope (crawlWatermarkScope) → how many times a resync cleared its
+  // watermarks this page session (clearCrawlMetaForScope). A crawl in flight
+  // through a clear walked from before it, so it must not stamp backfilledAt
+  // over the clear; the runner and the crawl hooks read this to supersede and
+  // relaunch it. Keyed by scope, not watermark key, so a first crawl that has
+  // written no watermark yet is superseded too. Ephemeral.
+  crawlResets: Record<string, number>;
   // Lift the excludes purgeTeamScopeRows planted for one scope (a rejoin): the
   // recut floor's rows would otherwise be dropped by every delta merge.
   liftScopeExcludes: (scopeKey: string) => void;
@@ -10316,31 +10323,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }));
   },
 
-  // Clear every tasks/docs crawl watermark belonging to one sync-log scope, so
-  // the next crawl runs as a FULL backfill (design D7 resync / D5 scope_added).
-  // Crawl keys are `${ns}:v<n>:${JSON.stringify(wsArgs)}` (syncMetaKey) — several per scope
-  // (project_path variants) and never byte-reconstructable from a scope key
-  // (object key order), so this parses and matches instead of concatenating.
+  // Clear every crawl watermark belonging to one sync-log scope, so the next
+  // crawl runs as a FULL backfill (design D7 resync / D5 scope_added): the
+  // tasks and docs crawls (several keys per scope, project_path variants) and,
+  // for the viewer's personal scope, the sessions floor, recut with the
+  // warm-cache probe that carries what left the inbox scan while the log had
+  // a hole. The bump supersedes a crawl already walking that scope.
   clearCrawlMetaForScope: sync(function (this: Draft, scopeKey: string) {
-    const teamId = scopeKey.startsWith("team:") ? scopeKey.slice(5) : null;
-    const personal = scopeKey.startsWith("user:");
-    // The sessions floor is keyed by the principal (inboxCrawlWsKey), so the
-    // personal scope's resync recuts it — with the warm-cache probe that
-    // carries what left the inbox scan while the log had a hole.
-    if (personal) delete this.syncMeta[syncMetaKey("sessions", inboxCrawlWsKey(scopeKey.slice(5)))];
+    const scopes = crawlScopesClearedBy(scopeKey);
     for (const key of Object.keys(this.syncMeta)) {
-      const m = /^(tasks|docs):v\d+:(.*)$/.exec(key);
-      if (!m) continue;
-      try {
-        const ws = JSON.parse(m[2]);
-        const matches = teamId
-          ? ws?.workspace === "team" && String(ws.team_id) === teamId
-          : personal && ws?.workspace === "personal";
-        if (matches) delete this.syncMeta[key];
-      } catch {
-        // not a JSON wsKey (e.g. "skip") — nothing to clear
-      }
+      const scope = crawlWatermarkScope(key);
+      if (scope && scopes.includes(scope)) delete this.syncMeta[key];
     }
+    for (const scope of scopes) this.crawlResets[scope] = (this.crawlResets[scope] ?? 0) + 1;
   }),
 
   switchAgent: sync(function (this: Draft, currentId: string, targetAgentType: string) {
@@ -12903,6 +12898,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set((s: any) => ({ syncLogScopeStamps: { ...s.syncLogScopeStamps, [scopeKey]: Date.now() } }));
   },
   syncLogFloorEpoch: 0,
+  crawlResets: {},
   bumpSyncLogFloorEpoch: () => set((s: any) => ({ syncLogFloorEpoch: s.syncLogFloorEpoch + 1 })),
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
   docs: {},

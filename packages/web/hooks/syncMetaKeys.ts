@@ -21,6 +21,34 @@ export function syncMetaKey(namespace: string, wsKey: string): string {
   return `${namespace}:v${WATERMARK_VERSION[namespace] ?? 2}:${wsKey}`;
 }
 
+/**
+ * The sync-log scope a crawl watermark belongs to, as the token a resync
+ * clears it under (clearCrawlMetaForScope): `team:<id>` for a team's tasks and
+ * docs, `personal` for the personal ones, `user:<id>` for that principal's
+ * inbox floor. Crawl keys carry JSON wsArgs whose key order is not
+ * reconstructable from a scope, so this parses. Null for any other key.
+ */
+export function crawlWatermarkScope(key: string): string | null {
+  const inbox = /^sessions:v\d+:inbox:(.+)$/.exec(key);
+  if (inbox) return `user:${inbox[1]}`;
+  const m = /^(tasks|docs):v\d+:(.*)$/.exec(key);
+  if (!m) return null;
+  try {
+    const ws = JSON.parse(m[2]);
+    if (ws?.workspace === "team" && ws.team_id) return `team:${ws.team_id}`;
+    if (ws?.workspace === "personal") return "personal";
+  } catch {
+    // not a JSON wsKey (e.g. "skip")
+  }
+  return null;
+}
+
+/** The tokens a resync of one sync-log scope clears: its own, and for the
+ *  viewer's personal scope the personal tasks and docs too. */
+export function crawlScopesClearedBy(scopeKey: string): string[] {
+  return scopeKey.startsWith("user:") ? [scopeKey, "personal"] : [scopeKey];
+}
+
 /** The inbox floor's workspace key for one principal. */
 export function inboxCrawlWsKey(principalId: string | null | undefined): string {
   return principalId ? `inbox:${principalId}` : "skip";

@@ -5,7 +5,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { useBootstrapCollection } from "./useBootstrapCollection";
-import { countLogMissedRows, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { countLogMissedRows, crawlResetsFor, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { track } from "../lib/analytics";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useWorkspaceArgs, type WorkspaceArgs as StoreWorkspaceArgs } from "./useWorkspaceArgs";
@@ -150,6 +150,8 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   // before the persisted backfilledAt loads. Mirrors useSyncTasks.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const [reconcileNonce, setReconcileNonce] = useState(0);
+  // A resync cleared this watermark: relaunch (see useSyncTasks).
+  const crawlReset = useInboxStore((s) => crawlResetsFor(s, syncMetaKey("docs", wsKey)));
   useMountEffect(() => {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), RECONCILE_THROTTLE_MS);
     return () => clearInterval(id);
@@ -220,7 +222,7 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
         useInboxStore.getState().syncTable("docs", all, opts);
       },
     });
-  }, [convex, wsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [convex, wsKey, reconcileNonce, hydrated, crawlReset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { ready };
 }

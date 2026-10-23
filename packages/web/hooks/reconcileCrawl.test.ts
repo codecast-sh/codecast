@@ -321,3 +321,126 @@ describe("inbox principal crawl keys", () => {
   });
 
 });
+
+// A resync (clearCrawlMetaForScope) asks for a FULL backfill. A crawl already
+// in flight walked from the old watermark or a resume checkpoint, so it must
+// not stamp backfilledAt over the clear, and the relaunch must not be held
+// back by the run in flight or by an earlier completion in this session.
+describe("runReconcileCrawl — a resync clears the watermark mid-crawl", () => {
+  const WS = JSON.stringify({ team_id: "T", workspace: "team" });
+  const KEY = syncMetaKey("tasks", WS);
+  beforeEach(() => {
+    useInboxStore.setState({ syncMeta: {}, syncProgress: {}, crawlResets: {} } as any);
+  });
+
+  // Pages answer only when released, so the test can clear between pages.
+  const gatedCrawl = (label: string, log: string[]) => {
+    const gates: Array<() => void> = [];
+    let page = 0;
+    const done = new Promise<void>((resolve) => {
+      runReconcileCrawl({
+        namespace: "tasks",
+        wsKey: WS,
+        throttleMs: THROTTLE,
+        pageDelayMs: 0,
+        maxPages: 10,
+        fetchPage: async () => {
+          const n = page++;
+          await new Promise<void>((r) => gates.push(r));
+          return { rows: [{ _id: `${label}${n}`, updated_at: n + 1 }], isDone: n >= 1, continueCursor: `${label}c${n}` };
+        },
+        onPage: () => {},
+        onComplete: () => { log.push(`${label} complete`); resolve(); },
+      });
+      setTimeout(resolve, 200); // a superseded run never completes
+    });
+    return { done, release: async () => { while (!gates.length) await delay(1); gates.shift()!(); await delay(5); } };
+  };
+
+  it("an old crawl in flight stamps nothing, and the relaunch runs the full walk", async () => {
+    useInboxStore.getState().recordSyncMeta(KEY, { cursor: 50 }); // the old incremental watermark
+    const log: string[] = [];
+    const old = gatedCrawl("old", log);
+    await old.release(); // first page lands, checkpoint written
+    useInboxStore.getState().clearCrawlMetaForScope("team:T");
+    expect(useInboxStore.getState().syncMeta[KEY]).toBeUndefined();
+
+    const fresh = gatedCrawl("new", log); // the hook's relaunch, old run still in flight
+    await old.release();
+    await fresh.release();
+    await fresh.release();
+    await Promise.all([old.done, fresh.done]);
+
+    expect(log).toEqual(["new complete"]);
+    const meta = useInboxStore.getState().syncMeta[KEY] as any;
+    expect(meta.backfilledAt).toBeDefined();
+    expect(meta.cursor).toBe(2); // from the new walk's rows, not the old run's
+    expect(meta.resumeCursor ?? null).toBeNull();
+    expect(useInboxStore.getState().syncProgress.tasks?.loading).toBe(false);
+  });
+
+  it("a crawl that already finished this session does not throttle the relaunch", async () => {
+    const log: string[] = [];
+    const first = gatedCrawl("a", log);
+    await first.release();
+    await first.release();
+    await first.done;
+    expect(log).toEqual(["a complete"]);
+
+    const throttled = gatedCrawl("b", log); // inside the window: skipped
+    await throttled.done;
+    expect(log).toEqual(["a complete"]);
+
+    useInboxStore.getState().clearCrawlMetaForScope("team:T");
+    const relaunch = gatedCrawl("c", log);
+    await relaunch.release();
+    await relaunch.release();
+    await relaunch.done;
+    expect(log).toEqual(["a complete", "c complete"]);
+  });
+
+  it("a run stopped only by the reset releases its slot when nothing relaunches it", async () => {
+    const log: string[] = [];
+    const old = gatedCrawl("x", log);
+    await old.release();
+    useInboxStore.getState().clearCrawlMetaForScope("team:T");
+    await old.release();
+    await old.done;
+    expect(log).toEqual([]);
+    expect(useInboxStore.getState().syncMeta[KEY]).toBeUndefined(); // no checkpoint, no backfilledAt
+    expect(useInboxStore.getState().syncProgress.tasks?.loading).toBe(false);
+  });
+});
+
+describe("crawlWatermarkScope", () => {
+  const { crawlWatermarkScope, crawlScopesClearedBy } = require("./syncMetaKeys");
+  it("names the scope a resync clears each watermark under", () => {
+    expect(crawlWatermarkScope(syncMetaKey("tasks", JSON.stringify({ workspace: "team", team_id: "T" })))).toBe("team:T");
+    expect(crawlWatermarkScope(syncMetaKey("docs", JSON.stringify({ team_id: "T", workspace: "team" })))).toBe("team:T");
+    expect(crawlWatermarkScope(syncMetaKey("tasks", JSON.stringify({ workspace: "personal" })))).toBe("personal");
+    expect(crawlWatermarkScope(syncMetaKey("sessions", inboxCrawlWsKey("u1")))).toBe("user:u1");
+    expect(crawlWatermarkScope("tasks:v2:skip")).toBeNull();
+    expect(crawlWatermarkScope("synclog:v1:team:T")).toBeNull();
+    expect(crawlScopesClearedBy("user:u1")).toEqual(["user:u1", "personal"]);
+    expect(crawlScopesClearedBy("team:T")).toEqual(["team:T"]);
+  });
+
+  it("a first crawl with no watermark yet is superseded by its scope's resync", async () => {
+    const WS = JSON.stringify({ workspace: "personal" });
+    useInboxStore.setState({ syncMeta: {}, syncProgress: {}, crawlResets: {} } as any);
+    let release!: () => void;
+    let completed = false;
+    runReconcileCrawl({
+      namespace: "docs", wsKey: WS, throttleMs: THROTTLE, pageDelayMs: 0, maxPages: 5,
+      fetchPage: async () => { await new Promise<void>((r) => (release = r)); return { rows: [{ _id: "d1" }], isDone: true, continueCursor: null }; },
+      onPage: () => {},
+      onComplete: () => { completed = true; },
+    });
+    await delay(5);
+    useInboxStore.getState().clearCrawlMetaForScope("user:u1");
+    release();
+    await delay(20);
+    expect(completed).toBe(false);
+    expect(useInboxStore.getState().syncMeta[syncMetaKey("docs", WS)]).toBeUndefined();
+  });
+});

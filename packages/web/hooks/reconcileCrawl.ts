@@ -1,6 +1,6 @@
 import { useInboxStore } from "../store/inboxStore";
 import { mapSlots } from "../store/simSlot";
-import { syncMetaKey } from "./syncMetaKeys";
+import { crawlWatermarkScope, syncMetaKey } from "./syncMetaKeys";
 
 // Shared full-reconcile crawl, used by useSyncTasks and useSyncDocs.
 //
@@ -20,11 +20,17 @@ import { syncMetaKey } from "./syncMetaKeys";
 //   runningKey — wsKey of the crawl currently in flight, if any.
 //   gen        — bumped on a real workspace change so a stale crawl abandons its
 //                writes instead of clobbering the new workspace's data.
-type ReconcileState = { doneAt: Map<string, number>; runningKey: string | null; gen: number };
+//   resets     — wsKey → the store's crawlResets count for its scope that the
+//                last run saw. A
+//                resync clearing the watermark supersedes the crawl in flight
+//                (it walked from the old watermark or a resume checkpoint, so
+//                its backfilledAt would stamp over the full backfill the clear
+//                asked for) and drops the in-session throttle.
+type ReconcileState = { doneAt: Map<string, number>; runningKey: string | null; gen: number; resets: Map<string, number> };
 const states = new Map<string, ReconcileState>();
 function stateFor(namespace: string): ReconcileState {
   let s = states.get(namespace);
-  if (!s) { s = { doneAt: new Map(), runningKey: null, gen: 0 }; states.set(namespace, s); }
+  if (!s) { s = { doneAt: new Map(), runningKey: null, gen: 0, resets: new Map() }; states.set(namespace, s); }
   return s;
 }
 
@@ -128,6 +134,13 @@ export function countLogMissedRows(
   return n;
 }
 
+/** How many times a resync cleared this watermark's scope this page session:
+ *  the crawl hooks relaunch when it moves, the runner supersedes on it. */
+export function crawlResetsFor(s: { crawlResets: Record<string, number> }, metaKey: string): number {
+  const scope = crawlWatermarkScope(metaKey);
+  return scope ? s.crawlResets[scope] ?? 0 : 0;
+}
+
 export function runReconcileCrawl(opts: CrawlOptions): void {
   const { namespace, wsKey, throttleMs, pageDelayMs, maxPages } = opts;
   if (wsKey === "skip") {
@@ -137,6 +150,16 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
   if (opts.isCurrent && !opts.isCurrent()) return;
   const st = stateFor(namespace);
   const metaKey = syncMetaKey(namespace, wsKey);
+  const resetsNow = () => crawlResetsFor(useInboxStore.getState(), metaKey);
+  const resets = resetsNow();
+  if ((st.resets.get(wsKey) ?? 0) !== resets) {
+    st.resets.set(wsKey, resets);
+    st.doneAt.delete(wsKey);
+    if (st.runningKey === wsKey) {
+      st.gen++;
+      st.runningKey = null;
+    }
+  }
   // Recently completed for this workspace → serve from the IDB-cached store.
   // The completion time is DURABLE (persisted in syncMeta), so a fresh page load
   // honors a backfill that finished in a prior session instead of re-crawling the
@@ -149,10 +172,12 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
   // Start (and supersede any crawl for a different/old workspace).
   const myGen = ++st.gen;
   st.runningKey = wsKey;
-  const superseded = () => st.gen !== myGen;
+  const superseded = () => st.gen !== myGen || resetsNow() !== resets;
   const isCurrent = () => !superseded() && (opts.isCurrent?.() ?? true);
   const stop = (loaded: number) => {
-    if (!superseded()) {
+    // A run stopped by a watermark reset still releases the slot: nothing
+    // newer owns it until the relaunch takes a new generation.
+    if (st.gen === myGen) {
       st.runningKey = null;
       setProgress(namespace, false, loaded);
     }

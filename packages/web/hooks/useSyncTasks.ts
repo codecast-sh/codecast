@@ -5,7 +5,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { collectionRowValidator } from "../store/clientSyncRegistry";
 import { useConvexSync } from "./useConvexSync";
-import { countLogMissedRows, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
+import { countLogMissedRows, crawlResetsFor, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { useBootstrapCollection } from "./useBootstrapCollection";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { track } from "../lib/analytics";
@@ -137,6 +137,9 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), RECONCILE_THROTTLE_MS);
     return () => clearInterval(id);
   }, []);
+  // A resync cleared this watermark: relaunch, so the full backfill it asked
+  // for runs now instead of at the next interval tick.
+  const crawlReset = useInboxStore((s) => crawlResetsFor(s, metaKey));
   useEffect(() => {
     if (!hydrated || wsArgs === "skip") return; // resume from the restored watermark, not an empty one
     // Incremental top-up only AFTER a full backfill exists for this workspace.
@@ -185,7 +188,7 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
         }
       },
     });
-  }, [convex, wsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [convex, wsKey, reconcileNonce, hydrated, crawlReset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { hasMore: false, loadMore: () => {}, ready };
 }
