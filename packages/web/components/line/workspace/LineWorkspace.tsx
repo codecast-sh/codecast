@@ -76,6 +76,9 @@ const ICONS: Record<LineView, LucideIcon> = { foryou: Inbox, timeline: History, 
 /** How long after G the second key of the go chord still counts. */
 const GO_MS = 1200;
 
+/** Whether the document is on screen now (the page's entrance animates only then). */
+const documentShown = () => typeof document === "undefined" || document.visibilityState === "visible";
+
 function Skeleton() {
   return <div className="lw-skeleton" aria-busy>{[70, 92, 54, 80].map((w, i) => <i key={i} style={{ width: `${w}%` }} />)}</div>;
 }
@@ -315,7 +318,9 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
               {settings && model && !unresolved ? (
                 <LineSettingsStage projectId={projectId} line={drawnLine} lines={picks} projects={ws.projects} rollups={ws.allRollups} processOf={ws.process.project} href={settingsAt} />
               ) : !model || unresolved ? <Skeleton /> : (
-                <div className="lw-stage-in" key={scoped ? `${selection.view}:${selection.mode}:${model.graphKey}:${projectId ?? "all"}` : `foryou:${projectId ?? "all"}`}>
+                // The page rises in only while the tab is on screen: a hidden tab runs no frames, so an entrance never
+                // finishes there, and Chrome keeps every page it replaced (and all that page read) until it would.
+                <div className="lw-stage-in" data-enter={documentShown() ? "" : undefined} key={scoped ? `${selection.view}:${selection.mode}:${model.graphKey}:${projectId ?? "all"}` : `foryou:${projectId ?? "all"}`}>
                   {/* An open step is a page of its own (LJ8.6), in place of the view it was opened from. */}
                   {drawerOpen && !stepSlides
                     ? <StepPage model={model} workspace={ws} selection={drawerSelection} select={select} href={href} pinned={!!pinned} />
