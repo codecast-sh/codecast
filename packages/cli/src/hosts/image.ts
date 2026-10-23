@@ -18,6 +18,7 @@
 
 import { execFileSync } from "../proc.js";
 import { agentSpawnPath } from "../agentSpawnPath.js";
+import { shq } from "../remote/session-move.js";
 
 export const IMAGE_TAG = { Key: "managed-by", Value: "codecast" };
 
@@ -161,12 +162,40 @@ export function cloneResetUserData(user = "ubuntu"): string {
     "rm -f /etc/machine-id /var/lib/dbus/machine-id",
     "systemd-machine-id-setup",
     `rm -f ${home}/.codecast/config.json ${home}/.codecast/.device_binding.json ${home}/.codecast/host-active`,
-    `for r in ${home}/work/*/; do rm -rf "$r.codecast/worktrees" "$r.codecast/workspaces"; su - ${user} -c "git -C '$r' worktree prune" 2>/dev/null || true; done`,
+    ...cloneTreesAside(home, user),
+    `for r in ${home}/work/*/; do su - ${user} -c ${shq(brokenRefSweep('"$1"'))} sh "$r" 2>/dev/null || true; done`,
   ].join("; ");
   return `#cloud-config
 bootcmd:
   - [cloud-init-per, instance, codecast-clone-reset, sh, -c, ${JSON.stringify(script)}]
 `;
+}
+
+/**
+ * The clone's step for the source host's session worktrees: renamed aside, not
+ * deleted. A busy source host's trees run to millions of files (union-line-5:
+ * 48 trees, 56 GB, 10.7M files), and deleting them during boot, on a disk still
+ * loading from its snapshot, held boot (and sshd) for over 20 minutes. The
+ * rename is instant, `git worktree prune` drops the trees from the repo, and
+ * the delete runs in the background after boot.
+ */
+export function cloneTreesAside(home: string, user: string): string[] {
+  return [
+    `for r in ${home}/work/*/; do for d in worktrees workspaces; do [ -e "$r.codecast/$d" ] && mv "$r.codecast/$d" "$r.codecast/.clone-trash-$d"; done; su - ${user} -c "git -C '$r' worktree prune" 2>/dev/null || true; done`,
+    `(nohup setsid sh -c 'sleep 60; nice -n 19 rm -rf ${home}/work/*/.codecast/.clone-trash-*' >/dev/null 2>&1 &)`,
+  ];
+}
+
+/**
+ * Shell that drops every ref of the repo at `repo` whose object the repo does
+ * not hold, and a gc.log left by an interrupted gc. A no-reboot snapshot can
+ * catch a ref file on disk before the objects it names: the clones of
+ * union-line-1 carried two such branches, and every fetch on them failed with
+ * "did not send all necessary objects" until they were deleted (2026-10-23).
+ * Branches the clone never had a use for, so dropping them loses nothing.
+ */
+export function brokenRefSweep(repo: string): string {
+  return `cd ${repo} || exit 0; git for-each-ref --format='%(objectname) %(refname)' | while read -r o r; do git cat-file -e "$o" 2>/dev/null || git update-ref -d "$r"; done; rm -f "$(git rev-parse --git-dir)/gc.log"`;
 }
 
 /** Deregister a codecast image and delete its snapshots (refuses an image that is not codecast's). */

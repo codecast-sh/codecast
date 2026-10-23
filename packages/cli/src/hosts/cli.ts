@@ -1272,6 +1272,18 @@ export function buildHostsCommand(parent: Command): Command {
           console.log(fmt.muted("  once AWS finishes it: cast hosts image --publish-base, rerun until every region is public"));
           return;
         }
+        // The image is taken without a reboot, so a write still in the page
+        // cache misses the snapshot: union-line-1's clones got branch refs whose
+        // objects never reached disk, and every fetch on them failed
+        // (2026-10-23). A stopped host has nothing in flight.
+        const state = aws(opts, ["ec2", "describe-instances", "--instance-ids", h.id]).Reservations?.[0]?.Instances?.[0]?.State?.Name;
+        if (state !== "stopped") {
+          try {
+            remoteExec(toRemoteHost(h), "sync", 120_000);
+          } catch (err) {
+            die(`could not flush the host's disk before the snapshot (${(err as Error).message}); stop it with cast hosts sleep and capture it stopped`);
+          }
+        }
         const name = imageName(platform, h.id);
         const out = aws(opts, createImageArgs(h.id, platform, name));
         console.log(`${OK} ${out.ImageId}  ${name}`);
