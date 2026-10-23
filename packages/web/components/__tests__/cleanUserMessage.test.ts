@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { formatVaultReady } from "@codecast/shared/contracts";
 import { cleanUserMessage, foldNudgeRuns, isBareNudge, nudgeLabel, type NudgeRow } from "../sessionMessage";
 
 const interruptionNotice = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
@@ -40,6 +41,16 @@ describe("cleanUserMessage", () => {
     const truncated =
       '<task-notification>\n<task-id>bnvc12ng6</task-id>\n<summary>Monitor event: "web dev server health (localhost:3200)"</summary>\n<event>dev server responding (200)</event>\nIf this event is something the us';
     expect(cleanUserMessage(truncated)).toBeNull();
+  });
+
+  // The preview slice is 200 characters, so the tag is usually gone by the time
+  // it reaches the card; whole or cut, it reads as the secret's name.
+  it("previews a filled vault request by its name", () => {
+    const whole = formatVaultReady({ short_id: "sec-4", name: "stripe-test", kind: "key", vars: ["STRIPE_SECRET_KEY"] });
+    expect(cleanUserMessage(whole)).toBe("Vault: stripe-test is ready");
+    expect(cleanUserMessage(whole.slice(0, 60))).toBe("Vault: stripe-test is ready");
+    const signin = formatVaultReady({ short_id: "sec-5", name: "github", kind: "signin", vars: [], sites: ["github.com"] });
+    expect(cleanUserMessage(signin.slice(0, 50))).toBe("Vault: github is ready");
   });
 });
 
