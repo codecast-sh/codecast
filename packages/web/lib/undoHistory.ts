@@ -166,7 +166,7 @@ export function undoFoldLabel(item: UndoHistoryItem): string {
     const noun = [...nouns][0];
     return `${ids.size} ${noun}s`;
   }
-  return `${children.length} changes`;
+  return `${children.length} ${children.length === 1 ? "change" : "changes"}`;
 }
 
 /** "just now", "3m ago", "2h ago": line two's clock, read against `now`. */
