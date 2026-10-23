@@ -366,7 +366,7 @@ function stationReport(node: { result_preview?: string; session?: { result?: str
 /** What a run's stations found, proposed and built, placed by the line's phases (shared/contracts/linePhases), and the argument a close made. */
 export function runSaid(run: { node_statuses?: any[] }): RunSaid {
   const out: RunSaid = { found: null, proposed: null, built: null, argued: null };
-  const line = isLineRun(run.node_statuses);
+  const line = isLineRun(run);
   const nodes = [...(run.node_statuses ?? [])].sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0));
   for (const n of nodes) {
     if (n.status !== "completed" || !n.session_id) continue;

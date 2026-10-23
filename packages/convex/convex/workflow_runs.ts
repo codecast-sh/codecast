@@ -70,10 +70,10 @@ export async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promi
 export function runEndStatus(
   taskStatus: string,
   runStatus: "completed" | "failed" | "running",
-  nodes: Parameters<typeof lineRunOutcome>[0],
+  run: Parameters<typeof lineRunOutcome>[0],
 ): "done" | "open" | "in_review" | null {
   if (runStatus !== "completed" || isTerminalTaskStatus(taskStatus)) return null;
-  const end = lineRunOutcome(nodes)?.kind;
+  const end = lineRunOutcome(run)?.kind;
   if (end === "shipped") return "done";
   if (end === "parked") return taskStatus === "in_progress" ? "open" : null;
   return taskStatus === "in_progress" ? "in_review" : null;
@@ -89,9 +89,9 @@ async function settleRunTask(ctx: Ctx & { runMutation?: any }, run: any, runStat
     await patchTask(ctx, task, { execution_status: "blocked", ...(failReason ? { execution_concerns: failReason } : {}), updated_at: now });
     return;
   }
-  const next = runEndStatus(task.status, runStatus, run.node_statuses);
+  const next = runEndStatus(task.status, runStatus, run);
   if (!next) return;
-  const end = lineRunOutcome(run.node_statuses);
+  const end = lineRunOutcome(run);
   await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id, now, ...(next === "done" && end ? { closedAt: end.at } : {}) });
   if (next === "done" && end?.kind === "shipped") await noticeChangeShipped(ctx, task, task.watch_until);
 }
@@ -1746,7 +1746,7 @@ export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> 
     gate_answer: decision?.status === "answered" && typeof decision.answer_index === "number" ? decision.options?.[decision.answer_index]?.label : undefined,
     // How a line run ended (LE16): shipped, dropped, dissolved or parked,
     // so a project reading its runs never re-derives it from station ids.
-    line_outcome: lineRunOutcome(run.node_statuses)?.kind,
+    line_outcome: lineRunOutcome(run)?.kind,
     // Billed money and the subscription sessions' list price, two kinds never added (changeCard costParts).
     ...(typeof decision?.card?.cost?.usd === "number" ? (({ billed_usd, list_usd }) => ({ card_billed_usd: billed_usd, card_list_usd: list_usd }))(costParts(decision.card.cost)) : {}),
     // line-versions.md LV1: a live run a later run, a dropped station or its problem replaced; null while current.
@@ -1827,7 +1827,7 @@ export const repairLineCauseStatus = internalMutation({
       // Only the run the cause is bound to speaks for it now.
       if (!task || String(task.workflow_run_id ?? "") !== String(run._id)) continue;
       // The cause closed when its run reached the end, not when this repair ran.
-      const end = lineRunOutcome(run.node_statuses);
+      const end = lineRunOutcome(run);
       const next = repairedLineStatus(task, run);
       if (!next) {
         const at = repairedClosedAt(task, run, await statusHistory(ctx, task._id));

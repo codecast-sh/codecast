@@ -1,7 +1,7 @@
 // The LE16 repair's reading of a line cause (workflow_runs.repairLineCauseStatus):
 // what status and close time a cause the old run end left in review should hold.
 
-import { isLineRun, lineRunOutcome } from "@codecast/shared/contracts/changeCard";
+import { isLineRun, lineRunOutcome, type LineRunStations } from "@codecast/shared/contracts/changeCard";
 
 /**
  * The status a cause should hold, given the completed line run bound to it,
@@ -12,14 +12,14 @@ import { isLineRun, lineRunOutcome } from "@codecast/shared/contracts/changeCard
  */
 export function repairedLineStatus(
   task: { status: string; review_verdict?: { verdict: string } | null },
-  run: { status: string; node_statuses?: Parameters<typeof lineRunOutcome>[0] },
+  run: { status: string } & LineRunStations,
 ): "done" | "dropped" | "open" | null {
   if (run.status !== "completed" || task.status !== "in_review") return null;
-  const end = lineRunOutcome(run.node_statuses)?.kind;
+  const end = lineRunOutcome(run)?.kind;
   if (end === "shipped" || end === "dissolved") return "done";
   if (end === "dropped") return "dropped";
   if (end === "parked") return "open";
-  if (!end && isLineRun(run.node_statuses) && task.review_verdict?.verdict === "reject") return "open";
+  if (!end && isLineRun(run) && task.review_verdict?.verdict === "reject") return "open";
   return null;
 }
 
@@ -34,11 +34,11 @@ export const statusHistory = async (ctx: any, taskId: any) =>
  */
 export function repairedClosedAt(
   task: { status: string; closed_at?: number | null },
-  run: { status: string; updated_at: number; node_statuses?: Parameters<typeof lineRunOutcome>[0] },
+  run: { status: string; updated_at: number } & LineRunStations,
   history: ReadonlyArray<{ created_at: number; new_value?: string; actor_type?: string }>,
 ): number | null {
   if (run.status !== "completed" || (task.status !== "done" && task.status !== "dropped") || !task.closed_at) return null;
-  const end = lineRunOutcome(run.node_statuses);
+  const end = lineRunOutcome(run);
   if (!end || end.kind === "parked" || Math.abs(task.closed_at - end.at) < 60_000) return null;
   const last = [...history].sort((a, b) => b.created_at - a.created_at)[0];
   const byRepair = !!last && last.created_at > run.updated_at && last.created_at === task.closed_at && last.new_value === task.status && (last.actor_type ?? "system") === "system";

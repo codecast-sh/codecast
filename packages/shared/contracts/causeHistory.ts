@@ -88,7 +88,7 @@ export function failedAtStation(nodes: ReadonlyArray<{ node_id: string; status: 
  *  gate it passed on the way. `node` is the end station it reached. */
 export function runEnd(run: { node_statuses?: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null; started_at?: number; completed_at?: number }> } & AnsweredGate): { kind: LineRunEnd; at: number; node: string } | null {
   if (passedUnansweredCard(run.node_statuses, run)) return null;
-  const line = isLineRun(run.node_statuses);
+  const line = isLineRun(run);
   let best: { kind: LineRunEnd; at: number; node: string } | null = null;
   for (const n of run.node_statuses ?? []) {
     const kind = line ? LINE_END_NODES[n.node_id] : SHARED_ENDS[n.node_id] ?? foreignEnd(n.node_id);

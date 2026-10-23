@@ -91,8 +91,8 @@ export function dissolveKind(preview: string | undefined): "judge_defect" | "no_
 export function judgeDefectCauses(runs: ReadonlyArray<MetricsRun>): Set<string> {
   const latest = new Map<string, { at: number; judge: boolean }>();
   for (const r of runs) {
-    if (!r.task_id || !isLineRun(r.node_statuses)) continue;
-    const end = lineRunOutcome(r.node_statuses, r);
+    if (!r.task_id || !isLineRun(r)) continue;
+    const end = lineRunOutcome(r, r);
     if (!end) continue;
     const prev = latest.get(r.task_id);
     if (prev && prev.at > end.at) continue;

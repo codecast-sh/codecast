@@ -656,7 +656,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
   // whatever its status says at this moment.
   const lineEnd = new Map<string, { kind: LineRunEnd; at: number }>();
   for (const r of lineRuns) {
-    const end = lineRunOutcome(r.node_statuses, r);
+    const end = lineRunOutcome(r, r);
     const prev = lineEnd.get(r.task_id!);
     if (end && (!prev || end.at >= prev.at)) lineEnd.set(r.task_id!, end);
   }

@@ -320,7 +320,7 @@ describe("the repair restamps its own close (LE16)", () => {
 });
 
 describe("runEndStatus and repairedLineStatus", () => {
-  const nodes = (...ends: string[]) => lineNodes(...ends);
+  const nodes = (...ends: string[]) => ({ node_statuses: lineNodes(...ends) });
   test("never overwrites done or dropped", () => {
     expect(runEndStatus("done", "completed", nodes("watch"))).toBeNull();
     expect(runEndStatus("dropped", "completed", nodes())).toBeNull();
@@ -332,8 +332,23 @@ describe("runEndStatus and repairedLineStatus", () => {
     expect(runEndStatus("open", "completed", nodes("review"))).toBeNull();
     expect(runEndStatus("in_progress", "failed", nodes("watch"))).toBeNull();
   });
+  // An agentwatch-shaped spine starts at bind and has no ground station: its graph makes it a line run.
+  const spine = ["start", "bind", "investigate", "card", "decide", "ship", "watch", "drop", "dissolve", "exit"].map((id) => ({ id, h: id }));
+  const spineRun = (...visited: string[]) => ({ graph_nodes: spine, node_statuses: [node("start", T0), node("bind", T0 + 1), ...visited.map((id, i) => node(id, T0 + 10 + i))] });
+  test("a run of a spine that starts at bind is a line run: its ship makes the problem done, its drop and dissolve end it", () => {
+    expect(runEndStatus("open", "completed", spineRun("card", "decide", "ship", "watch"))).toBe("done");
+    expect(runEndStatus("in_review", "completed", spineRun("card", "decide", "ship", "watch"))).toBe("done");
+    expect(repairedLineStatus({ status: "in_review" }, { status: "completed", ...spineRun("card", "decide", "drop") })).toBe("dropped");
+    expect(repairedLineStatus({ status: "in_review" }, { status: "completed", ...spineRun("investigate", "dissolve") })).toBe("done");
+  });
+  test("a graph that does not ask a card and watch the change is not a line run, whatever its stations are named", () => {
+    const deploy = { graph_nodes: ["start", "ci", "live", "watch", "exit"].map((id) => ({ id, h: id })), node_statuses: [node("start", T0), node("ci", T0 + 1), node("watch", T0 + 2)] };
+    expect(runEndStatus("open", "completed", deploy)).toBeNull();
+    const segment = { graph_nodes: ["start", "check", "decide", "drop", "exit"].map((id) => ({ id, h: id })), node_statuses: [node("start", T0), node("check", T0 + 1), node("drop", T0 + 2)] };
+    expect(repairedLineStatus({ status: "in_review" }, { status: "completed", ...segment })).toBeNull();
+  });
   test("the repair reads what the run decided", () => {
-    const run = (...ends: string[]) => ({ status: "completed", node_statuses: nodes(...ends) });
+    const run = (...ends: string[]) => ({ status: "completed", node_statuses: lineNodes(...ends) });
     expect(repairedLineStatus({ status: "in_review" }, run("watch"))).toBe("done");
     expect(repairedLineStatus({ status: "in_review" }, run("dissolve"))).toBe("done");
     expect(repairedLineStatus({ status: "in_review" }, run("drop"))).toBe("dropped");

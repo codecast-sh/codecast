@@ -49,7 +49,7 @@ describe("a fix decision a teammate answered after its gate node failed (ct-5744
   test("the run's record of the answer outranks the gate node's failure", () => {
     expect(passedUnansweredCard(nodes, answeredGate)).toBe(false);
     expect(passedUnansweredCard(nodes)).toBe(true);
-    expect(lineRunOutcome(nodes, answeredGate)?.kind).toBe("shipped");
+    expect(lineRunOutcome({ node_statuses: nodes }, answeredGate)?.kind).toBe("shipped");
   });
   test("it is never an unapproved ship, so no 'lapsed' need is raised for it", () => {
     const task = { _id: "t1", status: "in_review" };

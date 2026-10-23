@@ -508,19 +508,29 @@ export const CARD_GATE_NODE_ID = "decide";
 /** What a line run did to its cause (LE12, LE16), read from its stations:
  *  the watch station runs only after the change landed (ship, or merge), so a
  *  completed watch is the ship record; drop, dissolve and park each end the
- *  run at their own station. Every line run starts at ground, which is how a
- *  run of another workflow with a station of the same name is told apart. */
+ *  run at their own station. A line run is told apart from a run of another
+ *  workflow with a station of the same name by its graph (isLineRun). */
 export type LineRunEnd = "shipped" | "dropped" | "dissolved" | "parked";
-const LINE_FIRST_NODE_ID = "ground";
 /** The stations that end a line run, and the end each means. */
 export const LINE_END_NODES: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped", dissolve: "dissolved", park: "parked" };
 
-/** Whether a run's stations are the line's (it started at ground). */
-export function isLineRun(nodes: ReadonlyArray<{ node_id: string }> | undefined): boolean {
-  return !!nodes?.some((n) => n.node_id === LINE_FIRST_NODE_ID);
+/** A run as isLineRun and lineRunOutcome read it: the stations it visited, and its graph's stations (LE14). */
+export type LineRunStations = {
+  node_statuses?: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null; started_at?: number; completed_at?: number }>;
+  graph_nodes?: ReadonlyArray<{ id: string }>;
+};
+
+/** Whether a run is a line run: its graph puts a change to a person on the card gate and watches it after it
+ *  ships, which the shipped line and every variant of its spine (agentwatch starts at bind) share and no segment
+ *  or other workflow has; or it visited ground, where the shipped line starts, which is all a run recorded before
+ *  runs carried their graph shows. */
+export function isLineRun(run: LineRunStations | null | undefined): boolean {
+  if (!run) return false;
+  if (run.node_statuses?.some((n) => n.node_id === "ground")) return true;
+  const ids = new Set(run.graph_nodes?.map((n) => n.id));
+  return ids.has(CARD_GATE_NODE_ID) && ids.has("watch");
 }
 
-/** The latest end station a line run completed and when, or null when it reached none. */
 /** A run that went on past a card nobody answered (its decide gate failed)
  *  and still reached ship. Nothing approved it, so nothing after the card is
  *  a ship, on any graph. */
@@ -543,11 +553,10 @@ export type AnsweredGate = { gate_node_id?: string | null; gate_decision_status?
 export const cardAnswered = (gate: AnsweredGate | null | undefined): boolean =>
   !!gate && gate.gate_node_id === CARD_GATE_NODE_ID && (gate.gate_decision_status === "answered" || !!gate.gate_answer?.trim());
 
-export function lineRunOutcome(
-  nodes: ReadonlyArray<{ node_id: string; status: string; started_at?: number; completed_at?: number }> | undefined,
-  gate?: AnsweredGate | null,
-): { kind: LineRunEnd; at: number } | null {
-  if (!nodes || !isLineRun(nodes) || passedUnansweredCard(nodes, gate)) return null;
+/** The latest end station a line run completed and when, or null when it reached none. */
+export function lineRunOutcome(run: LineRunStations | null | undefined, gate?: AnsweredGate | null): { kind: LineRunEnd; at: number } | null {
+  const nodes = run?.node_statuses;
+  if (!nodes || !isLineRun(run) || passedUnansweredCard(nodes, gate)) return null;
   let best: { kind: LineRunEnd; at: number } | null = null;
   for (const n of nodes) {
     const kind = LINE_END_NODES[n.node_id];

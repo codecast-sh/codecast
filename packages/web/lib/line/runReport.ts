@@ -557,7 +557,7 @@ function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null, opts:
     : row.status === "failed" ? "failed" : "done";
   const words = WORDS[row.id];
   // A line's script station reads as one sentence, never its raw output.
-  const own = READ_SCRIPTS.has(row.id) && isLineRun(run.node_statuses) ? scriptSentence(row) : scriptLine(runNodeLine(row));
+  const own = READ_SCRIPTS.has(row.id) && isLineRun(run) ? scriptSentence(row) : scriptLine(runNodeLine(row));
   // What happened to the station when it reported nothing the line routes on.
   const end = gate || row.status === "running" ? null : stationEnd(row, run);
   // The card's own decision names the gate it answered.
@@ -609,7 +609,7 @@ const reached = (r: RunNodeRow) => r.status !== "pending" || r.current;
  * run without one reads the shipped line's.
  */
 export function runPath(run: ReportRun, workflow?: { nodes?: Array<{ id: string; label?: string; type?: string }> } | null, task?: ReportTask | null, opts: PathOpts = {}): ReportPhase[] {
-  const line = isLineRun(run.node_statuses);
+  const line = isLineRun(run);
   const rows = runNodeRows(run, workflow ?? (line ? SHIPPED_LINE : null)).filter((r) => !isHidden(r));
   if (!line) {
     const steps = foldLanding(rows.filter(reached).map((r) => stepOf(r, run, task, opts)), labelOf(run, "ship"));
@@ -792,7 +792,7 @@ export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.
   }
   if (end === "dropped") return { tone: "closed", end, text: nodeOf(run, CARD_GATE_NODE_ID) ? "Dropped at your decision." : "Dropped at the plan." };
   // On the line, Dissolve is its own station; another graph closes at a named step (below).
-  if (end === "dissolved" && isLineRun(run.node_statuses)) return { tone: "closed", end, text: "Closed without a change: the problem did not reproduce." };
+  if (end === "dissolved" && isLineRun(run)) return { tone: "closed", end, text: "Closed without a change: the problem did not reproduce." };
   if (end === "parked") return { tone: "calm", end, text: `Parked: the problem is not ready to build.${task?.readiness_note ? ` ${task.readiness_note.trim().replace(/\.?$/, ".")}` : ""}` };
   if (ran(run, "unscored")) return { tone: "failed", end, text: "Stopped: the evals could not score the change." };
   // A card taken back without an answer ends the run as asked, not as a failure.
@@ -1208,7 +1208,7 @@ export function versionChange(nodes: ReportRun["graph_nodes"] | null, prev: Repo
 export function lineVersions(runs: ReadonlyArray<ReportRun>, reopenedAt: (taskId: string) => number[]): LineVersion[] {
   const out = new Map<string, LineVersion>();
   for (const r of runs) {
-    if (!isLineRun(r.node_statuses)) continue;
+    if (!isLineRun(r)) continue;
     const hash = r.graph_hash || "unrecorded";
     const v = out.get(hash) ?? { hash, first: r.created_at, last: r.created_at, runs: 0, shipped: 0, revised: 0, dropped: 0, stopped: 0, reopened: 0, billedUsd: null, listUsd: null, live: 0, nodes: null, change: "" };
     v.runs++;

@@ -45,7 +45,7 @@ const SIGNALS_SHOWN = 4;
  *  alone otherwise. */
 export function TaskLineStory({ task }: { task: StoryTask }) {
   const runs = useCauseRuns(task._id);
-  const lineRuns = useMemo(() => runs.filter((r) => isLineRun(r.node_statuses)), [runs]);
+  const lineRuns = useMemo(() => runs.filter((r) => isLineRun(r)), [runs]);
   if (!task.cause && lineRuns.length === 0) return <StationStrip task={task as any} />;
   return <Story task={task} runs={lineRuns} allRuns={runs} />;
 }
@@ -78,7 +78,7 @@ function Story({ task, runs, allRuns }: { task: StoryTask; runs: ReportRun[]; al
   const latest = runs[0] ?? null;
 
   // Reopened: a signal flagged as reopening the cause after its newest ship.
-  const lastShip = runs.map((r) => lineRunOutcome(r.node_statuses as any, r as any)).find((o) => o?.kind === "shipped")?.at ?? 0;
+  const lastShip = runs.map((r) => lineRunOutcome(r as any, r as any)).find((o) => o?.kind === "shipped")?.at ?? 0;
   const reopened = signals.some((s) => s.reopened && s.created_at > lastShip);
   // A line that starts nothing until a person acts says so, with its switch at hand (LL5).
   const admit = useLineAdmission(task.project_id ?? null);

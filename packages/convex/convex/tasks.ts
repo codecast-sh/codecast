@@ -506,7 +506,7 @@ export async function notifyTaskStatus(
 async function liveLineRun(ctx: any, task: any): Promise<any | null> {
   const run = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
   if (!run || !(run.status === "pending" || run.status === "running" || run.status === "paused")) return null;
-  if (isLineRun(run.node_statuses)) return run;
+  if (isLineRun(run)) return run;
   const project = task.project_id ? await ctx.db.get(task.project_id) : null;
   return project?.line_trial ? run : null;
 }
@@ -524,7 +524,7 @@ const LINE_CLOSING_STATIONS: ReadonlySet<string> = new Set(["drop", "dissolve"])
  */
 async function closesItself(ctx: any, run: any): Promise<boolean> {
   if (LINE_CLOSING_STATIONS.has(run.current_node_id)) return true;
-  if (isLineRun(run.node_statuses) || run.status === "paused") return false;
+  if (isLineRun(run) || run.status === "paused") return false;
   const workflow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
   return !!workflow?.nodes?.find((n: any) => n.id === run.current_node_id)?.script;
 }

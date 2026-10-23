@@ -142,7 +142,7 @@ function RunDetailContent({ runId }: { runId: string }) {
   const StatusIcon = st.icon;
   const isActive = run.status === "running" || run.status === "paused";
   const duration = formatRunDuration(run.created_at, isActive ? undefined : run.updated_at);
-  const line = isLineRun(run.node_statuses);
+  const line = isLineRun(run);
   const ended = run.status === "completed" || run.status === "failed";
 
   // The answered gate, in words (never a raw key), and its card.
