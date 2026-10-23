@@ -122,6 +122,9 @@ export interface UpdaterConfig {
   platform?: string;
   arch?: string;
   now?: () => number;
+  /** Where the updater speaks: its notice and download progress. Stderr by
+   *  default, because the notice prints during whatever command ran the check
+   *  and that command's stdout may be read by a program (`cd "$(cast ws path x)"`). */
   log?: (line: string) => void;
 }
 
@@ -168,7 +171,7 @@ export class Updater {
       platform: process.platform,
       arch: process.arch,
       now: () => Date.now(),
-      log: (line) => console.log(line),
+      log: (line) => console.error(line),
       ...stripUndefined(config),
     };
     this.channels = config.channels && config.channels.length > 0 ? config.channels : [STABLE_CHANNEL];
