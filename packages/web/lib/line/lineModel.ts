@@ -63,7 +63,7 @@ import {
   type LinePhaseKey, type ReportNode, type ReportRun, type ReportStep, type ReportTask, type RunOutcome, type StepState,
 } from "./runReport";
 import { SHIPPED_LINE } from "./shippedLine.generated";
-import { causeHistory, type CauseHistory, type DeployRow, type HandMerge, type HistoryClose, type OccurrenceRow } from "./causeHistory";
+import { causeHistory, coverageOf, type CauseHistory, type DeployCoverage, type DeployRow, type HandMerge, type HistoryClose, type OccurrenceRow } from "./causeHistory";
 import { attemptVerdict, cameBackCount, type MarkTone } from "./timeline";
 import { backTimes, reportArgument, unshippedGuard, reportFieldWords, saidSlot, signalQuotes, type CloseArgument, type CloseKind, type RunSaid } from "@codecast/shared/contracts/causeHistory";
 import { halfOfPhase } from "@codecast/shared/contracts/linePhases";
@@ -71,6 +71,7 @@ import type { LabelVerdict } from "./lineLabels";
 import { isEmptyFinding, repeatedFindings } from "./findingEvidence";
 import { faultsNaming, stepFaults, type LineFault } from "./lineFaults";
 import { decisionOutcome, gateCard, type DecisionOutcome } from "./decisionOutcome";
+import { drain, yieldEvery, type Sliced } from "../slicedWork";
 
 export { lineLabelKey, type LabelVerdict } from "./lineLabels";
 
@@ -834,6 +835,16 @@ function sourceFromIds(ids: string[]): LineGraphSource {
   return src;
 }
 
+/** The deploys' coverage every problem's history shares, kept while the deploy rows are the same rows: a build hands
+ *  the model a new list each time, and a reused issue compares its coverage by identity. */
+let coverageRead: { rows: ReadonlyArray<object> | undefined; coverage: DeployCoverage } | null = null;
+function deployCoverage(rows: ReadonlyArray<DeployRow> | undefined): DeployCoverage {
+  const was = coverageRead;
+  if (was && (was.rows === rows || (!!was.rows && !!rows && was.rows.length === rows.length && was.rows.every((d, n) => d === rows[n])))) return was.coverage;
+  coverageRead = { rows, coverage: coverageOf(rows) };
+  return coverageRead.coverage;
+}
+
 /** One problem's issue as a build read it: every input it read, in order, and the answers it asked for by id. */
 type IssueRead = { deps: unknown[]; asked: Array<["said" | "fold", string, unknown]>; issue: LineIssue };
 /** Each process's issues as its last builds read them. Two per problem, so the line over every project and one
@@ -853,7 +864,7 @@ type RowsIndex = {
 /** The indexes every build over the same rows reads, made once for them: one rebuild draws each process over one row set. */
 const rowsIndexes = new WeakMap<object, { runs: object; signals: object; index: RowsIndex }>();
 
-function rowsIndex(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], signals: ReadonlyArray<MapSignal>): RowsIndex {
+function* rowsIndexSteps(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], signals: ReadonlyArray<MapSignal>): Sliced<RowsIndex> {
   const hit = rowsIndexes.get(tasks);
   if (hit && hit.runs === runs && hit.signals === signals) return hit.index;
   const group = <T,>(rows: ReadonlyArray<T>, keyOf: (r: T) => string | null | undefined) => {
@@ -862,16 +873,25 @@ function rowsIndex(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], s
     return by;
   };
   const taskById = new Map(tasks.map((t) => [t._id, t]));
+  yield;
   const anyRunByTask = group(runs, (r) => r.task_id);
   const process = processIndex(runs as ReadonlyArray<GraphRun>, (id) => (taskById.get(id) as { project_id?: string | null } | undefined)?.project_id);
-  const index: RowsIndex = {
-    graphs: projectGraphs(runs as ReadonlyArray<GraphRun>, signals as ReadonlyArray<{ task_id: string; source: string }>),
-    taskById,
-    taskByRef: new Map(tasks.flatMap((t) => (t.short_id ? [[t.short_id, t] as const] : []))),
-    anyRunByTask,
-    signalsByTask: group(signals, (s) => s.task_id),
-    unrunByProcess: new Map([...group(tasks.filter((t) => t.cause && !anyRunByTask.has(t._id)), (t) => process.task(t._id))].map(([k, ts]) => [k, ts.map((t) => t._id)])),
-  };
+  const graphs = projectGraphs(runs as ReadonlyArray<GraphRun>, signals as ReadonlyArray<{ task_id: string; source: string }>);
+  yield;
+  const taskByRef = new Map(tasks.flatMap((t) => (t.short_id ? [[t.short_id, t] as const] : [])));
+  const signalsByTask = group(signals, (s) => s.task_id);
+  yield;
+  const unrunByProcess = new Map<string, string[]>();
+  const tick = yieldEvery(2000);
+  for (const t of tasks) {
+    if (tick()) yield;
+    if (!t.cause || anyRunByTask.has(t._id)) continue;
+    const k = process.task(t._id);
+    if (!k) continue;
+    const at = unrunByProcess.get(k);
+    if (at) at.push(t._id); else unrunByProcess.set(k, [t._id]);
+  }
+  const index: RowsIndex = { graphs, taskById, taskByRef, anyRunByTask, signalsByTask, unrunByProcess };
   rowsIndexes.set(tasks, { runs, signals, index });
   return index;
 }
@@ -883,8 +903,13 @@ function rowsIndex(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], s
  * the project's busiest.
  */
 export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel {
+  return drain(lineModelSteps(rows, graphKey));
+}
+
+/** buildLineModel, stopping every few runs and problems (lib/slicedWork): the line built in slices, off one long task. */
+export function* lineModelSteps(rows: LineModelRows, graphKey: string): Sliced<LineModel> {
   const signals = rows.signals ?? [];
-  const index = rowsIndex(rows.runs, rows.tasks, signals);
+  const index = yield* rowsIndexSteps(rows.runs, rows.tasks, signals);
   const { graphs, taskById, anyRunByTask, signalsByTask, taskByRef } = index;
   const key = graphKey || graphs[0]?.key || CODECAST_LINE;
   const isLine = isCodecastLine(key);
@@ -921,7 +946,13 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
     list.push(d);
     decisionsByRun.set(d.workflow_run_id, list);
   }
-  const reads = runs.map((r) => ({ run: r, task: r.task_id ? taskById.get(r.task_id) : undefined, read: readRun(r, r.task_id ? taskById.get(r.task_id) : undefined, decisionsByRun.get(r._id) ?? [], g) }));
+  const reads: Array<{ run: MapRun; task: LineModelRows["tasks"][number] | undefined; read: RunRead }> = [];
+  const readTick = yieldEvery(20);
+  for (const r of runs) {
+    if (readTick()) yield;
+    const task = r.task_id ? taskById.get(r.task_id) : undefined;
+    reads.push({ run: r, task, read: readRun(r, task, decisionsByRun.get(r._id) ?? [], g) });
+  }
 
   // ── labels by decision ──
   const labelsBy = new Map<string, DecisionLabel[]>();
@@ -1066,7 +1097,9 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
 
   // ── each step's decisions, and the runs as paths ──
   const runModels: LineRunModel[] = [];
+  const runTick = yieldEvery(40);
   for (const { run, task, read } of reads) {
+    if (runTick()) yield;
     const caseTitle = task?.title ?? run.task_title ?? "A run";
     const caseRef = task?.short_id ?? run.task_short_id ?? null;
     for (const v of read.visits) {
@@ -1133,18 +1166,25 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
   const reads0 = issueReads.get(key) ?? new Map<string, IssueRead[]>();
   const kept = new Map<string, IssueRead[]>();
   const shared = [
-    rows.deploys ? rows.deploys.length : -1, ...(rows.deploys ?? []), rows.watchDays ?? null, rows.forYou ? 1 : 0,
+    rows.watchDays ?? null, rows.forYou ? 1 : 0,
     order.map((id) => `${id}:${steps[id].kind}:${steps[id].stage}:${steps[id].half}`).join(","),
     faults.map((f) => `${f.runId}|${f.caseId}|${f.caseRef}|${f.step}|${f.stepLabel}|${f.words}|${f.at}`).join("\n"),
   ];
+  const coverage = deployCoverage(rows.deploys);
   const answers = (asked: IssueRead["asked"]) => asked.every(([kind, arg, was]) => (kind === "said" ? readById.get(arg)?.visits : foldFixAt(arg)) === was);
+  const issueTick = yieldEvery(100);
   for (const taskId of causeIds) {
+    if (issueTick()) yield;
     const task = taskById.get(taskId);
     const project = (task as { project_id?: string | null } | undefined)?.project_id ?? null;
     // The clock reaches a problem only through a run's age or end and a watch's deadline (causeWhere, causeHistory): one
     // with neither reads the same at any time, so a tick does not read it again.
-    const timed = !!anyRunByTask.get(taskId)?.length || !!(task as { watch_until?: number | null } | undefined)?.watch_until;
-    const deps: unknown[] = [...shared, timed ? now : null, task, occurrencesByTask.get(taskId), rows.holdOf?.(project) ?? null, rows.forYou?.get(taskId) ?? null, rows.handMerges?.get(taskId) ?? null];
+    const ran = !!anyRunByTask.get(taskId)?.length;
+    const timed = ran || !!(task as { watch_until?: number | null } | undefined)?.watch_until;
+    // Deploys reach a problem through the merges they carried (a run's or a hand merge's) and the coverage every
+    // problem shares, which a reused issue takes on below: a problem with no merge reads the same whatever deployed.
+    const merged = ran || !!rows.handMerges?.get(taskId);
+    const deps: unknown[] = [...shared, timed ? now : null, ...(merged ? [rows.deploys?.length ?? -1, ...(rows.deploys ?? [])] : [null]), task, occurrencesByTask.get(taskId), rows.holdOf?.(project) ?? null, rows.forYou?.get(taskId) ?? null, rows.handMerges?.get(taskId) ?? null];
     for (const r of runsByTask.get(taskId) ?? []) deps.push(runById.get(r.id));
     deps.push("|");
     for (const r of anyRunByTask.get(taskId) ?? []) deps.push(r);
@@ -1153,8 +1193,8 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
     deps.push("|");
     for (const d of decisionsOf(taskId, anyRunByTask.get(taskId) ?? [])) deps.push(d);
     const hit = reads0.get(taskId)?.find((x) => x.deps.length === deps.length && x.deps.every((d, n) => d === deps[n]) && answers(x.asked));
-    ((globalThis as any).__ih ??= [0, 0])[hit ? 0 : 1]++; // __LP temp
     if (hit) {
+      if (hit.issue.history.coverage !== coverage) hit.issue = { ...hit.issue, history: { ...hit.issue.history, coverage } };
       kept.set(taskId, [hit, ...(reads0.get(taskId) ?? []).filter((x) => x !== hit)].slice(0, ISSUE_READS_KEPT));
       issues.push(hit.issue);
       continue;
@@ -1187,7 +1227,7 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
       lineFaults: faultsNaming(`${task?.title ?? ""}\n${(task as { description?: string | null } | undefined)?.description ?? ""}`, faults),
       history: causeHistory({
         task, runs: allRuns, decisions: decisionsOf(taskId, allRuns),
-        signals: own, occurrences, deploys: rows.deploys, said: saidHere, foldFixAt: foldHere, handMerge: rows.handMerges?.get(taskId) ?? null, watchDays: rows.watchDays ?? null, now,
+        signals: own, occurrences, deploys: rows.deploys, coverage, said: saidHere, foldFixAt: foldHere, handMerge: rows.handMerges?.get(taskId) ?? null, watchDays: rows.watchDays ?? null, now,
       }),
     };
     kept.set(taskId, [{ deps, asked, issue }, ...(reads0.get(taskId) ?? [])].slice(0, ISSUE_READS_KEPT));
