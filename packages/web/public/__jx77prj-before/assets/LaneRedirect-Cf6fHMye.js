@@ -1,0 +1,2 @@
+import{k as r,j as o,N as i}from"./vendor-BRSpyZc9.js";import{l as s,p}from"./laneRedirect-DOr8_4m8.js";import"./lineWorkspaceUrl-B9h2uFzW.js";import"./index-D3dApSdX.js";import"./dexie-BEFYTs6O.js";import"./convex-pL9slGJ3.js";import"./sentry-C0kWfPzV.js";function g(){const{pathname:t,search:a,hash:e}=r();return o.jsx(i,{to:s(t,a,e)??p(t,a,e)??"/inbox",replace:!0})}export{g as default};
+//# sourceMappingURL=LaneRedirect-Cf6fHMye.js.map

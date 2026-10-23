@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.ashotp.codecast",
+      "sha256_cert_fingerprints": [
+        "F9:B9:DA:55:6A:22:2A:B8:94:40:B3:91:FF:CE:8A:95:73:C8:93:7B:BA:2E:4C:F7:4F:22:D5:BA:4E:1D:A2:85"
+      ]
+    }
+  }
+]
