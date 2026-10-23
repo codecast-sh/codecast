@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
 import { c } from "../colors.js";
+import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { frozenChangeContext } from "./flowChangeFile.js";
 import { lineRunsRoot } from "./runDirs.js";
@@ -452,11 +453,14 @@ async function loadNodeDefinition(node: WorkflowNode, options: RunOptions): Prom
 }
 
 // One POST to a /cli route with the run's token; null on any failure so the
-// runner degrades instead of throwing mid-graph.
+// runner degrades instead of throwing mid-graph. Through cliFetch, so a write
+// that lost a race on every server retry (nothing applied) is sent again with
+// backoff, whatever the route: at fifty runs a station's spawn lost to other
+// stations' writes and failed its node on the first 500 (2026-10-23).
 async function cliCall(options: RunOptions, route: string, body: Record<string, any>): Promise<any | null> {
   if (!options.convexSiteUrl || !options.apiToken) return null;
   try {
-    const resp = await fetch(`${options.convexSiteUrl}${route}`, {
+    const resp = await cliFetch(`${options.convexSiteUrl}${route}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_token: options.apiToken, ...body }),

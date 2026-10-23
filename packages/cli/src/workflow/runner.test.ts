@@ -660,6 +660,20 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
   }`);
   const run = () => runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
 
+  test("a spawn that lost a write race on every server retry is sent again, and the station runs", async () => {
+    const inner = globalThis.fetch;
+    let spawns = 0;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (String(url).endsWith("/cli/spawn") && ++spawns === 1) {
+        calls.push({ route: "/cli/spawn", body: JSON.parse(init?.body || "{}") });
+        return new Response(JSON.stringify({ error: 'Documents read from or written to the "org_roles" table changed while this mutation was being run and on every subsequent retry.' }), { status: 500 });
+      }
+      return inner(url, init);
+    }) as typeof fetch;
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/spawn")).toHaveLength(2);
+  }, 20000);
+
   test("a station spawns nested under the run's session, named for its node and task", async () => {
     expect(await run()).toBe("completed");
     const spawn = calls.find(c => c.route === "/cli/spawn")!;
