@@ -1,3 +1,4 @@
+import { isWorkflowRunLog } from "./lib/runLog";
 import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
 import { noteWriteCause } from "./lifecycleEvents";
 import type { RegisteredMutation } from "convex/server";
@@ -462,7 +463,11 @@ export async function enqueuePendingMessage(
     });
   }
 
-  if (fields.hold || (fields.defer && !conversation.standing_role_id)) {
+  // A run's own log has no agent: a turn there would only start a fresh one
+  // that asks what it is for (jx73gnf, 2026-10-23). Whatever is sent stays on
+  // its record and wakes nothing. The run's gates are answered by their own
+  // mutation (respondToGate), never through here.
+  if (fields.hold || (fields.defer && !conversation.standing_role_id) || isWorkflowRunLog(conversation)) {
     return await insertEnqueuedPendingMessage(ctx, {
       conversationId: conversation._id,
       fromUserId,

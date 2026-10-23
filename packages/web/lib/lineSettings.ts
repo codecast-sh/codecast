@@ -4,7 +4,6 @@
 // paints the store row ahead of the daemon, and whether the viewer can edit
 // at all. Pure, so the page, the store slice and the tests share one copy.
 import {
-  CAPS_KEYS,
   COMMAND_KEYS,
   LINE_PROFILE_DEFAULTS,
   LINE_PROFILE_REL_PATH,
@@ -51,11 +50,6 @@ const COMMAND_FIELDS: Record<(typeof COMMAND_KEYS)[number], FieldWords & { label
   ship: { label: "Ship", what: "Lands an accepted change.", placeholder: "git push" },
 };
 
-/** What each cap holds, one per shared caps key. */
-const CAPS_FIELDS: Record<(typeof CAPS_KEYS)[number], FieldWords & { label: string }> = {
-  cards: { label: "Waiting decisions", unit: "waiting", what: "The line starts no new build while this many finished fixes wait for your decision." },
-};
-
 /** The sections as written; LINE_SECTIONS below adds each field's kind. Finders (Listens to) render their own rows. */
 const SECTION_DECLS: Array<Omit<LineSection, "fields"> & { fields: FieldDecl[] }> = [
   { id: "listens", title: "Sources", what: "What reports problems into this line on its own, like an error tracker or the evals: what each watches, how much it reported, and whether it has gone quiet.", fields: [] },
@@ -77,11 +71,10 @@ const SECTION_DECLS: Array<Omit<LineSection, "fields"> & { fields: FieldDecl[] }
   {
     id: "limits",
     title: "Limits",
-    what: "How big a change may be, how long a shipped one is watched, and how many finished fixes may wait for your decision.",
+    what: "How big a change may be, and how long a shipped one is watched.",
     fields: [
       { key: "size_budget", label: "Size budget", unit: "lines", what: "A change larger than this is split before it builds." },
       { key: "watch_days", label: "Watch", unit: "days", what: "A shipped fix stays watched this long; if the problem is reported again, it reopens." },
-      ...CAPS_KEYS.map((k) => ({ key: `caps.${k}`, ...CAPS_FIELDS[k] })),
     ],
   },
 ];

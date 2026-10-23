@@ -652,6 +652,8 @@
    the card wear it, so the word under them does too. Warm here said "your
    voice is going out" on a line where nothing may be said for minutes. */
 .walkie-stage-locked    { --stage-tone: var(--sol-violet); }
+/* The same call on its way in: violet, still blinking until the room is up. */
+.walkie-stage-joining   { --stage-tone: var(--sol-violet); }
 .walkie-stage-incoming  { --stage-tone: var(--walkie-rx); }
 .walkie-stage-dropped,
 .walkie-stage-mic-off   { --stage-tone: var(--sol-red); }

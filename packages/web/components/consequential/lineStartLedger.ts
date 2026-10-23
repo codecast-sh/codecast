@@ -129,7 +129,7 @@ function waitRows(a: LineAdmission, first: ReadonlyArray<string>): { rows: Switc
   const free = Math.max(0, a.slots - (a.busy ?? 0));
   const why = handsLeft === 0
     ? `Today's ${a.handsCap} sessions used: tomorrow`
-    : free === 0 ? `All ${a.slots} places await decisions` : null;
+    : free === 0 ? `All ${a.slots} places working` : null;
   const next = first.slice(0, Math.max(1, Math.min(a.slots, handsLeft === 0 ? a.handsCap ?? a.slots : a.slots)));
   return {
     rows: [
