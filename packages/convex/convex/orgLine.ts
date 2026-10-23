@@ -8,7 +8,7 @@ import { readinessLookups } from "./lib/taskGraph";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
 import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
-import { flowAtHandsCap, flowHands, liveFlowFor, planLiveFlow } from "./liveFlows";
+import { flowAdmits, flowHands, liveFlowFor, planLiveFlow } from "./liveFlows";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { recordHandStart } from "./spawn";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
@@ -17,7 +17,7 @@ import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineVersionFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
-import { linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
+import { holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
 import { allRolesInBoundary, projectLeadRole, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownerOf, projectLeadOf } from "@codecast/shared/contracts/orgLead";
@@ -223,8 +223,7 @@ export async function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promi
           .collect());
       }
       for (const run of runs) {
-        const lineRun = run.org_role_id || run.task_id;
-        if (lineRun && !waiting.has(String(run._id)) && !pooled.has(String(run.runner_device ?? ""))) working.add(String(run._id));
+        if (!pooled.has(String(run.runner_device ?? "")) && await holdsSlot(ctx, run, waiting)) working.add(String(run._id));
       }
     }
   }
@@ -491,7 +490,7 @@ export async function startPlanned(ctx: Ctx, p: { role_id: string; task_id: stri
   // A live flow's start answers to the flow's switch and hands; the lead's own
   // line switch no longer decides (its lead is a watcher).
   const flow = p.live_flow_id ? await ctx.db.get(p.live_flow_id) : null;
-  if (p.live_flow_id ? !flow?.on || flowAtHandsCap(flow, now) || role.status !== "active" : !roleMayStartHands(role, now)) return null;
+  if (p.live_flow_id ? !flowAdmits(flow, now) || role.status !== "active" : !roleMayStartHands(role, now)) return null;
   const task = await ctx.db.get(p.task_id);
   if (!task || task.status !== "open" || task.workflow_run_id || task.ephemeral) return null;
   if (p.place && !(await slotStillFree(ctx, role, p.place))) return null;
@@ -506,10 +505,11 @@ async function slotStillFree(ctx: Ctx, role: any, place: RunPlace): Promise<bool
   const device = await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", runner).eq("device_id", place.device)).first();
   const slot = (device?.line_slots ?? []).find((s: any) => place.project_path === s.root || place.project_path.startsWith(`${s.root.replace(/\/+$/, "")}/`));
   if (!slot) return false;
+  const waiting = await runsWaitingOnAPerson(ctx, runner);
   let working = 0;
   for (const status of WORKING_RUN_STATUSES) {
     const runs: any[] = await ctx.db.query("workflow_runs").withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", place.device).eq("status", status)).collect();
-    working += runs.filter((r) => r.org_role_id || r.task_id).length;
+    for (const r of runs) if (await holdsSlot(ctx, r, waiting)) working++;
   }
   return working < slot.runs;
 }

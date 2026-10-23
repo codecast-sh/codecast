@@ -21,6 +21,11 @@ export const liveFlowTables = {
     carried_lines_on: v.optional(v.array(v.string())),
     caps: v.optional(v.object({ hands_per_day: v.optional(v.number()) })),
     counters: v.optional(v.object({ day: v.string(), hands: v.number() })),
+    // A timed hold (liveFlows.holdCore): admission starts nothing until
+    // `until`, for `why`. A hand or the watcher sets it on a wait no person
+    // has to answer (a spent budget until it rolls over); a person clears it.
+    // `by` names who set it: a session's short id, or a user.
+    hold: v.optional(v.object({ why: v.string(), until: v.number(), by: v.string(), at: v.number() })),
     watcher_role_id: v.optional(v.id("org_roles")),
     changed_by: v.id("users"),
     changed_at: v.number(),

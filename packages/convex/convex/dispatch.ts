@@ -11,7 +11,7 @@ import { guardClientResolution, hostedAnswerRefusal, passCore, type PassTarget, 
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { discussCore } from "./decisionDiscussion";
 import { sendLineChatCore } from "./lineChat";
-import { setOnCore } from "./liveFlows";
+import { clearHoldCore, setOnCore } from "./liveFlows";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
@@ -3086,6 +3086,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setLiveFlowOn: async (ctx, userId, [id, on]: [string, boolean]) => {
     const flowId = ctx.db.normalizeId("live_flows", id);
     await setOnCore(ctx, userId, flowId ? await ctx.db.get(flowId) : null, on);
+  },
+  clearLiveFlowHold: async (ctx, userId, [id]: [string]) => {
+    const flowId = ctx.db.normalizeId("live_flows", id);
+    await clearHoldCore(ctx, userId, flowId ? await ctx.db.get(flowId) : null);
   },
   setSessionBackground: async (ctx, _userId, [device_id, session_id, background]: [string, string, boolean]) => {
     return ctx.runMutation!(api.machineResources.setSessionBackground, { device_id, session_id, background });

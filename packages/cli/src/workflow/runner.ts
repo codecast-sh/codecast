@@ -3,6 +3,7 @@ import { definitionLaunchFlags } from "../agentLaunch.js";
 import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
 import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
+import { ParkedClock, taskWaiting } from "./parkedClock.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition";
@@ -617,8 +618,11 @@ async function waitOnStation(
     await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "in_progress" });
   }
   let askedForHandoffAt = 0;
-  while (Date.now() - startMs < timeout) {
+  // The node's clock leaves out time the hand spends parked on its task's wait (parkedClock.ts).
+  const clock = new ParkedClock(startMs);
+  while (clock.elapsed() < timeout) {
     await new Promise(r => setTimeout(r, pollInterval));
+    clock.beginPoll();
     if (answersByHandoff && await handedOff(options)) {
       console.log(`  ${c.green}✓ handed off${c.reset}`);
       recordNodeOutput(context, node.id, "handed off");
@@ -711,6 +715,8 @@ async function waitOnStation(
       if (!heldDormant) console.log(`${c.dim}  ${shortId}: pinned dormant, waiting for its wake${c.reset}`);
       heldDormant = true;
       askedOnce = false;
+      const waiting = await taskWaiting((route, body) => cliCall(options, route, body), options.taskId);
+      if (waiting && clock.park()) console.log(`${c.dim}  ${shortId}: its task waits (${waiting}); the node's clock stops until it clears${c.reset}`);
       continue;
     }
     // The pin is display text, capped; its json block is stored whole as

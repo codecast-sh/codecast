@@ -25,6 +25,20 @@ export async function runsWaitingOnAPerson(ctx: Ctx, runner: string): Promise<Se
   return new Set(asked.filter((d) => d.blocking && d.workflow_run_id).map((d) => String(d.workflow_run_id)));
 }
 
+/**
+ * Whether a line run uses a machine slot: a role's run (a cause's, or a judge
+ * diagnosis with no task) or any run with a task, unless it is parked. A run
+ * at a blocking decision is parked (`waiting`, runsWaitingOnAPerson), and so
+ * is one whose task holds an open wait (a time, a PR, a decision:
+ * task-graph.md TG2): its hand sleeps until the wait clears, like a run at a
+ * card, and the runner does not kill it at the node's timeout.
+ */
+export async function holdsSlot(ctx: Ctx, run: any, waiting: Set<string>): Promise<boolean> {
+  if (!(run.org_role_id || run.task_id) || waiting.has(String(run._id))) return false;
+  const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+  return !task?.waiting_since;
+}
+
 /** The runner's devices that offer any line checkout: their runs are counted by the pool, not the runner's own cap. */
 export async function poolDeviceIds(ctx: Ctx, runner: string): Promise<Set<string>> {
   const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", runner)).collect();
@@ -57,8 +71,7 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
         .query("workflow_runs")
         .withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", String(d.device_id)).eq("status", status))
         .collect();
-      // A role's run (a cause's, or a judge diagnosis with no task) or any run with a task.
-      working += runs.filter((r) => (r.org_role_id || r.task_id) && !waiting.has(String(r._id))).length;
+      for (const r of runs) if (await holdsSlot(ctx, r, waiting)) working++;
     }
     slots.push({ device: String(d.device_id), root: slot.root, runs: slot.runs, working });
   }

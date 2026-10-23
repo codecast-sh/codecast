@@ -135,4 +135,23 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     expect(calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === id && c.body.node_status === "failed")).toBe(true);
     expect(failReason()).toContain("killed after 10m");
   }, 30000);
+
+  test.each(builders)("%s: a hand parked on its task's wait outlives the node's timeout and routes on its handoff after", async (id) => {
+    // Nine Build hands committed their fix, recorded a wait until a spent
+    // eval budget rolled over, pinned dormant, and were killed at 90m (2026-10-23).
+    task = { ...task, waiting_since: Date.now(), waits: [{ id: "w1", kind: "time", at: Date.now() + 6 * 3_600_000, state: "waiting", added_at: Date.now() }] };
+    jumpAt = 5;
+    jumpMs = 11 * 60_000;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      // The wait clears at the 7th read, and the hand hands off at the 9th.
+      if (String(url).endsWith("/cli/inbox") && reads === 6) task = { ...task, waiting_since: undefined, waits: [{ ...task.waits[0], state: "met" }] };
+      return realFetch(url, init);
+    }) as typeof fetch;
+    handoffAt = 9;
+    expect(await run(id)).toBe("completed");
+    expect(reached("verify")).toBe(true);
+    expect(logs.some((l) => l.includes("its task waits (until"))).toBe(true);
+    expect(failReason()).not.toContain("killed after");
+  }, 30000);
 });

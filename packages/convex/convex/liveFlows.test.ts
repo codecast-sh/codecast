@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { LINE_RUNS_PER_RUNNER, requeueCore, sweepCore } from "./orgLine";
-import { createLiveFlowCore, liveFlowView, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
+import { clearHoldCore, createLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
 import { hashToken } from "./apiTokens";
 
 // A team's live flow (liveFlows.ts): one queue in start order across every
@@ -162,5 +162,41 @@ describe("liveFlows (one live flow per team)", () => {
     await expect(flip({ flow: "nope" })).rejects.toThrow('No live flow of the team runs "nope"');
     await expect(flip({ flow: "agentwatch" })).rejects.toThrow("A person switches a live flow off, from the Flows page in the browser");
     expect(tables.live_flows[0].on).toBe(true);
+  });
+
+  test("a timed hold stops admission and says why until it ends; a hand sets it, a person clears it", async () => {
+    const token = "cx_live_flow_hold_token";
+    const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], extra: { api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(token), name: "cli", created_at: 1 }] } });
+    const hold = (args: Record<string, any>) => (holdFromCli as any)._handler(ctx, { api_token: token, team_id: TEAM, from_session: "jx7hand", ...args });
+    await expect(hold({ why: "eval_reserve spent", until: Date.now() + MAX_HOLD_MS + 60_000 })).rejects.toThrow("at most 48 hours");
+    await expect(hold({ why: " ", until: Date.now() + 60_000 })).rejects.toThrow("Say why");
+    const until = Date.now() + 4 * 3_600_000;
+    const held = await hold({ why: "eval_reserve spent ($3,007 of $3,000) until the 00:00 UTC roll-over", until });
+    expect(held.hold).toMatchObject({ until, by: "jx7hand" });
+    // A shorter second hold keeps the later end.
+    expect((await hold({ why: "still spent", until: until - 3_600_000 })).hold).toMatchObject({ until, why: "still spent" });
+    expect((await sweepCore(ctx, Date.now())).started).toEqual([]);
+    const view = await liveFlowView(ctx, tables.live_flows[0], Date.now());
+    expect(view.hold).toMatchObject({ why: "still spent", until, by: "jx7hand" });
+    expect(view.waiting).toStartWith("held until ");
+    expect(view.queue).toEqual([{ task_id: "tasks_g70", waiting: view.waiting }]);
+    // Ended, it no longer holds anything.
+    expect((await sweepCore(ctx, until + 1000)).started.map((st) => st.task_id)).toEqual(["tasks_g70"]);
+  });
+
+  test("only a team admin clears a hold", async () => {
+    const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], flow: { hold: { why: "spent", until: Date.now() + 3_600_000, by: "jx7hand", at: 1 } } });
+    await expect(clearHoldCore(ctx, MATE as any, tables.live_flows[0])).rejects.toThrow("team admin required");
+    await clearHoldCore(ctx, HOST as any, tables.live_flows[0]);
+    expect(tables.live_flows[0].hold).toBeUndefined();
+    expect((await sweepCore(ctx, NOW)).started.map((st) => st.task_id)).toEqual(["tasks_g70"]);
+  });
+
+  test("a run whose task waits holds no machine slot, as a run at a card holds none", async () => {
+    const parked = Array.from({ length: LINE_RUNS_PER_RUNNER }, (_, n) => ({ _id: `workflow_runs_p${n}`, user_id: MATE, status: "running", org_role_id: "org_roles_deals", task_id: `tasks_p${n}`, node_statuses: [] }));
+    const waits = parked.map((r, n) => problem(`p${n}`, "deals", 10, { _id: r.task_id, status: "in_progress", waiting_since: 1, waits: [{ id: `w${n}`, kind: "time", at: Date.now() + 3_600_000, state: "waiting", added_at: 1 }] }));
+    const { ctx } = fixtures({ tasks: [problem("d90", "deals", 90), ...waits], extra: { workflow_runs: parked } });
+    // All four of Deals' machine slots hold parked runs, so its next problem still starts.
+    expect((await sweepCore(ctx, NOW)).started.map((st) => st.task_id)).toEqual(["tasks_d90"]);
   });
 });

@@ -30,6 +30,11 @@ export type LiveCandidate = { task: any; role: any };
 
 export const flowHands = (flow: any, now: number): number => (flow.counters?.day === utcDay(now) ? flow.counters.hands : 0);
 export const flowAtHandsCap = (flow: any, now: number): boolean => atCap(flowHands(flow, now), flow.caps?.hands_per_day);
+/** The flow's hold while it stands, else null. */
+export const flowHold = (flow: any, now: number): { why: string; until: number; by: string; at: number } | null => (flow.hold && flow.hold.until > now ? flow.hold : null);
+/** Whether a live flow may start a run now: on, not held, hands left today. */
+export const flowAdmits = (flow: any, now: number): boolean => !!flow?.on && !flowHold(flow, now) && !flowAtHandsCap(flow, now);
+const holdWords = (hold: { why: string; until: number }) => `held until ${new Date(hold.until).toISOString().slice(0, 16).replace("T", " ")} UTC: ${hold.why}`;
 
 /** The team's roles a live flow runs as: each problem goes to the one whose area holds it. */
 export const flowRoles = (flow: { team_id?: any }, roles: any[]): any[] => roles.filter((r) => String(r.team_id ?? "") === String(flow.team_id ?? "") && r.team_id);
@@ -103,7 +108,8 @@ export async function planLiveFlow(ctx: Ctx, flow: any, roles: any[], now: numbe
   const handsCap = flow.caps?.hands_per_day;
   const handsLeft = handsCap == null ? Infinity : handsCap - flowHands(flow, now);
   const take = Math.min(room, handsLeft);
-  const offWords = !flow.on ? "the flow is off" : handsLeft <= 0 ? "hands cap reached" : null;
+  const hold = flowHold(flow, now);
+  const offWords = !flow.on ? "the flow is off" : hold ? holdWords(hold) : handsLeft <= 0 ? "hands cap reached" : null;
   const candidates = await liveFlowCandidates(ctx, flow, roles, Math.max(take, 0) + 16);
   const starts: LivePlanned[] = [];
   const queue: Array<LiveCandidate & { waiting: string | null }> = [];
@@ -133,6 +139,7 @@ export type LiveFlowRow = {
   on: boolean;
   caps: { hands_per_day: number | null };
   hands_today: number;
+  hold: { why: string; until: number; by: string; at: number } | null;
   load: { working: number; cap: number };
   waiting: string | null;
   watcher: { role_id: string; handle: string } | null;
@@ -149,7 +156,9 @@ export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promi
   const loads: LineLoads = new Map();
   // Every machine the flow's leads run on, counted once.
   for (const r of team) if (r.status === "active") await lineLoadFor(ctx, r, now, loads, roles);
-  const totals = [...loads.values()].reduce((t, l) => ({ working: t.working + l.working, cap: t.cap + l.cap }), { working: 0, cap: 0 });
+  // Leads seated in different folders of one checkout share its pool: count each pool, and each runner's own machine, once.
+  const distinct = new Map([...loads.values()].map((l) => [l.pool ? l.pool.slots.map((sl) => sl.device).sort().join(",") : `runner:${l.runner}`, l]));
+  const totals = [...distinct.values()].reduce((t, l) => ({ working: t.working + l.working, cap: t.cap + l.cap }), { working: 0, cap: 0 });
   const plan = await planLiveFlow(ctx, flow, roles, now, LIVE_FLOW_SHOWN, loads);
   const running: string[] = [];
   for (const r of team) {
@@ -170,6 +179,7 @@ export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promi
     on: flow.on,
     caps: { hands_per_day: flow.caps?.hands_per_day ?? null },
     hands_today: flowHands(flow, now),
+    hold: flowHold(flow, now),
     load: totals,
     waiting: plan.waiting,
     watcher: watcher ? { role_id: String(watcher._id), handle: watcher.handle } : null,
@@ -284,6 +294,60 @@ export const setOnFromCli = mutation({
     if (!flows) throw new ConvexError("Your personal workspace has no live flow: name a team");
     await pickFlow(ctx, flows, args.flow);
     throw new ConvexError(`A person switches a live flow ${args.on ? "on" : "off"}, from the Flows page in the browser; no CLI call or agent session may.`);
+  },
+});
+
+/** The longest a hold may stand: it waits out a reset, never a person's call. */
+export const MAX_HOLD_MS = 48 * 3_600_000;
+
+/**
+ * Holds a live flow until `until` for `why`: its admission starts nothing
+ * meanwhile, and the flow says why. A second hold keeps the later end and
+ * the newest reason.
+ */
+export async function holdCore(ctx: Ctx, flow: any, o: { why: string; until: number; by: string }, now = Date.now()) {
+  const why = o.why.trim().replace(/\s+/g, " ");
+  if (!why) throw new ConvexError("Say why the live flow holds");
+  if (why.length > 300) throw new ConvexError("Keep the hold's reason under 300 characters");
+  if (!(o.until > now)) throw new ConvexError("A hold ends in the future");
+  if (o.until - now > MAX_HOLD_MS) throw new ConvexError("A hold lasts at most 48 hours; a longer stop is a person's, with the switch");
+  const standing = flowHold(flow, now);
+  const hold = { why, until: Math.max(o.until, standing?.until ?? 0), by: o.by, at: now };
+  await ctx.db.patch(flow._id, { hold });
+  return hold;
+}
+
+/** Clears a live flow's hold: a team admin's, as the switch is. */
+export async function clearHoldCore(ctx: Ctx, userId: Id<"users">, flow: any): Promise<void> {
+  if (!flow || !(await isMember(ctx, userId, flow.team_id))) throw new ConvexError("no such live flow");
+  await requireTeamAdmin(ctx as any, userId, flow.team_id);
+  if (flow.hold) await ctx.db.patch(flow._id, { hold: undefined });
+}
+
+export const clearHold = mutation({
+  args: { id: v.id("live_flows") },
+  handler: async (ctx, { id }) => {
+    const userId = await getAuthUserId(ctx as any);
+    if (!userId) throw new ConvexError("Sign in to clear a live flow's hold");
+    await clearHoldCore(ctx, userId, await ctx.db.get(id));
+  },
+});
+
+/**
+ * `cast flow hold <until> "<why>"`: a hand that meets a wait no person has to
+ * answer (a spent budget until it rolls over), or the flow's watcher, holds
+ * the flow so it stops starting runs that would park on the same wait.
+ */
+export const holdFromCli = mutation({
+  args: { api_token: v.string(), from_session: v.optional(v.string()), team_id: v.optional(v.string()), flow: v.optional(v.string()), why: v.string(), until: v.number() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new ConvexError("Unauthorized");
+    const flows = await teamFlows(ctx, auth.userId, args.team_id);
+    if (!flows) throw new ConvexError("Your personal workspace has no live flow: name a team");
+    const flow = await pickFlow(ctx, flows, args.flow);
+    const hold = await holdCore(ctx, flow, { why: args.why, until: args.until, by: args.from_session ?? `user:${auth.userId}` });
+    return { _id: String(flow._id), hold, waiting: holdWords(hold) };
   },
 });
 

@@ -4157,6 +4157,8 @@ cliRoute("/cli/line/requeue", async (ctx, body) => ctx.runMutation(api.orgLine.r
 cliRoute("/cli/flow/live/show", async (ctx, body) => ctx.runQuery(api.liveFlows.showFromCli, body));
 cliRoute("/cli/flow/live/on", async (ctx, body) => ctx.runMutation(api.liveFlows.setOnFromCli, { ...body, on: true }));
 cliRoute("/cli/flow/live/off", async (ctx, body) => ctx.runMutation(api.liveFlows.setOnFromCli, { ...body, on: false }));
+// `cast flow hold`: a hand or the watcher holds the flow for a timed wait; a person clears it in the browser.
+cliRoute("/cli/flow/live/hold", async (ctx, body) => ctx.runMutation(api.liveFlows.holdFromCli, body));
 // The line's deploy stage (deploys.md DP2): what waits to go out, one deploy that sends it, and the deploy path's reports.
 cliRoute("/cli/line/deploy/stage", async (ctx, body) => ctx.runQuery(api.deploys.stage, body));
 cliRoute("/cli/line/deploy/request", async (ctx, body) => ctx.runMutation(api.deploys.request, body));
