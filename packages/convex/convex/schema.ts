@@ -34,6 +34,7 @@ import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { momentsTables } from "./momentsSchema";
 import { lineTrialTables } from "./lineTrialSchema";
 import { orgRoleTokenTables } from "./orgRoleTokensSchema";
+import { liveFlowTables } from "./liveFlowsSchema";
 import { slackTables } from "./slackSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
 import { decisionValidator, intentSourceValidator, milestoneValidator, questionValidator, scoreValidator } from "./lib/initiativeValidators";
@@ -135,6 +136,7 @@ export default defineSchema({
   ...momentsTables,
   ...lineTrialTables,
   ...orgRoleTokenTables,
+  ...liveFlowTables,
   ...slackTables,
   ...authTables,
   users: defineTable({
@@ -6295,6 +6297,9 @@ export default defineSchema({
     // first, so a pass reads only the window it ranks, however long the backlog.
     .index("by_project_source_status_readiness", ["project_id", "source", "status", "readiness"])
     .index("by_workspace_source_status_readiness", ["workspace", "source", "status", "readiness"])
+    // A live flow's queue (liveFlows.ts): a workspace's open, ready causes by
+    // their scored value, so the queue reads its head without the backlog.
+    .index("by_workspace_source_status_readiness_score", ["workspace", "source", "status", "readiness", "cause.scored.score"])
     .index("by_created_from_conversation", ["created_from_conversation"])
     .index("by_from_call", ["from_call"])
     .index("by_user_insight", ["user_id", "created_from_insight"])

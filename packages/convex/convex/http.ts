@@ -4153,6 +4153,10 @@ cliRoute("/cli/role/line/merge", async (ctx, body) => ctx.runMutation(api.orgLin
 cliRoute("/cli/line/merge/check", async (ctx, body) => ctx.runQuery(api.orgLineMerge.check, body));
 cliRoute("/cli/line/merge/record", async (ctx, body) => ctx.runMutation(api.orgLineMerge.record, body));
 cliRoute("/cli/line/requeue", async (ctx, body) => ctx.runMutation(api.orgLine.requeueFromCli, body));
+// `cast flow show|on|off` on a team's live flow (liveFlows.ts). on and off are a person's, on the web: the CLI's are refused with that reason.
+cliRoute("/cli/flow/live/show", async (ctx, body) => ctx.runQuery(api.liveFlows.showFromCli, body));
+cliRoute("/cli/flow/live/on", async (ctx, body) => ctx.runMutation(api.liveFlows.setOnFromCli, { ...body, on: true }));
+cliRoute("/cli/flow/live/off", async (ctx, body) => ctx.runMutation(api.liveFlows.setOnFromCli, { ...body, on: false }));
 // The line's deploy stage (deploys.md DP2): what waits to go out, one deploy that sends it, and the deploy path's reports.
 cliRoute("/cli/line/deploy/stage", async (ctx, body) => ctx.runQuery(api.deploys.stage, body));
 cliRoute("/cli/line/deploy/request", async (ctx, body) => ctx.runMutation(api.deploys.request, body));

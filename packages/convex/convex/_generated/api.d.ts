@@ -341,6 +341,7 @@ import type * as lineTimeline from "../lineTimeline.js";
 import type * as lineTrial from "../lineTrial.js";
 import type * as lineTrialSchema from "../lineTrialSchema.js";
 import type * as lineWorkspace from "../lineWorkspace.js";
+import type * as liveFlows from "../liveFlows.js";
 import type * as linearApi from "../linearApi.js";
 import type * as linearWebhooks from "../linearWebhooks.js";
 import type * as linkPreviews from "../linkPreviews.js";
@@ -860,6 +861,7 @@ declare const fullApi: ApiFromModules<{
   lineTrial: typeof lineTrial;
   lineTrialSchema: typeof lineTrialSchema;
   lineWorkspace: typeof lineWorkspace;
+  liveFlows: typeof liveFlows;
   linearApi: typeof linearApi;
   linearWebhooks: typeof linearWebhooks;
   linkPreviews: typeof linkPreviews;

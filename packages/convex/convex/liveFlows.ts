@@ -1,0 +1,321 @@
+// A team's live flow (doc s975wwqd8hdn81affbf2jvygpn8gvvt4): a flow from the
+// library switched on, fed by its sources, with one queue of the team's open
+// problems in the line's start order (byStartOrder: score, then findings, then
+// age). The sweep admits from it onto the machines (orgLine.planSweep), and a
+// team with a live flow admits nothing per lead. Each run still starts as the
+// lead of its problem's area (lineOwnerOf): that role's seat, spawner and
+// placement, so the card goes to the person over that area. Leads become
+// watchers; the flow's own watcher, when it has one, answers its asks.
+import { ConvexError, v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { internalMutation, mutation, query } from "./functions";
+import type { Id } from "./_generated/dataModel";
+import { verifyApiToken } from "./apiTokens";
+import { requireTeamAdmin } from "./lib/access";
+import { atCap } from "@codecast/shared/contracts/orgCapacity";
+import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
+import { utcDay } from "./lib/orgCaps";
+import { WORKING_RUN_STATUSES } from "./lib/linePlacement";
+import { byStartOrder, startValue } from "./lib/linePriority";
+import { agentAssignee, claimSlot, freeSlots, isReadyCause, lineLoadFor, lineOwnerOf, takeAdmissible, type LineLoad, type LineLoads } from "./orgLine";
+
+type Ctx = { db: any };
+
+/** How many of the head a queue read takes from each order (scored, unscored) before it filters. */
+export const LIVE_FLOW_WINDOW = 200;
+/** How many of the queue a view shows. */
+export const LIVE_FLOW_SHOWN = 50;
+
+export type LiveCandidate = { task: any; role: any };
+
+export const flowHands = (flow: any, now: number): number => (flow.counters?.day === utcDay(now) ? flow.counters.hands : 0);
+export const flowAtHandsCap = (flow: any, now: number): boolean => atCap(flowHands(flow, now), flow.caps?.hands_per_day);
+
+/** The team's roles a live flow runs as: each problem goes to the one whose area holds it. */
+export const flowRoles = (flow: { team_id?: any }, roles: any[]): any[] => roles.filter((r) => String(r.team_id ?? "") === String(flow.team_id ?? "") && r.team_id);
+
+/** Whether a live flow, on or off, holds the team's line: its leads then admit nothing on their own. */
+export async function liveFlowFor(ctx: Ctx, teamId: string | null | undefined): Promise<any | null> {
+  if (!teamId) return null;
+  return ctx.db.query("live_flows").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).first();
+}
+
+// The source of a problem: its first finding's, as workflows.lineVersionFor reads it.
+async function sourceOf(ctx: Ctx, task: any): Promise<string | null> {
+  const first = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).order("asc").first();
+  return first?.source?.trim().toLowerCase() ?? null;
+}
+
+/**
+ * The live flow's queue in start order, as far as `limit`: the open, ready
+ * problems of its workspace (the scored head, highest first, and the
+ * unscored, which rank as 50) and the open tasks handed to its roles, each
+ * with the role whose area holds it. Left out: a problem with a run, one no
+ * active role owns, one handed to a person or to a role that does not own
+ * it, one from a source the flow does not take, a trial problem, and one
+ * with a blocker open.
+ */
+export async function liveFlowCandidates(ctx: Ctx, flow: any, roles: any[], limit: number): Promise<LiveCandidate[]> {
+  if (limit <= 0) return [];
+  const team = flowRoles(flow, roles);
+  const window = Math.min(LIVE_FLOW_WINDOW, limit + 64);
+  const head = (q: any) => q.eq("workspace", flow.workspace).eq("source", "signal").eq("status", "open").eq("readiness", "ready");
+  const rows: any[] = [
+    ...await ctx.db.query("tasks").withIndex("by_workspace_source_status_readiness_score", head).order("desc").take(window),
+    ...await ctx.db.query("tasks").withIndex("by_workspace_source_status_readiness_score", (q: any) => head(q).eq("cause.scored.score", undefined)).take(window),
+  ];
+  for (const r of team) {
+    for (const a of [agentAssignee(r), String(r._id)]) {
+      rows.push(...await ctx.db.query("tasks").withIndex("by_assignee_status", (q: any) => q.eq("assignee", a).eq("status", "open")).collect());
+    }
+  }
+  const seen = new Set<string>();
+  const ranked: LiveCandidate[] = [];
+  for (const task of rows) {
+    if (seen.has(String(task._id))) continue;
+    seen.add(String(task._id));
+    if (task.status !== "open" || task.workflow_run_id || task.ephemeral || task.workspace !== flow.workspace) continue;
+    if (!task.assignee && !isReadyCause(task)) continue;
+    ranked.push({ task, role: null });
+  }
+  ranked.sort((a, b) => byStartOrder(a.task, b.task));
+  return takeAdmissible(ctx, ranked, limit, async (c) => {
+    const owner = await lineOwnerOf(ctx, c.task, team);
+    if (!owner || owner.status !== "active" || owner.handing_over?.retire) return false;
+    if (c.task.assignee && c.task.assignee !== agentAssignee(owner) && c.task.assignee !== String(owner._id)) return false;
+    if (flow.sources?.length && c.task.source === "signal" && !flow.sources.includes((await sourceOf(ctx, c.task)) ?? "")) return false;
+    c.role = owner;
+    return true;
+  });
+}
+
+export type LivePlanned = { role_id: string; task_id: string; place?: { device: string; project_path: string }; live_flow_id: string };
+
+/**
+ * What one sweep pass starts from a live flow: its queue in order while
+ * hands are left today and `room` allows, each on its area lead's machines
+ * (lineLoadFor, shared through `loads` with the rest of the pass). A problem
+ * whose lead's machines are full waits and the next one is tried, so a full
+ * laptop never holds back problems the pool can take. `waiting` says why the
+ * head did not start.
+ */
+export async function planLiveFlow(ctx: Ctx, flow: any, roles: any[], now: number, room: number, loads: LineLoads): Promise<{ starts: LivePlanned[]; waiting: string | null; queue: Array<LiveCandidate & { waiting: string | null }> }> {
+  const handsCap = flow.caps?.hands_per_day;
+  const handsLeft = handsCap == null ? Infinity : handsCap - flowHands(flow, now);
+  const take = Math.min(room, handsLeft);
+  const offWords = !flow.on ? "the flow is off" : handsLeft <= 0 ? "hands cap reached" : null;
+  const candidates = await liveFlowCandidates(ctx, flow, roles, Math.max(take, 0) + 16);
+  const starts: LivePlanned[] = [];
+  const queue: Array<LiveCandidate & { waiting: string | null }> = [];
+  for (const c of candidates) {
+    let waiting = offWords;
+    if (!waiting && starts.length >= take) waiting = "waits for the next pass";
+    let load: LineLoad | null = null;
+    if (!waiting) {
+      load = await lineLoadFor(ctx, c.role, now, loads, roles);
+      if (freeSlots(load) <= 0) waiting = `${load.working} run${load.working === 1 ? " is" : "s are"} working on @${c.role.handle}'s machine${load.pool ? "s" : ""}`;
+    }
+    if (!waiting && load) {
+      const place = claimSlot(load);
+      starts.push({ role_id: String(c.role._id), task_id: String(c.task._id), live_flow_id: String(flow._id), ...(place ? { place } : {}) });
+    }
+    queue.push({ ...c, waiting });
+  }
+  return { starts, waiting: offWords ?? queue.find((q) => q.waiting)?.waiting ?? null, queue };
+}
+
+export type LiveFlowRow = {
+  _id: string;
+  workspace: string;
+  team_id: string | null;
+  flow: { id: string; slug: string | null; label: string };
+  sources: string[] | null;
+  on: boolean;
+  caps: { hands_per_day: number | null };
+  hands_today: number;
+  load: { working: number; cap: number };
+  waiting: string | null;
+  watcher: { role_id: string; handle: string } | null;
+  changed_by: string;
+  changed_at: number;
+  running: string[];
+  queue: Array<{ task_id: string; waiting: string | null }>;
+};
+
+/** One live flow as the web and the CLI read it: its row, its machines' load, its runs and the head of its queue. */
+export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promise<LiveFlowRow & { entries: Array<LiveCandidate & { waiting: string | null }> }> {
+  const roles: any[] = await ctx.db.query("org_roles").collect();
+  const team = flowRoles(flow, roles);
+  const loads: LineLoads = new Map();
+  // Every machine the flow's leads run on, counted once.
+  for (const r of team) if (r.status === "active") await lineLoadFor(ctx, r, now, loads, roles);
+  const totals = [...loads.values()].reduce((t, l) => ({ working: t.working + l.working, cap: t.cap + l.cap }), { working: 0, cap: 0 });
+  const plan = await planLiveFlow(ctx, flow, roles, now, LIVE_FLOW_SHOWN, loads);
+  const running: string[] = [];
+  for (const r of team) {
+    for (const status of WORKING_RUN_STATUSES) {
+      const runs: any[] = await ctx.db.query("workflow_runs").withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", r._id).eq("status", status)).collect();
+      running.push(...runs.map((run) => String(run._id)));
+    }
+  }
+  const workflow = await ctx.db.get(flow.workflow_id);
+  const watcher = flow.watcher_role_id ? await ctx.db.get(flow.watcher_role_id) : null;
+  const entries = plan.queue.slice(0, LIVE_FLOW_SHOWN);
+  return {
+    _id: String(flow._id),
+    workspace: flow.workspace,
+    team_id: flow.team_id ? String(flow.team_id) : null,
+    flow: { id: String(flow.workflow_id), slug: workflow?.slug ?? null, label: workflow?.label ?? workflow?.name ?? "" },
+    sources: flow.sources?.length ? flow.sources : null,
+    on: flow.on,
+    caps: { hands_per_day: flow.caps?.hands_per_day ?? null },
+    hands_today: flowHands(flow, now),
+    load: totals,
+    waiting: plan.waiting,
+    watcher: watcher ? { role_id: String(watcher._id), handle: watcher.handle } : null,
+    changed_by: String(flow.changed_by),
+    changed_at: flow.changed_at,
+    running,
+    queue: entries.map((e) => ({ task_id: String(e.task._id), waiting: e.waiting })),
+    entries,
+  };
+}
+
+const plainRow = ({ entries: _e, ...row }: Awaited<ReturnType<typeof liveFlowView>>): LiveFlowRow => row;
+
+async function isMember(ctx: Ctx, userId: Id<"users">, teamId: string | null | undefined): Promise<boolean> {
+  if (!teamId) return false;
+  return !!(await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId)).first());
+}
+
+/** The live flows a member of `team_id` reads (the web's liveFlows collection); [] for anyone else. */
+export const forTeam = query({
+  args: { team_id: v.id("teams") },
+  handler: async (ctx, { team_id }): Promise<LiveFlowRow[]> => {
+    const userId = await getAuthUserId(ctx as any);
+    if (!userId || !(await isMember(ctx, userId, team_id))) return [];
+    const flows: any[] = await ctx.db.query("live_flows").withIndex("by_team", (q: any) => q.eq("team_id", team_id)).collect();
+    const now = Date.now();
+    return Promise.all(flows.map(async (f) => plainRow(await liveFlowView(ctx, f, now))));
+  },
+});
+
+/** Switches a live flow on or off: a team admin's act, since it starts or stops the team's runs. */
+export async function setOnCore(ctx: Ctx, userId: Id<"users">, flow: any, on: boolean, now = Date.now()): Promise<void> {
+  if (!flow || !(await isMember(ctx, userId, flow.team_id))) throw new ConvexError("no such live flow");
+  await requireTeamAdmin(ctx as any, userId, flow.team_id);
+  if (flow.on !== on) await ctx.db.patch(flow._id, { on, changed_by: userId, changed_at: now });
+}
+
+/** The web's switch: a person signed in, never an API token (the web turns it on through the confirm flow). */
+export const setOn = mutation({
+  args: { id: v.id("live_flows"), on: v.boolean() },
+  handler: async (ctx, { id, on }) => {
+    const userId = await getAuthUserId(ctx as any);
+    if (!userId) throw new ConvexError("Sign in to switch a live flow");
+    await setOnCore(ctx, userId, await ctx.db.get(id), on);
+  },
+});
+
+// A team's live flows for the CLI, the team named by id (the CLI resolves
+// --team); null for no team, which is the personal workspace and has none.
+async function teamFlows(ctx: Ctx, userId: Id<"users">, teamId?: string): Promise<any[] | null> {
+  const team = teamId ? ctx.db.normalizeId("teams", teamId) : null;
+  if (!team || !(await isMember(ctx, userId, team))) return null;
+  return ctx.db.query("live_flows").withIndex("by_team", (q: any) => q.eq("team_id", team)).collect();
+}
+
+// One of them by the flow's slug, its label, its workflow id or the live
+// flow's own id; omitted, the team's one live flow.
+async function pickFlow(ctx: Ctx, flows: any[], ref?: string): Promise<any> {
+  const want = ref?.trim();
+  if (!want) {
+    if (flows.length === 1) return flows[0];
+    throw new ConvexError(flows.length ? `The team has ${flows.length} live flows: name one by its slug` : "The team has no live flow");
+  }
+  for (const f of flows) {
+    const wf = await ctx.db.get(f.workflow_id);
+    if ([String(f._id), String(f.workflow_id), wf?.slug, wf?.label, wf?.name].includes(want)) return f;
+  }
+  throw new ConvexError(`No live flow of the team runs "${want}" (looked for a flow slug, label or id, or a live flow id)`);
+}
+
+async function cliRow(ctx: Ctx, flow: any) {
+  const view = await liveFlowView(ctx, flow);
+  return {
+    ...plainRow(view),
+    queue: view.entries.map((e) => ({
+      task_id: String(e.task._id),
+      short_id: e.task.short_id ?? null,
+      title: e.task.cause?.named?.name ?? e.task.title,
+      score: startValue(e.task),
+      scored: !!e.task.cause?.scored,
+      findings: e.task.cause?.signal_count ?? 0,
+      family: e.task.cause?.scored?.cluster_name ?? null,
+      area: e.role ? { role_id: String(e.role._id), handle: e.role.handle } : null,
+      waiting: e.waiting,
+    })),
+  };
+}
+
+/** `cast flow show` on live flows: the team's, or null when it has none (and for the personal workspace). */
+export const showFromCli = query({
+  args: { api_token: v.string(), team_id: v.optional(v.string()), flow: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new ConvexError("Unauthorized");
+    const flows = await teamFlows(ctx, auth.userId, args.team_id);
+    if (!flows?.length) return null;
+    return Promise.all((args.flow ? [await pickFlow(ctx, flows, args.flow)] : flows).map((f) => cliRow(ctx, f)));
+  },
+});
+
+/**
+ * `cast flow on|off`: a person's act, and a token cannot tell a person from an
+ * agent, so every CLI call is refused with where a person switches it. The
+ * flow is resolved first, so a wrong name gets its own error.
+ */
+export const setOnFromCli = mutation({
+  args: { api_token: v.string(), from_session: v.optional(v.string()), on: v.boolean(), team_id: v.optional(v.string()), flow: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new ConvexError("Unauthorized");
+    const flows = await teamFlows(ctx, auth.userId, args.team_id);
+    if (!flows) throw new ConvexError("Your personal workspace has no live flow: name a team");
+    await pickFlow(ctx, flows, args.flow);
+    throw new ConvexError(`A person switches a live flow ${args.on ? "on" : "off"}, from the Flows page in the browser; no CLI call or agent session may.`);
+  },
+});
+
+/**
+ * A team's live flow on a library flow. Its switch is a person's, so it
+ * starts in the state people left the leads' lines in: on when any active
+ * lead's line was on, off otherwise, and the row names those lines. The row
+ * is also what stops each lead admitting on its own (orgLine.planSweep), so
+ * one commit moves admission over and nothing pauses between. Refused when
+ * the team has one.
+ */
+export async function createLiveFlowCore(ctx: Ctx, args: { team_id: Id<"teams">; workflow_id: Id<"workflows">; by: Id<"users">; sources?: string[]; watcher_role_id?: Id<"org_roles"> }, now = Date.now()) {
+  if (await liveFlowFor(ctx, args.team_id)) throw new ConvexError("the team already has a live flow");
+  const roles: any[] = await ctx.db.query("org_roles").collect();
+  const linesOn = flowRoles({ team_id: args.team_id }, roles).filter((r) => r.status === "active" && lineStartsOn(r)).map((r) => r.handle as string).sort();
+  const id = await ctx.db.insert("live_flows", {
+    workspace: `team:${args.team_id}`,
+    team_id: args.team_id,
+    workflow_id: args.workflow_id,
+    ...(args.sources?.length ? { sources: args.sources } : {}),
+    ...(args.watcher_role_id ? { watcher_role_id: args.watcher_role_id } : {}),
+    on: linesOn.length > 0,
+    carried_lines_on: linesOn,
+    changed_by: args.by,
+    changed_at: now,
+    created_at: now,
+  });
+  console.log(`live flow ${id} for team ${args.team_id}: ${linesOn.length ? `on, carried from the lines of ${linesOn.map((h) => "@" + h).join(", ")}` : "off, no lead's line was on"}; its leads admit nothing on their own from now`);
+  return { id: String(id), on: linesOn.length > 0, carried_lines_on: linesOn };
+}
+
+export const create = internalMutation({
+  args: { team_id: v.id("teams"), workflow_id: v.id("workflows"), by: v.id("users"), sources: v.optional(v.array(v.string())), watcher_role_id: v.optional(v.id("org_roles")) },
+  handler: async (ctx, args) => createLiveFlowCore(ctx, args),
+});
