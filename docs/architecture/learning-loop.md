@@ -598,3 +598,31 @@ What a replay cannot see: Union's database and Union's own models (the
 sandbox refuses both, so a station that would measure says it could not), and
 codecast state that moved since the run (reads are live).
 
+
+## LL15. Scoring and families of problems
+
+The line works a few problems an hour, so the order it takes them in decides
+what the work is worth. `linePriority` alone ranks on fields most problems
+share (one goal, medium severity, a handful of findings), which leaves age as
+the real order. A scoring pass reads every open problem once and writes
+`tasks.cause.scored`:
+
+- **score** 1 to 100, with the harm, reach and fixability (1 to 5 each) it
+  weighed and a one-line **reason**. One Sonnet call per problem through the
+  Batch API on the deployment's key (`problemScores.submit` / `collect`),
+  reading the title, the description and up to five findings (most severe
+  first, one per distinct opening) with the counts of findings and distinct
+  conversations. The prompt lives in `shared/contracts/problemScore.ts`.
+- **root_cause**: a few words naming the mechanism, worded so two problems
+  with one cause get one label.
+- **cluster_key** and **cluster_name**: the family the label belongs to. One
+  Opus call names the families from every distinct label with its count
+  (`problemScores.submitFamilies`); Opus calls of a few hundred labels each
+  place every label in one (`submitAssign`). A family is one cause one fix
+  would address, so the line runs a family's lead first and its siblings
+  after the fix lands, when many dissolve as already fixed.
+
+The pass is a backfill that re-runs: `submit` takes only problems with no
+score or one from an older `SCORE_VERSION`, and `submitAssign` without
+families reuses the families already written. Writing a new score drops the
+old cluster, since its label may have changed.

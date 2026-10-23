@@ -43,6 +43,8 @@ export type SurfaceRequest = MessagesRequest & {
   images?: Array<{ label: string; url: string }>;
   /** A JSON schema the answer is generated under (structured outputs), so it is always one well-formed object of that shape. */
   output_schema?: Record<string, unknown>;
+  /** How hard a thinking model works (output_config.effort); its thinking bills as output. */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
 };
 
 /** The user turn: the prompt alone, or the prompt followed by each labelled image. */
@@ -76,7 +78,9 @@ export function anthropicBody(req: SurfaceRequest) {
     ...(req.system ? { system: req.system } : {}),
     messages: [{ role: "user" as const, content: userContent(req) }],
     ...(req.tools ? { tools: req.tools } : {}),
-    ...(req.output_schema ? { output_config: { format: { type: "json_schema" as const, schema: req.output_schema } } } : {}),
+    ...(req.output_schema || req.effort
+      ? { output_config: { ...(req.output_schema ? { format: { type: "json_schema" as const, schema: req.output_schema } } : {}), ...(req.effort ? { effort: req.effort } : {}) } }
+      : {}),
   };
 }
 
@@ -95,6 +99,69 @@ export async function postMessages(req: SurfaceRequest, opts: { signal?: AbortSi
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify(anthropicBody(req)),
   });
+}
+
+// Message Batches: the same request bodies, run asynchronously at half the
+// price. For passes over many rows where nothing waits on the answer.
+
+const apiHeaders = (apiKey: string) => ({ "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" });
+
+export interface BatchState {
+  id: string;
+  processing_status: "in_progress" | "canceling" | "ended";
+  request_counts: { processing: number; succeeded: number; errored: number; canceled: number; expired: number };
+  results_url: string | null;
+}
+
+/** One batch of requests, each under its own id. Throws on a refusal, since a caller that submits wants to know why. */
+export async function createBatch(requests: Array<{ custom_id: string; req: SurfaceRequest }>): Promise<BatchState> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this deployment");
+  const response = await fetch("https://api.anthropic.com/v1/messages/batches", {
+    method: "POST",
+    headers: apiHeaders(apiKey),
+    body: JSON.stringify({ requests: requests.map((r) => ({ custom_id: r.custom_id, params: anthropicBody(r.req) })) }),
+  });
+  if (!response.ok) throw new Error(`batch create answered ${response.status}: ${(await response.text()).slice(0, 500)}`);
+  return response.json();
+}
+
+export async function getBatch(id: string): Promise<BatchState> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this deployment");
+  const response = await fetch(`https://api.anthropic.com/v1/messages/batches/${encodeURIComponent(id)}`, { headers: apiHeaders(apiKey) });
+  if (!response.ok) throw new Error(`batch read answered ${response.status}: ${(await response.text()).slice(0, 500)}`);
+  return response.json();
+}
+
+export interface BatchResult {
+  custom_id: string;
+  /** The reply's text when the request succeeded. */
+  text: string | null;
+  usage: ModelUsage | null;
+  stop_reason: string | null;
+  error?: string;
+}
+
+/** An ended batch's results, keyed by custom_id (they arrive in any order). */
+export async function batchResults(state: BatchState): Promise<BatchResult[]> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set on this deployment");
+  if (!state.results_url) return [];
+  const response = await fetch(state.results_url, { headers: apiHeaders(apiKey) });
+  if (!response.ok) throw new Error(`batch results answered ${response.status}`);
+  const out: BatchResult[] = [];
+  for (const line of (await response.text()).split("\n")) {
+    if (!line.trim()) continue;
+    const row = JSON.parse(line);
+    const result = row.result ?? {};
+    if (result.type === "succeeded") {
+      out.push({ custom_id: row.custom_id, text: replyText(result.message) || null, usage: usageOf(result.message), stop_reason: result.message?.stop_reason ?? null });
+    } else {
+      out.push({ custom_id: row.custom_id, text: null, usage: null, stop_reason: null, error: result.type === "errored" ? String(result.error?.error?.message ?? result.error?.message ?? "errored") : String(result.type) });
+    }
+  }
+  return out;
 }
 
 // The reply's text: every text block, in order, trimmed (@platform/assistant,

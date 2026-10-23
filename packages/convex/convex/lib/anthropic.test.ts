@@ -64,6 +64,15 @@ describe("anthropicBody", () => {
     });
   }
 
+  test("effort rides in output_config beside the schema", () => {
+    expect(JSON.stringify(anthropicBody({ model: "claude-sonnet-5-5", prompt: "p", max_tokens: 10, effort: "low", output_schema: { type: "object" } }))).toBe(
+      '{"model":"claude-sonnet-5-5","max_tokens":10,"messages":[{"role":"user","content":"p"}],"output_config":{"format":{"type":"json_schema","schema":{"type":"object"}},"effort":"low"}}',
+    );
+    expect(JSON.stringify(anthropicBody({ model: "claude-sonnet-5-5", prompt: "p", max_tokens: 10, effort: "high" }))).toBe(
+      '{"model":"claude-sonnet-5-5","max_tokens":10,"messages":[{"role":"user","content":"p"}],"output_config":{"effort":"high"}}',
+    );
+  });
+
   test("the cheap model is sent no temperature and no thinking", () => {
     // It refuses any temperature, and thinking would spend the reply's max_tokens.
     expect(JSON.stringify(anthropicBody({ model: CHEAP_MODEL, prompt: "p", max_tokens: 1200 }))).toBe(

@@ -411,6 +411,7 @@ import type * as presenceState from "../presenceState.js";
 import type * as principalViewRevisions from "../principalViewRevisions.js";
 import type * as privacy from "../privacy.js";
 import type * as problemMerge from "../problemMerge.js";
+import type * as problemScores from "../problemScores.js";
 import type * as progressEvents from "../progressEvents.js";
 import type * as projectPaths from "../projectPaths.js";
 import type * as projectUpdates from "../projectUpdates.js";
@@ -929,6 +930,7 @@ declare const fullApi: ApiFromModules<{
   principalViewRevisions: typeof principalViewRevisions;
   privacy: typeof privacy;
   problemMerge: typeof problemMerge;
+  problemScores: typeof problemScores;
   progressEvents: typeof progressEvents;
   projectPaths: typeof projectPaths;
   projectUpdates: typeof projectUpdates;

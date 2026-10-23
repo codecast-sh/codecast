@@ -44,6 +44,7 @@
     "./contracts/agentJudges": "./contracts/agentJudges.ts",
     "./contracts/judgeReview": "./contracts/judgeReview.ts",
     "./contracts/judgeFix": "./contracts/judgeFix.ts",
+    "./contracts/problemScore": "./contracts/problemScore.ts",
     "./contracts/lineWords": "./contracts/lineWords.ts",
     "./contracts/modelCall": "./contracts/modelCall.ts",
     "./contracts/pageData": "./contracts/pageData.ts",
