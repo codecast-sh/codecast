@@ -30143,8 +30143,7 @@ async function main(): Promise<void> {
   // Shared /cli ingest channel for both snapshot shapes (completion file and
   // the journal-derived live model below).
   async function postWorkflowRunIngest({ hostDir, ...payload }: {
-    external_run_id: string;
-    hostDir: string;
+    external_run_id: string; hostDir: string;
     session_id: string;
     project_path?: string;
     workflow_name: string;
