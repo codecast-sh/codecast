@@ -1,0 +1,172 @@
+# Codecast installer script for Windows.
+#
+# codecast runs inside WSL (Windows Subsystem for Linux) on Windows. This
+# script gets WSL ready and runs the Linux installer inside it. It also
+# removes the pieces of an old native Windows install (binary, auto-start
+# task), which never worked correctly.
+#
+# Usage (install only):
+#   irm codecast.sh/install.ps1 | iex
+#
+# Usage (install AND link this device with a setup token from Settings -> CLI):
+#   $env:CODECAST_SETUP_TOKEN="<token>"; irm codecast.sh/install.ps1 | iex
+#
+# A token is passed via env var rather than an argument because `irm | iex`
+# evaluates the script text and cannot forward positional parameters.
+
+$ErrorActionPreference = "Stop"
+
+$setupToken = $env:CODECAST_SETUP_TOKEN
+
+Write-Host "codecast on Windows runs inside WSL (Windows Subsystem for Linux)."
+Write-Host ""
+
+# --- 1. Remove a legacy native install (harmful: it spawned console windows) ---
+
+# Native commands run through cmd /c with redirection inside cmd: under Windows
+# PowerShell 5.1 (what `irm | iex` usually runs in), a PS-level 2> redirect of
+# native stderr creates error records, and $ErrorActionPreference = "Stop"
+# turns them into a script-killing throw (e.g. schtasks complaining the task
+# doesn't exist: the normal case for a fresh install).
+& cmd.exe /c "schtasks /Delete /TN CodecastDaemon /F >nul 2>&1"
+Get-Process codecast -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+$legacyDir = "$env:LOCALAPPDATA\codecast"
+if (Test-Path (Join-Path $legacyDir "codecast.exe")) {
+    Write-Host "Removing old native Windows install from $legacyDir..."
+    try {
+        Remove-Item -Recurse -Force $legacyDir
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($userPath -like "*$legacyDir*") {
+            $cleaned = ($userPath -split ";" | Where-Object { $_ -and $_ -ne $legacyDir }) -join ";"
+            [Environment]::SetEnvironmentVariable("Path", $cleaned, "User")
+        }
+    } catch {
+        Write-Host "Could not fully remove $legacyDir. You can delete it manually."
+    }
+}
+
+# The npm package on Windows leaves a POSIX `cast` launcher in npm's global
+# folder. WSL appends the Windows PATH to its own, so a WSL shell that has not
+# picked up ~/.local/bin runs that launcher and fails with "node: not found".
+$npm = Get-Command npm -ErrorAction SilentlyContinue
+if ($npm) {
+    & cmd.exe /c "npm ls -g --depth=0 @codecast-sh/cli >nul 2>&1"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Removing the npm install of codecast from Windows (it runs inside WSL instead)..."
+        & cmd.exe /c "npm uninstall -g @codecast-sh/cli >nul 2>&1"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Could not remove it. Run this yourself:  npm uninstall -g @codecast-sh/cli" -ForegroundColor Yellow
+        }
+    }
+}
+
+# --- 2. Make sure WSL has a working distro ---
+
+$wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+if (-not $wsl) {
+    Write-Host "WSL is not available on this Windows version." -ForegroundColor Yellow
+    Write-Host "codecast needs Windows 10 (2004+) or Windows 11."
+    exit 1
+}
+
+# `wsl true` boots the default distro if one exists; a nonzero exit means
+# no distro is installed yet (or WSL itself needs the one-time install).
+# cmd /c handles the output redirection (see the 5.1 stderr note above), and
+# $LASTEXITCODE propagates through cmd.
+function Test-WslDistro {
+    & cmd.exe /c "wsl true >nul 2>&1"
+    return ($LASTEXITCODE -eq 0)
+}
+
+if (-not (Test-WslDistro)) {
+    $isAdmin = ([Security.Principal.WindowsPrincipal] `
+        [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+    $installExit = $null
+    if ($isAdmin) {
+        Write-Host "Installing WSL with Ubuntu (one time; this can take a few minutes)..."
+        # With WSL already enabled this finishes in place: Ubuntu asks for a
+        # Linux user right here, and no restart is needed.
+        & wsl.exe --install -d Ubuntu
+        $installExit = $LASTEXITCODE
+        Write-Host ""
+    }
+
+    if ($installExit -eq 0 -and (Test-WslDistro)) {
+        Write-Host "WSL is ready." -ForegroundColor Green
+    } else {
+        if ($installExit -eq 0) {
+            Write-Host "WSL install started." -ForegroundColor Green
+            Write-Host "Restart Windows to finish WSL setup, open Ubuntu once to create your"
+            Write-Host "Linux user, then run this installer again:"
+        } elseif ($isAdmin) {
+            Write-Host "WSL could not be installed automatically (exit $installExit)." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  1. In this Administrator PowerShell, run:  wsl --install"
+            Write-Host "  2. Restart Windows if it asks, then open Ubuntu once to create your Linux user."
+            Write-Host "  3. Run this installer again:"
+        } else {
+            Write-Host "WSL is not set up yet. One manual step (needs Administrator):" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  1. Open PowerShell as Administrator and run:  wsl --install"
+            Write-Host "  2. Restart Windows, then open Ubuntu once to create your Linux user."
+            Write-Host "  3. Run this installer again:"
+        }
+        Write-Host ""
+        if ($setupToken) {
+            Write-Host '     $env:CODECAST_SETUP_TOKEN="<token>"; irm codecast.sh/install.ps1 | iex'
+        } else {
+            Write-Host "     irm codecast.sh/install.ps1 | iex"
+        }
+        exit 1
+    }
+}
+
+# --- 3. Run the Linux installer inside WSL ---
+
+# Ubuntu ships curl; for a minimal distro without curl or wget, try to add
+# curl via apt as root. Best effort: install.sh gives a clear error if a
+# download tool is still missing. All quieting happens inside sh, never as a
+# PS-level redirect (see the 5.1 stderr note above).
+& wsl.exe -- sh -c "command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Installing curl inside WSL..."
+    & wsl.exe -u root -- sh -c "apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq curl >/dev/null 2>&1"
+}
+
+Write-Host "Installing codecast inside WSL..."
+Write-Host ""
+
+if ($setupToken) {
+    & wsl.exe -- sh -c "curl -fsSL https://codecast.sh/install | sh -s -- '$setupToken'"
+} else {
+    & wsl.exe -- sh -c "curl -fsSL https://codecast.sh/install | sh"
+}
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "Install inside WSL failed (exit $LASTEXITCODE)." -ForegroundColor Yellow
+    Write-Host "Open your WSL terminal (run: wsl) and try:  curl -fsSL codecast.sh/install | sh"
+    exit 1
+}
+
+# Link cast into /usr/local/bin. Every WSL shell searches it ahead of the
+# Windows folders WSL appends, including a shell opened before this install and
+# `wsl -- cast`, which never read the profile line install.sh wrote. An entry
+# already there is replaced only when it is ours. Passed with --exec and no
+# double quotes, so neither PowerShell nor a login shell re-parses the script.
+$wslHome = (& wsl.exe -e printenv HOME | Out-String).Trim()
+if ($wslHome -match '^/[A-Za-z0-9._/-]+$') {
+    $linkScript = 'T=$1/.local/bin/codecast; [ -x $T ] || exit 0; for n in cast codecast; do L=/usr/local/bin/$n; case $(readlink $L 2>/dev/null) in */.local/bin/codecast) ln -sfn $T $L; continue;; esac; [ -e $L ] || [ -L $L ] || ln -s $T $L; done'
+    & wsl.exe -u root -e sh -c $linkScript sh $wslHome
+}
+
+Write-Host ""
+Write-Host "codecast is installed inside WSL." -ForegroundColor Green
+Write-Host "Open a new WSL terminal (run: wsl) and use 'cast' from there."
+& wsl.exe -e sh -c 'test -f ~/.codecast/config.json'
+if (-not $setupToken -and $LASTEXITCODE -ne 0) {
+    Write-Host "Then run 'cast auth' to authenticate and start syncing."
+}
