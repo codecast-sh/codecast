@@ -20,6 +20,7 @@ Snippets:
   chat          Team channels and direct messages to people (cast chat)
   calls         Read transcribed team calls (cast calls)
   browser       Use your Chrome through the Cast extension
+  vault         Team keys, logins and sign-ins for agents, never pasted in chat (cast vault)
   computer      Drive a native macOS app (cast computer)
   sim           Drive iOS simulators from a shared pool, on a laptop or a cloud Mac (cast sim)
   check         Typecheck through one shared tsc watcher per project (cast check)
