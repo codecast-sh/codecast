@@ -117,7 +117,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, setReserved, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import { recoveryModeOf, type RecoveryMode } from "@codecast/shared/contracts";
 import { agentDisplayName, CHEAP_MODEL, normalizeSubagentCaps } from "@codecast/shared/contracts";
@@ -4239,7 +4239,8 @@ accountsCmd
             : launch
               ? (launch.expires_at <= Date.now() ? ` ${c.yellow}· refresh lifetime over — cast accounts signin ${p.name}${c.reset}` : ` ${c.dim}· sessions${c.reset}`)
               : "";
-        console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${tokenNote}${roleNote}`);
+        const reserved = p.reserved_for ? ` ${c.dim}· reserved for ${p.reserved_for}, never an auto-switch target${c.reset}` : "";
+        console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${tokenNote}${reserved}${roleNote}`);
       }
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
@@ -4279,6 +4280,35 @@ accountsCmd
       if (config.limits_enabled === undefined && listProfiles().length >= 2) {
         console.log(`${c.dim}  tip: cast install limits tells your agents to keep working through usage limits${c.reset}`);
       }
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+    }
+    await publishAccountsInventory();
+  });
+
+accountsCmd
+  .command("reserve <names...>")
+  .description("Keep saved profiles for one job (a review batch): auto-switch never moves this machine's sessions onto them")
+  .requiredOption("--for <job>", "what they are kept for, e.g. reviews")
+  .action(async (names: string[], opts: { for: string }) => {
+    try {
+      const changed = setReserved(names, opts.for.trim());
+      console.log(changed.length ? `${c.green}✓${c.reset} reserved ${changed.map((n) => `${c.cyan}${n}${c.reset}`).join(", ")} for ${opts.for.trim()}` : `${c.dim}already reserved for ${opts.for.trim()}${c.reset}`);
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+    }
+    await publishAccountsInventory();
+  });
+
+accountsCmd
+  .command("release <names...>")
+  .description("Give reserved profiles back to auto-switch")
+  .action(async (names: string[]) => {
+    try {
+      const changed = setReserved(names, null);
+      console.log(changed.length ? `${c.green}✓${c.reset} released ${changed.map((n) => `${c.cyan}${n}${c.reset}`).join(", ")}` : `${c.dim}none of them was reserved${c.reset}`);
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
