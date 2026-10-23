@@ -753,13 +753,17 @@ async function waitOnStation(
       return "failure";
     }
     if (answersByHandoff) {
+      // A hand that ended a turn while its own check runs in the background
+      // (the Bash tool backgrounds past 120s) has not answered yet: the ask
+      // has it pin dormant, which the wait above holds to the node's timeout.
+      // Its handoff landed 1 to 60+ minutes later on 14 runs (ct-60145).
       if (!askedForHandoffAt && !row.is_killed) {
         askedForHandoffAt = Date.now();
         console.log(`${c.yellow}  ${shortId}: read as finished without a handoff; asking it to finish with one${c.reset}`);
         await cliCall(options, "/cli/messages/send", {
           to: conversationId,
           ...(options.runSession ? { from: options.runSession } : {}),
-          body: `The run reads this session as finished, but ${options.taskId} has no handoff from it, and this station's next step routes on the handoff. If you are still working, carry on. When the work is done, or cannot be done, end with \`cast task handoff ${options.taskId} --status done|blocked|needs_context\` as your brief says.`,
+          body: `The run reads this session as finished, but ${options.taskId} has no handoff from it, and this station's next step routes on the handoff. If work you started is still running (a backgrounded check, a replay), pin \`cast state --status dormant\` naming what you wait on and end your turn: the run waits for your wake. When the work is done, or cannot be done, end with \`cast task handoff ${options.taskId} --status done|blocked|needs_context\` as your brief says.`,
           wake: true,
         });
         askedOnce = false;
