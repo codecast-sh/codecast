@@ -95,3 +95,15 @@ First week under the policy and the huddle gap (700 messages, 109 agent to agent
 - **Huddle: nothing to read.** One fed call (Oct 19). Its only unnamed chunk was the backlog of a route added mid call; the monitor's "inside the gap" 100% came from filing the attach briefing and a voice handoff as unnamed talk. Fixed in the monitor.
 - **The monitor read teammates' sessions. Fixed.** It filtered on who sent a message, not who owns the recipient, so a message from Ashot's session into a teammate's session (a role standing session above all) was opened: at least 17 cases on Oct 13, 1 on Oct 16 and 2 this week (two role leads' sessions, which this run also read by hand while tracing the route duplicate). The sample now draws only recipients the person owns; the 40 such transcripts and their label batches are deleted from every run directory. Earlier columns include those cases and are not restated; this week's are after the fix.
 
+
+### 2026-10-22 (week since delivery was fixed, 300 cases)
+
+2,624 messages over Oct 15 to 22, 299 agent to agent cases and 1 huddle case read.
+
+- **Delivery holds.** Since Oct 15, about 99% of sessions that run the start hook see `<org-context>` (305 of 308 on Oct 22). The 599 sessions on Oct 17 and 18 with no start hook were a film-generation harness running in `/tmp` sandboxes, not org agents.
+- **First separated effect of the wording: noise.** Pooling the Oct 20 and Oct 22 samples (392 cases with a known sender), noise is 1.9% (5 of 270) from senders that saw the guidance and 7.4% (9 of 122) from senders that did not, Fisher p = 0.014. The gap sits in parents messaging their own workers (2 of 71 against 5 of 55); role and worker-to-parent rates are close. Nearly every noise case from the "did not see" group is a long-running parent or lead repeating what the recipient already had (a late duplicate report, a restated hold, a fix already made), so the groups differ in session age as well as in the guidance. Idle messages (4.8% against 6.6%), out-of-line direction (18.5% against 22.1%) and changed recipient (56% against 61%) do not separate.
+- **Peer share is slightly higher among senders that saw it (14% against 8%, p = 0.10), and those peer messages are what the policy sends direct:** 11 of 39 are coordination, 16 urgent, 21 changed the recipient, none noise. Overall peer share held at 10%.
+- **Leads keep relaying more.** Role messages that name another session: 13% (Sep 6 to Oct 5), 23% (Oct 6 to 14), 27% (117 of 429, Oct 15 to 22).
+- **Week totals:** idle messages with asked-for results left out 6.0% (baseline 14.8%), the lowest yet; agent noise 4.0%; peer share 10.2%; out-of-line direction followed 68% (baseline 64%); hub share with a recipient's own workers left out 34%. Volume 0.54 messages per new session, still led by orchestrators and their workers.
+- **Huddle:** 3 unnamed chunks all week, none inside the gap.
+- **No wording change.** The remaining noise comes from long-running sessions and should shrink as they pick the guidance up at their next compaction or resume. Next run: re-test noise with the Oct 27 sample pooled in, comparing within parent-to-worker only.
