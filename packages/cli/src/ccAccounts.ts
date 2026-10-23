@@ -66,6 +66,11 @@ export interface CcProfileMeta {
   // the login nor a setup token can carry a session and signing in again does
   // not help. Set by the daemon's usage refresh, cleared by its next good probe.
   access_refused_at?: number;
+  // Kept for one job (`cast accounts reserve <name> --for reviews`): auto-switch
+  // never moves this machine's sessions onto it, so the job keeps the
+  // account's windows to itself. A person sets and clears it; a re-save of the
+  // same account keeps it.
+  reserved_for?: string;
   active: boolean;
 }
 
@@ -845,7 +850,7 @@ function saveProfileSnapshot(name: string, cred: string, oauthAccount: Record<st
   writeProfileSecret(name, JSON.stringify(profile));
   const meta = profileMeta(profile);
   const index = readProfileIndex();
-  index.profiles[name] = meta;
+  index.profiles[name] = !differentAccount && existing?.reserved_for ? { ...meta, reserved_for: existing.reserved_for } : meta;
   writeProfileIndex(index);
   invalidateAccountsCache();
   return { name, ...meta, active: true };
@@ -2355,6 +2360,26 @@ export function isOrgAccessRefusal(err: unknown): boolean {
   return /oauth_not_allowed_for_organization|not allowed for this organization/i.test(message);
 }
 
+/** Keep saved profiles for one job (`purpose`), or give them back with null.
+ *  Returns the names whose reservation changed; an unknown name throws. */
+export function setReserved(names: readonly string[], purpose: string | null): string[] {
+  const index = readProfileIndex();
+  const unknown = names.filter((n) => !index.profiles[n]);
+  if (unknown.length) throw new CcAccountError(`no saved profile named ${unknown.join(", ")} (cast accounts ls)`);
+  const changed: string[] = [];
+  for (const name of names) {
+    const { reserved_for: prev, ...rest } = index.profiles[name];
+    if ((prev ?? null) === purpose) continue;
+    index.profiles[name] = purpose ? { ...rest, reserved_for: purpose } : rest;
+    changed.push(name);
+  }
+  if (changed.length) {
+    writeProfileIndex(index);
+    invalidateAccountsCache();
+  }
+  return changed;
+}
+
 /** Stamp (or clear, with `at` null) an account's org refusal on every profile
  *  covering it. Returns the profile names whose stamp changed. */
 export function setAccessRefused(key: string, at: number | null): string[] {
@@ -3087,6 +3112,8 @@ export interface AccountsHeartbeatPayload {
     setup_token?: { stored_at: number; expires_at: number };
     // The saved login is dead (refresh refused) — see CcProfileMeta.
     login_expired_at?: number;
+    // Kept for one job: never an auto-switch target — see CcProfileMeta.
+    reserved_for?: string;
   }>;
 }
 
@@ -3139,7 +3166,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
       ? launch.since
       : stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
     const usage = readUsageCache().accounts;
-    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at: expired, access_refused_at }]) => {
+    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at: expired, access_refused_at, reserved_for }]) => {
       // The server's validator has no field for an org refusal, and its
       // auto-switch already reads a dead login with no credential behind it as
       // "never a target, its parks are dead". A refused account is exactly that.
@@ -3155,6 +3182,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
         ...(tok ? { token: { stored_at: tok.stored_at, expires_at: tok.expires_at } } : {}),
         ...(setup ? { setup_token: { stored_at: setup.stored_at, expires_at: setup.expires_at } } : {}),
         ...(login_expired_at ? { login_expired_at } : {}),
+        ...(reserved_for ? { reserved_for } : {}),
       };
     });
     if (active?.email || profiles.length > 0) {
