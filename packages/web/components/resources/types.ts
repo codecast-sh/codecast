@@ -170,6 +170,8 @@ export type ResourceActions = {
   onPark?: (sessionIds: string[]) => void;
   onResume?: (sessionIds: string[]) => void;
   onPreflight?: (selections: OffloadSelection[]) => void;
+  /** Ask the source machine to rehearse these moves (each takes a snapshot and an ssh round trip, so only ticked ones). */
+  onRehearse?: (selections: OffloadSelection[]) => void;
   /** Always the safe mode: waits for a turn boundary, never interrupts. Returns the
    *  launch's client batch id, which its runs carry, or nothing when it did not start. */
   onStartOffload?: (selections: OffloadSelection[], opts: { waitForTurnMs: number }) => string | undefined;

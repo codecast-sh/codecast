@@ -2,9 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   base32Decode,
   base32Encode,
+  ambiguousSecretName,
   envFor,
+  envNameProblem,
   envValues,
   fingerprint,
+  pickSecretByName,
+  secretEnvProblem,
   parseOtpauth,
   redactionValuesOf,
   secretNameProblem,
@@ -82,6 +86,40 @@ describe("validation", () => {
     expect(secretNameProblem("x".repeat(64))).not.toBeNull();
   });
 
+  test("a name shaped like a short id or a Convex id is refused, since lookups would read it as an id", () => {
+    expect(secretNameProblem("sec-5")).toMatch(/reads as a secret's id/);
+    expect(secretNameProblem("a".repeat(32))).toMatch(/reads as a secret's id/);
+    expect(secretNameProblem("sec-5-live")).toBeNull();
+    expect(secretNameProblem("a".repeat(31))).toBeNull();
+  });
+
+  test("env vars that make a shell or an interpreter load code are refused, any case", () => {
+    for (const name of ["PATH", "BASH_ENV", "ENV", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "NODE_OPTIONS", "PYTHONPATH", "PYTHONSTARTUP", "PERL5OPT", "RUBYOPT", "SHELL", "IFS", "PROMPT_COMMAND", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL", "npm_config_script_shell", "path"]) {
+      expect(envNameProblem(name)).toMatch(/what code to load/);
+    }
+    for (const name of ["STRIPE_SECRET_KEY", "GITHUB_TOKEN", "GIT_TOKEN", "DATABASE_URL", "PGPASSWORD", "OPENAI_API_KEY"]) expect(envNameProblem(name)).toBeNull();
+    // A key's var derived from its name counts too, and a stored one refuses to inject.
+    expect(secretEnvProblem({ name: "path", kind: "key" })).toMatch(/PATH/);
+    expect(secretEnvProblem({ name: "path", kind: "login" })).toBeNull();
+    expect(secretEnvProblem({ name: "team-file", kind: "file", env: ["BASH_ENV"] })).toMatch(/BASH_ENV/);
+    expect(() => envValues({ name: "team-file", kind: "file", env: ["BASH_ENV"] }, { content: "x" }, "/tmp/p")).toThrow(/BASH_ENV/);
+  });
+
+  test("a name in several workspaces resolves only when the preferred workspace or the status settles it", () => {
+    const rows = [
+      { name: "foo", workspace: "user:u1", status: "ready" as const, short_id: "sec-1" },
+      { name: "foo", workspace: "team:t1", status: "requested" as const, short_id: "sec-2" },
+      { name: "bar", workspace: "team:t1", status: "ready" as const, short_id: "sec-3" },
+    ];
+    expect(pickSecretByName(rows, "bar")).toBe(rows[2]);
+    expect(pickSecretByName(rows, "nope")).toBeNull();
+    expect(pickSecretByName(rows, "foo")).toEqual({ ambiguous: [rows[0], rows[1]] });
+    expect(pickSecretByName(rows, "foo", { prefer: "team:t1" })).toBe(rows[1]);
+    expect(pickSecretByName(rows, "foo", { prefer: "team:other" })).toEqual({ ambiguous: [rows[0], rows[1]] });
+    expect(pickSecretByName(rows, "foo", { status: "requested" })).toBe(rows[1]);
+    expect(ambiguousSecretName("foo", [rows[0], rows[1]])).toBe("foo is in 2 workspaces (sec-1 personal, sec-2 team): name the one you mean by its short id, like sec-1");
+  });
+
   test("each kind normalizes or refuses with a sentence that never quotes the value", () => {
     expect(validatePayload("key", { value: "  sk_test_abc \n" })).toEqual({ payload: { value: "sk_test_abc" } });
     expect(validatePayload("key", { value: " " })).toMatchObject({ error: expect.stringMatching(/needs a value/) });
@@ -123,7 +161,22 @@ describe("env and redaction", () => {
   });
 
   test("redaction takes secrets, not usernames, and skips a file too long to match", () => {
-    expect(redactionValuesOf("login", { username: "ana", password: "pw-123456", totp_seed: "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP" })).toEqual(["pw-123456", "JBSWY3DPEHPK3PXP"]);
+    const link = "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP";
+    expect(redactionValuesOf("login", { username: "ana", password: "pw-123456", totp_seed: link })).toEqual(["pw-123456", "JBSWY3DPEHPK3PXP", link]);
     expect(redactionValuesOf("file", { content: "x".repeat(9000) })).toEqual([]);
+  });
+
+  test("a file is redacted in the pieces a command prints: dotenv values, JSON strings, one-token lines", () => {
+    const env = "# staging\nexport API_KEY=abc123def456\nDB_PASSWORD=\"hunter2-staging\"\nDEBUG=true\nURL=https://api.example.com/v1\n";
+    expect(redactionValuesOf("file", { content: env })).toEqual([env.trim(), "abc123def456", "hunter2-staging"]);
+    const pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nVJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDu\n-----END PRIVATE KEY-----\n";
+    const sa = JSON.stringify({ type: "service_account", private_key_id: "0123456789abcdef0123", private_key: pem, token_uri: "https://oauth2.googleapis.com/token" }, null, 2);
+    const got = redactionValuesOf("file", { content: sa });
+    expect(got).toContain("0123456789abcdef0123");
+    expect(got).toContain(pem.trim());
+    expect(got).toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7");
+    expect(got).toContain("VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDu");
+    // Armour, urls and the JSON's own short words name no secret.
+    expect(got.some((v) => v === "-----BEGIN PRIVATE KEY-----" || v.startsWith("https://") || v === "service_account")).toBe(false);
   });
 });
