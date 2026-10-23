@@ -10,11 +10,9 @@
 
 import { execSync } from "../proc.js";
 import { tmuxRun as defaultTmuxRun } from "../tmux.js";
+import { shellQuote } from "../shellQuote.js";
 
-/** Wrap a value in single quotes for a `bash -c` body. */
-export function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
+export { shellQuote };
 
 export interface SpawnTmuxPaneOptions {
   session: string;

@@ -12,3 +12,4 @@ export * from "./format";
 export * from "./toolCall";
 export * from "./toolVisual";
 export * from "./pageTheme";
+export * from "./structuredResult";

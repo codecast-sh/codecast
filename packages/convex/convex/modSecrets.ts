@@ -5,7 +5,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { MOD_SECRET_NAME_RE, type ModManifest } from "@codecast/shared/contracts/mods";
 import { decryptRefreshToken, encryptRefreshToken } from "./googleOAuth";
-import { CONNECTION_SECRETS_KEY_ENV } from "./tokenConnectors";
+import { connectionKey } from "./tokenConnectors";
 import { tokenUser } from "./modLocal";
 
 /**
@@ -20,11 +20,7 @@ import { tokenUser } from "./modLocal";
 const MOD_SECRET_HKDF_INFO = "codecast-mod-secret-v1";
 const MAX_SECRET = 8_000;
 
-function deploymentKey(): string {
-  const key = process.env[CONNECTION_SECRETS_KEY_ENV];
-  if (!key) throw new Error(`mod secrets are not configured on this deployment (${CONNECTION_SECRETS_KEY_ENV})`);
-  return key;
-}
+const deploymentKey = () => connectionKey("Mod secrets");
 
 export async function decryptModSecret(enc: string): Promise<string | null> {
   return decryptRefreshToken(enc, deploymentKey(), MOD_SECRET_HKDF_INFO);
