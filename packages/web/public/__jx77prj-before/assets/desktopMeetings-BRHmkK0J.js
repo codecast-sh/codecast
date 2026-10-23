@@ -1,0 +1,2 @@
+import{bB as n,aZ as t}from"./lineWorkspaceUrl-C4SdhC6E.js";function r(){return n()&&!!t("getMeetingDetect")}function f(){return t("getMeetingDetect")?.()??Promise.resolve(null)}function g(e){return t("setMeetingDetect")?.(e)??Promise.resolve(null)}function c(e){t("onMeetingDetected")?.(e)}function o(e){t("meetingOfferSize")?.(e)}function s(){t("meetingOfferHide")?.()}function a(e){t("meetingOfferOpenCall")?.(e)}export{s as a,a as b,r as c,f as g,o as m,c as o,g as s};
+//# sourceMappingURL=desktopMeetings-BRHmkK0J.js.map

@@ -1,0 +1,7 @@
+import{aj as o}from"./index-oKYuP8e-.js";import"./vendor-BRSpyZc9.js";import"./lineWorkspaceUrl-BGLIta-t.js";import"./index-JvKZ8HIj.js";import"./dexie-BEFYTs6O.js";import"./convex-pL9slGJ3.js";import"./sentry-C0kWfPzV.js";import"./highlight-9pfC9kl-.js";import"./ui-DVb64tq5.js";import"./diff-05CVVOnl.js";import"./markdown-B7kiGmIT.js";/**
+ * @license lucide-react v0.556.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const t=[["path",{d:"m21 16-4 4-4-4",key:"f6ql7i"}],["path",{d:"M17 20V4",key:"1ejh1v"}],["path",{d:"m3 8 4-4 4 4",key:"11wl7u"}],["path",{d:"M7 4v16",key:"1glfcx"}]],f=o("arrow-up-down",t);export{t as __iconNode,f as default};
+//# sourceMappingURL=arrow-up-down-DNZBTUVG.js.map

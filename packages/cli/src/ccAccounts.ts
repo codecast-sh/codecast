@@ -66,6 +66,11 @@ export interface CcProfileMeta {
   // the login nor a setup token can carry a session and signing in again does
   // not help. Set by the daemon's usage refresh, cleared by its next good probe.
   access_refused_at?: number;
+  // Kept for one job (`cast accounts reserve <name> --for reviews`): auto-switch
+  // never moves this machine's sessions onto it, so the job keeps the
+  // account's windows to itself. A person sets and clears it; a re-save of the
+  // same account keeps it.
+  reserved_for?: string;
   active: boolean;
 }
 
@@ -461,7 +466,7 @@ export function readProfileIndex(): ProfileIndex {
   );
 }
 
-function writeProfileIndex(index: ProfileIndex): void {
+export function writeProfileIndex(index: ProfileIndex): void {
   atomicWriteFile(indexPath(), JSON.stringify(index, null, 2), { mode: 0o644 });
 }
 
@@ -845,7 +850,7 @@ function saveProfileSnapshot(name: string, cred: string, oauthAccount: Record<st
   writeProfileSecret(name, JSON.stringify(profile));
   const meta = profileMeta(profile);
   const index = readProfileIndex();
-  index.profiles[name] = meta;
+  index.profiles[name] = !differentAccount && existing?.reserved_for ? { ...meta, reserved_for: existing.reserved_for } : meta;
   writeProfileIndex(index);
   invalidateAccountsCache();
   return { name, ...meta, active: true };
@@ -2346,33 +2351,6 @@ export async function rotateOauthCredential(
   };
 }
 
-/** The account's organization refuses subscription OAuth: the 403 Claude
- *  Code shows as "Your organization has disabled Claude subscription access".
- *  The usage endpoint throws it as a CloudApiError, the model probe as a
- *  CcAccountError quoting the body; both carry the provider's wording. */
-export function isOrgAccessRefusal(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return /oauth_not_allowed_for_organization|not allowed for this organization/i.test(message);
-}
-
-/** Stamp (or clear, with `at` null) an account's org refusal on every profile
- *  covering it. Returns the profile names whose stamp changed. */
-export function setAccessRefused(key: string, at: number | null): string[] {
-  const index = readProfileIndex();
-  const changed: string[] = [];
-  for (const [name, meta] of Object.entries(index.profiles)) {
-    if ((meta.uuid || meta.email) !== key || !!meta.access_refused_at === (at !== null)) continue;
-    const { access_refused_at: _prev, ...rest } = meta;
-    index.profiles[name] = at === null ? rest : { ...rest, access_refused_at: at };
-    changed.push(name);
-  }
-  if (changed.length) {
-    writeProfileIndex(index);
-    invalidateAccountsCache();
-  }
-  return changed;
-}
-
 /** Stamp a profile dead in the index (see CcProfileMeta.login_expired_at). */
 export function markLoginExpired(name: string, now: number): void {
   const index = readProfileIndex();
@@ -3087,6 +3065,8 @@ export interface AccountsHeartbeatPayload {
     setup_token?: { stored_at: number; expires_at: number };
     // The saved login is dead (refresh refused) — see CcProfileMeta.
     login_expired_at?: number;
+    // Kept for one job: never an auto-switch target — see CcProfileMeta.
+    reserved_for?: string;
   }>;
 }
 
@@ -3139,7 +3119,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
       ? launch.since
       : stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
     const usage = readUsageCache().accounts;
-    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at: expired, access_refused_at }]) => {
+    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at: expired, access_refused_at, reserved_for }]) => {
       // The server's validator has no field for an org refusal, and its
       // auto-switch already reads a dead login with no credential behind it as
       // "never a target, its parks are dead". A refused account is exactly that.
@@ -3155,6 +3135,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
         ...(tok ? { token: { stored_at: tok.stored_at, expires_at: tok.expires_at } } : {}),
         ...(setup ? { setup_token: { stored_at: setup.stored_at, expires_at: setup.expires_at } } : {}),
         ...(login_expired_at ? { login_expired_at } : {}),
+        ...(reserved_for ? { reserved_for } : {}),
       };
     });
     if (active?.email || profiles.length > 0) {

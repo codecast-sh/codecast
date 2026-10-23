@@ -1,0 +1,2 @@
+import{r as o}from"./vendor-BRSpyZc9.js";import{cM as u,cN as s,cO as n,cP as a,k as f,cQ as i}from"./index-oKYuP8e-.js";import{u as l}from"./convex-pL9slGJ3.js";function R(){return o.useSyncExternalStore(u,s,s)}function b(){const e=l();f(()=>{i(e)})}function v(e){return o.useCallback(r=>{if(!r||(r.style.setProperty("--level","0"),!e))return;const t=()=>r.style.setProperty("--level",a().toFixed(3));t();const c=n(t);return()=>{c(),r.style.setProperty("--level","0")}},[e])}export{R as a,v as b,b as u};
+//# sourceMappingURL=useRecorder-DehUdgRG.js.map

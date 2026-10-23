@@ -17,6 +17,7 @@ import {
   setKnownValuesForTest,
 } from "./knownValueRedaction.js";
 import { redactSecrets } from "./secretRedaction.js";
+import { vaultRedactionSource } from "./secrets/redactionSource.js";
 
 const values = (list: Array<{ value: string }>) => list.map((v) => v.value);
 
@@ -189,5 +190,100 @@ describe("store", () => {
     } finally {
       store.stop();
     }
+  });
+});
+
+describe("vault values", () => {
+  const emptyHome = () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "kv-vault-"));
+    return { home, configDir: path.join(home, ".codecast") };
+  };
+  const fixedVault = (list: Array<{ name: string; value: string }>) => ({ values: () => list, refresh: async () => false });
+
+  test("a Vault value skips the shape floors but keeps a small minimum, and a Vault name beats an env name for the same value", () => {
+    const store = new KnownValueStore({
+      ...emptyHome(),
+      env: () => ({ STRIPE_TOKEN: "sk_vault_9f8e7d6c5b4a", OTHER_TOKEN: "correcthorse" }),
+      vault: fixedVault([
+        { name: "stripe", value: "sk_vault_9f8e7d6c5b4a" },
+        { name: "pin", value: "1234" },
+        { name: "word", value: "correcthorse" },
+        { name: "digits", value: "8675309" },
+      ]),
+    });
+    try {
+      const m = store.rebuild();
+      expect(m.size).toBe(3);
+      expect(redactKnownValues("sk_vault_9f8e7d6c5b4a 1234 correcthorse 8675309")).toBe("[redacted:known:stripe] 1234 [redacted:known:word] [redacted:known:digits]");
+    } finally {
+      store.stop();
+    }
+  });
+
+  test("a value with a quote, a backslash or a newline is caught once a tool call's input is JSON-stringified, once or twice", () => {
+    setKnownValuesForTest([
+      { value: 'pa"ss\\w0rd-77', name: "db", vault: true },
+      { value: "first-line-Xy7\nsecond-line-Zq9", name: "cert", vault: true },
+    ]);
+    try {
+      const input = { command: `psql --password='pa"ss\\w0rd-77'`, content: "first-line-Xy7\nsecond-line-Zq9" };
+      const once = redactSecrets(JSON.stringify(input));
+      expect(once).not.toContain("w0rd-77");
+      expect(once).not.toContain("second-line-Zq9");
+      expect(once).toContain("[redacted:known:db]");
+      expect(once).toContain("[redacted:known:cert]");
+      expect(redactSecrets(JSON.stringify({ input: JSON.stringify(input) }))).not.toMatch(/w0rd-77|second-line-Zq9/);
+    } finally {
+      setKnownValuesForTest(null);
+    }
+  });
+
+  test("a Vault value inside a marker is dropped, so a second pass changes nothing", () => {
+    const m = buildMatcher([{ value: "redacted", name: "a", vault: true }, { value: "stripe-test", name: "stripe-test", vault: true }, { value: "zq7Kp2Lm9Xw4", name: "key" }]);
+    expect(m.size).toBe(1);
+    const once = redactWithMatcher("zq7Kp2Lm9Xw4 redacted stripe-test", m);
+    expect(redactWithMatcher(once, m)).toBe(once);
+  });
+
+  test("end to end: a transcript line holding a Vault value syncs with the secret's name", async () => {
+    let version = "team:a=1";
+    let values = [{ name: "prod-db", value: "opaque-Db-Pw-7731xyz" }];
+    const fetch = (async (url: string) =>
+      url.endsWith("/redaction-version") ? Response.json({ version }) : Response.json({ version, values })) as unknown as typeof globalThis.fetch;
+    const store = new KnownValueStore({
+      ...emptyHome(),
+      env: () => ({}),
+      vault: vaultRedactionSource({ endpoint: () => ({ siteUrl: "https://b.test", apiToken: "t" }), fetch }),
+    });
+    try {
+      store.rebuild();
+      await store.refreshVault();
+      const line = JSON.stringify({ type: "user", message: { content: "psql -p opaque-Db-Pw-7731xyz" } });
+      expect(redactSecrets(line)).toBe(JSON.stringify({ type: "user", message: { content: "psql -p [redacted:known:prod-db]" } }));
+
+      // A rotation reaches the matcher on the next tick.
+      version = "team:a=2";
+      values = [{ name: "prod-db", value: "rotated-Db-Pw-000111" }];
+      await store.refreshVault();
+      expect(redactSecrets("rotated-Db-Pw-000111")).toBe("[redacted:known:prod-db]");
+    } finally {
+      store.stop();
+    }
+  });
+
+  test("a refresh still in flight when the store stops installs nothing", async () => {
+    let land: (changed: boolean) => void = () => {};
+    const store = new KnownValueStore({
+      ...emptyHome(),
+      env: () => ({}),
+      vault: { values: () => [{ name: "late", value: "late-Value-Pw-445566" }], refresh: () => new Promise<boolean>((r) => (land = r)) },
+    });
+    store.start();
+    expect(redactKnownValues("late-Value-Pw-445566")).toBe("[redacted:known:late]");
+    const pending = store.refreshVault();
+    store.stop();
+    land(true);
+    await pending;
+    expect(redactKnownValues("late-Value-Pw-445566")).toBe("late-Value-Pw-445566");
   });
 });

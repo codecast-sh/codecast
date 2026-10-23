@@ -1,0 +1,2 @@
+function e(o,t,a){switch(t){case"task":return o.tasks[a];case"doc":return o.docDetails[a]??o.docs[a];case"plan":return o.plans[a];default:return}}function n(o,t){if(t)return t.project_path||(t.project_id?o.projects[t.project_id]?.project_path:void 0)||t.conversation?.project_path||(t.conversation_id?o.conversations[t.conversation_id]?.project_path:void 0)||void 0}export{n as a,e as r};
+//# sourceMappingURL=contextProjectPath-4JIDOyj3.js.map
