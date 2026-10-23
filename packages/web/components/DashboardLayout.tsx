@@ -62,6 +62,7 @@ import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
 import { useSyncIssueSyncSources } from "../hooks/useSyncIssueSyncSources";
 import { useAdoptTimezone } from "../hooks/useAdoptTimezone";
 import { useSyncAgentDefinitions } from "../hooks/useSyncAgentDefinitions";
+import { useSyncSecrets } from "../hooks/useSyncSecrets";
 import { useSyncInitiatives } from "../hooks/useInitiatives";
 import { useSyncOrgProposals } from "../hooks/useSyncOrgProposals";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
@@ -345,6 +346,8 @@ function HostFeeders() {
   // The workspace's agent definitions and chains: the compose "as" chooser,
   // the settings library and the spawn actions all read them.
   useSyncAgentDefinitions();
+  // Vault metadata: the Vault page and every sec-N reference read it.
+  useSyncSecrets();
   // The workspace's initiatives: few rows, read by the list, a project's
   // line, the task board's axis and every `in-N` pill.
   useSyncInitiatives();

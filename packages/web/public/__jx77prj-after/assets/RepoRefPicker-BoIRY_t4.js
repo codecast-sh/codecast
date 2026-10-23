@@ -1,0 +1,2 @@
+import{j as f}from"./vendor-BRSpyZc9.js";import{u as m}from"./lineWorkspaceUrl-Dr1fY_US.js";import{eq as p,er as h,es as R,et as b}from"./index-DcUHIs2h.js";import{B as d}from"./RepoChrome-BWaDaOM3.js";function x({repository:e,refName:o,path:a="",blob:n=!1,family:s}){const r=p(e),c=h(e),u=m();return f.jsx(d,{branches:r.data?.branches??[],tags:c.data?.tags??[],value:o,defaultBranch:r.data?.default_branch,onPick:t=>u.push(n?R(e,t,a,s):b(e,t,a,s))})}export{x as R};
+//# sourceMappingURL=RepoRefPicker-BoIRY_t4.js.map
