@@ -92,8 +92,17 @@ beforeEach(() => { moves.length = 0; pushed.length = 0; seed(); });
 
 const key = (k: string) => act(async () => { document.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true })); });
 
-test("the app: its pages, the flow list the home, Decisions the only count; G then a letter switches page, a digit never does", async () => {
+test("the app opens on the steps' map", async () => {
   search = "";
+  const { host, root } = await mount(React.createElement(LineWorkspace));
+  expect(host.querySelector("[data-line-view-tab='line']")?.getAttribute("aria-current")).toBe("page");
+  expect(host.querySelector("[data-line-view='graph']")).not.toBeNull();
+  expect(host.querySelector("[data-line-mode='map']")?.getAttribute("aria-selected")).toBe("true");
+  await act(async () => { root.unmount(); });
+}, 30_000);
+
+test("the app: its pages, the flow list, Decisions the only count; G then a letter switches page, a digit never does", async () => {
+  search = "view=flows";
   useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
   expect([...host.querySelectorAll<HTMLElement>("[data-line-view-tab]")].map((b) => b.dataset.lineViewTab)).toEqual(["flows", "foryou", "timeline", "problems", "line", "deploys"]);
@@ -111,7 +120,7 @@ test("the app: its pages, the flow list the home, Decisions the only count; G th
   await key("g"); await key("p");
   expect(pushed.at(-1)).toBe("/flows?view=problems");
   await key("g"); await key("s");
-  expect(pushed.at(-1)).toBe("/flows?view=line");
+  expect(pushed.at(-1)).toBe("/flows");
   await act(async () => { root.unmount(); });
 }, 30_000);
 
@@ -179,7 +188,7 @@ test("a line fence draws the live step, and an unreadable project says so", asyn
   expect(card?.dataset.lineStep).toBe("prove");
   expect(card?.querySelector(".lw-obj-title")?.textContent).toBe("Prove");
   const open = card?.querySelector<HTMLAnchorElement>(".lw-obj-foot a");
-  expect(open?.getAttribute("href")).toBe("/flows?project=pr-1&view=line&graph=line&step=prove");
+  expect(open?.getAttribute("href")).toBe("/flows?project=pr-1&graph=line&step=prove");
   await act(async () => { root.unmount(); });
 
   const other = await mount(React.createElement(LineFence, { code: JSON.stringify({ widget: "step", project: "pr-404", step: "prove" }) }));
@@ -201,7 +210,7 @@ test("on the Map a station slides in as a drawer over the graph, Esc closes it; 
   expect(host.querySelector("[data-line-flow]")).not.toBeNull();
   expect(host.querySelector(".lw-body")?.hasAttribute("data-drawer-open")).toBe(true);
   await key("Escape");
-  expect(moves.at(-1)).toBe("/flows?project=pr-1&view=line&mode=map&graph=line");
+  expect(moves.at(-1)).toBe("/flows?project=pr-1&graph=line");
   await act(async () => { root.unmount(); });
 
   search = "project=pr-1&view=line&graph=line&step=prove";
@@ -224,8 +233,8 @@ test("a stage named in the address opens its drawer over the Map; nothing arrivi
   expect(host.querySelector("[data-line-flow-stage='moments']")?.getAttribute("aria-current")).toBe("true");
   // The drawer's head walks to another stage in place.
   await act(async () => { host.querySelector<HTMLElement>("[data-line-drawer-stage='grouping']")!.click(); });
-  expect(moves.at(-1)).toBe("/flows?project=pr-1&view=line&mode=map&graph=line&stage=grouping");
+  expect(moves.at(-1)).toBe("/flows?project=pr-1&graph=line&stage=grouping");
   await key("Escape");
-  expect(moves.at(-1)).toBe("/flows?project=pr-1&view=line&mode=map&graph=line");
+  expect(moves.at(-1)).toBe("/flows?project=pr-1&graph=line");
   await act(async () => { root.unmount(); });
 }, 30_000);

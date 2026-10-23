@@ -4,9 +4,10 @@
 // project is a filter on either:
 //   project  the filter (a project's short id or row id); absent is every project
 //   flow     a flow's owner handle: Decisions narrows to that flow's projects
-//   view     flows (the landing page: the flows, or one flow's overview),
-//            foryou (Decisions), timeline, problems, line (Steps), deploys: the nav entries
-//   mode     the Line page's mode: table (default) or map
+//   view     flows (the flows, or one flow's overview), foryou (Decisions),
+//            timeline, problems, line (Steps), deploys: the nav entries. An
+//            address with no view is the landing page: Steps on its map
+//   mode     the Steps page's mode: table (the default when the view is named) or map
 //   graph    which process (codecast's line, AgentWatch, ...) Line draws, and an open problem or run is read in
 //   process  Problems' narrowing to one process; absent, Problems lists every process, as For you does
 //   need     what waits on the viewer, open in For you's reader: a problem's
@@ -31,6 +32,8 @@
 //            links already sent. For you settles either on its `need`.
 // An address with no view that names what For you reads (a need, a card, a
 // decision) opens For you, so links from before the flow list led still land.
+// `view=line` with no mode stays the table, as every link to it written before
+// the map led meant.
 // Selecting a run keeps its case; selecting a case drops a run of another
 // case; moving to another step drops the tab; another view keeps only what it
 // reads; another graph or project drops what named the old one. Keys the line
@@ -41,13 +44,17 @@
 
 export const LINE_VIEWS = ["flows", "foryou", "timeline", "problems", "line", "deploys"] as const;
 export type LineView = (typeof LINE_VIEWS)[number];
-export const DEFAULT_LINE_VIEW: LineView = "flows";
+/** What an address with no view opens: Steps, on its map (LANDING_MODE). */
+export const DEFAULT_LINE_VIEW: LineView = "line";
 /** What only For you reads: an address naming one with no view opens For you. */
 const FORYOU_ONLY = ["need", "card", "decision"] as const;
 
 export const LINE_MODES = ["table", "map"] as const;
 export type LineMode = (typeof LINE_MODES)[number];
+/** The Steps page's mode when the address names the view and no mode. */
 export const DEFAULT_LINE_MODE: LineMode = "table";
+/** The landing page's mode: an address with no view opens the map. */
+export const LANDING_MODE: LineMode = "map";
 
 /** The stages before the line's own stations, in the order work flows through them (learning-loop.md LL1): what the
  *  product sends, what it should do, who grades it, how findings become problems, and what starts a run. Each opens
@@ -120,7 +127,7 @@ export function readLineSelection(search: Search): LineSelection {
   return {
     view: asked?.[0] ?? DEFAULT_LINE_VIEW,
     // A mode the address names wins over the one an earlier view name implies (view=process&mode=notebook is the table).
-    mode: modeOf(mode) ?? asked?.[1] ?? DEFAULT_LINE_MODE,
+    mode: modeOf(mode) ?? asked?.[1] ?? (asked ? DEFAULT_LINE_MODE : LANDING_MODE),
     project: ALL.has(project) ? null : project,
     flow: search?.get("flow") || null,
     graph: search?.get("graph") || null,
@@ -167,22 +174,23 @@ export function lineSelectionSearch(current: (Search & { toString(): string }) |
   if (legacy && isLegacy(q.get("view"))) {
     // Chat's job is a step's instructions now: a link that opened Chat on a step opens that tab.
     if (q.get("view") === "chat" && q.get("step") && !q.get(PARAM.tab)) q.set(PARAM.tab, "instructions");
-    if (legacy[0] === DEFAULT_LINE_VIEW) q.delete("view"); else q.set("view", legacy[0]);
+    q.set("view", legacy[0]);
     if (legacy[1] && !q.get("mode")) q.set("mode", legacy[1]);
   }
   const oldMode = q.get("mode");
   if (oldMode && LEGACY_MODES[oldMode]) q.set("mode", LEGACY_MODES[oldMode]);
-  if (q.get("mode") === DEFAULT_LINE_MODE) q.delete("mode");
   const p: LineSelectionPatch = { ...patch };
   // A step names a place on the Line page: picked from a view that has no step of its own, it opens there.
   if (p.step && p.view === undefined && !STEP_VIEWS.has(before.view) && !(RUN_VIEWS.has(before.view) && (p.run ?? before.run))) p.view = "line";
-  // A need, card or decision opens For you from the flow list, which reads none of them.
-  if (p.view === undefined && before.view === DEFAULT_LINE_VIEW && FORYOU_ONLY.some((k) => p[k])) p.view = "foryou";
+  // A need, card or decision opens For you from the flow list or the steps, which read none of them.
+  if (p.view === undefined && (before.view === "flows" || before.view === "line") && FORYOU_ONLY.some((k) => p[k])) p.view = "foryou";
   if (p.view) {
     const named = p.view;
     const [view, mode] = resolveView(named) ?? [DEFAULT_LINE_VIEW, null];
     p.view = view;
     if (mode && p.mode === undefined) p.mode = mode;
+    // Steps opens on its map when another view moves to it; the table is its switch away.
+    if (view === "line" && before.view !== "line" && p.mode === undefined) p.mode = LANDING_MODE;
     if (named === "chat" && (p.step ?? before.step) && p.tab === undefined) p.tab = "instructions";
   }
   if (p.mode) p.mode = modeOf(p.mode);
@@ -191,11 +199,13 @@ export function lineSelectionSearch(current: (Search & { toString(): string }) |
   if (old) { q.delete("tab"); if (!q.get(PARAM.tab)) q.set(PARAM.tab, old); }
   const del = (k: Key) => q.delete(PARAM[k]);
   const set = (k: Key, v: string | null | undefined) => {
-    if (v == null || v === "" || (k === "view" && v === DEFAULT_LINE_VIEW) || (k === "mode" && v === DEFAULT_LINE_MODE) || (k === "project" && ALL.has(v))) del(k);
+    if (v == null || v === "" || (k === "project" && ALL.has(v))) del(k);
     else q.set(PARAM[k], v);
   };
   for (const k of KEYS) if (p[k] !== undefined) set(k, p[k]);
-  if (q.get("view") !== "line") q.delete("mode");
+  // The mode is the Steps page's alone: the landing page (no view) is its map, a named view=line its table unless the
+  // mode says map. The mode stays as the move left it until the view is settled.
+  if (!q.get("mode") && !q.get("view") && before.view === DEFAULT_LINE_VIEW && p.view === undefined) q.set("mode", before.mode);
   if (p.project !== undefined && (p.project || null) !== before.project) {
     for (const k of ["graph", "step", "tab", "run", "case", "finding", "row", "ask"] as const) if (p[k] === undefined) del(k);
   }
@@ -228,6 +238,11 @@ export function lineSelectionSearch(current: (Search & { toString(): string }) |
   // One drawer at a time: a stage opened closes the step, a step opened closes the stage.
   if (p.stage && p.step === undefined) { del("step"); del("tab"); del("show"); }
   if (p.step && p.stage === undefined) { del("stage"); del("item"); }
+  // Steps on its map is the landing page, and says nothing of its view; its table names the view and leaves the mode out.
+  const settled = readLineSelection(q);
+  if (settled.view !== DEFAULT_LINE_VIEW) q.delete("mode");
+  else if (settled.mode === LANDING_MODE) { q.delete("view"); q.delete("mode"); }
+  else { if (!q.get("view")) q.set("view", DEFAULT_LINE_VIEW); q.delete("mode"); }
   // An address naming what only For you reads opens For you without saying so (readLineSelection).
   if (q.get("view") === "foryou" && FORYOU_ONLY.some((k) => q.get(PARAM[k]))) q.delete("view");
   const s = q.toString();
@@ -349,7 +364,7 @@ export function lineWorkspaceRedirect(search: Search & { toString(): string } | 
   const kept = new URLSearchParams(project && !ALL.has(project) ? { project } : {});
   for (const [k, v] of new URLSearchParams(search?.toString() ?? "")) if (!["project", "node", "edge", "section", "window", "trace"].includes(k)) kept.append(k, v);
   // An old address with no view meant Decisions, the landing page before the flow list.
-  return `/flows${flowsAddressOf(new URLSearchParams(lineSelectionSearch(kept, { ...(step ? { step } : {}), ...(node === QUEUE_NODE ? { view: "problems" as const } : {}) }).slice(1)))}`;
+  return `/flows${lineSelectionSearch(new URLSearchParams(flowsAddressOf(kept).slice(1)), { ...(step ? { step } : {}), ...(node === QUEUE_NODE ? { view: "problems" as const } : {}) })}`;
 }
 
 /** Any ref a flow knows (a problem, a finding, a fingerprint, a run, a card)

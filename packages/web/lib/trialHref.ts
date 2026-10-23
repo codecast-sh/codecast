@@ -35,7 +35,7 @@ export function lineFromName(from: string): string {
   const [path, query = ""] = from.split("?");
   const view = new URLSearchParams(query).get("view");
   if (view) return LINE_VIEW_NAME[view] ?? "Decisions";
-  return path.startsWith("/flows") && readLineSelection(new URLSearchParams(query)).view === "flows" ? "Flows" : "Decisions";
+  return path.startsWith("/flows") ? LINE_VIEW_NAME[readLineSelection(new URLSearchParams(query)).view] : "Decisions";
 }
 
 /** The `ws` an address names, when it is a workspace the viewer is in (their own, or a team they belong to); else

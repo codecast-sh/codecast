@@ -29,6 +29,7 @@ import { lineProjectParam } from "../../../lib/line/lineStations";
 import { graphKeyOf, newestRunByTask, processKeyOf, processName, readLastProcess, rememberProcess, type GraphRun, type ProjectGraph } from "../../../lib/line/lineGraphs";
 import { useDecisionTask } from "../../../hooks/useFixDecision";
 import { useSyncTrial, useTrialCards } from "../../../hooks/useSyncTrial";
+import { useSyncWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { LINE_VIEWS, LINE_VIEW_KEYS, LINE_VIEW_LABELS, lineSelectionSearch, lineViewForGoKey, lineViewHome, readLineSelection, type LineSelection, type LineSelectionPatch, type LineView } from "../../../lib/line/lineWorkspaceUrl";
 import { NO_PROJECT, type RollupRow } from "../../../lib/lineFlow";
 import { KeyCap } from "../../KeyCap";
@@ -288,6 +289,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
     <TaskHrefProvider place={problemPlace}>
       {!unresolved && ws.historyFeeds.map((f) => <HistoryFeed key={f.projectId} projectId={f.projectId} repositories={f.repositories} />)}
       {trialSpaces.map((key) => <TrialFeed key={key} workspace={key} />)}
+      {ws.decisionRuns.map((id) => <RunFeed key={id} id={id} />)}
       <div className="lw lw-app" data-line-workspace={projectId ?? "all"} data-line-app data-view={selection.view}>
         <header className="lw-head">
           {!embedded && (flow
@@ -471,6 +473,12 @@ function SpaceSwitcher({ space, onPick }: { space: LineSpaceState; onPick: (key:
 /** One workspace's trial cards, fed so For you lists every workspace's (useLineWorkspace everySpace). */
 function TrialFeed({ workspace }: { workspace: string }) {
   useSyncTrial(workspace);
+  return null;
+}
+
+/** One run an open decision names, fed by id whatever its age. */
+function RunFeed({ id }: { id: string }) {
+  useSyncWorkflowRun(id);
   return null;
 }
 

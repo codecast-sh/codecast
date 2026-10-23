@@ -9,9 +9,10 @@ describe("the line app's selection in the URL", () => {
     expect(readLineSelection(q("step=dissolve&steptab=try")).tab).toBe("try");
     expect(readLineSelection(q("step=dissolve&tab=try")).tab).toBe("try");
     expect(readLineSelection(q("tab=line&step=dissolve")).tab).toBeNull();
-    expect(readLineSelection(q("")).view).toBe("flows");
+    expect(readLineSelection(q(""))).toMatchObject({ view: "line", mode: "map" });
+    expect(readLineSelection(q("view=line")).mode).toBe("table");
     expect(readLineSelection(q("need=sd-6")).view).toBe("foryou");
-    expect(readLineSelection(q("view=nope")).view).toBe("flows");
+    expect(readLineSelection(q("view=nope")).view).toBe("line");
     expect(readLineSelection(q("")).project).toBeNull();
     expect(readLineSelection(q("project=all")).project).toBeNull();
   });
@@ -34,7 +35,7 @@ describe("the line app's selection in the URL", () => {
 
   test("an earlier name in the address is rewritten to the new one by the next move", () => {
     expect(lineSelectionSearch(q("view=inbox&decision=sd-5"), { need: "sd-5", decision: null })).toBe("?need=sd-5");
-    expect(lineSelectionSearch(q("view=process&mode=notebook&step=prove"), { mode: "map" })).toBe("?view=line&step=prove&mode=map");
+    expect(lineSelectionSearch(q("view=process&mode=notebook&step=prove"), { mode: "map" })).toBe("?step=prove");
     expect(lineSelectionSearch(q("view=chat&step=prove"), {})).toBe("?view=line&step=prove&steptab=instructions");
     // Problems' process narrowing is the list's own place: kept while a problem opens, dropped for another view.
     expect(lineSelectionSearch(q("view=problems&process=agentwatch"), { case: "ct-4" })).toBe("?view=problems&process=agentwatch&case=ct-4");
@@ -50,13 +51,15 @@ describe("the line app's selection in the URL", () => {
     expect(lineSelectionSearch(q("view=problems&case=t1&decision=sd-5"), { case: null })).toBe("?view=problems");
     expect(lineSelectionSearch(q("view=line&mode=map&step=prove"), { mode: "table" })).toBe("?view=line&step=prove");
     expect(lineSelectionSearch(q("view=problems"), { view: "foryou" })).toBe("?view=foryou");
-    expect(lineSelectionSearch(q("view=problems"), { view: "flows" })).toBe("");
+    expect(lineSelectionSearch(q("view=problems"), { view: "flows" })).toBe("?view=flows");
+    expect(lineSelectionSearch(q(""), { mode: "table" })).toBe("?view=line");
+    expect(lineSelectionSearch(q("view=line"), { mode: "map" })).toBe("");
     expect(lineSelectionSearch(q(""), { view: "problems" })).toBe("?view=problems");
   });
 
   test("an earlier view name in a patch writes the page and mode that hold it", () => {
     expect(lineSelectionSearch(q(""), { view: "notebook" })).toBe("?view=line");
-    expect(lineSelectionSearch(q(""), { view: "graph" })).toBe("?view=line&mode=map");
+    expect(lineSelectionSearch(q(""), { view: "graph" })).toBe("");
     expect(lineSelectionSearch(q("view=problems&case=t1"), { view: "replay", run: "r1" })).toBe("?view=problems&case=t1&run=r1");
     expect(lineSelectionSearch(q(""), { view: "problems", case: "t1" })).toBe("?view=problems&case=t1");
     expect(lineSelectionSearch(q(""), { view: "inbox", decision: "sd-5" })).toBe("?decision=sd-5");
@@ -88,7 +91,7 @@ describe("the line app's selection in the URL", () => {
   });
 
   test("another page keeps only the selection it reads", () => {
-    expect(lineSelectionSearch(q("view=problems&run=r1&case=t1&step=prove"), { view: "line" })).toBe("?view=line");
+    expect(lineSelectionSearch(q("view=problems&run=r1&case=t1&step=prove"), { view: "line" })).toBe("");
     expect(lineSelectionSearch(q("view=problems&case=t1"), { view: "foryou" })).toBe("?view=foryou");
     expect(lineSelectionSearch(q("need=sd-5"), { view: "problems" })).toBe("?view=problems");
     expect(lineSelectionSearch(q("view=line&source=s&step=x"), { view: "problems", case: "t1" })).toBe("?view=problems&source=s&case=t1");
@@ -100,15 +103,15 @@ describe("the line app's selection in the URL", () => {
   });
 
   test("a step picked where no step is drawn opens on Line; inside an open run it is the run's playhead", () => {
-    expect(lineSelectionSearch(q("view=problems&case=t1"), { step: "prove" })).toBe("?view=line&step=prove");
-    expect(lineSelectionSearch(q(""), { step: "prove" })).toBe("?view=line&step=prove");
+    expect(lineSelectionSearch(q("view=problems&case=t1"), { step: "prove" })).toBe("?step=prove");
+    expect(lineSelectionSearch(q(""), { step: "prove" })).toBe("?step=prove");
     expect(lineSelectionSearch(q("view=problems&run=r1"), { step: "prove" })).toBe("?view=problems&run=r1&step=prove");
   });
 
   test("keys the line does not own survive every move: the project page's tab stays on Line", () => {
     const from = q("tab=line");
     expect(lineSelectionSearch(from, { view: "problems" })).toBe("?tab=line&view=problems");
-    expect(lineSelectionSearch(from, { step: "plan" })).toBe("?tab=line&view=line&step=plan");
+    expect(lineSelectionSearch(from, { step: "plan" })).toBe("?tab=line&step=plan");
     expect(lineSelectionSearch(q("tab=line&step=plan"), { tab: "work" })).toBe("?tab=line&step=plan&steptab=work");
     expect(lineSelectionSearch(q("tab=line&view=line&step=plan&steptab=work"), { step: "build" })).toBe("?tab=line&view=line&step=build");
     expect(lineSelectionSearch(q("tab=line&view=line&step=plan"), { view: "foryou" })).toBe("?tab=line&view=foryou");
@@ -164,7 +167,7 @@ describe("history: which moves Back and Forward walk", () => {
     expect(push("view=problems&case=t1", "view=problems&case=t1&finding=f1")).toBe(false);
     expect(push("view=problems&case=t1", "view=problems&case=t1&row=r2")).toBe(false);
     expect(push("view=problems", "view=problems&q=eval")).toBe(false);
-    expect(push("", "view=flows")).toBe(false);
+    expect(push("", "view=line&mode=map")).toBe(false);
     expect(push("tab=line", "tab=line&other=1")).toBe(false);
   });
 });
@@ -185,7 +188,7 @@ describe("the line app's address", () => {
     // An old address with no view opened Decisions, the landing page then.
     expect(lineWorkspaceRedirect(q(""), "pr-12")).toBe("/flows?project=pr-12&view=foryou");
     expect(lineWorkspaceRedirect(q("view=replay&run=r1&case=t1"), "pr-12")).toBe("/flows?project=pr-12&view=problems&run=r1&case=t1");
-    expect(lineWorkspaceRedirect(q("graph=agentwatch&step=prove"), "pr-12")).toBe("/flows?project=pr-12&graph=agentwatch&step=prove&view=line");
+    expect(lineWorkspaceRedirect(q("graph=agentwatch&step=prove"), "pr-12")).toBe("/flows?project=pr-12&graph=agentwatch&step=prove");
   });
 
   test("/line itself stays", () => {
@@ -195,12 +198,12 @@ describe("the line app's address", () => {
   });
 
   test("what the old map's address opened keeps its meaning", () => {
-    expect(lineWorkspaceRedirect(q("project=pr-12&node=investigate"))).toBe("/flows?project=pr-12&view=line&step=investigate");
-    expect(lineWorkspaceRedirect(q("project=pr-12&edge=prove->card"))).toBe("/flows?project=pr-12&view=line&step=prove");
+    expect(lineWorkspaceRedirect(q("project=pr-12&node=investigate"))).toBe("/flows?project=pr-12&step=investigate");
+    expect(lineWorkspaceRedirect(q("project=pr-12&edge=prove->card"))).toBe("/flows?project=pr-12&step=prove");
     expect(lineWorkspaceRedirect(q("project=pr-12&node=causes&section=health"))).toBe("/flows?project=pr-12&view=problems");
     expect(lineWorkspaceRedirect(q("project=pr-12&node=line&section=health"))).toBe("/flows/settings?project=pr-12&section=health");
     expect(lineWorkspaceRedirect(q("project=pr-12&trace=ct-1"))).toBe("/flows/trace/ct-1");
-    expect(lineWorkspaceRedirect(q("project=pr-12&node=prove&window=30d&graph=agentwatch"))).toBe("/flows?project=pr-12&graph=agentwatch&view=line&step=prove");
+    expect(lineWorkspaceRedirect(q("project=pr-12&node=prove&window=30d&graph=agentwatch"))).toBe("/flows?project=pr-12&graph=agentwatch&step=prove");
   });
 });
 
@@ -237,7 +240,7 @@ test("the nav opens a page's home: nothing open elsewhere rides along, and the p
   // From the old Inbox with a problem open, Problems is the list.
   expect(lineSelectionSearch(from, lineViewHome("problems"))).toBe("?view=problems&graph=agentwatch&project=union");
   expect(lineSelectionSearch(new URLSearchParams("need=sd-5"), lineViewHome("foryou"))).toBe("?view=foryou");
-  expect(lineSelectionSearch(new URLSearchParams("view=foryou"), lineViewHome("flows"))).toBe("");
+  expect(lineSelectionSearch(new URLSearchParams("view=foryou"), lineViewHome("flows"))).toBe("?view=flows");
   // Clicking Problems on a problem's page goes back to the list.
   expect(lineSelectionSearch(new URLSearchParams("view=problems&case=t1&decision=sd-5"), lineViewHome("problems"))).toBe("?view=problems");
   expect(lineSelectionSearch(new URLSearchParams("view=line&source=agentwatch&finding=s1"), lineViewHome("line"))).toBe("?view=line");
@@ -265,16 +268,16 @@ describe("a leading stage open over the Map", () => {
   });
   test("another stage drops the open item; a step closes the stage and a stage closes the step", () => {
     const q = new URLSearchParams("view=line&mode=map&stage=judges&item=comms");
-    expect(lineSelectionSearch(q, { stage: "moments" })).toBe("?view=line&mode=map&stage=moments");
-    expect(lineSelectionSearch(q, { step: "prove" })).toBe("?view=line&mode=map&step=prove");
-    expect(lineSelectionSearch(new URLSearchParams("view=line&mode=map&step=prove&show=failed"), { stage: "dispatch" })).toBe("?view=line&mode=map&stage=dispatch");
+    expect(lineSelectionSearch(q, { stage: "moments" })).toBe("?stage=moments");
+    expect(lineSelectionSearch(q, { step: "prove" })).toBe("?step=prove");
+    expect(lineSelectionSearch(new URLSearchParams("view=line&mode=map&step=prove&show=failed"), { stage: "dispatch" })).toBe("?stage=dispatch");
   });
   test("opening or closing a stage is a place Back walks", () => {
     expect(lineSelectionPushes(new URLSearchParams("view=line&mode=map"), new URLSearchParams("view=line&mode=map&stage=grouping"))).toBe(true);
     expect(lineSelectionPushes(new URLSearchParams("view=line&mode=map&stage=moments"), new URLSearchParams("view=line&mode=map&stage=moments&item=mo-4"))).toBe(true);
   });
   test("a view's home closes the stage", () => {
-    expect(lineSelectionSearch(new URLSearchParams("view=line&mode=map&stage=judges&item=comms"), lineViewHome("line"))).toBe("?view=line&mode=map");
+    expect(lineSelectionSearch(new URLSearchParams("view=line&mode=map&stage=judges&item=comms"), lineViewHome("line"))).toBe("");
   });
 });
 

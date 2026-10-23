@@ -159,6 +159,8 @@ export type LineWorkspace = {
   everySignals: LineScopedRows["signals"];
   /** Projects whose history (occurrences, deploys, cards) the shell feeds: those with problems in any process (Problems lists every one), other than the filtered one (fed here), with the repositories their merges name. */
   historyFeeds: Array<{ projectId: string; repositories: string }>;
+  /** The runs open decisions name, which the shell feeds by id: the floor's newest-runs window may not hold them, and a card's run must open. */
+  decisionRuns: string[];
   /** The product's name as a reader says it ("Union"), for "runs in Union" and "Fixes in Union". */
   product: string | null;
   /** What waits on the viewer in the process drawn and the project filter (lineInbox), computed once for the header and the Inbox. */
@@ -417,6 +419,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
     }
     return [...drawn].sort().map((p) => ({ projectId: p, repositories: repositories.get(p) ?? "" }));
   }, [everyRow.tasks, projectId, repositories]);
+  const decisionRuns = useShared(() => [...new Set(allDecisions.filter((d) => d.status === "pending" && !!d.workflow_run_id).map((d) => d.workflow_run_id!))].sort(), [allDecisions]);
   const process = useShared(() => {
     const projectOf = new Map((scoped.tasks as Array<{ _id: string; project_id?: string | null }>).map((t) => [t._id, t.project_id ?? null]));
     return processIndex(scoped.runs as unknown as GraphRun[], (id) => projectOf.get(id));
@@ -424,7 +427,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
 
   // The rest is the line's heavy reading (models of every process, the inboxes, duplicates, the roll-up): it runs as a
   // job outside render, in slices (workspaceSteps), so opening the line never holds the page for the whole of it.
-  const inputs: WorkspaceInputs = { projectId, pinned, project, projects, lineRows, scoped, everyRow, now, admissions, allDecisions, decisionsComplete: teamDecisions.ready, allTrialCards, trialProjects, trialHeld, trialRuns, viewerId, otherTasks, modelOf, deploysReady, everyTaskProject, taskProject, names, bots, allOccurrences, processOf, unread: lg.unread, historyFeeds, processes, process, held, refs, deploys };
+  const inputs: WorkspaceInputs = { projectId, pinned, project, projects, lineRows, scoped, everyRow, now, admissions, allDecisions, decisionsComplete: teamDecisions.ready, allTrialCards, trialProjects, trialHeld, trialRuns, viewerId, otherTasks, modelOf, deploysReady, everyTaskProject, taskProject, names, bots, allOccurrences, processOf, unread: lg.unread, historyFeeds, decisionRuns, processes, process, held, refs, deploys };
   const deps = Object.values(inputs);
   const scope = `${projectId ?? ""}|${lg.graphKey}|${pinned}|${everySpace}`;
   const job = jobOf(`lw:${pinned}:${everySpace}`);
@@ -450,7 +453,7 @@ type WorkspaceInputs = {
   modelOf: ReturnType<typeof modelBuilder>; deploysReady: boolean; everyTaskProject: ReadonlyMap<string, string | null>;
   taskProject: ReadonlyMap<string, string | null>; names: ReadonlyMap<string, string>; bots: ReadonlySet<string>;
   allOccurrences: Array<OccurrenceRow & { project_id?: string }>; processOf: ReturnType<typeof inboxProcessOf>; unread: boolean;
-  historyFeeds: LineWorkspace["historyFeeds"]; processes: ProjectGraph[]; process: LineWorkspace["process"];
+  historyFeeds: LineWorkspace["historyFeeds"]; decisionRuns: string[]; processes: ProjectGraph[]; process: LineWorkspace["process"];
   held: number | null; refs: CaseRefs; deploys: LineDeploy[];
 };
 
@@ -469,7 +472,7 @@ function assemble(i: WorkspaceInputs, r: WorkspaceReading | null, complete = tru
   return {
     model: r?.model ?? null, project: i.project, home: r?.home ?? i.project, projects: i.projects, graphKey: r?.model?.graphKey ?? null, unread: i.unread, now: i.now,
     rollup: r?.rollup ?? null, rollups: r?.rollups ?? EMPTY, allRollups: r?.allRollups ?? EMPTY, admissions: i.admissions, trialProjects: i.trialProjects, trialHeld: i.trialHeld, trialRuns: i.trialRuns,
-    rows: i.scoped, everySignals: i.lineRows.signals, historyFeeds: i.historyFeeds, inbox: r?.inbox ?? EMPTY, allInbox: r?.allInbox ?? EMPTY, problems: r?.problems ?? EMPTY,
+    rows: i.scoped, everySignals: i.lineRows.signals, historyFeeds: i.historyFeeds, decisionRuns: i.decisionRuns, inbox: r?.inbox ?? EMPTY, allInbox: r?.allInbox ?? EMPTY, problems: r?.problems ?? EMPTY,
     needs: r?.needs ?? EMPTY, forYou: r?.forYou ?? 0, open: r?.open ?? 0, forYouByGraph: r?.forYouByGraph ?? NO_COUNTS, processes: i.processes, byProject: r?.byProject ?? NO_PROJECTS,
     process: i.process, sources: r?.sources ?? NO_SOURCES, names: i.names, decisions: i.allDecisions, overlaps: r?.overlaps ?? NO_OVERLAPS, heldFrom: i.held, refs: i.refs, deploys: i.deploys,
     complete: !!r && complete,

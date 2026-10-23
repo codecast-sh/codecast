@@ -1,6 +1,7 @@
 "use client";
 // The Line page (line-journeys.md LJ8.5). Job: see whether the line is working
-// and where it is not. Table (the default) lists every step in the line's
+// and where it is not. Map (the flows app's landing page) draws the steps as
+// the graph with the runs on them. Table lists every step in the line's
 // order, under its phase, with the work sitting at it; each count opens that
 // step's page on the same rows (stepTable reads stepWork's counts). The bar
 // says what waits on the viewer as For you's one count (opening it), then the
@@ -8,8 +9,7 @@
 // step failures (failed visits of this line's steps, not Problems' Failed,
 // which counts problems). Under the bar, one pointer
 // to Problems' Not started: what the line has not taken. The finders sit
-// under it, a row each opening the finder's page. Map draws the same steps as
-// the graph, for its shape.
+// under it, a row each opening the finder's page.
 import { memo, useMemo, type ReactNode } from "react";
 import { LINE_MODES, LINE_MODE_LABELS, type LineMode } from "../../../../lib/line/lineWorkspaceUrl";
 import { stepTableFigures, type StepTableRow } from "../../../../lib/line/stepTable";
