@@ -117,9 +117,9 @@ async function onHosts(args: string): Promise<HostScan[]> {
   }));
 }
 
-const ORDER: TreeVerdict[] = ["ready", "review", "stale", "landed", "empty", "live", "primary"];
+const ORDER: TreeVerdict[] = ["ready", "review", "run", "stale", "landed", "empty", "live", "primary"];
 const TONE: Record<TreeVerdict, (s: string) => string> = {
-  ready: fmt.success, review: fmt.warning, stale: fmt.muted, landed: fmt.muted, empty: fmt.muted, live: fmt.accent, primary: fmt.label,
+  ready: fmt.success, review: fmt.warning, run: fmt.accent, stale: fmt.muted, landed: fmt.muted, empty: fmt.muted, live: fmt.accent, primary: fmt.label,
 };
 
 function treeLine(t: TreeReport, now: number): string {
@@ -188,6 +188,8 @@ export function registerLandCommand(program: Command): void {
 Verdicts (a tree's own work = its base to its working tree, untracked files included):
   ready    finished recently, holds files only it changed: land them
   review   finished recently, holds changes main lacks to files main also changed
+  run      a line run made it: the run ships its change after its decision, so
+           it is never landed by hand (land diff refuses it)
   stale    finished and untouched for 7 days: archived and released, not landed
   landed   main already holds every change it made
   empty    no changes of its own
@@ -230,6 +232,7 @@ branch as refs/codecast/land-archive/<branch>.`);
       const scan = await scanRepo(await repoRootOf(dir), { roster: null, processCwds: [], fetch: false, only: [dir] });
       const report = scan.trees.find((t) => t.path === dir);
       if (!report) { console.error(`no worktree at ${dir}`); process.exit(1); }
+      if (report.verdict === "run") { console.error(`not landed by hand: ${dir} is ${report.reason}`); process.exit(1); }
       const only: FileVerdict[] | undefined = opts.only || opts.both ? [...(opts.only ? ["only" as const] : []), ...(opts.both ? ["both" as const] : [])] : undefined;
       process.stdout.write(await treePatch(report, only));
     });
