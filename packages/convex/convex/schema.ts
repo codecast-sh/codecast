@@ -5632,11 +5632,9 @@ export default defineSchema({
   // Vault (docs/architecture/vault.md): the team's keys, logins, files and
   // saved browser sign-ins, one row per secret. `workspace` is ACCESS (a team
   // secret is every member's, a personal one its owner's); team_id is routing.
-  // value_enc is the payload JSON encrypted under the deployment's connection
-  // key with the workspace in its derivation (secrets.ts), so a row moved to
-  // another workspace no longer decrypts. No query returns it; values leave
-  // only through secrets.reveal and secrets.cliRead, each recording an event.
-  // A `requested` row is an agent's ask with no value yet.
+  // The value lives in secret_values (value_id), never on this row, so the
+  // list and every metadata read load no ciphertext. A `requested` row is an
+  // agent's ask with no value yet.
   secrets: defineTable({
     workspace: v.string(),
     team_id: v.optional(v.id("teams")),
@@ -5644,6 +5642,10 @@ export default defineSchema({
     name: v.string(),
     kind: v.union(v.literal("key"), v.literal("login"), v.literal("signin"), v.literal("file")),
     status: v.union(v.literal("ready"), v.literal("requested")),
+    // The current value (secret_values). value_enc is the LEGACY inline
+    // ciphertext of rows written before the split; secrets.moveValuesOut
+    // moves it there.
+    value_id: v.optional(v.id("secret_values")),
     value_enc: v.optional(v.string()),
     env: v.optional(v.array(v.string())),
     sites: v.optional(v.array(v.string())),
@@ -5656,26 +5658,95 @@ export default defineSchema({
     created_at: v.number(),
     updated_by: v.optional(v.id("users")),
     updated_at: v.number(),
+    // When the VALUE last changed (create, rotate, fill, refresh, restore):
+    // the version a sign-in's write-back names. updated_at also moves on a
+    // metadata edit and is for display. Absent on rows written before it;
+    // updated_at stands in until the next write.
+    value_updated_at: v.optional(v.number()),
     rotated_at: v.optional(v.number()),
     last_used_at: v.optional(v.number()),
     last_used_by_conversation: v.optional(v.id("conversations")),
     use_count: v.optional(v.number()),
-    // A request (`cast vault request`): who asked, from which session, and why.
+    // A request (`cast vault request`): who asked first, from which session,
+    // and why. Every later session that asks for the same name is added to
+    // also_requested_from, and the fill wakes them all.
     requested_by: v.optional(v.id("users")),
     requested_from_conversation: v.optional(v.id("conversations")),
+    also_requested_from: v.optional(v.array(v.id("conversations"))),
     request_why: v.optional(v.string()),
+    // A login with a 2FA seed, set when the value is written (never by decrypting on read).
+    has_otp: v.optional(v.boolean()),
+    // Ask first: an agent's read needs a person's approval per session (secret_approvals).
+    ask_first: v.optional(v.boolean()),
+    // How many previous values secret_versions holds for it, kept by every write that moves one.
+    version_count: v.optional(v.number()),
   })
     .index("by_workspace", ["workspace"])
     .index("by_workspace_name", ["workspace", "name"])
     .index("by_short_id", ["short_id"]),
 
+  // A secret's previous values: rotate (and a fulfill over a stored value)
+  // keeps the old ciphertext here for 7 days so a person can restore it
+  // (secrets.restore); a cron purges the expired ones. A sign-in's cookie
+  // refresh writes no version. Bound to its workspace like the row's own.
+  secret_versions: defineTable({
+    secret_id: v.id("secrets"),
+    workspace: v.string(),
+    // The kept value (secret_values); value_enc is the LEGACY inline copy.
+    value_id: v.optional(v.id("secret_values")),
+    value_enc: v.optional(v.string()),
+    fingerprint: v.optional(v.string()),
+    signin_expires_at: v.optional(v.number()),
+    has_otp: v.optional(v.boolean()),
+    rotated_at: v.number(),
+    rotated_by: v.id("users"),
+    expires_at: v.number(),
+  })
+    .index("by_secret", ["secret_id", "rotated_at"])
+    .index("by_expires_at", ["expires_at"]),
+
+  // Every ciphertext a secret holds, current or kept: the payload JSON
+  // encrypted under the deployment's connection key with the workspace in its
+  // derivation (secrets.ts), so a value moved to another workspace no longer
+  // decrypts. A row of its own so that a metadata read never loads up to
+  // SECRET_PAYLOAD_MAX of ciphertext per secret: only the value paths (reveal,
+  // cliRead, the redaction feed, a rotate's merge) read it, by id. No query
+  // returns it.
+  secret_values: defineTable({
+    secret_id: v.id("secrets"),
+    workspace: v.string(),
+    value_enc: v.string(),
+  }).index("by_secret", ["secret_id"]),
+
+  // Ask first, per session: an agent's read of an ask_first secret files a
+  // decision on its conversation (pending); a person's Approve makes it
+  // approved for that conversation while it is active, for
+  // SECRET_APPROVAL_TTL_MS at most (`at` is when it was approved), Deny
+  // denied. A new value or an Ask first switch clears a secret's approvals.
+  // The decision is the audit.
+  secret_approvals: defineTable({
+    secret_id: v.id("secrets"),
+    workspace: v.string(),
+    conversation_id: v.id("conversations"),
+    decision_id: v.id("session_decisions"),
+    status: v.union(v.literal("pending"), v.literal("approved"), v.literal("denied")),
+    approved_by: v.optional(v.id("users")),
+    at: v.number(),
+  })
+    .index("by_secret_conversation", ["secret_id", "conversation_id"])
+    .index("by_decision", ["decision_id"]),
+
   // Vault's audit trail: every create, change, reveal, agent read and request
   // of a secret, with who and from which session. Kept after the secret is
   // deleted (secret_name says what it was). Only the secret's panel reads it.
+  // A workspace-wide event (redaction_sync: a daemon fetched the redaction
+  // list) names no secret.
   secret_events: defineTable({
-    secret_id: v.id("secrets"),
+    secret_id: v.optional(v.id("secrets")),
     workspace: v.string(),
-    secret_name: v.string(),
+    secret_name: v.optional(v.string()),
+    // So the trail stays findable by sec-N after the secret is deleted.
+    secret_short_id: v.optional(v.string()),
     kind: v.union(
       v.literal("created"),
       v.literal("updated"),
@@ -5688,14 +5759,26 @@ export default defineSchema({
       v.literal("requested"),
       v.literal("fulfilled"),
       v.literal("deleted"),
+      v.literal("ask_first_on"),
+      v.literal("ask_first_off"),
+      v.literal("approval_requested"),
+      v.literal("approved"),
+      v.literal("denied"),
+      v.literal("restored"),
+      v.literal("redaction_sync"),
     ),
     actor_user_id: v.optional(v.id("users")),
     conversation_id: v.optional(v.id("conversations")),
     // What an agent read it for: get, run, env, otp or signin.
     purpose: v.optional(v.string()),
+    // The approval decision an ask_first read filed or that settled it.
+    decision_id: v.optional(v.id("session_decisions")),
+    // redaction_sync: how many values the daemon received for this workspace.
+    count: v.optional(v.number()),
     at: v.number(),
   })
     .index("by_secret_at", ["secret_id", "at"])
+    .index("by_short_id_at", ["secret_short_id", "at"])
     .index("by_workspace_at", ["workspace", "at"]),
 
   // What a mod's local half published ($.publish): one value per mod and key,

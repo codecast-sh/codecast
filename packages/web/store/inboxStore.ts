@@ -2,6 +2,7 @@ import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActi
 import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress } from "@codecast/shared/contracts";
+import { cleanSecretList, cleanSecretSites, type SecretMeta } from "@codecast/shared/contracts/secrets";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
 import type { SharedObjectKind } from "@codecast/shared/entities";
@@ -5861,6 +5862,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   startResourceOffload: (args: ResourceOffloadIntent) => Promise<any>;
+  requestMoveRehearsals: (args: { request_id: string; source_device_id: string; selections: Array<{ conversation_id: string; session_id: string; destination_id: string }> }) => Promise<any>;
   cancelResourceOffload: (batchId: string) => Promise<any>;
   setSessionBackground: (deviceId: string, sessionId: string, background: boolean) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
@@ -6637,6 +6639,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   removeAgentDefinition: (id: string) => void;
   upsertAgentChain: (fields: Partial<AgentChainSpec> & { name: string; description: string; _id?: string }) => Promise<any>;
   removeAgentChain: (id: string) => void;
+
+  // -- Vault (docs/architecture/vault.md): metadata only --
+  updateSecretMeta: (id: string, fields: { name?: string; note?: string; env?: string[]; sites?: string[] }) => void;
+  removeSecret: (id: string) => void;
+  setSecretAskFirst: (id: string, askFirst: boolean) => void;
+  stageSecret: (row: SecretMeta) => void;
+  settleSecretStub: (stubId: string, shortId: string | null) => void;
 
   addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }) => void;
@@ -10916,6 +10925,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.migrationBatches = [...resourceOffloadStubs(args, ids, Date.now(), this.sessions), ...(this.migrationBatches ?? [])];
     return { batch_ids: ids };
   }),
+  // The offload review asks the source machine to rehearse moves: pending rows
+  // paint at once, and the server's rows (same ids by request and pair) replace them.
+  requestMoveRehearsals: asyncAction(function (this: Draft, args: { request_id: string; source_device_id: string; selections: Array<{ conversation_id: string; session_id: string; destination_id: string }> }) {
+    const at = Date.now();
+    const stubs = args.selections.map((s, i) => ({ _id: `${args.request_id}:${i}`, request_id: args.request_id, session_id: s.session_id, destination_id: s.destination_id, status: "pending" as const, result: null, error: null, created_at: at }));
+    this.moveRehearsals = [...(this.moveRehearsals ?? []), ...stubs];
+  }),
   cancelResourceOffload: asyncAction(function (this: Draft, batchId: string) {
     const requested_at = Date.now();
     const batch = this.migrationBatches?.find(b => b.batch_id === batchId);
@@ -13133,6 +13149,40 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   removeAgentChain: action(function (this: Draft, id: string) {
     delete (this.agentChains as any)[id];
+  }),
+
+  // Vault. Only metadata moves through the store: a value goes straight to its
+  // Convex action (create, rotate, fulfill, reveal), so no outbox, cache or
+  // replica ever holds one. Edits normalize the way the server does, so its
+  // echo equals the draft and the field lock clears; updated_at is the
+  // server's clock, so no edit writes it (a local stamp would never match).
+  updateSecretMeta: action(function (this: Draft, id: string, fields: { name?: string; note?: string; env?: string[]; sites?: string[] }) {
+    const row = (this.secrets as any)[id];
+    if (!row) return;
+    if (fields.name !== undefined) row.name = fields.name.trim();
+    if (fields.note !== undefined) row.note = fields.note.trim() || undefined;
+    if (fields.env !== undefined) row.env = cleanSecretList(fields.env)?.length ? cleanSecretList(fields.env) : undefined;
+    if (fields.sites !== undefined) row.sites = cleanSecretSites(fields.sites)?.length ? cleanSecretSites(fields.sites) : undefined;
+  }),
+  removeSecret: action(function (this: Draft, id: string) {
+    delete (this.secrets as any)[id];
+  }),
+  setSecretAskFirst: action(function (this: Draft, id: string, askFirst: boolean) {
+    const row = (this.secrets as any)[id];
+    if (!row) return;
+    row.ask_first = askFirst;
+  }),
+  // A create's row before the server has one: keyed by a stub id, painted at
+  // once, and given its short_id when the create answers (registry altKey).
+  stageSecret: sync(function (this: Draft, row: SecretMeta) {
+    (this.secrets as any)[row._id] = row;
+  }),
+  settleSecretStub: sync(function (this: Draft, stubId: string, shortId: string | null) {
+    const rows = this.secrets as any;
+    if (!rows[stubId]) return;
+    // The snapshot can land before the action answers; then the real row is already here.
+    if (!shortId || Object.values(rows).some((r: any) => r._id !== stubId && r.short_id === shortId)) delete rows[stubId];
+    else rows[stubId].short_id = shortId;
   }),
 
   // Local-first create: an optimistic stub renders the row instantly (the

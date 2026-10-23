@@ -22,7 +22,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "./proc.js";
-import { decisionFromRun, findCheckpointFile, harnessScriptPath, refusedCalls, type TryDecision } from "./lineTry.js";
+import { decisionFromRun, harnessScriptPath, refusedCalls, type TryDecision } from "./lineTry.js";
+import { findCheckpointFile } from "./workflow/runDirs.js";
 import { extractJsonOutput } from "./workflow/condition.js";
 
 export type ReplayCase = {
