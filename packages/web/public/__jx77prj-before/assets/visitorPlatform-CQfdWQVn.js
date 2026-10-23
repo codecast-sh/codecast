@@ -1,0 +1,2 @@
+function i(){if(typeof navigator>"u")return"other";const t=navigator.platform||"",n=navigator.userAgent||"";return/iPhone|iPad|iPod/.test(n)||/Mac/.test(t)&&(navigator.maxTouchPoints??0)>1?"ios":/Mac/.test(t)?"mac":/Win/.test(t)||/Windows/.test(n)?"windows":/Linux|X11|CrOS/.test(`${t} ${n}`)&&!/Android/.test(n)?"linux":"other"}function r(){return i()==="windows"?"windows":"unix"}export{r as d,i as v};
+//# sourceMappingURL=visitorPlatform-CQfdWQVn.js.map

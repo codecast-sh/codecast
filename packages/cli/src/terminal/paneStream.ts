@@ -21,7 +21,12 @@
 //
 // Unchanged screens are not pushed. An agent thinking quietly for a minute
 // costs one small heartbeat every few seconds, not 150 frames.
+//
+// A screen leaves this machine only through redactSecrets, the same pass a
+// transcript takes: a pane that just ran `cast vault get` or `env` shows real
+// values, and the relay keeps frames for a day.
 
+import { redactSecrets } from "../redact.js";
 import { tmuxRun } from "../tmux.js";
 import {
   PANE_CAPTURE_INTERVAL_MS,
@@ -111,7 +116,8 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
       return;
     }
 
-    const changed = snap.frame !== lastFrame;
+    const frame = redactSecrets(snap.frame);
+    const changed = frame !== lastFrame;
     // An unchanged screen is normally worth one write every few seconds. While
     // someone is focused on the pane it is worth several a second instead —
     // not for the picture, which hasn't moved, but because this request is the
@@ -123,7 +129,7 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
         changed
           ? {
               target,
-              frame: snap.frame,
+              frame,
               cols: snap.cols,
               rows: snap.rows,
               cursor_x: snap.cursorX,
@@ -140,7 +146,7 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
         failures = 0;
         lastPushAt = deps.now();
         fast = !!answer.fast;
-        if (changed) lastFrame = snap.frame;
+        if (changed) lastFrame = frame;
         if (answer.stop) {
           deps.log?.(`[PANE] ${target}: lease lapsed, stopping`);
           return;

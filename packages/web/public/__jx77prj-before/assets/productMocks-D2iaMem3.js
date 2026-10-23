@@ -1,0 +1,2 @@
+import{j as e}from"./vendor-BRSpyZc9.js";function n({children:s,className:r="",screenClassName:d=""}){return e.jsx("div",{className:`relative bg-[#002b36] rounded-[2.5rem] p-3 shadow-2xl ${r}`,children:e.jsxs("div",{className:`bg-[#002b36] rounded-[2rem] overflow-hidden ${d}`,children:[e.jsx("div",{className:"h-6 bg-[#002b36] flex items-center justify-center",children:e.jsx("div",{className:"w-20 h-4 bg-[#073642] rounded-full"})}),s]})})}export{n as P};
+//# sourceMappingURL=productMocks-D2iaMem3.js.map
