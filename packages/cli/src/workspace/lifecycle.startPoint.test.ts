@@ -225,3 +225,33 @@ describe("acquire --start-point", () => {
     expect(fs.existsSync(plain.workspace.path)).toBe(false);
   });
 });
+
+// Line runs start from origin/main, a remote-tracking ref, so a plain
+// `git worktree add -b` also writes branch.<b>.remote/merge into .git/config.
+// Ten runs at once on one host collided on .git/config.lock and left the
+// branch behind without a worktree (ct-61097, ct-61071, ct-61722).
+describe("acquire --start-point at a remote-tracking ref", () => {
+  beforeEach(() => {
+    git(repoRoot, "remote", "add", "origin", "https://example.invalid/repo.git");
+    git(repoRoot, "update-ref", "refs/remotes/origin/main", base);
+  });
+
+  test("creates the branch without writing .git/config: a held config lock does not fail it, and the branch tracks nothing", async () => {
+    const lock = path.join(repoRoot, ".git", "config.lock");
+    fs.writeFileSync(lock, "");
+    try {
+      const r = await acquireWorkspace(repoRoot, "line-1", { ...opts, branch: "codecast/line-1", startPoint: "origin/main" });
+      expect(git(r.workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("codecast/line-1");
+    } finally {
+      fs.rmSync(lock, { force: true });
+    }
+    expect(() => git(repoRoot, "config", "--get", "branch.codecast/line-1.merge")).toThrow();
+  });
+
+  test("ten concurrent acquires against one repo all succeed", async () => {
+    const names = Array.from({ length: 10 }, (_, i) => `line-${i}`);
+    const results = await Promise.allSettled(names.map((n) => acquireWorkspace(repoRoot, n, { ...opts, branch: `codecast/${n}`, startPoint: "origin/main" })));
+    expect(results.filter((r) => r.status === "rejected").map((r) => String((r as PromiseRejectedResult).reason))).toEqual([]);
+    for (const n of names) expect(git(path.join(repoRoot, ".codecast/worktrees", n), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`codecast/${n}`);
+  }, 60_000);
+});

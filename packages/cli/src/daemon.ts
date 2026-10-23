@@ -9518,7 +9518,7 @@ function createWorktreeLegacy(repoRoot: string, name: string): WorktreeResult | 
       try { execSync(`sleep ${(200 + attempt * 300) / 1000}`, { stdio: "ignore" }); } catch {}
     }
     try {
-      execSync(`git worktree add -b ${branchName} ${worktreePath}`, {
+      execSync(`git worktree add --no-track -b ${branchName} ${worktreePath}`, {
         cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
       });
       created = true;

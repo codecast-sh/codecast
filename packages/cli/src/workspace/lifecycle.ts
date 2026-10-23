@@ -889,6 +889,12 @@ async function recreateSeededWorktree(repoRoot: string, name: string, branch: st
  * Without a start point: today's behaviour — an existing directory is
  * assumed to be a previous creation, and an existing branch is attached to.
  *
+ * Branches are made with --no-track: from a remote-tracking start point
+ * (origin/main, where every line run starts) git would otherwise write the
+ * branch's upstream into .git/config, and concurrent adds on one repo collide
+ * on .git/config.lock after the branch ref exists, stranding it without a
+ * worktree. Nothing reads these branches' upstream; pushes name their refs.
+ *
  * Async because the warm pool warms slots through acquireWorkspace on the
  * daemon's timer: a synchronous `git worktree add` on a repo this size freezes
  * delivery, injection and the heartbeat for the seconds it runs (ct-49540).
@@ -900,7 +906,7 @@ async function createGitWorktree(repoRoot: string, name: string, branch: string,
 
   if (startPoint) {
     if (fs.existsSync(worktreePath)) throw new Error(`worktree directory ${worktreePath} already exists`);
-    const add = (b: string) => execFileAsync("git", ["worktree", "add", "-b", b, worktreePath, startPoint], { cwd: repoRoot, encoding: "utf-8" });
+    const add = (b: string) => execFileAsync("git", ["worktree", "add", "--no-track", "-b", b, worktreePath, startPoint], { cwd: repoRoot, encoding: "utf-8" });
     try {
       await add(branch);
       return { path: worktreePath, branch };
@@ -923,7 +929,7 @@ async function createGitWorktree(repoRoot: string, name: string, branch: string,
 
   // Try create-new-branch path first; fall back to attaching to existing branch.
   try {
-    await execFileAsync("git", ["worktree", "add", "-b", branch, worktreePath], {
+    await execFileAsync("git", ["worktree", "add", "--no-track", "-b", branch, worktreePath], {
       cwd: repoRoot,
     });
   } catch {

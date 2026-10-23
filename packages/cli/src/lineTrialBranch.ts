@@ -208,7 +208,7 @@ export async function freshRunBranch(cwd: string, graph: Pick<WorkflowGraph, "na
     // refuse the start, and every later one, with no runner to say so (ct-59568): it goes first.
     if (fs.existsSync(path.join(repo, ".codecast", "workspaces", slug))) await releaseWorkspace(repo, slug);
     await acquireWorkspace(repo, slug, { branch, startPoint: base });
-  } else if (!git(repo, ["branch", branch, base]).ok) {
+  } else if (!git(repo, ["branch", "--no-track", branch, base]).ok) {
     throw new Error(`Could not start ${branch} from ${base}`);
   }
   return { slug, branch, base, set_aside: setAside };
