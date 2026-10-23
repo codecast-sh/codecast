@@ -21,14 +21,13 @@
 import { LINE_SIGNAL_WINDOW_MS, type LineFinderDecl, type PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { priority as linePriority, type Severity } from "@codecast/convex/convex/lib/linePriority";
 import { LINE_GOAL, NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
-import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
-import { CARD_GATE_NODE_ID, lineRunOutcome, type AnsweredGate, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
+import { lineRunOutcome, type AnsweredGate, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { runEnd, shippedUnanswered } from "@codecast/shared/contracts/causeHistory";
 import { isLiveRun, runLiveNode, type LineRun, type LiveNode, type RunNodeStatus } from "./taskLine";
 import { isConvexId } from "./entityLinks";
 import { runHref } from "./decisionLinks";
 import { lineForkIndex, lineRunKind, type LineRunKind } from "./line/lineStations";
-import { projectGraphs, type ProjectGraph } from "./line/lineGraphs";
+import type { ProjectGraph } from "./line/lineGraphs";
 import { judgeReviewLine, type JudgeReviewView } from "@codecast/shared/contracts/judgeReview";
 
 export const HOUR = 60 * 60 * 1000;
@@ -171,7 +170,7 @@ export type SenseSource = {
 
 /** Whether the line may start its next cause, as the sweep decides it
  *  (convex orgLine admissionWait, LE6): the role that starts this project's
- *  line, its switch, and the answering person's card slots. `role: null`:
+ *  line, its switch, and the run slots on its runner's machine. `role: null`:
  *  no role looks after the project, so nothing starts on its own. */
 export type LineAdmission = {
   role: { id: string; handle: string; paused: boolean } | null;
@@ -183,9 +182,9 @@ export type LineAdmission = {
   /** What the line would start in order, the sweep's own queue (orgLine.queue);
    *  null or absent until the server has said. */
   queued?: number | null;
-  /** Open cards the answering person may hold across their lines (caps.cards). */
+  /** Runs that may work at once on the machine the line runs on (orgLine LINE_RUNS_PER_RUNNER). */
   slots: number;
-  /** Cards they hold open now; null until the server has said. */
+  /** Runs working there now, across every line on that machine; null until the server has said. */
   busy: number | null;
   /** Hands the role has started today and may start a day; null until known. */
   hands: number | null;
@@ -212,7 +211,7 @@ export function admissionHold(a: LineAdmission): AdmissionHold | null {
   if (a.role.paused) return { why: `${who}, who runs this line, is paused, so nothing new starts`, short: "Paused", stopped: `${who}, who runs this line, is paused` };
   if (!a.on) return { why: `${who}'s line is off, so nothing starts on its own`, short: "Line off", stopped: `${who}'s line is off` };
   if (a.hands != null && a.handsCap != null && a.hands >= a.handsCap) return { why: `${who} used all ${a.handsCap} of today's sessions`, short: "Today's limit reached" };
-  if (a.busy != null && a.busy >= a.slots) return { why: a.slots === 1 ? "the line works on one fix at a time, and one waits for your decision" : `the line works on ${a.slots} fixes at a time, and ${a.slots === 2 ? "both" : `all ${a.slots}`} wait for your decision`, short: `${a.slots} of ${a.slots} places taken` };
+  if (a.busy != null && a.busy >= a.slots) return { why: `${a.busy} run${a.busy === 1 ? " is" : "s are"} working on its machine, the most it runs at once`, short: `${a.slots} of ${a.slots} places taken` };
   return null;
 }
 
@@ -482,9 +481,6 @@ export function isLineCard(d: LineDecision): boolean {
   return d.status === "pending" && !!d.blocking && !!d.workflow_run_id;
 }
 
-/** LE6/LE11: a card at the decide gate, the only kind admission counts. */
-export const isGateCard = (d: LineDecision) => isLineCard(d) && d.gate_node_id === CARD_GATE_NODE_ID;
-
 /** LE12: the quiet watch end stamps resolved_at; a close after it is a later
  *  ship of a reopened cause. */
 const resolvedQuietly = (t: LineCauseTask) => typeof t.resolved_at === "number" && t.resolved_at >= (t.closed_at ?? 0);
@@ -562,6 +558,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
   /** Goal chips read these; a row with an id also names its customized line. */
   projects: Array<GoalRow & { _id?: string }>;
   now: number;
+  /** Unread: decisions waiting for an answer hold no admission (LE6). */
   cardsCap?: number;
   /** The selected project's declared finders: each is a Sense row, silent or not. */
   finders?: LineFinderDecl[];
@@ -571,7 +568,6 @@ export function buildLineFlow<D extends LineDecision>(input: {
   admission?: LineAdmission | null;
 }): LineFlow<D> {
   const { now } = input;
-  const cardsCap = input.cardsCap ?? DEFAULT_LINE_CARDS_CAP;
   const causes = input.tasks.filter(isCause);
   const causeById = new Map(causes.map((t) => [t._id, t]));
   const weekAgo = now - WEEK;
@@ -692,13 +688,9 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const ranked = openRows.filter((r) => r.goal.kind !== "parked");
   const parked = openRows.filter((r) => r.goal.kind === "parked");
 
-  // LE6: admission waits while the viewer holds cardsCap open cards at the
-  // decide gate (other blocking asks on a run do not hold a slot). Since
-  // when: the moment the cap filled, the cap-th oldest card.
-  // With the role known, its admission says why nothing starts (the switch,
-  // the day's hands, the slots), the sweep's own order.
-  const gateCards = awaitingItems.filter(isGateCard);
-  const capped = gateCards.length >= cardsCap;
+  // LE6: with the role known, its admission says why nothing starts (the
+  // switch, the day's hands, the runs working on its machine), the sweep's
+  // own order. Decisions waiting for an answer never hold a start.
   const lastStart = lineRuns.reduce<number | null>((m, r) => (m === null || r.created_at > m ? r.created_at : m), null);
   const held = input.admission && ranked.length > 0 ? admissionHold(input.admission) : null;
   // With the line's start switch off, starting by hand is the other way in: the top ready cause is offered.
@@ -707,11 +699,9 @@ export function buildLineFlow<D extends LineDecision>(input: {
     : null;
   const causesState: StageState = hold
     ? { kind: "paused", since: null, why: hold.why }
-    : !input.admission && capped
-      ? { kind: "paused", since: gateCards[cardsCap - 1]?.created_at ?? null, why: `queued behind ${gateCards.length} open cards` }
-      : openRows.length > 0
-        ? { kind: "running", why: input.admission ? `${ranked.length} queued; the next starts within two minutes` : `${ranked.length} queued` }
-        : { kind: "idle", why: started ? "no open problem" : "opens on the first report" };
+    : openRows.length > 0
+      ? { kind: "running", why: input.admission ? `${ranked.length} queued; the next starts within two minutes` : `${ranked.length} queued` }
+      : { kind: "idle", why: started ? "no open problem" : "opens on the first report" };
 
   const buildState: StageState = lastEnded?.status === "failed"
     ? { kind: "failing", since: lastEnded.updated_at, why: lastEnded.fail_reason?.trim() || "last run failed", run: lastEnded._id }
@@ -837,10 +827,10 @@ export function lineHeadline(flow: LineFlow, now: number, scope?: string | null)
 export const NO_PROJECT = "none";
 export const ALL_PROJECTS = "all";
 
-type LineRows<D extends LineDecision> = Pick<Parameters<typeof buildLineFlow<D>>[0], "signals" | "tasks" | "runs" | "decisions">;
+export type LineRows<D extends LineDecision> = Pick<Parameters<typeof buildLineFlow<D>>[0], "signals" | "tasks" | "runs" | "decisions">;
 
 /** The project a row belongs to: its own, else its cause's (a signal filed before signals carried one). */
-const projectKey = (id: string | null | undefined) => id || NO_PROJECT;
+export const projectKey = (id: string | null | undefined) => id || NO_PROJECT;
 
 /**
  * The rows of one project's line: its causes (and its other tasks, whose runs
@@ -926,74 +916,3 @@ export type RollupRow = {
   /** The hold is automatic starting switched off (the role's switch or codecast's own), which the Causes switch answers. */
   startingOff: boolean;
 };
-
-/**
- * Every line with anything on it, counted the way its own page counts:
- * projects holding a cause or a signal in the window, projects whose profile
- * declares finders, and the work filed under no project. Most open causes first.
- */
-export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: LineProject[], now: number, cardsCap?: number, admissions?: ReadonlyMap<string, LineAdmission>): RollupRow[] {
-  const keys = new Set<string>();
-  for (const t of rows.tasks) if (isCause(t)) keys.add(projectKey(t.project_id));
-  const causeKey = projectKeysOf(rows.tasks);
-  for (const s of rows.signals) keys.add(s.project_id || causeKey.get(s.task_id) || NO_PROJECT);
-  for (const p of projects) if (p.line_profile) keys.add(p._id);
-  const byId = new Map(projects.map((p) => [p._id, p]));
-  const out: RollupRow[] = [];
-  for (const key of keys) {
-    const project = byId.get(key);
-    // A project the viewer cannot see (another workspace's) is not a line here.
-    if (key !== NO_PROJECT && !project) continue;
-    const scoped = scopeLine(rows, key, causeKey);
-    const admission = key === NO_PROJECT ? NO_PROJECT_ADMISSION : admissions?.get(key);
-    const f = buildLineFlow({ ...scoped, initiatives: [], projects: [], now, cardsCap, finders: project?.line_profile?.finders, findersSince: project?.line_profile?.changed_at, admission });
-    out.push({
-      key,
-      title: project?.title ?? "No project",
-      short_id: project?.short_id,
-      signalsDay: f.sense.count,
-      causes: f.causes.count,
-      build: f.build.count,
-      awaiting: f.awaiting.count,
-      watching: f.watching.count,
-      closed: f.closed.count,
-      finders: project?.line_profile?.finders.length ?? 0,
-      silent: f.sense.items.filter((s) => s.silent).length,
-      undeclared: f.sense.items.filter((s) => !s.finder && s.week > 0 && !isBuiltInSource(s.source)).sort((a, b) => b.week - a.week).map((s) => s.source),
-      hold: f.causes.count > 0 && f.causes.state.kind === "paused" ? f.causes.state.why : null,
-      stalled: f.build.items.filter((b) => b.stalled).length,
-      failing: f.build.state.kind === "failing",
-      graphs: projectGraphs(scoped.runs, scoped.signals, undefined, waitingCauseIds(f)),
-      neverRun: causesNeverRun(f, scoped.runs),
-      unapproved: unapprovedShips(scoped.tasks.filter(isCause), scoped.runs, now).length,
-      ...waitingReadiness([...f.causes.items, ...f.causes.parked].map((r) => r.task)),
-      startingOff: f.causes.count > 0 && f.causes.state.kind === "paused" && !!admission?.role && !admission.role.paused && !admission.on,
-    });
-  }
-  return out.sort((a, b) => Number(a.key === NO_PROJECT) - Number(b.key === NO_PROJECT) || b.causes - a.causes || b.awaiting - a.awaiting || b.signalsDay - a.signalsDay || a.title.localeCompare(b.title));
-}
-
-/** Is `dir` the checkout `root`, or inside it? */
-const within = (dir: string, root: string) => {
-  const r = root.replace(/\/+$/, "");
-  return dir === r || dir.startsWith(`${r}/`);
-};
-
-/**
- * The line /line opens on: the project of the repo the viewer is in (the one
- * its profile names as default, else the project whose path holds it), else
- * the line with the most open causes, else the roll-up.
- */
-export function defaultLineKey(rollup: RollupRow[], projects: LineProject[], repoPath: string | null | undefined): string {
-  const lines = new Set(rollup.map((r) => r.key));
-  if (repoPath) {
-    const byProfile = projects.find((p) => p.line_profile?.default && p.line_profile.root && within(repoPath, p.line_profile.root));
-    if (byProfile) return byProfile._id;
-    const byPath = projects
-      .filter((p) => p.project_path && within(repoPath, p.project_path) && lines.has(p._id))
-      .sort((a, b) => b.project_path!.length - a.project_path!.length)[0];
-    if (byPath) return byPath._id;
-  }
-  const busiest = rollup.find((r) => r.key !== NO_PROJECT && r.causes > 0) ?? rollup.find((r) => r.causes > 0);
-  return busiest?.key ?? rollup[0]?.key ?? ALL_PROJECTS;
-}

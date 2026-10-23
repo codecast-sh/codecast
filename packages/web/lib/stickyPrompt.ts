@@ -4,7 +4,7 @@
 // dependencies, and import by relative path.
 
 import { isCommandMessage, isStrippedCommand, parseBashInput, parseBashOutput, cleanContent, isSystemMessage, commandExpansionName } from "./conversationProcessor";
-import { cleanUserMessage, isBareNudge, isSpawnedTaskPrompt } from "../components/sessionMessage";
+import { cleanUserMessage, isBareNudge, isSpawnedTaskPrompt, vaultReadyName } from "../components/sessionMessage";
 import { isTurnInterruptionNotice, parseDecisionAnswer } from "@codecast/shared/contracts";
 import { LRUCache } from "./lruCache";
 
@@ -23,8 +23,9 @@ function isClientCommand(raw: string): boolean {
 // The text a sticky prompt header may show for a user message, or null when
 // the message is not the human's own ask: anything machinery delivered (a
 // trigger run, a cast send, a teammate broadcast), a spawned run's opening
-// briefing, a bare nudge, a command aimed at the client, or a decision answer
-// (a tap on a card, stored as "Decision: <label>", tagged or legacy). Every sticky
+// briefing, a bare nudge, a command aimed at the client, a decision answer
+// (a tap on a card, stored as "Decision: <label>", tagged or legacy), or the
+// line a filled Vault request wakes its session with. Every sticky
 // source (timeline, cached user list, last-message fallback) must agree, so
 // they all go through here.
 //
@@ -39,7 +40,7 @@ export function stickyPromptContent(raw: string | null | undefined): string | nu
   const hit = contentCache.get(raw);
   if (hit !== undefined) return hit;
   let out: string | null = null;
-  if (!(isSpawnedTaskPrompt(raw) || isClientCommand(raw) || isTurnInterruptionNotice(raw) || parseDecisionAnswer(raw))) {
+  if (!(isSpawnedTaskPrompt(raw) || isClientCommand(raw) || isTurnInterruptionNotice(raw) || parseDecisionAnswer(raw) || vaultReadyName(raw) !== null)) {
     const display = cleanUserMessage(raw);
     out = display && !isBareNudge(display) ? display : null;
   }

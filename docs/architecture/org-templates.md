@@ -53,7 +53,7 @@ The digest is SHA-256 over sorted relative file paths. Each file contributes `JS
 
 ## A role that owns a line
 
-A v2 manifest may give its role the line it runs: `role.line`, a workflow slug (`line`, `feature`, or one pushed to the workspace), and `role.caps.cards`, a positive integer, the open change cards the line admits work against (line-profile.md LP6). Both are optional; v1 refuses them like any other unknown key. Install copies them into the role proposal beside the other caps. Applying the person's answer sets `org_roles.line_workflow_slug` and `caps.cards` under that decision, the only path by which a hire sets them, since both are otherwise human only. Reconcile verifies the created role carries the approved line and cap before provisioning, and upgrade refuses a release that changes either. The shipped line template (`packages/cli/org-templates/line/`, line-profile.md LP7) is the reference use.
+A v2 manifest may give its role the line it runs: `role.line`, a workflow slug (`line`, `feature`, or one pushed to the workspace), and `role.caps.cards`, a positive integer that no longer limits what the line starts (the-line-end-to-end.md LE6). Both are optional; v1 refuses them like any other unknown key. Install copies them into the role proposal beside the other caps. Applying the person's answer sets `org_roles.line_workflow_slug` and `caps.cards` under that decision, the only path by which a hire sets them, since both are otherwise human only. Reconcile verifies the created role carries the approved line and cap before provisioning, and upgrade refuses a release that changes either. The shipped line template (`packages/cli/org-templates/line/`, line-profile.md LP7) is the reference use.
 
 ## Receipt and recovery
 
