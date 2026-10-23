@@ -199,6 +199,15 @@ describe("tool logins", () => {
 
 describe("collectAgentAuthBundle — a fake HOME", () => {
   const live = () => codexBlob(NOW / 1000 + 86400);
+  test("a file still naming laptop paths stays behind alone; Codex and the rest ship (union-line hosts, 2026-10-23)", () => {
+    write(".codex/auth.json", live());
+    write(".codecast/workspace-trust.json", JSON.stringify({ repos: { [`${home}/src/union-mobile`]: { approved: "abc" } } }));
+    const { bundle, skipped } = collectAgentAuthBundle({ home, env: {}, now: NOW, userId: "u1", deviceId: "d1", hostHome: "/home/ubuntu" });
+    expect(bundle.files.map((f) => f.path)).toContain("~/.codex/auth.json");
+    expect(bundle.files.map((f) => f.path)).not.toContain("~/.codecast/workspace-trust.primary.json");
+    expect(skipped).toContainEqual({ id: "workspace-trust", reason: "names laptop paths" });
+    expect(() => assertNoLaptopPaths(bundle, home)).not.toThrow();
+  });
   test("missing sources land in absent; present-and-live in files with mode 0o600 and ~/-relative paths; gated ones are skipped", () => {
     write(".codex/auth.json", live());
     write(".grok/auth.json", JSON.stringify({ "https://accounts.x.ai/sign-in": { key: "t" } }));

@@ -501,6 +501,11 @@ export function collectAgentAuthBundle(opts: CollectOptions): CollectedBundle {
     if (text === null) { skipped.push({ id: source.id, reason: "no login" }); continue; }
     if (source.remapHome && !opts.hostHome && text.includes(opts.home)) { skipped.push({ id: source.id, reason: "names laptop paths and no host home was given" }); continue; }
     const raw = source.remapHome && opts.hostHome ? remapHome(text, opts.home, opts.hostHome) : text;
+    // One file that still names the laptop's home stays behind on its own. As a
+    // whole-bundle refusal (assertNoLaptopPaths) the trust store's laptop paths
+    // kept every login, Codex's included, off every host: the line's review
+    // hands there failed with 401 (union-line-1 to 5, 2026-10-23).
+    if (opts.home && opts.home !== "/" && raw.includes(opts.home)) { skipped.push({ id: source.id, reason: "names laptop paths" }); continue; }
     if (source.requires && !shipped.has(source.requires)) { skipped.push({ id: source.id, reason: `${source.requires} not shipped` }); continue; }
     const gate = source.gate(raw, now);
     if (gate.ship === null) { skipped.push({ id: source.id, reason: gate.reason ?? "not pushable" }); continue; }

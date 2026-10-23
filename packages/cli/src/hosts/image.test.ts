@@ -12,6 +12,8 @@ test("a clone makes itself its own machine once, before the daemon: new machine 
   expect(script.indexOf("systemctl stop codecast-daemon")).toBeLessThan(script.indexOf("systemd-machine-id-setup"));
   expect(script).toContain("rm -f /etc/machine-id /var/lib/dbus/machine-id");
   expect(script).toContain("/home/ubuntu/.codecast/config.json");
+  expect(script).toContain("/home/ubuntu/.codex/auth.json");
+  expect(script).toContain("/home/ubuntu/.codecast/cc-token-*.env");
   expect(script).toContain(".codecast/$d");
 });
 

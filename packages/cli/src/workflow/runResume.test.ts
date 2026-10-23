@@ -6,6 +6,7 @@ import { parseWorkflowSource } from "./parser.js";
 import { runWorkflow, type RunOptions } from "./runner.js";
 import { checkpointPath, claimRun, isMidRun, PANE_CLAIM_GRACE_S, paneReplaceable, readCheckpoint, resumePoint, runnerPidFile, type ResumeRow } from "./runResume.js";
 import { lineRunDir } from "./runner.js";
+import { deviceId } from "../remote/device.js";
 
 // A runner that dies is a runner whose next request never comes back: the
 // first run is left hanging on a fetch that never resolves, and a second
@@ -97,6 +98,19 @@ describe("workflow/runResume (a run outlives its runner)", () => {
       { node_id: "build", status: "completed", outcome: "success", session_id: "jxbuild2", completed_at: 3 },
     ],
     ...over,
+  });
+
+  // Every hand of a run is placed on the machine running it. A shared hand
+  // placed by its path alone landed on another host with the same checkout
+  // path and could not read the run's branch (union-line-1 and -3, 2026-10-23).
+  test("every station hand is placed on the runner's own machine, isolated or not", async () => {
+    hangOn = "/cli/workflow-runs/gate";
+    void runWorkflow(graph(), options());
+    await until(() => calls.some((c) => c.route === "/cli/workflow-runs/gate"));
+    hangOn = null;
+    const spawns = calls.filter((c) => c.route === "/cli/spawn");
+    expect(spawns.length).toBeGreaterThan(0);
+    for (const c of spawns) expect(c.body.device).toBe(deviceId());
   });
 
   test("a run killed at the decide gate with its gate answered resumes at ship", async () => {

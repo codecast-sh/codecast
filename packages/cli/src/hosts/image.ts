@@ -162,6 +162,11 @@ export function cloneResetUserData(user = "ubuntu"): string {
     "rm -f /etc/machine-id /var/lib/dbus/machine-id",
     "systemd-machine-id-setup",
     `rm -f ${home}/.codecast/config.json ${home}/.codecast/.device_binding.json ${home}/.codecast/host-active`,
+    // Credentials never come from an image: the source's Codex grant (one
+    // rotating OAuth grant, so a clone that refreshes it kills every other
+    // copy) and its Claude setup tokens and launch account. Provisioning pushes
+    // this machine's logins; a fleet pins its own accounts.
+    `rm -f ${home}/.codex/auth.json ${home}/.codecast/cc-token-*.env ${home}/.codecast/cc-launch.json ${home}/.codecast/cc-accounts.json`,
     ...cloneTreesAside(home, user),
     `for r in ${home}/work/*/; do su - ${user} -c ${shq(brokenRefSweep('"$1"'))} sh "$r" 2>/dev/null || true; done`,
   ].join("; ");

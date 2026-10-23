@@ -843,10 +843,13 @@ async function spawnHand(
     ...(node.definition && !node.agent ? {} : { agent_type: agent }),
     ...(node.definition ? { definition: node.definition } : {}),
     ...(model ? { model } : {}),
-    // An isolated hand must run on this machine: the verify station reads
-    // its worktree from here, and a hand placed elsewhere by device fallback
-    // would leave verify checking nothing.
-    ...(worktreeName ? { isolated: true, worktree_name: worktreeName, device: deviceId() } : {}),
+    // Every hand runs on the machine running the run: the branch, its worktree
+    // and the proof directory live here. An isolated hand placed elsewhere left
+    // verify checking nothing; a shared hand placed by its path alone landed on
+    // another host with the same checkout path and could not read the run's
+    // branch (review on union-line-3 for a run on union-line-1, 2026-10-23).
+    device: deviceId(),
+    ...(worktreeName ? { isolated: true, worktree_name: worktreeName } : {}),
     // The review station is the task's reviewer, not the running role's hand
     // (the-line.md L3): no spawner, so the server files it under no role, and
     // review_for_task so it counts against the role's caps and its approve is
