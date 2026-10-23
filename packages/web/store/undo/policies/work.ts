@@ -29,6 +29,9 @@ import type { TaskWaitInput } from "../../taskGraphDraft";
 
 type Spec = { spec: UndoSpec };
 
+/** The fields updateSecretMeta writes, each with how secrets.updateMeta unsets it (a name is never unset). */
+const SECRET_CLEARS = new Map<string, unknown>([["name", undefined], ["note", ""], ["env", []], ["sites", []]]);
+
 const call = (action: string, ...args: unknown[]): Invocation => ({ action, args, runDraft: false });
 
 const cellsOf = (ctx: UndoCtx, stores: string | readonly string[], field?: string): CellChange[] => {
@@ -609,6 +612,23 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
             if (c.id === id && c.field && c.field !== "updated_at") patch[c.field] = c.before;
           }
           return Object.keys(patch).length ? [call("updateModObject", id, patch)] : [];
+        }),
+    },
+  },
+  // A Vault secret's metadata edit sends back the prior fields. An unset prior
+  // goes back as the clear secrets.updateMeta reads: "" for a note, [] for env
+  // vars and sites. The value is never in the store, so never in an undo.
+  updateSecretMeta: {
+    spec: {
+      label: (ctx) => `Edited ${quoted(ctx.before?.secrets?.[ctx.args[0] as string]?.name, "secret")}`,
+      inverse: (ctx) =>
+        rowIds(cellsOf(ctx, "secrets")).flatMap((id) => {
+          const patch: Record<string, unknown> = {};
+          for (const c of cellsOf(ctx, "secrets")) {
+            if (c.id !== id || !c.field || !SECRET_CLEARS.has(c.field)) continue;
+            patch[c.field] = c.before ?? SECRET_CLEARS.get(c.field);
+          }
+          return Object.keys(patch).length ? [call("updateSecretMeta", id, patch)] : [];
         }),
     },
   },
