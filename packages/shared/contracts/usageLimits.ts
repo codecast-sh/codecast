@@ -219,8 +219,9 @@ export function headroomScore(usage: CcUsage | undefined | null, now: number): n
 }
 
 /** The other accounts a limit-parked session could fall back to: every saved
- * profile that is not the account the fleet runs on, shows no pegged window,
- * and can carry a session: its saved login still works, or a minted
+ * profile that is not the account the fleet runs on, is not kept for one job
+ * (`reserved_for`: a review batch draws on it, so the fleet must not), shows
+ * no pegged window, and can carry a session: its saved login still works, or a minted
  * setup-token is live (`login_expired_at` alone means the daemon's token
  * refresh was refused, so a switch there lands on a dead credential and parks
  * on an auth banner instead of un-parking anything), and is not spent for
@@ -235,6 +236,7 @@ export function fallbackProfiles<
     login_expired_at?: number | null;
     access_refused_at?: number | null;
     setup_token?: { expires_at: number } | null;
+    reserved_for?: string | null;
   },
 >(profiles: readonly P[], activeEmail: string | undefined, now: number, models?: readonly string[]): P[] {
   // A dead saved login is still a target when a minted setup-token is live:
@@ -243,7 +245,7 @@ export function fallbackProfiles<
   const reachable = (p: P) =>
     !p.access_refused_at && (!p.login_expired_at || (!!p.setup_token && p.setup_token.expires_at > now));
   return rankByHeadroom(
-    profiles.filter((p) => p.email && p.email !== activeEmail && reachable(p) && !isUsageExhausted(p.usage, now, models)),
+    profiles.filter((p) => p.email && p.email !== activeEmail && !p.reserved_for && reachable(p) && !isUsageExhausted(p.usage, now, models)),
     now,
   );
 }
