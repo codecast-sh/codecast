@@ -1,0 +1,7 @@
+import{aj as o}from"./index-QvzrbXQD.js";import"./vendor-BRSpyZc9.js";import"./lineWorkspaceUrl-C4SdhC6E.js";import"./index-BtPYbi2n.js";import"./dexie-BEFYTs6O.js";import"./convex-pL9slGJ3.js";import"./sentry-C0kWfPzV.js";import"./highlight-9pfC9kl-.js";import"./ui-DVb64tq5.js";import"./diff-05CVVOnl.js";import"./markdown-B7kiGmIT.js";/**
+ * @license lucide-react v0.556.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const i=[["path",{d:"M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z",key:"yt0hxn"}],["polyline",{points:"7.5 4.21 12 6.81 16.5 4.21",key:"fabo96"}],["polyline",{points:"7.5 19.79 7.5 14.6 3 12",key:"z377f1"}],["polyline",{points:"21 12 16.5 14.6 16.5 19.79",key:"9nrev1"}],["polyline",{points:"3.27 6.96 12 12.01 20.73 6.96",key:"1180pa"}],["line",{x1:"12",x2:"12",y1:"22.08",y2:"12",key:"3z3uq6"}]],c=o("codesandbox",i);export{i as __iconNode,c as default};
+//# sourceMappingURL=codesandbox-DMVXR2iC.js.map

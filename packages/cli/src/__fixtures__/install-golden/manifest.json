@@ -132,6 +132,15 @@
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
+  "vault": {
+    "config": {
+      "vault_enabled": true,
+      "vault_version": "1"
+    },
+    "stdout": "* Vault — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
   "computer": {
     "config": {
       "computer_enabled": true,

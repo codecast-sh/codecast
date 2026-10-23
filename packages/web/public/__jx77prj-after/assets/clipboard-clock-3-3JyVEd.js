@@ -1,0 +1,7 @@
+import{aj as o}from"./index-oKYuP8e-.js";import"./vendor-BRSpyZc9.js";import"./lineWorkspaceUrl-BGLIta-t.js";import"./index-JvKZ8HIj.js";import"./dexie-BEFYTs6O.js";import"./convex-pL9slGJ3.js";import"./sentry-C0kWfPzV.js";import"./highlight-9pfC9kl-.js";import"./ui-DVb64tq5.js";import"./diff-05CVVOnl.js";import"./markdown-B7kiGmIT.js";/**
+ * @license lucide-react v0.556.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const t=[["path",{d:"M16 14v2.2l1.6 1",key:"fo4ql5"}],["path",{d:"M16 4h2a2 2 0 0 1 2 2v.832",key:"1ujtp2"}],["path",{d:"M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h2",key:"qvpao1"}],["circle",{cx:"16",cy:"16",r:"6",key:"qoo3c4"}],["rect",{x:"8",y:"2",width:"8",height:"4",rx:"1",key:"ublpy"}]],k=o("clipboard-clock",t);export{t as __iconNode,k as default};
+//# sourceMappingURL=clipboard-clock-3-3JyVEd.js.map

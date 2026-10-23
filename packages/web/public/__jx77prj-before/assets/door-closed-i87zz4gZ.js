@@ -1,0 +1,7 @@
+import{aj as o}from"./index-QvzrbXQD.js";import"./vendor-BRSpyZc9.js";import"./lineWorkspaceUrl-C4SdhC6E.js";import"./index-BtPYbi2n.js";import"./dexie-BEFYTs6O.js";import"./convex-pL9slGJ3.js";import"./sentry-C0kWfPzV.js";import"./highlight-9pfC9kl-.js";import"./ui-DVb64tq5.js";import"./diff-05CVVOnl.js";import"./markdown-B7kiGmIT.js";/**
+ * @license lucide-react v0.556.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const t=[["path",{d:"M10 12h.01",key:"1kxr2c"}],["path",{d:"M18 20V6a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v14",key:"36qu9e"}],["path",{d:"M2 20h20",key:"owomy5"}]],n=o("door-closed",t);export{t as __iconNode,n as default};
+//# sourceMappingURL=door-closed-i87zz4gZ.js.map

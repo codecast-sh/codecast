@@ -1,0 +1,7 @@
+import{aj as o}from"./index-oKYuP8e-.js";import"./vendor-BRSpyZc9.js";import"./lineWorkspaceUrl-BGLIta-t.js";import"./index-JvKZ8HIj.js";import"./dexie-BEFYTs6O.js";import"./convex-pL9slGJ3.js";import"./sentry-C0kWfPzV.js";import"./highlight-9pfC9kl-.js";import"./ui-DVb64tq5.js";import"./diff-05CVVOnl.js";import"./markdown-B7kiGmIT.js";/**
+ * @license lucide-react v0.556.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const t=[["path",{d:"M11 20H2",key:"nlcfvz"}],["path",{d:"M11 4.562v16.157a1 1 0 0 0 1.242.97L19 20V5.562a2 2 0 0 0-1.515-1.94l-4-1A2 2 0 0 0 11 4.561z",key:"au4z13"}],["path",{d:"M11 4H8a2 2 0 0 0-2 2v14",key:"74r1mk"}],["path",{d:"M14 12h.01",key:"1jfl7z"}],["path",{d:"M22 20h-3",key:"vhrsz"}]],s=o("door-open",t);export{t as __iconNode,s as default};
+//# sourceMappingURL=door-open-BP9Snall.js.map
