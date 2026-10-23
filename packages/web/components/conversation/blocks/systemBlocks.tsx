@@ -324,6 +324,27 @@ export function FoldedPromptBlock({ label, preview, content, timestamp, collapse
   );
 }
 
+// A Workflow-tool agent's brief, computed by the workflow script: authored
+// markdown from a machine, so it reads as a brief card (the trigger run's
+// shape in the workflow's cyan) rather than a person's bubble. Long briefs
+// start clipped behind an Expand.
+export function WorkflowTaskBlock({ body, timestamp }: { body: string; timestamp: number }) {
+  return (
+    <div className="mb-3 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+        <Workflow className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">Workflow task</span>
+        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+        <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{body}</ReactMarkdown>
+        </div>
+      </CollapsibleBody>
+    </div>
+  );
+}
+
 // On theme tokens, so hosted mode's palette (html.hosted-mode.minimal-style)
 // recolours it like every other sol class: neutral is muted ink on a border
 // rule, amber the warning hue.

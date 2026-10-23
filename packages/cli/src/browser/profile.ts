@@ -47,6 +47,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { defaultConfigDir } from "../config/configDir.js";
+import { OWN_LOGIN_HOSTS, keepsOwnLogin } from "@codecast/shared/contracts/secrets";
 
 /** Where managed clones live. Mode 0700 — these hold live session cookies. */
 export function browserHome(): string {
@@ -62,20 +63,9 @@ export function clonePath(name: string): string {
 // Logins the agent browser keeps for itself
 // ---------------------------------------------------------------------------
 
-/**
- * Sites whose login the clone must own rather than borrow from the human's
- * Chrome. Google rotates its session cookies and revokes a session it sees
- * from two browsers (header comment); YouTube carries the same cookies.
- * Matched as the host itself or any subdomain, so `accounts.google.com`,
- * `ads.google.com` and `.google.com` cookie rows all count.
- */
-export const OWN_LOGIN_HOSTS: readonly string[] = ["google.com", "youtube.com"];
-
-/** Does the agent browser keep its own login for this host (see OWN_LOGIN_HOSTS)? */
-export function keepsOwnLogin(host: string): boolean {
-  const h = host.replace(/^\.+/, "").toLowerCase();
-  return OWN_LOGIN_HOSTS.some((s) => h === s || h.endsWith(`.${s}`));
-}
+// Sites whose login the clone owns rather than borrows from the human's Chrome
+// (header comment): one list, shared with the Vault, which never saves them.
+export { OWN_LOGIN_HOSTS, keepsOwnLogin };
 
 /** SQL predicate selecting the cookie rows of the own-login hosts. */
 function ownLoginCookieWhere(): string {

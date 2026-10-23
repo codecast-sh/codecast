@@ -57,6 +57,8 @@ export const graphOriginV = v.object({
 const upsertArgs = {
   name: v.string(),
   slug: v.string(),
+  /** The graph's `label`: what a person reads as its name. A push always says ("" for none); a write that leaves it out leaves it as it was. */
+  label: v.optional(v.string()),
   goal: v.optional(v.string()),
   source: v.optional(v.string()),
   nodes: v.array(nodeV),
@@ -116,7 +118,7 @@ export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, 
 }
 
 // `serves`: a list or null (a push: written as the file says), undefined (the web: left as it is).
-async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, ...args }: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish }) {
+async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, ...args }: { name: string; slug: string; label?: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish }) {
   const now = Date.now();
   const existing = await workflowBySlug(ctx, userId, args.slug);
 
@@ -125,6 +127,7 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, s
   if (existing) {
     await ctx.db.patch(existing._id, {
       name: args.name,
+      ...(args.label !== undefined ? { label: args.label.trim() || undefined } : {}),
       goal: args.goal,
       source: args.source,
       nodes: args.nodes,
@@ -147,6 +150,7 @@ async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, s
     ...axes,
     name: args.name,
     slug: args.slug,
+    ...(args.label?.trim() ? { label: args.label.trim() } : {}),
     goal: args.goal,
     source: args.source,
     nodes: args.nodes,

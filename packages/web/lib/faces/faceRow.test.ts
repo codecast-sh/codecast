@@ -231,6 +231,14 @@ describe("every state in the vocabulary", () => {
     expect(later.card).toMatchObject({ kind: "live", roomKey: DM_ANN });
   });
 
+  test("a Join on its way in says joining until the room is up, then the ordinary live card", () => {
+    const seated = { [DM_ANN]: [seat(ANN)] };
+    const joining = deriveFaceRow(input({ call: call(DM_ANN, { phase: "connecting" }), occupancy: seated }), null);
+    expect(joining.card).toMatchObject({ kind: "live", roomKey: DM_ANN, joining: true, end: true });
+    const up = deriveFaceRow(input({ call: call(DM_ANN), occupancy: seated }), joining);
+    expect(up.card).toMatchObject({ kind: "live", joining: false });
+  });
+
   test("an ordinary huddle (no walkie) in a channel room: seated faces are live with me", () => {
     const row = deriveFaceRow(
       input({

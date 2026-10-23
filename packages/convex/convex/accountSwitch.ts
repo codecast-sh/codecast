@@ -38,6 +38,7 @@ import {
   isAutoContinueEnabled,
   autoRecoveryEnabled,
   isBlockedConversation,
+  isWorkflowRunLog,
   isCurrentBlock,
   blockedAt,
   BLOCKED_WINDOW_MS,
@@ -193,21 +194,27 @@ function recoveryDecision(
 // workers (an orchestrator waiting on a workflow) never switched at all.
 // Fleet-store machines only: there the parent follows the switch without a
 // restart, while a legacy switch would restart it and kill its live workers.
+// A workflow station is the exception: it nests under its run's log, where no
+// agent runs, and is a process of its own that a continue reaches. It is
+// revived as itself, so its run survives the switch (jx73gnf, 2026-10-23).
 async function workerParks(
   ctx: { db: any },
   primary: Doc<"devices"> | undefined,
   skipped: Doc<"conversations">[],
   blocked: Doc<"conversations">[],
-): Promise<{ workers: Doc<"conversations">[]; parents: Doc<"conversations">[] }> {
+): Promise<{ workers: Doc<"conversations">[]; parents: Doc<"conversations">[]; stations: Doc<"conversations">[] }> {
   const workers: Doc<"conversations">[] = [];
+  const stations: Doc<"conversations">[] = [];
   const parents = new Map<string, Doc<"conversations"> | null>(blocked.map((c) => [c._id, null]));
-  if (!primary?.cc_accounts?.fleet_store || !autoRecoveryEnabled(primary)) return { workers, parents: [] };
+  const runLogs = new Set<string>();
+  if (!primary?.cc_accounts?.fleet_store || !autoRecoveryEnabled(primary)) return { workers, parents: [], stations };
   for (const worker of skipped) {
     const parentId = worker.parent_conversation_id;
     if (worker.pending_api_error_kind !== "limit" || worker.agent_type === "codex" || !parentId) continue;
-    if (!parents.has(parentId)) {
+    if (!parents.has(parentId) && !runLogs.has(parentId)) {
       const parent: Doc<"conversations"> | null = await ctx.db.get(parentId);
-      parents.set(parentId, parent && !isSubagentConversation(parent) && !parent.inbox_dismissed_at
+      if (parent && isWorkflowRunLog(parent)) runLogs.add(parentId);
+      else parents.set(parentId, parent && !isSubagentConversation(parent) && !parent.inbox_dismissed_at
         ? {
             ...parent,
             pending_api_error: true,
@@ -217,10 +224,14 @@ async function workerParks(
           }
         : null);
     }
+    if (runLogs.has(parentId)) {
+      if (!worker.inbox_dismissed_at) stations.push(worker);
+      continue;
+    }
     // A parent parked on its own already carries the recovery.
     if (parents.get(parentId)) workers.push(worker);
   }
-  return { workers, parents: [...parents.values()].filter((p): p is Doc<"conversations"> => !!p) };
+  return { workers, parents: [...parents.values()].filter((p): p is Doc<"conversations"> => !!p), stations };
 }
 
 async function dismissSkippedWorkersAutomatically(
@@ -1838,9 +1849,9 @@ export const autoSwitchCheck = internalMutation({
     // A worker stopped on a limit is evidence about the account, and its
     // parent is the session to recover (workerParks): the parent stands in
     // for it below, and the worker stays blocked until the pass acts on it.
-    const { workers, parents } = await workerParks(ctx, primary, listed.skipped, listed.blocked);
-    const skipped = listed.skipped.filter((c) => !workers.includes(c));
-    const blocked = [...listed.blocked, ...parents];
+    const { workers, parents, stations } = await workerParks(ctx, primary, listed.skipped, listed.blocked);
+    const skipped = listed.skipped.filter((c) => !workers.includes(c) && !stations.includes(c));
+    const blocked = [...listed.blocked, ...parents, ...stations];
     const releaseWorkers = () => dismissSkippedWorkers(ctx, workers);
     // Before any account decision: the workers this pass will not act on leave
     // the blocked set now, whatever the pass decides about the rest.
