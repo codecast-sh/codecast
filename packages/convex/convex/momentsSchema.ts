@@ -213,6 +213,8 @@ export const momentsTables = {
     /** Set once correctDoubledCosts fixed a cost that counted the first turn twice. */
     cost_corrected: v.optional(v.boolean()),
     findings: v.optional(v.number()),
+    /** The findings as JSON while they wait to be filed: kept until fileReview records its run, so a filing cut off midway can run again. */
+    file: v.optional(v.string()),
     filed: v.optional(v.number()),
     run_id: v.optional(v.id("judge_runs")),
     transcript_key: v.optional(v.string()),

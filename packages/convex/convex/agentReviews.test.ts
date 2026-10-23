@@ -167,6 +167,32 @@ describe("agent reviews", () => {
     expect(await t.mutation(api.agentReviews.renewForCli, { api_token: TOKEN, device_id: "host-2", reviews: [again.review] })).toEqual({ lost: [again.review] });
   }, 120_000);
 
+  test("a filing cut off before it recorded its run runs again from the review and files nothing twice", async () => {
+    const { t, scope, extract } = await setup();
+    await t.mutation(api.agentReviews.startForCli, { ...scope, source: "app", kind: "conversation", subjects: ["c_1"] });
+    await extract();
+    const a = (await t.action(api.agentReviews.claimForCli, { api_token: TOKEN, device_id: "host-1", slots: 1 }))[0];
+    await t.action(api.agentReviews.doneForCli, { api_token: TOKEN, device_id: "host-1", review: a.review, ok: true, findings_text: FINDINGS });
+    const row = async () => t.run(async (ctx) => (await ctx.db.query("agent_reviews").collect()).find((r) => r.short_id === a.review)!);
+    // The findings wait on the review until its run is recorded.
+    expect(JSON.parse((await row()).file!)).toHaveLength(2);
+    await filing(t);
+    expect((await row()).file).toBeUndefined();
+    // The action dies after filing every finding but before recording its run: the review reads unfiled again.
+    await t.run(async (ctx) => {
+      const r = (await ctx.db.query("agent_reviews").collect()).find((x) => x.short_id === a.review)!;
+      await ctx.db.delete(r.run_id!);
+      await ctx.db.patch(r._id, { run_id: undefined, filed: undefined, file: JSON.stringify(JSON.parse(FINDINGS).findings) });
+    });
+    for (let i = 0; i < 2; i++) await t.action(internal.agentReviews.fileReview, { review_id: (await row())._id });
+    const live = (await t.run((ctx) => ctx.db.query("signals").collect())).filter((x) => !x.retired);
+    expect(live).toHaveLength(2);
+    const runs = await t.run((ctx) => ctx.db.query("judge_runs").collect());
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.signal_ids?.map(String).sort()).toEqual(live.map((x) => String(x._id)).sort());
+    expect(await row()).toMatchObject({ filed: 2, run_id: runs[0]!._id });
+  }, 120_000);
+
   test("a review of a moment read again replaces what the earlier one filed; cancel stops what waits", async () => {
     const { t, scope, extract } = await setup();
     await t.mutation(api.agentReviews.startForCli, { ...scope, source: "app", kind: "conversation", subjects: ["c_1"] });

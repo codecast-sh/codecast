@@ -305,14 +305,17 @@ export const doneForCli = action({
  * A settled review's findings recorded as its judge's run and, for a live
  * judge, filed one by one through the door, so a finding can group with one
  * filed just before it. What an earlier review of the same moment filed and
- * this one did not file again is replaced.
+ * this one did not file again is replaced. The findings wait on the review
+ * until the run is recorded, and one this review already filed under its key
+ * is not filed again, so a filing cut off midway runs again whole.
  */
 export const fileReview = internalAction({
-  args: { review_id: v.id("agent_reviews"), findings: v.string() },
+  // findings: only on jobs scheduled before the review kept them itself.
+  args: { review_id: v.id("agent_reviews"), findings: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const h: { review: Doc<"agent_reviews">; judge: Doc<"judges">; moment: Doc<"moments">; source: Doc<"event_sources">; earlier: Id<"signals">[] } | null = await ctx.runQuery(internal.agentReviews.filing, { review_id: args.review_id });
     if (!h) return;
-    const findings: AgentFinding[] = JSON.parse(args.findings);
+    const findings: AgentFinding[] = JSON.parse(args.findings ?? h.review.file ?? "[]");
     const signalIds: Id<"signals">[] = [];
     if (h.judge.mode === "live") {
       const body = await readKeptBody(liveBodyKey(h.moment, Date.now()));
@@ -321,6 +324,8 @@ export const fileReview = internalAction({
       for (const f of findings) {
         try {
           const signal = agentFindingSignal(f, { judge: h.judge.name, judge_version: h.judge.version, moment: h.moment.short_id, subject: h.moment.subject }, evidenceUrl);
+          const already: Id<"signals"> | null = await ctx.runQuery(internal.agentReviews.filedSince, { workspace: h.source.workspace, fingerprint: signal.fingerprint, since: h.review.finished_at ?? h.review.updated_at });
+          if (already) { signalIds.push(already); continue; }
           const result = await ctx.runAction(internal.signals.ingestAs, { user_id: h.source.owner_user_id, ...signal, observed_at: h.moment.extracted_at ?? h.moment.event_at, ...sourceFilingScope(h.source), ...(project ? { project: String(project) } : {}) });
           signalIds.push(result.signal_id);
         } catch (error) {
@@ -360,10 +365,19 @@ export const filing = internalQuery({
   },
 });
 
+/** A live finding filed under this key since the review settled: one this review's filing already made. */
+export const filedSince = internalQuery({
+  args: { workspace: v.string(), fingerprint: v.string(), since: v.number() },
+  handler: async (ctx, args): Promise<Id<"signals"> | null> => {
+    const rows: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_workspace_fingerprint", (q: any) => q.eq("workspace", args.workspace).eq("fingerprint", args.fingerprint)).collect();
+    return rows.find((r) => !r.retired && !r.merged_into && r.created_at >= args.since)?._id ?? null;
+  },
+});
+
 export const filed = internalMutation({
   args: { review_id: v.id("agent_reviews"), filed: v.number(), run_id: v.optional(v.id("judge_runs")) },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.review_id, { filed: args.filed, ...(args.run_id ? { run_id: args.run_id } : {}), updated_at: Date.now() });
+    await ctx.db.patch(args.review_id, { filed: args.filed, file: undefined, ...(args.run_id ? { run_id: args.run_id } : {}), updated_at: Date.now() });
   },
 });
 
@@ -401,10 +415,10 @@ export const settle = internalMutation({
       status,
       ...(refund ? { attempts: Math.max(0, r.attempts - 1) } : {}),
       ...(status === "queued" ? { claim_device: undefined, lease_until: undefined } : { finished_at: now, lease_until: undefined }),
-      ...(status === "done" ? { error: undefined } : {}),
+      ...(status === "done" ? { error: undefined, ...(file ? { file } : {}) } : {}),
       updated_at: now,
     });
-    if (status === "done" && file) await ctx.scheduler.runAfter(0, internal.agentReviews.fileReview, { review_id, findings: file });
+    if (status === "done" && file) await ctx.scheduler.runAfter(0, internal.agentReviews.fileReview, { review_id });
     return true;
   },
 });
