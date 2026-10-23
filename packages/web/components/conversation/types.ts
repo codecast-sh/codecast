@@ -1,4 +1,4 @@
-import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage } from "@codecast/shared/contracts";
+import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage, VaultReadyMessage } from "@codecast/shared/contracts";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { SentFileData } from "@codecast/shared/files";
 import type { ChatWakePrompt, HuddleSummaryTag } from "../sessionMessage";
@@ -397,6 +397,9 @@ export type UserMessageKind =
   | { kind: 'chat_wake'; wake: ChatWakePrompt }
   // The human's answer to a `cast decide` question (store answerDecision).
   | { kind: 'decision_answer'; decision: DecisionAnswerMessage }
+  // A person filled a secret this session asked for (secrets.fulfill sends
+  // formatVaultReady): a system line, not the person's words.
+  | { kind: 'vault_ready'; vault: VaultReadyMessage }
   // A session moving between its role and the person (<session-escalation …>,
   // org-roles-run-work.md R1 revised): an inline divider with the role's face,
   // the move and the whole line as markdown, in both threads.

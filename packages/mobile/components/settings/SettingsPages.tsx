@@ -22,6 +22,7 @@ import { useHostedMode } from '@codecast/web/lib/surfaces';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
 import { PlanPage } from '@/components/hosted/PlanPage';
 import { MailPage } from '@/components/hosted/MailPage';
+import { VaultPage } from './VaultPage';
 import { useTeamRosterIdentity } from '@codecast/web/hooks/useTeamRoster';
 import { peopleOf } from '@codecast/shared/team/memberKind';
 import { Text as RNText, TextInput } from '@/components/Themed';
@@ -554,6 +555,7 @@ export const SETTINGS_PAGES: Record<string, { title: string; Page: ComponentType
   appearance: { title: 'Appearance', Page: AppearancePage },
   security: { title: 'Security', Page: SecurityPage },
   team: { title: 'Team', Page: TeamPage },
+  vault: { title: 'Vault', Page: VaultPage },
   about: { title: 'About', Page: AboutPage },
   plan: { title: 'Plan', Page: PlanPage },
   mail: { title: LANE_COPY.connections.mail, Page: MailPage },

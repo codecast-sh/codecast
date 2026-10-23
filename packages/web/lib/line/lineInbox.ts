@@ -4,7 +4,7 @@
 // unanswered card, problems holding for a person's answer, runs that
 // failed or went silent, and projects whose line cannot start. Each row names
 // the concrete thing (the problem, the question, the failure) and carries one
-// action. The counts agree with the roll-up (lineFlow lineRollup): the waiting
+// action. The counts agree with the roll-up (lineRollup): the waiting
 // problems come from the same flow, split by the same reasons. Pure.
 import { causeHeading } from "./causeHeading";
 import { cardAsRead, emptyWords, trialHold, trialLane } from "../trialEvidence";
