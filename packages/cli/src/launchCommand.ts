@@ -21,6 +21,7 @@ import {
 } from "@codecast/shared/contracts";
 import { getAgentArgs, type Config } from "./config/types.js";
 import { stableClaudeBinary } from "./stableClaudeBinary.js";
+import { shellArg } from "./shellQuote.js";
 import type { ApprovalPolicy, SandboxMode, ThreadStartParams } from "./codexAppServer.js";
 
 export function blankCodexRecoveryParams(
@@ -585,11 +586,6 @@ function pushOutputFormat(
 
 /** Shell-quote a binary + args: the `--dry-run` display, and a command line sh runs. */
 export function formatPrintCommand(binary: string, args: string[]): string {
-  return [binary, ...args].map(shellQuote).join(" ");
+  return [binary, ...args].map(shellArg).join(" ");
 }
 
-function shellQuote(value: string): string {
-  if (value === "") return "''";
-  if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
