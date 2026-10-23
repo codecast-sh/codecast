@@ -618,11 +618,24 @@ the real order. A scoring pass reads every open problem once and writes
 - **cluster_key** and **cluster_name**: the family the label belongs to. One
   Opus call names the families from every distinct label with its count
   (`problemScores.submitFamilies`); Opus calls of a few hundred labels each
-  place every label in one (`submitAssign`). A family is one cause one fix
-  would address, so the line runs a family's lead first and its siblings
-  after the fix lands, when many dissolve as already fixed.
+  place every label in one (`submitAssign`). A family is one kind of cause,
+  and it groups problems in the Problems view; the line ranks by score alone.
 
 The pass is a backfill that re-runs: `submit` takes only problems with no
 score or one from an older `SCORE_VERSION`, and `submitAssign` without
 families reuses the families already written. Writing a new score drops the
 old cluster, since its label may have changed.
+
+A scheduled pass keeps this current (`problemScores.tick`, every 15 minutes
+in `crons.ts`, for each judge `problemScores.configure` turned on). Every 6
+hours it sends one batch of the problems due: those with no current score,
+newest first, then those with a finding filed after their score, oldest score
+first. While a batch is in flight nothing else is sent, so no problem is paid
+for twice. When the batch ends the tick writes the scores in the same paced
+pages as the backfill, then sends the labels of problems left without a
+cluster to be placed in the configured families, and writes those when that
+batch ends. What each batch cost is kept in `system_config`
+(`problem_scores:<workspace>:<judge>`), and a send takes only as many problems
+as $2 over the last 24 hours still pays for, at the cost per problem the last
+batch measured. `tick {dry: true}` reports what it would send and sends
+nothing.

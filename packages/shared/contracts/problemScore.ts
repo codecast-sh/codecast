@@ -237,3 +237,31 @@ export function parseAssignments(text: string, families: ProblemFamily[], count:
 
 /** The label as families compare it: case and spacing folded. */
 export const labelKey = (label: string) => label.trim().toLowerCase().replace(/\s+/g, " ");
+
+// ── Keeping scores current ──────────────────────────────────────────────────
+
+/** How often the scheduled pass sends a batch, and what it may spend in any 24 hours. */
+export const RESCORE_EVERY_MS = 6 * 60 * 60_000;
+export const DAILY_CAP_USD = 2;
+/** What a problem costs to score before a pass has measured it (the backfill measured $0.0031). */
+export const DEFAULT_PROBLEM_USD = 0.004;
+
+/**
+ * The problems a pass should score, in the order it sends them: those with no
+ * current score first, newest first, then those with a finding filed after
+ * their score, oldest score first.
+ */
+export function dueForScoring<T extends { scored: { at: number; version: string } | null; last_finding_at: number; created_at: number }>(rows: T[]): T[] {
+  const unscored = rows.filter((r) => !r.scored || r.scored.version !== SCORE_VERSION).sort((a, b) => b.created_at - a.created_at);
+  const stale = rows.filter((r) => r.scored && r.scored.version === SCORE_VERSION && r.last_finding_at > r.scored.at).sort((a, b) => a.scored!.at - b.scored!.at);
+  return [...unscored, ...stale];
+}
+
+/** What the pass has spent in the 24 hours before `now`. */
+export const spentToday = (spend: Array<{ at: number; usd: number }>, now: number) => spend.filter((s) => s.at > now - 24 * 60 * 60_000).reduce((n, s) => n + s.usd, 0);
+
+/** How many problems the cap still pays for at `perProblemUsd` each. */
+export function affordable(spend: Array<{ at: number; usd: number }>, now: number, perProblemUsd: number, capUsd = DAILY_CAP_USD): number {
+  const left = capUsd - spentToday(spend, now);
+  return left > 0 ? Math.floor(left / Math.max(perProblemUsd, 1e-6)) : 0;
+}

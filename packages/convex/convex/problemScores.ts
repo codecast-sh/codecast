@@ -5,21 +5,30 @@
 // once the batch has ended. `submitFamilies` / `collectFamilies` name the
 // families of the root-cause labels; `submitAssign` / `collectAssign` place
 // each label in one and write the cluster onto every problem carrying it.
+// `tick` keeps this current on a schedule (crons.ts): every 6 hours it sends
+// the problems with no score or a finding newer than their score, writes the
+// answers when the batch ends, then places their labels in the families.
 // Writes touch cause.scored only: never a task's status, assignee or priority.
 
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
+import { getSystemConfig } from "./systemConfig";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { batchResults, createBatch, getBatch, modelCost, type ModelUsage } from "./lib/anthropic";
+import { batchResults, createBatch, getBatch, modelCost, type BatchResult, type ModelUsage } from "./lib/anthropic";
 import {
   ASSIGN_SCHEMA,
+  DAILY_CAP_USD,
+  DEFAULT_PROBLEM_USD,
   FAMILIES_SCHEMA,
   FAMILY_MODEL,
   PROBLEM_SCORE_SCHEMA,
   SCORE_MODEL,
   SCORE_VERSION,
+  RESCORE_EVERY_MS,
+  affordable,
   assignFamiliesPrompt,
+  dueForScoring,
   labelKey,
   parseAssignments,
   parseFamilies,
@@ -27,6 +36,7 @@ import {
   problemFamiliesPrompt,
   problemScorePrompt,
   sampleFindings,
+  spentToday,
   type ProblemFamily,
 } from "@codecast/shared/contracts/problemScore";
 
@@ -49,6 +59,17 @@ async function writePaced<T>(rows: T[], from: number, write: (chunk: T[]) => Pro
   }
   return { written, of: rows.length, next: from + WRITE_PAGE < rows.length ? from + WRITE_PAGE : null };
 }
+
+/** Every page, one after another, for the scheduled pass that has no caller to call again. */
+async function writeAll<T>(rows: T[], write: (chunk: T[]) => Promise<number>): Promise<number> {
+  let written = 0;
+  for (let from: number | null = 0; from !== null; ) {
+    const page: { written: number; next: number | null } = await writePaced(rows, from, write);
+    written += page.written;
+    from = page.next;
+  }
+  return written;
+}
 /** A batch is billed at half the list price. */
 const batchCost = (model: string, usage: ModelUsage) => modelCost(model, usage) / 2;
 
@@ -56,17 +77,17 @@ type Scored = NonNullable<NonNullable<Doc<"tasks">["cause"]>["scored"]>;
 
 const isOpen = (t: Doc<"tasks">) => t.status === "open" && !t.cause?.merged_into && !t.cause?.dissolved;
 
-/** Every problem the judge's live findings reach, by id. */
-async function problemIds(ctx: any, workspace: string, judge: string): Promise<Id<"tasks">[]> {
-  const ids = new Set<string>();
+/** Every problem the judge's live findings reach, with when its newest one was filed. */
+async function problemFindings(ctx: any, workspace: string, judge: string): Promise<Map<string, number>> {
+  const newest = new Map<string, number>();
   let cursor: string | null = null;
   for (;;) {
-    const page: { rows: Array<{ task: string | null; retired: boolean }>; cursor: string | null } = await ctx.runQuery(internal.agentReviewsRepair.filingPage, { workspace, judge, cursor });
-    for (const r of page.rows) if (r.task && !r.retired) ids.add(r.task);
+    const page: { rows: Array<{ task: string | null; retired: boolean; at: number }>; cursor: string | null } = await ctx.runQuery(internal.agentReviewsRepair.filingPage, { workspace, judge, cursor });
+    for (const r of page.rows) if (r.task && !r.retired) newest.set(r.task, Math.max(newest.get(r.task) ?? 0, r.at));
     if (!page.cursor) break;
     cursor = page.cursor;
   }
-  return [...ids] as Id<"tasks">[];
+  return newest;
 }
 
 /** Each task's fields the pass reads: whether it is open, its ranking inputs today, and its score. */
@@ -105,7 +126,11 @@ async function readBriefs(ctx: any, ids: Id<"tasks">[]) {
   return out;
 }
 
-const openBriefs = async (ctx: any, workspace: string, judge: string): Promise<Brief[]> => (await readBriefs(ctx, await problemIds(ctx, workspace, judge))).filter((b) => b.open);
+async function openBriefs(ctx: any, workspace: string, judge: string): Promise<Array<Brief & { last_finding_at: number }>> {
+  const newest = await problemFindings(ctx, workspace, judge);
+  const briefs = await readBriefs(ctx, [...newest.keys()] as Id<"tasks">[]);
+  return briefs.filter((b) => b.open).map((b) => ({ ...b, last_finding_at: newest.get(b.id) ?? 0 }));
+}
 
 /**
  * How the open problems spread on what the line ranks them by today
@@ -166,22 +191,43 @@ export const inputs = internalQuery({
 /**
  * Sends up to `limit` open problems with no current score to the Batch API
  * (`rescore` takes scored ones too). Returns the batch id for `collect`.
+ * A problem counts as scored only once `collect` writes it, so a second
+ * submit before then sends the same problems again: collect, then submit.
  */
 export const submit = internalAction({
   args: { workspace: v.string(), judge: v.string(), limit: v.number(), rescore: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const open = await openBriefs(ctx, args.workspace, args.judge);
-    const due = open.filter((b) => args.rescore || !b.scored || b.scored.version !== SCORE_VERSION).slice(0, args.limit);
+    const due = (args.rescore ? open : dueForScoring(open)).slice(0, args.limit);
     if (!due.length) return { batch_id: null, count: 0, open: open.length };
-    const requests: Array<{ custom_id: string; req: any }> = [];
-    for (let i = 0; i < due.length; i += 50) {
-      const rows: Array<{ id: string; input: any }> = await ctx.runQuery(internal.problemScores.inputs, { ids: due.slice(i, i + 50).map((b) => b.id as Id<"tasks">) });
-      for (const r of rows) requests.push({ custom_id: r.id, req: { model: SCORE_MODEL, max_tokens: 6_000, effort: "low", prompt: problemScorePrompt(r.input), output_schema: PROBLEM_SCORE_SCHEMA } });
-    }
+    const requests = await scoreRequests(ctx, due.map((b) => b.id));
     const batch = await createBatch(requests);
     return { batch_id: batch.id, count: requests.length, open: open.length };
   },
 });
+
+/** One scoring request per problem, keyed by its id. */
+async function scoreRequests(ctx: any, ids: string[]) {
+  const requests: Array<{ custom_id: string; req: any }> = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const rows: Array<{ id: string; input: any }> = await ctx.runQuery(internal.problemScores.inputs, { ids: ids.slice(i, i + 50) as Id<"tasks">[] });
+    for (const r of rows) requests.push({ custom_id: r.id, req: { model: SCORE_MODEL, max_tokens: 6_000, effort: "low", prompt: problemScorePrompt(r.input), output_schema: PROBLEM_SCORE_SCHEMA } });
+  }
+  return requests;
+}
+
+/** A scoring batch's answers as rows to write, and the ones that did not parse. */
+function scoreRows(results: BatchResult[]) {
+  const at = Date.now();
+  const rows: Array<{ id: Id<"tasks">; scored: Scored }> = [];
+  const failed: Array<{ id: string; why: string }> = [];
+  for (const r of results) {
+    const score = r.text ? parseProblemScore(r.text) : null;
+    if (!score) { failed.push({ id: r.custom_id, why: r.error ?? `unparsed (${r.stop_reason})` }); continue; }
+    rows.push({ id: r.custom_id as Id<"tasks">, scored: { ...score, at, version: SCORE_VERSION } });
+  }
+  return { rows, failed };
+}
 
 /** Writes scores onto causes. A new score drops the cluster, since its label may have changed. */
 export const record = internalMutation({
@@ -212,14 +258,7 @@ export const collect = internalAction({
     const state = await getBatch(args.batch_id);
     if (state.processing_status !== "ended") return { status: state.processing_status, counts: state.request_counts };
     const results = await batchResults(state);
-    const at = Date.now();
-    const rows: Array<{ id: Id<"tasks">; scored: Scored }> = [];
-    const failed: Array<{ id: string; why: string }> = [];
-    for (const r of results) {
-      const score = r.text ? parseProblemScore(r.text) : null;
-      if (!score) { failed.push({ id: r.custom_id, why: r.error ?? `unparsed (${r.stop_reason})` }); continue; }
-      rows.push({ id: r.custom_id as Id<"tasks">, scored: { ...score, at, version: SCORE_VERSION } });
-    }
+    const { rows, failed } = scoreRows(results);
     const page = await writePaced(rows, args.from ?? 0, (chunk): Promise<number> => ctx.runMutation(internal.problemScores.record, { rows: chunk }));
     return { status: "ended", ...page, failed: failed.length, failures: failed.slice(0, 10), ...meter(SCORE_MODEL, results) };
   },
@@ -280,17 +319,28 @@ export const submitAssign = internalAction({
   handler: async (ctx, args) => {
     const { open, labels } = await labelsOf(ctx, args.workspace, args.judge);
     const families = args.families ?? writtenFamilies(open);
-    const unplaced = args.families ? labels : labels.filter((l) => l.ids.some((id) => !open.find((b) => b.id === id)?.scored?.cluster_key));
-    if (!unplaced.length || !families.length) return { batch_id: null, labels: 0 };
-    const requests = [];
-    for (let i = 0; i < unplaced.length; i += ASSIGN_CHUNK) {
-      const chunk = unplaced.slice(i, i + ASSIGN_CHUNK).map((l) => l.label);
-      requests.push({ custom_id: `assign-${i / ASSIGN_CHUNK}`, req: { model: FAMILY_MODEL, max_tokens: 32_000, effort: "low" as const, prompt: assignFamiliesPrompt(families, chunk), output_schema: ASSIGN_SCHEMA } });
-    }
+    const chunks = (args.families ? labels : unplacedLabels(open, labels)).map((l) => l.label);
+    if (!chunks.length || !families.length) return { batch_id: null, labels: 0 };
+    const requests = assignRequests(families, chunks);
     const batch = await createBatch(requests);
-    return { batch_id: batch.id, labels: unplaced.length, requests: requests.length, families, chunks: unplaced.map((l) => l.label) };
+    return { batch_id: batch.id, labels: chunks.length, requests: requests.length, families, chunks };
   },
 });
+
+/** The labels carried by any problem that has no cluster yet. */
+function unplacedLabels(open: Brief[], labels: Array<{ label: string; ids: string[] }>) {
+  const placed = new Set(open.filter((b) => b.scored?.cluster_key).map((b) => b.id));
+  return labels.filter((l) => l.ids.some((id) => !placed.has(id)));
+}
+
+/** The labels in requests of ASSIGN_CHUNK, keyed by chunk index. */
+const assignRequests = (families: ProblemFamily[], labels: string[]) => {
+  const requests = [];
+  for (let i = 0; i < labels.length; i += ASSIGN_CHUNK) {
+    requests.push({ custom_id: `assign-${i / ASSIGN_CHUNK}`, req: { model: FAMILY_MODEL, max_tokens: 32_000, effort: "low" as const, prompt: assignFamiliesPrompt(families, labels.slice(i, i + ASSIGN_CHUNK)), output_schema: ASSIGN_SCHEMA } });
+  }
+  return requests;
+};
 
 /** Writes a cluster onto problems, keeping their score. */
 export const recordClusters = internalMutation({
@@ -318,28 +368,38 @@ export const collectAssign = internalAction({
     const state = await getBatch(args.batch_id);
     if (state.processing_status !== "ended") return { status: state.processing_status, counts: state.request_counts };
     const results = await batchResults(state);
-    const keyOf = new Map<string, string>();
-    const failed: string[] = [];
-    for (const r of results) {
-      const n = Number(r.custom_id.replace("assign-", ""));
-      const chunk = args.labels.slice(n * ASSIGN_CHUNK, (n + 1) * ASSIGN_CHUNK);
-      const placed = r.text ? parseAssignments(r.text, args.families, chunk.length) : null;
-      if (!placed) { failed.push(r.custom_id); continue; }
-      chunk.forEach((label, i) => { const k = placed.get(i); if (k) keyOf.set(labelKey(label), k); });
-    }
-    const nameOf = new Map(args.families.map((f) => [f.key, f.name]));
-    nameOf.set("other", "Other");
     const { labels } = await labelsOf(ctx, args.workspace, args.judge);
-    const rows: Array<{ id: Id<"tasks">; key: string; name: string }> = [];
-    for (const l of labels) {
-      const key = keyOf.get(labelKey(l.label));
-      if (!key) continue;
-      for (const id of l.ids) rows.push({ id: id as Id<"tasks">, key, name: nameOf.get(key) ?? key });
-    }
+    const { rows, placed, failed } = clusterRows(results, args.labels, args.families, labels);
     const page = await writePaced(rows, args.from ?? 0, (chunk): Promise<number> => ctx.runMutation(internal.problemScores.recordClusters, { rows: chunk }));
-    return { status: "ended", ...page, placed_labels: keyOf.size, failed, ...meter(FAMILY_MODEL, results) };
+    return { status: "ended", ...page, placed_labels: placed, failed, ...meter(FAMILY_MODEL, results) };
   },
 });
+
+/**
+ * An assignment batch's answers as cluster rows: each label sent (`sent`, in
+ * the order it was chunked) placed in a family, written onto every open
+ * problem that carries it now.
+ */
+function clusterRows(results: BatchResult[], sent: string[], families: ProblemFamily[], labels: Array<{ label: string; ids: string[] }>) {
+  const keyOf = new Map<string, string>();
+  const failed: string[] = [];
+  for (const r of results) {
+    const n = Number(r.custom_id.replace("assign-", ""));
+    const chunk = sent.slice(n * ASSIGN_CHUNK, (n + 1) * ASSIGN_CHUNK);
+    const placed = r.text ? parseAssignments(r.text, families, chunk.length) : null;
+    if (!placed) { failed.push(r.custom_id); continue; }
+    chunk.forEach((label, i) => { const k = placed.get(i); if (k) keyOf.set(labelKey(label), k); });
+  }
+  const nameOf = new Map(families.map((f) => [f.key, f.name]));
+  nameOf.set("other", "Other");
+  const rows: Array<{ id: Id<"tasks">; key: string; name: string }> = [];
+  for (const l of labels) {
+    const key = keyOf.get(labelKey(l.label));
+    if (!key) continue;
+    for (const id of l.ids) rows.push({ id: id as Id<"tasks">, key, name: nameOf.get(key) ?? key });
+  }
+  return { rows, placed: keyOf.size, failed };
+}
 
 /** The scored open problems for review: score, reason, cluster and title, highest first; and the clusters by size. */
 export const report = internalAction({
@@ -367,3 +427,139 @@ export const report = internalAction({
     };
   },
 });
+
+// ── The scheduled pass ──────────────────────────────────────────────────────
+
+/** The judges the scheduled pass keeps scored (set by `configure`), and each one's state. */
+const TARGETS_KEY = "problem_scores.targets";
+const stateKey = (workspace: string, judge: string) => `problem_scores:${workspace}:${judge}`;
+
+interface PassState {
+  /** The one batch in flight; nothing is sent while it is, so no problem is paid for twice. */
+  pending?: { kind: "score" | "assign"; batch_id: string; at: number; labels?: string[]; families?: ProblemFamily[] };
+  /** What each ended batch cost, for the daily cap. */
+  spend: Array<{ at: number; usd: number }>;
+  per_problem_usd?: number;
+  last_submit_at?: number;
+  /** The families labels are placed in; without them, the ones already written on problems. */
+  families?: ProblemFamily[];
+  last?: Record<string, unknown>;
+}
+
+const familyValidator = v.object({ key: v.string(), name: v.string(), covers: v.string() });
+
+export const passConfig = internalQuery({
+  args: { key: v.string() },
+  handler: async (ctx, args) => getSystemConfig(ctx, args.key),
+});
+
+export const savePassConfig = internalMutation({
+  args: { key: v.string(), value: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.query("system_config").withIndex("by_key", (q: any) => q.eq("key", args.key)).unique();
+    if (row) await ctx.db.patch(row._id, { value: args.value, updated_at: Date.now() });
+    else await ctx.db.insert("system_config", { key: args.key, value: args.value, updated_at: Date.now() });
+  },
+});
+
+async function loadPass(ctx: any, workspace: string, judge: string): Promise<PassState> {
+  const raw: string | null = await ctx.runQuery(internal.problemScores.passConfig, { key: stateKey(workspace, judge) });
+  return raw ? JSON.parse(raw) : { spend: [] };
+}
+
+async function savePass(ctx: any, workspace: string, judge: string, state: PassState) {
+  const now = Date.now();
+  state.spend = state.spend.filter((s) => s.at > now - 48 * 60 * 60_000);
+  await ctx.runMutation(internal.problemScores.savePassConfig, { key: stateKey(workspace, judge), value: JSON.stringify(state) });
+}
+
+/**
+ * Turns the scheduled pass on or off for one judge (run with
+ * packages/convex/run.sh); `families` sets the families new labels go in.
+ */
+export const configure = internalAction({
+  args: { workspace: v.string(), judge: v.string(), off: v.optional(v.boolean()), families: v.optional(v.array(familyValidator)) },
+  handler: async (ctx, args): Promise<{ targets: Array<{ workspace: string; judge: string }> }> => {
+    const raw: string | null = await ctx.runQuery(internal.problemScores.passConfig, { key: TARGETS_KEY });
+    const targets: Array<{ workspace: string; judge: string }> = ((raw ? JSON.parse(raw) : []) as Array<{ workspace: string; judge: string }>).filter((t) => t.workspace !== args.workspace || t.judge !== args.judge);
+    if (!args.off) targets.push({ workspace: args.workspace, judge: args.judge });
+    await ctx.runMutation(internal.problemScores.savePassConfig, { key: TARGETS_KEY, value: JSON.stringify(targets) });
+    if (args.families) {
+      const state = await loadPass(ctx, args.workspace, args.judge);
+      await savePass(ctx, args.workspace, args.judge, { ...state, families: args.families });
+    }
+    return { targets };
+  },
+});
+
+/**
+ * The scheduled pass, every 15 minutes for each configured judge: a batch in
+ * flight is collected once it ends and its answers written, paced; with none
+ * in flight and 6 hours since the last send, the problems due (dueForScoring)
+ * go out as one batch, as many as the daily cap still pays for. A scoring
+ * batch is followed by placing the labels of problems with no cluster.
+ * `dry` reports what it would do and sends nothing.
+ */
+export const tick = internalAction({
+  args: { dry: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<Array<Record<string, unknown>>> => {
+    const raw: string | null = await ctx.runQuery(internal.problemScores.passConfig, { key: TARGETS_KEY });
+    const out: Array<Record<string, unknown>> = [];
+    for (const t of (raw ? JSON.parse(raw) : []) as Array<{ workspace: string; judge: string }>) {
+      out.push({ ...t, ...(await advance(ctx, t.workspace, t.judge, !!args.dry)) });
+    }
+    return out;
+  },
+});
+
+async function advance(ctx: any, workspace: string, judge: string, dry: boolean): Promise<Record<string, unknown>> {
+  const now = Date.now();
+  const state = await loadPass(ctx, workspace, judge);
+  const pending = state.pending;
+  if (pending) {
+    const batch = await getBatch(pending.batch_id);
+    if (batch.processing_status !== "ended") {
+      // A batch ends within 24 hours; one still open after two days is lost.
+      if (!dry && now - pending.at > 48 * 60 * 60_000) { delete state.pending; await savePass(ctx, workspace, judge, state); return { dropped: pending.batch_id }; }
+      return { waiting: pending.batch_id, status: batch.processing_status };
+    }
+    if (dry) return { ended: pending.batch_id, kind: pending.kind };
+    const results = await batchResults(batch);
+    delete state.pending;
+    if (pending.kind === "score") {
+      const { rows, failed } = scoreRows(results);
+      const written = await writeAll(rows, (chunk): Promise<number> => ctx.runMutation(internal.problemScores.record, { rows: chunk }));
+      const m = meter(SCORE_MODEL, results);
+      state.spend.push({ at: now, usd: m.cost_usd });
+      if (m.per_request_usd > 0) state.per_problem_usd = m.per_request_usd;
+      state.last = { kind: "score", at: now, batch_id: pending.batch_id, written, failed: failed.length, cost_usd: m.cost_usd };
+      const { open, labels } = await labelsOf(ctx, workspace, judge);
+      const families = state.families?.length ? state.families : writtenFamilies(open);
+      const chunks = unplacedLabels(open, labels).map((l) => l.label);
+      if (chunks.length && families.length && spentToday(state.spend, now) < DAILY_CAP_USD) {
+        const assign = await createBatch(assignRequests(families, chunks));
+        state.pending = { kind: "assign", batch_id: assign.id, at: now, labels: chunks, families };
+      }
+    } else {
+      const { labels } = await labelsOf(ctx, workspace, judge);
+      const { rows, placed, failed } = clusterRows(results, pending.labels ?? [], pending.families ?? [], labels);
+      const written = await writeAll(rows, (chunk): Promise<number> => ctx.runMutation(internal.problemScores.recordClusters, { rows: chunk }));
+      const m = meter(FAMILY_MODEL, results);
+      state.spend.push({ at: now, usd: m.cost_usd });
+      state.last = { kind: "assign", at: now, batch_id: pending.batch_id, written, placed_labels: placed, failed: failed.length, cost_usd: m.cost_usd };
+    }
+    await savePass(ctx, workspace, judge, state);
+    return { ...state.last, next: state.pending?.batch_id ?? null };
+  }
+  if (state.last_submit_at && now - state.last_submit_at < RESCORE_EVERY_MS) return { next_send_at: state.last_submit_at + RESCORE_EVERY_MS };
+  const due = dueForScoring(await openBriefs(ctx, workspace, judge));
+  const send = due.slice(0, affordable(state.spend, now, state.per_problem_usd ?? DEFAULT_PROBLEM_USD));
+  if (dry) return { due: due.length, would_send: send.length, spent_today: spentToday(state.spend, now) };
+  state.last_submit_at = now;
+  if (send.length) {
+    const batch = await createBatch(await scoreRequests(ctx, send.map((b) => b.id)));
+    state.pending = { kind: "score", batch_id: batch.id, at: now };
+  }
+  await savePass(ctx, workspace, judge, state);
+  return { due: due.length, sent: send.length, batch_id: state.pending?.batch_id ?? null };
+}

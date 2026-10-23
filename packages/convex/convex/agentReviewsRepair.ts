@@ -281,7 +281,7 @@ export const filingPage = internalQuery({
   args: { workspace: v.string(), judge: v.string(), cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, args) => {
     const page = await ctx.db.query("signals").withIndex("by_workspace_subject", (q: any) => q.eq("workspace", args.workspace).eq("subject", args.judge)).paginate({ cursor: args.cursor, numItems: 400 });
-    const rows = (page.page as Doc<"signals">[]).filter((r) => r.source === `judge:${args.judge}`).map((r) => ({ task: r.task_id ? String(r.task_id) : null, key: r.fingerprint, retired: !!r.retired || !!r.merged_into }));
+    const rows = (page.page as Doc<"signals">[]).filter((r) => r.source === `judge:${args.judge}`).map((r) => ({ task: r.task_id ? String(r.task_id) : null, key: r.fingerprint, retired: !!r.retired || !!r.merged_into, at: r.created_at }));
     return { rows, cursor: page.isDone ? null : page.continueCursor };
   },
 });

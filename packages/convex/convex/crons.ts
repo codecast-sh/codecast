@@ -13,6 +13,11 @@ crons.interval("prune conversation events", { hours: 6 }, (internal as any).conv
 
 // Summarize hosted conversations' history past the replayed window
 // (assistant/longHistory.ts): bounded by its own deadline and spend caps.
+// Keep agent-review problem scores current: every 6 hours a batch of the
+// problems with no score or a newer finding, under a $2 daily cap
+// (problemScores.ts). The 15-minute tick collects a batch soon after it ends.
+crons.interval("score agent-review problems", { minutes: 15 }, internal.problemScores.tick, {});
+
 crons.interval("summarize long assistant conversations", { minutes: 10 }, internal.assistant.longHistory.compress, {});
 
 crons.interval(
