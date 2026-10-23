@@ -20,7 +20,10 @@
  * The tree's verdict follows from those and from who is still in it. Only a
  * finished tree is ever proposed for landing or pruning: one a live session
  * owns, a process sits in, or that changed within ACTIVE_MS is "live" and
- * left alone.
+ * left alone. A tree a line run made is never proposed for landing, however
+ * quiet: the run ships its change itself once a person decides, and a hand
+ * landing it first would ship a fix nobody approved (Union's ship of Oct 22
+ * took 14 runs' repro tests into main this way).
  *
  * All index work happens in a private copy of the worktree's index, so a scan
  * never changes what a session has staged.
@@ -54,7 +57,9 @@ export type TreeVerdict =
   /** Finished recently with changes only it has: land them. */
   | "ready"
   /** Finished recently, and its changes collide with newer work on main. */
-  | "review";
+  | "review"
+  /** A line run made it and it holds work main lacks, in use or not: the run ships that work after its decision, never a hand. */
+  | "run";
 
 /** Verdicts whose tree `cast land prune` archives and removes. */
 export const PRUNABLE: ReadonlySet<TreeVerdict> = new Set(["empty", "landed", "stale"]);
@@ -298,6 +303,8 @@ export interface VerdictFacts {
   locked: boolean;
   liveOwner: boolean;
   processInside: boolean;
+  /** A line run made it: its run files sit under the checkout's run dirs by the tree's name (runDirs.ts lineRunsRoot). */
+  run: boolean;
   lastActivity: number;
   counts: Record<FileVerdict, number>;
   now: number;
@@ -318,11 +325,13 @@ export function treeVerdict(f: VerdictFacts): { verdict: TreeVerdict; reason: st
   const quiet = f.now - f.lastActivity;
   const inUse = inUseReason(f);
   if (f.primary) return { verdict: "primary", reason: `the repo's main checkout${inUse ? `, in use: ${inUse}` : ""}` };
-  if (inUse) return { verdict: "live", reason: inUse };
   const { same, absorbed, only, both } = f.counts;
+  const open = `${only} files only it changed, ${both} where main lacks its change`;
+  // A run's own work is the run's to ship, while a hand is in it as much as while it waits on a person.
+  if (f.run && only + both > 0 && (inUse || quiet < STALE_MS)) return { verdict: "run", reason: `a line run's change, which the run ships after its decision; ${open}` };
+  if (inUse) return { verdict: "live", reason: inUse };
   if (same + absorbed + only + both === 0) return { verdict: "empty", reason: "no changes of its own" };
   if (only + both === 0) return { verdict: "landed", reason: `main already holds all ${same + absorbed} files it changed${absorbed ? ` (${absorbed} reworked since)` : ""}` };
-  const open = `${only} files only it changed, ${both} where main lacks its change`;
   if (quiet >= STALE_MS) return { verdict: "stale", reason: `untouched for ${Math.floor(quiet / 86_400_000)}d; ${open}` };
   if (only > 0) return { verdict: "ready", reason: open };
   return { verdict: "review", reason: open };
@@ -334,8 +343,11 @@ export interface ScanContext {
   mainBlobs: Map<string, string>;
   roster: RosterRow[] | null;
   processCwds: string[];
+  /** Names that have run files in this checkout: the trees line runs made. */
+  runTrees: ReadonlySet<string>;
   now: number;
 }
+
 
 export async function scanTree(entry: WorktreeEntry, ctx: ScanContext): Promise<TreeReport> {
   const base = await worktreeBase(entry, ctx.mainRef);
@@ -356,6 +368,7 @@ export async function scanTree(entry: WorktreeEntry, ctx: ScanContext): Promise<
     locked: entry.locked,
     liveOwner: !!ownerRow && ownerIsLive(ownerRow, ctx.now),
     processInside: ctx.processCwds.some((c) => c === entry.path || c.startsWith(`${entry.path}/`)),
+    run: !entry.primary && ctx.runTrees.has(path.basename(entry.path)),
     lastActivity,
     counts: { same: 0, absorbed: 0, only: 0, both: 0 },
     now: ctx.now,
@@ -443,6 +456,7 @@ export async function scanRepo(root: string, opts: { roster: RosterRow[] | null;
     mainBlobs: await treeBlobs(root, mainRef),
     roster: opts.roster,
     processCwds: opts.processCwds,
+    runTrees: (await import("../workflow/runDirs.js")).runTreeNames(root),
     now,
   };
   // `only`: the named trees and those nested above or below them, whose verdicts decide whether a named one may go.

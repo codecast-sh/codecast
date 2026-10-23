@@ -25,116 +25,16 @@
 // TODO: expose a per-project opt-out flag once config plumbing exists. On by
 // default for now.
 
+import { LABELED_SECRET_SHAPES, SECRET_SHAPES } from "@codecast/shared/contracts/secretShapes";
 import { redactKnownValues } from "./knownValueRedaction.js";
 
 type SecretPattern = { re: RegExp; marker: string };
 
-// Order matters only for clean labeling of overlapping shapes (more specific
-// first); correctness does not depend on it. All regexes are global.
-const SECRET_PATTERNS: SecretPattern[] = [
-  // PEM private key blocks — highest value, effectively zero false positives.
-  {
-    re: /-----BEGIN [A-Z0-9 ]*?PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*?PRIVATE KEY-----/g,
-    marker: "[redacted:private-key]",
-  },
-  // JSON Web Tokens: header.payload.signature, each a base64url segment.
-  // Requires two dots, which base64 image data / hashes never contain.
-  {
-    re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-    marker: "[redacted:jwt]",
-  },
-  // AWS access key id (long-term AKIA / temporary ASIA). Exactly 20 chars,
-  // bounded both sides so it can't match a slice of a longer base64 blob.
-  {
-    re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
-    marker: "[redacted:aws-access-key]",
-  },
-  // GitHub fine-grained PAT.
-  {
-    re: /\bgithub_pat_[A-Za-z0-9_]{22,}/g,
-    marker: "[redacted:github-token]",
-  },
-  // GitHub classic PAT + OAuth / server / refresh tokens (36-char body).
-  {
-    re: /\b(?:ghp|gho|ghs|ghr)_[A-Za-z0-9]{36}\b/g,
-    marker: "[redacted:github-token]",
-  },
-  // Slack bot / user / app / refresh / legacy tokens.
-  {
-    re: /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
-    marker: "[redacted:slack-token]",
-  },
-  // Slack incoming webhook URL.
-  {
-    re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9_\/+-]{10,}/g,
-    marker: "[redacted:slack-webhook]",
-  },
-  // Discord webhook URL.
-  {
-    re: /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/[0-9]{10,}\/[A-Za-z0-9_-]{10,}/g,
-    marker: "[redacted:discord-webhook]",
-  },
-  // Stripe live secret key.
-  {
-    re: /\bsk_live_[A-Za-z0-9]{24,}/g,
-    marker: "[redacted:stripe-secret-key]",
-  },
-  // Google API key.
-  {
-    re: /\bAIza[A-Za-z0-9_-]{35}\b/g,
-    marker: "[redacted:google-api-key]",
-  },
-  // Anthropic API key (distinctive sk-ant- prefix).
-  {
-    re: /\bsk-ant-[A-Za-z0-9-]{20,}/g,
-    marker: "[redacted:anthropic-key]",
-  },
-  // OpenAI project key.
-  {
-    re: /\bsk-proj-[A-Za-z0-9_-]{40,}/g,
-    marker: "[redacted:openai-key]",
-  },
-  // OpenAI legacy key: sk- followed by exactly 48 alnum chars. The strict
-  // length avoids eating short `sk-...` fragments that appear in prose.
-  {
-    re: /\bsk-[A-Za-z0-9]{48}\b/g,
-    marker: "[redacted:openai-key]",
-  },
-];
-
-// Secrets that follow a label. Group 1 (the label: a variable name and its
-// operator, `Bearer`, a URL path prefix) is preserved; only the value is
+// The shapes live in shared/contracts/secretShapes.ts, which the web composer
+// reads too. Labeled shapes keep their group 1 (the label); only the value is
 // redacted.
-const LABELED_PATTERNS: SecretPattern[] = [
-  // Opaque secret assigned to a strongly secret-named variable — the .env-dump
-  // case that no vendor prefix above matches. Guards against eating code: the
-  // name ends in a strong secret word (bare `KEY` is deliberately excluded, so
-  // FOREIGN_KEY/PRIMARY_KEY are ignored), and the value must be 16+ non-space
-  // chars that include a digit — plain identifiers (`users_id`) have none.
-  {
-    re: /\b([A-Za-z0-9_-]{0,40}(?:SECRET|PASSWORD|PASSWD|CREDENTIALS?|TOKEN|ACCESS[_-]?KEY|API[_-]?KEY|PRIVATE[_-]?KEY)\s*[=:]\s*["'`]?)(?=[^\s"'`]*\d)[A-Za-z0-9][^\s"'`]{15,}/gi,
-    marker: "[redacted:secret-assignment]",
-  },
-  // `Bearer <token>` in a header/curl. Digit-guarded so `Bearer someVariable`
-  // in a code discussion (no digit) is left alone; real bearer tokens contain
-  // digits.
-  {
-    re: /\b(Bearer\s+)(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9._-]{20,}/g,
-    marker: "[redacted:bearer-token]",
-  },
-  // The cast browser bridge token (32 random bytes as hex) in the two shapes
-  // the CLI prints it: `token  <hex>` from `extension setup --show-token`,
-  // and the bridge host's browser socket URL `/devtools/browser/<hex>`.
-  // Chrome's own socket URLs end in a dashed UUID, which never matches.
-  {
-    re: /\b(token\s+)[0-9a-f]{64}\b/gi,
-    marker: "[redacted:bridge-token]",
-  },
-  {
-    re: /(\/devtools\/browser\/)[0-9a-f]{64}\b/g,
-    marker: "[redacted:bridge-token]",
-  },
-];
+const SECRET_PATTERNS: SecretPattern[] = SECRET_SHAPES.map((s) => ({ re: s.re, marker: `[redacted:${s.id}]` }));
+const LABELED_PATTERNS: SecretPattern[] = LABELED_SECRET_SHAPES.map((s) => ({ re: s.re, marker: `[redacted:${s.id}]` }));
 
 function redactLabeled(text: string): string {
   let out = text;
