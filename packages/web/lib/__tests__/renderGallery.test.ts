@@ -56,6 +56,7 @@ const USER_ROW_KINDS: Record<UserMessageKind["kind"], true | string> = {
   huddle_summary: true,
   chat_wake: true,
   decision_answer: true,
+  vault_ready: true,
   session_escalation: true,
 };
 

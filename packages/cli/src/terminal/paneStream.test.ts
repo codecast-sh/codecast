@@ -5,8 +5,9 @@
 // runPaneStream takes all of that through deps, so the tests below ARE the
 // contract — a change in write volume or in stop behaviour breaks one of them.
 
-import { describe, expect, test } from "bun:test";
-import { runPaneStream, capturePane, type PaneFramePush, type PaneSnapshot } from "./paneStream.js";
+import { afterEach, describe, expect, test } from "bun:test";
+import { setKnownValuesForTest } from "../knownValueRedaction.js";
+import { runPaneStream, capturePane, redactFrame, type PaneFramePush, type PaneSnapshot } from "./paneStream.js";
 import {
   PANE_CAPTURE_INTERVAL_MS,
   PANE_HEARTBEAT_MS,
@@ -63,6 +64,8 @@ function harness(opts: {
 }
 
 describe("runPaneStream", () => {
+  afterEach(() => setKnownValuesForTest(null));
+
   test("an unchanged screen is not re-pushed — only heartbeats", async () => {
     // 40 ticks of a totally static pane. At a 400ms capture interval that is
     // 16 seconds of wall clock: one opening frame plus a heartbeat every four
@@ -92,6 +95,36 @@ describe("runPaneStream", () => {
     const frames = h.pushes.filter((p) => p.frame !== undefined);
     expect(frames.map((f) => f.frame)).toEqual(["one", "two", "three"]);
     expect(frames[0]).toMatchObject({ cols: 80, rows: 24, cursor_x: 3, cursor_y: 5 });
+  });
+
+  test("a frame is redacted before it leaves: a Vault value printed in the pane never reaches the relay", async () => {
+    setKnownValuesForTest([{ value: "zz-pane-value-91c2", name: "zz-pane", vault: true }]);
+    const h = harness({
+      screens: ["$ cast vault get zz-pane\nzz-pane-value-91c2\n$ "],
+      answer: (n) => ({ stop: n >= 1 }),
+    });
+    await h.run();
+    expect(h.pushes[0]!.frame).toBe("$ cast vault get zz-pane\n[redacted:known:zz-pane]\n$ ");
+  });
+
+  test("a value wider than the pane, split across rows, is masked in every row it spans", () => {
+    const value = "zzwide" + "q7".repeat(47);
+    setKnownValuesForTest([{ value, name: "zz-wide", vault: true }]);
+    const frame = ["$ echo $ZZ_WIDE", value.slice(0, 80), value.slice(80), "$ "].join("\n");
+    const out = redactFrame(frame, 80).split("\n");
+    expect(out).toEqual(["$ echo $ZZ_WIDE", "[redacted:known:zz-wide]", "", "$ "]);
+    for (const row of out) expect(row).not.toContain(value.slice(80));
+  });
+
+  test("a color change inside a value does not hide it; rows with no secret keep their colors", () => {
+    setKnownValuesForTest([{ value: "zz-pane-value-91c2", name: "zz-pane", vault: true }]);
+    const frame = "\x1b[32m$\x1b[0m ls\nzz-pane-\x1b[31mvalue-91c2\x1b[0m";
+    expect(redactFrame(frame, 80)).toBe("\x1b[32m$\x1b[0m ls\n[redacted:known:zz-pane]");
+  });
+
+  test("a frame with no secret leaves unchanged, full rows included", () => {
+    const frame = ["a".repeat(80), "b", "\x1b[1mbold\x1b[0m"].join("\n");
+    expect(redactFrame(frame, 80)).toBe(frame);
   });
 
   test("a lapsed lease stops the loop — no stop message needed", async () => {

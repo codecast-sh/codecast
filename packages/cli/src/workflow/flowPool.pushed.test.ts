@@ -53,3 +53,32 @@ describe("a published flow in the pool", () => {
     expect(pool.filter((p) => p.slug === "change").map((p) => p.where)).toEqual(["shipped"]);
   });
 });
+
+describe("a published flow as a segment", () => {
+  test("a repo flow that names a team flow by slug runs its steps, read from this machine's copy", () => {
+    const cache = mkdtemp();
+    const repo = mkdtemp();
+    const saved = process.env.CODECAST_FLOWS_CACHE;
+    process.env.CODECAST_FLOWS_CACHE = cache;
+    try {
+      fs.mkdirSync(path.join(repo, ".codecast", "flows"), { recursive: true });
+      fs.writeFileSync(path.join(repo, ".codecast", "flows", "ship-it.cast"), `digraph ship_it {
+        graph [kind="line", label="Ship it"]
+        start [shape=Mdiamond]
+        second [flow="review-pass"]
+        exit [shape=Msquare]
+        start -> second -> exit
+      }`);
+      const pool = poolFlows(repo, null, [row()]);
+      const shipIt = pool.find((f) => f.slug === "ship-it")!;
+      expect(shipIt.errors).toEqual([]);
+      expect(shipIt.uses).toEqual(["review-pass"]);
+      const graph = parseWorkflowFile(path.join(repo, ".codecast", "flows", "ship-it.cast"));
+      expect(graph.nodes.get("second__review")?.prompt).toBe("Read the diff on $branch.");
+      expect(fs.existsSync(path.join(cache, "index.json"))).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.CODECAST_FLOWS_CACHE;
+      else process.env.CODECAST_FLOWS_CACHE = saved;
+    }
+  });
+});
