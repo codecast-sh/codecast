@@ -1,0 +1,7 @@
+import{aj as t}from"./index-DyCGlXy1.js";import"./vendor-BRSpyZc9.js";import"./lineWorkspaceUrl-DlQra3DE.js";import"./index-V19xsL7x.js";import"./dexie-BEFYTs6O.js";import"./convex-pL9slGJ3.js";import"./sentry-C0kWfPzV.js";import"./highlight-9pfC9kl-.js";import"./ui-DVb64tq5.js";import"./diff-05CVVOnl.js";import"./markdown-B7kiGmIT.js";/**
+ * @license lucide-react v0.556.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const o=[["path",{d:"M11 2h2",key:"isr7bz"}],["path",{d:"m14.28 14-4.56 8",key:"4anwcf"}],["path",{d:"m21 22-1.558-4H4.558",key:"enk13h"}],["path",{d:"M3 10v2",key:"w8mti9"}],["path",{d:"M6.245 15.04A2 2 0 0 1 8 14h12a1 1 0 0 1 .864 1.505l-3.11 5.457A2 2 0 0 1 16 22H4a1 1 0 0 1-.863-1.506z",key:"pouggg"}],["path",{d:"M7 2a4 4 0 0 1-4 4",key:"78s8of"}],["path",{d:"m8.66 7.66 1.41 1.41",key:"1vaqj8"}]],s=t("solar-panel",o);export{o as __iconNode,s as default};
+//# sourceMappingURL=solar-panel-B99HvF9h.js.map

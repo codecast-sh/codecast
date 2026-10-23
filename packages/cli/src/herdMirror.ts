@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { herdViewerAlive } from "./herdViewer.js";
 import { execFileAsync } from "./proc.js";
+import { shellQuote } from "./shellQuote.js";
 import { tmuxRunAsync } from "./tmux.js";
 import { cliFetchRead } from "./cliHttp.js";
 import type { CodecastPane } from "./tmux.js";
@@ -209,10 +210,6 @@ function reportState(req: Req, paneId: string, member: HerdMember) {
     state: member.state ?? "unknown",
     agent_session_id: member.sessionId,
   });
-}
-
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 /** One full pass: read herdr, plan against `members`, apply. */

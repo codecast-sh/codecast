@@ -274,10 +274,11 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
                     <button type="button" className="lw-iconbtn" disabled={at < 0 || at >= order.length - 1} onClick={() => move(1, false)} aria-label="Next"><ChevronRight className="w-4 h-4" /></button>
                   </span>}
                 </div>
-                <div className="fy-reader-b">
+                {/* Keyed by the item: the body is the decision's scroll, so the next one opens at its top. */}
+                <div className="fy-reader-b" key={current.key} data-flow={current.kind === "decision" && (current.decisionId || current.decisionRef) ? "" : undefined}>
                   {(current.decisionId || current.caseId) && <div className="fy-origin" data-line-foryou-origin><OriginTrail key={current.key} decision={current.decisionId ?? null} task={current.decisionId ? null : current.caseId ?? null} folded /></div>}
                   {current.kind === "decision" && (current.decisionId || current.decisionRef)
-                    ? <LineDecision key={current.key} id={current.decisionId ?? current.decisionRef!} head={false} quiet onProblem={toProblem(current)} onRun={toRun(current)} />
+                    ? <LineDecision key={current.key} id={current.decisionId ?? current.decisionRef!} head={false} quiet inline onProblem={toProblem(current)} onRun={toRun(current)} />
                     : <WaitingItem key={current.key} need={current} now={now} onProblem={toProblem(current)} onRun={toRun(current)} head={false} asked={false} />}
                 </div>
               </>

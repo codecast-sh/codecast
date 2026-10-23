@@ -1,0 +1,2 @@
+import{r as o}from"./vendor-BRSpyZc9.js";import{am as r,G as a}from"./index-DyCGlXy1.js";import{f as n}from"./lineWorkspaceUrl-DlQra3DE.js";const c=a,u=e=>e?.task?.id?[{_id:e.task.id,...e}]:[];function f(e){return r("taskEvidence",c.taskEvidence.get,e?{task_id:e}:"skip",o.useMemo(()=>({select:u}),[]))}function m(e){return n(s=>e?s.taskEvidence?.[e]:void 0)}function p(e){return n(s=>{if(!e)return;const t=s.taskEvidence;for(const i in t??{})if(t[i]?.task?.short_id===e)return t[i]})}export{p as a,m as b,f as u};
+//# sourceMappingURL=useSyncTaskEvidence-DUBSGOv-.js.map

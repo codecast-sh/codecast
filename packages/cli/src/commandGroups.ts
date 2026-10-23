@@ -470,6 +470,32 @@ host and token: cast integrations connect <provider>`,
     load: () => import("./connectorCommand.js").then((m) => m.registerConnectorCommand),
   },
   {
+    token: "vault",
+    aliases: ["secrets"],
+    args: ["[args...]"],
+    hasOptions: true,
+    description: `The team's keys, logins, files and saved sign-ins, for agents. Values never go in argv, chat or your own output
+
+  cast vault [ls --stale]                     every secret, open requests first (--json)
+  cast vault run stripe-test -- npm test      the command gets STRIPE_TEST (or the secret's --env names)
+  cast vault run -- npm test                  every var this repo's [vault] in .codecast/workspace.toml maps
+  cast vault run --env-file .env.vault -- …   an env file's vault://<name> values filled in
+  cast vault get stripe-test                  the raw value on stdout, for a pipe or $(…)
+  eval "$(cast vault env stripe-test)"        export lines
+  cast vault otp github-bot                   a login's current 2FA code
+  cast vault request stripe-test --why "…"    ask a person; a message arrives when it is filled
+  cast vault add|rotate|fill <name>           store a value from a hidden prompt, stdin, --file or --from-env
+  cast vault save-signin vercel.com           save the agent browser's sign-in; cast browser open loads it
+  cast vault show|rm <name>                   details and recent use; delete
+  cast vault restore <name> [number]          list, or put back, a value rotate replaced in the last 7 days
+  cast vault ask-first <name> on              each session's first read waits on a person's approval
+
+Exit 3 from get, run, env or otp: an Ask first secret waits on a person. Nothing was read; stderr names the decision.
+Missing a credential? Request it, never ask for it in chat. Prefer run over get.
+Local markdown folders moved to cast files.`,
+    load: () => import("./secrets/command.js").then((m) => m.registerVaultCommand),
+  },
+  {
     token: "switch",
     hasOptions: true,
     description: `Change the agent or model on this session without forking
