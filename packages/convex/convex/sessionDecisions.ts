@@ -39,6 +39,7 @@ import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
+import { secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded } from "./lib/superseded";
@@ -713,7 +714,11 @@ export function normalizeVerdict(row: DecisionRow, raw: Verdict): Verdict | { er
   return { status: "answered", answer_json: values, answer_text: raw.answer_text };
 }
 
-export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants">; via?: Id<"conversations"> };
+// signed_in: a person answering from the app with their own sign-in (the
+// web's resolve and dispatch rail), never through an api token, which the
+// session that asked holds too. Only Vault's Ask first reads it
+// (secretApprovalRefusal).
+export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants">; via?: Id<"conversations">; signed_in?: boolean };
 
 export const HOSTED_ANSWER_REFUSED = "Only the owner can answer a hosted assistant's question";
 
@@ -731,6 +736,13 @@ export async function hostedAnswerRefusal(ctx: Ctx, row: { conversation_id?: Id<
   return HOSTED_ANSWER_REFUSED;
 }
 
+// Every refusal a resolve path checks before it writes: a hosted
+// conversation's question is its owner's, and a Vault Ask first decision is a
+// signed-in person's (secretApprovalRefusal). Returns why, or null.
+export async function answerRefusal(ctx: Ctx, row: DecisionRow, by: AnsweredBy): Promise<string | null> {
+  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by));
+}
+
 // The one place a decision is resolved, for every path (web resolve, CLI
 // answer, a role under a grant, a stack auto default, a dismissal). First
 // writer wins: a row that is no longer pending is left alone.
@@ -746,7 +758,7 @@ export async function finalizeAnswer(
   opts: { deliver: boolean; now?: number },
 ): Promise<{ already_resolved: boolean; answer_label?: string; delivered?: boolean; resumed_run?: boolean }> {
   if (row.status !== "pending") return { already_resolved: true };
-  const refusal = await hostedAnswerRefusal(ctx, row, by);
+  const refusal = await answerRefusal(ctx, row, by);
   if (refusal) throw new Error(refusal);
   const now = opts.now ?? Date.now();
   const label = answerLabel(row, verdict);
@@ -845,6 +857,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await noticeAnsweredForPeople(ctx, row, verdict, by);
   // An expectations proposal's card applies or drops it (LM5).
   await settleExpectationCard(ctx, row, verdict, by, now);
+  // A Vault Ask first read's decision grants or denies that session (vault.md).
+  await settleSecretApproval(ctx, row, verdict, by, now);
   // Tasks waiting on this decision settle (task-graph.md TG2).
   await scheduleDecisionSettle(ctx as any, row, by);
   // A dismissal delivers no message, so a hosted turn parked on this
@@ -913,7 +927,7 @@ export async function settleClientResolution(
     answer_text: patch.answer_text,
     answer_json: patch.answer_json,
   };
-  const by: AnsweredBy = { kind: "user", id: String(userId), user_id: userId };
+  const by: AnsweredBy = { kind: "user", id: String(userId), user_id: userId, signed_in: true };
   await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
   const consumed = await settleResolution(ctx, row, verdict, by, now);
   if (row.workflow_run_id && !consumed) await deliverAnswer(ctx, row, verdict, by);
@@ -1784,7 +1798,7 @@ export async function answerCore(
   const now = Date.now();
   const by = await answererFor(ctx, auth, row, args.session_id, now, !!args.for_human);
   if ("error" in by) return by;
-  const refusal = await hostedAnswerRefusal(ctx, row, by);
+  const refusal = await answerRefusal(ctx, row, by);
   if (refusal) return { error: refusal };
   const verdict = normalizeVerdict(row, { status: "answered", answer_index: args.answer_index, answer_json: args.answer_json, answer_text: args.answer_text });
   if ("error" in verdict) return verdict;
@@ -1847,7 +1861,7 @@ export const resolve = mutation({
     if (row.status !== "pending") return { already_resolved: true };
     const verdict = normalizeVerdict(row, args);
     if ("error" in verdict) throw new Error(verdict.error);
-    return finalizeAnswer(ctx, row, verdict, { kind: "user", id: String(userId), user_id: userId }, { deliver: false });
+    return finalizeAnswer(ctx, row, verdict, { kind: "user", id: String(userId), user_id: userId, signed_in: true }, { deliver: false });
   },
 });
 

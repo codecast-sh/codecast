@@ -21,12 +21,13 @@ const FORKS_VERSION = "8"; // bumped: with N directions this thread takes the fi
 const PUBLISH_VERSION = "6"; // bumped: publish open, gate only when the human asks
 const BROWSER_VERSION = "17"; // bumped: reuse abandoned Cast tabs on the same URL; Grok is not keyed by pane
 const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
-const DECIDE_VERSION = "3"; // v3: never post a probe or test decision; every ask reaches the real queue
+const DECIDE_VERSION = "4"; // v4: the card is written for someone who never saw the session, recommendation first, in a minute; v3: never post a probe or test decision
 const CALLS_VERSION = "6"; // 6: filmed lines marked in the transcript, --crop and --tiles for small screen text; 5: a frame is shown by its citation, --share is public and only on request, the snap spellings; 4: cast call snap, frames of a recorded call; 3: cl-N short ids and cl-N:a-b line embeds
 const LIMITS_VERSION = "2"; // 2: a subagent or workflow agent stopped on a limit gets its work run again; 1: usage limits are a pause, not a stop; cast usage
 const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
 const CHECK_VERSION = "1"; // first release: cast check, one shared tsc watcher per tree and project
 const SIM_VERSION = "1"; // first release: cast sim, the shared simulator pool on a laptop or a cloud Mac
+const VAULT_VERSION = "1"; // first release: cast vault, credentials from the team's Vault instead of the conversation
 const SKILLS_VERSION = "3"; // bumped: cast-ship ships a whole shared checkout with cast ship checkout
 const PR_VERSION = "2"; // bumped: cast pr create, the change guide as the walkthrough
 const MODS_VERSION = "1"; // first release: cast mod, panes, commands and fences in the app
@@ -98,6 +99,10 @@ export function getComputerVersion(): string {
 
 export function getSimVersion(): string {
   return SIM_VERSION;
+}
+
+export function getVaultVersion(): string {
+  return VAULT_VERSION;
 }
 
 export function getCheckVersion(): string {

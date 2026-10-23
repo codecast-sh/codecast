@@ -128,6 +128,10 @@ export const ccAccountsValidator = v.object({
       // (invalid_grant): dead until the account signs in again. Never a
       // switch target (fallbackProfiles); the UI says "login expired".
       login_expired_at: v.optional(v.number()),
+      // Kept on this machine for one job (`cast accounts reserve <name> --for
+      // reviews`): auto-switch never moves the machine's sessions onto it
+      // (fallbackProfiles), so the job keeps the account's windows.
+      reserved_for: v.optional(v.string()),
     }),
   ),
 });
@@ -1056,18 +1060,31 @@ export function parkedAccountResetAt(
 // (a marked opencode/pi client error) is OUT of the blocked set for everyone.
 // A statusful 5xx banner is kind "fatal": Claude Code writes it only after its
 // own retries are spent. Dismissed is an explicit user "go away" — never
-// auto-revive.
+// auto-revive. A workflow run's log is never blocked: no agent of its own runs
+// there, so a continue only wakes a fresh one that asks what it is for.
 export function isBlockedConversation(conv: {
   pending_api_error?: boolean;
   pending_api_error_kind?: string | null;
   agent_type?: string;
   inbox_dismissed_at?: number | null;
+  is_workflow_primary?: boolean;
+  session_id?: string | null;
 }): boolean {
   return (
     conv.pending_api_error === true &&
     blockedKindsForAgent(conv.agent_type).has(conv.pending_api_error_kind ?? "") &&
-    !conv.inbox_dismissed_at
+    !conv.inbox_dismissed_at &&
+    !isWorkflowRunLog(conv)
   );
+}
+
+// A workflow run's log: the primary conversation a run created for itself
+// (session `wf-<runId>`), written by the runner and never by an agent. Its
+// stations nest under it as workers, so it looks like their parent. A real
+// session that hosted a run is stamped is_workflow_primary too, and its agent
+// is revived like any other (RunLogEndedBar.isEndedRunLog draws the same line).
+export function isWorkflowRunLog(conv: { is_workflow_primary?: boolean; session_id?: string | null }): boolean {
+  return conv.is_workflow_primary === true && !!conv.session_id?.startsWith("wf-");
 }
 
 // The revive window: a park older than this is the graveyard, not the current

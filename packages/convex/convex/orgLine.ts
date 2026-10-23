@@ -1,19 +1,20 @@
 import { v } from "convex/values";
-import { internalMutation, query } from "./functions";
+import { internalMutation, internalQuery, query } from "./functions";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
 import { isUnblocked, TASK_PRIORITIES } from "@codecast/shared/tasks";
 import { readinessLookups } from "./lib/taskGraph";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
-import { capsFor, cardsCapOf, countersFor } from "./lib/orgCaps";
+import { capsFor, countersFor } from "./lib/orgCaps";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { recordHandStart } from "./spawn";
 import { insertTaskComment } from "./tasks";
-import { createRunCore, LIVE_RUN_STATUSES, queueRunOnDaemon } from "./workflow_runs";
+import { createRunCore, queueRunOnDaemon } from "./workflow_runs";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineVersionFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
+import { linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
 import { allRolesInBoundary, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownsWork, projectLeadOf } from "@codecast/shared/contracts/orgLead";
@@ -22,6 +23,7 @@ import { LINE_GOAL, NO_GOAL, type GoalPriority } from "@codecast/shared/contract
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { priority as linePriority, type Severity } from "./lib/linePriority";
 import { getAuthenticatedUserId } from "./pendingMessages";
+import { accessJudgeFor } from "./lib/access";
 import { trialProjectOf } from "./lineTrial";
 
 // The line (docs/architecture/the-line.md L2, L9). A scope owns one workflow,
@@ -53,40 +55,50 @@ const agentAssignee = (role: { handle: string }) => `agent:${role.handle}`;
 // causes there, since the rule leaves it the work no narrower role covers.
 // Highest computed priority first (lib/linePriority.ts); ties drain oldest
 // first, in the order they were filed.
-export async function lineCandidates(ctx: Ctx, role: any): Promise<any[]> {
-  return (await rankedCandidates(ctx, role)).map((c) => c.task);
+export async function lineCandidates(ctx: Ctx, role: any, limit = Infinity): Promise<any[]> {
+  return (await rankedCandidates(ctx, role, limit)).map((c) => c.task);
 }
 
 export type RankedCandidate = { task: any; priority: number };
 
-export async function rankedCandidates(ctx: Ctx, role: any): Promise<RankedCandidate[]> {
+// Ranks the pool on the fields every task carries, then takes the owned,
+// unblocked ones in that order until `limit`: ownership, the trial check and
+// the blocker reads cost reads per task, so a sweep that can start three
+// pays for about three.
+export async function rankedCandidates(ctx: Ctx, role: any, limit = Infinity): Promise<RankedCandidate[]> {
+  if (limit <= 0) return [];
   const assignees = new Set([agentAssignee(role), String(role._id)]);
-  const pool = await linePool(ctx, role, assignees);
-  const roles = await allRolesInBoundary(ctx, role);
   const goals = new Map<string, GoalPriority | "unranked" | null>();
-  const owned: any[] = [];
+  const ranked: RankedCandidate[] = [];
   const seen = new Set<string>();
-  for (const task of pool) {
+  for (const task of await linePool(ctx, role, assignees)) {
     if (seen.has(String(task._id))) continue;
     seen.add(String(task._id));
-    if (task.status !== "open" || task.workflow_run_id) continue;
-    const assigned = assignees.has(task.assignee);
-    if (!assigned && !(isReadyCause(task) && !task.assignee)) continue;
-    if (!(await lineOwns(ctx, role, task, roles))) continue;
-    // A trial project's problems run only on the trial graph, started by hand
-    // (lineTrial.ts); the role's own line would push and merge.
-    if (await trialProjectOf(ctx, task)) continue;
-    owned.push(task);
-  }
-  // Blockers and waits by the one rule (task-graph.md TG1).
-  const lookupsFor = await readinessLookups(ctx, owned);
-  const out: RankedCandidate[] = [];
-  for (const task of owned) {
-    if (!isUnblocked(task, lookupsFor(task).statusOf)) continue;
-    out.push({ task, priority: linePriority(await goalPriorityOf(ctx, task, goals), severityOf(task), task.cause?.signal_count ?? 1) });
+    if (task.status !== "open" || task.workflow_run_id || task.ephemeral) continue;
+    if (!assignees.has(task.assignee) && !(isReadyCause(task) && !task.assignee)) continue;
+    ranked.push({ task, priority: linePriority(await goalPriorityOf(ctx, task, goals), severityOf(task), task.cause?.signal_count ?? 1) });
   }
   const age = (t: any) => t.created_at ?? t._creationTime ?? 0;
-  out.sort((a, b) => b.priority - a.priority || age(a.task) - age(b.task));
+  ranked.sort((a, b) => b.priority - a.priority || age(a.task) - age(b.task));
+  const roles = await allRolesInBoundary(ctx, role);
+  const out: RankedCandidate[] = [];
+  // In chunks, so the blocker reads (task-graph.md TG1) batch.
+  const chunk = Math.min(Math.max(limit, 8), 64);
+  for (let i = 0; i < ranked.length && out.length < limit; i += chunk) {
+    const owned: RankedCandidate[] = [];
+    for (const c of ranked.slice(i, i + chunk)) {
+      if (!(await lineOwns(ctx, role, c.task, roles))) continue;
+      // A trial project's problems run only on the trial graph, started by
+      // hand (lineTrial.ts); the role's own line would push and merge.
+      if (await trialProjectOf(ctx, c.task)) continue;
+      owned.push(c);
+    }
+    const lookupsFor = await readinessLookups(ctx, owned.map((c) => c.task));
+    for (const c of owned) {
+      if (out.length >= limit) break;
+      if (isUnblocked(c.task, lookupsFor(c.task).statusOf)) out.push(c);
+    }
+  }
   return out;
 }
 
@@ -131,17 +143,35 @@ async function goalPriorityOf(ctx: Ctx, task: any, cache: Map<string, GoalPriori
   return value;
 }
 
-async function linePool(ctx: Ctx, role: any, assignees: Set<string>): Promise<any[]> {
-  if (!isWholeWorkspaceRole(role)) return (await resolveScope(ctx, role.host_user_id, { role_id: String(role._id) }))?.tasks ?? [];
-  const key = role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id}`;
+// How many open, ready causes one pass reads per scope project (or per
+// workspace, for a whole workspace role), oldest first: the window the sweep
+// and the queue rank. A backlog longer than this drains window by window as
+// its oldest causes start.
+export const CAUSE_WINDOW = 200;
+
+// The line's pool, read by the candidate predicate's own indexes: the open
+// tasks handed to the role, and the open causes at `readiness` where it
+// looks. The ownership rule then picks what is the role's (lineOwns).
+async function linePool(ctx: Ctx, role: any, assignees: Set<string>, readiness: "ready" | "needs_context" = "ready"): Promise<any[]> {
   const rows: any[] = [];
-  for (const a of assignees) rows.push(...await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) => q.eq("assignee", a)).collect());
-  // Every open cause in the boundary (LE6), read by its own index so the
-  // whole set ranks, however many other open tasks the workspace holds.
-  rows.push(...await ctx.db.query("tasks")
-    .withIndex("by_workspace_source_status", (q: any) => q.eq("workspace", key).eq("source", "signal").eq("status", "open"))
-    .collect());
-  return rows.filter((t) => t.workspace === key);
+  for (const a of assignees) rows.push(...await ctx.db.query("tasks").withIndex("by_assignee_status", (q: any) => q.eq("assignee", a).eq("status", "open")).collect());
+  if (isWholeWorkspaceRole(role)) {
+    const key = role.team_id ? `team:${role.team_id}` : `user:${role.scope_user_id}`;
+    rows.push(...await ctx.db.query("tasks")
+      .withIndex("by_workspace_source_status_readiness", (q: any) => q.eq("workspace", key).eq("source", "signal").eq("status", "open").eq("readiness", readiness))
+      .take(CAUSE_WINDOW));
+    return rows.filter((t) => t.workspace === key);
+  }
+  for (const projectId of role.scope?.project_ids ?? []) {
+    rows.push(...await ctx.db.query("tasks")
+      .withIndex("by_project_source_status_readiness", (q: any) => q.eq("project_id", projectId).eq("source", "signal").eq("status", "open").eq("readiness", readiness))
+      .take(CAUSE_WINDOW));
+  }
+  // What the role's host may read, as its scope read did (org.resolveScope).
+  const mayRead = await accessJudgeFor(ctx as any, role.host_user_id);
+  const out: any[] = [];
+  for (const t of rows) if (await mayRead("tasks", t)) out.push(t);
+  return out;
 }
 
 // Whether the role's line may start a run now: active, its line's start switch
@@ -158,52 +188,62 @@ export function roleMayStartHands(role: any, now: number): boolean {
 // One name in the contract, shared with the line page's admission state.
 export const LINE_CARD_GATE_NODE = CARD_GATE_NODE_ID;
 
-const IN_FLIGHT = LIVE_RUN_STATUSES;
+// LE6: how many line runs may work at once on one runner's own machine when
+// no machine of theirs offers the role's checkout (lib/linePlacement): twelve
+// agent sessions is about what a laptop runs beside its person's own work.
+// Decisions waiting for an answer hold nothing back, so this or the pool's
+// slots are all that stands between a sweep and thousands of sessions.
+export const LINE_RUNS_PER_RUNNER = 12;
 
-// The cards open on this role's line: every line run (a run with a task that
-// the role's standing session spawned) from its start until its card is
-// answered, plus any card still pending and blocking at the card gate of such
-// a run. A run started this minute holds a slot before it has asked anything,
-// so admission is paced by answers, not by how fast runs reach their card.
-// Answering a card frees its slot.
-export async function openLineCards(ctx: Ctx, role: any): Promise<number> {
+export type RunnerLoad = { runner: string; working: number; cap: number };
+
+// Where a role's runs work: its runner and its folder (seatPlace).
+async function seatOf(ctx: Ctx, role: any): Promise<{ runner: string; project_path: string | undefined }> {
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
-  const standing = anchor?.conversation_id ?? null;
-  // A run is this line's when the role started it, or (runs from before
-  // org_role_id) when the role's standing session spawned it. Keyed only on
-  // the standing session, a role without one, or one restarted onto a new
-  // session, held no slots and started without limit.
-  const mine = (run: any) => String(run.org_role_id ?? "") === String(role._id) || (!!standing && String(run.spawner_conversation_id ?? "") === String(standing));
-  const held = new Set<string>();
-  for (const status of IN_FLIGHT) {
-    const byRole: any[] = await ctx.db
-      .query("workflow_runs")
-      .withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", role._id).eq("status", status))
-      .collect();
-    const bySpawner: any[] = standing
-      ? await ctx.db
-        .query("workflow_runs")
-        .withIndex("by_spawner_status", (q: any) => q.eq("spawner_conversation_id", standing).eq("status", status))
-        .collect()
-      : [];
-    for (const run of [...byRole, ...bySpawner]) if (run.task_id && !cardAnswered(run)) held.add(String(run._id));
-  }
-  const runner = seatPlace(role, standing ? await ctx.db.get(standing) : null).runner_user_id;
-  const pending: any[] = await ctx.db
-    .query("session_decisions")
-    .withIndex("by_user_status", (q: any) => q.eq("user_id", runner).eq("status", "pending"))
-    .collect();
-  for (const d of pending) {
-    if (!d.blocking || !d.workflow_run_id || d.gate_node_id !== LINE_CARD_GATE_NODE || held.has(String(d.workflow_run_id))) continue;
-    const run = await ctx.db.get(d.workflow_run_id);
-    if (run && mine(run)) held.add(String(run._id));
-  }
-  return held.size;
+  const standing = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+  const place = seatPlace(role, standing);
+  return { runner: String(place.runner_user_id), project_path: place.project_path };
 }
 
-// The runner completes the card gate's node once its decision is answered.
-function cardAnswered(run: any): boolean {
-  return (run.node_statuses ?? []).some((n: any) => n.node_id === LINE_CARD_GATE_NODE && n.status === "completed");
+// LE6: the line runs working now on `runner`'s own machine: runs with a task
+// that a role run by `runner` started (or, from before org_role_id, its
+// standing session spawned), minus those waiting on a blocking decision and
+// those on a pool machine, which its slots count. Every role counts, paused
+// and retired ones too: their runs still use the machine.
+export async function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promise<RunnerLoad> {
+  const all: any[] = roles ?? await ctx.db.query("org_roles").collect();
+  const waiting = await runsWaitingOnAPerson(ctx, runner);
+  const pooled = await poolDeviceIds(ctx, runner);
+  const working = new Set<string>();
+  for (const role of all) {
+    const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+    const standing = anchor?.conversation_id ?? null;
+    if (String(seatPlace(role, standing ? await ctx.db.get(standing) : null).runner_user_id) !== runner) continue;
+    for (const status of WORKING_RUN_STATUSES) {
+      const runs: any[] = await ctx.db
+        .query("workflow_runs")
+        .withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", role._id).eq("status", status))
+        .collect();
+      if (standing) {
+        runs.push(...await ctx.db
+          .query("workflow_runs")
+          .withIndex("by_spawner_status", (q: any) => q.eq("spawner_conversation_id", standing).eq("status", status))
+          .collect());
+      }
+      for (const run of runs) {
+        if (run.task_id && !waiting.has(String(run._id)) && !pooled.has(String(run.runner_device ?? ""))) working.add(String(run._id));
+      }
+    }
+  }
+  return { runner, working: working.size, cap: LINE_RUNS_PER_RUNNER };
+}
+
+/** The load a role's next run meets: its pool's slots when a machine offers its checkout, else its runner's own machine. */
+export async function lineLoadFor(ctx: Ctx, role: any, now: number): Promise<RunnerLoad & { pool: LinePool | null }> {
+  const seat = await seatOf(ctx, role);
+  const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now);
+  if (pool) return { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool };
+  return { ...await runnerLoad(ctx, seat.runner), pool: null };
 }
 
 // LP6: the person who answers a role's cards is the person at the top of its
@@ -212,52 +252,18 @@ export function answererOf(role: any, boundaryRoles: any[]): string {
   return chainHeadOf(role._id, boundaryRoles) ?? String(role.host_user_id);
 }
 
-// Every role whose cards `person` answers, across every boundary they are in:
-// their own and each team they belong to.
-export async function rolesAnsweredBy(ctx: Ctx, person: string): Promise<any[]> {
-  const boundaries: Array<{ team_id?: any; scope_user_id?: any }> = [{ scope_user_id: person }];
-  const memberships: any[] = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", person)).collect();
-  for (const m of memberships) boundaries.push({ team_id: m.team_id });
-  const out: any[] = [];
-  for (const b of boundaries) {
-    const roles = await allRolesInBoundary(ctx, b);
-    for (const r of roles) if (answererOf(r, roles) === person) out.push(r);
-  }
-  return out;
-}
-
-export type CardLoad = { person: string; open: number; cap: number };
-
-// LP6: a person's open cards across every line they answer for, against one
-// cap: the smallest caps.cards among their roles whose line is on, so nine
-// roles never mean forty-five open cards. A retired or paused role's open
-// runs still hold their cards.
-export async function personCardLoad(ctx: Ctx, person: string): Promise<CardLoad> {
-  const roles = await rolesAnsweredBy(ctx, person);
-  let open = 0;
-  for (const r of roles) open += await openLineCards(ctx, r);
-  const live = roles.filter((r) => r.status === "active" && lineStartsOn(r));
-  const cap = live.length ? Math.min(...live.map(cardsCapOf)) : cardsCapOf({});
-  return { person, open, cap };
-}
-
-/** The card load of the person a role's cards go to. */
-export async function cardLoadFor(ctx: Ctx, role: any): Promise<CardLoad> {
-  return personCardLoad(ctx, answererOf(role, await allRolesInBoundary(ctx, role)));
-}
-
-export type AdmissionWait = "off" | "hands" | "cards";
+export type AdmissionWait = "off" | "hands" | "runs";
 
 // LE6: why the line may not admit its next cause now, or null when it may.
-// `openCards` and `cardsCap` are the answering person's (LP6).
-export function admissionWait(role: any, openCards: number, now: number, cardsCap: number = cardsCapOf(role)): AdmissionWait | null {
+// `working` and `cap` are the role's load (lineLoadFor).
+export function admissionWait(role: any, working: number, now: number, cap = LINE_RUNS_PER_RUNNER): AdmissionWait | null {
   if (!roleMayStartHands(role, now)) return atCap(countersFor(role, now).hands, capsFor(role).hands_per_day) ? "hands" : "off";
-  if (openCards >= cardsCap) return "cards";
+  if (working >= cap) return "runs";
   return null;
 }
 
-export function admissionWaitWords(wait: AdmissionWait, openCards: number): string {
-  if (wait === "cards") return `queued behind ${openCards} open card${openCards === 1 ? "" : "s"}`;
+export function admissionWaitWords(wait: AdmissionWait, working: number, pooled = false): string {
+  if (wait === "runs") return `${working} run${working === 1 ? "" : "s"} working on its machine${pooled ? "s" : ""}`;
   if (wait === "hands") return "hands cap reached";
   return "line is off";
 }
@@ -270,8 +276,8 @@ export function admissionWaitWords(wait: AdmissionWait, openCards: number): stri
 // template that was never pushed) the run carries `workflow_name` = the
 // slug and no `workflow_id`; `cast workflow run-daemon` resolves the shipped
 // template by that name (workflow/daemonGraph.ts).
-export async function startLineRun(ctx: Ctx, role: any, task: any, now = Date.now()): Promise<Id<"workflow_runs">> {
-  const { runId, primaryConvId } = await startRoleRun(ctx, role, { slug: lineSlugOf(role), task, goal: task.title, now });
+export async function startLineRun(ctx: Ctx, role: any, task: any, now = Date.now(), place?: RunPlace): Promise<Id<"workflow_runs">> {
+  const { runId, primaryConvId } = await startRoleRun(ctx, role, { slug: lineSlugOf(role), task, goal: task.title, now, place });
   await insertTaskComment(ctx, task._id, {
     author: `@${role.handle}`,
     text: `${LINE_STARTED_PREFIX}${runId}`,
@@ -287,7 +293,10 @@ export async function startLineRun(ctx: Ctx, role: any, task: any, now = Date.no
  * wrong finding's diagnosis, learning-loop.md LL11), which names its subject
  * in the goal.
  */
-export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?: any; goal: string; now: number }): Promise<{ runId: Id<"workflow_runs">; primaryConvId: Id<"conversations"> }> {
+/** A pool machine for a run (lib/linePlacement.takeSlot): its device and the role's folder in its checkout. */
+export type RunPlace = { device: string; project_path: string };
+
+export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?: any; goal: string; now: number; place?: RunPlace }): Promise<{ runId: Id<"workflow_runs">; primaryConvId: Id<"conversations"> }> {
   const { slug, task, now } = o;
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
   const standing = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
@@ -308,7 +317,7 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
     workflow_id: workflow?._id,
     task,
     goal_override: o.goal,
-    project_path: place.project_path,
+    project_path: o.place?.project_path ?? place.project_path,
     spawner_conversation_id: anchor?.conversation_id ?? undefined,
     org_role_id: role._id,
     fallback_team_id: role.team_id ?? undefined,
@@ -316,7 +325,10 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
     now,
   });
 
-  await queueRunOnDaemon(ctx, hostId, runId, { slug: workflow?.slug ?? slug, now });
+  // A placed run names its machine from the start, so the pool counts it
+  // there before a runner claims it.
+  if (o.place) await ctx.db.patch(runId, { runner_device: o.place.device });
+  await queueRunOnDaemon(ctx, hostId, runId, { slug: workflow?.slug ?? slug, now, ...(o.place ? { device: o.place.device } : {}) });
 
   // The run's primary session is a hand of the role: it counts against
   // caps.hands_per_day and carries org_role_id, the same as a spawn.
@@ -327,42 +339,66 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
 export type SweepResult = {
   started: Array<{ role_id: string; task_id: string; run_id: string }>;
   skipped_capped: string[];
-  // Roles whose next cause waits behind open cards (LE6).
-  skipped_cards: string[];
+  // Roles whose next cause waits for a run on their machine to finish (LE6).
+  skipped_busy: string[];
+  // A dry pass (orgLine.explain) also says each load it read.
+  loads?: Array<{ runner: string; project_path: string; working: number; cap: number; pool: Array<{ device: string; root: string; runs: number; working: number }> | null }>;
 };
 
 // L9 and LE6: every two minutes. Paused roles and roles whose line's start
 // switch is off (learning-loop.md LL5: caps.line_on, under the role's own
-// switch) never start anything, and every line starts off. A role admits its candidates highest priority first
-// while the open cards of the person who answers them (LP6, across all their
-// lines) are under that person's cap and the role's hands under
-// caps.hands_per_day; a role at either cap is reported and waits for a card
-// to be answered or for tomorrow.
-export async function sweepCore(ctx: Ctx, now = Date.now()): Promise<SweepResult> {
-  const result: SweepResult = { started: [], skipped_capped: [], skipped_cards: [] };
+// switch) never start anything, and every line starts off. A role admits its
+// candidates highest priority first while fewer than LINE_RUNS_PER_RUNNER
+// runs work on its runner's machine (across every line that person runs) and
+// its hands are under caps.hands_per_day; a role at either cap is reported
+// and waits for a run to finish, pause or ask, or for tomorrow.
+//
+// A pass reads only what it can start: a role's starts this pass are bounded
+// by the sweep's own limit, the free run slots and the hands left, and its
+// candidates are read for that many (rankedCandidates). `dry` decides the
+// same way and starts nothing (orgLine.explain).
+export async function sweepCore(ctx: Ctx, now = Date.now(), o: { dry?: boolean } = {}): Promise<SweepResult> {
+  const result: SweepResult = { started: [], skipped_capped: [], skipped_busy: [] };
   const roles: any[] = await ctx.db.query("org_roles").collect();
-  // One load per person, shared by every role they answer for in this pass.
-  const loads = new Map<string, CardLoad>();
+  // One load per runner and folder, shared by every role that runs there in
+  // this pass: a pool's slots, else the runner's own machine.
+  const loads = new Map<string, RunnerLoad & { pool: LinePool | null }>();
   for (const seed of roles) {
+    if (result.started.length >= MAX_STARTS_PER_SWEEP) break;
     if (seed.status !== "active" || !lineStartsOn(seed)) continue;
     let role = seed;
-    const candidates = await lineCandidates(ctx, role);
-    if (!candidates.length) continue;
-    const person = answererOf(role, await allRolesInBoundary(ctx, role));
-    const load = loads.get(person) ?? await personCardLoad(ctx, person);
-    loads.set(person, load);
-    for (const task of candidates) {
-      if (result.started.length >= MAX_STARTS_PER_SWEEP) return result;
-      const wait = admissionWait(role, load.open, now, load.cap);
-      if (wait === "cards") { result.skipped_cards.push(String(role._id)); break; }
-      if (wait) { result.skipped_capped.push(String(role._id)); break; }
-      const runId = await startLineRun(ctx, role, task, now);
+    const seat = await seatOf(ctx, role);
+    const key = `${seat.runner}|${seat.project_path ?? ""}`;
+    let load = loads.get(key);
+    if (!load) {
+      const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now);
+      load = pool
+        ? { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool }
+        : { ...await runnerLoad(ctx, seat.runner, roles), pool: null };
+      loads.set(key, load);
+      if (o.dry) (result.loads ??= []).push({ runner: seat.runner, project_path: seat.project_path ?? "", working: load.working, cap: load.cap, pool: pool ? pool.slots.map((sl) => ({ ...sl })) : null });
+    }
+    const handsCap = capsFor(role).hands_per_day;
+    const handsLeft = handsCap == null ? Infinity : handsCap - countersFor(role, now).hands;
+    const slots = load.pool ? poolFree(load.pool) : load.cap - load.working;
+    const sweepLeft = MAX_STARTS_PER_SWEEP - result.started.length;
+    const wait = admissionWait(role, load.cap - slots, now, load.cap);
+    const room = wait ? 0 : Math.min(sweepLeft, slots, handsLeft);
+    // One past the room tells whether a cause waits behind the limit.
+    const candidates = await lineCandidates(ctx, role, room + 1);
+    for (const task of candidates.slice(0, room)) {
+      // A pool run goes to the machine with the most free slots, in its checkout.
+      const place = load.pool ? takeSlot(load.pool) ?? undefined : undefined;
+      const runId = o.dry ? `dry${place ? `@${place.device}` : ""}` : await startLineRun(ctx, role, task, now, place);
       result.started.push({ role_id: String(role._id), task_id: String(task._id), run_id: String(runId) });
-      // The new run holds a card slot until its card is answered.
-      load.open++;
-      // recordHandStart patched the counters; read the row back before the
-      // next cap check.
-      role = await ctx.db.get(role._id);
+      // The new run is pending, so it works on the runner's machine.
+      load.working++;
+      // recordHandStart counts from the row it is given: read it back.
+      if (!o.dry) role = await ctx.db.get(role._id);
+    }
+    if (candidates.length > room && room < sweepLeft) {
+      const why = wait ?? (handsLeft <= slots ? "hands" : "runs");
+      (why === "runs" ? result.skipped_busy : result.skipped_capped).push(String(role._id));
     }
   }
   return result;
@@ -373,11 +409,17 @@ export const sweep = internalMutation({
   handler: async (ctx) => sweepCore(ctx),
 });
 
+/** What the next sweep would start, and which roles wait and why, starting nothing. */
+export const explain = internalQuery({
+  args: {},
+  handler: async (ctx) => sweepCore(ctx, Date.now(), { dry: true }),
+});
+
 export type LineQueueItem = { task_id: string; short_id: string | null; title: string; cause: boolean; priority: number; waiting: string | null };
 /** A cause the role leads that grounding held on a fact (readiness needs_context): the lead's to answer, never a
  *  person's For you. `note` is grounding's own words, the question inside them. */
 export type LineAsk = { task_id: string; short_id: string | null; title: string; note: string | null; findings: number };
-export type LineQueue = { role_id: string; open_cards: number; cards_cap: number; hands: number; hands_cap: number | null; waiting: string | null; items: LineQueueItem[]; asks: LineAsk[] };
+export type LineQueue = { role_id: string; working: number; runs_cap: number; hands: number; hands_cap: number | null; waiting: string | null; items: LineQueueItem[]; asks: LineAsk[] };
 
 /** A note that parks a cause until more findings come asks nobody anything (web lineInbox waitsForFindings). */
 const WAITS_FOR_FINDINGS = /\bwaits? (?:for|on) more (?:signals|findings)\b/i;
@@ -389,7 +431,7 @@ export async function lineAsksFor(ctx: Ctx, role: any): Promise<LineAsk[]> {
   const roles = await allRolesInBoundary(ctx, role);
   const seen = new Set<string>();
   const out: Array<LineAsk & { at: number }> = [];
-  for (const task of await linePool(ctx, role, new Set([agentAssignee(role), String(role._id)]))) {
+  for (const task of await linePool(ctx, role, new Set([agentAssignee(role), String(role._id)]), "needs_context")) {
     if (seen.has(String(task._id))) continue;
     seen.add(String(task._id));
     if (task.source !== "signal" || task.status !== "open" || task.workflow_run_id || task.readiness !== "needs_context") continue;
@@ -402,28 +444,29 @@ export async function lineAsksFor(ctx: Ctx, role: any): Promise<LineAsk[]> {
 
 // LE6: the line page's queue for one role: its candidates in admission order,
 // each with why it waits (null: it starts at the next sweep). `waiting` on the
-// queue is why the head has not started. Each start takes a card slot and a
-// hand, so an item waits behind whichever runs out before its turn.
+// queue is why the head has not started. Each start takes a run slot on the
+// runner's machine and a hand, so an item waits behind whichever runs out
+// before its turn.
 export async function lineQueueFor(ctx: Ctx, role: any, now = Date.now()): Promise<LineQueue> {
   const ranked = await rankedCandidates(ctx, role);
-  const { open: cards, cap: cardsCap } = await cardLoadFor(ctx, role);
-  const wait = admissionWait(role, cards, now, cardsCap);
-  const waiting = wait ? admissionWaitWords(wait, cards) : null;
+  const { working, cap: runsCap, pool } = await lineLoadFor(ctx, role, now);
+  const wait = admissionWait(role, working, now, runsCap);
+  const waiting = wait ? admissionWaitWords(wait, working, !!pool) : null;
   const hands = countersFor(role, now).hands;
   const handsCap = capsFor(role).hands_per_day ?? null;
-  // The sweep checks hands before cards, so when both run out at once the
-  // hands cap is the reason. No hands cap leaves the cards as the only limit.
+  // The sweep checks hands before runs, so when both run out at once the
+  // hands cap is the reason.
   const handSlots = handsCap === null ? Infinity : handsCap - hands;
-  const cardSlots = cardsCap - cards;
+  const runSlots = runsCap - working;
   const itemWait = (i: number): string | null => {
     if (waiting) return waiting;
-    if (i < Math.min(handSlots, cardSlots)) return null;
-    return handSlots <= cardSlots ? admissionWaitWords("hands", cards) : admissionWaitWords("cards", cardsCap);
+    if (i < Math.min(handSlots, runSlots)) return null;
+    return handSlots <= runSlots ? admissionWaitWords("hands", working) : admissionWaitWords("runs", runsCap, !!pool);
   };
   return {
     role_id: String(role._id),
-    open_cards: cards,
-    cards_cap: cardsCap,
+    working,
+    runs_cap: runsCap,
     hands,
     hands_cap: handsCap,
     waiting,

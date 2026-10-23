@@ -144,6 +144,16 @@ const live = (over: Partial<Extract<FaceCard, { kind: "live" }>> = {}): FaceCard
   kind: "live", roomKey: ROOM, title: NAME, end: true, mute: false, muted: false, words: null, hearing: null, ...over,
 });
 
+describe("a call on its way in", () => {
+  test("the card says joining, with End there to back out", () => {
+    const html = render(live({ mute: true, joining: true }));
+    expect(html).toContain("walkie-stage-joining");
+    expect(html).toContain("Joining");
+    expect(html).toContain(">End<");
+    expect(render(live({ mute: true }))).not.toContain("Joining");
+  });
+});
+
 describe("talking, one way", () => {
   const html = render(live({ words: words({ sending: { live: true, heardLive: true }, incoming: false }) }));
 
