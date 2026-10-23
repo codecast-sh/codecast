@@ -4,6 +4,7 @@
 // `cast org feed` prints for every kind, run rows included. Everything here
 // is a pure formatter over the rows the server returns; index.ts fetches and
 // prints.
+import { flowName } from "@codecast/shared/contracts/flowPool";
 import { c } from "./colors.js";
 import { decisionHandle, describeResolution, formatAge, type DecisionRow } from "./decideCommand.js";
 import { graphChange, graphChangeText } from "@codecast/shared/tasks";
@@ -14,6 +15,8 @@ export interface RunRow {
   status: string;
   workflow_name?: string;
   workflow_slug?: string;
+  /** What a person reads as the flow's name (the graph's label), when it has one. */
+  workflow_label?: string;
   task_short_id?: string;
   task_title?: string;
   plan_short_id?: string;
@@ -99,8 +102,12 @@ export function runSummary(run: RunRow): string {
   const node = run.current_node_label ?? run.current_node_id;
   const gate = run.gate_decision_short_id ? `  gate ${c.cyan}${run.gate_decision_short_id}${c.reset}` : "";
   const fail = run.status === "failed" && run.fail_reason ? `  ${c.red}${head(run.fail_reason, 60)}${c.reset}` : "";
-  return `${run.status}  ${c.bold}${run.workflow_name ?? "run"}${c.reset}${node ? `  ${c.dim}at ${node}${c.reset}` : ""}${gate}${fail}`;
+  return `${run.status}  ${c.bold}${runFlow(run)}${c.reset}${node ? `  ${c.dim}at ${node}${c.reset}` : ""}${gate}${fail}`;
 }
+
+/** A run's flow as a person reads it. */
+const runFlow = (run: Pick<RunRow, "workflow_label" | "workflow_name" | "workflow_slug">): string =>
+  flowName({ label: run.workflow_label, name: run.workflow_name, slug: run.workflow_slug });
 
 export function formatTaskRuns(runs: RunRow[], now: number = Date.now()): string[] {
   if (runs.length === 0) return [];
@@ -182,7 +189,7 @@ export function formatRunsTable(runs: RunRow[], now: number = Date.now()): strin
   const rows = runs.map((r) => [
     formatAge(now - r.updated_at),
     r.status,
-    r.workflow_name ?? r.workflow_slug ?? "run",
+    runFlow(r),
     r.task_short_id ?? r.plan_short_id ?? "-",
     r.current_node_label ?? r.current_node_id ?? "-",
     r.gate_decision_short_id ?? "-",

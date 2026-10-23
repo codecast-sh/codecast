@@ -60,7 +60,7 @@ export function ProblemsHome({ list, workspace, selection, select, href, drawerO
   const open = useCallback((id: string) => select({ case: id, run: null }), [select]);
   const caseHref = useCallback((id: string) => href({ case: id, run: null }), [href]);
   // The list spans every process unless narrowed: a row then names its own, as For you's rows do.
-  const processTitles = useMemo(() => new Map(workspace.processes.map((g) => [g.key, processName(g.key, g.title).title])), [workspace.processes]);
+  const processTitles = useMemo(() => new Map(workspace.processes.map((g) => [g.key, processName(g.key, g.title, g.label).title])), [workspace.processes]);
   const spans = !list.process && new Set(workspace.problems.map((i) => i.process)).size > 1;
   const processOf = useMemo(() => (spans ? (r: ProblemRow) => processTitles.get((r.issue as { process?: string }).process ?? "") ?? "" : undefined), [spans, processTitles]);
 

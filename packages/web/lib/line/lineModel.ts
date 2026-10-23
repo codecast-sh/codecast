@@ -100,7 +100,7 @@ export type LineLabelRow = {
 };
 
 /** The graph's own row (workflows): its stations with their prompts and scripts, and the .cast source naming their files. */
-export type LineGraphSource = { nodes: ReadonlyArray<GraphNodeIn>; edges: ReadonlyArray<GraphEdgeIn>; source?: string | null; name?: string | null };
+export type LineGraphSource = { nodes: ReadonlyArray<GraphNodeIn>; edges: ReadonlyArray<GraphEdgeIn>; source?: string | null; name?: string | null; label?: string | null };
 
 /** The rows one project's line is read from: scope them to the project first (lineFlow scopeLine). */
 export type LineModelRows = {
@@ -1261,7 +1261,7 @@ export function* lineModelSteps(rows: LineModelRows, graphKey: string): Sliced<L
 
   return {
     graphKey: key,
-    title: graphTitle(key, rows.graph?.name ?? runs[0]?.workflow_name),
+    title: graphTitle(key, rows.graph?.name ?? runs[0]?.workflow_name, rows.graph?.label ?? runs[0]?.workflow_label),
     graphs,
     graph: { nodes, edges, stages, halves },
     steps,

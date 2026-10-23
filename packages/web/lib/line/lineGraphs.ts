@@ -27,6 +27,8 @@ export type GraphRun = {
   workflow_id?: string;
   workflow_slug?: string;
   workflow_name?: string;
+  /** What a person reads as the flow's name (its workflow row's label), when it has one. */
+  workflow_label?: string;
   graph_nodes?: Array<{ id: string; h: string }>;
   created_at: number;
   updated_at: number;
@@ -69,7 +71,9 @@ export function graphKeyOf(run: Pick<GraphRun, "workflow_slug" | "workflow_name"
 export const isCodecastLine = (key: string) => key === CODECAST_LINE || isRepoLineSlug(key) || key.startsWith(`${CODECAST_LINE}-`);
 
 /** A graph's name as a reader says it. */
-export function graphTitle(key: string, name?: string | null): string {
+export function graphTitle(key: string, name?: string | null, label?: string | null): string {
+  // A flow that names itself (the graph's `label`) reads as written.
+  if (label?.trim()) return label.trim();
   if (key === CODECAST_LINE) return DEFAULT_STEPS_LABEL;
   if (isRepoLineSlug(key)) return "This repo's own steps";
   if (key.startsWith(`${CODECAST_LINE}-`)) return `${DEFAULT_STEPS_LABEL}, customized`;
@@ -96,15 +100,15 @@ const FIXES: Record<string, string> = { agentwatch: "Union's agents" };
  * process it is tooling for, if any. A route of a product's graph ("agentwatch-judge") is our own tooling for the
  * product's process (it fixes AgentWatch's judges), so it folds under that process rather than standing beside it.
  */
-export function processName(key: string, name?: string | null): { title: string; fixes: string | null; parent: string | null } {
-  if (isCodecastLine(key)) return { title: graphTitle(key, name), fixes: "codecast", parent: null };
+export function processName(key: string, name?: string | null, label?: string | null): { title: string; fixes: string | null; parent: string | null } {
+  if (isCodecastLine(key)) return { title: graphTitle(key, name, label), fixes: "codecast", parent: null };
   const [first, ...rest] = key.split("-");
   const base = knownName(first);
   if (base && rest.length) {
     const route = routeWords(rest.join(" "));
-    return { title: route.charAt(0).toUpperCase() + route.slice(1), fixes: `${base}'s ${route}`, parent: first };
+    return { title: label?.trim() || route.charAt(0).toUpperCase() + route.slice(1), fixes: `${base}'s ${route}`, parent: first };
   }
-  return { title: graphTitle(key, name), fixes: FIXES[key] ?? null, parent: null };
+  return { title: graphTitle(key, name, label), fixes: FIXES[key] ?? null, parent: null };
 }
 
 /** The processes in the order a picker lists them, which never moves with a filter: codecast's line first, then by name. */
@@ -127,6 +131,8 @@ export function graphPlaceTitle(key: string, product?: string | null): string {
 export type ProjectGraph = {
   key: string;
   title: string;
+  /** The flow's own label, shown as written wherever it is named. */
+  label: string | null;
   /** The work that goes through it, in words: "21 causes, found by agentwatch". */
   work: string;
   runs: number;
@@ -243,7 +249,8 @@ export function projectGraphs(
     const held = waiting && graphOfTask ? [...waiting].filter((t) => graphOfTask.get(t) === key).length : null;
     out.push({
       key,
-      title: graphTitle(key, names.get(key) ?? newest[0]?.workflow_name),
+      title: graphTitle(key, names.get(key) ?? newest[0]?.workflow_name, newest.find((r) => r.workflow_label)?.workflow_label),
+      label: newest.find((r) => r.workflow_label)?.workflow_label ?? null,
       work: held != null ? `${held} waiting${who ? `, ${who}` : ""}` : causes ? `${plural(causes, "problem")}${who ? `, ${who}` : ""}` : plural(rs.length, "run"),
       runs: rs.length,
       live: rs.filter((r) => r.status === "running" || r.status === "paused" || r.status === "pending").length,

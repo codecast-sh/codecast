@@ -1736,6 +1736,8 @@ export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> 
     plan_short_id: plan?.short_id,
     workflow_name: run.workflow_name ?? workflow?.name,
     workflow_slug: workflow?.slug,
+    // What a person reads as the flow's name, read from its workflow row; `workflow_name` stays the key.
+    workflow_label: workflow?.label,
     current_node_label: node?.label ?? run.node_statuses?.find((n: any) => n.node_id === run.current_node_id)?.label ?? run.current_node_id,
     gate_decision_short_id: decision?.short_id,
     gate_decision_status: decision?.status,

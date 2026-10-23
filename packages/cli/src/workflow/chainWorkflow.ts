@@ -192,6 +192,7 @@ export function workflowUpsertPayload(graph: WorkflowGraph, source?: string): Re
   }));
   return {
     name: graph.name,
+    label: graph.label ?? "",
     slug: workflowSlug(graph.name),
     goal: graph.goal,
     source: source ?? renderDotSource(graph),

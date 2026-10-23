@@ -182,3 +182,12 @@ export function flowPathWords(f: Pick<FoldedFlow, "stations">): { path: string; 
   const counted = f.stations.filter((s) => s.kind !== "join");
   return { path: words.join(" → "), side: counted.length - main.length };
 }
+
+/**
+ * A flow as a person reads it: its label (the graph's `label`), else the name
+ * it is keyed by. The name stays the key everywhere (run creation, line slugs,
+ * each run's worktree), so only what is shown reads the label.
+ */
+export function flowName(f: { label?: string | null; name?: string | null; slug?: string | null }, fallback = "run"): string {
+  return f.label?.trim() || f.name?.trim() || f.slug?.trim() || fallback;
+}

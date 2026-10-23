@@ -1,5 +1,6 @@
 "use client";
 
+import { flowName } from "@codecast/shared/contracts/flowPool";
 import { useMemo, useState } from "react";
 import { ShareControl } from "../../../../components/ShareControl";
 import Link from "next/link";
@@ -34,6 +35,7 @@ interface WorkflowRun {
   _id: string;
   workflow_id?: string;
   workflow_name?: string;
+  workflow_label?: string;
   status: "pending" | "running" | "paused" | "completed" | "failed";
   current_node_id?: string;
   node_statuses: any[];
@@ -63,6 +65,7 @@ interface WorkflowRun {
 interface Workflow {
   _id: string;
   name: string;
+  label?: string;
   slug: string;
   goal?: string;
   nodes: any[];
@@ -180,7 +183,7 @@ function RunDetailContent({ runId }: { runId: string }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-sol-text truncate">
-              {run.task_title ?? task?.title ?? workflow?.name ?? run.workflow_name ?? "run"}
+              {run.task_title ?? task?.title ?? flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name })}
             </span>
             {/* A line run's state is the outcome sentence below; another workflow keeps the engine's word. */}
             {line ? null : (
@@ -192,7 +195,7 @@ function RunDetailContent({ runId }: { runId: string }) {
           </div>
           {/* What ran, and how long and what it cost unless the card below says so. */}
           <p className="text-xs text-sol-text-dim mt-0.5 truncate" data-run-subtitle>
-            {line ? `Flow run${projectTitle ? ` on ${projectTitle}` : ""}` : run.task_title || task?.title ? `Run of ${workflow?.name ?? run.workflow_name ?? "a workflow"}` : "Workflow run"}
+            {line ? `Flow run${projectTitle ? ` on ${projectTitle}` : ""}` : run.task_title || task?.title ? `Run of ${flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name }, "a workflow")}` : "Workflow run"}
             {run.goal_override && !run.task_title ? `: ${run.goal_override}` : ""}
             {counts && counts.sessions > 0 && <span> · {counts.sessions} {counts.sessions === 1 ? "session" : "sessions"}</span>}
             {!line && run.total_tokens ? <span title="Tokens across the run's sessions"> · {wfFmtTokens(run.total_tokens)} tok</span> : null}

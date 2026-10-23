@@ -381,7 +381,7 @@ function StationWalk({ order, at, labelOf, go }: { order: readonly string[]; at:
  * It carries no count of what waits: that is one number, on the For you nav entry.
  */
 function ProcessPicker({ picks, drawn, here, projectTitle, onPick, all = false }: { picks: ProjectGraph[]; /** Problems' list: All first, and `drawn` null is every process. */ all?: boolean; drawn: string | null; here: ReadonlySet<string>; projectTitle: string | null; onPick: (key: string | null) => void }) {
-  const named = useMemo(() => picks.map((g) => ({ g, ...processName(g.key, g.title) })), [picks]);
+  const named = useMemo(() => picks.map((g) => ({ g, ...processName(g.key, g.title, g.label) })), [picks]);
   const tops = named.filter((x) => !x.parent || !named.some((y) => y.g.key === x.parent));
   const under = (key: string) => named.filter((x) => x.parent === key);
   return (

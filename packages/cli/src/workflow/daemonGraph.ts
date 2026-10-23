@@ -108,6 +108,7 @@ export async function publishDaemonGraph(file: string, wf: DaemonRow, deviceId: 
   const { nodes, edges, stack, serves } = graphToPushPayload(graph);
   await post("/cli/workflows/upsert", {
     name: wf?.name ?? graph.name,
+    label: graph.label ?? "",
     slug: wf?.slug ?? graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
     goal: graph.goal,
     source: fs.readFileSync(file, "utf-8"),

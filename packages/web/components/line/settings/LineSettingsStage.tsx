@@ -76,7 +76,7 @@ export function LineSettingsStage({ projectId, line, lines, projects, rollups, p
         {rows.map(({ g, projects: ps }) => (
           <li key={g.key}>
             <Link href={href(ps.length === 1 ? { project: param(ps[0]), graph: g.key } : { graph: g.key })} className="lset-pick-row" data-lset-pick-row={g.key}>
-              <span>{processName(g.key, g.title).title}</span>
+              <span>{processName(g.key, g.title, g.label).title}</span>
               <span className="lset-dim">{ps.map(name).join(", ")}</span>
             </Link>
           </li>

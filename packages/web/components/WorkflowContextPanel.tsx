@@ -1,4 +1,5 @@
 import { useWorkflow, useWorkflowRun } from "../hooks/useSyncWorkflows";
+import { flowName } from "@codecast/shared/contracts/flowPool";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
 import { useState } from "react";
@@ -50,7 +51,7 @@ export function WorkflowRunPanel({ run, workflow, defaultExpanded = false }: { r
   // (L9): its node statuses are the node list then.
   const rows = runNodeRows(run, workflow);
   const counts = runNodeCounts(rows);
-  const name = workflow?.name ?? run.workflow_name ?? "run";
+  const name = flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name });
   const alive = run.status === "running" || run.status === "paused" || run.status === "pending";
   const current = alive ? rows.find((r) => r.current) : undefined;
   const age = run.updated_at ? compactAge(now - run.updated_at) : null;

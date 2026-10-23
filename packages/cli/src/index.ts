@@ -21056,7 +21056,7 @@ workflow
 
       try {
         const pushResult = await cliPost("/cli/workflows/upsert", {
-          name: graph.name, slug, goal: graph.goal, source,
+          name: graph.name, label: graph.label ?? "", slug, goal: graph.goal, source,
           nodes, edges, stack, model_stylesheet: graph.model_stylesheet,
           ...(serves ? { serves } : {}),
           ...(origin ? { origin } : {}),
@@ -21462,7 +21462,7 @@ workflow
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_token: apiToken,
-        name: graph.name,
+        name: graph.name, label: graph.label ?? "",
         slug,
         goal: graph.goal,
         source,

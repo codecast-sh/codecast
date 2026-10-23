@@ -1,4 +1,5 @@
 "use client";
+import { flowName } from "@codecast/shared/contracts/flowPool";
 import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Eye, GitBranch } from "lucide-react";
@@ -139,7 +140,7 @@ export function StationStrip({ task, embedded, aside }: { task: TaskItem & LineT
       {showDetail && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pb-2 text-[11px] text-sol-text-muted" data-station-detail>
           {live && node && (
-            <span className="inline-flex items-center gap-1.5 min-w-0" title={run?.workflow_name ? `Run of ${run.workflow_name}` : "Run"} data-live-node={node.id}>
+            <span className="inline-flex items-center gap-1.5 min-w-0" title={run?.workflow_name ? `Run of ${flowName({ label: run.workflow_label, name: run.workflow_name })}` : "Run"} data-live-node={node.id}>
               <GitBranch className="w-3 h-3 text-sol-violet shrink-0" />
               {line
                 ? <Link href={lineSettingsHref({ project: lineProject, station: node.id })} className="text-sol-violet truncate hover:underline" title={`${node.label}: read this station's prompt in line settings`} data-station-settings={node.id}>{node.label}</Link>

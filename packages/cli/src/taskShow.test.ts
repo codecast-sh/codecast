@@ -93,6 +93,13 @@ describe("cast task show: runs", () => {
     expect(out).toContain("failed  line  gate withdrawn  3h ago");
     expect(formatTaskRuns([], now)).toEqual([]);
   });
+
+  test("a flow with a label reads by it, in the run line and the runs table, while its name stays the key", () => {
+    const labelled = run({ status: "failed", workflow_name: "agentwatch_system", workflow_label: "Union fix flow for system findings", current_node_label: "Build", gate_decision_short_id: undefined });
+    expect(formatTaskRuns([labelled], now).join("\n")).toContain("failed  Union fix flow for system findings  at Build");
+    expect(formatRunsTable([labelled], now)).toContain("Union fix flow for system findings");
+    expect(formatRunsTable([labelled], now)).not.toContain("agentwatch_system");
+  });
 });
 
 describe("cast task show: evidence", () => {

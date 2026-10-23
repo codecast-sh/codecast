@@ -44,6 +44,8 @@ export type LineRun = {
   current_node_id?: string;
   current_node_label?: string;
   workflow_name?: string;
+  /** What a person reads as the flow's name (its workflow row's label), when it has one. */
+  workflow_label?: string;
   gate_decision_id?: string;
   gate_decision_short_id?: string;
   gate_node_id?: string;

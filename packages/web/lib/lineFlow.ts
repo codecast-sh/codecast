@@ -459,7 +459,8 @@ function runStep(run: LineFlowRun, node: LiveNode | null): string | null {
  *  is a real name, and only then its step and a short id. */
 export function runName(run: LineFlowRun, task?: { title: string }, step?: string | null): { name: string; workflow: string | null } {
   const wf = run.workflow_name?.trim();
-  const workflow = wf && !GENERIC_WORKFLOW.has(wf.toLowerCase()) ? humanizeSlug(wf) : null;
+  // A flow's own label reads as written; a bare name is made readable.
+  const workflow = run.workflow_label?.trim() || (wf && !GENERIC_WORKFLOW.has(wf.toLowerCase()) ? humanizeSlug(wf) : null);
   const name = task?.title
     ?? run.task_title
     ?? firstLine(run.goal_override)

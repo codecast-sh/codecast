@@ -84,6 +84,15 @@ describe("projectGraphs", () => {
     expect(pickGraph([], null)).toBe("line");
   });
 
+  test("a flow's label names it as written, in the graph list and the picker; its slug stays the key", () => {
+    const g = projectGraphs([run("a", { workflow_slug: "agentwatch", workflow_name: "agentwatch", workflow_label: "Union fix flow" }), run("b", { workflow_slug: "agentwatch" })]);
+    expect(g[0]).toMatchObject({ key: "agentwatch", title: "Union fix flow", label: "Union fix flow" });
+    expect(processName(g[0].key, g[0].title, g[0].label).title).toBe("Union fix flow");
+    expect(graphTitle("agentwatch-system", "agentwatch_system", "Union fix flow for system findings")).toBe("Union fix flow for system findings");
+    // Without one, the name is made readable as before.
+    expect(projectGraphs([run("c", { workflow_slug: "agentwatch" })])[0].label).toBeNull();
+  });
+
   test("a run with no slug falls back to its name, and to codecast's line", () => {
     expect(graphKeyOf({ workflow_name: "AgentWatch" })).toBe("agentwatch");
     expect(graphKeyOf({})).toBe("line");

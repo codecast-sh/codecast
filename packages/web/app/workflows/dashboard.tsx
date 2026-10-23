@@ -1,5 +1,6 @@
 "use client";
 
+import { flowName } from "@codecast/shared/contracts/flowPool";
 import Link from "next/link";
 import { useDynamicRuns } from "../../hooks/useSyncWorkflows";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -30,7 +31,7 @@ function RunCard({ run }: { run: any }) {
     <div className="rounded-xl border border-sol-cyan/20 bg-sol-cyan/[0.04] overflow-hidden">
       <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-sol-cyan/15">
         <Workflow className="w-4 h-4 text-sol-cyan flex-shrink-0" />
-        <span className="text-sm font-semibold text-sol-text truncate">{run.workflow_name || "workflow"}</span>
+        <span className="text-sm font-semibold text-sol-text truncate">{flowName({ label: run.workflow_label, name: run.workflow_name }, "workflow")}</span>
         <div className="ml-auto flex items-center gap-3 text-[11px] text-sol-text-dim flex-shrink-0">
           <span>{agentCount} agents</span>
           {run.total_tokens ? <span>{wfFmtTokens(run.total_tokens)} tok</span> : null}

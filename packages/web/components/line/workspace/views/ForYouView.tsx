@@ -63,7 +63,7 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
     const all = needsOfLine(workspace.needs.filter((n) => n.counted), line, lineProject);
     return flow ? flowNeeds(all, flow) : all;
   }, [workspace.needs, line, lineProject, flow]);
-  const processTitle = useMemo(() => new Map(workspace.processes.map((g) => [g.key, processName(g.key, g.title).title])), [workspace.processes]);
+  const processTitle = useMemo(() => new Map(workspace.processes.map((g) => [g.key, processName(g.key, g.title, g.label).title])), [workspace.processes]);
   // A row's product by name. The list holds decisions from every workspace, and the page's projects are its own
   // workspace's: another's are named from the store.
   const projectIds = useMemo(() => [...new Set(needs.map((n) => n.projectId).filter((p): p is string => !!p))], [needs]);
