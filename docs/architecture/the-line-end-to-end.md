@@ -180,31 +180,41 @@ prompt carries verbatim. A reply it cannot use (a goal_ref the brief does not
 offer, a value outside the vocabulary) leaves the cause `needs_context` with
 the reason, for a person; no reply at all leaves it for the next pass.
 
-## LE6. Admit: work starts at the rate decisions finish
+## LE6. Admit: work starts as the machine has room
 
-The admission sweep is off: `crons.ts` does not register `orgLine.sweep`
-(since 2026-10-02), so a run starts when someone runs `cast workflow run
---task <ct-N>` (no file: the calling role's line, else the shipped `line`).
-The rule below is what `orgLine.sweep` and `orgLine.queue` compute.
+`orgLine.sweep` (the-line.md L9) runs every two minutes and admits causes,
+highest priority first, while all of these hold:
 
-`orgLine.sweep` (the-line.md L9) admits causes, highest priority first, while
-both hold:
+- the line's start switch is on (`lineStartsOn`, learning-loop.md LL5);
+- `counters.hands < caps.hands_per_day`;
+- a run slot is free where the role's runs work. The runner is whoever runs
+  the role's standing session (`seatPlace`). When online machines of the
+  runner offer a checkout of the role's repository (`devices.line_slots`,
+  each `{ root, origin, runs }`, declared in the host's
+  `~/.codecast/config.json` under `line.checkouts` and sent on the
+  heartbeat), the slots are those machines' `runs`, and each run goes to
+  the one with the most free slots, in `root` plus the role's folder under
+  its repository root, with `runner_device` set. The repository is matched
+  by `normalizeGitOrigin` of the origin in the runner's git plane.
+  Otherwise the runner's own machine takes at most `LINE_RUNS_PER_RUNNER`
+  (4), counted across every line role that person runs, minus runs on pool
+  machines.
 
-- the open cards of the person the role reports to (the top of its chain),
-  counted across every line they answer for, are fewer than the smallest
-  `caps.cards` among their live line roles (default 5; line-profile.md LP6),
-  and
-- `counters.hands < caps.hands_per_day`.
+A run works while it is `pending` or `running` with a task. A run paused at
+its card, or running but blocked on a pending decision, uses no machine and
+holds no slot. Decisions waiting for an answer never hold back a start: the
+line has no limit on open cards, and `caps.cards` limits nothing. One sweep
+starts at most `MAX_STARTS_PER_SWEEP` (10) runs, and reads only the
+candidates it can start: open ready causes by index, at most `CAUSE_WINDOW`
+(200) per scope project, oldest first, ranked within that window. A cause
+that waits shows "4 runs working on its machine" on the line page.
+`orgLine:explain` runs the same pass dry and says what it would start,
+where, and each load it read.
 
-When the person answers a card, a slot frees and the next cause starts. A
-cause that waits shows "queued behind 5 open cards" on the line page.
-
-An open card is a pending, blocking `session_decisions` row of the role's
-host, asked at gate node `decide` (`LINE_CARD_GATE_NODE`) of a run the role's
-standing session spawned. Candidates are the role's assigned tasks plus causes
-(`source: "signal"`, `readiness: "ready"`, `goal_ref` set, unassigned) it owns.
-`orgLine.queue` returns the candidates in admission order with why each waits;
-`cast role limits <handle> --cards <n>` sets the cap.
+Candidates are the role's assigned tasks plus causes (`source: "signal"`,
+`readiness: "ready"`, `goal_ref` set, unassigned) it owns. `orgLine.queue`
+returns the candidates in admission order with why each waits, and the
+machine's `working` and `runs_cap`.
 
 ## LE7. Plan (only when `risk = plan`)
 

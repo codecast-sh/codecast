@@ -7,7 +7,7 @@ import { headForward, isSeatedAnchor } from "./anchorAlias.js";
 import { planProgressLabel } from "./planProgress.js";
 import { registerSessionSendCommand, printSendResult } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
-import { Command, Help, type Option } from "commander";
+import { Command, Help, Option } from "commander";
 import { randomUUID } from "node:crypto";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
@@ -20,7 +20,7 @@ import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
 import { READY_LIST_LIMIT, buildTaskClaimBody, buildTaskStartBody, foldStaleTasks, groupTasksByAssignee, readyCountLine, startedLines, taskHintBody, unclaimedLine } from "./taskClaim.js";
 import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
-import { DEFAULT_LINE_CARDS_CAP, usedOf } from "@codecast/shared/contracts/orgCapacity";
+import { usedOf } from "@codecast/shared/contracts/orgCapacity";
 import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
 import { AUTONOMY_LABEL, autonomyOn, autonomySentence, lineStartsOn, switchFromStageWord } from "@codecast/shared/contracts/roleAutonomy";
 import open from "open";
@@ -13954,14 +13954,15 @@ roleGroup
   .option("--hands <n|none>", "Sessions it may start in a day; none lifts the limit", dailyLimitArg)
   .option("--wakes <n|none>", "Wakes it may take in a day; none lifts the limit", dailyLimitArg)
   .option("--tokens <n|none>", "Tokens it may read and write in a day; none lifts the limit", dailyLimitArg)
-  .option("--cards <n>", "Open change cards its line may hold before it starts another problem (default 5)", parseInt)
+  // Open change cards no longer limit what a line starts (the-line-end-to-end.md LE6); accepted so older scripts still run.
+  .addOption(new Option("--cards <n>").argParser(parseInt).hideHelp())
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
   .action(async (handle: string, options: any) => {
     const role_id = await resolveRoleId(handle, options.team);
     const result = await cliPost("/cli/role/limits", { role_id, hands: options.hands, wakes: options.wakes, tokens: options.tokens, cards: options.cards, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    console.log(`${c.green}✓${c.reset} @${result.handle} limits: ${result.caps.hands_per_day ?? "no limit on"} sessions started · ${result.caps.wakes_per_day ?? "no limit on"} wakes · ${result.caps.tokens_per_day ?? "no limit on"} tokens a day · ${result.caps.cards ?? DEFAULT_LINE_CARDS_CAP} open cards`);
+    console.log(`${c.green}✓${c.reset} @${result.handle} limits: ${result.caps.hands_per_day ?? "no limit on"} sessions started · ${result.caps.wakes_per_day ?? "no limit on"} wakes · ${result.caps.tokens_per_day ?? "no limit on"} tokens a day`);
   });
 
 // Who reports to a role (org-roles-run-work.md R6): a person who wants the

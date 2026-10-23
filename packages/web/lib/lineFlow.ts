@@ -21,8 +21,7 @@
 import { LINE_SIGNAL_WINDOW_MS, type LineFinderDecl, type PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { priority as linePriority, type Severity } from "@codecast/convex/convex/lib/linePriority";
 import { LINE_GOAL, NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
-import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
-import { CARD_GATE_NODE_ID, lineRunOutcome, type AnsweredGate, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
+import { lineRunOutcome, type AnsweredGate, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { runEnd, shippedUnanswered } from "@codecast/shared/contracts/causeHistory";
 import { isLiveRun, runLiveNode, type LineRun, type LiveNode, type RunNodeStatus } from "./taskLine";
 import { isConvexId } from "./entityLinks";
@@ -171,7 +170,7 @@ export type SenseSource = {
 
 /** Whether the line may start its next cause, as the sweep decides it
  *  (convex orgLine admissionWait, LE6): the role that starts this project's
- *  line, its switch, and the answering person's card slots. `role: null`:
+ *  line, its switch, and the run slots on its runner's machine. `role: null`:
  *  no role looks after the project, so nothing starts on its own. */
 export type LineAdmission = {
   role: { id: string; handle: string; paused: boolean } | null;
@@ -183,9 +182,9 @@ export type LineAdmission = {
   /** What the line would start in order, the sweep's own queue (orgLine.queue);
    *  null or absent until the server has said. */
   queued?: number | null;
-  /** Open cards the answering person may hold across their lines (caps.cards). */
+  /** Runs that may work at once on the machine the line runs on (orgLine LINE_RUNS_PER_RUNNER). */
   slots: number;
-  /** Cards they hold open now; null until the server has said. */
+  /** Runs working there now, across every line on that machine; null until the server has said. */
   busy: number | null;
   /** Hands the role has started today and may start a day; null until known. */
   hands: number | null;
@@ -212,7 +211,7 @@ export function admissionHold(a: LineAdmission): AdmissionHold | null {
   if (a.role.paused) return { why: `${who}, who runs this line, is paused, so nothing new starts`, short: "Paused", stopped: `${who}, who runs this line, is paused` };
   if (!a.on) return { why: `${who}'s line is off, so nothing starts on its own`, short: "Line off", stopped: `${who}'s line is off` };
   if (a.hands != null && a.handsCap != null && a.hands >= a.handsCap) return { why: `${who} used all ${a.handsCap} of today's sessions`, short: "Today's limit reached" };
-  if (a.busy != null && a.busy >= a.slots) return { why: a.slots === 1 ? "the line works on one fix at a time, and one waits for your decision" : `the line works on ${a.slots} fixes at a time, and ${a.slots === 2 ? "both" : `all ${a.slots}`} wait for your decision`, short: `${a.slots} of ${a.slots} places taken` };
+  if (a.busy != null && a.busy >= a.slots) return { why: `${a.busy} run${a.busy === 1 ? " is" : "s are"} working on its machine, the most it runs at once`, short: `${a.slots} of ${a.slots} places taken` };
   return null;
 }
 
@@ -482,9 +481,6 @@ export function isLineCard(d: LineDecision): boolean {
   return d.status === "pending" && !!d.blocking && !!d.workflow_run_id;
 }
 
-/** LE6/LE11: a card at the decide gate, the only kind admission counts. */
-export const isGateCard = (d: LineDecision) => isLineCard(d) && d.gate_node_id === CARD_GATE_NODE_ID;
-
 /** LE12: the quiet watch end stamps resolved_at; a close after it is a later
  *  ship of a reopened cause. */
 const resolvedQuietly = (t: LineCauseTask) => typeof t.resolved_at === "number" && t.resolved_at >= (t.closed_at ?? 0);
@@ -562,6 +558,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
   /** Goal chips read these; a row with an id also names its customized line. */
   projects: Array<GoalRow & { _id?: string }>;
   now: number;
+  /** Unread: decisions waiting for an answer hold no admission (LE6). */
   cardsCap?: number;
   /** The selected project's declared finders: each is a Sense row, silent or not. */
   finders?: LineFinderDecl[];
@@ -571,7 +568,6 @@ export function buildLineFlow<D extends LineDecision>(input: {
   admission?: LineAdmission | null;
 }): LineFlow<D> {
   const { now } = input;
-  const cardsCap = input.cardsCap ?? DEFAULT_LINE_CARDS_CAP;
   const causes = input.tasks.filter(isCause);
   const causeById = new Map(causes.map((t) => [t._id, t]));
   const weekAgo = now - WEEK;
@@ -692,13 +688,9 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const ranked = openRows.filter((r) => r.goal.kind !== "parked");
   const parked = openRows.filter((r) => r.goal.kind === "parked");
 
-  // LE6: admission waits while the viewer holds cardsCap open cards at the
-  // decide gate (other blocking asks on a run do not hold a slot). Since
-  // when: the moment the cap filled, the cap-th oldest card.
-  // With the role known, its admission says why nothing starts (the switch,
-  // the day's hands, the slots), the sweep's own order.
-  const gateCards = awaitingItems.filter(isGateCard);
-  const capped = gateCards.length >= cardsCap;
+  // LE6: with the role known, its admission says why nothing starts (the
+  // switch, the day's hands, the runs working on its machine), the sweep's
+  // own order. Decisions waiting for an answer never hold a start.
   const lastStart = lineRuns.reduce<number | null>((m, r) => (m === null || r.created_at > m ? r.created_at : m), null);
   const held = input.admission && ranked.length > 0 ? admissionHold(input.admission) : null;
   // With the line's start switch off, starting by hand is the other way in: the top ready cause is offered.
@@ -707,11 +699,9 @@ export function buildLineFlow<D extends LineDecision>(input: {
     : null;
   const causesState: StageState = hold
     ? { kind: "paused", since: null, why: hold.why }
-    : !input.admission && capped
-      ? { kind: "paused", since: gateCards[cardsCap - 1]?.created_at ?? null, why: `queued behind ${gateCards.length} open cards` }
-      : openRows.length > 0
-        ? { kind: "running", why: input.admission ? `${ranked.length} queued; the next starts within two minutes` : `${ranked.length} queued` }
-        : { kind: "idle", why: started ? "no open problem" : "opens on the first report" };
+    : openRows.length > 0
+      ? { kind: "running", why: input.admission ? `${ranked.length} queued; the next starts within two minutes` : `${ranked.length} queued` }
+      : { kind: "idle", why: started ? "no open problem" : "opens on the first report" };
 
   const buildState: StageState = lastEnded?.status === "failed"
     ? { kind: "failing", since: lastEnded.updated_at, why: lastEnded.fail_reason?.trim() || "last run failed", run: lastEnded._id }

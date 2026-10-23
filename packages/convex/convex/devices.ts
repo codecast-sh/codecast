@@ -32,6 +32,8 @@ import { releasePreviousOwner } from "./sessionRelease";
 import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unparkForMove } from "./cloudPlacement";
 import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
+import { lineSlotsValidator } from "./lib/lineSlotsValidator";
+import { normalizeGitOrigin } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -2109,5 +2111,19 @@ export const fleetAdoption = internalQuery({
       current: macs.length - behind.length,
       behind: behind.map((d) => ({ hostname: d.hostname ?? null, cli_version: d.cli_version ?? null })),
     };
+  },
+});
+
+/** Sets a device's line checkouts (lib/lineSlotsValidator) by hand, for a host
+ *  whose daemon does not report them yet; the next heartbeat that carries
+ *  line_slots replaces them. Origins are normalized the way the daemon's are. */
+export const setLineSlots = internalMutation({
+  args: { device_id: v.string(), line_slots: lineSlotsValidator },
+  handler: async (ctx, { device_id, line_slots }) => {
+    const rows = await ctx.db.query("devices").filter((q) => q.eq(q.field("device_id"), device_id)).collect();
+    if (rows.length !== 1) throw new Error(`${rows.length} devices have device_id ${device_id}`);
+    const slots = line_slots.map((s) => ({ ...s, ...(s.origin ? { origin: normalizeGitOrigin(s.origin) ?? s.origin } : {}) }));
+    await ctx.db.patch(rows[0]._id, { line_slots: slots });
+    return { device: device_id, user_id: rows[0].user_id, line_slots: slots };
   },
 });

@@ -96,6 +96,6 @@ test("nothing starts now over ready problems: the review says why and names the 
   assert.equal(row(l, "Then")!.v, "29 more, 10 a day");
   assertGlance(l);
   const full = lineStartLedger({ project: "Callers", admission: { ...used, hands: 2, busy: 5 }, ready: 34, first: ["a", "b"] });
-  assert.match(row(full, "Not now")!.v, /^All 5 places await decisions$/);
+  assert.match(row(full, "Not now")!.v, /^All 5 places working$/);
   assertGlance(full);
 });

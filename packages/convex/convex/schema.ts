@@ -14,6 +14,7 @@ import { taskWaitValidator } from "./lib/taskWaitValidator";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
+import { lineSlotsValidator } from "./lib/lineSlotsValidator";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
@@ -2998,6 +2999,8 @@ export default defineSchema({
       aws_request_id: v.optional(v.string()),
     })),
     local_project_roots: v.optional(v.array(v.string())),
+    // The line checkouts this device offers (lib/lineSlotsValidator).
+    line_slots: v.optional(lineSlotsValidator),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
     // heartbeat-reported: is origin a real rendezvous URL, does fetch succeed,
     // how far HEAD sits from upstream. Metadata only — never file content or
@@ -6265,6 +6268,11 @@ export default defineSchema({
     // LE5: the open causes no one has grounded yet (readiness unset), which
     // lineGround.sweep grounds before admission can rank them.
     .index("by_source_status_readiness", ["source", "status", "readiness"])
+    // The line sweep's candidate reads (orgLine.linePool): open, ready causes of
+    // one scope project, or of one workspace for a whole workspace role, oldest
+    // first, so a pass reads only the window it ranks, however long the backlog.
+    .index("by_project_source_status_readiness", ["project_id", "source", "status", "readiness"])
+    .index("by_workspace_source_status_readiness", ["workspace", "source", "status", "readiness"])
     .index("by_created_from_conversation", ["created_from_conversation"])
     .index("by_from_call", ["from_call"])
     .index("by_user_insight", ["user_id", "created_from_insight"])
@@ -7764,6 +7772,11 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     name: v.string(),
     slug: v.string(),
+    // What a person reads as the flow's name (the graph's `label`), when it
+    // has one. `name` and `slug` stay its key: run creation finds a workflow
+    // by name and a line run by its slug, and each run's worktree is named
+    // after the graph's name.
+    label: v.optional(v.string()),
     goal: v.optional(v.string()),
     source: v.optional(v.string()),
     nodes: v.array(v.object({

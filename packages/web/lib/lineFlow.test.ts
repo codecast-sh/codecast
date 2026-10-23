@@ -179,13 +179,13 @@ describe("buildLineFlow", () => {
     expect(f.sense.state.kind).toBe("running");
   });
 
-  it("stage states: idle before the first signal, starved when signals stop, paused behind open cards, failing on a failed run", () => {
+  it("stage states: idle before the first signal, starved when signals stop, never held by open cards, failing on a failed run", () => {
     expect(flow({}).sense.state).toMatchObject({ kind: "idle", why: "waiting for the first report" });
     expect(flow({ signals: [signal("s1", { created_at: NOW - 3 * DAY })] }).sense.state).toMatchObject({ kind: "starved", why: "no report in 24h" });
     expect(flow({ tasks: [cause("a")] }).build.state).toMatchObject({ kind: "starved", why: "problems wait, nothing building" });
     expect(flow({ decisions: [card("d1")] }).awaiting.state.kind).toBe("ask");
-    const capped = flow({ tasks: [cause("a")], decisions: [1, 2, 3, 4, 5].map((i) => card(`d${i}`, { created_at: NOW - i * HOUR })) });
-    expect(capped.causes.state).toMatchObject({ kind: "paused", why: "queued behind 5 open cards", since: NOW - HOUR });
+    const asked = flow({ tasks: [cause("a")], decisions: [1, 2, 3, 4, 5, 6, 7].map((i) => card(`d${i}`, { created_at: NOW - i * HOUR })) });
+    expect(asked.causes.state).toMatchObject({ kind: "running", why: "1 queued" });
     const failing = flow({ tasks: [cause("a")], runs: [run("r1", { task_id: "a", status: "failed", fail_reason: "tests red", updated_at: NOW - HOUR })] });
     expect(failing.build.state).toMatchObject({ kind: "failing", why: "tests red" });
   });
@@ -200,7 +200,7 @@ describe("buildLineFlow", () => {
     expect(why(adm({ role: { ...role, paused: true } }))).toMatchObject({ kind: "paused", why: "@aq-line, who runs this line, is paused, so nothing new starts" });
     expect(why(adm({ on: false }))).toMatchObject({ kind: "paused", why: "@aq-line's line is off, so nothing starts on its own" });
     expect(why(adm({ hands: 6 }))).toMatchObject({ kind: "paused", why: "@aq-line used all 6 of today's sessions" });
-    expect(why(adm({ busy: 2 }))).toMatchObject({ kind: "paused", why: "the line works on 2 fixes at a time, and both wait for your decision" });
+    expect(why(adm({ busy: 2 }))).toMatchObject({ kind: "paused", why: "2 runs are working on its machine, the most it runs at once" });
     expect(why(adm({}))).toMatchObject({ kind: "running", why: "1 queued; the next starts within two minutes" });
     // An unknown count holds nothing: only what the sweep would see does.
     expect(why(adm({ busy: null, hands: null }))).toMatchObject({ kind: "running" });

@@ -1,3 +1,4 @@
+import { lineSlotsValidator } from "./lib/lineSlotsValidator";
 import { getUserOrToken } from "./lib/auth";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
@@ -435,6 +436,8 @@ export const daemonHeartbeat = mutation({
     // absent elsewhere and from pre-presence daemons). Anchored to the SERVER
     // clock below so a skewed daemon clock can't manufacture presence.
     input_idle_ms: v.optional(v.number()),
+    // devices.line_slots: absent changes nothing, an empty list leaves the pool.
+    line_slots: v.optional(lineSlotsValidator),
     // Git-plane health per repo (gitPlane.ts) — metadata only, mirrors the
     // devices.git_plane schema field.
     git_plane: v.optional(v.array(v.object({
@@ -636,6 +639,7 @@ export const daemonHeartbeat = mutation({
           ? { local_project_roots: args.local_project_roots }
           : {}),
         ...(args.git_plane !== undefined ? { git_plane: args.git_plane } : {}),
+        ...(args.line_slots !== undefined ? { line_slots: args.line_slots } : {}),
         ...(args.git_pubkey !== undefined ? { git_pubkey: args.git_pubkey } : {}),
         ...(args.cc_accounts !== undefined ? { cc_accounts: args.cc_accounts } : {}),
         ...(args.codex_usage !== undefined ? { codex_usage: args.codex_usage } : {}),
