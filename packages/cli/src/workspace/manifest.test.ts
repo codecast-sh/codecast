@@ -290,3 +290,34 @@ describe("[verify]", () => {
     expect(() => parseManifestText(`[verify]\ncommand = ""\n`)).toThrow(/verify.command/);
   });
 });
+
+describe("[vault]", () => {
+  test("a name, or a table marking it required", () => {
+    const m = parseManifestText(`[vault]\nSTRIPE_SECRET_KEY = "stripe-test"\nDATABASE_URL = { secret = "staging-db", required = true }\n`);
+    expect(m.vault).toEqual({
+      STRIPE_SECRET_KEY: { secret: "stripe-test", required: false },
+      DATABASE_URL: { secret: "staging-db", required: true },
+    });
+    expect(parseManifestText(`[setup]\ninstall = ["true"]\n`).vault).toBeUndefined();
+  });
+
+  test("a bad line is refused naming its env var and the rule it broke, never quoting the value side", () => {
+    const refusal = (toml: string) => {
+      try {
+        parseManifestText(toml, "/r/.codecast/workspace.toml");
+      } catch (e) {
+        expect(e).toBeInstanceOf(ManifestError);
+        return (e as ManifestError).message;
+      }
+      throw new Error("expected a refusal");
+    };
+    expect(refusal(`[vault]\nSTRIPE_KEY = "sk_test_51HXabcdefghijkl"\n`)).toBe(
+      "[vault] STRIPE_KEY: the value is not a secret name: use 1 to 63 lowercase letters, digits and dashes, like stripe-test. A value itself goes in with cast vault add (/r/.codecast/workspace.toml: vault.STRIPE_KEY)",
+    );
+    expect(refusal(`[vault]\n"1BAD" = "x"\n`)).toContain(`"1BAD" is not an env var name`);
+    expect(refusal(`[vault]\nKEY = 3\n`)).toContain("must be a secret name in quotes");
+    expect(refusal(`[vault]\nKEY = { secret = "x", optional = true }\n`)).toContain("unknown key 'optional'");
+    expect(refusal(`[vault]\nKEY = { secret = "x", required = "yes" }\n`)).toContain("'required' must be true or false");
+    expect(refusal(`vault = "x"\n`)).toContain("[vault] must be a table");
+  });
+});

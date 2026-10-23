@@ -5,7 +5,8 @@
 // runPaneStream takes all of that through deps, so the tests below ARE the
 // contract — a change in write volume or in stop behaviour breaks one of them.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { setKnownValuesForTest } from "../knownValueRedaction.js";
 import { runPaneStream, capturePane, type PaneFramePush, type PaneSnapshot } from "./paneStream.js";
 import {
   PANE_CAPTURE_INTERVAL_MS,
@@ -63,6 +64,8 @@ function harness(opts: {
 }
 
 describe("runPaneStream", () => {
+  afterEach(() => setKnownValuesForTest(null));
+
   test("an unchanged screen is not re-pushed — only heartbeats", async () => {
     // 40 ticks of a totally static pane. At a 400ms capture interval that is
     // 16 seconds of wall clock: one opening frame plus a heartbeat every four
@@ -92,6 +95,16 @@ describe("runPaneStream", () => {
     const frames = h.pushes.filter((p) => p.frame !== undefined);
     expect(frames.map((f) => f.frame)).toEqual(["one", "two", "three"]);
     expect(frames[0]).toMatchObject({ cols: 80, rows: 24, cursor_x: 3, cursor_y: 5 });
+  });
+
+  test("a frame is redacted before it leaves: a Vault value printed in the pane never reaches the relay", async () => {
+    setKnownValuesForTest([{ value: "zz-pane-value-91c2", name: "zz-pane", vault: true }]);
+    const h = harness({
+      screens: ["$ cast vault get zz-pane\nzz-pane-value-91c2\n$ "],
+      answer: (n) => ({ stop: n >= 1 }),
+    });
+    await h.run();
+    expect(h.pushes[0]!.frame).toBe("$ cast vault get zz-pane\n[redacted:known:zz-pane]\n$ ");
   });
 
   test("a lapsed lease stops the loop — no stop message needed", async () => {

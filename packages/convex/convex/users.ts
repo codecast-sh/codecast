@@ -4480,6 +4480,8 @@ export const getCommandResult = query({
     if (!cmd || cmd.user_id !== userId) return null;
     return {
       executed_at: cmd.executed_at,
+      // null while no daemon has picked it up, so a caller can tell waiting from working.
+      claimed_at: cmd.claimed_at ?? null,
       result: cmd.result,
       error: cmd.error,
     };
