@@ -720,6 +720,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     reorderStackCore(ctx, userId, stackId, decisionIds as Id<"session_decisions">[]),
   removeFromStack: async (ctx, userId, [stackId, decisionId]: [string, string]) => removeFromStackCore(ctx, userId, stackId, decisionId),
   setStackPolicy: async (ctx, _userId, [stackId, args]: [string, Record<string, any>]) => ctx.runMutation!((api as any).decisionStacks.setStackPolicy, { stack: stackId, ...args }),
+  // A session's flow saved to the library (flowLibrary.save, the /flows "Used in sessions" shelf).
+  saveSessionFlow: async (ctx, _userId, [id, opts]: [string, { slug?: string; label?: string; variant_of?: string }]) => ctx.runMutation!((api as any).flowLibrary.save, { id, ...opts }),
   createStackWith: async (ctx, userId, [input]: [{ title: string; decision_ids: string[]; team_id?: string; client_key?: string }]) =>
     createStackWithCore(ctx, userId, {
       title: input.title,

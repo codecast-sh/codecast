@@ -211,44 +211,29 @@ function sharedOpening(prompts: string[]): string {
 
 export type ImportedFlow = { slug: string; file: string; prompts: string[]; stations: string[]; source: string; notes: string[] };
 
-/** Write the trace as `.codecast/flows/<slug>.cast` with a prompt file per station. */
-export async function importWorkflowScript(script: string, opts: { kind: "line" | "segment"; slug?: string; cwd: string; force?: boolean; args?: unknown; session?: string | null }): Promise<ImportedFlow> {
-  const trace = await traceWorkflowScript(script, opts.args);
+/** A traced script as a flow's files: the graph's source and each station's text, at paths relative to `.codecast/flows`. */
+export type ScriptFlowFiles = { slug: string; label: string; source: string; files: Array<{ rel: string; text: string; node?: string }>; stations: string[]; notes: string[] };
+
+/** The trace as `<slug>.cast` and a prompt file per station, in memory. */
+export function scriptFlowFiles(trace: ScriptTrace, opts: { kind: "line" | "segment"; slug?: string; session?: string | null }): ScriptFlowFiles {
   if (!trace.calls.length) throw new Error(trace.stopped ? `No agent calls recorded: ${trace.stopped}` : "The script makes no agent calls, so there is nothing to make stations of");
   const shaped = shapeTrace(trace);
   const slug = (opts.slug ?? trace.meta.name ?? "imported").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "imported";
-  const root = (() => {
-    const top = spawnSync("git", ["-C", opts.cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" });
-    return top.status === 0 ? top.stdout.trim() : opts.cwd;
-  })();
-  const flowsDir = path.join(root, ".codecast", "flows");
-  const file = path.join(flowsDir, `${slug}.cast`);
-  if (fs.existsSync(file) && !opts.force) throw new Error(`${path.relative(opts.cwd, file)} exists: pass --force to replace it, or --slug for another name`);
-  const promptDir = path.join(flowsDir, slug);
-  fs.mkdirSync(promptDir, { recursive: true });
-
   const agents = [...shaped.stations.values()].filter((s) => !s.flow);
   const shared = sharedOpening(agents.map((s) => s.prompt));
   const notes: string[] = [];
   if (trace.stopped) notes.push(`The trace is partial: ${trace.stopped}.`);
-  const prompts: string[] = [];
-  if (shared) {
-    const f = path.join(promptDir, "_shared.md");
-    fs.writeFileSync(f, shared.trimEnd() + "\n");
-    prompts.push(f);
-  }
-  const loopFrom = new Map(shaped.loops.map((l) => [l.from, l]));
+  const files: ScriptFlowFiles["files"] = [];
+  if (shared) files.push({ rel: `${slug}/_shared.md`, text: shared.trimEnd() + "\n" });
   for (const s of agents) {
     const own = shared && s.prompt.startsWith(shared) ? s.prompt.slice(shared.length).replace(/^\n+/, "") : s.prompt;
     const lastOfLoop = shaped.loops.find((l) => shaped.steps[l.from].stations.includes(s.id));
     const parts = [shared ? "@include _shared.md\n" : "", own.trimEnd()];
     if (s.schema) parts.push(`\nEnd your turn with one JSON object in a fenced json block, shaped like this schema:\n\n\`\`\`json\n${JSON.stringify(s.schema, null, 2)}\n\`\`\``);
     if (lastOfLoop) parts.push(`\nAnother round runs when your JSON says "again": true. Say when, in your own terms, by rewriting this line.`);
-    const f = path.join(promptDir, `${s.id}.md`);
-    fs.writeFileSync(f, parts.filter(Boolean).join("\n") + "\n");
-    prompts.push(f);
+    files.push({ rel: `${slug}/${s.id}.md`, text: parts.filter(Boolean).join("\n") + "\n", node: s.id });
   }
-
+  const loopFrom = new Map(shaped.loops.map((l) => [l.from, l]));
   const lines: string[] = [];
   const desc = trace.meta.description ? `, description=${dot(trace.meta.description)}` : "";
   lines.push(`// Imported from a Claude Code workflow (${trace.meta.name ?? slug}) by cast flow import (flows.md FL5).`);
@@ -298,8 +283,62 @@ export async function importWorkflowScript(script: string, opts: { kind: "line" 
   }
   lines.push("}");
   const source = lines.join("\n") + "\n";
-  fs.writeFileSync(file, source);
-  const errors = validateWorkflow(parseWorkflowSource(source, flowsDir));
+  const label = labelFrom(trace.meta.name ?? slug);
+  return { slug, label, source, files, stations: shaped.steps.map((s) => s.stations.map((id) => shaped.stations.get(id)!.label).join(" + ")), notes };
+}
+
+/** Write the trace as `.codecast/flows/<slug>.cast` with a prompt file per station. */
+export async function importWorkflowScript(script: string, opts: { kind: "line" | "segment"; slug?: string; cwd: string; force?: boolean; args?: unknown; session?: string | null }): Promise<ImportedFlow> {
+  const flow = scriptFlowFiles(await traceWorkflowScript(script, opts.args), opts);
+  const root = (() => {
+    const top = spawnSync("git", ["-C", opts.cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" });
+    return top.status === 0 ? top.stdout.trim() : opts.cwd;
+  })();
+  const flowsDir = path.join(root, ".codecast", "flows");
+  const file = path.join(flowsDir, `${flow.slug}.cast`);
+  if (fs.existsSync(file) && !opts.force) throw new Error(`${path.relative(opts.cwd, file)} exists: pass --force to replace it, or --slug for another name`);
+  fs.mkdirSync(path.join(flowsDir, flow.slug), { recursive: true });
+  const prompts: string[] = [];
+  for (const f of flow.files) {
+    const abs = path.join(flowsDir, f.rel);
+    fs.writeFileSync(abs, f.text);
+    prompts.push(abs);
+  }
+  fs.writeFileSync(file, flow.source);
+  const notes = [...flow.notes];
+  const errors = validateWorkflow(parseWorkflowSource(flow.source, flowsDir));
   if (errors.length) notes.push(`The graph needs work: ${errors.join("; ")}`);
-  return { slug, file, prompts, stations: shaped.steps.map((s) => s.stations.map((id) => shaped.stations.get(id)!.label).join(" + ")), source, notes };
+  return { slug: flow.slug, file, prompts, stations: flow.stations, source: flow.source, notes };
+}
+
+/** Where a traced script's flow sits in a checkout: what a saved copy materializes at (convex session_flows.file). */
+const FLOWS_REL = ".codecast/flows";
+
+/**
+ * A Claude Code Workflow script as the graph a session ran (convex
+ * flowLibrary, "used in sessions"): traced the way `cast flow import` traces
+ * it, parsed from memory, with its hash and the push payload's stations and
+ * routes. The draft mark is the same for every session, so one script is one
+ * graph wherever it ran.
+ */
+export async function traceScriptGraph(script: string, args?: unknown) {
+  const { graphHash, graphNodeHashes } = await import("./parser.js");
+  const { graphToPushPayload } = await import("./runner.js");
+  const flow = scriptFlowFiles(await traceWorkflowScript(script, args), { kind: "line" });
+  const dir = path.join("/", FLOWS_REL);
+  const byPath = new Map(flow.files.map((f) => [path.join(dir, f.rel), f.text]));
+  const graph = parseWorkflowSource(flow.source, dir, { read: (abs: string) => byPath.get(abs) ?? null });
+  const { nodes, edges } = graphToPushPayload(graph);
+  return {
+    hash: graphHash(graph),
+    name: graph.name,
+    label: flow.label,
+    source: flow.source,
+    nodes,
+    edges,
+    file: `${FLOWS_REL}/${flow.slug}.cast`,
+    files: flow.files.filter((f) => f.node).map((f) => ({ node: f.node!, prompt: `${FLOWS_REL}/${f.rel}` })),
+    graph_nodes: graphNodeHashes(graph),
+    script,
+  };
 }

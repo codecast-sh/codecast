@@ -15,6 +15,7 @@ import { DOC_TYPES } from "@codecast/shared/docs";
 import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 import { lineSlotsValidator } from "./lib/lineSlotsValidator";
+import { workflowEdgeValidator, workflowNodeValidator } from "./lib/workflowGraphValidators";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
@@ -35,6 +36,7 @@ import { momentsTables } from "./momentsSchema";
 import { lineTrialTables } from "./lineTrialSchema";
 import { orgRoleTokenTables } from "./orgRoleTokensSchema";
 import { liveFlowTables } from "./liveFlowsSchema";
+import { sessionFlowTables } from "./sessionFlowsSchema";
 import { slackTables } from "./slackSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
 import { decisionValidator, intentSourceValidator, milestoneValidator, questionValidator, scoreValidator } from "./lib/initiativeValidators";
@@ -137,6 +139,7 @@ export default defineSchema({
   ...lineTrialTables,
   ...orgRoleTokenTables,
   ...liveFlowTables,
+  ...sessionFlowTables,
   ...slackTables,
   ...authTables,
   users: defineTable({
@@ -7806,39 +7809,8 @@ export default defineSchema({
     label: v.optional(v.string()),
     goal: v.optional(v.string()),
     source: v.optional(v.string()),
-    nodes: v.array(v.object({
-      id: v.string(),
-      label: v.string(),
-      shape: v.string(),
-      type: v.string(),
-      prompt: v.optional(v.string()),
-      script: v.optional(v.string()),
-      reasoning_effort: v.optional(v.string()),
-      model: v.optional(v.string()),
-      max_visits: v.optional(v.number()),
-      max_retries: v.optional(v.number()),
-      retry_target: v.optional(v.string()),
-      goal_gate: v.optional(v.boolean()),
-      backend: v.optional(v.string()),
-      agent: v.optional(v.string()),
-      isolated: v.optional(v.boolean()),
-      // the-line.md L8: a run the daemon executes from this copy must match
-      // a local run, so every attribute the runner reads is stored.
-      definition: v.optional(v.string()),
-      reviewer: v.optional(v.boolean()),
-      timeout: v.optional(v.number()),
-      temperature: v.optional(v.number()),
-      doc: v.optional(v.string()),
-      category: v.optional(v.string()),
-      card: v.optional(v.string()),
-      asker: v.optional(v.string()),
-    })),
-    edges: v.array(v.object({
-      from: v.string(),
-      to: v.string(),
-      label: v.optional(v.string()),
-      condition: v.optional(v.string()),
-    })),
+    nodes: v.array(workflowNodeValidator),
+    edges: v.array(workflowEdgeValidator),
     model_stylesheet: v.optional(v.string()),
     is_private: v.optional(v.boolean()),
     // ACCESS (computeWorkspaceKey through createDataContext): `team:<id>` for
@@ -7861,6 +7833,10 @@ export default defineSchema({
     // whose problems it runs. workflows.lineVersionFor picks by them when a
     // line run starts on a problem; written only by a push from a file.
     serves: v.optional(v.array(v.string())),
+    // The library flow this one is a variant of, by slug, when it was saved
+    // from a session (flowLibrary.save): its graph is whole, so its base is
+    // named here rather than by `extends` (shared flowPool.flowBase reads both).
+    variant_of: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -8114,7 +8090,9 @@ export default defineSchema({
     // Sparse in effect: only runs whose fix merged carry merge.at. The deploy
     // stage's waiting set and a marker's carries read a workspace's merges
     // here, never its runs whole (deploys.md DP2).
-    .index("by_workspace_merged", ["workspace", "merge.at"]),
+    .index("by_workspace_merged", ["workspace", "merge.at"])
+    // A session flow's runs (session_flows): the runs on one graph in one workspace, newest first.
+    .index("by_workspace_graph", ["workspace", "graph_hash", "updated_at"]),
 
   client_state: defineTable({
     user_id: v.id("users"),

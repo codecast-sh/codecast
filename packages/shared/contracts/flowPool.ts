@@ -191,3 +191,53 @@ export function flowPathWords(f: Pick<FoldedFlow, "stations">): { path: string; 
 export function flowName(f: { label?: string | null; name?: string | null; slug?: string | null }, fallback = "run"): string {
   return f.label?.trim() || f.name?.trim() || f.slug?.trim() || fallback;
 }
+
+/**
+ * The library flow a flow is a variant of, by slug: the base a session save
+ * named (`workflows.variant_of`), else the graph's `extends` file without its
+ * `.cast`. Null for a flow that extends nothing.
+ */
+export function flowBase(f: { variant_of?: string | null; source?: string | null }): string | null {
+  if (f.variant_of) return f.variant_of;
+  const ext = flowGraphAttr(f.source, "extends");
+  return ext ? ext.split("/").pop()!.replace(/\.cast$/, "") || null : null;
+}
+
+/** The span of a DOT source's first `graph [...]` list, quotes respected: [start of the list's contents, its closing bracket]. */
+function graphAttrSpan(source: string): [number, number] | null {
+  const m = /(^|[\s{;])graph\s*\[/m.exec(source);
+  if (!m) return null;
+  const open = m.index + m[0].length;
+  let quoted = false;
+  for (let i = open; i < source.length; i++) {
+    const ch = source[i];
+    if (quoted) { if (ch === "\\") i++; else if (ch === '"') quoted = false; continue; }
+    if (ch === '"') quoted = true;
+    else if (ch === "]") return [open, i];
+  }
+  return null;
+}
+
+/** One `key=value` pair of an attribute list, as written. */
+const ATTR_RE = /([A-Za-z_][\w.-]*)\s*=\s*("(?:[^"\\]|\\.)*"|[^\s,;\]]+)/g;
+
+/**
+ * The source with its graph attributes set (a string) or dropped (null),
+ * every other byte as written. A source with no `graph [...]` gets one after
+ * its opening brace. Used when a session's graph is saved to the library
+ * (convex flowLibrary.save): its kind and label set, its draft mark dropped.
+ */
+export function withGraphAttrs(source: string, set: Record<string, string | null>): string {
+  const q = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
+  const span = graphAttrSpan(source);
+  const pairs: Array<[string, string]> = [];
+  if (span) for (const m of source.slice(span[0], span[1]).matchAll(ATTR_RE)) pairs.push([m[1], m[2]]);
+  const out = pairs.filter(([k]) => !(k in set));
+  for (const [k, v] of Object.entries(set)) if (v !== null) out.push([k, q(v)]);
+  const list = out.map(([k, v]) => `${k}=${v}`).join(", ");
+  if (span) return source.slice(0, span[0]) + list + source.slice(span[1]);
+  if (!list) return source;
+  const brace = source.indexOf("{");
+  if (brace < 0) return source;
+  return `${source.slice(0, brace + 1)}\n  graph [${list}]${source.slice(brace + 1)}`;
+}

@@ -5,7 +5,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { execFileSync } from "child_process";
-import { importWorkflowScript, shapeTrace, traceWorkflowScript } from "./flowImport";
+import { importWorkflowScript, shapeTrace, traceScriptGraph, traceWorkflowScript } from "./flowImport";
 import { poolFlows } from "./flowPool";
 import { parseWorkflowFile, validateWorkflow } from "./parser";
 
@@ -78,5 +78,21 @@ describe("importing it", () => {
   test("refuses to write over a flow of the same name", async () => {
     await importWorkflowScript(SCRIPT, { kind: "segment", cwd: root, session: "jx7abcd" });
     await expect(importWorkflowScript(SCRIPT, { kind: "segment", cwd: root, session: "jx7abcd" })).rejects.toThrow(/exists/);
+  });
+});
+
+describe("a session's script as the graph it ran (convex flowLibrary)", () => {
+  test("one script is one graph wherever it ran, stations carrying their text and files", async () => {
+    const a = await traceScriptGraph(SCRIPT);
+    const b = await traceScriptGraph(SCRIPT);
+    expect(a.hash).toBe(b.hash);
+    expect(a.file).toBe(".codecast/flows/ship-widget.cast");
+    const agents = a.nodes.filter((n: any) => n.prompt);
+    expect(agents.length).toBeGreaterThan(0);
+    expect(agents.every((n: any) => !n.prompt.startsWith("@"))).toBe(true);
+    expect(a.files.map((f) => f.node).sort()).toEqual(agents.map((n: any) => n.id).sort());
+    expect(a.graph_nodes.length).toBe(a.nodes.length);
+    expect(a.script).toBe(SCRIPT);
+    expect(await traceScriptGraph(SCRIPT.replace("Build the widget", "Build the gadget"))).not.toHaveProperty("hash", a.hash);
   });
 });

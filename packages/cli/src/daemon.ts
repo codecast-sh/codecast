@@ -30120,6 +30120,7 @@ async function main(): Promise<void> {
         }));
       await postWorkflowRunIngest({
         external_run_id: runId,
+        hostDir: path.dirname(path.dirname(filePath)),
         session_id: sessionId,
         project_path: projectPath,
         workflow_name: snap.workflowName || "workflow",
@@ -30137,8 +30138,9 @@ async function main(): Promise<void> {
 
   // Shared /cli ingest channel for both snapshot shapes (completion file and
   // the journal-derived live model below).
-  async function postWorkflowRunIngest(payload: {
+  async function postWorkflowRunIngest({ hostDir, ...payload }: {
     external_run_id: string;
+    hostDir: string;
     session_id: string;
     project_path?: string;
     workflow_name: string;
@@ -30152,13 +30154,8 @@ async function main(): Promise<void> {
     const siteUrl = (config.convex_url || "").replace(".cloud", ".site");
     const token = config.auth_token;
     if (!siteUrl || !token) return;
-    const resp = await fetch(`${siteUrl}/cli/workflow-runs/ingest`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_token: token, ...payload }),
-    });
-    const respText = await resp.text().catch(() => "");
-    const ok = resp.ok && !respText.includes('"error"');
+    // With the run's script as a graph until the server holds it (flows used in sessions); lazy: it stays off the boot graph.
+    const { resp, respText, ok } = await (await import("./workflowRunGraph.js")).postWorkflowIngest(`${siteUrl}/cli/workflow-runs/ingest`, token, hostDir, payload);
     log(`Workflow snapshot ${ok ? "synced" : `FAILED(${resp.status}) ${respText.slice(0, 120)}`}: ${payload.external_run_id} (${payload.agents.length} agents, ${payload.status})`);
   }
 
@@ -30230,6 +30227,7 @@ async function main(): Promise<void> {
       else liveWorkflowRuns.set(runId, { runDir, hostSessionId, projectPath });
       await postWorkflowRunIngest({
         external_run_id: runId,
+        hostDir,
         session_id: hostSessionId,
         project_path: projectPath,
         workflow_name: workflowName,

@@ -261,6 +261,17 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): void {
       console.log(dim(`  run ${runId} · cast workflow runs --task ${task}`));
     });
 
+  // The daemon's tracer for a Claude Code Workflow run (daemon.ts
+  // workflowRunGraph): the script as the graph it ran, as JSON, in its own
+  // process so a script that never yields cannot hold the daemon.
+  flow
+    .command("trace <script>", { hidden: true })
+    .action(async (script: string) => {
+      const { traceScriptGraph } = await import("./workflow/flowImport.js");
+      const text = fs.readFileSync(script, "utf-8");
+      console.log(JSON.stringify(await traceScriptGraph(text, launchArgs(script, text))));
+    });
+
   flow
     .command("import <script>")
     .description("Turn a Claude Code workflow script (a path, or a wf_ run id) into a flow under .codecast/flows/")

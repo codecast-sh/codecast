@@ -7,42 +7,10 @@ import { LINE_SLUG_RE } from "@codecast/shared/contracts/orgProposal";
 import { publishableFlowSource } from "@codecast/shared/contracts/flowPool";
 import { createDataContext } from "./data";
 import { computeWorkspaceKey, isTeamMember } from "./lib/access";
+import { workflowEdgeValidator, workflowNodeValidator } from "./lib/workflowGraphValidators";
 
-const nodeV = v.object({
-  id: v.string(),
-  label: v.string(),
-  shape: v.string(),
-  type: v.string(),
-  prompt: v.optional(v.string()),
-  script: v.optional(v.string()),
-  reasoning_effort: v.optional(v.string()),
-  model: v.optional(v.string()),
-  max_visits: v.optional(v.number()),
-  max_retries: v.optional(v.number()),
-  retry_target: v.optional(v.string()),
-  goal_gate: v.optional(v.boolean()),
-  // The CLI pushes these three; a validator without them rejected every push
-  // that named a backend (the run then went unrendered in the web UI).
-  backend: v.optional(v.string()),
-  agent: v.optional(v.string()),
-  isolated: v.optional(v.boolean()),
-  // the-line.md L8: every attribute the runner reads survives the push.
-  definition: v.optional(v.string()),
-  reviewer: v.optional(v.boolean()),
-  timeout: v.optional(v.number()),
-  temperature: v.optional(v.number()),
-  doc: v.optional(v.string()),
-  category: v.optional(v.string()),
-  card: v.optional(v.string()),
-  asker: v.optional(v.string()),
-});
-
-const edgeV = v.object({
-  from: v.string(),
-  to: v.string(),
-  label: v.optional(v.string()),
-  condition: v.optional(v.string()),
-});
+const nodeV = workflowNodeValidator;
+const edgeV = workflowEdgeValidator;
 
 // Where a pushed graph lives (schema workflows.origin, line-workspace.md LW4).
 export const graphOriginV = v.object({
@@ -118,7 +86,7 @@ export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, 
 }
 
 // `serves`: a list or null (a push: written as the file says), undefined (the web: left as it is).
-async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, ...args }: { name: string; slug: string; label?: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish }) {
+export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, ...args }: { name: string; slug: string; label?: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish }) {
   const now = Date.now();
   const existing = await workflowBySlug(ctx, userId, args.slug);
 

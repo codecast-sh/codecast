@@ -23,6 +23,8 @@ import { runSuperseded } from "./lib/superseded";
 import { resolveOwnerDevice } from "./devices";
 import { openRunPrice } from "./lib/trialRunPrices";
 import { isLineRunSlug, lineVersionFor } from "./workflows";
+import { recordRoutineRunGraph, recordScriptRunGraph } from "./flowLibrary";
+import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
 
 type Ctx = { db: any };
@@ -1069,6 +1071,7 @@ export const updateProgress = mutation({
     if (!run || run.user_id !== auth.userId) return { error: "Not found" };
 
     const now = Date.now();
+    if (args.graph_hash) await recordRoutineRunGraph(ctx, run, args.graph_hash, now);
     const nodeStatuses = [...run.node_statuses];
     const existing = nodeStatuses.findIndex((n) => n.node_id === args.node_id);
     const prev = existing >= 0 ? nodeStatuses[existing] : undefined;
@@ -1194,31 +1197,8 @@ export function ingestRunStatus(status: string): "pending" | "running" | "paused
 }
 
 export const ingestSnapshot = mutation({
-  args: {
-    api_token: v.string(),
-    external_run_id: v.string(),
-    session_id: v.string(),
-    project_path: v.optional(v.string()),
-    workflow_name: v.string(),
-    status: v.string(),
-    phases: v.array(v.object({ title: v.string(), detail: v.optional(v.string()) })),
-    agents: v.array(v.object({
-      agent_id: v.string(),
-      label: v.optional(v.string()),
-      phase: v.optional(v.string()),
-      state: v.string(),
-      tokens: v.optional(v.number()),
-      duration_ms: v.optional(v.number()),
-      started_at: v.optional(v.number()),
-      result_preview: v.optional(v.string()),
-      last_tool_name: v.optional(v.string()),
-      last_tool_summary: v.optional(v.string()),
-    })),
-    total_tokens: v.optional(v.number()),
-    agent_count: v.optional(v.number()),
-    started_at: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
+  args: ingestSnapshotArgs,
+  handler: async (ctx, { graph, ...args }) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) return { error: "Unauthorized" };
     const now = Date.now();
@@ -1325,6 +1305,7 @@ export const ingestSnapshot = mutation({
         }
       }
     }
+    await recordScriptRunGraph(ctx, runId, existing, graph, now);
     // Stamp the host conversation with its current run, the same link the DOT
     // path writes in updateProgress. This is what feeds the inbox row's
     // workflow_run_status enrichment — without it a session running a workflow
