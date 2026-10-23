@@ -27,6 +27,7 @@ import pullRequests from "./content/pull-requests.md?raw";
 import orgRoles from "./content/org-roles.md?raw";
 import browser from "./content/browser.md?raw";
 import computer from "./content/computer.md?raw";
+import vault from "./content/vault.md?raw";
 import typecheck from "./content/typecheck.md?raw";
 import skills from "./content/skills.md?raw";
 import usageLimits from "./content/usage-limits.md?raw";
@@ -59,6 +60,7 @@ const CONTENT: Record<string, string> = {
   "org-roles": orgRoles,
   "browser": browser,
   "computer": computer,
+  "vault": vault,
   "typecheck": typecheck,
   "skills": skills,
   "usage-limits": usageLimits,
