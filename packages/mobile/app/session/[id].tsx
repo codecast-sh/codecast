@@ -62,6 +62,7 @@ import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
+import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { SessionActionsSheet, type SessionRow, type SessionTile } from '@/components/session/SessionActionsSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { ApprovalCard, ApprovalPending, ApprovalSettled } from '@/components/hosted/ApprovalCard';
@@ -80,7 +81,7 @@ import { useLinkDown } from '@/hooks/useLinkDown';
 import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
-import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, sessionEscalationCaption, stripPastedContent, isPollResponsePayload } from '@codecast/shared/contracts';
+import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, sessionEscalationCaption, stripPastedContent, isPollResponsePayload, type VaultReadyMessage } from '@codecast/shared/contracts';
 import { MarkdownContent, CodeBlockWithCopy, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { AnsiText } from '@/components/CodeText';
 import { stripAnsiCodes } from '@codecast/web/lib/ansi';
@@ -1389,6 +1390,23 @@ function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; timestamp?: 
           </RNText>
         ))}
       </CollapsibleBody>
+    </RNView>
+  );
+}
+
+// Mobile twin of web's VaultReadyLine: a filled vault request is a system
+// line naming the secret, which opens it in the Vault. The usage text is for
+// the agent.
+function VaultReadyLine({ vault, timestamp }: { vault: VaultReadyMessage; timestamp?: number }) {
+  const Theme = useTheme();
+  const router = useRouter();
+  const route = mobileEntityRoute('secret', vault.id || vault.name);
+  return (
+    <RNView style={styles.vaultReadyLine} testID={`vault-ready-${vault.name}`}>
+      <Feather name="lock" size={12} color={Theme.yellow + 'cc'} />
+      <RNText style={[styles.vaultReadyText, { color: Theme.text }]} numberOfLines={1} onPress={route ? () => router.push(route as never) : undefined}>{vault.name}</RNText>
+      <RNText style={[styles.vaultReadyText, { color: Theme.green + 'cc' }]}>ready in Vault</RNText>
+      {timestamp != null && timestamp > 0 && <RNText style={[styles.vaultReadyText, { color: Theme.textDim }]}>· {formatRelativeTime(timestamp)}</RNText>}
     </RNView>
   );
 }
@@ -4582,6 +4600,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         return <SessionMessageBlock from="unknown" name={`Huddle — ${kind.huddle.title}`} body={kind.huddle.body} timestamp={item.timestamp} />;
       case 'chat_wake':
         return <ChatWakeBlock wake={kind.wake} timestamp={item.timestamp} />;
+      case 'vault_ready':
+        return <VaultReadyLine vault={kind.vault} timestamp={item.timestamp} />;
       case 'scheduled_task':
         return <ScheduledTaskBlock content={item.content || ''} timestamp={item.timestamp} />;
       case 'task_notification':
@@ -5541,6 +5561,17 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   interruptLineText: {
     fontSize: 11,
     fontWeight: '500',
+  },
+  vaultReadyLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+  },
+  vaultReadyText: {
+    fontSize: 12,
+    flexShrink: 1,
   },
   systemRail: {
     flexDirection: 'row',
