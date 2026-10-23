@@ -273,30 +273,36 @@ describe("orgLine admission (LE6)", () => {
   const causes = (count: number) => Array.from({ length: count }, (_, n) => cause({ _id: `tasks_c${n}`, short_id: `ct-c${n}`, created_at: NOW - 10_000 + n }));
   const busy = `${LINE_RUNS_PER_RUNNER} runs working on its machine`;
 
-  test("candidates rank by goal priority, severity and signals; unready, ungrounded and someone else's causes stay out", async () => {
+  test("candidates rank by scored value, then findings, then age; an unscored problem ranks as 50; unready, ungrounded and someone else's causes stay out", async () => {
+    const scored = (score: number, signal_count = 1) => ({ signal_count, first_seen: 1, last_seen: 1, fingerprints: ["f"], scored: { score, harm: 3, reach: 3, fixability: 3, reason: "r", root_cause: "c", at: 1, version: "1" } });
     const { ctx, tables } = fixtures({
       role: caps(),
       extra: {
         initiatives,
         tasks: [
           task({ _id: "tasks_assigned", short_id: "ct-1", created_at: NOW - 9000 }),
-          cause({ _id: "tasks_p0", short_id: "ct-2" }),
-          cause({ _id: "tasks_p3_urgent", short_id: "ct-3", goal_ref: "in-2:polish", priority: "urgent" }),
-          cause({ _id: "tasks_none_loud", short_id: "ct-4", goal_ref: "none", cause: { signal_count: 4, first_seen: 1, last_seen: 1, fingerprints: [] } }),
-          cause({ _id: "tasks_foreign_goal", short_id: "ct-5", goal_ref: "in-9:x" }),
-          cause({ _id: "tasks_not_ready", short_id: "ct-6", readiness: "needs_context" }),
-          cause({ _id: "tasks_ungrounded", short_id: "ct-7", goal_ref: undefined }),
-          cause({ _id: "tasks_persons", short_id: "ct-8", assignee: MATE }),
-          cause({ _id: "tasks_running", short_id: "ct-9", workflow_run_id: "workflow_runs_x" }),
+          cause({ _id: "tasks_90", short_id: "ct-2", cause: scored(90) }),
+          cause({ _id: "tasks_70_loud", short_id: "ct-3", goal_ref: "none", cause: scored(70, 9), created_at: NOW - 100 }),
+          cause({ _id: "tasks_70_old", short_id: "ct-4", cause: scored(70, 2), created_at: NOW - 8000 }),
+          cause({ _id: "tasks_70_new", short_id: "ct-5", cause: scored(70, 2), created_at: NOW - 50 }),
+          cause({ _id: "tasks_20_urgent", short_id: "ct-6", priority: "urgent", cause: scored(20, 30) }),
+          cause({ _id: "tasks_unscored", short_id: "ct-7", cause: { signal_count: 3, first_seen: 1, last_seen: 1, fingerprints: ["f"] } }),
+          cause({ _id: "tasks_not_ready", short_id: "ct-8", readiness: "needs_context", cause: scored(99) }),
+          cause({ _id: "tasks_ungrounded", short_id: "ct-9", goal_ref: undefined, cause: scored(99) }),
+          cause({ _id: "tasks_persons", short_id: "ct-10", assignee: MATE, cause: scored(99) }),
+          cause({ _id: "tasks_running", short_id: "ct-11", workflow_run_id: "workflow_runs_x", cause: scored(99) }),
         ],
       },
     });
-    // p0 x medium = 16; p3 x urgent = 4; unranked (a ref this workspace cannot
-    // read) x medium = 2; none x medium x (1 + log2 4) = 1.5; the assigned
-    // task with no goal = 0.5.
-    expect((await lineCandidates(ctx, tables.org_roles[0])).map((t) => t._id)).toEqual(["tasks_p0", "tasks_p3_urgent", "tasks_foreign_goal", "tasks_none_loud", "tasks_assigned"]);
+    // The goal and the task's own priority do not weigh: an urgent problem on
+    // the p0 goal scored 20 starts after an unscored one (50), and the
+    // assigned task with no cause ranks as unscored, behind it on findings.
+    const order = ["tasks_90", "tasks_70_loud", "tasks_70_old", "tasks_70_new", "tasks_unscored", "tasks_assigned", "tasks_20_urgent"];
+    expect((await lineCandidates(ctx, tables.org_roles[0])).map((t) => t._id)).toEqual(order);
+    const q = await lineQueueFor(ctx, tables.org_roles[0], NOW);
+    expect(q.items.map((i) => i.priority)).toEqual([90, 70, 70, 70, 50, 50, 20]);
     const res = await sweepCore(ctx, NOW);
-    expect(res.started.map((s) => s.task_id)).toEqual(["tasks_p0", "tasks_p3_urgent", "tasks_foreign_goal", "tasks_none_loud", "tasks_assigned"].slice(0, LINE_RUNS_PER_RUNNER));
+    expect(res.started.map((s) => s.task_id)).toEqual(order.slice(0, LINE_RUNS_PER_RUNNER));
   });
 
   test("a cause grounding held on a fact is its lead role's ask, never a candidate; one parked for more findings asks nobody", async () => {
@@ -315,18 +321,6 @@ describe("orgLine admission (LE6)", () => {
     const q = await lineQueueFor(ctx, tables.org_roles[0], NOW);
     expect(q.items.map((i) => i.task_id)).toEqual(["tasks_ready"]);
     expect(q.asks).toEqual([{ task_id: "tasks_q", short_id: "ct-7", title: "Rep left?", note: "Has Quinn left, or is Riley wrong?", findings: 3 }]);
-  });
-
-  test("a project goal_ref reads the project's priority", async () => {
-    const { ctx, tables } = fixtures({
-      extra: {
-        projects: [{ _id: PROJECT, short_id: "pj-1", title: "Growth", priority: "p1", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, created_at: 1, updated_at: 1 }],
-        initiatives,
-        tasks: [cause({ _id: "tasks_proj", goal_ref: "pj-1" }), cause({ _id: "tasks_p3", short_id: "ct-3", goal_ref: "in-2:polish" })],
-      },
-    });
-    const q = await lineQueueFor(ctx, tables.org_roles[0], NOW);
-    expect(q.items.map((i) => [i.task_id, i.priority])).toEqual([["tasks_proj", 8], ["tasks_p3", 2]]);
   });
 
   test("decisions waiting for an answer hold nothing: a line with many open cards starts its next cause", async () => {

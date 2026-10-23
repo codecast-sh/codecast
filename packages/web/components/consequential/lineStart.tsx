@@ -9,7 +9,7 @@ import { useState, type ReactNode } from "react";
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { useInboxStore } from "../../store/inboxStore";
 import { causeName, startableCause, type LineCauseTask } from "../../lib/lineFlow";
-import { goalOfRefs, inStartOrder, type RankTask } from "../../lib/line/lineStartOrder";
+import { inStartOrder, type RankTask } from "../../lib/line/lineStartOrder";
 import { problemListName } from "../../lib/line/problemTable";
 import type { NotReady } from "./lineStartLedger";
 import { useLineAdmission } from "../line/map/useLineAdmission";
@@ -39,14 +39,14 @@ export function LineStartControl({ projectId: given_id, project, admit: given, w
   const projectId = given_id ?? (led?.length === 1 ? led[0] : null);
   const title = useInboxStore((s) => projectId ? (s.projects as Record<string, { title?: string }>)[projectId]?.title : undefined);
   const cost = useRunCost(projectId ?? null);
-  // The problems the sweep would start, in the order it takes them (convex orgLine rankedCandidates: the one line
-  // priority, goal x severity x findings, then oldest first), named as the lists name them: never a blocked one
+  // The problems the sweep would start, in the order it takes them (convex orgLine rankedCandidates: scored value,
+  // then findings, then oldest first), named as the lists name them: never a blocked one
   // (assigned, ungrounded, held by a run), which it skips. As many as a press starts at most: the line's places.
   const places = admit.admission?.slots ?? 5;
   const firstSig = useInboxStore((s) => {
     if (!projectId) return "";
     const tasks = (Object.values(s.tasks) as Array<LineCauseTask & RankTask & { short_id?: string; title?: string }>).filter((t) => t.project_id === projectId && !!t.cause && startableCause(t));
-    return inStartOrder(tasks, goalOfRefs(Object.values(s.projects ?? {}) as Array<{ short_id?: string; priority?: string }>))
+    return inStartOrder(tasks)
       .slice(0, places).map((t) => problemListName({ title: t.title ?? t.short_id ?? "", name: causeName(t) })).join("\n");
   });
   // A role with no daily cap gets one with the switch: picked in the review, 10 unless the person picks another.

@@ -19,7 +19,7 @@ import { bucketAt, buildOverview, DEFAULT_RANGE, finderShifts, isOverviewRange, 
 import { isStatusKey, type ProblemFacts, type ProblemNeed } from "../../../../../lib/line/problemStatus";
 import { landingOutput, newestRuns } from "../../../../../lib/line/problemPage";
 import { useInboxStore } from "../../../../../store/inboxStore";
-import { goalOfRefs, inStartOrder, type RankTask } from "../../../../../lib/line/lineStartOrder";
+import { inStartOrder, type RankTask } from "../../../../../lib/line/lineStartOrder";
 import {
   foldTwins, isProblemSort, problemRow, lineStepsOf, lessonOnlyIds, problemOrder, problemRowSig, problemSections, searchProblems, shownOrder, statusCounts,
   type FoundFilter, type ProblemFilter, type ProblemRow, type ProblemSort,
@@ -194,10 +194,10 @@ export function useProblemRows(model: LineModel, workspace: LineWorkspace, selec
 export function useProblemList(model: LineModel, workspace: LineWorkspace, selection: LineSelection) {
   const { all, counts, process, filter, sort, range, win, q, projectName } = useProblemRows(model, workspace, selection);
   // The line's start order (lineStartOrder): Not started lists a project's ready problems in it.
-  const startOrder = useMemo(() => {
-    const goalOf = goalOfRefs(workspace.projects as Array<{ short_id?: string; priority?: string | null }>);
-    return new Map(inStartOrder(workspace.rows.tasks as unknown as RankTask[], goalOf).map((t, i) => [t._id, i]));
-  }, [workspace.projects, workspace.rows.tasks]);
+  const startOrder = useMemo(
+    () => new Map(inStartOrder(workspace.rows.tasks as unknown as RankTask[]).map((t, i) => [t._id, i])),
+    [workspace.rows.tasks],
+  );
   const sections = useMemo(() => problemSections(all, filter, sort, projectName, startOrder), [all, filter, sort, projectName, startOrder]);
   const order = useMemo(() => problemOrder(sections), [sections]);
   const shown = useMemo(() => shownOrder(sections), [sections]);

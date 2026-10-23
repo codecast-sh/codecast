@@ -3,7 +3,7 @@ import { internalAction, internalMutation, internalQuery, mutation, query } from
 import { internal } from "./_generated/api";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
-import { isTerminalTaskStatus, isUnblocked, TASK_PRIORITIES } from "@codecast/shared/tasks";
+import { isTerminalTaskStatus, isUnblocked } from "@codecast/shared/tasks";
 import { readinessLookups } from "./lib/taskGraph";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
@@ -21,9 +21,8 @@ import { allRolesInBoundary, projectLeadRole, resolveRoleRef, userCanAccessRole 
 import { taskWork } from "./lib/orgOwnership";
 import { ownsWork, projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { chainHeadOf } from "@codecast/shared/contracts/orgAssignee";
-import { LINE_GOAL, NO_GOAL, type GoalPriority } from "@codecast/shared/contracts/goalsBrief";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
-import { priority as linePriority, type Severity } from "./lib/linePriority";
+import { byStartOrder, startValue } from "./lib/linePriority";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { accessJudgeFor, canAccessTask } from "./lib/access";
 import { trialProjectOf } from "./lineTrial";
@@ -55,8 +54,8 @@ const agentAssignee = (role: { handle: string }) => `agent:${role.handle}`;
 // A scoped role reads its scope through the resolver the scope feed uses; a
 // whole workspace role reads what it was handed in its boundary plus the open
 // causes there, since the rule leaves it the work no narrower role covers.
-// Highest computed priority first (lib/linePriority.ts); ties drain oldest
-// first, in the order they were filed.
+// In the line's start order (lib/linePriority.ts byStartOrder): the scored
+// value of fixing each, then the most findings, then the oldest.
 export async function lineCandidates(ctx: Ctx, role: any, limit = Infinity): Promise<any[]> {
   return (await rankedCandidates(ctx, role, limit)).map((c) => c.task);
 }
@@ -70,7 +69,6 @@ export type RankedCandidate = { task: any; priority: number };
 export async function rankedCandidates(ctx: Ctx, role: any, limit = Infinity): Promise<RankedCandidate[]> {
   if (limit <= 0) return [];
   const assignees = new Set([agentAssignee(role), String(role._id)]);
-  const goals = new Map<string, GoalPriority | "unranked" | null>();
   const ranked: RankedCandidate[] = [];
   const seen = new Set<string>();
   for (const task of await linePool(ctx, role, assignees)) {
@@ -78,10 +76,9 @@ export async function rankedCandidates(ctx: Ctx, role: any, limit = Infinity): P
     seen.add(String(task._id));
     if (task.status !== "open" || task.workflow_run_id || task.ephemeral) continue;
     if (!assignees.has(task.assignee) && !(isReadyCause(task) && !task.assignee)) continue;
-    ranked.push({ task, priority: linePriority(await goalPriorityOf(ctx, task, goals), severityOf(task), task.cause?.signal_count ?? 1) });
+    ranked.push({ task, priority: startValue(task) });
   }
-  const age = (t: any) => t.created_at ?? t._creationTime ?? 0;
-  ranked.sort((a, b) => b.priority - a.priority || age(a.task) - age(b.task));
+  ranked.sort((a, b) => byStartOrder(a.task, b.task));
   const roles = await allRolesInBoundary(ctx, role);
   const out: RankedCandidate[] = [];
   // In chunks, so the blocker reads (task-graph.md TG1) batch.
@@ -117,32 +114,9 @@ async function lineOwns(ctx: Ctx, role: any, task: any, roles: any[]): Promise<b
 }
 
 // LE5: a cause reaches the line once ground marked it ready and named the
-// goal it threatens ("none" included; it ranks low, linePriority.NO_GOAL_WEIGHT).
+// goal it threatens ("none" included).
 function isReadyCause(task: any): boolean {
   return task.source === "signal" && task.readiness === "ready" && !!task.goal_ref?.trim();
-}
-
-const SEVERITIES = new Set<Severity>(TASK_PRIORITIES);
-function severityOf(task: any): Severity {
-  return SEVERITIES.has(task.priority) ? task.priority : "none";
-}
-
-// goal_ref is a metric ref `in-N:key`, a project's short id, "line" or "none"
-// (goalsBrief.ts). The goal's priority is read from its row in the task's own
-// workspace; the line's own goal has no row and no priority, and a ref that
-// names nothing readable there counts as unranked.
-async function goalPriorityOf(ctx: Ctx, task: any, cache: Map<string, GoalPriority | "unranked" | null>): Promise<GoalPriority | "unranked" | null> {
-  const ref = task.goal_ref?.trim();
-  if (!ref || ref === NO_GOAL) return null;
-  if (ref === LINE_GOAL) return "unranked";
-  const key = `${task.workspace}|${ref}`;
-  if (cache.has(key)) return cache.get(key)!;
-  const shortId = ref.split(":")[0];
-  const table = /^in-\d+$/.test(shortId) ? "initiatives" : "projects";
-  const row = await ctx.db.query(table).withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
-  const value = row && row.workspace === task.workspace ? (row.priority ?? "unranked") : "unranked";
-  cache.set(key, value);
-  return value;
 }
 
 // How many open, ready causes one pass reads per scope project (or per

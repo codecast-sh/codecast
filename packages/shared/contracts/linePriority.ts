@@ -1,6 +1,6 @@
 // A cause's priority on the line (docs/architecture/the-line-end-to-end.md
-// LE5): computed, never judged. The sweep admits causes highest first (LE6),
-// and the review of turning a line on names what starts in the same order.
+// LE5): computed, never judged. The line's start order is the scored value
+// below (byStartOrder), not this.
 //
 //   priority = goal × severity × (1 + log2(signals))
 //
@@ -31,4 +31,26 @@ export function priority(goalPriority: GoalPriority | "unranked" | null | undefi
   const sev = SEVERITY_WEIGHT[severity ?? "none"] ?? 1;
   const signals = 1 + Math.log2(Math.max(1, Math.floor(signalCount) || 1));
   return goal * sev * signals;
+}
+
+// The order the line starts ready problems (LE6): the value of fixing each,
+// as the scoring pass judged it (cause.scored.score, 1 to 100,
+// learning-loop.md LL15), highest first; then the most findings; then the
+// oldest. A problem the pass has not scored yet ranks as UNSCORED_VALUE, the
+// middle of the scale, so a new problem neither waits behind every scored one
+// nor jumps them.
+export const UNSCORED_VALUE = 50;
+
+export type StartOrderTask = {
+  created_at?: number;
+  _creationTime?: number;
+  cause?: { signal_count?: number; scored?: { score: number } | null } | null;
+};
+
+export const startValue = (t: StartOrderTask): number => t.cause?.scored?.score ?? UNSCORED_VALUE;
+
+/** Sorts tasks into the line's start order. */
+export function byStartOrder(a: StartOrderTask, b: StartOrderTask): number {
+  const age = (t: StartOrderTask) => t.created_at ?? t._creationTime ?? 0;
+  return startValue(b) - startValue(a) || (b.cause?.signal_count ?? 0) - (a.cause?.signal_count ?? 0) || age(a) - age(b);
 }
