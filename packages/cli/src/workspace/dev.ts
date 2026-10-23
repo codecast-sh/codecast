@@ -179,6 +179,8 @@ export interface StartOptions {
   onWait?: (svc: DevService, seconds: number) => void;
   /** A line worth saying before the wait: this machine is smaller than the repo needs. */
   onNote?: (line: string) => void;
+  /** The project's [vault] env, asked for only when a server is about to start. A throw fails that start. */
+  secretEnv?: () => Promise<Record<string, string>>;
 }
 
 /** Ensure one service is serving in this checkout; reuse it when it already is. */
@@ -205,6 +207,13 @@ export async function ensureService(svc: DevService, opts: StartOptions): Promis
     return { name: svc.name, state: "failed", reason: `port ${port} (${portVar}) is held by another process that does not answer HTTP` };
   }
 
+  let secrets: Record<string, string> = {};
+  try {
+    secrets = (await opts.secretEnv?.()) ?? {};
+  } catch (err) {
+    return { name: svc.name, state: "failed", reason: err instanceof Error ? err.message : String(err) };
+  }
+
   const log = path.join(devStateDir(opts.checkout), `${svc.name}.log`);
   fs.mkdirSync(path.dirname(log), { recursive: true });
   const fd = fs.openSync(log, "w");
@@ -212,7 +221,7 @@ export async function ensureService(svc: DevService, opts: StartOptions): Promis
   const oomBefore = oomKillCount();
   const child = spawn("bash", ["-c", command], {
     cwd: opts.checkout,
-    env: runEnv as NodeJS.ProcessEnv,
+    env: { ...runEnv, ...secrets } as NodeJS.ProcessEnv,
     detached: true,
     stdio: ["ignore", fd, fd],
   });
