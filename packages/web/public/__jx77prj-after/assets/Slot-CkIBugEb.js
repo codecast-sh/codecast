@@ -1,0 +1,2 @@
+import{r as a,j as t}from"./vendor-BRSpyZc9.js";import{f as r}from"./lineWorkspaceUrl-DlQra3DE.js";import{cy as o,aa as c}from"./index-DyCGlXy1.js";function x({slot:s,onClose:e}){if(a.useContext(o))return null;const n=()=>{if(e)return e();r.getState().wsHide(s,{remember:!0})};return t.jsx("span",{className:"cc-panel__actions",children:t.jsx("button",{onClick:n,className:"cc-panel__btn is-close",title:"Close",children:t.jsx(c,{className:"w-3.5 h-3.5"})})})}export{x as S};
+//# sourceMappingURL=Slot-CkIBugEb.js.map

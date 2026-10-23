@@ -14,6 +14,7 @@ import { useCallBaseFeeds } from '@codecast/web/hooks/useCallBaseFeeds';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { activeTeamIdOf } from '@codecast/web/lib/activeTeam';
 import { useSyncWorkspaceData } from '@/hooks/useSyncWorkspaceData';
+import { useSyncSecrets } from '@codecast/web/hooks/useSyncSecrets';
 import { emitSyncWake } from '@codecast/web/hooks/syncWake';
 import { flushPersistence, loadSplitRows, persistSplitRows } from '@codecast/web/store/idbCache';
 import { setSplitPersistence } from '@codecast/web/hooks/useSplitQuery';
@@ -83,6 +84,8 @@ function StoreSyncBridgeInner() {
   useCallBaseFeeds();
   // Teams, roster, notifications, tasks, plans, docs, projects and org roles.
   useSyncWorkspaceData();
+  // Vault metadata, so Settings counts open requests before the page opens.
+  useSyncSecrets();
   useEffect(() => { bootMark("sync-armed"); }, []);
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
   useEffect(() => {

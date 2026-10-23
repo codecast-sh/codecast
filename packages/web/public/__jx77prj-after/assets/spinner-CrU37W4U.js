@@ -1,0 +1,2 @@
+import{j as r}from"./vendor-BRSpyZc9.js";import{o}from"./lineWorkspaceUrl-DlQra3DE.js";function i({className:e}){return r.jsxs("svg",{className:o("w-3.5 h-3.5 animate-spin",e),viewBox:"0 0 24 24",fill:"none","aria-hidden":"true",children:[r.jsx("circle",{cx:"12",cy:"12",r:"9",stroke:"currentColor",strokeWidth:"2.5",className:"opacity-20"}),r.jsx("path",{d:"M21 12a9 9 0 0 0-9-9",stroke:"currentColor",strokeWidth:"2.5",strokeLinecap:"round"})]})}export{i as S};
+//# sourceMappingURL=spinner-CrU37W4U.js.map

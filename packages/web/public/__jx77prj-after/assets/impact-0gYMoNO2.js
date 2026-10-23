@@ -1,0 +1,2 @@
+function o(t){const n=t.fingerprint?.match(/^evidence:(.+):[^:]+:[0-9a-f]{8}$/);return n?n[1]:t.moment??t._id}function c(t){return t>=9?"breaks trust":t>=7?"contact noticed":"likely unnoticed"}function a(t){return new Set(t.filter(n=>(n.severity??0)>=7).map(o)).size}function u(t){const n=t.reduce((i,r)=>Math.max(i,r.severity??0),0);if(!n)return"";const e=a(t);return e?`${e} noticed by the contact`:c(n)}export{o as f,u as i,a as n,c as s};
+//# sourceMappingURL=impact-0gYMoNO2.js.map
