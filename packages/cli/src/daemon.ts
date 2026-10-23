@@ -3931,6 +3931,8 @@ async function hostReports(): Promise<import("./cloud/hostReports.js").HostRepor
 }
 const HOST_REPORT_INTERVAL_MS = 15 * 60_000;
 let hostReadinessReporter: import("./cloud/hostReadiness.js").HostReadinessReporter | null = null;
+// Loaded on the first heartbeat, off the daemon's boot graph (bench/bootGraph.guard.test.ts).
+let lineSlotsReporter: import("./lineSlots.js").LineSlotsReporter | null = null;
 async function hostReadinessNext(): Promise<import("@codecast/shared/contracts").HostReadiness | undefined> {
   try {
     if (!hostReadinessReporter) hostReadinessReporter = new (await import("./cloud/hostReadiness.js")).HostReadinessReporter(CONFIG_DIR, getVersion());
@@ -5344,6 +5346,9 @@ async function sendHeartbeat(): Promise<void> {
         // A cloud host's own readiness (mirror, tools, [host] setup, logins on
         // disk) for the Machines page, sent only when it changes (cloud/hostReadiness.ts).
         host_readiness: isRemoteDevice() ? await hostReadinessNext() : undefined,
+        // The line checkouts this machine offers (config.json `line`), sent
+        // only when they change; the server places line runs by them (lineSlots.ts).
+        line_slots: (lineSlotsReporter ??= new (await import("./lineSlots.js")).LineSlotsReporter()).next(config),
         // Time since the last keyboard/mouse event anywhere on this machine
         // (macOS only; omitted elsewhere). Sent as a DURATION so the server can
         // anchor it to its own clock — daemon clock skew can't fake presence.
