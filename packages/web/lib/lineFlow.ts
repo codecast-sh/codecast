@@ -996,28 +996,3 @@ export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: 
   rollupReads = kept;
   return out.sort((a, b) => Number(a.key === NO_PROJECT) - Number(b.key === NO_PROJECT) || b.causes - a.causes || b.awaiting - a.awaiting || b.signalsDay - a.signalsDay || a.title.localeCompare(b.title));
 }
-
-/** Is `dir` the checkout `root`, or inside it? */
-const within = (dir: string, root: string) => {
-  const r = root.replace(/\/+$/, "");
-  return dir === r || dir.startsWith(`${r}/`);
-};
-
-/**
- * The line /line opens on: the project of the repo the viewer is in (the one
- * its profile names as default, else the project whose path holds it), else
- * the line with the most open causes, else the roll-up.
- */
-export function defaultLineKey(rollup: RollupRow[], projects: LineProject[], repoPath: string | null | undefined): string {
-  const lines = new Set(rollup.map((r) => r.key));
-  if (repoPath) {
-    const byProfile = projects.find((p) => p.line_profile?.default && p.line_profile.root && within(repoPath, p.line_profile.root));
-    if (byProfile) return byProfile._id;
-    const byPath = projects
-      .filter((p) => p.project_path && within(repoPath, p.project_path) && lines.has(p._id))
-      .sort((a, b) => b.project_path!.length - a.project_path!.length)[0];
-    if (byPath) return byPath._id;
-  }
-  const busiest = rollup.find((r) => r.key !== NO_PROJECT && r.causes > 0) ?? rollup.find((r) => r.causes > 0);
-  return busiest?.key ?? rollup[0]?.key ?? ALL_PROJECTS;
-}

@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "bun:test";
-import { admissionHold, startAgainPlan, trialHold, trialStartWord, buildLineFlow, notReadyReasons, startableCause, defaultLineKey, goalChip, lineHeadline, lineRollup, runName, scopeLine, silentText, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineAdmission, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
+import { admissionHold, startAgainPlan, trialHold, trialStartWord, buildLineFlow, notReadyReasons, startableCause, goalChip, lineHeadline, lineRollup, runName, scopeLine, silentText, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineAdmission, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
 
 const NOW = 1_800_000_000_000;
 
@@ -411,13 +411,6 @@ describe("per project lines (line-profile.md LP1, LP3)", () => {
     ]);
   });
 
-  it("opens on the repo's project, else the busiest line", () => {
-    const r = lineRollup(rows, projects, NOW);
-    expect(defaultLineKey(r, projects, "/src/union/outreach")).toBe("pA");
-    expect(defaultLineKey(r, projects, "/src/infra")).toBe("pB");
-    expect(defaultLineKey(r, projects, "/elsewhere")).toBe("pA");
-    expect(defaultLineKey([], projects, null)).toBe(ALL_PROJECTS);
-  });
 });
 
 describe("notReadyReasons", () => {
