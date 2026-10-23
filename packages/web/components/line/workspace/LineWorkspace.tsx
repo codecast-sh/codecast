@@ -10,13 +10,14 @@
 // The selection lives in the URL (useLineSelection), so any state is a link.
 // `/line` draws this over every project; a project's Line tab draws it pinned
 // to that project.
-import { Fragment, memo, useCallback, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { Fragment, Suspense, memo, useCallback, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useStageScroll } from "./useStageScroll";
 import { Check, ChevronDown, Inbox, SlidersHorizontal, Workflow, AlertCircle, Rocket, Route, History, type LucideIcon } from "lucide-react";
 import { lineFilterParam, useLineProjectId, useLineSelection, useLineWorkspace, useSyncLineHistory } from "../../../hooks/useLineWorkspace";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useMountEffect } from "../../../hooks/useMountEffect"; // __BISECT
 import { useInboxStore } from "../../../store/inboxStore";
 import { useTabActive } from "../../../hooks/usePagePresence";
 import { useStageWide } from "../../../hooks/useStageWide";
@@ -96,6 +97,9 @@ export type LineWorkspaceProps = {
 type LineWorkspaceModel = ReturnType<typeof useLineWorkspace>;
 
 export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space, settings = false }: LineWorkspaceProps) {
+  const __g = ((globalThis as any).__lwc ??= { renders: 0, mountAttempts: 0, mounts: 0, t: [] as string[] }); __g.renders++; // __BISECT
+  useState(() => { __g.mountAttempts++; __g.t.push("attempt@" + Math.round(performance.now())); return 0; }); // __BISECT
+  useMountEffect(() => { __g.mounts++; __g.t.push("mount@" + Math.round(performance.now())); }); // __BISECT
   // The address names a problem by its ref (ct-N); every view below reads its row id (caseRefs), and every write
   // through `select`/`href` names it by its ref again.
   const { selection: address, select: go, href: link } = useLineSelection();
@@ -312,6 +316,10 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
 
           <div className="lw-body" data-drawer-open={slideOpen && model && !settings ? "" : undefined}>
             <main className="lw-stage" ref={stageRef}>
+              {/* A view's lazy part that is still loading waits here, on the stage: without a boundary of its own it
+                  suspended the whole page, and each chunk that arrived mounted the app again from nothing, the
+                  workspace's model included (three discarded mounts on a first open). */}
+              <Suspense fallback={<Skeleton />}>
               {settings && model && !unresolved ? (
                 <LineSettingsStage projectId={projectId} line={drawnLine} lines={picks} projects={ws.projects} rollups={ws.allRollups} processOf={ws.process.project} href={settingsAt} />
               ) : !model || unresolved ? <Skeleton /> : (
@@ -322,14 +330,15 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
                     : <View model={model} workspace={ws} selection={selection} select={select} href={href} pinned={!!pinned} drawerOpen={slideOpen} space={space?.key ?? null} />}
                 </div>
               )}
+              </Suspense>
             </main>
             {!settings && model && !unresolved && stepSlides && (
               <LineDrawer key={`step:${selection.step}`} label={model.steps[selection.step!]?.label ?? "Step"} onClose={() => select({ step: null })} nav={<StationWalk order={model.order} at={selection.step!} labelOf={(id) => model.steps[id]?.label ?? id} go={(id) => select({ step: id }, undefined, { replace: true })} />}>
-                <StepPage model={model} workspace={ws} selection={drawerSelection} select={select} href={href} pinned={!!pinned} />
+                <Suspense fallback={<Skeleton />}><StepPage model={model} workspace={ws} selection={drawerSelection} select={select} href={href} pinned={!!pinned} /></Suspense>
               </LineDrawer>
             )}
             {!settings && model && !unresolved && stageOpen && !stepSlides && (
-              <StageDrawer key={`stage:${selection.stage}`} stage={selection.stage!} projectId={ws.project?._id ?? ws.home?._id ?? null} model={model} workspace={ws} selection={selection} select={select} href={href} pinned={!!pinned} />
+              <Suspense fallback={null}><StageDrawer key={`stage:${selection.stage}`} stage={selection.stage!} projectId={ws.project?._id ?? ws.home?._id ?? null} model={model} workspace={ws} selection={selection} select={select} href={href} pinned={!!pinned} /></Suspense>
             )}
           </div>
         </div>
