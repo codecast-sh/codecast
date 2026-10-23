@@ -292,3 +292,14 @@ One dynamic route, `mobile/app/settings/[section].tsx`, renders `SETTINGS_PAGES[
 - **Gallery:** `web/lib/renderGallery.ts`. The "cast commands" section at :352-376 adds rows with `sh('<cast cmd>', '<output>')`; the header (:1-11) says to add the row along with the renderer.
 - **Test:** `web/lib/__tests__/renderGallery.test.ts:113-124` reads the `case "x":` labels from `getCategoryConfig` and fails if any category has no gallery row.
 - **So a new card for a new `cast <noun>` needs:** a `case` in `castBlocks.tsx` `getCategoryConfig`, a matching entry in the mobile `CATEGORY` table, an `sh(...)` row in `renderGallery.ts`, and optionally a body-prose rule in `extractCastBodyParts`.
+## Constraints added after the first waves (2026-10-22)
+
+- Import Vault contracts from `@codecast/shared/contracts/secrets`, never the
+  `@codecast/shared/contracts` barrel: the barrel no longer re-exports them,
+  so secrets.ts stays off the CLI's and the daemon's boot graphs.
+- `formatVaultReady` takes `vars: string[]` (the caller passes
+  `envFor(row).map((b) => b.var)`); machineMessages imports no runtime code
+  from secrets.
+- origin/main carries `"vault.md": ["vault"]` in NOT_INSTRUCTIONS
+  (packages/cli/src/docsCommands.guard.test.ts). Delete it in the commit that
+  lands packages/cli/src/secrets/ and the `vault` command group.
