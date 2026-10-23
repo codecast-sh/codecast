@@ -1,4 +1,5 @@
 import { test, it, expect, describe } from "bun:test";
+import { formatVaultReady } from "@codecast/shared/contracts";
 import {
   buildNavigatorRows,
   filterNavigatorRows,
@@ -506,6 +507,14 @@ describe("stickyPromptContent", () => {
     expect(stickyPromptContent("Decision: Approve")).toBeNull();
     const typed = "Decision: we go with the blue one.\nCan you update the note?";
     expect(stickyPromptContent(typed)).not.toBeNull();
+  });
+
+  it("drops a filled Vault request's wake line, whole or cut to a preview, and keeps a prompt about the Vault", () => {
+    const ready = formatVaultReady({ short_id: "sec-4", name: "zz-stripe", kind: "key", vars: ["ZZ_STRIPE"] });
+    expect(stickyPromptContent(ready)).toBeNull();
+    expect(stickyPromptContent(ready.slice(0, 60))).toBeNull();
+    expect(isStickyEligible(ready)).toBe(false);
+    expect(stickyPromptContent("Vault: zz-stripe is ready? check it")).not.toBeNull();
   });
 
   it("drops a bare nudge", () => {

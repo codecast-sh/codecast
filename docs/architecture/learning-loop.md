@@ -76,11 +76,10 @@ new issue's problem and notes the split on both. The problem page lists its
 findings by judge, each with a link back to where the product shows it.
 
 **When problems start.** Codecast's start switch, one per project: the role
-that leads the project carries it (`caps.line_on`) and its slot count
-(`caps.cards`), and it counts only while that role's own switch is on
-(`roleAutonomy.lineStartsOn`). The sweep runs every two minutes (`orgLine.sweep`) and starts
-ready problems up to the free slots, counting a role's in-flight runs by the
-role they carry. A line that is off starts nothing. The switch sits in the
+that leads the project carries it (`caps.line_on`), and it counts only while
+that role's own switch is on (`roleAutonomy.lineStartsOn`). The sweep runs
+every two minutes (`orgLine.sweep`) and starts ready problems while fewer than
+12 runs work on the runner's machine (the-line-end-to-end.md LE6). A line that is off starts nothing. The switch sits in the
 line workspace header and on the project's Line tab, and says what turning it
 on starts and at what pace before it changes anything.
 

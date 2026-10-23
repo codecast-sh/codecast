@@ -6,14 +6,14 @@ import { isUnblocked, TASK_PRIORITIES } from "@codecast/shared/tasks";
 import { readinessLookups } from "./lib/taskGraph";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
-import { capsFor, cardsCapOf, countersFor } from "./lib/orgCaps";
+import { capsFor, countersFor } from "./lib/orgCaps";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { recordHandStart } from "./spawn";
 import { insertTaskComment } from "./tasks";
-import { createRunCore, LIVE_RUN_STATUSES, queueRunOnDaemon } from "./workflow_runs";
+import { createRunCore, queueRunOnDaemon } from "./workflow_runs";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineVersionFor } from "./workflows";
-import { seatPlace } from "./lib/seatPlace";
+import { roleRunner, seatPlace } from "./lib/seatPlace";
 import { allRolesInBoundary, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownsWork, projectLeadOf } from "@codecast/shared/contracts/orgLead";
@@ -158,52 +158,55 @@ export function roleMayStartHands(role: any, now: number): boolean {
 // One name in the contract, shared with the line page's admission state.
 export const LINE_CARD_GATE_NODE = CARD_GATE_NODE_ID;
 
-const IN_FLIGHT = LIVE_RUN_STATUSES;
+// LE6: how many line runs may work at once on one runner's machine, summed
+// across every line role that person runs. Decisions waiting for an answer
+// hold nothing back, so this is the only thing between a sweep and thousands
+// of sessions on one laptop: twelve agent sessions is about what a laptop
+// runs beside its person's own work.
+export const LINE_RUNS_PER_RUNNER = 12;
 
-// The cards open on this role's line: every line run (a run with a task that
-// the role's standing session spawned) from its start until its card is
-// answered, plus any card still pending and blocking at the card gate of such
-// a run. A run started this minute holds a slot before it has asked anything,
-// so admission is paced by answers, not by how fast runs reach their card.
-// Answering a card frees its slot.
-export async function openLineCards(ctx: Ctx, role: any): Promise<number> {
-  const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
-  const standing = anchor?.conversation_id ?? null;
-  // A run is this line's when the role started it, or (runs from before
-  // org_role_id) when the role's standing session spawned it. Keyed only on
-  // the standing session, a role without one, or one restarted onto a new
-  // session, held no slots and started without limit.
-  const mine = (run: any) => String(run.org_role_id ?? "") === String(role._id) || (!!standing && String(run.spawner_conversation_id ?? "") === String(standing));
-  const held = new Set<string>();
-  for (const status of IN_FLIGHT) {
-    const byRole: any[] = await ctx.db
-      .query("workflow_runs")
-      .withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", role._id).eq("status", status))
-      .collect();
-    const bySpawner: any[] = standing
-      ? await ctx.db
-        .query("workflow_runs")
-        .withIndex("by_spawner_status", (q: any) => q.eq("spawner_conversation_id", standing).eq("status", status))
-        .collect()
-      : [];
-    for (const run of [...byRole, ...bySpawner]) if (run.task_id && !cardAnswered(run)) held.add(String(run._id));
-  }
-  const runner = seatPlace(role, standing ? await ctx.db.get(standing) : null).runner_user_id;
-  const pending: any[] = await ctx.db
+// A run works while it is pending or running. A run paused at its card, or
+// running but blocked on a person's answer, uses no machine and holds no slot.
+const WORKING_RUN_STATUSES = ["pending", "running"] as const;
+
+export type RunnerLoad = { runner: string; working: number; cap: number };
+
+// LE6: the line runs working now on `runner`'s machine: runs with a task that
+// a role run by `runner` started (or, from before org_role_id, its standing
+// session spawned), minus those waiting on a blocking decision. Every role
+// counts, paused and retired ones too: their runs still use the machine.
+export async function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promise<RunnerLoad> {
+  const all: any[] = roles ?? await ctx.db.query("org_roles").collect();
+  const asked: any[] = await ctx.db
     .query("session_decisions")
     .withIndex("by_user_status", (q: any) => q.eq("user_id", runner).eq("status", "pending"))
     .collect();
-  for (const d of pending) {
-    if (!d.blocking || !d.workflow_run_id || d.gate_node_id !== LINE_CARD_GATE_NODE || held.has(String(d.workflow_run_id))) continue;
-    const run = await ctx.db.get(d.workflow_run_id);
-    if (run && mine(run)) held.add(String(run._id));
+  const waiting = new Set(asked.filter((d) => d.blocking && d.workflow_run_id).map((d) => String(d.workflow_run_id)));
+  const working = new Set<string>();
+  for (const role of all) {
+    const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+    const standing = anchor?.conversation_id ?? null;
+    if (String(seatPlace(role, standing ? await ctx.db.get(standing) : null).runner_user_id) !== runner) continue;
+    for (const status of WORKING_RUN_STATUSES) {
+      const runs: any[] = await ctx.db
+        .query("workflow_runs")
+        .withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", role._id).eq("status", status))
+        .collect();
+      if (standing) {
+        runs.push(...await ctx.db
+          .query("workflow_runs")
+          .withIndex("by_spawner_status", (q: any) => q.eq("spawner_conversation_id", standing).eq("status", status))
+          .collect());
+      }
+      for (const run of runs) if (run.task_id && !waiting.has(String(run._id))) working.add(String(run._id));
+    }
   }
-  return held.size;
+  return { runner, working: working.size, cap: LINE_RUNS_PER_RUNNER };
 }
 
-// The runner completes the card gate's node once its decision is answered.
-function cardAnswered(run: any): boolean {
-  return (run.node_statuses ?? []).some((n: any) => n.node_id === LINE_CARD_GATE_NODE && n.status === "completed");
+/** The load of the machine a role's line runs on. */
+export async function runnerLoadFor(ctx: Ctx, role: any): Promise<RunnerLoad> {
+  return runnerLoad(ctx, String(await roleRunner(ctx, role)));
 }
 
 // LP6: the person who answers a role's cards is the person at the top of its
@@ -212,52 +215,18 @@ export function answererOf(role: any, boundaryRoles: any[]): string {
   return chainHeadOf(role._id, boundaryRoles) ?? String(role.host_user_id);
 }
 
-// Every role whose cards `person` answers, across every boundary they are in:
-// their own and each team they belong to.
-export async function rolesAnsweredBy(ctx: Ctx, person: string): Promise<any[]> {
-  const boundaries: Array<{ team_id?: any; scope_user_id?: any }> = [{ scope_user_id: person }];
-  const memberships: any[] = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", person)).collect();
-  for (const m of memberships) boundaries.push({ team_id: m.team_id });
-  const out: any[] = [];
-  for (const b of boundaries) {
-    const roles = await allRolesInBoundary(ctx, b);
-    for (const r of roles) if (answererOf(r, roles) === person) out.push(r);
-  }
-  return out;
-}
-
-export type CardLoad = { person: string; open: number; cap: number };
-
-// LP6: a person's open cards across every line they answer for, against one
-// cap: the smallest caps.cards among their roles whose line is on, so nine
-// roles never mean forty-five open cards. A retired or paused role's open
-// runs still hold their cards.
-export async function personCardLoad(ctx: Ctx, person: string): Promise<CardLoad> {
-  const roles = await rolesAnsweredBy(ctx, person);
-  let open = 0;
-  for (const r of roles) open += await openLineCards(ctx, r);
-  const live = roles.filter((r) => r.status === "active" && lineStartsOn(r));
-  const cap = live.length ? Math.min(...live.map(cardsCapOf)) : cardsCapOf({});
-  return { person, open, cap };
-}
-
-/** The card load of the person a role's cards go to. */
-export async function cardLoadFor(ctx: Ctx, role: any): Promise<CardLoad> {
-  return personCardLoad(ctx, answererOf(role, await allRolesInBoundary(ctx, role)));
-}
-
-export type AdmissionWait = "off" | "hands" | "cards";
+export type AdmissionWait = "off" | "hands" | "runs";
 
 // LE6: why the line may not admit its next cause now, or null when it may.
-// `openCards` and `cardsCap` are the answering person's (LP6).
-export function admissionWait(role: any, openCards: number, now: number, cardsCap: number = cardsCapOf(role)): AdmissionWait | null {
+// `working` is the runs working on the role's runner's machine.
+export function admissionWait(role: any, working: number, now: number): AdmissionWait | null {
   if (!roleMayStartHands(role, now)) return atCap(countersFor(role, now).hands, capsFor(role).hands_per_day) ? "hands" : "off";
-  if (openCards >= cardsCap) return "cards";
+  if (working >= LINE_RUNS_PER_RUNNER) return "runs";
   return null;
 }
 
-export function admissionWaitWords(wait: AdmissionWait, openCards: number): string {
-  if (wait === "cards") return `queued behind ${openCards} open card${openCards === 1 ? "" : "s"}`;
+export function admissionWaitWords(wait: AdmissionWait, working: number): string {
+  if (wait === "runs") return `${working} run${working === 1 ? "" : "s"} working on its machine`;
   if (wait === "hands") return "hands cap reached";
   return "line is off";
 }
@@ -327,39 +296,39 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
 export type SweepResult = {
   started: Array<{ role_id: string; task_id: string; run_id: string }>;
   skipped_capped: string[];
-  // Roles whose next cause waits behind open cards (LE6).
-  skipped_cards: string[];
+  // Roles whose next cause waits for a run on their machine to finish (LE6).
+  skipped_busy: string[];
 };
 
 // L9 and LE6: every two minutes. Paused roles and roles whose line's start
 // switch is off (learning-loop.md LL5: caps.line_on, under the role's own
-// switch) never start anything, and every line starts off. A role admits its candidates highest priority first
-// while the open cards of the person who answers them (LP6, across all their
-// lines) are under that person's cap and the role's hands under
-// caps.hands_per_day; a role at either cap is reported and waits for a card
-// to be answered or for tomorrow.
+// switch) never start anything, and every line starts off. A role admits its
+// candidates highest priority first while fewer than LINE_RUNS_PER_RUNNER
+// runs work on its runner's machine (across every line that person runs) and
+// its hands are under caps.hands_per_day; a role at either cap is reported
+// and waits for a run to finish, pause or ask, or for tomorrow.
 export async function sweepCore(ctx: Ctx, now = Date.now()): Promise<SweepResult> {
-  const result: SweepResult = { started: [], skipped_capped: [], skipped_cards: [] };
+  const result: SweepResult = { started: [], skipped_capped: [], skipped_busy: [] };
   const roles: any[] = await ctx.db.query("org_roles").collect();
-  // One load per person, shared by every role they answer for in this pass.
-  const loads = new Map<string, CardLoad>();
+  // One load per runner, shared by every role they run in this pass.
+  const loads = new Map<string, RunnerLoad>();
   for (const seed of roles) {
     if (seed.status !== "active" || !lineStartsOn(seed)) continue;
     let role = seed;
     const candidates = await lineCandidates(ctx, role);
     if (!candidates.length) continue;
-    const person = answererOf(role, await allRolesInBoundary(ctx, role));
-    const load = loads.get(person) ?? await personCardLoad(ctx, person);
-    loads.set(person, load);
+    const runner = String(await roleRunner(ctx, role));
+    const load = loads.get(runner) ?? await runnerLoad(ctx, runner, roles);
+    loads.set(runner, load);
     for (const task of candidates) {
       if (result.started.length >= MAX_STARTS_PER_SWEEP) return result;
-      const wait = admissionWait(role, load.open, now, load.cap);
-      if (wait === "cards") { result.skipped_cards.push(String(role._id)); break; }
+      const wait = admissionWait(role, load.working, now);
+      if (wait === "runs") { result.skipped_busy.push(String(role._id)); break; }
       if (wait) { result.skipped_capped.push(String(role._id)); break; }
       const runId = await startLineRun(ctx, role, task, now);
       result.started.push({ role_id: String(role._id), task_id: String(task._id), run_id: String(runId) });
-      // The new run holds a card slot until its card is answered.
-      load.open++;
+      // The new run is pending, so it works on the runner's machine.
+      load.working++;
       // recordHandStart patched the counters; read the row back before the
       // next cap check.
       role = await ctx.db.get(role._id);
@@ -377,7 +346,7 @@ export type LineQueueItem = { task_id: string; short_id: string | null; title: s
 /** A cause the role leads that grounding held on a fact (readiness needs_context): the lead's to answer, never a
  *  person's For you. `note` is grounding's own words, the question inside them. */
 export type LineAsk = { task_id: string; short_id: string | null; title: string; note: string | null; findings: number };
-export type LineQueue = { role_id: string; open_cards: number; cards_cap: number; hands: number; hands_cap: number | null; waiting: string | null; items: LineQueueItem[]; asks: LineAsk[] };
+export type LineQueue = { role_id: string; working: number; runs_cap: number; hands: number; hands_cap: number | null; waiting: string | null; items: LineQueueItem[]; asks: LineAsk[] };
 
 /** A note that parks a cause until more findings come asks nobody anything (web lineInbox waitsForFindings). */
 const WAITS_FOR_FINDINGS = /\bwaits? (?:for|on) more (?:signals|findings)\b/i;
@@ -402,28 +371,29 @@ export async function lineAsksFor(ctx: Ctx, role: any): Promise<LineAsk[]> {
 
 // LE6: the line page's queue for one role: its candidates in admission order,
 // each with why it waits (null: it starts at the next sweep). `waiting` on the
-// queue is why the head has not started. Each start takes a card slot and a
-// hand, so an item waits behind whichever runs out before its turn.
+// queue is why the head has not started. Each start takes a run slot on the
+// runner's machine and a hand, so an item waits behind whichever runs out
+// before its turn.
 export async function lineQueueFor(ctx: Ctx, role: any, now = Date.now()): Promise<LineQueue> {
   const ranked = await rankedCandidates(ctx, role);
-  const { open: cards, cap: cardsCap } = await cardLoadFor(ctx, role);
-  const wait = admissionWait(role, cards, now, cardsCap);
-  const waiting = wait ? admissionWaitWords(wait, cards) : null;
+  const { working, cap: runsCap } = await runnerLoadFor(ctx, role);
+  const wait = admissionWait(role, working, now);
+  const waiting = wait ? admissionWaitWords(wait, working) : null;
   const hands = countersFor(role, now).hands;
   const handsCap = capsFor(role).hands_per_day ?? null;
-  // The sweep checks hands before cards, so when both run out at once the
-  // hands cap is the reason. No hands cap leaves the cards as the only limit.
+  // The sweep checks hands before runs, so when both run out at once the
+  // hands cap is the reason.
   const handSlots = handsCap === null ? Infinity : handsCap - hands;
-  const cardSlots = cardsCap - cards;
+  const runSlots = runsCap - working;
   const itemWait = (i: number): string | null => {
     if (waiting) return waiting;
-    if (i < Math.min(handSlots, cardSlots)) return null;
-    return handSlots <= cardSlots ? admissionWaitWords("hands", cards) : admissionWaitWords("cards", cardsCap);
+    if (i < Math.min(handSlots, runSlots)) return null;
+    return handSlots <= runSlots ? admissionWaitWords("hands", working) : admissionWaitWords("runs", runsCap);
   };
   return {
     role_id: String(role._id),
-    open_cards: cards,
-    cards_cap: cardsCap,
+    working,
+    runs_cap: runsCap,
     hands,
     hands_cap: handsCap,
     waiting,
