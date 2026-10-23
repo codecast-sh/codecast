@@ -164,6 +164,9 @@ a.fy-head:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person)
 /* The reader's body is the one box its content fills: a decision scrolls inside it and docks its answers at its foot. */
 .fy-reader-b { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .fy-reader-b > * { flex: 1; min-height: 0; }
+/* The trail above the card takes its own height; opened onto the raw thing it scrolls within a share of the
+   reader, so the card below keeps the rest and its answers stay in view. */
+.fy-reader-b > .fy-origin { flex: none; max-height: 45%; overflow: auto; }
 
 .fy-clear { flex: 1; display: grid; place-items: center; }
 .fy-missing { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
