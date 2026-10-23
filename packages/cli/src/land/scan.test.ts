@@ -12,7 +12,7 @@ import { ARCHIVE_REF_PREFIX, pruneTree, treePatch } from "./prune.js";
 
 const NOW = 1_800_000_000_000;
 const facts = (over: Partial<VerdictFacts>): VerdictFacts => ({
-  primary: false, locked: false, liveOwner: false, processInside: false,
+  primary: false, locked: false, liveOwner: false, processInside: false, run: false,
   lastActivity: NOW - 3 * 86_400_000, counts: { same: 0, absorbed: 0, only: 0, both: 0 }, now: NOW, ...over,
 });
 
@@ -37,6 +37,17 @@ describe("treeVerdict", () => {
     expect(treeVerdict(facts({ lastActivity: NOW - STALE_MS - 1, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("stale");
     // Nothing of its own left: it is landed however old.
     expect(treeVerdict(facts({ lastActivity: NOW - STALE_MS - 1, counts: { same: 2, absorbed: 0, only: 0, both: 0 } })).verdict).toBe("landed");
+  });
+  test("a line run's tree holding work main lacks is the run's to ship, in use or not", () => {
+    expect(treeVerdict(facts({ run: true, counts: { same: 0, absorbed: 0, only: 2, both: 1 } })).verdict).toBe("run");
+    expect(treeVerdict(facts({ run: true, counts: { same: 0, absorbed: 3, only: 0, both: 2 } })).verdict).toBe("run");
+    expect(treeVerdict(facts({ run: true, processInside: true, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("run");
+    expect(treeVerdict(facts({ run: true, lastActivity: NOW - 60_000, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("run");
+    // Holding nothing of its own, or idle past the stale line, it reads as any tree does.
+    expect(treeVerdict(facts({ run: true, processInside: true })).verdict).toBe("live");
+    expect(treeVerdict(facts({ run: true })).verdict).toBe("empty");
+    expect(treeVerdict(facts({ run: true, counts: { same: 2, absorbed: 0, only: 0, both: 0 } })).verdict).toBe("landed");
+    expect(treeVerdict(facts({ run: true, lastActivity: NOW - STALE_MS - 1, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("stale");
   });
 });
 
@@ -154,6 +165,9 @@ describe("against a real repo", () => {
     const conflict = wt("conflict", 1 * day); write(path.join(conflict, "d.ts"), "export const d = 2;\n"); age(conflict, 1 * day);
     const stale = wt("stale", 10 * day); write(path.join(stale, "stale.ts"), "s\n"); age(stale, 10 * day);
     const live = wt("live"); write(path.join(live, "live.ts"), "l\n");
+    // A tree a line run made: the run's files sit under the checkout's run dirs by the tree's name.
+    const run = wt("line-ct-1", 1 * day); write(path.join(run, "fix.ts"), "f\n"); age(run, 1 * day);
+    fs.mkdirSync(path.join(root, ".git", "cast-line", "line-ct-1"), { recursive: true });
     // An empty tree nested inside the live one stays with it.
     const underLive = path.join(live, ".codecast", "worktrees", "under-live");
     shAt(3 * day, root, "worktree", "add", "-q", "-b", "under-live", underLive); age(underLive, 3 * day);
@@ -183,6 +197,7 @@ describe("against a real repo", () => {
     expect(tree("stale").verdict).toBe("stale");
     expect(tree("live").verdict).toBe("live");
     expect(tree("inner").verdict).toBe("ready");
+    expect(tree("line-ct-1").verdict).toBe("run");
   });
 
   test("a scan never touches a worktree's own index", () => {

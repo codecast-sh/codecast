@@ -1,0 +1,2 @@
+import{f as e,cX as i,t as r,cY as a}from"./lineWorkspaceUrl-HbLDNrsj.js";import{a as n}from"./contextProjectPath-4JIDOyj3.js";import{ge as p}from"./index-DXIvynXe.js";function c(s,o){const t=o?s.opsSources[o]:void 0;return n(s,t)??a(s)??void 0}function x(s,o){const t=e.getState();i({prompt:p(s),projectPath:c(t,o),failureLabel:"Failed to start the fix session"}),r.success("Fix session started",{description:"It is in your inbox."})}export{x as s};
+//# sourceMappingURL=startFix-CLnBQ9ad.js.map
