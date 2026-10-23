@@ -17,6 +17,7 @@ import { useStageScroll } from "./useStageScroll";
 import { Check, ChevronDown, Inbox, SlidersHorizontal, Workflow, AlertCircle, Rocket, Route, History, type LucideIcon } from "lucide-react";
 import { lineFilterParam, useLineProjectId, useLineSelection, useLineWorkspace, useSyncLineHistory } from "../../../hooks/useLineWorkspace";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useMountEffect } from "../../../hooks/useMountEffect"; // __BISECT
 import { useInboxStore } from "../../../store/inboxStore";
 import { useTabActive } from "../../../hooks/usePagePresence";
 import { useStageWide } from "../../../hooks/useStageWide";
@@ -96,6 +97,9 @@ export type LineWorkspaceProps = {
 type LineWorkspaceModel = ReturnType<typeof useLineWorkspace>;
 
 export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space, settings = false }: LineWorkspaceProps) {
+  const __g = ((globalThis as any).__lwc ??= { renders: 0, mountAttempts: 0, mounts: 0, t: [] as string[] }); __g.renders++; // __BISECT
+  useState(() => { __g.mountAttempts++; __g.t.push("attempt@" + Math.round(performance.now())); return 0; }); // __BISECT
+  useMountEffect(() => { __g.mounts++; __g.t.push("mount@" + Math.round(performance.now())); }); // __BISECT
   // The address names a problem by its ref (ct-N); every view below reads its row id (caseRefs), and every write
   // through `select`/`href` names it by its ref again.
   const { selection: address, select: go, href: link } = useLineSelection();

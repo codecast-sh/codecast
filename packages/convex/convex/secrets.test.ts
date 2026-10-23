@@ -10,6 +10,7 @@ import { hashToken } from "./apiTokens";
 import { allModules } from "./testModules.testkit";
 import { decryptSecret, encryptSecret } from "./secrets";
 import { parseVaultReady } from "@codecast/shared/contracts";
+import { isHumanOnlyCategory } from "./lib/decisionCategory";
 
 setDefaultTimeout(60_000);
 
@@ -199,6 +200,148 @@ test("the redaction version moves on every value write and delete, and the event
 
   expect(await as(ana).mutation(api.secrets.remove, { ref: made.short_id })).toMatchObject({ removed: true });
   expect((await t.query(api.secrets.redactionVersion, { api_token: ANA_TOKEN })).version).not.toBe(v3);
-  const evs = await t.run(async (ctx: any) => ctx.db.query("secret_events").collect());
+  const evs = (await t.run(async (ctx: any) => ctx.db.query("secret_events").collect())).filter((e: any) => e.secret_id);
   expect(evs.map((e: any) => [e.kind, e.secret_name])).toEqual([["created", "k"], ["rotated", "k"], ["updated", "k"], ["deleted", "k"]]);
+});
+
+const SEED = "JBSWY3DPEHPK3PXP";
+const read = (t: any, refs: string[], extra: Record<string, unknown> = {}) =>
+  t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs, conversation: "jx7ana1", purpose: "run", ...extra });
+const answer = (t: any, decision: string, index: number) =>
+  t.mutation(api.sessionDecisions.answer, { api_token: ANA_TOKEN, decision_id: decision, answer_index: index });
+
+test("Ask first: an agent's read files one decision for the session, Approve lets that session read, Deny asks again", async () => {
+  const { t, as, ana, ben, acme, conv } = await seed();
+  await as(ana).action(api.secrets.create, { name: "stripe-live", kind: "key", payload: { value: STRIPE }, team_id: acme });
+  expect(await as(ben).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: true })).toMatchObject({ ask_first: true });
+  expect((await as(ana).query(api.secrets.show, { ref: "stripe-live" })).ask_first).toBe(true);
+
+  const held = await read(t, ["stripe-live"], { why: "refund order 123" });
+  expect(held.secrets).toBeUndefined();
+  expect(held.needs_approval.secret).toBe("stripe-live");
+  expect(held.needs_approval.decision).toMatch(/^sd-\d+$/);
+  expect(held.message).toContain(`dormant naming ${held.needs_approval.decision}`);
+  expect(JSON.stringify(held)).not.toContain(STRIPE);
+  const decision = await t.run(async (ctx: any) => ctx.db.query("session_decisions").first());
+  expect(decision.question).toBe("Wire up billing wants stripe-live to refund order 123");
+  expect(decision.options.map((o: any) => o.label)).toEqual(["Approve for this session", "Deny"]);
+  expect(decision.conversation_id).toBe(conv);
+  // Proposed as access; a keyword may pin another protected category. Either way only a person holds it.
+  expect(isHumanOnlyCategory(decision.category)).toBe(true);
+
+  // A repeat while it is open reuses the decision; no read is recorded and no value leaves.
+  expect((await read(t, ["stripe-live"])).needs_approval.decision).toBe(held.needs_approval.decision);
+  expect(await t.run(async (ctx: any) => (await ctx.db.query("session_decisions").collect()).length)).toBe(1);
+  // No session to approve: refused, never silently read.
+  expect(await t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs: ["stripe-live"], purpose: "get" })).toMatchObject({ error: expect.stringMatching(/Ask first/) });
+  // A person's reveal on the web is not gated.
+  expect(await as(ana).action(api.secrets.reveal, { ref: "stripe-live" })).toEqual({ payload: { value: STRIPE } });
+
+  await answer(t, held.needs_approval.decision, 0);
+  const approval = await t.run(async (ctx: any) => ctx.db.query("secret_approvals").first());
+  expect(approval).toMatchObject({ status: "approved", approved_by: ana, conversation_id: conv });
+  const ok = await read(t, ["stripe-live"]);
+  expect(ok.secrets[0].payload).toEqual({ value: STRIPE });
+  const kinds = (await as(ana).query(api.secrets.events, { ref: "stripe-live" })).map((e: any) => e.kind);
+  expect(kinds.slice(0, 4)).toEqual(["read", "approved", "revealed", "approval_requested"]);
+  expect(kinds).toContain("ask_first_on");
+  expect((await as(ana).query(api.secrets.events, { ref: "stripe-live" })).find((e: any) => e.kind === "approved").decision_short_id).toBe(held.needs_approval.decision);
+
+  // Deny on another secret records it, and the next read asks again.
+  await as(ana).action(api.secrets.create, { name: "prod-db", kind: "key", payload: { value: "postgres://prod-secret-value" }, team_id: acme });
+  await as(ana).mutation(api.secrets.setAskFirst, { ref: "prod-db", ask_first: true });
+  const first = await read(t, ["stripe-live", "prod-db"]);
+  expect(first.approvals).toEqual([{ decision: expect.stringMatching(/^sd-/), secret: "prod-db" }]);
+  await answer(t, first.needs_approval.decision, 1);
+  const again = await read(t, ["prod-db"]);
+  expect(again.needs_approval.decision).not.toBe(first.needs_approval.decision);
+  expect((await as(ana).query(api.secrets.events, { ref: "prod-db" })).map((e: any) => e.kind).slice(0, 3)).toEqual(["approval_requested", "denied", "approval_requested"]);
+  expect(await allText(t)).not.toContain("postgres://prod-secret-value");
+});
+
+test("rotate keeps the previous value as a version, restore swaps it back, refresh keeps none, and the cron purges expired ones", async () => {
+  const { t, as, ana, acme } = await seed();
+  await as(ana).action(api.secrets.create, { name: "k", kind: "key", payload: { value: "value-one-1234567890" }, team_id: acme });
+  await as(ana).action(api.secrets.rotate, { ref: "k", payload: { value: "value-two-1234567890" } });
+  await as(ana).action(api.secrets.rotate, { ref: "k", payload: { value: "value-three-12345678" } });
+  const vers = await as(ana).query(api.secrets.versions, { ref: "k" });
+  expect(vers).toHaveLength(2);
+  expect(vers[0]).toMatchObject({ rotated_by_name: "Ana", fingerprint: "valu…7890" });
+  expect(vers[0].expires_at - vers[0].rotated_at).toBe(7 * 24 * 60 * 60 * 1000);
+  expect(JSON.stringify(vers)).not.toMatch(/value-|v1\./);
+  expect((await as(ana).query(api.secrets.show, { ref: "k" })).version_count).toBe(2);
+
+  const v0 = (await t.query(api.secrets.redactionVersion, { api_token: ANA_TOKEN })).version;
+  expect(await as(ana).action(api.secrets.restore, { ref: "k" })).toMatchObject({ name: "k", restored_from: vers[0].rotated_at });
+  expect(await as(ana).action(api.secrets.reveal, { ref: "k" })).toEqual({ payload: { value: "value-two-1234567890" } });
+  expect((await t.query(api.secrets.redactionVersion, { api_token: ANA_TOKEN })).version).not.toBe(v0);
+  // The value it replaced is now the newest version, so a wrong restore is undone the same way.
+  const after = await as(ana).query(api.secrets.versions, { ref: "k" });
+  expect(after).toHaveLength(2);
+  expect(after[0].fingerprint).toBe("valu…5678");
+  expect((await as(ana).query(api.secrets.events, { ref: "k" })).map((e: any) => e.kind).slice(0, 2)).toEqual(["revealed", "restored"]);
+  expect(await as(ana).action(api.secrets.restore, { ref: "k", version: "nope" })).toMatchObject({ error: expect.stringMatching(/gone/) });
+
+  const cookie = { name: "sid", value: "cookie-1", domain: "app.example.com", path: "/", secure: true, httpOnly: true };
+  await as(ana).action(api.secrets.create, { name: "app-signin", kind: "signin", payload: { cookies: [cookie], captured_from: "chrome" }, sites: ["app.example.com"], team_id: acme });
+  await as(ana).action(api.secrets.refresh, { ref: "app-signin", payload: { cookies: [{ ...cookie, value: "cookie-2" }], captured_from: "agent-browser" } });
+  expect(await as(ana).query(api.secrets.versions, { ref: "app-signin" })).toEqual([]);
+
+  await t.run(async (ctx: any) => {
+    for (const r of await ctx.db.query("secret_versions").collect()) await ctx.db.patch(r._id, { expires_at: Date.now() - 1 });
+  });
+  expect(await t.mutation((anyApi as any).secrets.purgeExpiredVersions, {})).toEqual({ purged: 2 });
+  expect(await as(ana).query(api.secrets.versions, { ref: "k" })).toEqual([]);
+  expect((await as(ana).query(api.secrets.show, { ref: "k" })).version_count).toBe(0);
+  expect(await as(ana).action(api.secrets.restore, { ref: "k" })).toMatchObject({ error: expect.stringMatching(/no earlier value/) });
+});
+
+test("a login's has_otp is stored at write time, and a rotate keeps the fields it leaves out and clears an empty one", async () => {
+  const { as, ana, ben, acme } = await seed();
+  await as(ana).action(api.secrets.create, { name: "staging", kind: "login", payload: { username: "admin", password: "pw-1", totp_seed: SEED }, team_id: acme });
+  expect(await as(ana).query(api.secrets.show, { ref: "staging" })).toMatchObject({ has_otp: true, updated_by_name: "Ana" });
+  await as(ben).action(api.secrets.rotate, { ref: "staging", payload: { password: "pw-2" } });
+  expect(await as(ana).action(api.secrets.reveal, { ref: "staging" })).toEqual({ payload: { username: "admin", password: "pw-2", totp_seed: SEED } });
+  expect(await as(ana).query(api.secrets.show, { ref: "staging" })).toMatchObject({ has_otp: true, updated_by_name: "Ben", version_count: 1 });
+  await as(ana).action(api.secrets.rotate, { ref: "staging", payload: { totp_seed: "" } });
+  expect(await as(ana).action(api.secrets.reveal, { ref: "staging" })).toEqual({ payload: { username: "admin", password: "pw-2" } });
+  expect((await as(ana).query(api.secrets.show, { ref: "staging" })).has_otp).toBe(false);
+});
+
+test("events are found by short id after delete, inside the viewer's workspaces only", async () => {
+  const { as, ana, cat, acme } = await seed();
+  const made = await as(ana).action(api.secrets.create, { name: "gone", kind: "key", payload: { value: "x-value-123" }, team_id: acme });
+  await as(ana).mutation(api.secrets.remove, { ref: "gone" });
+  const evs = await as(ana).query(api.secrets.events, { ref: made.short_id });
+  expect(evs.map((e: any) => e.kind)).toEqual(["deleted", "created"]);
+  expect(await as(cat).query(api.secrets.events, { ref: made.short_id })).toMatchObject({ error: expect.any(String) });
+  expect(await as(ana).query(api.secrets.events, { ref: "gone" })).toMatchObject({ error: expect.any(String) });
+});
+
+test("a redaction fetch records one redaction_sync per workspace and nothing per secret", async () => {
+  const { t, as, ana, acme } = await seed();
+  await as(ana).action(api.secrets.create, { name: "a", kind: "key", payload: { value: "value-a-123456" }, team_id: acme });
+  await as(ana).action(api.secrets.create, { name: "b", kind: "login", payload: { username: "u", password: "value-b-123456" }, team_id: acme });
+  await as(ana).action(api.secrets.create, { name: "c", kind: "key", payload: { value: "value-c-123456" }, personal: true });
+  await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN });
+  const evs = await t.run(async (ctx: any) => ctx.db.query("secret_events").collect());
+  const syncs = evs.filter((e: any) => e.kind === "redaction_sync");
+  expect(syncs.map((e: any) => [e.workspace, e.count, e.secret_id]).sort()).toEqual([[`team:${acme}`, 2, undefined], [`user:${ana}`, 1, undefined]].sort());
+  expect(evs.filter((e: any) => e.kind !== "created" && e.kind !== "redaction_sync")).toEqual([]);
+});
+
+test("refresh refuses a stale write-back with a distinct answer", async () => {
+  const { t, as, ana, acme } = await seed();
+  const cookie = { name: "sid", value: "cookie-1", domain: "app.example.com", path: "/", secure: true, httpOnly: true };
+  await as(ana).action(api.secrets.create, { name: "app", kind: "signin", payload: { cookies: [cookie], captured_from: "chrome" }, team_id: acme });
+  const got = await read(t, ["app"], { purpose: "signin" });
+  const seen = got.secrets[0].updated_at;
+  expect(seen).toEqual(expect.any(Number));
+  const ok = await t.action(api.secrets.refresh, { api_token: ANA_TOKEN, ref: "app", payload: { cookies: [{ ...cookie, value: "cookie-2" }], captured_from: "agent-browser" }, expected_updated_at: seen });
+  expect(ok.error).toBeUndefined();
+  expect(ok.stale).toBeUndefined();
+  // A second machine still holding the first read is refused, and nothing is written.
+  const stale = await t.action(api.secrets.refresh, { api_token: ANA_TOKEN, ref: "app", payload: { cookies: [{ ...cookie, value: "cookie-3" }], captured_from: "agent-browser" }, expected_updated_at: seen });
+  expect(stale).toMatchObject({ stale: true, updated_at: ok.updated_at, message: expect.stringMatching(/read it again/) });
+  expect((await as(ana).action(api.secrets.reveal, { ref: "app" })).payload.cookies[0].value).toBe("cookie-2");
 });
