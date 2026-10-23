@@ -19,7 +19,8 @@
 // ship: lands an approved change the way this repo works, in the main
 // checkout's working tree beside everyone else's uncommitted work, never as a
 // push; committing is a person's separate step. It applies the branch's diff
-// against its merge base and prints the one line that goes on the task.
+// against its merge base with origin's default branch and prints the one line
+// that goes on the task.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -126,19 +127,34 @@ function git(cwd: string, args: string[], input?: string): { ok: boolean; out: s
   return { ok: r.status === 0, out: r.stdout ?? "", err: (r.stderr ?? "").trim() };
 }
 
+/**
+ * The branch's own commits. The rebase station puts the branch on
+ * origin/<base>, and the local <base> can lag it by any number of commits;
+ * diffing from the local one would carry those upstream commits into the
+ * patch, and they collide with whatever the tree holds uncommitted.
+ */
+export function shipRange(cwd: string, base: string): string {
+  const remote = `origin/${base}`;
+  const from = git(cwd, ["rev-parse", "--verify", "-q", `refs/remotes/${remote}`]).ok ? remote : base;
+  const mergeBase = git(cwd, ["merge-base", from, "HEAD"]);
+  if (!mergeBase.ok) fail(`no merge base with ${from}: ${mergeBase.err}`);
+  return `${mergeBase.out.trim()}..HEAD`;
+}
+
 function ship(): void {
   const tree = need("tree");
   const cwd = process.cwd();
-  const base = git(cwd, ["merge-base", need("base"), "HEAD"]);
-  if (!base.ok) fail(`no merge base with ${arg("base")}: ${base.err}`);
-  const range = `${base.out.trim()}..HEAD`;
+  const range = shipRange(cwd, need("base"));
   const patch = git(cwd, ["diff", "--binary", range]).out;
   if (!patch.trim()) { console.log("nothing to land: the branch has no change against its base"); return; }
+  const stat = git(cwd, ["diff", "--shortstat", range]).out.trim();
+  // A change made from a session's own edits was committed from this tree,
+  // and flowChange.ts leaves the edits there: the tree already holds it.
+  if (git(tree, ["apply", "--check", "-R", "-"], patch).ok) { console.log(`already in the working tree at ${tree}: ${stat}`); return; }
   const check = git(tree, ["apply", "--check", "-"], patch);
   if (!check.ok) fail(`the change does not apply to ${tree} as it stands: ${check.err.split("\n")[0]}`);
   const applied = git(tree, ["apply", "-"], patch);
   if (!applied.ok) fail(`applying to ${tree} failed: ${applied.err.split("\n")[0]}`);
-  const stat = git(cwd, ["diff", "--shortstat", range]).out.trim();
   console.log(`applied to the working tree at ${tree}: ${stat}`);
 }
 

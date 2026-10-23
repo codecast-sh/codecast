@@ -255,7 +255,8 @@ import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { TokenDecryptError } from "./tokenEncryption.js";
 import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerToken.js";
-import { startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
+import { refreshKnownVault, startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
+import { VAULT_REFRESH_PATH, vaultRedactionSource } from "./secrets/redactionSource.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { launchTokenLedger } from "./launchToken.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
@@ -2781,6 +2782,19 @@ function startHookServer(): http.Server {
     if (req.method === "GET" && req.url === "/health") {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("ok");
+      return;
+    }
+
+    // A `cast vault` read about to hand out a value: take the Vault's current
+    // values into redaction first, and answer once they are in.
+    if (req.method === "POST" && req.url === VAULT_REFRESH_PATH) {
+      req.resume();
+      const admitted = admitHookIngress(req);
+      if (!admitted.ok) return refuseHookIngress(VAULT_REFRESH_PATH, admitted.reason, res);
+      void refreshKnownVault().finally(() => {
+        res.writeHead(204);
+        res.end();
+      });
       return;
     }
 
@@ -8732,6 +8746,18 @@ async function executeRemoteCommand(
         // cloud/browserSync.ts. The child's line holds counts, never a cookie.
         const { handleBrowserSyncCommand } = await import("./cloud/browserSync.js");
         const out = await handleBrowserSyncCommand(commandArgs, { isRemoteDevice, runCastCommand, log, childErrorDetail });
+        result = out.result;
+        error = out.error;
+        break;
+      }
+      case "vault_capture_signin":
+      case "vault_check_signin": {
+        // The web's Save sign-in from this laptop's Chrome. The child reads
+        // the cookies and stores them in the Vault (or, for a check, only
+        // counts them); its line holds counts and a name, never a cookie
+        // (secrets/signinCommand.ts).
+        const { handleCaptureSigninCommand } = await import("./secrets/signinCommand.js");
+        const out = await handleCaptureSigninCommand(commandArgs, { isRemoteDevice, runCastCommand, log, childErrorDetail }, command === "vault_check_signin");
         result = out.result;
         error = out.error;
         break;
@@ -29567,6 +29593,14 @@ async function main(): Promise<void> {
       if (!token) return [];
       try { return [token, secretFromStored(token)]; } catch { return [token]; }
     },
+    vault: vaultRedactionSource({
+      endpoint: () => {
+        const siteUrl = getSiteUrl();
+        const apiToken = getAuthToken();
+        return siteUrl && apiToken ? { siteUrl, apiToken } : null;
+      },
+      log,
+    }),
     log,
   });
   resumeStartedSessionDiscovery();

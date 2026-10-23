@@ -18,8 +18,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "./proc.js";
+import { spawn } from "./proc.js";
 import { extractJsonOutput } from "./workflow/condition.js";
+import { findCheckpointFile } from "./workflow/runDirs.js";
 
 // ── the template edit, applied to a rendered brief ───────────────────────────
 
@@ -422,25 +423,6 @@ export function harnessScriptPath(): string | null {
 /** A case's run dir: under the machine's own temp dir, which the try's sandbox opens to it alone. */
 export const tryRunDir = (tryId: string, rowId: string) =>
   path.join(fs.realpathSync(os.tmpdir()), "cast-line-try", tryId.replace(/[^\w-]/g, ""), rowId.replace(/[^\w-]/g, ""));
-
-/** The newest checkpoint of `runId` under the checkout's run dirs (runner.ts lineRunDir, runResume.ts checkpointPath). */
-export function findCheckpointFile(root: string, runId: string): string | null {
-  const r = spawnSync("git", ["-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-  const common = r.status === 0 ? r.stdout.trim() : "";
-  const base = common ? path.join(common, "cast-line") : path.join(os.tmpdir(), "cast-line");
-  const name = `${runId.replace(/[^\w-]/g, "")}.json`;
-  let best: { file: string; at: number } | null = null;
-  let dirs: string[] = [];
-  try { dirs = fs.readdirSync(base); } catch { return null; }
-  for (const d of dirs) {
-    const file = path.join(base, d, "runs", name);
-    try {
-      const at = fs.statSync(file).mtimeMs;
-      if (!best || at > best.at) best = { file, at };
-    } catch { /* not here */ }
-  }
-  return best?.file ?? null;
-}
 
 /** Run the harness under bun, resolving with its exit code. */
 export function spawnHarness(argv: string[], opts: { cwd: string; timeoutMs?: number; env?: NodeJS.ProcessEnv }): Promise<number> {

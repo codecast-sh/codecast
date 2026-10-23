@@ -5,13 +5,16 @@
 
 import * as fs from "node:fs";
 import type { Command } from "commander";
+import type { PublishDeps } from "../castApi.js";
 import { spawn } from "../proc.js";
 import { fmt, icons } from "../colors.js";
 import { commandGroup } from "../commandGroups.js";
+import { exitForApproval, isNeedsApproval } from "../secrets/approval.js";
+import { loadProjectEnv, type VaultMap } from "../secrets/projectMap.js";
 import { resolveManifest } from "./resolver.js";
 import {
   checkoutRoot, devServices, ensureService, readRecord, serviceStatus, stopService,
-  type DevService, type DevStatus,
+  type DevService, type DevStatus, type StartOptions,
 } from "./dev.js";
 
 function loadServices(names: string[]): { checkout: string; manifest: ReturnType<typeof resolveManifest>; services: DevService[] } {
@@ -30,6 +33,35 @@ function loadServices(names: string[]): { checkout: string; manifest: ReturnType
     process.exit(1);
   }
   return { checkout, manifest, services: names.length ? all.filter((s) => names.includes(s.name)) : all };
+}
+
+/**
+ * The project's [vault] env for one `cast dev`: read once, and only when a
+ * server is about to start. Each gap is named with its fix and the server
+ * starts without it, unless its [vault] line is required. A read Ask first
+ * holds stops `cast dev` with the decision to wait on (NEEDS_APPROVAL_EXIT)
+ * before that server starts, required or not.
+ */
+export function vaultEnv(deps: PublishDeps, map: VaultMap | undefined, say: (line: string) => void): StartOptions["secretEnv"] {
+  if (!map) return undefined;
+  let loading: Promise<Record<string, string>> | undefined;
+  const load = async () => {
+    let got: Awaited<ReturnType<typeof loadProjectEnv>>;
+    try {
+      got = await loadProjectEnv(deps, map, deps.detectCurrentSessionId() ?? undefined);
+    } catch (err) {
+      const why = `could not read the [vault] secrets: ${err instanceof Error ? err.message : String(err)}`;
+      if (Object.values(map).some((b) => b.required)) throw new Error(why);
+      say(`${why}. Starting without them`);
+      return {};
+    }
+    if (isNeedsApproval(got)) exitForApproval(got);
+    for (const gap of got.gaps.filter((g) => !g.required)) say(`${gap.line}. Starting without it`);
+    const blocking = got.gaps.filter((g) => g.required);
+    if (blocking.length) throw new Error(`required in [vault]: ${blocking.map((g) => g.line).join("; ")}`);
+    return got.env;
+  };
+  return () => (loading ??= load());
 }
 
 function printStatus(s: DevStatus): void {
@@ -56,7 +88,7 @@ function printStatus(s: DevStatus): void {
   }
 }
 
-export function registerDevCommand(program: Command): void {
+export function registerDevCommand(program: Command, deps: PublishDeps): void {
   const dev = program
     .command("dev")
     .argument("[service...]", "Services to start (default: all)")
@@ -65,10 +97,11 @@ export function registerDevCommand(program: Command): void {
     .option("--json", "Output JSON")
     .action(async (names: string[], o: { timeout?: string; json?: boolean }) => {
       const { checkout, manifest, services } = loadServices(names);
+      const secretEnv = vaultEnv(deps, manifest.vault, (line) => console.error(fmt.warning(`  ${line}`)));
       const results: DevStatus[] = [];
       for (const svc of services) {
         const status = await ensureService(svc, {
-          checkout, manifest,
+          checkout, manifest, secretEnv,
           timeoutSec: o.timeout ? Number(o.timeout) : undefined,
           onWait: o.json ? undefined : (s, sec) => console.log(fmt.muted(`  ${s.name}: waiting for it to answer (${sec}s)`)),
           onNote: o.json ? undefined : (line) => console.log(fmt.muted(`  ${line}`)),
