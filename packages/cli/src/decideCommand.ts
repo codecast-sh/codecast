@@ -471,7 +471,7 @@ function printPreview(question: string, optionList: DecideOption[], defaultOptio
   if (!reportSlug && contextChars < 200) {
     console.log(
       fmt.muted(
-        `\n  Note: ${contextChars} characters of context. They will probably have to open the session to answer this.\n  Say what you found, what each option costs, and why you cannot pick — or attach --report.`
+        `\n  Note: ${contextChars} characters of context. They will probably have to open the session to answer this.\n  Open with what you would pick and why, in words someone who never saw this session follows, then the finding that forces the choice — or attach --report.`
       )
     );
   }
@@ -528,7 +528,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       [] as string[]
     )
     .option("--question <text>", stdinText("edit: replace the question"))
-    .option("--context <text>", stdinText("Markdown context: the reasoning, the tradeoff, what happens under each choice; a cast-canvas block renders inline, so options worth comparing can sit side by side"))
+    .option("--context <text>", stdinText("Markdown context for someone who never saw this session: what you would pick and why, the finding that forces the choice, what each answer does; a cast-canvas block renders inline, so options worth comparing can sit side by side"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
     .option("--proposal <xp-N>", "The expectations proposal this decision settles: an answer opening with Apply lands it, one opening with Keep closes it, any other course leaves it open for you")
     .option("--card <card.json>", "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop")

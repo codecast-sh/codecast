@@ -29,6 +29,7 @@ import { Check, Copy, KeyRound, Laptop, Pin, Trash2, Zap } from "lucide-react";
 import {
   AccountUsageBars,
   LoginExpiredBadge,
+  ReservedBadge,
   ProfileSignInButton,
   UsageRefreshButton,
   type ProfileLoginFlow,
@@ -63,6 +64,7 @@ type DeviceAccounts = {
     token?: { stored_at: number; expires_at: number };
     setup_token?: { stored_at: number; expires_at: number };
     login_expired_at?: number;
+    reserved_for?: string;
   }>;
   auto_switch: boolean;
   /** Absent on servers that predate the field — treated as on. */
@@ -374,6 +376,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                   </span>
                 )}
                 <LoginExpiredBadge profile={p} />
+                <ReservedBadge profile={p} />
                 <ProfileSignInButton
                   device={device}
                   profile={p}

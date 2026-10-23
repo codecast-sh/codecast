@@ -538,6 +538,14 @@ crons.interval(
 );
 
 crons.interval(
+  // Vault: previous secret values past their 7 days of restore (secrets.ts).
+  "purge expired secret versions",
+  { hours: 6 },
+  internal.secrets.purgeExpiredVersions,
+  {}
+);
+
+crons.interval(
   // The hosted assistant's wallet: give back holds that ended turns leaked,
   // including holds whose turn row was deleted, which the lease cannot see.
   "reconcile wallet holds",
