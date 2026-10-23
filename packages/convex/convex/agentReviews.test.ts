@@ -193,6 +193,63 @@ describe("agent reviews", () => {
     expect(await row()).toMatchObject({ filed: 2, run_id: runs[0]!._id });
   }, 120_000);
 
+  test("a finding the door fails to file is filed by a later run of the filing, and the run waits for it", async () => {
+    const { t, scope, extract } = await setup();
+    await t.mutation(api.agentReviews.startForCli, { ...scope, source: "app", kind: "conversation", subjects: ["c_1"] });
+    await extract();
+    const a = (await t.action(api.agentReviews.claimForCli, { api_token: TOKEN, device_id: "host-1", slots: 1 }))[0];
+    const signalsModule: any = await import("./signals");
+    const real = signalsModule.ingestAs._handler;
+    let failed = 0;
+    signalsModule.ingestAs._handler = async (...args: unknown[]) => {
+      if (!failed++) throw new Error("Your request couldn't be completed. Try again later.");
+      return real(...args);
+    };
+    try {
+      await t.action(api.agentReviews.doneForCli, { api_token: TOKEN, device_id: "host-1", review: a.review, ok: true, findings_text: FINDINGS });
+      await filing(t);
+    } finally {
+      signalsModule.ingestAs._handler = real;
+    }
+    const row = async () => t.run(async (ctx) => (await ctx.db.query("agent_reviews").collect()).find((r) => r.short_id === a.review)!);
+    // One of two filed; the review records no run and keeps its findings, and the filing is due again in a minute.
+    expect((await t.run((ctx) => ctx.db.query("signals").collect())).filter((x) => !x.retired)).toHaveLength(1);
+    expect(await row()).toMatchObject({ file: expect.any(String) });
+    expect((await row()).run_id).toBeUndefined();
+    const due = (await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).filter((j: any) => j.name.includes("fileReview") && j.state.kind === "pending");
+    expect(due.map((j: any) => j.args[0].attempt)).toEqual([1]);
+    await t.action(internal.agentReviews.fileReview, { review_id: (await row())._id, attempt: 1 });
+    const live = (await t.run((ctx) => ctx.db.query("signals").collect())).filter((x) => !x.retired);
+    expect(live).toHaveLength(2);
+    const runs = await t.run((ctx) => ctx.db.query("judge_runs").collect());
+    expect(runs).toHaveLength(1);
+    expect(await row()).toMatchObject({ filed: 2, run_id: runs[0]!._id });
+    expect((await row()).file).toBeUndefined();
+  }, 120_000);
+
+  test("a filed review that lost a finding is filed again, and only the missing finding is filed", async () => {
+    const { t, scope, extract } = await setup();
+    await t.mutation(api.agentReviews.startForCli, { ...scope, source: "app", kind: "conversation", subjects: ["c_1"] });
+    await extract();
+    const a = (await t.action(api.agentReviews.claimForCli, { api_token: TOKEN, device_id: "host-1", slots: 1 }))[0];
+    await t.action(api.agentReviews.doneForCli, { api_token: TOKEN, device_id: "host-1", review: a.review, ok: true, findings_text: FINDINGS });
+    await filing(t);
+    // The second finding never reached the board, as when the door failed before filings were retried.
+    const lost = await t.run(async (ctx) => {
+      const [, second] = await ctx.db.query("signals").collect();
+      await ctx.db.delete(second!._id);
+      return second!.fingerprint;
+    });
+    await t.mutation(internal.agentReviewsRepair.refileReview, { review: a.review, findings: JSON.stringify(JSON.parse(FINDINGS).findings) });
+    await filing(t);
+    const live = (await t.run((ctx) => ctx.db.query("signals").collect())).filter((x) => !x.retired);
+    expect(live).toHaveLength(2);
+    expect(live.filter((x) => x.fingerprint === lost)).toHaveLength(1);
+    const runs = await t.run((ctx) => ctx.db.query("judge_runs").collect());
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.signal_ids?.map(String).sort()).toEqual(live.map((x) => String(x._id)).sort());
+  }, 120_000);
+
   test("a review of a moment read again replaces what the earlier one filed; cancel stops what waits", async () => {
     const { t, scope, extract } = await setup();
     await t.mutation(api.agentReviews.startForCli, { ...scope, source: "app", kind: "conversation", subjects: ["c_1"] });

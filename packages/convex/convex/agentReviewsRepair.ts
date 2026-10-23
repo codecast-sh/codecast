@@ -85,6 +85,23 @@ export const relistFinding = internalAction({
   },
 });
 
+/**
+ * A done review whose filing lost findings (a door error before the retry
+ * existed), filed again (run with packages/convex/run.sh): its run record
+ * goes, its findings wait on it again, and the filing skips the ones already
+ * filed under their key, so only the missing ones are filed.
+ */
+export const refileReview = internalMutation({
+  args: { review: v.string(), findings: v.string() },
+  handler: async (ctx, args) => {
+    const review = await ctx.db.query("agent_reviews").withIndex("by_short_id", (q: any) => q.eq("short_id", args.review)).first();
+    if (!review || review.status !== "done" || !review.run_id) throw new Error(`${args.review} is not a filed review`);
+    await ctx.db.delete(review.run_id);
+    await ctx.db.patch(review._id, { run_id: undefined, filed: undefined, file: args.findings, updated_at: Date.now() });
+    await ctx.scheduler.runAfter(0, internal.agentReviews.fileReview, { review_id: review._id });
+  },
+});
+
 export const signalByShortId = internalQuery({
   args: { signal: v.string() },
   handler: async (ctx, args) => await ctx.db.query("signals").withIndex("by_short_id", (q: any) => q.eq("short_id", args.signal)).first(),

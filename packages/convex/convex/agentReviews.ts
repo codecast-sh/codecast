@@ -44,6 +44,9 @@ import { MOMENT_KIND } from "@codecast/shared/contracts/moments";
 const LEASE_MS = 10 * 60_000;
 /** Tries a review gets before it fails for good: a lease that ran out, or a session that ended in an error. */
 const REVIEW_TRIES = 3;
+/** A review's filing runs this many times while some finding fails to file (a transient error in the door), a minute, then two, then four apart. */
+const FILE_TRIES = 4;
+const FILE_RETRY_MS = 60_000;
 /** Reviews one claim may lease. */
 const CLAIM_MAX = 32;
 /** Subjects one bulk start may name per call. */
@@ -307,16 +310,18 @@ export const doneForCli = action({
  * filed just before it. What an earlier review of the same moment filed and
  * this one did not file again is replaced. The findings wait on the review
  * until the run is recorded, and one this review already filed under its key
- * is not filed again, so a filing cut off midway runs again whole.
+ * is not filed again, so a filing cut off midway runs again whole. While a
+ * finding fails to file, the filing runs again later for the ones missing.
  */
 export const fileReview = internalAction({
   // findings: only on jobs scheduled before the review kept them itself.
-  args: { review_id: v.id("agent_reviews"), findings: v.optional(v.string()) },
+  args: { review_id: v.id("agent_reviews"), findings: v.optional(v.string()), attempt: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const h: { review: Doc<"agent_reviews">; judge: Doc<"judges">; moment: Doc<"moments">; source: Doc<"event_sources">; earlier: Id<"signals">[] } | null = await ctx.runQuery(internal.agentReviews.filing, { review_id: args.review_id });
     if (!h) return;
     const findings: AgentFinding[] = JSON.parse(args.findings ?? h.review.file ?? "[]");
     const signalIds: Id<"signals">[] = [];
+    const attempt = args.attempt ?? 0;
     if (h.judge.mode === "live") {
       const body = await readKeptBody(liveBodyKey(h.moment, Date.now()));
       const evidenceUrl = body?.refs.find((r) => r.url)?.url;
@@ -331,6 +336,10 @@ export const fileReview = internalAction({
         } catch (error) {
           console.error(`Agent review ${h.review.short_id}: filing a finding failed`, error);
         }
+      }
+      if (signalIds.length < findings.length && attempt + 1 < FILE_TRIES) {
+        await ctx.scheduler.runAfter(FILE_RETRY_MS * 2 ** attempt, internal.agentReviews.fileReview, { review_id: args.review_id, attempt: attempt + 1, ...(args.findings ? { findings: args.findings } : {}) });
+        return;
       }
       const kept = new Set(signalIds.map(String));
       const replaced = h.earlier.filter((id) => !kept.has(String(id)));
