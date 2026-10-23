@@ -10,7 +10,7 @@
 import { useMemo, useRef } from "react";
 import type { LinePhaseKey } from "@codecast/shared/contracts/linePhases";
 import type { LineCauseTask } from "../../../../../lib/lineFlow";
-import type { LineModel } from "../../../../../lib/line/lineModel";
+import type { LineIssue, LineModel } from "../../../../../lib/line/lineModel";
 import type { MapRun } from "../../../../../lib/line/lineMap";
 import { waitsForFindings } from "../../../../../lib/line/lineInbox";
 import { stoppedNeedingYes } from "../../../../../lib/line/lineNeeds";
@@ -119,9 +119,25 @@ function unfoldedRows(model: LineModel, workspace: LineWorkspace, win: OverviewW
   if (hit && hit.model === model && hit.win.d0 === win.d0 && hit.win.d1 === win.d1) return hit.rows;
   const facts = problemFacts(model, workspace);
   const input = { win, now: workspace.now, facts: facts.of, projectOf: facts.projectOf, projectName: projectNamer(workspace.projects), sources: workspace.sources, overlaps: workspace.overlaps };
-  const rows = new Map(workspace.problems.map((i) => [i.id, problemRow(i, input)]));
+  const rows = new Map(workspace.problems.map((i) => [i.id, rowOf(i, input)]));
   unfoldedReads.set(workspace, { model, win, rows });
   return rows;
+}
+
+/** Each problem's row as the last reading made it, with every input it read: a push that leaves a problem's issue,
+ *  facts, sources, twin and window as they were keeps its row. The clock is an input, so a tick reads every row again. */
+const rowReads = new WeakMap<LineIssue, { deps: unknown[]; row: ProblemRow }>();
+
+function rowOf(issue: LineIssue, input: Parameters<typeof problemRow>[1]): ProblemRow {
+  const f = input.facts(issue.id);
+  const project = input.projectOf(issue.id);
+  const deps = [input.now, input.win.d0, input.win.d1, project, input.projectName(project), input.overlaps?.get(issue.id), f.task, f.notes,
+    (input.sources?.get(issue.id)?.all ?? []).map((a) => a.source).join("\u0001"), JSON.stringify({ ...f, task: undefined, notes: undefined })];
+  const was = rowReads.get(issue);
+  if (was && was.deps.every((d, n) => d === deps[n])) return was.row;
+  const row = problemRow(issue, { ...input, facts: () => f });
+  rowReads.set(issue, { deps, row });
+  return row;
 }
 
 /** Every problem's row with its one status, and the count per chip: what a page that only counts or looks a problem

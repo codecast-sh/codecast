@@ -1931,6 +1931,20 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(id)) return;
     await (ctx as any).runMutation(api.agentDefinitions.removeChain, { id });
   },
+  // Vault metadata edits and deletes; no value ever rides this rail. A stub
+  // that never reached the server has nothing to change there.
+  updateSecretMeta: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    if (!isServerId(id)) return;
+    return await (ctx as any).runMutation(api.secrets.updateMeta, { ref: id, ...fields });
+  },
+  removeSecret: async (ctx, userId, [id]: [string]) => {
+    if (!isServerId(id)) return;
+    return await (ctx as any).runMutation(api.secrets.remove, { ref: id });
+  },
+  setSecretAskFirst: async (ctx, userId, [id, askFirst]: [string, boolean]) => {
+    if (!isServerId(id)) return;
+    return await (ctx as any).runMutation(api.secrets.setAskFirst, { ref: id, ask_first: askFirst });
+  },
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,
@@ -3074,6 +3088,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // conversation_id as its first arg; per-command extras ride extraArgs.
   startResourceOffload: async (ctx, _userId, [args], result) => {
     return ctx.runMutation!(api.resourceOffload.start, { ...args, batch_ids: result.batch_ids });
+  },
+  requestMoveRehearsals: async (ctx, _userId, [args]) => {
+    return ctx.runMutation!(api.moveRehearsals.request, args);
   },
   cancelResourceOffload: async (ctx, _userId, [batch_id], result) => {
     return ctx.runMutation!(api.sessionMigrations.cancelBatch, { batch_id, requested_at: result.requested_at });

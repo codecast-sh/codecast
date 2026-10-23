@@ -206,6 +206,14 @@ export const GUIDES: Guide[] = [
     feature: "browser",
   },
   {
+    slug: "vault",
+    published: "2026-10-22",
+    title: "Vault: keys, logins and sign-ins for your agents",
+    dek: "Fill a credential once and every agent on every machine can use it, without the value ever entering a conversation.",
+    category: "Hands on the machine",
+    feature: "vault",
+  },
+  {
     slug: "computer",
     published: "2026-09-20",
     title: "Computer use: agents in your Mac apps",
