@@ -1,0 +1,128 @@
+"use client";
+// The composer's catch: a message about to go out holds a credential-shaped
+// string (shared/contracts/secretShapes). The bar above the composer names
+// what it found, offers to save it to the Vault under a name, and sends the
+// message with a reference in its place. The value goes from the composer's
+// text straight to secrets.create (useCreate); the store sees metadata only.
+
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import { KeyRound } from "lucide-react";
+import { fingerprint } from "@codecast/shared/contracts/secrets";
+import type { FoundSecret } from "@codecast/shared/contracts/secretShapes";
+import { KeyCap } from "../KeyCap";
+import { useSecrets, useVaultScope } from "../../hooks/useSyncSecrets";
+import { ScopePicker, defaultWhere, useCreate } from "./AddSecretDialog";
+import { nameIssue, namesIn, saveRemaining, withVaultReferences } from "./vaultModel";
+
+export function ComposerCatch({
+  text,
+  found,
+  teamId,
+  onSend,
+  onCancel,
+}: {
+  text: string;
+  found: FoundSecret[];
+  /** The conversation's team, offered beside Only me. */
+  teamId: string | null;
+  /** Send this text: the original, or the one with references. */
+  onSend: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const scope = useVaultScope(teamId);
+  const personal = scope.personal;
+  const rows = useSecrets(teamId);
+  const create = useCreate(scope);
+  const [where, setWhere] = useState(() => defaultWhere(scope));
+  const [names, setNames] = useState(() => found.map((f) => f.name));
+  const [saving, setSaving] = useState(false);
+  // Indexes already in the Vault from an earlier press that stopped at a refusal: kept, never created twice.
+  const [saved, setSaved] = useState<ReadonlySet<number>>(() => new Set());
+  const taken = useMemo(() => namesIn(rows, where === "team" ? scope.team?.key ?? null : personal), [rows, where, scope.team, personal]);
+  const issues = names.map((n, i) => (saved.has(i) ? null : nameIssue(n, taken) ?? (names.indexOf(n) !== i ? "Twice here" : null)));
+  const canSave = !saving && issues.every((x) => !x);
+
+  const save = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    const res = await saveRemaining(found, saved, (f, i) => create(where, { name: names[i]!, kind: "key", payload: { value: f.value }, env: f.env ? [f.env] : undefined }));
+    setSaved(res.saved);
+    if (res.failed) {
+      setSaving(false);
+      toast.error(`${names[res.failed.index]} was not saved: ${res.failed.error}`);
+      return;
+    }
+    onSend(withVaultReferences(text, found, names));
+  };
+
+  return (
+    <div
+      role="group"
+      aria-label="Credential in this message"
+      className="flex flex-col gap-1.5 rounded-lg border border-sol-yellow/50 bg-sol-yellow/[0.07] px-3 py-2 text-[12.5px]"
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+      data-composer-catch
+    >
+      {found.map((f, i) => (
+        <div key={f.start} className="flex min-w-0 items-center gap-2">
+          <KeyRound size={13} className="shrink-0 text-sol-yellow" />
+          <span className="shrink-0 font-medium text-sol-text">{f.label}</span>
+          <span className="min-w-0 truncate font-mono text-[11.5px] text-sol-text-dim">{fingerprint(f.value) ?? ""}</span>
+          <span className="ml-auto shrink-0 text-sol-text-muted">as</span>
+          <input
+            value={names[i]}
+            onChange={(e) => setNames((xs) => xs.map((x, j) => (j === i ? e.target.value.toLowerCase() : x)))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void save();
+              }
+            }}
+            autoFocus={i === 0}
+            disabled={saved.has(i)}
+            spellCheck={false}
+            aria-label={`Vault name for the ${f.label}`}
+            className={`w-[12rem] min-w-0 rounded-md border bg-sol-bg px-2 py-1 font-mono text-[12px] text-sol-text outline-none focus:border-sol-yellow disabled:opacity-60 ${issues[i] ? "border-sol-red/70" : "border-sol-border"}`}
+            data-composer-catch-name
+          />
+          {saved.has(i) ? <span className="shrink-0 text-[11.5px] text-sol-green">Saved</span> : issues[i] && <span className="shrink-0 text-[11.5px] text-sol-red">{issues[i]}</span>}
+        </div>
+      ))}
+      <div className="flex flex-wrap items-center gap-2">
+        <ScopePicker scope={scope} value={where} onChange={setWhere} />
+        <div className="ml-auto flex items-center gap-1.5">
+          {/* The one choice that puts the value in the transcript for good: quiet, and red when pointed at. */}
+          <button type="button" onClick={() => onSend(text)} disabled={saving} className="inline-flex h-7 items-center rounded-md px-2 text-sol-text-dim hover:bg-sol-red/10 hover:text-sol-red disabled:opacity-50" data-composer-catch-as-is>
+            Send as is
+          </button>
+          <button type="button" onClick={onCancel} className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-sol-text-muted hover:text-sol-text">
+            Cancel <span className="hidden sm:inline-flex"><KeyCap size="xs">esc</KeyCap></span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={!canSave}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md bg-sol-yellow px-2.5 font-semibold text-sol-bg transition-transform duration-150 ease-out hover:brightness-110 active:scale-[0.97] disabled:cursor-not-allowed disabled:bg-sol-border disabled:text-sol-text-dim disabled:active:scale-100"
+            data-composer-catch-save
+          >
+            {/* Both labels share one cell, so the button keeps the width of the longer one while saving. */}
+            <span className="grid [&>*]:col-start-1 [&>*]:row-start-1">
+              <span className={saving ? "invisible" : ""}>Save to Vault and send</span>
+              {saving && <span>Saving…</span>}
+            </span>
+            <span className={`hidden sm:inline-flex ${canSave ? "" : "opacity-40"}`}>
+              <KeyCap size="xs" tone="onAccent">↵</KeyCap>
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

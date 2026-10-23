@@ -253,8 +253,11 @@ export function googleAuthorizeUrl(state: string, scopes: string[]): string {
 const REFRESH_TOKEN_HKDF_INFO = "codecast-google-refresh-token-v1";
 const REFRESH_TOKEN_ENC_VERSION = "v1";
 
+/** In slices: spreading a whole Vault secret (up to 512 KB) into one call overflows the stack. */
 function b64(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes));
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return btoa(bin);
 }
 
 function unb64(s: string): Uint8Array<ArrayBuffer> {

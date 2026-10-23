@@ -39,6 +39,7 @@ import { hasRichMarkdown } from '@codecast/web/lib/richMarkdown';
 import { isCommandMessage, isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
 import { SentFileBlock, type SentFileData } from '@/components/session/SentFileBlock';
+import { StructuredResultBlock } from '@/components/session/StructuredResultBlock';
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
 import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
@@ -62,6 +63,7 @@ import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
+import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { SessionActionsSheet, type SessionRow, type SessionTile } from '@/components/session/SessionActionsSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { ApprovalCard, ApprovalPending, ApprovalSettled } from '@/components/hosted/ApprovalCard';
@@ -80,7 +82,7 @@ import { useLinkDown } from '@/hooks/useLinkDown';
 import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
-import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, sessionEscalationCaption, stripPastedContent, isPollResponsePayload } from '@codecast/shared/contracts';
+import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, sessionEscalationCaption, stripPastedContent, isPollResponsePayload, type VaultReadyMessage } from '@codecast/shared/contracts';
 import { MarkdownContent, CodeBlockWithCopy, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { AnsiText } from '@/components/CodeText';
 import { stripAnsiCodes } from '@codecast/web/lib/ansi';
@@ -1393,6 +1395,23 @@ function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; timestamp?: 
   );
 }
 
+// Mobile twin of web's VaultReadyLine: a filled vault request is a system
+// line naming the secret, which opens it in the Vault. The usage text is for
+// the agent.
+function VaultReadyLine({ vault, timestamp }: { vault: VaultReadyMessage; timestamp?: number }) {
+  const Theme = useTheme();
+  const router = useRouter();
+  const route = mobileEntityRoute('secret', vault.id || vault.name);
+  return (
+    <RNView style={styles.vaultReadyLine} testID={`vault-ready-${vault.name}`}>
+      <Feather name="lock" size={12} color={Theme.yellow + 'cc'} />
+      <RNText style={[styles.vaultReadyText, { color: Theme.text }]} numberOfLines={1} onPress={route ? () => router.push(route as never) : undefined}>{vault.name}</RNText>
+      <RNText style={[styles.vaultReadyText, { color: Theme.green + 'cc' }]}>ready in Vault</RNText>
+      {timestamp != null && timestamp > 0 && <RNText style={[styles.vaultReadyText, { color: Theme.textDim }]}>· {formatRelativeTime(timestamp)}</RNText>}
+    </RNView>
+  );
+}
+
 // Mobile port of web's ScheduledTaskBlock: a `cast trigger` prompt injection.
 // (<scheduled-task> is the frozen pre-rename wire tag; old transcripts carry it.)
 function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp?: number }) {
@@ -1582,10 +1601,6 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
     if (isShellTool(toolCall.name) && (parsed.command || parsed.cmd)) {
       // For shell tools, just show the command
       inputDisplay = parsed.command || parsed.cmd;
-    } else if (toolCall.name === 'StructuredOutput') {
-      // The input IS the payload (a workflow subagent's typed return) — the
-      // key/value flattening below drops nested objects, which is all of it.
-      inputDisplay = JSON.stringify(parsed, null, 2);
     } else {
       // For other tools, format as key: value pairs
       // Filter out verbose/internal fields
@@ -1615,12 +1630,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
 
   const isRead = isReadTool(toolCall.name);
   const processedResult = result?.content ? (isRead ? stripLineNumbers(result.content) : result.content) : '';
-  // StructuredOutput's success result is boilerplate ("Structured output
-  // provided successfully") — the payload shown above it is the content.
-  const hideResult = toolCall.name === 'StructuredOutput' && !result?.is_error;
-  const resultDisplay = hideResult
-    ? undefined
-    : result && expanded && processedResult.length > 2000
+  const resultDisplay = result && expanded && processedResult.length > 2000
       ? processedResult.slice(0, 2000) + '\n... (truncated)'
       : (processedResult || undefined);
 
@@ -2604,6 +2614,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             if (tc.name === 'TaskCreate' || tc.name === 'TaskUpdate' || tc.name === 'TaskGet') {
               return <TaskCreateUpdateBlock key={tc.id} tool={tc} result={result} taskSubjectMap={taskSubjectMap} />;
             }
+            if (tc.name === 'StructuredOutput') {
+              return <StructuredResultBlock key={tc.id} input={tc.input} result={result} />;
+            }
             if (tc.name === 'SendUserFile') {
               return <SentFileBlock key={tc.id} files={(message.files ?? []).filter(f => f.tool_use_id === tc.id)} />;
             }
@@ -3452,14 +3465,16 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // A hosted turn that failed and was tried again reads as one turn, as on
   // the web: the earlier notices and the repeated request fold away and the
   // shown notice counts the attempts (lib/hostedNotice foldHostedRetries).
+  // A person's turn is what the shared classifier reads as typed by one, so a
+  // decision answer or a vault-ready line is never counted as a retry.
   const retryFold = useMemo(() => {
     if (!hosted) return null;
-    const rows = allMessages.map((m) => ({
-      ...m,
-      person: m.role === 'user' && !isToolResultCarrier(m) && !!m.content && !m.content.trim().startsWith('<') && !parseDecisionAnswer(m.content),
-    }));
+    const rows = allMessages.map((m) => {
+      const kind = m.role === 'user' ? (userRowKinds.kinds.get(m._id)?.kind ?? 'normal') : null;
+      return { ...m, person: kind === 'normal' || kind === 'direct_user' };
+    });
     return { ...foldHostedRetries(rows), personTurns: rows.filter((r) => r.person).length };
-  }, [hosted, allMessages]);
+  }, [hosted, allMessages, userRowKinds]);
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -4533,6 +4548,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       }
       case 'skill_expansion':
         return <FoldedPromptRow icon="book-open" label={kind.cmdName ? `/${kind.cmdName}` : 'Skill'} detail="prompt" body={cleanCommandExpansion(item.content || '')} timestamp={item.timestamp} />;
+      case 'workflow_frame':
+        // Web draws the same two frames: the launching session's ask folded,
+        // the agent's computed task as a prompt from the workflow.
+        if (kind.frame === 'user request') return <FoldedPromptRow icon="corner-down-right" label="Request" detail={kind.body.split('\n')[0]} body={kind.body} timestamp={item.timestamp} />;
+        break;
       case 'role_brief': {
         const brief = stripSystemTags(item.content || '').trim();
         return <FoldedPromptRow icon="user-check" label="Role brief" detail={brief.split('\n')[0].replace(/\*\*/g, '')} body={brief} timestamp={item.timestamp} />;
@@ -4582,6 +4602,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         return <SessionMessageBlock from="unknown" name={`Huddle — ${kind.huddle.title}`} body={kind.huddle.body} timestamp={item.timestamp} />;
       case 'chat_wake':
         return <ChatWakeBlock wake={kind.wake} timestamp={item.timestamp} />;
+      case 'vault_ready':
+        return <VaultReadyLine vault={kind.vault} timestamp={item.timestamp} />;
       case 'scheduled_task':
         return <ScheduledTaskBlock content={item.content || ''} timestamp={item.timestamp} />;
       case 'task_notification':
@@ -4598,8 +4620,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const joint = kind?.kind === 'direct_user' ? parseJointMessage(item.content) : null;
     const bubbleBody = kind?.kind === 'direct_user'
       ? (joint ? joint.map((p) => `**${p.from}:** ${p.body}`).join('\n\n') : kind.body)
+      : kind?.kind === 'workflow_frame' ? kind.body
       : kind?.kind === 'decision_answer' ? (kind.decision.question ? `> ${kind.decision.question}\n\n` : '') + kind.decision.answer : null;
-    const sender = kind?.kind === 'direct_user' ? kind.from : undefined;
+    const sender = kind?.kind === 'direct_user' ? kind.from : kind?.kind === 'workflow_frame' ? 'Workflow' : undefined;
     const isSearchDimmed = searchMatchIds && !searchMatchIds.has(item._id);
     const isCurrentSearchMatch = searchMatchList.length > 0 && searchMatchList[currentMatchIndex] === item._id;
     const isHighlighted = highlightedMessageId === item._id;
@@ -5541,6 +5564,17 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   interruptLineText: {
     fontSize: 11,
     fontWeight: '500',
+  },
+  vaultReadyLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+  },
+  vaultReadyText: {
+    fontSize: 12,
+    flexShrink: 1,
   },
   systemRail: {
     flexDirection: 'row',
