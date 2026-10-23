@@ -238,6 +238,10 @@ export function EngagementCard({
         <>
           {card.words ? (
             <Stage words={card.words} name={card.title} hearing={card.hearing} muteButton={card.mute} onTrack />
+          ) : card.joining ? (
+            <Line stage="joining">
+              Joining <span className="engagement-card-title">{shortName(card.title)}</span>
+            </Line>
           ) : (
             <Line stage="locked" hearing={card.hearing}>
               <span className="engagement-card-title">{shortName(card.title)}</span>

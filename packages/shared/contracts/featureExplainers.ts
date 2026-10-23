@@ -239,6 +239,18 @@ export const FEATURE_EXPLAINERS: Record<string, FeatureExplainer> = {
     tryIt: "Open the settings page, change the theme, and show me a screenshot.",
     surface: { label: "Browser", path: "/browser" },
   },
+  vault: {
+    pitch: "Agents use the team's keys, logins and sign-ins without anyone pasting them into chat.",
+    youSee: [
+      "A card with a masked field in the conversation when an agent needs a credential nobody has saved.",
+      "On the Vault page, which session used each secret and when.",
+    ],
+    agentsUse: [
+      "Running tests or scripts that need an API key, signing in to a site, entering a 2FA code.",
+    ],
+    tryIt: "Run the billing tests against Stripe test mode, and ask me for the key if the Vault lacks it.",
+    surface: { label: "Vault", path: "/vault" },
+  },
   computer: {
     pitch: "Agents can use native Mac apps for you, in the background.",
     youSee: [

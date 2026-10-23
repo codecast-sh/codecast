@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { LINE_CARD_GATE_NODE, LINE_STARTED_PREFIX, lineCandidates, lineQueueFor, sweepCore } from "./orgLine";
+import { CAUSE_WINDOW, LINE_CARD_GATE_NODE, LINE_RUNS_PER_RUNNER, LINE_STARTED_PREFIX, MAX_STARTS_PER_SWEEP, lineCandidates, lineQueueFor, sweepCore } from "./orgLine";
 import { lineSlugOf, normalizeLineSlug, performSetLine } from "./orgRoles";
 import { HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
+import { normalizeGitOrigin } from "@codecast/shared/contracts";
 
 // the-line.md L2 (a scope owns a line) and L9 (the sweep starts it), driven
 // through the exported core functions against the fake db.
@@ -260,17 +261,17 @@ describe("orgLine admission (LE6)", () => {
     { _id: "initiatives_other", short_id: "in-9", title: "Elsewhere", priority: "p0", status: "active", workspace: "team:teams_other", team_id: "teams_other", project_ids: [] },
   ];
   const caps = (over: Record<string, any> = {}) => ({ caps: { hands_per_day: 10, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true, ...over } });
-  // A pending card at the card gate of a run the role's standing session spawned.
+  // A pending card at the card gate of a run the role started.
   const card = (n: number, over: Record<string, any> = {}) => ({
     _id: `session_decisions_${n}`, conversation_id: STANDING, session_id: "standing", user_id: HOST, question: "Ship it?", options: [], blocking: true, status: "pending",
     workflow_run_id: `workflow_runs_card${n}`, gate_node_id: LINE_CARD_GATE_NODE, created_at: NOW, ...over,
   });
-  const cardRun = (n: number, over: Record<string, any> = {}) => ({ _id: `workflow_runs_card${n}`, user_id: HOST, status: "paused", spawner_conversation_id: STANDING, task_id: `tasks_card${n}`, node_statuses: [], ...over });
-  // What the runner leaves on a run once its card is answered: the gate's node completes.
-  const answer = (run: any) => {
-    run.status = "running";
-    run.node_statuses = [{ node_id: LINE_CARD_GATE_NODE, status: "completed" }];
-  };
+  const cardRun = (n: number, over: Record<string, any> = {}) => ({ _id: `workflow_runs_card${n}`, user_id: HOST, status: "paused", org_role_id: ROLE, spawner_conversation_id: STANDING, task_id: `tasks_card${n}`, node_statuses: [], ...over });
+  // A line run working now on the runner's machine.
+  const workRun = (n: number, over: Record<string, any> = {}) => ({ _id: `workflow_runs_w${n}`, user_id: HOST, status: "running", org_role_id: ROLE, task_id: `tasks_w${n}`, node_statuses: [], ...over });
+  const working = (count: number, over: Record<string, any> = {}) => Array.from({ length: count }, (_, n) => workRun(n, over));
+  const causes = (count: number) => Array.from({ length: count }, (_, n) => cause({ _id: `tasks_c${n}`, short_id: `ct-c${n}`, created_at: NOW - 10_000 + n }));
+  const busy = `${LINE_RUNS_PER_RUNNER} runs working on its machine`;
 
   test("candidates rank by goal priority, severity and signals; unready, ungrounded and someone else's causes stay out", async () => {
     const { ctx, tables } = fixtures({
@@ -295,7 +296,7 @@ describe("orgLine admission (LE6)", () => {
     // task with no goal = 0.5.
     expect((await lineCandidates(ctx, tables.org_roles[0])).map((t) => t._id)).toEqual(["tasks_p0", "tasks_p3_urgent", "tasks_foreign_goal", "tasks_none_loud", "tasks_assigned"]);
     const res = await sweepCore(ctx, NOW);
-    expect(res.started.map((s) => s.task_id)).toEqual(["tasks_p0", "tasks_p3_urgent", "tasks_foreign_goal", "tasks_none_loud", "tasks_assigned"]);
+    expect(res.started.map((s) => s.task_id)).toEqual(["tasks_p0", "tasks_p3_urgent", "tasks_foreign_goal", "tasks_none_loud", "tasks_assigned"].slice(0, LINE_RUNS_PER_RUNNER));
   });
 
   test("a cause grounding held on a fact is its lead role's ask, never a candidate; one parked for more findings asks nobody", async () => {
@@ -328,89 +329,173 @@ describe("orgLine admission (LE6)", () => {
     expect(q.items.map((i) => [i.task_id, i.priority])).toEqual([["tasks_proj", 8], ["tasks_p3", 2]]);
   });
 
-  test("open cards at the cap hold every cause; only blocking pending cards at this line's card gate count", async () => {
+  test("decisions waiting for an answer hold nothing: a line with many open cards starts its next cause", async () => {
+    const open = [1, 2, 3, 4, 5, 6, 7].map((n) => card(n));
     const { ctx, tables } = fixtures({
       role: caps({ cards: 2 }),
+      extra: { initiatives, tasks: [cause({ _id: "tasks_p0" })], workflow_runs: [1, 2, 3, 4, 5, 6, 7].map((n) => cardRun(n)), session_decisions: open },
+    });
+    const q = await lineQueueFor(ctx, tables.org_roles[0], NOW);
+    expect(q).toMatchObject({ working: 0, runs_cap: LINE_RUNS_PER_RUNNER, waiting: null });
+    expect(q.items.map((i) => i.waiting)).toEqual([null]);
+    const res = await sweepCore(ctx, NOW);
+    expect(res.started.map((s) => s.task_id)).toEqual(["tasks_p0"]);
+    expect(res.skipped_busy).toEqual([]);
+  });
+
+  test("runs working on the runner's machine hold at the cap, a role's taskless run among them; paused, waiting on a person, finished or another workflow's runs do not count", async () => {
+    const { ctx, tables } = fixtures({
+      role: caps({ hands_per_day: 50 }),
       extra: {
         initiatives,
         tasks: [cause({ _id: "tasks_p0" })],
-        // Runs 3 and 4 finished, so only their pending decisions could count;
-        // run 5's card was answered and it is merging.
         workflow_runs: [
+          ...working(LINE_RUNS_PER_RUNNER - 2),
+          workRun(90, { status: "pending" }),
+          // A judge diagnosis the role started: no task, still a session on the machine.
+          workRun(95, { task_id: undefined }),
           cardRun(1),
-          cardRun(2),
-          cardRun(3, { status: "completed" }),
-          cardRun(4, { status: "completed" }),
-          cardRun(5, { status: "running", node_statuses: [{ node_id: LINE_CARD_GATE_NODE, status: "completed" }] }),
-          cardRun(6, { spawner_conversation_id: "conversations_other" }),
+          workRun(91, { status: "running" }),
+          workRun(92, { status: "completed" }),
+          workRun(93, { status: "failed" }),
+          // The standing session ran some other workflow with no task.
+          workRun(94, { task_id: undefined, org_role_id: undefined, spawner_conversation_id: STANDING }),
         ],
-        session_decisions: [
-          card(1),
-          card(2),
-          card(3, { blocking: false }),
-          card(4, { gate_node_id: "plan" }),
-          card(5, { status: "answered" }),
-          card(6),
-        ],
+        // Run 91 is running but blocked on a person's answer at a gate other than the card.
+        session_decisions: [card(1), card(91, { workflow_run_id: "workflow_runs_w91", gate_node_id: "plan" })],
       },
     });
+    const q = await lineQueueFor(ctx, tables.org_roles[0], NOW);
+    expect(q).toMatchObject({ working: LINE_RUNS_PER_RUNNER, runs_cap: LINE_RUNS_PER_RUNNER, waiting: busy });
+    expect(q.items.map((i) => i.waiting)).toEqual([busy]);
     const res = await sweepCore(ctx, NOW);
     expect(res.started).toHaveLength(0);
-    expect(res.skipped_cards).toEqual([ROLE]);
-    expect(tables.tasks[0].status).toBe("open");
-    const q = await lineQueueFor(ctx, tables.org_roles[0], NOW);
-    expect(q).toMatchObject({ open_cards: 2, cards_cap: 2, waiting: "queued behind 2 open cards" });
-    expect(q.items.map((i) => i.waiting)).toEqual(["queued behind 2 open cards"]);
+    expect(res.skipped_busy).toEqual([ROLE]);
+    expect(tables.tasks.find((t) => t._id === "tasks_p0")!.status).toBe("open");
+
+    // A run reaching its card pauses there and frees its slot.
+    tables.workflow_runs.find((r) => r._id === "workflow_runs_w0")!.status = "paused";
+    const next = await sweepCore(ctx, NOW + 120_000);
+    expect(next.started.map((s) => s.task_id)).toEqual(["tasks_p0"]);
   });
 
-  test("caps.cards defaults to 5", async () => {
-    const decisions = [1, 2, 3, 4, 5].map((n) => card(n));
-    const runs = [1, 2, 3, 4, 5].map((n) => cardRun(n));
-    const held = fixtures({ extra: { initiatives, tasks: [cause()], workflow_runs: runs, session_decisions: decisions } });
-    expect((await sweepCore(held.ctx, NOW)).skipped_cards).toEqual([ROLE]);
-    const open = fixtures({ extra: { initiatives, tasks: [cause()], workflow_runs: runs.slice(1), session_decisions: decisions.slice(1) } });
-    expect((await sweepCore(open.ctx, NOW)).started).toHaveLength(1);
-  });
-
-  test("answering a card frees a slot and the highest cause starts next", async () => {
+  test("the cap is per runner: every line role on the same machine shares it, another person's machine does not", async () => {
+    const OTHER = "org_roles_ops";
+    const OTHER_STANDING = "conversations_ops";
+    const mateRole = "org_roles_mate";
+    const base = fixtures();
+    const growth = base.tables.org_roles[0];
+    const role = (id: string, handle: string, anchor: string) => ({ ...growth, _id: id, short_id: `or-${handle}`, handle, name: handle, anchor_id: anchor, scope: { project_ids: [], plan_ids: [] } });
     const { ctx, tables } = fixtures({
-      role: caps({ cards: 1, hands_per_day: 1 }),
+      role: caps({ hands_per_day: 50 }),
       extra: {
         initiatives,
-        tasks: [cause({ _id: "tasks_low", short_id: "ct-2", goal_ref: "in-2:polish", created_at: NOW - 9000 }), cause({ _id: "tasks_high", short_id: "ct-3" })],
-        workflow_runs: [cardRun(1)],
-        session_decisions: [card(1)],
+        tasks: [cause({ _id: "tasks_p0" })],
+        org_roles: [{ ...growth, ...caps({ hands_per_day: 50 }) }, role(OTHER, "ops", "anchors_ops"), role(mateRole, "mate", "anchors_mate")],
+        anchors: [
+          ...base.tables.anchors,
+          { _id: "anchors_ops", team_id: TEAM, bot_user_id: "users_bot", host_user_id: HOST, conversation_id: OTHER_STANDING },
+          { _id: "anchors_mate", team_id: TEAM, bot_user_id: "users_bot", host_user_id: HOST, conversation_id: "conversations_mate" },
+        ],
+        conversations: [
+          ...base.tables.conversations,
+          { ...base.tables.conversations[0], _id: OTHER_STANDING, session_id: "ops", standing_role_id: OTHER, anchor_id: "anchors_ops" },
+          // Seated by HOST, pulled onto MATE's machine.
+          { ...base.tables.conversations[0], _id: "conversations_mate", session_id: "mate", user_id: MATE, standing_role_id: mateRole, anchor_id: "anchors_mate" },
+        ],
+        workflow_runs: [...working(2), ...working(LINE_RUNS_PER_RUNNER, { org_role_id: mateRole, user_id: MATE }).map((r, n) => ({ ...r, _id: `workflow_runs_m${n}` }))],
       },
     });
-    expect((await sweepCore(ctx, NOW)).started).toHaveLength(0);
-    tables.session_decisions[0].status = "answered";
-    answer(tables.workflow_runs[0]);
-    const res = await sweepCore(ctx, NOW + 120_000);
-    expect(res.started.map((s) => s.task_id)).toEqual(["tasks_high"]);
-    // The hands cap of one holds the rest for tomorrow.
-    expect(res.skipped_capped).toEqual([ROLE]);
-    expect(tables.tasks.find((t) => t._id === "tasks_low")!.status).toBe("open");
+    expect((await lineQueueFor(ctx, tables.org_roles[0], NOW)).working).toBe(2);
+    // The ops role, on the same machine, fills the rest.
+    tables.workflow_runs.push(...working(LINE_RUNS_PER_RUNNER - 2, { org_role_id: OTHER }).map((r, n) => ({ ...r, _id: `workflow_runs_o${n}` })));
+    expect((await lineQueueFor(ctx, tables.org_roles[0], NOW)).waiting).toBe(busy);
+    expect((await sweepCore(ctx, NOW)).skipped_busy).toEqual([ROLE]);
   });
 
-  test("a started run holds its card slot before it asks: 7 causes, cap 5, start 5 until a card is answered", async () => {
-    const { ctx, tables } = fixtures({
-      role: caps({ cards: 5, hands_per_day: 20 }),
-      extra: { initiatives, tasks: [1, 2, 3, 4, 5, 6, 7].map((n) => cause({ _id: `tasks_c${n}`, short_id: `ct-${n}`, created_at: NOW - 10_000 + n })) },
-    });
+  test("a started run holds its slot: a sweep starts at most MAX_STARTS_PER_SWEEP, the next fills the cap, then nothing until one finishes", async () => {
+    const { ctx, tables } = fixtures({ role: caps({ hands_per_day: 100 }), extra: { initiatives, tasks: causes(LINE_RUNS_PER_RUNNER + 3) } });
     const before = await lineQueueFor(ctx, tables.org_roles[0], NOW);
-    expect(before.items.map((i) => i.waiting)).toEqual([null, null, null, null, null, "queued behind 5 open cards", "queued behind 5 open cards"]);
-    const first = await sweepCore(ctx, NOW);
-    expect(first.started.map((s) => s.task_id)).toEqual(["tasks_c1", "tasks_c2", "tasks_c3", "tasks_c4", "tasks_c5"]);
-    expect(first.skipped_cards).toEqual([ROLE]);
-    const held = await lineQueueFor(ctx, tables.org_roles[0], NOW);
-    expect(held).toMatchObject({ open_cards: 5, waiting: "queued behind 5 open cards" });
-    const second = await sweepCore(ctx, NOW + 120_000);
-    expect(second.started).toHaveLength(0);
-    expect(second.skipped_cards).toEqual([ROLE]);
-    answer(tables.workflow_runs[0]);
+    expect(before.items.map((i) => i.waiting)).toEqual([...Array(LINE_RUNS_PER_RUNNER).fill(null), busy, busy, busy]);
+    const first = Math.min(MAX_STARTS_PER_SWEEP, LINE_RUNS_PER_RUNNER);
+    expect((await sweepCore(ctx, NOW)).started).toHaveLength(first);
+    expect((await sweepCore(ctx, NOW + 120_000)).started).toHaveLength(LINE_RUNS_PER_RUNNER - first);
     const third = await sweepCore(ctx, NOW + 240_000);
-    expect(third.started.map((s) => s.task_id)).toEqual(["tasks_c6"]);
-    expect(tables.tasks.find((t) => t._id === "tasks_c7")!.status).toBe("open");
+    expect(third.started).toHaveLength(0);
+    expect(third.skipped_busy).toEqual([ROLE]);
+    expect(await lineQueueFor(ctx, tables.org_roles[0], NOW)).toMatchObject({ working: LINE_RUNS_PER_RUNNER, waiting: busy });
+    tables.workflow_runs[0].status = "completed";
+    expect((await sweepCore(ctx, NOW + 360_000)).started).toHaveLength(1);
+  });
+
+  test("a dry pass decides like a real one and starts nothing", async () => {
+    const { ctx, tables } = fixtures({ role: caps({ hands_per_day: 100 }), extra: { initiatives, tasks: causes(MAX_STARTS_PER_SWEEP + 2) } });
+    const dry = await sweepCore(ctx, NOW, { dry: true });
+    expect(tables.workflow_runs).toHaveLength(0);
+    expect(tables.tasks.every((t) => t.status === "open")).toBe(true);
+    const real = await sweepCore(ctx, NOW);
+    expect(real.started.map((s) => s.task_id)).toEqual(dry.started.map((s) => s.task_id));
+  });
+
+  test("a pass reads a window of the backlog, oldest first, and a limit stops the reads at the limit", async () => {
+    const { ctx, tables } = fixtures({ role: caps({ hands_per_day: 1000 }), extra: { initiatives, tasks: causes(CAUSE_WINDOW + 30) } });
+    const role = tables.org_roles[0];
+    expect((await lineCandidates(ctx, role)).length).toBe(CAUSE_WINDOW);
+    expect((await lineCandidates(ctx, role, 3)).map((t) => t._id)).toEqual(["tasks_c0", "tasks_c1", "tasks_c2"]);
+    // The newest causes come into the window as the oldest start.
+    for (const t of tables.tasks.slice(0, 30)) t.status = "in_progress";
+    expect((await lineCandidates(ctx, role)).map((t) => t._id)).toContain(`tasks_c${CAUSE_WINDOW + 29}`);
+  });
+
+  test("a role at its limit reads one candidate to say why it waits, and starts none", async () => {
+    const { ctx } = fixtures({ role: caps({ hands_per_day: 50 }), extra: { initiatives, tasks: causes(3), workflow_runs: working(LINE_RUNS_PER_RUNNER) } });
+    const res = await sweepCore(ctx, NOW);
+    expect(res).toMatchObject({ started: [], skipped_busy: [ROLE], skipped_capped: [] });
+    // With nothing queued, a full machine reports nothing.
+    const idle = fixtures({ role: caps({ hands_per_day: 50 }), extra: { initiatives, tasks: [], workflow_runs: working(LINE_RUNS_PER_RUNNER) } });
+    expect(await sweepCore(idle.ctx, NOW)).toMatchObject({ started: [], skipped_busy: [] });
+  });
+
+  describe("a pool of machines that offer the role's checkout", () => {
+    const ORIGIN = normalizeGitOrigin("git@github.com:Acme/Growth.git")!;
+    // The laptop holds the role's folder (/srv/growth) inside the repository at /srv.
+    const laptop = { _id: "devices_laptop", user_id: HOST, device_id: "dev-laptop", last_seen: NOW, git_plane: [{ root: "/srv", origin: "git@github.com:Acme/Growth.git", origin_ok: true }] };
+    const host = (id: string, runs: number, over: Record<string, any> = {}) => ({ _id: `devices_${id}`, user_id: HOST, device_id: id, last_seen: NOW, line_slots: [{ root: `/home/ubuntu/${id}`, origin: ORIGIN, runs }], ...over });
+
+    test("each run goes to the host with the most free slots, in that host's checkout, until the pool is full", async () => {
+      const { ctx, tables } = fixtures({
+        role: caps({ hands_per_day: 100 }),
+        extra: {
+          initiatives,
+          tasks: causes(8),
+          devices: [laptop, host("h1", 2), host("h2", 3), host("h3", 5, { last_seen: NOW - 3_600_000 })],
+          // The laptop's own runs fill its cap, and hold nothing on the pool.
+          workflow_runs: working(LINE_RUNS_PER_RUNNER, { runner_device: "dev-laptop" }),
+        },
+      });
+      const res = await sweepCore(ctx, NOW);
+      expect(res.started).toHaveLength(5);
+      expect(res.skipped_busy).toEqual([ROLE]);
+      const placed = tables.workflow_runs.filter((r) => r.runner_device && r.runner_device !== "dev-laptop");
+      expect(placed.map((r) => r.runner_device).sort()).toEqual(["h1", "h1", "h2", "h2", "h2"]);
+      expect(placed.find((r) => r.runner_device === "h2")!.project_path).toBe("/home/ubuntu/h2/growth");
+      expect(tables.daemon_commands.map((c) => c.target_device_id).sort()).toEqual(["h1", "h1", "h2", "h2", "h2"]);
+      expect(await lineQueueFor(ctx, tables.org_roles[0], NOW)).toMatchObject({ working: 5, runs_cap: 5, waiting: "5 runs working on its machines" });
+      // A run that pauses at its card frees its host's slot.
+      placed.find((r) => r.runner_device === "h1")!.status = "paused";
+      // Within the hosts' heartbeat window.
+      const next = await sweepCore(ctx, NOW + 60_000);
+      expect(next.started).toHaveLength(1);
+      expect(tables.daemon_commands.at(-1)!.target_device_id).toBe("h1");
+    });
+
+    test("with no online host offering the checkout, the run stays on the runner's own machine and cap", async () => {
+      for (const devices of [[laptop], [laptop, host("h1", 4, { line_slots: [] })], [laptop, host("h1", 4, { last_seen: NOW - 3_600_000 })], [{ ...laptop, git_plane: [] }, host("h1", 4)]]) {
+        const { ctx, tables } = fixtures({ role: caps({ hands_per_day: 100 }), extra: { initiatives, tasks: causes(3), devices } });
+        expect((await sweepCore(ctx, NOW)).started).toHaveLength(3);
+        expect(tables.workflow_runs.every((r) => !r.runner_device && r.project_path === "/srv/growth")).toBe(true);
+      }
+    });
   });
 
   test("a whole workspace role reads every open cause, however many other open tasks the workspace holds", async () => {
@@ -455,30 +540,14 @@ describe("orgLine admission (LE6)", () => {
     }
   });
 
-  test("on with N slots starts at most N, sweep after sweep, until a decision frees one", async () => {
-    for (const n of [1, 3]) {
-      const { ctx, tables } = fixtures({
-        role: caps({ cards: n, hands_per_day: 50 }),
-        extra: { initiatives, tasks: [1, 2, 3, 4, 5, 6].map((i) => cause({ _id: `tasks_s${i}`, short_id: `ct-s${i}`, created_at: NOW - 10_000 + i })) },
-      });
-      expect((await sweepCore(ctx, NOW)).started).toHaveLength(n);
-      expect((await sweepCore(ctx, NOW + 120_000)).started).toHaveLength(0);
-      expect(tables.workflow_runs).toHaveLength(n);
-    }
-  });
-
   test("slots hold for a role with no standing session, and across a restart onto a new one", async () => {
-    const tasks = () => [1, 2, 3].map((i) => cause({ _id: `tasks_r${i}`, short_id: `ct-r${i}`, created_at: NOW - 10_000 + i }));
-    const seatless = fixtures({ role: { ...caps({ cards: 1, hands_per_day: 50 }), anchor_id: undefined }, extra: { initiatives, tasks: tasks() } });
-    expect((await sweepCore(seatless.ctx, NOW)).started).toHaveLength(1);
-    expect((await sweepCore(seatless.ctx, NOW + 120_000)).started).toHaveLength(0);
-    expect(seatless.tables.workflow_runs).toHaveLength(1);
+    const seatless = fixtures({ role: { ...caps({ hands_per_day: 50 }), anchor_id: undefined }, extra: { initiatives, tasks: [cause()], workflow_runs: working(LINE_RUNS_PER_RUNNER) } });
+    expect((await sweepCore(seatless.ctx, NOW)).skipped_busy).toEqual([ROLE]);
 
-    const restarted = fixtures({ role: caps({ cards: 1, hands_per_day: 50 }), extra: { initiatives, tasks: tasks() } });
-    expect((await sweepCore(restarted.ctx, NOW)).started).toHaveLength(1);
+    const restarted = fixtures({ role: caps({ hands_per_day: 50 }), extra: { initiatives, tasks: [cause()], workflow_runs: working(LINE_RUNS_PER_RUNNER, { spawner_conversation_id: STANDING }) } });
     restarted.tables.anchors[0].conversation_id = "conversations_standing2";
     restarted.tables.conversations.push({ ...restarted.tables.conversations[0], _id: "conversations_standing2", session_id: "standing2" });
-    expect((await sweepCore(restarted.ctx, NOW + 120_000)).started).toHaveLength(0);
+    expect((await sweepCore(restarted.ctx, NOW)).skipped_busy).toEqual([ROLE]);
   });
 
   test("a role whose switch is off reads as off in the queue", async () => {

@@ -27,6 +27,7 @@
 import type { EventEmitter } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
 import { agentSetupLines } from "@codecast/shared/contracts";
+import { askYesNo } from "../terminalAsk.js";
 import { ComputerError } from "./errors.js";
 import type { ComputerPermissionApi } from "./run.js";
 import type { ComputerPermissionId, ComputerPermissionStatusResult } from "./types.js";
@@ -234,20 +235,3 @@ export function defaultSetupDeps(permissions: ComputerPermissionApi, isTty: () =
     },
   };
 }
-
-/** A `[y/N]` prompt. Ctrl C at the prompt reads as no, which is also what the
- *  default reads as: this verb never opens a window on silence. */
-async function askYesNo(question: string): Promise<boolean> {
-  const readline = await import("node:readline");
-  const iface = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = await new Promise<string>((resolve) => {
-      iface.on("SIGINT", () => resolve(""));
-      iface.question(question, resolve);
-    });
-    return /^y(es)?$/i.test(answer.trim());
-  } finally {
-    iface.close();
-  }
-}
-
