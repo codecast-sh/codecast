@@ -10,7 +10,7 @@ import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { GROUND_FIELDS, GROUND_OUTPUT_SCHEMA, GROUND_PROJECT_FIELD, GROUND_PURPOSE } from "@codecast/shared/contracts/goalsBrief";
 import { HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
-import { admissionWait, cardLoadFor, lineCandidates, personCardLoad } from "./orgLine";
+import { admissionWait, LINE_RUNS_PER_RUNNER, lineCandidates, runnerLoad, runnerLoadFor } from "./orgLine";
 import { setBudgetCap } from "./lib/teamBudget";
 
 setDefaultTimeout(60_000);
@@ -318,22 +318,20 @@ describe("admission after grounding (LP1, LP6)", () => {
     expect(await candidatesOf(checkoutLead.id)).toEqual([]);
   });
 
-  test("open cards count per person across every line they answer for, against the smallest cap", async () => {
+  test("working runs count per runner across every line they run, against one cap", async () => {
     const { t, person, hop, checkoutLead, run, role, add } = await orgSetup();
     const a = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", project: "pr-1" });
     const b = await add({ fingerprint: "err-2", title: "Avatar upload rejects PNG" });
-    // One open card on each line; both roles answer to the founder (the
-    // checkout lead through the Head of People).
+    // One working run on each line; both roles run on the founder's machine.
     await run(hop.conv, b.task_id);
     await run(checkoutLead.conv, a.task_id);
-    const load = await t.run(async (ctx) => personCardLoad(ctx, String(person)));
-    // The checkout lead's caps.cards is 2; the Head of People's is the default.
-    expect(load).toMatchObject({ person: String(person), open: 2, cap: 2 });
+    const load = await t.run(async (ctx) => runnerLoad(ctx, String(person)));
+    expect(load).toMatchObject({ runner: String(person), working: 2, cap: LINE_RUNS_PER_RUNNER });
     const hopRole = await role(hop.id);
-    const viaRole = await t.run(async (ctx) => cardLoadFor(ctx, hopRole));
-    expect(viaRole).toMatchObject({ open: 2, cap: 2 });
-    // The Head of People's own line holds one card, under its own default cap
-    // of 5, yet waits: its person is at their cap.
-    expect(admissionWait(hopRole, viaRole.open, Date.now(), viaRole.cap)).toBe("cards");
+    const viaRole = await t.run(async (ctx) => runnerLoadFor(ctx, hopRole));
+    expect(viaRole).toMatchObject({ working: 2, cap: LINE_RUNS_PER_RUNNER });
+    // caps.cards, 2 on the checkout lead, no longer limits anything.
+    expect(admissionWait(hopRole, viaRole.working, Date.now())).toBeNull();
+    expect(admissionWait(hopRole, LINE_RUNS_PER_RUNNER, Date.now())).toBe("runs");
   });
 });

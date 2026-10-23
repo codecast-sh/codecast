@@ -18,12 +18,12 @@ import { deadEndReason, profileFailure, quotedTitle, taskStopCard } from "./runF
 import { claimRun, readCheckpoint, resumePoint, runnerStamp, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
 import presenterBase from "./presenter.md" with { type: "text" };
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
 import { c } from "../colors.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { frozenChangeContext } from "./flowChangeFile.js";
+import { lineRunsRoot } from "./runDirs.js";
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -1399,11 +1399,7 @@ export function runSlug(graph: WorkflowGraph, context: Record<string, string>, f
  * the temp directory.
  */
 export function lineRunDir(cwd: string, slug: string): string {
-  try {
-    const r = spawnSync("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
-    if (r.status === 0 && r.stdout.trim()) return path.join(r.stdout.trim(), "cast-line", slug);
-  } catch {}
-  return path.join(os.tmpdir(), "cast-line", slug);
+  return path.join(lineRunsRoot(cwd), slug);
 }
 
 function detectDefaultBranch(cwd: string): string {
