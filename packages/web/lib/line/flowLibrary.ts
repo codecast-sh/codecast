@@ -4,7 +4,7 @@
 // segments flows are built from as a shelf. A variant names its base with
 // `extends="<file>.cast"` in its graph (a file-pushed variant) or the row's
 // `variant_of` (a flow saved from a session). Pure: no store, no React.
-import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
+import { flowGraphAttr, segmentTopOf } from "@codecast/shared/contracts/flowPool";
 import { pushedFlow, type AppFlow, type PushedFlowRow } from "./flowPool";
 
 /** A workflows row as the library reads it: the pool's fields, and what a variant's changes are read from. */
@@ -68,19 +68,30 @@ export function variantChange(base: Pick<LibraryRow, "nodes" | "serves">, varian
   for (const n of [...base.nodes, ...variant.nodes.filter((x) => !before.has(x.id))]) { if (seen.has(n.label)) shared.add(n.label); seen.add(n.label); }
   const step = (n: { id: string; label: string }): LibraryStep => ({ id: n.id, label: n.label && !shared.has(n.label) ? n.label : n.id.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) });
   const changed: VariantChange["changed"] = [];
+  // A segment's own stations (check__verify) are the segment's: any of them added, removed or changed reads as the
+  // segment's steps changing, under the segment's name.
+  const inner = (id: string) => segmentTopOf(id) !== id;
+  const segments = new Set<string>();
+  for (const id of new Set([...before.keys(), ...after.keys()])) {
+    if (!inner(id)) continue;
+    const b = before.get(id);
+    const n = after.get(id);
+    if (!b || !n || JSON.stringify({ ...b, label: 0 }) !== JSON.stringify({ ...n, label: 0 })) segments.add(segmentTopOf(id));
+  }
   for (const [id, n] of after) {
     const b = before.get(id);
-    if (!b) continue;
+    if (!b || inner(id)) continue;
     const what = [...new Set([...Object.keys(b), ...Object.keys(n)])]
       .filter((k) => !SAME.has(k) && JSON.stringify(b[k]) !== JSON.stringify(n[k]))
       .map((k) => FIELD_WORDS[k] ?? k.replace(/_/g, " "));
+    if (segments.has(id)) what.push("steps");
     if (what.length) changed.push({ ...step(n), what });
   }
   const serves = [...(variant.serves ?? [])];
   const baseServes = [...(base.serves ?? [])];
   return {
-    added: [...after.values()].filter((n) => !before.has(n.id) && isStep(n)).map(step),
-    removed: [...before.values()].filter((n) => !after.has(n.id) && isStep(n)).map(step),
+    added: [...after.values()].filter((n) => !before.has(n.id) && isStep(n) && !inner(n.id)).map(step),
+    removed: [...before.values()].filter((n) => !after.has(n.id) && isStep(n) && !inner(n.id)).map(step),
     changed,
     serves: serves.join(" ") !== baseServes.join(" ") ? serves : null,
   };
@@ -110,7 +121,8 @@ export function flowLibrary(pool: ReadonlyArray<AppFlow>, rows: ReadonlyArray<Li
     grew = false;
     for (const r of rowOf.values()) {
       const base = flowBaseOf(r);
-      if (base && flows.has(base) && !flows.has(r.slug) && r.slug !== base) { flows.set(r.slug, asFlow(r)); grew = true; }
+      // A session's draft is not the library's until it is saved (flowPool publishableFlowSource).
+      if (base && flows.has(base) && !flows.has(r.slug) && r.slug !== base && !flowGraphAttr(r.source, "draft")) { flows.set(r.slug, asFlow(r)); grew = true; }
     }
   }
   const entries = new Map<string, LibraryEntry>();

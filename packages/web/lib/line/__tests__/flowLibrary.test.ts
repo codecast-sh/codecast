@@ -51,6 +51,18 @@ describe("the flow library", () => {
     expect(lib.segments.length).toBeGreaterThan(0);
   });
 
+  test("a change inside a segment reads as the segment's steps; a session's draft stays out of the library", () => {
+    const seg = (id: string, label: string, type = "command") => ({ id, label, type });
+    const change: LibraryRow = { _id: "c1", slug: "change", name: "change", source: 'graph [kind="line", label="Change"]', edges: [],
+      nodes: [seg("start", "start", "start"), seg("check", "Check", "conditional"), seg("check__verify", "Verify"), seg("check__passed", "Passed"), seg("check__failed", "Checks failed", "exit"), seg("exit", "Done", "exit")] };
+    const flaky: LibraryRow = { _id: "c2", slug: "flaky-fix", name: "flaky_fix", source: 'graph [extends="change", label="Change, flaky test"]', edges: [],
+      nodes: [seg("start", "start", "start"), seg("check", "Check", "conditional"), seg("check__reproduce", "check__reproduce", "agent"), seg("check__prove", "check__prove"), seg("exit", "Done", "exit")] };
+    expect(variantChange(change, flaky)).toEqual({ added: [], removed: [], changed: [{ id: "check", label: "Check", what: ["steps"] }], serves: null });
+    const draft = { ...flaky, source: 'graph [extends="change", draft="jx7bhm0"]' };
+    expect(libraryEntry(flowLibrary(appPool([]), [change, draft], null), "flaky-fix")).toBeNull();
+    expect(libraryEntry(flowLibrary(appPool([]), [change, flaky], null), "flaky-fix")?.base).toBe("change");
+  });
+
   test("with no live flow the spine is not drawn, and its variants have nothing to hang from", () => {
     const lib = flowLibrary(appPool([]), [spine, system], null);
     expect(libraryEntry(lib, "agentwatch")).toBeNull();

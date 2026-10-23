@@ -44,6 +44,8 @@ export type LineSliceActions = {
   labelDecision: (runId: string, nodeId: string, verdict: LabelVerdict | null, note?: string | null) => void;
   /** A live flow's switch (convex liveFlows.setOn, human only): the row reads on or off at once. */
   setLiveFlowOn: (id: string, on: boolean) => void;
+  /** Lift a live flow's hold (convex liveFlows.clearHold, team admins): it starts again at once. */
+  clearLiveFlowHold: (id: string) => void;
   /** Save a flow a session ran into the team's library (convex flowLibrary.save): the row reads saved at once, under the
    *  slug it asks for, as a new version when that slug is saved already. */
   saveSessionFlow: (id: string, opts?: { slug?: string; label?: string; variant_of?: string }) => void;
@@ -200,6 +202,11 @@ export function createLineSlice(): LineSliceActions {
       const row = this.liveFlows[id];
       if (row) row.on = on;
     }) as LineSliceActions["setLiveFlowOn"],
+
+    clearLiveFlowHold: action(function (this: { liveFlows: Record<string, any> }, id: string) {
+      const row = this.liveFlows[id];
+      if (row) row.hold = null;
+    }) as LineSliceActions["clearLiveFlowHold"],
 
     saveSessionFlow: action(function (this: { sessionFlows: Record<string, any> }, id: string, opts?: { slug?: string; label?: string; variant_of?: string }) {
       const row = this.sessionFlows[id];

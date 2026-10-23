@@ -62,7 +62,7 @@ function useLibrary(space: string | null | undefined) {
 function FlowsHome(props: LineViewProps) {
   const { select, space } = props;
   const { lib, live, runsOf } = useLibrary(space);
-  const sessionFlows = useSessionFlows(space);
+  const sessions = useSessionFlows(space);
   const open = (slug: string) => select({ item: slug, run: null });
   return (
     <div className="flh" data-flows-home>
@@ -81,7 +81,7 @@ function FlowsHome(props: LineViewProps) {
           ))}
         </ul>
       </section>
-      {sessionFlows.length ? <SessionShelf flows={sessionFlows} library={lib} names={props.workspace.names} /> : null}
+      {sessions.answered ? <SessionShelf flows={sessions.flows} library={lib} names={props.workspace.names} /> : null}
     </div>
   );
 }
@@ -128,7 +128,15 @@ function LivePanel({ live, runs, onOpenFlow, workspace, href }: LineViewProps & 
           {changedBy && live.changed_at ? <span title={new Date(live.changed_at).toLocaleString()}>{live.on ? "on" : "off"} by {changedBy}, {ageShort(workspace.now - live.changed_at)} ago</span> : null}
         </span>
       </header>
-      {live.waiting && live.on ? <p className="fll-live-wait" data-live-flow-waiting>{live.waiting}</p> : null}
+      {live.hold ? (
+        <div className="fll-live-hold" data-live-flow-hold="">
+          <b>Held</b>
+          {live.hold.until ? <span>until {new Date(live.hold.until).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span> : null}
+          <span className="fll-live-hold-why">{live.hold.why}</span>
+          {live.hold.by ? <Link className="flv-chip flv-chip-btn" href={`/conversation/${live.hold.by}`}>{live.hold.by}</Link> : null}
+          {admin ? <button type="button" className="flv-steps" onClick={() => useInboxStore.getState().clearLiveFlowHold(live._id)} data-live-flow-hold-clear="">Clear hold</button> : null}
+        </div>
+      ) : live.waiting && live.on ? <p className="fll-live-wait" data-live-flow-waiting>{live.waiting}</p> : null}
       <div className="flv-facts">
         <Fact label="Takes from">{live.sources ? live.sources.map((s) => <span key={s} className="flv-chip">{s}</span>) : <span className="flv-chip">Every source</span>}</Fact>
       </div>
@@ -139,7 +147,8 @@ function LivePanel({ live, runs, onOpenFlow, workspace, href }: LineViewProps & 
             <table className="flh-table fll-queue" data-live-queue>
               <thead><tr><th data-num="">#</th><th>Problem</th><th data-num="">Score</th><th>Family</th><th data-num="">Findings</th><th>Area</th><th>Waits on</th></tr></thead>
               <tbody>
-                {shown.map((r, i) => <QueueRow key={r.taskId} row={r} n={i + 1} area={r.projectId ? projectTitle.get(r.projectId) ?? "" : ""} href={href({ view: "problems", case: r.ref ?? r.taskId, run: null })} />)}
+                {/* A row's wait is named only where it differs from the flow's own, which the panel says once above. */}
+                {shown.map((r, i) => <QueueRow key={r.taskId} row={r.waiting === live.waiting ? { ...r, waiting: null } : r} n={i + 1} area={r.projectId ? projectTitle.get(r.projectId) ?? "" : ""} href={href({ view: "problems", case: r.ref ?? r.taskId, run: null })} />)}
               </tbody>
             </table>
           )}
@@ -230,6 +239,7 @@ function SessionShelf({ flows, library, names }: { flows: SessionFlow[]; library
   return (
     <section data-flows-sessions>
       <h2 className="flv-h">Used in sessions<span className="lw-num">{flows.length}</span></h2>
+      {flows.length === 0 ? <p className="flv-none" data-session-flows-none="">None yet</p> : (
       <table className="flh-table fll-sessions">
         <thead><tr><th>Flow</th><th data-num="">Steps</th><th data-num="">Runs</th><th>Last</th><th>Ran it</th><th>Sessions</th><th /></tr></thead>
         <tbody>
@@ -254,6 +264,7 @@ function SessionShelf({ flows, library, names }: { flows: SessionFlow[]; library
           })}
         </tbody>
       </table>
+      )}
     </section>
   );
 }

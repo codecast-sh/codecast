@@ -126,3 +126,7 @@ a.flo-count:hover { border-color: var(--lw-ink-3); }
 .fll-seg:hover { border-color: var(--lw-ink-3); }
 .fll-sessions .flh-name { display: flex; flex-direction: column; gap: 1px; }
 @container (max-width: 760px) { .fll-live-cols { grid-template-columns: minmax(0, 1fr); } }
+.fll-live-hold { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--sol-yellow) 12%, transparent); font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.fll-live-hold b { color: var(--sol-yellow); }
+.fll-live-hold-why { color: var(--lw-ink); }
+.fll-live-hold .flv-steps { margin-left: auto; }
