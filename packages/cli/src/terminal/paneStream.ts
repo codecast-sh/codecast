@@ -21,7 +21,14 @@
 //
 // Unchanged screens are not pushed. An agent thinking quietly for a minute
 // costs one small heartbeat every few seconds, not 150 frames.
+//
+// A screen leaves this machine only through redactSecrets, the same pass a
+// transcript takes: a pane that just ran `cast vault get` or `env` shows real
+// values, and the relay keeps frames for a day. redactFrame matches each line
+// as the program wrote it, with colors stripped and wrapped rows rejoined, so
+// a value wider than the pane is caught too.
 
+import { redactSecrets } from "../redact.js";
 import { tmuxRun } from "../tmux.js";
 import {
   PANE_CAPTURE_INTERVAL_MS,
@@ -111,7 +118,8 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
       return;
     }
 
-    const changed = snap.frame !== lastFrame;
+    const frame = redactFrame(snap.frame, snap.cols);
+    const changed = frame !== lastFrame;
     // An unchanged screen is normally worth one write every few seconds. While
     // someone is focused on the pane it is worth several a second instead —
     // not for the picture, which hasn't moved, but because this request is the
@@ -123,7 +131,7 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
         changed
           ? {
               target,
-              frame: snap.frame,
+              frame,
               cols: snap.cols,
               rows: snap.rows,
               cursor_x: snap.cursorX,
@@ -140,7 +148,7 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
         failures = 0;
         lastPushAt = deps.now();
         fast = !!answer.fast;
-        if (changed) lastFrame = snap.frame;
+        if (changed) lastFrame = frame;
         if (answer.stop) {
           deps.log?.(`[PANE] ${target}: lease lapsed, stopping`);
           return;
@@ -165,6 +173,51 @@ export async function runPaneStream(target: string, deps: PaneStreamDeps): Promi
       fast || deps.now() < typingUntil ? PANE_TYPING_INTERVAL_MS : PANE_CAPTURE_INTERVAL_MS,
     );
   }
+}
+
+/** Colors (SGR) and the other escapes capture-pane -e emits, OSC 8 links included. */
+const ESCAPE_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])/g;
+
+/** Cells a row's text takes, counting anything past U+1100 as wide: an overcount only joins a row that did not wrap, never misses one that did. */
+function cellWidth(text: string): number {
+  let n = 0;
+  for (const ch of text) n += ch.codePointAt(0)! >= 0x1100 ? 2 : 1;
+  return n;
+}
+
+/**
+ * A frame with every secret masked, row layout kept. capture-pane gives
+ * screen rows, so a value longer than the pane is split across rows with a
+ * newline, and a color change can split one inside a row; neither matches
+ * redactSecrets. Each logical line (a row that fills the width runs on into
+ * the next) is matched with its escapes stripped. A line that holds a secret
+ * is rewritten as its redacted text, wrapped back into the same rows without
+ * colors; every other row keeps its colors and still goes through
+ * redactSecrets, which also covers a value inside an escape (a link's URL).
+ */
+export function redactFrame(frame: string, cols: number): string {
+  const rows = frame.split("\n");
+  const plain = rows.map((r) => r.replace(ESCAPE_RE, ""));
+  const lines: Array<{ start: number; end: number; text: string }> = [];
+  for (let start = 0, end = 0; start < rows.length; start = end) {
+    end = start + 1;
+    while (end < rows.length && cellWidth(plain[end - 1]!) >= cols) end++;
+    lines.push({ start, end, text: plain.slice(start, end).join("") });
+  }
+  // Most ticks hold no secret: one pass over every line at once says so.
+  const all = lines.map((l) => l.text).join("\n");
+  if (redactSecrets(all) === all) return redactSecrets(frame);
+  const out: string[] = [];
+  for (const { start, end, text } of lines) {
+    const redacted = redactSecrets(text);
+    if (redacted === text) {
+      for (let i = start; i < end; i++) out.push(redactSecrets(rows[i]!));
+      continue;
+    }
+    const chars = [...redacted];
+    for (let i = 0; i < end - start; i++) out.push(chars.slice(i * cols, (i + 1) * cols).join(""));
+  }
+  return out.join("\n");
 }
 
 /**

@@ -38,7 +38,7 @@ describe("editForField", () => {
   test("clearing a value the file sets puts it back to the default; clearing a default sends nothing", () => {
     const lp = profile();
     expect(editForField(field("size_budget"), "", lp)).toEqual({ edit: { op: "remove", key: "size_budget" } });
-    expect(editForField(field("caps.cards"), "  ", lp)).toEqual({ edit: null });
+    expect(editForField(field("watch_days"), "  ", lp)).toEqual({ edit: null });
   });
 
   test("a list splits on lines and commas", () => {

@@ -366,3 +366,15 @@ describe("planTypeLabel", () => {
     expect(planTypeLabel("max")).toBe("Max");
   });
 });
+
+describe("fallbackProfiles and reserved accounts", () => {
+  test("an account kept for a job is never a fallback, however fresh", () => {
+    const now = Date.now();
+    const fresh = (percent: number): CcUsage => ({ fetched_at: now - 60_000, session: { percent, resets_at: now + 3600_000 }, weekly: { percent, resets_at: now + 86_400_000 } });
+    const review = { name: "review", email: "r@x.com", usage: fresh(5), reserved_for: "reviews" };
+    const spare = { name: "spare", email: "s@x.com", usage: fresh(60) };
+    const picks = fallbackProfiles([review, spare, { name: "active", email: "a@x.com" }], "a@x.com", now);
+    expect(picks.map((p) => p.name)).toEqual(["spare"]);
+    expect(fallbackProfiles([{ ...review, reserved_for: null }, spare], "a@x.com", now).map((p) => p.name)).toEqual(["review", "spare"]);
+  });
+});

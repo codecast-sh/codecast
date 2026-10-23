@@ -70,7 +70,7 @@ import { AgentTypeIcon } from "../../AgentTypeIcon";
 import { identityRowOf, identitySig, sessionIdentity } from "../../../lib/sessionIdentity";
 import { usePersonifyAll } from "../../../hooks/usePersonifyAll";
 import { ScheduleWakeupBlock, TeammateMessageCard } from "./systemBlocks";
-import { BrowserWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
+import { BrowserWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, StructuredResultBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
 import { isAlwaysVisibleToolCall, parseApiErrorContent, parseCastCommand, parseContextBlocks, parseSkillBlocks, parseTeammateMessages, stripSystemTags } from "../classify";
 import { copyMessageLink, formatFullTimestamp, formatMessagePartsForCopy, formatRelativeTime, forwardMessageToChat, safeString, useRelativeTime } from "../../../lib/conversationFormat";
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
@@ -1374,6 +1374,8 @@ function AssistantBlockImpl({
       <TeamCreateBlock key={tc.id} tool={tc} />
     ) : tc.name === "Workflow" || tc.name === "workflow" ? (
       <WorkflowToolBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} />
+    ) : tc.name === "StructuredOutput" ? (
+      <StructuredResultBlock key={tc.id} tool={tc} result={result} />
     ) : tc.name === "Skill" ? (
       <SkillBlock key={tc.id} tool={tc} />
     ) : tc.name === "Monitor" || tc.name === "monitor" || isBackgroundBashToolCall(tc) ? (

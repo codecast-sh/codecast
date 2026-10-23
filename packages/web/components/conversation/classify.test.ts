@@ -40,3 +40,16 @@ describe("decideOutputId", () => {
     expect(decideOutputId("Decision updated: sd-12", "edit")).toBe("sd-12");
   });
 });
+
+describe("a Workflow agent's framed opening turns", () => {
+  const header = (frame: string) => `[Workflow harness — ${frame}] Boilerplate about authority that the person never needs to read. The text follows:\n`;
+  test("the computed task is its body, unindented, without the header", () => {
+    const content = `${header("computed task")}  Review the fixes.\n\n  - Check every requirement.`;
+    expect(classifyUserMessage({ _id: "m", role: "user", content, timestamp: 1 } as any)).toEqual({ kind: "workflow_frame", frame: "computed task", body: "Review the fixes.\n\n- Check every requirement." });
+    expect(cleanStickyContent(content)).toBe("Review the fixes.\n\n- Check every requirement.");
+  });
+  test("the relayed user request keeps its frame name", () => {
+    const kind = classifyUserMessage({ _id: "m", role: "user", content: `${header("user request")}  Ship the vault.`, timestamp: 1 } as any);
+    expect(kind).toEqual({ kind: "workflow_frame", frame: "user request", body: "Ship the vault." });
+  });
+});

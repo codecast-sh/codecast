@@ -750,6 +750,31 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { altKey: "client_key" },
     feeds: ["agentDefinitions.list"],
   },
+  // Vault (docs/architecture/vault.md): secrets' metadata only. Values never
+  // reach the store, IndexedDB or the outbox: create, rotate, fulfill and
+  // reveal call their Convex actions directly. A create paints a stub that
+  // takes its short_id from the action's answer, and the snapshot carrying
+  // that short_id supersedes it. A few small rows, hydrated before first paint
+  // so a returning Vault never paints empty while its cache loads.
+  secrets: {
+    persistence: { kind: "collection", key: "secrets" },
+    localFirst: true,
+    workspaceScoped: true,
+    indexes: "_id, name",
+    sync: { altKey: "short_id" },
+    feeds: ["secrets.list"],
+  },
+  // A secret's history in its detail panel: per secret opened, one row for its
+  // activity (`events:<id>`) and one for its previous values (`versions:<id>`),
+  // each holding the query's answer in `rows`. Metadata only, as in the list;
+  // no value is ever in either answer. Delta: each panel feeds its own rows and
+  // must not evict another secret's.
+  secretHistory: {
+    persistence: { kind: "collection", key: "secretHistory" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["rows"] },
+    feeds: ["secrets.events", "secrets.versions"],
+  },
   agentChains: {
     persistence: { kind: "collection", key: "agentChains" },
     hydration: { phase: "deferred" },
@@ -1933,6 +1958,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   issueSyncSources: "shared",
   agentDefinitions: "shared",
   agentChains: "shared",
+  secrets: "shared",
+  secretHistory: "shared",
   workflows: "shared",
   workflowRuns: "shared",
   signals: "shared",

@@ -260,6 +260,25 @@ async function remoteCookies(page: PageSession, url: string): Promise<Map<string
   return map;
 }
 
+/**
+ * Every cookie the browser behind `conn` holds (browser-wide `Storage`
+ * domain), in the shape `Storage.setCookies` takes back. A session cookie
+ * comes back with expires -1, which the setCookies shape spells as no field.
+ */
+export async function browserCookies(conn: Pick<CdpConnection, "send">): Promise<Cookie[]> {
+  const r = await conn.send<any>("Storage.getCookies", {}, undefined, 8_000);
+  return (r.cookies ?? []).map((c: any) => ({
+    name: c.name,
+    value: c.value,
+    domain: c.domain,
+    path: c.path || "/",
+    secure: !!c.secure,
+    httpOnly: !!c.httpOnly,
+    ...(c.sameSite ? { sameSite: c.sameSite } : {}),
+    ...(!c.session && typeof c.expires === "number" && c.expires > 0 ? { expires: c.expires } : {}),
+  }));
+}
+
 /** Why a carry was skipped for an own-login host — the message agents read. */
 export const OWN_LOGIN_REASON = "the agent browser keeps its own login for this site (a shared one signs both browsers out)";
 
