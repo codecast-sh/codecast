@@ -167,7 +167,8 @@
 .lw-body { position: relative; flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .lw-stage { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; transition: margin-right var(--lw-slow) var(--lw-ease); }
 .lw-body[data-drawer-open] .lw-stage { margin-right: var(--lw-drawer-w); }
-.lw-stage-in { animation: lw-rise var(--lw-med) var(--lw-ease) both; min-height: 100%; }
+.lw-stage-in { min-height: 100%; }
+.lw-stage-in[data-enter] { animation: lw-rise var(--lw-med) var(--lw-ease) both; }
 @keyframes lw-rise { from { opacity: 0; transform: translateY(6px); } }
 @keyframes lw-fade { from { opacity: 0; } }
 

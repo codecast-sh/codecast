@@ -37,6 +37,8 @@ export const DESTRUCTIVE_COMMANDS: readonly DestructiveCommand[] = [
   { path: ["workspace", "destroy"] },
   { path: ["keys", "rm"] },
   { path: ["files", "rm"] },
+  // Asks on a terminal and needs --yes elsewhere, in its own words (secrets/command.ts).
+  { path: ["vault", "rm"] },
   { path: ["label", "rm"] },
   { path: ["accounts", "rm"] },
   { path: ["anchor", "rm"] },
