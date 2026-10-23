@@ -26,7 +26,7 @@ import type { BroughtPath } from "../remote/session-move.js";
 import { bringsByDefault } from "@codecast/shared/contracts/moveRehearsal";
 import { createRunnerIo } from "./io.js";
 import { hostResolver } from "./hosts.js";
-import { formatBytes, rehearseMove } from "./rehearse.js";
+import { formatBytes, rehearseMove, unreachableRehearsal } from "./rehearse.js";
 import { runBatch } from "./runner.js";
 
 function ago(ts: number): string {
@@ -223,8 +223,11 @@ export function registerMigrateCommand(program: Command): void {
         const rows: any[] = (await client.query(api.moveRehearsals.forRunner, { api_token: token, request_id: opts.request, device_id: localDeviceId() })) ?? [];
         for (const r of rows) {
           try {
-            const { cloud, host } = await resolve(r.destination_id);
-            const result = await rehearseMove(r.session_id, { host, cloud, destinationId: r.destination_id });
+            // A destination this machine cannot reach is the answer, not a failed check: the move would stop there too.
+            const reached = await resolve(r.destination_id).catch((err: unknown) => err instanceof Error ? err : new Error(String(err)));
+            const result = reached instanceof Error
+              ? unreachableRehearsal(r.session_id, r.destination_id, reached.message)
+              : await rehearseMove(r.session_id, { host: reached.host, cloud: reached.cloud, destinationId: r.destination_id });
             await client.mutation(api.moveRehearsals.report, { api_token: token, rehearsal_id: r.rehearsal_id, result: JSON.stringify(result) });
             console.log(`${r.session_id}: ${result.blockers.length} blockers, ${result.missing.length} missing`);
           } catch (err) {
