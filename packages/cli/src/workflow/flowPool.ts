@@ -5,13 +5,13 @@
 // would run. Pure but for reading the repo's files and writing published
 // flows to this machine's cache.
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { foldFlow, flowPathWords, type FlowStation, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import { parseWorkflowSource, validateWorkflow } from "./parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 import { DEFAULT_LINE_SLUG } from "@codecast/shared/contracts/orgProposal";
 import type { WorkflowGraph } from "./types.js";
+import { defaultFlowsCache, writeTeamFlowIndex } from "./teamFlowIndex.js";
 
 export type PoolWhere = "shipped" | "repo" | "pushed" | "team";
 export type PoolStation = FlowStation;
@@ -48,7 +48,7 @@ export type PushedPoolRow = {
  * checkout. A path that would leave the directory is not written. Returns the
  * graph file.
  */
-export function materializePushedFlow(row: PushedPoolRow, cacheRoot = path.join(os.homedir(), ".codecast", "flows")): string {
+export function materializePushedFlow(row: PushedPoolRow, cacheRoot = defaultFlowsCache()): string {
   const dir = path.resolve(cacheRoot, row._id.replace(/[^\w-]/g, ""));
   const write = (rel: string, text: string): string | null => {
     const abs = path.resolve(dir, rel);
@@ -83,8 +83,14 @@ export function repoFlowsDir(cwd: string): string | null {
  * is offered only to that session (`session`, its id or short id).
  */
 export function poolFlows(cwd: string, session?: string | null, pushed: ReadonlyArray<PushedPoolRow> = [], cacheRoot?: string): PoolFlow[] {
-  const out: PoolFlow[] = [];
+  // Every team flow the repo and the shipped flows do not name is written and indexed before any flow is read, so a
+  // flow here (or another team flow) can use one as a segment.
   const dir = repoFlowsDir(cwd);
+  const repoSlugs = new Set((dir ? fs.readdirSync(dir) : []).filter((f) => f.endsWith(".cast")).map((f) => f.replace(/\.cast$/, "")));
+  const team = pushed.filter((row) => row.source && !repoSlugs.has(row.slug) && !Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, row.slug));
+  const files = new Map(team.map((row) => [row.slug, materializePushedFlow(row, cacheRoot)] as const));
+  writeTeamFlowIndex(files, cacheRoot);
+  const out: PoolFlow[] = [];
   const own = new Set<string>();
   if (dir) {
     for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".cast")).sort()) {
@@ -101,10 +107,10 @@ export function poolFlows(cwd: string, session?: string | null, pushed: Readonly
     out.push(describeFlow(slug, src, "shipped", null, dir ?? undefined));
   }
   const named = new Set(out.map((f) => f.slug));
-  for (const row of pushed) {
-    if (named.has(row.slug) || !row.source) continue;
+  for (const row of team) {
+    if (named.has(row.slug)) continue;
     named.add(row.slug);
-    const file = materializePushedFlow(row, cacheRoot);
+    const file = files.get(row.slug)!;
     const where = row.workspace?.startsWith("team:") ? "team" : "pushed";
     out.push({ ...describeFlow(row.slug, row.source, where, file), by: row.mine ? null : row.by ?? null });
   }

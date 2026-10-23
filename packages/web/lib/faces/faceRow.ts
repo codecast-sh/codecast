@@ -137,6 +137,9 @@ export type FaceCard =
       cameraOn: boolean;
       words: WalkieStageWords | null;
       hearing: SenderHearing | null;
+      /** The call plane is still on its way in (accept, token, media): the
+       *  card says so until the room is up, so a Join reads as joining. */
+      joining?: boolean;
     }
   /** Somebody stepped in: the live card, with the join said in words for a
    *  few seconds. Same controls as `live`, so nothing disappears under the notice. */
@@ -498,6 +501,7 @@ function cardOf(
       cameraOn,
       words: walkieHeld ? stageWordsFor(input, mode, name) : null,
       hearing,
+      joining: mode === "call" && input.call.phase === "connecting" && input.call.roomKey === room,
     };
   }
   const ringOut =

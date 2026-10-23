@@ -1,13 +1,13 @@
 import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage, isInterruptNotice } from "../../lib/conversationProcessor";
-import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload } from "@codecast/shared/contracts";
-import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
+import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload, parseWorkflowHarnessFrame } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, parseVaultReady, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
 import { stripMentionContext, stripPastedContent } from "@codecast/shared/contracts";
 import { jointAuthors, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { parseLineChat } from "@codecast/shared/contracts/lineChat";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, parseTaskCommentMessage, parseDecisionDiscussion, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
-import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, isFlowRunCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
+import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, isFlowRunCastCommand, isVaultRequestCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
 import { hasRichMarkdown } from "../../lib/richMarkdown";
 import { parseSessionHandoff } from "../../lib/sessionHandoff";
 import type { Message, ParsedApiError, ParsedContextBlock, TeammateMessagePart, ToolCall, UserMessageKind } from "./types";
@@ -77,6 +77,8 @@ export function cleanStickyContent(content: string): string {
     if (!spawned.prompt) return spawned.title;
     return spawned.prompt.startsWith(spawned.title) ? spawned.prompt : `${spawned.title} — ${spawned.prompt}`;
   }
+  const workflowFrame = parseWorkflowHarnessFrame(content.trimStart());
+  if (workflowFrame) return workflowFrame.body;
   // A person's words from a line workspace's chat: the frame, its brief, what they had open and the reply note are context for the agent.
   const lineChat = parseLineChat(content);
   if (lineChat) return lineChat.body;
@@ -288,12 +290,12 @@ function extractPlanContent(text: string): string | null {
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
 
 // The user rows fold mode keeps: what a person said to the agent, a chat
-// line that woke it, and a trigger run (a role's routine or a session under it
+// line that woke it, a Vault request they filled, and a trigger run (a role's routine or a session under it
 // needing input: what woke the agent and why, so its reply never reads as
-// unprompted), and a role's brief, folded, because it is the context every
-// reply after it answers to. Everything else on the user rail was sent by a machine (a poll
+// unprompted), and a role's brief or a workflow agent's task, because each is
+// the context every reply after it answers to. Everything else on the user rail was sent by a machine (a poll
 // answer, an interrupt, a notice, a session's report).
-export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'session_handoff', 'scheduled_task', 'role_brief']);
+export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'vault_ready', 'session_handoff', 'scheduled_task', 'role_brief', 'workflow_frame']);
 
 // Dedup key for matching a still-pending message against its eventual JSONL echo.
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
@@ -340,6 +342,8 @@ export function classifyUserMessage(
   // The brief that seats or re-seats a standing agent: the session's context,
   // written by a machine, so it folds to one row that opens it.
   if (isBootstrapPrompt(tNoReminders)) return { kind: 'role_brief' };
+  const workflowFrame = parseWorkflowHarnessFrame(tNoReminders);
+  if (workflowFrame) return { kind: 'workflow_frame', frame: workflowFrame.kind, body: workflowFrame.body };
   // A spawned schedule run's opening prompt (plain-text wire format from
   // taskScheduler.buildPrompt) gets the same rich block as injected schedules.
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
@@ -400,6 +404,8 @@ export function classifyUserMessage(
   }
   const chatWake = parseChatWakePrompt(t);
   if (chatWake) return { kind: 'chat_wake', wake: chatWake };
+  const vaultReady = parseVaultReady(tNoReminders);
+  if (vaultReady) return { kind: 'vault_ready', vault: vaultReady };
   const decisionAnswer = parseDecisionAnswer(tNoReminders);
   if (decisionAnswer) return { kind: 'decision_answer', decision: decisionAnswer };
   if (isPollResponsePayload(t)) return { kind: 'poll_response' };
@@ -579,9 +585,11 @@ export function isAlwaysVisibleToolCall(tc: ToolCall, result?: { content?: strin
   // A command whose output carries the setup marker holds a card the person
   // must act on (AgentToolSetupCard), so it stays out of the receipt too.
   // A `cast flow run` is a change set on its way through a flow: its card
-  // follows the run live, so it stays visible like a running workflow.
+  // follows the run live, so it stays visible like a running workflow. A
+  // `cast vault request` card holds the field the person fills. A workflow
+  // agent's StructuredOutput is what its whole session was run to produce.
   if (hasAgentSetupMarker(result?.content)) return true;
-  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc)) || isFlowRunCastCommand(parseCastCommand(tc));
+  return isPlanWriteToolCall(tc) || tc.name === "StructuredOutput" || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc)) || isFlowRunCastCommand(parseCastCommand(tc)) || isVaultRequestCastCommand(parseCastCommand(tc));
 }
 
 // A row that is nothing but tool calls: one-line receipts, not prose. The
