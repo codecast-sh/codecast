@@ -17,6 +17,7 @@ import { internalMutation, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
+import { resolveSessionConversation } from "./lib/access";
 import { canAccessComment } from "./codeComments";
 import { createDataContext } from "./data";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
@@ -74,7 +75,8 @@ export const add = mutation({
     // A line reviewer's finding (cast task verdict --note): the task it was
     // found on, its severity, and the disposition the reviewer accepted.
     task_id: v.optional(v.id("tasks")),
-    conversation_id: v.optional(v.id("conversations")),
+    // The reviewer's session, as the CLI knows it (its agent session id).
+    conversation_id: v.optional(v.string()),
     author_kind: v.optional(v.union(v.literal("user"), v.literal("agent"))),
     severity: v.optional(v.string()),
     ...dispositionArgs,
@@ -84,6 +86,9 @@ export const add = mutation({
     const content = args.content.trim();
     if (!content) throw new Error("A review note needs a body");
     const promise = await resolvePromise(ctx, args);
+    const conversation = args.conversation_id
+      ? await resolveSessionConversation(ctx, userId, args.conversation_id)
+      : null;
 
     // The workspace chokepoint decides the key; review_comments is not one of
     // its scoped tables, so the row is stamped here from what it resolved.
@@ -113,7 +118,7 @@ export const add = mutation({
       git_root: args.git_root,
       diff_identity: args.diff_identity,
       task_id: args.task_id,
-      conversation_id: args.conversation_id,
+      conversation_id: conversation?._id,
       severity: args.severity,
       ...promise,
     });

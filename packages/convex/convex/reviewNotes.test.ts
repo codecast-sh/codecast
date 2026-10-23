@@ -79,6 +79,19 @@ describe("reviewNotes.add", () => {
     expect(ctx.db._tables.review_comments[0].workspace).toBe(`team:${TEAM}`);
   });
 
+  test("a verdict finding links the reviewer's session by its session id", async () => {
+    const ctx = context(USER);
+    await addNote(ctx, { conversation_id: "sess-1", author_kind: "agent", severity: "nit" });
+    expect(ctx.db._tables.review_comments[0].conversation_id).toBe(CONV);
+  });
+
+  test("a session id that resolves to nothing drops the link and keeps the finding", async () => {
+    const ctx = context(USER);
+    await addNote(ctx, { conversation_id: "94a063b2-6d80-4c4b-83aa-6bdb59464d7a" });
+    expect(ctx.db._tables.review_comments).toHaveLength(1);
+    expect(ctx.db._tables.review_comments[0].conversation_id).toBeUndefined();
+  });
+
   test("a whole-file note carries no line", async () => {
     const ctx = context(USER);
     await addNote(ctx, { line_number: 0 });

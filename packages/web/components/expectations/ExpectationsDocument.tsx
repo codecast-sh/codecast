@@ -19,6 +19,7 @@ import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ChevronRight, Plus, Search } from "lucide-react";
 import {
   citationFromInput,
+  proposalAnswerAction,
   personEditApplies,
   personOp,
   type Expectation,
@@ -27,11 +28,13 @@ import {
   type PersonEdit,
 } from "@codecast/shared/contracts/expectations";
 import { EntityIdPill } from "../EntityIdPill";
+import { useDecisionDetail, useSyncDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { useInboxStore } from "../../store/inboxStore";
 import { useProjectExpectations, useSyncProjectExpectations, type ExpectationFinding, type ExpectationProposalView, type ProjectExpectationsRow } from "../../hooks/useSyncProjectExpectations";
 import { ageShort } from "../../lib/lineFlow";
 import { shortDay } from "../../lib/line/runReport";
 import { cn } from "../../lib/utils";
+import "./proposals.css";
 import { byArea, filterCounts, findingCauses, findingWords, filterLines, LINE_FILTERS, lineHeat, openProposals, sourceSpeaker, usageOf, type LineFilter } from "../../lib/expectations/view";
 import { CitationLine } from "./CitationRef";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -77,11 +80,13 @@ export type DocumentVariant = "page" | "panel";
  * usage and findings; `panel` is the compact form a side panel holds.
  * `adding` opens the add form from outside (the page header's button).
  */
-export function ExpectationsDocument({ projectId, variant = "page", adding, onAddingChange }: {
+export function ExpectationsDocument({ projectId, variant = "page", adding, onAddingChange, opener = defaultOpener }: {
   projectId: string;
   variant?: DocumentVariant;
   adding?: boolean;
   onAddingChange?: (open: boolean) => void;
+  /** Where a proposal's row opens (the Line drawer opens its decision in place). */
+  opener?: ProposalOpener;
 }) {
   const { ready } = useSyncProjectExpectations(projectId);
   const row = useProjectExpectations(projectId);
@@ -126,7 +131,7 @@ export function ExpectationsDocument({ projectId, variant = "page", adding, onAd
   if (variant === "panel") {
     return (
       <div className="space-y-4" data-expectations-document="panel">
-        {open.length > 0 && <Proposals projectId={projectId} row={row} proposals={open} />}
+        {open.length > 0 && <Proposals projectId={projectId} row={row} proposals={open} opener={opener} />}
         {active.length === 0 && open.length === 0 && (
           <p className="text-[12.5px] text-sol-text-dim" data-expectations-empty>
             No expectations yet. Add the first line below, or let the daily routine propose them from what the team says.
@@ -145,7 +150,7 @@ export function ExpectationsDocument({ projectId, variant = "page", adding, onAd
 
   return (
     <div className="space-y-8" data-expectations-document="page">
-      {open.length > 0 && <Proposals projectId={projectId} row={row} proposals={open} />}
+      {open.length > 0 && <Proposals projectId={projectId} row={row} proposals={open} opener={opener} />}
       {addForm}
       {active.length > 0 && (
         <div className="grid gap-8 lg:grid-cols-[12.5rem_minmax(0,1fr)]">
@@ -456,18 +461,117 @@ function AddLine({ projectId, row, areas, onClose }: { projectId: string; row: P
   );
 }
 
-/** The open proposals, newest first: each change with its sources, and Apply or Drop. */
-function Proposals({ projectId, row, proposals }: { projectId: string; row: ProjectExpectationsRow; proposals: ExpectationProposalView[] }) {
+/** Where a proposal opens: its decision (the session that proposed it asked it), or the proposal itself when nobody was asked. */
+export type ProposalOpener = { href: (p: ExpectationProposalView) => string; open?: (p: ExpectationProposalView) => void };
+
+const defaultOpener: ProposalOpener = { href: (p) => (p.card ? `/decisions/${p.card}` : `#proposal-${p.short_id}`) };
+
+/**
+ * The open proposals, newest first, each one row read at a glance: the
+ * question its decision asks, what applying it does for people and the cases
+ * it settles (the decision's Apply answer and the fact that sizes it), and who
+ * it waits on. The row opens the decision, the one place it is answered; the
+ * rule's change and its sources open under it on demand.
+ */
+function Proposals({ projectId, row, proposals, opener }: { projectId: string; row: ProjectExpectationsRow; proposals: ExpectationProposalView[]; opener: ProposalOpener }) {
   const byId = useMemo(() => new Map((row.doc?.items ?? []).map((e) => [e.id, e])), [row.doc?.items]);
   return (
-    <section className="space-y-2.5" data-expectation-proposals>
-      <h3 className="flex items-baseline gap-2 text-[12.5px] font-semibold text-sol-yellow">
-        {proposals.length === 1 ? "A proposed change waits" : `${proposals.length} proposed changes wait`}
-        <span className="text-[11.5px] font-normal text-sol-text-dim">{row.you_answer ? "on you" : `on ${personWord(row)}`}</span>
+    <section className="xq" data-expectation-proposals={proposals.length}>
+      <h3 className="xq-head">
+        <span className="xq-head-n tabular-nums">{proposals.length}</span>
+        {proposals.length === 1 ? "proposed change to the rules" : "proposed changes to the rules"}
       </h3>
-      {proposals.map((p) => <Proposal key={p.short_id || `sending-${p.created_at}`} projectId={projectId} row={row} p={p} byId={byId} />)}
+      <ol className="xq-list">
+        {proposals.map((p) => <ProposalRow key={p.short_id || `sending-${p.created_at}`} projectId={projectId} p={p} row={row} byId={byId} opener={opener} />)}
+      </ol>
     </section>
   );
+}
+
+function ProposalRow({ projectId, p, row, byId, opener }: { projectId: string; p: ExpectationProposalView; row: ProjectExpectationsRow; byId: Map<string, Expectation>; opener: ProposalOpener }) {
+  useSyncDecisionDetail(p.card);
+  const detail = useDecisionDetail(p.card);
+  const me = useInboxStore((s) => String(s.currentUser?._id ?? ""));
+  const [changes, setChanges] = useState(false);
+  // Nobody was asked and nothing else opens it: it opens here, the one place it is answered.
+  const inline = !p.card && !opener.open && !!p.short_id;
+  const [acting, setActing] = useState(false);
+  const now = useMemo(() => Date.now(), []);
+  const d = detail?.decision;
+  const pending = d?.status === "pending";
+  const apply = d?.options?.find((o) => proposalAnswerAction(o.label) === "apply");
+  const onYou = pending ? (detail?.asked_users ?? []).some((u) => u._id === me) || (!detail?.asked_users?.length && !!row.you_answer) : false;
+  const state = !p.short_id ? "Sending" : !p.card ? "Not asked yet" : !d ? "" : pending ? (onYou ? "Waits on you" : `Waits on ${detail?.asked_users?.[0]?.name ?? personWord(row)}`) : d.status === "answered" ? "Answered" : "Closed";
+  const lines = p.ops?.length ?? p.changes;
+  const behind = [p.short_id, p.card, p.proposed_by && `proposed by ${p.from_session ? `${p.proposed_by}'s session` : p.proposed_by}`].filter(Boolean).join(" · ");
+  const settles = apply?.description ? leadingCount(apply.description) : null;
+  return (
+    <li className="xq-row" id={p.short_id ? `proposal-${p.short_id}` : undefined} data-expectation-proposal={p.short_id || "sending"} data-decision={p.card}>
+      <a className="xq-open" href={opener.href(p)} title={behind}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+          if (inline) { e.preventDefault(); setActing((v) => !v); return; }
+          if (!opener.open) return;
+          e.preventDefault();
+          opener.open(p);
+        }}
+        data-expectation-open={p.short_id}>
+        <span className="xq-q">{d?.question ?? newWords(p, byId)}</span>
+        {apply && (
+          <span className="xq-apply">
+            {settles && <b className="xq-n tabular-nums">{settles.n}</b>}
+            <span className="xq-course">{settles ? settles.rest : apply.description ?? apply.label}</span>
+          </span>
+        )}
+      </a>
+      <span className="xq-side">
+        {state && <span className="xq-state" data-you={onYou ? "" : undefined}>{state}</span>}
+        <span className="xq-age tabular-nums">{ageShort(now - p.created_at)}</span>
+      </span>
+      {acting && <div className="xq-act"><UnaskedProposal projectId={projectId} row={row} p={p} byId={byId} /></div>}
+      {!acting && p.ops && p.ops.length > 0 && (
+        <button type="button" className="xq-diff" aria-expanded={changes} onClick={() => setChanges((v) => !v)} data-expectation-changes={p.short_id}>
+          <ChevronRight className="xq-chev" aria-hidden />
+          {lines === 1 ? `${CHANGE_TAG[p.ops[0].op].label} 1 line` : `${lines} lines change`}
+        </button>
+      )}
+      {!acting && changes && p.ops && (
+        <ul className="xq-changes">{p.ops.map((op, i) => <Change key={i} op={op} row={row} byId={byId} />)}</ul>
+      )}
+      {p.refused && <div className="xq-refused" data-expectation-refused>Cannot apply as written: {p.refused}</div>}
+    </li>
+  );
+}
+
+/** A proposal nobody was asked about, opened: the rule's change with its sources, and the answer. */
+export function UnaskedProposal({ projectId, row, p, byId }: { projectId: string; row: ProjectExpectationsRow; p: ExpectationProposalView; byId: Map<string, Expectation> }) {
+  const resolve = useInboxStore((s) => s.resolveExpectationProposal);
+  return (
+    <div className="xq-unasked" data-expectation-unasked={p.short_id}>
+      <ul className="xq-changes">{(p.ops ?? []).map((op, i) => <Change key={i} op={op} row={row} byId={byId} />)}</ul>
+      {p.refused && <div className="xq-refused" data-expectation-refused>Cannot apply as written: {p.refused}</div>}
+      <div className="xq-answer">
+        <button type="button" onClick={() => resolve(projectId, p.short_id, "apply")} className={actBtn("green")} data-expectation-apply={p.short_id}>Apply</button>
+        <button type="button" onClick={() => resolve(projectId, p.short_id, "drop")} className={actBtn("plain")} data-expectation-drop={p.short_id}>Keep the lines</button>
+        <span className="xq-then">Judges read version {p.base_version + 1} once applied</span>
+      </div>
+    </div>
+  );
+}
+
+/** What an unasked proposal makes a line say: the words it adds or changes to, or the line it retires. */
+function newWords(p: ExpectationProposalView, byId: Map<string, Expectation>): string {
+  const op = p.ops?.[0];
+  if (!op) return p.summary;
+  const more = (p.ops?.length ?? 1) > 1 ? ` (and ${(p.ops?.length ?? 1) - 1} more)` : "";
+  if (op.op === "retire") return `Retire: ${byId.get(op.id)?.text ?? op.reason}${more}`;
+  return `${op.text ?? byId.get(op.id)?.text ?? p.summary}${more}`;
+}
+
+/** A fact that opens on a count ("4 flagged calls stop being flagged") as its number and the rest, so the count reads as a figure. */
+function leadingCount(text: string): { n: string; rest: string } | null {
+  const m = /^\s*(\d+(?:\s+of\s+\d+)?)\s+(.+)$/i.exec(text);
+  return m ? { n: m[1], rest: m[2] } : null;
 }
 
 export function Proposal({ projectId, row, p, byId }: { projectId: string; row: ProjectExpectationsRow; p: ExpectationProposalView; byId: Map<string, Expectation> }) {
@@ -498,7 +602,7 @@ export function Proposal({ projectId, row, p, byId }: { projectId: string; row: 
       {!sending && (
         <div className="mt-2.5 flex items-center gap-2">
           <button type="button" onClick={() => resolve(projectId, p.short_id, "apply")} className={actBtn("green")} data-expectation-apply={p.short_id}>Apply</button>
-          <button type="button" onClick={() => resolve(projectId, p.short_id, "drop")} className={actBtn("plain")} data-expectation-drop={p.short_id}>Drop</button>
+          <button type="button" onClick={() => resolve(projectId, p.short_id, "drop")} className={actBtn("plain")} data-expectation-drop={p.short_id}>Keep the lines</button>
           <span className="text-[11px] text-sol-text-dim">Applied, it becomes version {p.base_version + 1}.</span>
         </div>
       )}
