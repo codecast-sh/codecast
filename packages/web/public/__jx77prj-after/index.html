@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head><script>history.replaceState(null,"","/tasks"+location.search);</script>
+    <script>var __ccHandoffBoot=(()=>{var l=Object.defineProperty;var q=Object.getOwnPropertyDescriptor;var W=Object.getOwnPropertyNames;var j=Object.prototype.hasOwnProperty;var J=(e,t)=>{for(var o in t)l(e,o,{get:t[o],enumerable:!0})},Q=(e,t,o,n)=>{if(t&&typeof t=="object"||typeof t=="function")for(let r of W(t))!j.call(e,r)&&r!==o&&l(e,r,{get:()=>t[r],enumerable:!(n=q(t,r))||n.enumerable});return e};var X=e=>Q(l({},"__esModule",{value:!0}),e);var he={};J(he,{AGENT_TAB_EVENT:()=>p,AGENT_TAB_KEY:()=>P,ARM_WINDOW_MS:()=>g,AUTO_HANDOFF_PARAM:()=>a,HANDOFF_MIRROR_DEV:()=>F,HANDOFF_MIRROR_KEY:()=>c,HANDOFF_PERSIST_KEY:()=>f,HANDOFF_SKIP_KEY:()=>h,IN_SHELL_ROOT_SEGMENTS:()=>E,afterDocumentParsed:()=>z,armForegroundHandoff:()=>G,bootAfterHandoffGate:()=>ae,buildDesktopDeepLink:()=>D,conversationIdFromPath:()=>de,directConversationId:()=>pe,extractDeepLinkIntent:()=>Z,isAgentDrivenTab:()=>S,isAutoHandoffHost:()=>H,isForegroundTab:()=>T,isFreshNavigation:()=>N,isHandoffEligiblePath:()=>k,isPublicProfilePath:()=>_,isStandaloneSharePath:()=>V,openDesktop:()=>v,parseDesktopDeepLinkPath:()=>ee,preBootVerdict:()=>U,readSkippedUrl:()=>B,runPreBootHandoff:()=>ue,shareTokenInPath:()=>ge,shouldAttemptHandoff:()=>O,shouldAttemptPreBootHandoff:()=>u,showHandoffScreen:()=>K,skipHandoffForUrl:()=>C,takePendingPreferBrowser:()=>ie,writeHandoffMirror:()=>R});const d="open",a="cc_handoff";function D(e,t){const o=e.startsWith("/")?e:`/${e}`;if(!t?.auto)return`codecast://${d}${o}`;const n=o.includes("?")?"&":"?";return`codecast://${d}${o}${n}${a}=auto`}function Z(e){const t=e.indexOf("?");if(t===-1)return{path:e,auto:!1};const o=new URLSearchParams(e.slice(t+1)),n=o.get(a)==="auto";o.delete(a);const r=o.toString();return{path:e.slice(0,t)+(r?`?${r}`:""),auto:n}}function ee(e){let t;try{t=new URL(e)}catch{return null}let o=t.pathname||"";const n=t.hostname;return n&&n!==d&&(o=`/${n}${o==="/"?"":o}`),!o||o==="/"?null:o+(t.search||"")}const te=[/^\/$/,/^\/(about|features|documentation|privacy|security|support|terms|changelog|pricing|download|blog|compare)(\/|$)/,/^\/login/,/^\/auth/,/^\/oauth/,/^\/slack\/connect(\/|$)/,/^\/share\//,/^\/meet\//,/^\/a\//,/^\/r(\/|$)/,/^\/community(\/|$)/,/^\/palette/,/^\/api\//],E=new Set(["inbox","feed","changes","crosstalk","map","org","browser","chat","community","search","notifications","questions","line","expectations","trial","view","threads","docs","capabilities","agent-features","plans","goals","projects","tasks","files","vault","pages","artifacts","workflows","routines","triggers","schedules","sessions","resources","anchor","config","memory","evals","calls","ops","mods","explore","windows","orchestration","cli","repo"]);function _(e){const t=e.split("?")[0].split("#")[0].match(/^\/([^/]+)$/);return!!t&&!E.has(t[1])}function k(e){return!e||_(e)?!1:!te.some(t=>t.test(e))}function oe(e){const t=new URLSearchParams(e||"");return t.has("code")&&t.has("state")}function H(e){return/^(www\.)?codecast\.sh$/i.test(e)}function T(){return typeof document>"u"?!1:document.visibilityState==="visible"&&document.hasFocus()}const P="codecast-agent-tab",p="cast:driven";function S(){return m(P)==="1"}function N(){try{const e=performance.getEntriesByType("navigation")[0];return e?e.type==="navigate":!0}catch{return!0}}function O(e){return!(e.isDesktop||e.agentDriven||!e.initialized||!e.hasUsedDesktop||e.preferBrowser||!e.isTopWindow||!e.foreground||!H(e.host)||!e.freshNavigation||!k(e.path)||oe(e.search)||e.skippedUrl!==null&&e.skippedUrl===e.path+e.search)}const c="codecast-desktop-handoff",F="dev",h="codecast-handoff-skip",f="codecast-handoff-prefer-browser",L="__ccHandoffPending",$="__ccHandoffHold",b="data-cc-handoff",I="data-cc-handoff-kept",x="data-cc-handoff-action",ne="data-cc-handoff-modifier",g=12e4;function re(e){try{return localStorage.getItem(e)}catch{return null}}function m(e){try{return sessionStorage.getItem(e)}catch{return null}}function R(e){try{e?localStorage.setItem(c,"1"):localStorage.removeItem(c)}catch{}}function C(e){try{sessionStorage.setItem(h,e)}catch{}}function B(){return m(h)}function ie(){if(m(f)!=="1")return!1;try{sessionStorage.removeItem(f)}catch{}return!0}function u(e){return e.mirror?O({isDesktop:e.isDesktopShell,initialized:!0,hasUsedDesktop:!0,preferBrowser:!1,isTopWindow:e.isTopWindow,foreground:e.foreground,host:e.mirror===F?"codecast.sh":e.host,freshNavigation:e.freshNavigation,path:e.path,search:e.search,skippedUrl:e.skippedUrl,agentDriven:e.agentDriven}):!1}function U(e){return u(e)?"handoff":e.foreground?"boot":u({...e,foreground:!0})?"hold":"boot"}function se(){return window.__CODECAST_ELECTRON__?!0:typeof navigator<"u"&&/ Electron\//.test(navigator.userAgent)}function M(){return window.location.pathname+window.location.search}function A(){return{mirror:re(c),isDesktopShell:se(),isTopWindow:window.top===window.self,foreground:T(),host:window.location.host,freshNavigation:N(),path:window.location.pathname,search:window.location.search,skippedUrl:B(),agentDriven:S()}}function v(e){window.location.href=D(M(),e)}function G(e,t){const o=Date.now(),n=()=>{clearTimeout(s),window.removeEventListener("focus",i),document.removeEventListener("visibilitychange",i)},r=()=>{n(),t?.()},i=()=>{if(Date.now()-o>g){r();return}e()&&n()},s=setTimeout(r,g);return window.addEventListener("focus",i),document.addEventListener("visibilitychange",i),n}function ae(e){const t=window;if(t[L])return;const o=t[$];if(!o){e();return}o.then(n=>{n||e()})}function K(e){const t=document.documentElement;t.setAttribute(b,"");const o=()=>{t.removeAttribute(b),t.removeAttribute(I),document.removeEventListener("click",n)},n=r=>ce(r,e,o);return document.addEventListener("click",n),o}function ce(e,t,o){const r=e.target?.closest?.(`[${x}]`)?.getAttribute(x);if(r){if(r==="close"){fe();return}if(r==="retry"){v();return}if(r==="always")if(R(!1),t.booted)t.onAlways?.();else try{sessionStorage.setItem(f,"1")}catch{}C(M()),t.booted?o():window.location.reload()}}function fe(){const e=document.documentElement,t=/Mac|iPhone|iPad/.test(navigator.platform||"");for(const o of Array.from(document.querySelectorAll(`[${ne}]`)))o.textContent=t?"\u2318":"Ctrl";e.setAttribute(I,""),window.close()}function V(e){return/^\/share\/[a-z]+\/[^/]+\/?$/.test(e)||/^\/meet\/[^/]+\/?$/.test(e)}function ue(e,t=[],o=[]){if(typeof window>"u"||typeof document>"u")return;let n="boot";try{n=U(A())}catch{}const r=()=>{const i=window.location.pathname,s=V(i)?t:/^\/(?:inbox(?:\/|$)|conversation\/)/.test(i)?[...e,...o]:e;le([...new Set(s)])};if(n==="boot"){r();return}if(n==="handoff"){y();return}window[$]=new Promise(i=>{const s=()=>{Y(),document.removeEventListener(p,s),r(),i(!1)},Y=G(()=>{let w=!1;try{w=u(A())}catch{}return w?(y(),i(!0),!0):!1},s);document.addEventListener(p,s)})}function y(){window[L]=!0,K({booted:!1}),z(()=>v({auto:!0}))}function z(e){if(document.readyState!=="loading"){setTimeout(e,0);return}const t=()=>{document.readyState!=="loading"&&(document.removeEventListener("readystatechange",t),e())};document.addEventListener("readystatechange",t)}function le(e){for(const t of e){const o=document.createElement("link");o.rel="modulepreload",o.crossOrigin="anonymous",o.href=t,document.head.appendChild(o)}}function de(e){return e.match(/^\/conversation\/([^/?#]+)/)?.[1]??null}function pe(e){const t=e.match(/^\/conversation\/([^/?#]+)$/)?.[1];return t&&/^[a-z0-9]{32}$/.test(t)?t:null}function ge(e){const t=e.indexOf("?");return t===-1?null:new URLSearchParams(e.slice(t+1)).get("share")}return X(he);})();
+;__ccHandoffBoot.runPreBootHandoff(["/__jx77prj-after/assets/page-BEMrjeo3.js","/__jx77prj-after/assets/vendor-BRSpyZc9.js","/__jx77prj-after/assets/lineWorkspaceUrl-HbLDNrsj.js","/__jx77prj-after/assets/index-BpARccK_.js","/__jx77prj-after/assets/dexie-BEFYTs6O.js","/__jx77prj-after/assets/convex-pL9slGJ3.js","/__jx77prj-after/assets/sentry-C0kWfPzV.js","/__jx77prj-after/assets/AuthGuard-CPpQGOab.js","/__jx77prj-after/assets/authGuard-LQ_QTIcc.js","/__jx77prj-after/assets/index-DXIvynXe.js","/__jx77prj-after/assets/highlight-9pfC9kl-.js","/__jx77prj-after/assets/ui-DVb64tq5.js","/__jx77prj-after/assets/diff-05CVVOnl.js","/__jx77prj-after/assets/markdown-B7kiGmIT.js","/__jx77prj-after/assets/LinePage-UYKCzV7G.js","/__jx77prj-after/assets/useLineWorkspace-CqqIKl1_.js","/__jx77prj-after/assets/useSyncSessionDecisions-BUczJo1b.js","/__jx77prj-after/assets/useSyncRuns-ByIO4Qjz.js","/__jx77prj-after/assets/useLineAdmission-DMaOV7cv.js","/__jx77prj-after/assets/LineValueRow-M2vq_zjV.js","/__jx77prj-after/assets/superseded-Dkj_-nfP.js","/__jx77prj-after/assets/useLineFloor-D9X8qZkj.js","/__jx77prj-after/assets/useSyncTasks-Cp0xUjdE.js","/__jx77prj-after/assets/reconcileCrawl-DMMiDu_a.js","/__jx77prj-after/assets/useBootstrapCollection-BkGf_M1u.js","/__jx77prj-after/assets/useSyncProjects-Cb5LmyKL.js","/__jx77prj-after/assets/lineModel-DkW48880.js","/__jx77prj-after/assets/lineTrace-DRUYs5vw.js","/__jx77prj-after/assets/parts-qflFaIyE.js","/__jx77prj-after/assets/WorkflowGraphView-MzyRjli-.js","/__jx77prj-after/assets/index-DZtFW_Qg.js","/__jx77prj-after/assets/transform-Bze3wRRv.js","/__jx77prj-after/assets/pointer-Drloq0xg.js","/__jx77prj-after/assets/value-DhOZQ6hI.js","/__jx77prj-after/assets/tiptap-B90lm-rT.js","/__jx77prj-after/assets/stillFlow-BvVHobg0.js","/__jx77prj-after/assets/lineBoard-BjyGkTNp.js","/__jx77prj-after/assets/CustomizedLineChip-CZ22FR2h.js","/__jx77prj-after/assets/useLineCause-CUYcRamH.js","/__jx77prj-after/assets/visitOutput-DREHG51p.js","/__jx77prj-after/assets/LineWorkspace-BBhNW2Dj.js","/__jx77prj-after/assets/LineDrawer-Chl1Wt9u.js","/__jx77prj-after/assets/MomentView-Dq1GBiTe.js","/__jx77prj-after/assets/ProductView-yKaIkYeE.js","/__jx77prj-after/assets/arrow-down-left-C9GBev87.js","/__jx77prj-after/assets/TimelineChart-B9N-Fkep.js","/__jx77prj-after/assets/corner-down-right-BSgyxp39.js","/__jx77prj-after/assets/RunReport-BLb2S2Nm.js","/__jx77prj-after/assets/hand-FQkmDN7Q.js","/__jx77prj-after/assets/trialStopLedgers-v37j_ShU.js","/__jx77prj-after/assets/useSyncDecisionDetail-Fyw1pbOK.js","/__jx77prj-after/assets/view-NRhKsaft.js","/__jx77prj-after/assets/useSyncOps-u5pHFuJp.js","/__jx77prj-after/assets/TrialStopActs-D4NDvXnM.js","/__jx77prj-after/assets/useRunCost-D1ELo_Nq.js","/__jx77prj-after/assets/useSyncTaskEvidence-Cgn67wD4.js","/__jx77prj-after/assets/PromptDiff-BapWgIDi.js","/__jx77prj-after/assets/SessionInlineThread-CR4VEBfZ.js","/__jx77prj-after/assets/pendingSend-boqNAsah.js","/__jx77prj-after/assets/MintTokenDialog-B4pyQCnF.js","/__jx77prj-after/assets/endpoint-CULoGtBW.js","/__jx77prj-after/assets/solTheme-CcH_lfY2.js","/__jx77prj-after/assets/useWsConnected-CJ7DhUHN.js","/__jx77prj-after/assets/bot-DrU0-NMU.js","/__jx77prj-after/assets/command-BmuID85r.js","/__jx77prj-after/assets/badge-plus-Cglkp-M5.js","/__jx77prj-after/assets/providerKeyCrypto-DMgvRBnc.js","/__jx77prj-after/assets/SessionActivityLine-J68P-cDU.js","/__jx77prj-after/assets/merge-B628j6Z2.js","/__jx77prj-after/assets/classify-DZWC4zpn.js","/__jx77prj-after/assets/agentToolSetup-C3-t9kJo.js","/__jx77prj-after/assets/castCommand-arDgIDEa.js","/__jx77prj-after/assets/turnBlocks-B-zhumhz.js","/__jx77prj-after/assets/castBlocks-Dv9KGaYc.js","/__jx77prj-after/assets/BrowserStream-BdcHFlZq.js","/__jx77prj-after/assets/CursorArrow-rLlFften.js","/__jx77prj-after/assets/mouse-pointer-click-B-wyntZw.js","/__jx77prj-after/assets/sessionChrome-kAJ3q-Zy.js","/__jx77prj-after/assets/index-ry7-b6EJ.js","/__jx77prj-after/assets/useProviderKeyCommand-CwKzgbdd.js","/__jx77prj-after/assets/info-D6Wn11pc.js","/__jx77prj-after/assets/hourglass-BuqfhSpY.js","/__jx77prj-after/assets/timer-reset-7M8WVM4d.js","/__jx77prj-after/assets/steps-BN501nQe.js","/__jx77prj-after/assets/modelSwitch-C2RDw6G5.js","/__jx77prj-after/assets/usePinnedAgents-D47cxUZ7.js","/__jx77prj-after/assets/handoffWeb-D65mtr63.js","/__jx77prj-after/assets/agentColors-B7o08fXv.js","/__jx77prj-after/assets/useDynamicModels-BNjGfQJh.js","/__jx77prj-after/assets/archive-restore-DKl7-f9q.js","/__jx77prj-after/assets/archive-C61wT2sB.js","/__jx77prj-after/assets/download-BywcvtEn.js","/__jx77prj-after/assets/move-right-CSK8rJnA.js","/__jx77prj-after/assets/split-CRfSuP9Y.js","/__jx77prj-after/assets/spinner-BSvalns5.js","/__jx77prj-after/assets/list-collapse-BiJfT-J6.js","/__jx77prj-after/assets/gallery-vertical-end-QgdLAzz1.js","/__jx77prj-after/assets/git-commit-vertical-D9i_FyUD.js","/__jx77prj-after/assets/book-open-text-M1dyih-c.js","/__jx77prj-after/assets/TriggerPromptView-BLaNqZvy.js","/__jx77prj-after/assets/SplitResizeHandle-BjnQQ5Sh.js","/__jx77prj-after/assets/square-dashed-mouse-pointer-DnHqebmS.js","/__jx77prj-after/assets/conversationBlockStyles-DheviUej.js","/__jx77prj-after/assets/corner-down-left-Cu1z8iKE.js","/__jx77prj-after/assets/cloud-CxRLqkqE.js","/__jx77prj-after/assets/at-sign-CvDeWOet.js","/__jx77prj-after/assets/unifiedDiffParser-Bq1i451G.js","/__jx77prj-after/assets/corner-up-right-Beo0D7UF.js","/__jx77prj-after/assets/book-open-Ci7Ex8Zt.js","/__jx77prj-after/assets/followRestoredConversation-z1v-smk2.js","/__jx77prj-after/assets/corner-up-left-DzpV65n5.js","/__jx77prj-after/assets/AgentToolSetupCard-Cb1rRUUP.js","/__jx77prj-after/assets/bookmark-B_ld6ROU.js","/__jx77prj-after/assets/MessageInput-CLAgfltc.js","/__jx77prj-after/assets/TopUpLink-EbEtHQoQ.js","/__jx77prj-after/assets/useHostedAskGate-KhwY5GYs.js","/__jx77prj-after/assets/draftImages-DC79c7gL.js","/__jx77prj-after/assets/MentionMenu-CKbCvFy_.js","/__jx77prj-after/assets/slash-xETBLlVp.js","/__jx77prj-after/assets/shield-B7oXiu1Z.js","/__jx77prj-after/assets/ComposerShell-D1NIpgwr.js","/__jx77prj-after/assets/holdTextareaTextNode-De1Mwur4.js","/__jx77prj-after/assets/useMentionQuery-CBLUMn-v.js","/__jx77prj-after/assets/scopeModel-qWgN2qfa.js","/__jx77prj-after/assets/universalSearch-BNLZ_U5a.js","/__jx77prj-after/assets/fsBrowse-C2EiIOgk.js","/__jx77prj-after/assets/minimize-2-BIZfVi6r.js","/__jx77prj-after/assets/threads-BARx93hV.js","/__jx77prj-after/assets/panel-right-DwVymTv1.js","/__jx77prj-after/assets/wrench-h1zwH3LV.js","/__jx77prj-after/assets/lineStart-sCiL5Sgu.js","/__jx77prj-after/assets/useShipTarget-Cm43OqoI.js","/__jx77prj-after/assets/useSyncChangeFeed-OJIKd7Hq.js","/__jx77prj-after/assets/DecisionAnswering-CWNRrLob.js","/__jx77prj-after/assets/SupersededNote-B2WBVMq4.js","/__jx77prj-after/assets/DecisionSections-BI86TUXT.js","/__jx77prj-after/assets/user-round-x-Bx8H6GMM.js","/__jx77prj-after/assets/user-round-plus-CZ0HQdKd.js","/__jx77prj-after/assets/shapes-Cck_OYh8.js","/__jx77prj-after/assets/arrow-down-wide-narrow-Bj1F2o1e.js","/__jx77prj-after/assets/rows-3-X-2BaUaJ.js","/__jx77prj-after/assets/square-stack-QMbkOKR6.js","/__jx77prj-after/assets/FlowDiagram-B4nUomB-.js","/__jx77prj-after/assets/square-terminal-Ci08IMWr.js","/__jx77prj-after/assets/FlowFence-BBsSWIze.js","/__jx77prj-after/assets/index-BlxqDo4M.js","/__jx77prj-after/assets/sliders-horizontal-BhD9nvpJ.js","/__jx77prj-after/assets/circle-alert-DY_3zMZo.js","/__jx77prj-after/assets/history-B0Qracer.js","/__jx77prj-after/assets/page-4SbYGvle.js","/__jx77prj-after/assets/page-COYvjbAG.js","/__jx77prj-after/assets/boot-B2KR0yOc.js","/__jx77prj-after/assets/DashboardLayout-VTcdaoeE.js","/__jx77prj-after/assets/HostedNotice-D57kfJWT.js","/__jx77prj-after/assets/omega-DyoMotnh.js","/__jx77prj-after/assets/infinity-C1DyX8p8.js","/__jx77prj-after/assets/box-DrQ7CBoL.js","/__jx77prj-after/assets/triangle-I0VWPFbT.js","/__jx77prj-after/assets/dna-CRxILnFh.js","/__jx77prj-after/assets/atom-ClW0nCjS.js","/__jx77prj-after/assets/bolt-K96lsM-j.js","/__jx77prj-after/assets/moon-DesqaELs.js","/__jx77prj-after/assets/sun-BG2f9Uyj.js","/__jx77prj-after/assets/tree-pine-BtUwHYA-.js","/__jx77prj-after/assets/mountain-L2RfgNed.js","/__jx77prj-after/assets/compass-BTy1lRwn.js","/__jx77prj-after/assets/anchor-B4DPJmy7.js","/__jx77prj-after/assets/sword-BSrgahtN.js","/__jx77prj-after/assets/crown-DpBZM1Vy.js","/__jx77prj-after/assets/diamond-Dw71Jcsn.js","/__jx77prj-after/assets/star-D3udGjpJ.js","/__jx77prj-after/assets/flame-CgnPoMGT.js","/__jx77prj-after/assets/sessionLifecycle-BONFozC-.js","/__jx77prj-after/assets/useLocalDeviceId-CzHmXtqC.js","/__jx77prj-after/assets/unplug-CcBeAsHt.js","/__jx77prj-after/assets/useSyncTriggers-CB6YDx0i.js","/__jx77prj-after/assets/triggerTasks-B4492RQF.js","/__jx77prj-after/assets/pin-off-CtJCuIQq.js","/__jx77prj-after/assets/useResourceMonitor-D8aUmUsP.js","/__jx77prj-after/assets/useSyncManagedSessions-UV6F5E_B.js","/__jx77prj-after/assets/resourceModel-BadGKxTh.js","/__jx77prj-after/assets/shuffle-BO02uoOe.js","/__jx77prj-after/assets/useSyncExternalEvents-BNG-k4Aq.js","/__jx77prj-after/assets/folder-down-ClJ8JIVD.js","/__jx77prj-after/assets/browserPaneOffer-DfwbBZRh.js","/__jx77prj-after/assets/repeat-eOC-qpbe.js","/__jx77prj-after/assets/useIsPhone-D2QhCIMB.js","/__jx77prj-after/assets/cpu-Dv6Ur-Te.js","/__jx77prj-after/assets/smile-DDBcSEvA.js","/__jx77prj-after/assets/react-resizable-panels-DnNsHKh4.js","/__jx77prj-after/assets/circle-user-D4BAV_Y7.js","/__jx77prj-after/assets/settings-CFhAuhZa.js","/__jx77prj-after/assets/house-D_3VPOA5.js","/__jx77prj-after/assets/monitor-smartphone-Kzd3xzKt.js","/__jx77prj-after/assets/arrow-left-right-CSO5JZD5.js","/__jx77prj-after/assets/log-out-DMrp21R1.js","/__jx77prj-after/assets/calendar-clock-G1IFQ6J3.js","/__jx77prj-after/assets/waypoints-CSEE4rHp.js","/__jx77prj-after/assets/library-CCnf_LkX.js","/__jx77prj-after/assets/useNeedsInputCount-BvVPVLv2.js","/__jx77prj-after/assets/useThreadsSync-z2sHHG_i.js","/__jx77prj-after/assets/useSwitchWorkspace-CkpYJYo3.js","/__jx77prj-after/assets/useOpenDm-D8dXhwDO.js","/__jx77prj-after/assets/unlink-CSdoNIqW.js","/__jx77prj-after/assets/text-align-start-DV8z23Oo.js","/__jx77prj-after/assets/ObjectContextMenus-DZrmcAHp.js","/__jx77prj-after/assets/taskActions-D50OxDru.js","/__jx77prj-after/assets/mail-open-GO4CPGHy.js","/__jx77prj-after/assets/bell-DWpGuXQO.js","/__jx77prj-after/assets/ui-A6lDfRWh.js","/__jx77prj-after/assets/popOut-DXJJ8O_4.js","/__jx77prj-after/assets/app-window-mac-CMolBOWr.js","/__jx77prj-after/assets/picture-in-picture-2-tRejicfZ.js","/__jx77prj-after/assets/user-minus-CPIc_S2q.js","/__jx77prj-after/assets/square-pen-DuTJzQj7.js","/__jx77prj-after/assets/bell-off-DGdJhiRC.js","/__jx77prj-after/assets/sheet-iCsYoaTY.js","/__jx77prj-after/assets/useSyncDocs-B9BPRa-V.js","/__jx77prj-after/assets/undoWalk-WCuE52hV.js","/__jx77prj-after/assets/useTriggerKillNotice-BK4IX2h_.js","/__jx77prj-after/assets/palette-dX6GYgU1.js","/__jx77prj-after/assets/HealthStrip-BHdJhLnZ.js","/__jx77prj-after/assets/cloud-upload-CA_PTypw.js","/__jx77prj-after/assets/bell-ring-CaYY7-zg.js","/__jx77prj-after/assets/image-BoEVxxmK.js","/__jx77prj-after/assets/camera-BIqcxR-L.js","/__jx77prj-after/assets/cloud-off-BPFlbOU0.js","/__jx77prj-after/assets/hard-drive-CH2KnGM0.js","/__jx77prj-after/assets/zap-off-sZyMhSL4.js","/__jx77prj-after/assets/panel-bottom-p42PXHqS.js","/__jx77prj-after/assets/useFaceRow-CgdPY8T0.js","/__jx77prj-after/assets/peopleRoster-yhA61FHG.js","/__jx77prj-after/assets/mic-off-CGW30rl_.js","/__jx77prj-after/assets/video-off-BGPoNn--.js","/__jx77prj-after/assets/phone-off-CaOj3C-y.js","/__jx77prj-after/assets/RecordingMark-Bf23rI63.js","/__jx77prj-after/assets/useFollowSurface-CgVDkFk7.js","/__jx77prj-after/assets/wakeCost-B5mkuZaA.js","/__jx77prj-after/assets/calendar-plus-C7t5-99f.js","/__jx77prj-after/assets/list-DvNF29PG.js","/__jx77prj-after/assets/AssistantScopeSwitch-DxLmiK5c.js","/__jx77prj-after/assets/funnel-x-g7PgyfEo.js","/__jx77prj-after/assets/funnel-CemxPmCi.js","/__jx77prj-after/assets/StageSplitView-Dj7vLRzu.js","/__jx77prj-after/assets/indexSingleton-5TwNwEcO.js","/__jx77prj-after/assets/parseNote-g0H1m43O.js","/__jx77prj-after/assets/client-DbO4ImMs.js","/__jx77prj-after/assets/reveal-NUYjFNAh.js","/__jx77prj-after/assets/redo-2-BqgKfYKk.js","/__jx77prj-after/assets/ban-fRikenPP.js","/__jx77prj-after/assets/panels-top-left-DlfgZldH.js","/__jx77prj-after/assets/arrow-right-to-line-B1Qt-uR1.js","/__jx77prj-after/assets/menu-Dj7NnZ59.js","/__jx77prj-after/assets/panel-left-kmZyIzL_.js","/__jx77prj-after/assets/monitor-down-C-bZVSqW.js","/__jx77prj-after/assets/activity-CTBv2kp4.js","/__jx77prj-after/assets/octagon-alert-CRmtCji4.js","/__jx77prj-after/assets/heart-pulse-C7h93BDB.js","/__jx77prj-after/assets/shield-alert-RlLdkLba.js"],["/__jx77prj-after/assets/shareBoot-culI8Jcs.js","/__jx77prj-after/assets/index-BpARccK_.js","/__jx77prj-after/assets/vendor-BRSpyZc9.js","/__jx77prj-after/assets/lineWorkspaceUrl-HbLDNrsj.js","/__jx77prj-after/assets/dexie-BEFYTs6O.js","/__jx77prj-after/assets/convex-pL9slGJ3.js","/__jx77prj-after/assets/sentry-C0kWfPzV.js","/__jx77prj-after/assets/index-DXIvynXe.js","/__jx77prj-after/assets/highlight-9pfC9kl-.js","/__jx77prj-after/assets/ui-DVb64tq5.js","/__jx77prj-after/assets/diff-05CVVOnl.js","/__jx77prj-after/assets/markdown-B7kiGmIT.js","/__jx77prj-after/assets/page-CeX22TGp.js","/__jx77prj-after/assets/sharePreload-pNgUd5y6.js","/__jx77prj-after/assets/page-Df96gjx6.js","/__jx77prj-after/assets/SharedObjectPage-BAe1jMcD.js","/__jx77prj-after/assets/unlink-CSdoNIqW.js","/__jx77prj-after/assets/page-BQ9jtOLn.js","/__jx77prj-after/assets/page-YJagZ3L-.js","/__jx77prj-after/assets/page-BU7-cOnI.js","/__jx77prj-after/assets/useCallMomentLanding-NQ7QtUwA.js","/__jx77prj-after/assets/RecordingMark-Bf23rI63.js","/__jx77prj-after/assets/useIsPhone-D2QhCIMB.js","/__jx77prj-after/assets/volume-x-Byjl5Ah6.js","/__jx77prj-after/assets/volume-2-Ho0M4_Ch.js","/__jx77prj-after/assets/minimize-2-BIZfVi6r.js","/__jx77prj-after/assets/page-B6_vNpFb.js","/__jx77prj-after/assets/page-CJGZKEO1.js","/__jx77prj-after/assets/page-CLWDavE8.js","/__jx77prj-after/assets/DecisionView-sBosSeeQ.js","/__jx77prj-after/assets/star-D3udGjpJ.js","/__jx77prj-after/assets/page-D9WUE3Ik.js","/__jx77prj-after/assets/page-CPvpDi9g.js","/__jx77prj-after/assets/page-BoAyAYta.js"],["/__jx77prj-after/assets/ConversationDiffLayout-C1k0AASj.js"])</script>
+
+    <script>window.__ccDefaultColorTheme={"light":{"--sol-bg":"#edf3ee","--sol-bg-alt":"#e2eae3","--sol-bg-highlight":"color-mix(in srgb, var(--sol-text) 6%, #e2eae3)","--sol-bg-inset":"color-mix(in srgb, var(--sol-bg) 40%, #e2eae3)","--sol-card":"#f8fbf7","--sol-card-hover":"color-mix(in srgb, var(--sol-text) 3%, #f8fbf7)","--sol-border":"#c7d7cb","--sol-text":"#1a2d29","--sol-text-secondary":"color-mix(in srgb, #1a2d29 88%, var(--sol-bg))","--sol-text-muted":"#4a635b","--sol-text-muted0":"#4a635b","--sol-text-dim":"#7e958c","--sol-link":"#0d7a67","--sol-red":"#c3352b","--sol-class-red":"#c3352b","--sol-orange":"#c05d1c","--sol-class-orange":"#c05d1c","--sol-amber":"#a6740e","--sol-class-amber":"#a6740e","--sol-yellow":"#8c8211","--sol-class-yellow":"#8c8211","--sol-green":"#3d892d","--sol-class-green":"#3d892d","--sol-cyan":"#11807a","--sol-class-cyan":"#11807a","--sol-blue":"#2a66b4","--sol-class-blue":"#2a66b4","--sol-violet":"#694ebf","--sol-class-violet":"#694ebf","--sol-magenta":"#ae3977","--sol-class-magenta":"#ae3977","--background":"130 20% 94.1%","--foreground":"167.4 26.8% 13.9%","--card":"105 33.3% 97.6%","--card-foreground":"167.4 26.8% 13.9%","--popover":"105 33.3% 97.6%","--popover-foreground":"167.4 26.8% 13.9%","--primary":"167.4 26.8% 13.9%","--primary-foreground":"130 20% 94.1%","--secondary":"127.5 16% 90.2%","--secondary-foreground":"167.4 26.8% 13.9%","--muted":"127.5 16% 90.2%","--muted-foreground":"160.8 14.5% 33.9%","--accent":"127.5 16% 90.2%","--accent-foreground":"167.4 26.8% 13.9%","--border":"135 16.7% 81.2%","--input":"135 16.7% 81.2%","--ring":"160.8 14.5% 33.9%","--destructive":"3.9 63.9% 46.7%","--tw-c-slate-50":"color-mix(in srgb, var(--sol-text) 3%, var(--sol-bg))","--tw-c-slate-100":"color-mix(in srgb, var(--sol-text) 6%, var(--sol-bg))","--tw-c-slate-200":"color-mix(in srgb, var(--sol-text) 12%, var(--sol-bg))","--tw-c-slate-300":"color-mix(in srgb, var(--sol-text) 22%, var(--sol-bg))","--tw-c-slate-400":"color-mix(in srgb, var(--sol-text) 40%, var(--sol-bg))","--tw-c-slate-500":"color-mix(in srgb, var(--sol-text) 55%, var(--sol-bg))","--tw-c-slate-600":"color-mix(in srgb, var(--sol-text) 68%, var(--sol-bg))","--tw-c-slate-700":"color-mix(in srgb, var(--sol-text) 78%, var(--sol-bg))","--tw-c-slate-800":"color-mix(in srgb, var(--sol-text) 87%, var(--sol-bg))","--tw-c-slate-900":"color-mix(in srgb, var(--sol-text) 93%, var(--sol-bg))","--tw-c-slate-950":"color-mix(in srgb, var(--sol-text) 97%, var(--sol-bg))","--tw-c-gray-50":"color-mix(in srgb, var(--sol-text) 3%, var(--sol-bg))","--tw-c-gray-100":"color-mix(in srgb, var(--sol-text) 6%, var(--sol-bg))","--tw-c-gray-200":"color-mix(in srgb, var(--sol-text) 12%, var(--sol-bg))","--tw-c-gray-300":"color-mix(in srgb, var(--sol-text) 22%, var(--sol-bg))","--tw-c-gray-400":"color-mix(in srgb, var(--sol-text) 40%, var(--sol-bg))","--tw-c-gray-500":"color-mix(in srgb, var(--sol-text) 55%, var(--sol-bg))","--tw-c-gray-600":"color-mix(in srgb, var(--sol-text) 68%, var(--sol-bg))","--tw-c-gray-700":"color-mix(in srgb, var(--sol-text) 78%, var(--sol-bg))","--tw-c-gray-800":"color-mix(in srgb, var(--sol-text) 87%, var(--sol-bg))","--tw-c-gray-900":"color-mix(in srgb, var(--sol-text) 93%, var(--sol-bg))","--tw-c-gray-950":"color-mix(in srgb, var(--sol-text) 97%, var(--sol-bg))","--tw-c-zinc-50":"color-mix(in srgb, var(--sol-text) 3%, var(--sol-bg))","--tw-c-zinc-100":"color-mix(in srgb, var(--sol-text) 6%, var(--sol-bg))","--tw-c-zinc-200":"color-mix(in srgb, var(--sol-text) 12%, var(--sol-bg))","--tw-c-zinc-300":"color-mix(in srgb, var(--sol-text) 22%, var(--sol-bg))","--tw-c-zinc-400":"color-mix(in srgb, var(--sol-text) 40%, var(--sol-bg))","--tw-c-zinc-500":"color-mix(in srgb, var(--sol-text) 55%, var(--sol-bg))","--tw-c-zinc-600":"color-mix(in srgb, var(--sol-text) 68%, var(--sol-bg))","--tw-c-zinc-700":"color-mix(in srgb, var(--sol-text) 78%, var(--sol-bg))","--tw-c-zinc-800":"color-mix(in srgb, var(--sol-text) 87%, var(--sol-bg))","--tw-c-zinc-900":"color-mix(in srgb, var(--sol-text) 93%, var(--sol-bg))","--tw-c-zinc-950":"color-mix(in srgb, var(--sol-text) 97%, var(--sol-bg))","--tw-c-neutral-50":"color-mix(in srgb, var(--sol-text) 3%, var(--sol-bg))","--tw-c-neutral-100":"color-mix(in srgb, var(--sol-text) 6%, var(--sol-bg))","--tw-c-neutral-200":"color-mix(in srgb, var(--sol-text) 12%, var(--sol-bg))","--tw-c-neutral-300":"color-mix(in srgb, var(--sol-text) 22%, var(--sol-bg))","--tw-c-neutral-400":"color-mix(in srgb, var(--sol-text) 40%, var(--sol-bg))","--tw-c-neutral-500":"color-mix(in srgb, var(--sol-text) 55%, var(--sol-bg))","--tw-c-neutral-600":"color-mix(in srgb, var(--sol-text) 68%, var(--sol-bg))","--tw-c-neutral-700":"color-mix(in srgb, var(--sol-text) 78%, var(--sol-bg))","--tw-c-neutral-800":"color-mix(in srgb, var(--sol-text) 87%, var(--sol-bg))","--tw-c-neutral-900":"color-mix(in srgb, var(--sol-text) 93%, var(--sol-bg))","--tw-c-neutral-950":"color-mix(in srgb, var(--sol-text) 97%, var(--sol-bg))","--tw-c-stone-50":"color-mix(in srgb, var(--sol-text) 3%, var(--sol-bg))","--tw-c-stone-100":"color-mix(in srgb, var(--sol-text) 6%, var(--sol-bg))","--tw-c-stone-200":"color-mix(in srgb, var(--sol-text) 12%, var(--sol-bg))","--tw-c-stone-300":"color-mix(in srgb, var(--sol-text) 22%, var(--sol-bg))","--tw-c-stone-400":"color-mix(in srgb, var(--sol-text) 40%, var(--sol-bg))","--tw-c-stone-500":"color-mix(in srgb, var(--sol-text) 55%, var(--sol-bg))","--tw-c-stone-600":"color-mix(in srgb, var(--sol-text) 68%, var(--sol-bg))","--tw-c-stone-700":"color-mix(in srgb, var(--sol-text) 78%, var(--sol-bg))","--tw-c-stone-800":"color-mix(in srgb, var(--sol-text) 87%, var(--sol-bg))","--tw-c-stone-900":"color-mix(in srgb, var(--sol-text) 93%, var(--sol-bg))","--tw-c-stone-950":"color-mix(in srgb, var(--sol-text) 97%, var(--sol-bg))","--tw-c-red-50":"color-mix(in srgb, #c3352b 8%, var(--sol-bg))","--tw-c-red-100":"color-mix(in srgb, #c3352b 15%, var(--sol-bg))","--tw-c-red-200":"color-mix(in srgb, #c3352b 30%, var(--sol-bg))","--tw-c-red-300":"color-mix(in srgb, #c3352b 50%, var(--sol-bg))","--tw-c-red-400":"color-mix(in srgb, #c3352b 75%, var(--sol-bg))","--tw-c-red-500":"#c3352b","--tw-c-red-600":"color-mix(in srgb, #c3352b 85%, var(--sol-text))","--tw-c-red-700":"color-mix(in srgb, #c3352b 70%, var(--sol-text))","--tw-c-red-800":"color-mix(in srgb, #c3352b 55%, var(--sol-text))","--tw-c-red-900":"color-mix(in srgb, #c3352b 42%, var(--sol-text))","--tw-c-red-950":"color-mix(in srgb, #c3352b 28%, var(--sol-text))","--tw-c-rose-50":"color-mix(in srgb, #c3352b 8%, var(--sol-bg))","--tw-c-rose-100":"color-mix(in srgb, #c3352b 15%, var(--sol-bg))","--tw-c-rose-200":"color-mix(in srgb, #c3352b 30%, var(--sol-bg))","--tw-c-rose-300":"color-mix(in srgb, #c3352b 50%, var(--sol-bg))","--tw-c-rose-400":"color-mix(in srgb, #c3352b 75%, var(--sol-bg))","--tw-c-rose-500":"#c3352b","--tw-c-rose-600":"color-mix(in srgb, #c3352b 85%, var(--sol-text))","--tw-c-rose-700":"color-mix(in srgb, #c3352b 70%, var(--sol-text))","--tw-c-rose-800":"color-mix(in srgb, #c3352b 55%, var(--sol-text))","--tw-c-rose-900":"color-mix(in srgb, #c3352b 42%, var(--sol-text))","--tw-c-rose-950":"color-mix(in srgb, #c3352b 28%, var(--sol-text))","--tw-c-orange-50":"color-mix(in srgb, #c05d1c 8%, var(--sol-bg))","--tw-c-orange-100":"color-mix(in srgb, #c05d1c 15%, var(--sol-bg))","--tw-c-orange-200":"color-mix(in srgb, #c05d1c 30%, var(--sol-bg))","--tw-c-orange-300":"color-mix(in srgb, #c05d1c 50%, var(--sol-bg))","--tw-c-orange-400":"color-mix(in srgb, #c05d1c 75%, var(--sol-bg))","--tw-c-orange-500":"#c05d1c","--tw-c-orange-600":"color-mix(in srgb, #c05d1c 85%, var(--sol-text))","--tw-c-orange-700":"color-mix(in srgb, #c05d1c 70%, var(--sol-text))","--tw-c-orange-800":"color-mix(in srgb, #c05d1c 55%, var(--sol-text))","--tw-c-orange-900":"color-mix(in srgb, #c05d1c 42%, var(--sol-text))","--tw-c-orange-950":"color-mix(in srgb, #c05d1c 28%, var(--sol-text))","--tw-c-amber-50":"color-mix(in srgb, #a6740e 8%, var(--sol-bg))","--tw-c-amber-100":"color-mix(in srgb, #a6740e 15%, var(--sol-bg))","--tw-c-amber-200":"color-mix(in srgb, #a6740e 30%, var(--sol-bg))","--tw-c-amber-300":"color-mix(in srgb, #a6740e 50%, var(--sol-bg))","--tw-c-amber-400":"color-mix(in srgb, #a6740e 75%, var(--sol-bg))","--tw-c-amber-500":"#a6740e","--tw-c-amber-600":"color-mix(in srgb, #a6740e 85%, var(--sol-text))","--tw-c-amber-700":"color-mix(in srgb, #a6740e 70%, var(--sol-text))","--tw-c-amber-800":"color-mix(in srgb, #a6740e 55%, var(--sol-text))","--tw-c-amber-900":"color-mix(in srgb, #a6740e 42%, var(--sol-text))","--tw-c-amber-950":"color-mix(in srgb, #a6740e 28%, var(--sol-text))","--tw-c-yellow-50":"color-mix(in srgb, #8c8211 8%, var(--sol-bg))","--tw-c-yellow-100":"color-mix(in srgb, #8c8211 15%, var(--sol-bg))","--tw-c-yellow-200":"color-mix(in srgb, #8c8211 30%, var(--sol-bg))","--tw-c-yellow-300":"color-mix(in srgb, #8c8211 50%, var(--sol-bg))","--tw-c-yellow-400":"color-mix(in srgb, #8c8211 75%, var(--sol-bg))","--tw-c-yellow-500":"#8c8211","--tw-c-yellow-600":"color-mix(in srgb, #8c8211 85%, var(--sol-text))","--tw-c-yellow-700":"color-mix(in srgb, #8c8211 70%, var(--sol-text))","--tw-c-yellow-800":"color-mix(in srgb, #8c8211 55%, var(--sol-text))","--tw-c-yellow-900":"color-mix(in srgb, #8c8211 42%, var(--sol-text))","--tw-c-yellow-950":"color-mix(in srgb, #8c8211 28%, var(--sol-text))","--tw-c-lime-50":"color-mix(in srgb, #8c8211 8%, var(--sol-bg))","--tw-c-lime-100":"color-mix(in srgb, #8c8211 15%, var(--sol-bg))","--tw-c-lime-200":"color-mix(in srgb, #8c8211 30%, var(--sol-bg))","--tw-c-lime-300":"color-mix(in srgb, #8c8211 50%, var(--sol-bg))","--tw-c-lime-400":"color-mix(in srgb, #8c8211 75%, var(--sol-bg))","--tw-c-lime-500":"#8c8211","--tw-c-lime-600":"color-mix(in srgb, #8c8211 85%, var(--sol-text))","--tw-c-lime-700":"color-mix(in srgb, #8c8211 70%, var(--sol-text))","--tw-c-lime-800":"color-mix(in srgb, #8c8211 55%, var(--sol-text))","--tw-c-lime-900":"color-mix(in srgb, #8c8211 42%, var(--sol-text))","--tw-c-lime-950":"color-mix(in srgb, #8c8211 28%, var(--sol-text))","--tw-c-green-50":"color-mix(in srgb, #3d892d 8%, var(--sol-bg))","--tw-c-green-100":"color-mix(in srgb, #3d892d 15%, var(--sol-bg))","--tw-c-green-200":"color-mix(in srgb, #3d892d 30%, var(--sol-bg))","--tw-c-green-300":"color-mix(in srgb, #3d892d 50%, var(--sol-bg))","--tw-c-green-400":"color-mix(in srgb, #3d892d 75%, var(--sol-bg))","--tw-c-green-500":"#3d892d","--tw-c-green-600":"color-mix(in srgb, #3d892d 85%, var(--sol-text))","--tw-c-green-700":"color-mix(in srgb, #3d892d 70%, var(--sol-text))","--tw-c-green-800":"color-mix(in srgb, #3d892d 55%, var(--sol-text))","--tw-c-green-900":"color-mix(in srgb, #3d892d 42%, var(--sol-text))","--tw-c-green-950":"color-mix(in srgb, #3d892d 28%, var(--sol-text))","--tw-c-emerald-50":"color-mix(in srgb, #3d892d 8%, var(--sol-bg))","--tw-c-emerald-100":"color-mix(in srgb, #3d892d 15%, var(--sol-bg))","--tw-c-emerald-200":"color-mix(in srgb, #3d892d 30%, var(--sol-bg))","--tw-c-emerald-300":"color-mix(in srgb, #3d892d 50%, var(--sol-bg))","--tw-c-emerald-400":"color-mix(in srgb, #3d892d 75%, var(--sol-bg))","--tw-c-emerald-500":"#3d892d","--tw-c-emerald-600":"color-mix(in srgb, #3d892d 85%, var(--sol-text))","--tw-c-emerald-700":"color-mix(in srgb, #3d892d 70%, var(--sol-text))","--tw-c-emerald-800":"color-mix(in srgb, #3d892d 55%, var(--sol-text))","--tw-c-emerald-900":"color-mix(in srgb, #3d892d 42%, var(--sol-text))","--tw-c-emerald-950":"color-mix(in srgb, #3d892d 28%, var(--sol-text))","--tw-c-teal-50":"color-mix(in srgb, #11807a 8%, var(--sol-bg))","--tw-c-teal-100":"color-mix(in srgb, #11807a 15%, var(--sol-bg))","--tw-c-teal-200":"color-mix(in srgb, #11807a 30%, var(--sol-bg))","--tw-c-teal-300":"color-mix(in srgb, #11807a 50%, var(--sol-bg))","--tw-c-teal-400":"color-mix(in srgb, #11807a 75%, var(--sol-bg))","--tw-c-teal-500":"#11807a","--tw-c-teal-600":"color-mix(in srgb, #11807a 85%, var(--sol-text))","--tw-c-teal-700":"color-mix(in srgb, #11807a 70%, var(--sol-text))","--tw-c-teal-800":"color-mix(in srgb, #11807a 55%, var(--sol-text))","--tw-c-teal-900":"color-mix(in srgb, #11807a 42%, var(--sol-text))","--tw-c-teal-950":"color-mix(in srgb, #11807a 28%, var(--sol-text))","--tw-c-cyan-50":"color-mix(in srgb, #11807a 8%, var(--sol-bg))","--tw-c-cyan-100":"color-mix(in srgb, #11807a 15%, var(--sol-bg))","--tw-c-cyan-200":"color-mix(in srgb, #11807a 30%, var(--sol-bg))","--tw-c-cyan-300":"color-mix(in srgb, #11807a 50%, var(--sol-bg))","--tw-c-cyan-400":"color-mix(in srgb, #11807a 75%, var(--sol-bg))","--tw-c-cyan-500":"#11807a","--tw-c-cyan-600":"color-mix(in srgb, #11807a 85%, var(--sol-text))","--tw-c-cyan-700":"color-mix(in srgb, #11807a 70%, var(--sol-text))","--tw-c-cyan-800":"color-mix(in srgb, #11807a 55%, var(--sol-text))","--tw-c-cyan-900":"color-mix(in srgb, #11807a 42%, var(--sol-text))","--tw-c-cyan-950":"color-mix(in srgb, #11807a 28%, var(--sol-text))","--tw-c-sky-50":"color-mix(in srgb, #2a66b4 8%, var(--sol-bg))","--tw-c-sky-100":"color-mix(in srgb, #2a66b4 15%, var(--sol-bg))","--tw-c-sky-200":"color-mix(in srgb, #2a66b4 30%, var(--sol-bg))","--tw-c-sky-300":"color-mix(in srgb, #2a66b4 50%, var(--sol-bg))","--tw-c-sky-400":"color-mix(in srgb, #2a66b4 75%, var(--sol-bg))","--tw-c-sky-500":"#2a66b4","--tw-c-sky-600":"color-mix(in srgb, #2a66b4 85%, var(--sol-text))","--tw-c-sky-700":"color-mix(in srgb, #2a66b4 70%, var(--sol-text))","--tw-c-sky-800":"color-mix(in srgb, #2a66b4 55%, var(--sol-text))","--tw-c-sky-900":"color-mix(in srgb, #2a66b4 42%, var(--sol-text))","--tw-c-sky-950":"color-mix(in srgb, #2a66b4 28%, var(--sol-text))","--tw-c-blue-50":"color-mix(in srgb, #2a66b4 8%, var(--sol-bg))","--tw-c-blue-100":"color-mix(in srgb, #2a66b4 15%, var(--sol-bg))","--tw-c-blue-200":"color-mix(in srgb, #2a66b4 30%, var(--sol-bg))","--tw-c-blue-300":"color-mix(in srgb, #2a66b4 50%, var(--sol-bg))","--tw-c-blue-400":"color-mix(in srgb, #2a66b4 75%, var(--sol-bg))","--tw-c-blue-500":"#2a66b4","--tw-c-blue-600":"color-mix(in srgb, #2a66b4 85%, var(--sol-text))","--tw-c-blue-700":"color-mix(in srgb, #2a66b4 70%, var(--sol-text))","--tw-c-blue-800":"color-mix(in srgb, #2a66b4 55%, var(--sol-text))","--tw-c-blue-900":"color-mix(in srgb, #2a66b4 42%, var(--sol-text))","--tw-c-blue-950":"color-mix(in srgb, #2a66b4 28%, var(--sol-text))","--tw-c-indigo-50":"color-mix(in srgb, #694ebf 8%, var(--sol-bg))","--tw-c-indigo-100":"color-mix(in srgb, #694ebf 15%, var(--sol-bg))","--tw-c-indigo-200":"color-mix(in srgb, #694ebf 30%, var(--sol-bg))","--tw-c-indigo-300":"color-mix(in srgb, #694ebf 50%, var(--sol-bg))","--tw-c-indigo-400":"color-mix(in srgb, #694ebf 75%, var(--sol-bg))","--tw-c-indigo-500":"#694ebf","--tw-c-indigo-600":"color-mix(in srgb, #694ebf 85%, var(--sol-text))","--tw-c-indigo-700":"color-mix(in srgb, #694ebf 70%, var(--sol-text))","--tw-c-indigo-800":"color-mix(in srgb, #694ebf 55%, var(--sol-text))","--tw-c-indigo-900":"color-mix(in srgb, #694ebf 42%, var(--sol-text))","--tw-c-indigo-950":"color-mix(in srgb, #694ebf 28%, var(--sol-text))","--tw-c-violet-50":"color-mix(in srgb, #694ebf 8%, var(--sol-bg))","--tw-c-violet-100":"color-mix(in srgb, #694ebf 15%, var(--sol-bg))","--tw-c-violet-200":"color-mix(in srgb, #694ebf 30%, var(--sol-bg))","--tw-c-violet-300":"color-mix(in srgb, #694ebf 50%, var(--sol-bg))","--tw-c-violet-400":"color-mix(in srgb, #694ebf 75%, var(--sol-bg))","--tw-c-violet-500":"#694ebf","--tw-c-violet-600":"color-mix(in srgb, #694ebf 85%, var(--sol-text))","--tw-c-violet-700":"color-mix(in srgb, #694ebf 70%, var(--sol-text))","--tw-c-violet-800":"color-mix(in srgb, #694ebf 55%, var(--sol-text))","--tw-c-violet-900":"color-mix(in srgb, #694ebf 42%, var(--sol-text))","--tw-c-violet-950":"color-mix(in srgb, #694ebf 28%, var(--sol-text))","--tw-c-purple-50":"color-mix(in srgb, #694ebf 8%, var(--sol-bg))","--tw-c-purple-100":"color-mix(in srgb, #694ebf 15%, var(--sol-bg))","--tw-c-purple-200":"color-mix(in srgb, #694ebf 30%, var(--sol-bg))","--tw-c-purple-300":"color-mix(in srgb, #694ebf 50%, var(--sol-bg))","--tw-c-purple-400":"color-mix(in srgb, #694ebf 75%, var(--sol-bg))","--tw-c-purple-500":"#694ebf","--tw-c-purple-600":"color-mix(in srgb, #694ebf 85%, var(--sol-text))","--tw-c-purple-700":"color-mix(in srgb, #694ebf 70%, var(--sol-text))","--tw-c-purple-800":"color-mix(in srgb, #694ebf 55%, var(--sol-text))","--tw-c-purple-900":"color-mix(in srgb, #694ebf 42%, var(--sol-text))","--tw-c-purple-950":"color-mix(in srgb, #694ebf 28%, var(--sol-text))","--tw-c-fuchsia-50":"color-mix(in srgb, #ae3977 8%, var(--sol-bg))","--tw-c-fuchsia-100":"color-mix(in srgb, #ae3977 15%, var(--sol-bg))","--tw-c-fuchsia-200":"color-mix(in srgb, #ae3977 30%, var(--sol-bg))","--tw-c-fuchsia-300":"color-mix(in srgb, #ae3977 50%, var(--sol-bg))","--tw-c-fuchsia-400":"color-mix(in srgb, #ae3977 75%, var(--sol-bg))","--tw-c-fuchsia-500":"#ae3977","--tw-c-fuchsia-600":"color-mix(in srgb, #ae3977 85%, var(--sol-text))","--tw-c-fuchsia-700":"color-mix(in srgb, #ae3977 70%, var(--sol-text))","--tw-c-fuchsia-800":"color-mix(in srgb, #ae3977 55%, var(--sol-text))","--tw-c-fuchsia-900":"color-mix(in srgb, #ae3977 42%, var(--sol-text))","--tw-c-fuchsia-950":"color-mix(in srgb, #ae3977 28%, var(--sol-text))","--tw-c-pink-50":"color-mix(in srgb, #ae3977 8%, var(--sol-bg))","--tw-c-pink-100":"color-mix(in srgb, #ae3977 15%, var(--sol-bg))","--tw-c-pink-200":"color-mix(in srgb, #ae3977 30%, var(--sol-bg))","--tw-c-pink-300":"color-mix(in srgb, #ae3977 50%, var(--sol-bg))","--tw-c-pink-400":"color-mix(in srgb, #ae3977 75%, var(--sol-bg))","--tw-c-pink-500":"#ae3977","--tw-c-pink-600":"color-mix(in srgb, #ae3977 85%, var(--sol-text))","--tw-c-pink-700":"color-mix(in srgb, #ae3977 70%, var(--sol-text))","--tw-c-pink-800":"color-mix(in srgb, #ae3977 55%, var(--sol-text))","--tw-c-pink-900":"color-mix(in srgb, #ae3977 42%, var(--sol-text))","--tw-c-pink-950":"color-mix(in srgb, #ae3977 28%, var(--sol-text))"},"dark":{"--sol-bg":"#0e1918","--sol-bg-alt":"#13221f","--sol-bg-highlight":"color-mix(in srgb, var(--sol-text) 6%, #13221f)","--sol-bg-inset":"color-mix(in srgb, var(--sol-bg) 40%, #13221f)","--sol-card":"#172925","--sol-card-hover":"color-mix(in srgb, var(--sol-text) 3%, #172925)","--sol-border":"#233f39","--sol-text":"#d6e5dd","--sol-text-secondary":"color-mix(in srgb, #d6e5dd 88%, var(--sol-bg))","--sol-text-muted":"#93afa5","--sol-text-muted0":"#93afa5","--sol-text-dim":"#5e7c72","--sol-link":"#5fd6b9","--sol-red":"#f0645a","--sol-class-red":"#f0645a","--sol-orange":"#f08a4b","--sol-class-orange":"#f08a4b","--sol-amber":"#e3ad4a","--sol-class-amber":"#e3ad4a","--sol-yellow":"#d8cd6b","--sol-class-yellow":"#d8cd6b","--sol-green":"#7ec76b","--sol-class-green":"#7ec76b","--sol-cyan":"#4ccac0","--sol-class-cyan":"#4ccac0","--sol-blue":"#6aa8e8","--sol-class-blue":"#6aa8e8","--sol-violet":"#a28ee6","--sol-class-violet":"#a28ee6","--sol-magenta":"#e27aa9","--sol-class-magenta":"#e27aa9","--background":"174.5 28.2% 7.6%","--foreground":"148 22.4% 86.9%","--card":"166.7 28.1% 12.5%","--card-foreground":"148 22.4% 86.9%","--popover":"166.7 28.1% 12.5%","--popover-foreground":"148 22.4% 86.9%","--primary":"148 22.4% 86.9%","--primary-foreground":"174.5 28.2% 7.6%","--secondary":"168 28.3% 10.4%","--secondary-foreground":"148 22.4% 86.9%","--muted":"168 28.3% 10.4%","--muted-foreground":"158.6 14.9% 63.1%","--accent":"168 28.3% 10.4%","--accent-foreground":"148 22.4% 86.9%","--border":"167.1 28.6% 19.2%","--input":"167.1 28.6% 19.2%","--ring":"158.6 14.9% 63.1%","--destructive":"4 83.3% 64.7%","--tw-c-slate-50":"color-mix(in srgb, var(--sol-bg) 3%, var(--sol-text))","--tw-c-slate-100":"color-mix(in srgb, var(--sol-bg) 6%, var(--sol-text))","--tw-c-slate-200":"color-mix(in srgb, var(--sol-bg) 12%, var(--sol-text))","--tw-c-slate-300":"color-mix(in srgb, var(--sol-bg) 22%, var(--sol-text))","--tw-c-slate-400":"color-mix(in srgb, var(--sol-bg) 40%, var(--sol-text))","--tw-c-slate-500":"color-mix(in srgb, var(--sol-bg) 55%, var(--sol-text))","--tw-c-slate-600":"color-mix(in srgb, var(--sol-bg) 68%, var(--sol-text))","--tw-c-slate-700":"color-mix(in srgb, var(--sol-bg) 78%, var(--sol-text))","--tw-c-slate-800":"color-mix(in srgb, var(--sol-bg) 87%, var(--sol-text))","--tw-c-slate-900":"color-mix(in srgb, var(--sol-bg) 93%, var(--sol-text))","--tw-c-slate-950":"color-mix(in srgb, var(--sol-bg) 97%, var(--sol-text))","--tw-c-gray-50":"color-mix(in srgb, var(--sol-bg) 3%, var(--sol-text))","--tw-c-gray-100":"color-mix(in srgb, var(--sol-bg) 6%, var(--sol-text))","--tw-c-gray-200":"color-mix(in srgb, var(--sol-bg) 12%, var(--sol-text))","--tw-c-gray-300":"color-mix(in srgb, var(--sol-bg) 22%, var(--sol-text))","--tw-c-gray-400":"color-mix(in srgb, var(--sol-bg) 40%, var(--sol-text))","--tw-c-gray-500":"color-mix(in srgb, var(--sol-bg) 55%, var(--sol-text))","--tw-c-gray-600":"color-mix(in srgb, var(--sol-bg) 68%, var(--sol-text))","--tw-c-gray-700":"color-mix(in srgb, var(--sol-bg) 78%, var(--sol-text))","--tw-c-gray-800":"color-mix(in srgb, var(--sol-bg) 87%, var(--sol-text))","--tw-c-gray-900":"color-mix(in srgb, var(--sol-bg) 93%, var(--sol-text))","--tw-c-gray-950":"color-mix(in srgb, var(--sol-bg) 97%, var(--sol-text))","--tw-c-zinc-50":"color-mix(in srgb, var(--sol-bg) 3%, var(--sol-text))","--tw-c-zinc-100":"color-mix(in srgb, var(--sol-bg) 6%, var(--sol-text))","--tw-c-zinc-200":"color-mix(in srgb, var(--sol-bg) 12%, var(--sol-text))","--tw-c-zinc-300":"color-mix(in srgb, var(--sol-bg) 22%, var(--sol-text))","--tw-c-zinc-400":"color-mix(in srgb, var(--sol-bg) 40%, var(--sol-text))","--tw-c-zinc-500":"color-mix(in srgb, var(--sol-bg) 55%, var(--sol-text))","--tw-c-zinc-600":"color-mix(in srgb, var(--sol-bg) 68%, var(--sol-text))","--tw-c-zinc-700":"color-mix(in srgb, var(--sol-bg) 78%, var(--sol-text))","--tw-c-zinc-800":"color-mix(in srgb, var(--sol-bg) 87%, var(--sol-text))","--tw-c-zinc-900":"color-mix(in srgb, var(--sol-bg) 93%, var(--sol-text))","--tw-c-zinc-950":"color-mix(in srgb, var(--sol-bg) 97%, var(--sol-text))","--tw-c-neutral-50":"color-mix(in srgb, var(--sol-bg) 3%, var(--sol-text))","--tw-c-neutral-100":"color-mix(in srgb, var(--sol-bg) 6%, var(--sol-text))","--tw-c-neutral-200":"color-mix(in srgb, var(--sol-bg) 12%, var(--sol-text))","--tw-c-neutral-300":"color-mix(in srgb, var(--sol-bg) 22%, var(--sol-text))","--tw-c-neutral-400":"color-mix(in srgb, var(--sol-bg) 40%, var(--sol-text))","--tw-c-neutral-500":"color-mix(in srgb, var(--sol-bg) 55%, var(--sol-text))","--tw-c-neutral-600":"color-mix(in srgb, var(--sol-bg) 68%, var(--sol-text))","--tw-c-neutral-700":"color-mix(in srgb, var(--sol-bg) 78%, var(--sol-text))","--tw-c-neutral-800":"color-mix(in srgb, var(--sol-bg) 87%, var(--sol-text))","--tw-c-neutral-900":"color-mix(in srgb, var(--sol-bg) 93%, var(--sol-text))","--tw-c-neutral-950":"color-mix(in srgb, var(--sol-bg) 97%, var(--sol-text))","--tw-c-stone-50":"color-mix(in srgb, var(--sol-bg) 3%, var(--sol-text))","--tw-c-stone-100":"color-mix(in srgb, var(--sol-bg) 6%, var(--sol-text))","--tw-c-stone-200":"color-mix(in srgb, var(--sol-bg) 12%, var(--sol-text))","--tw-c-stone-300":"color-mix(in srgb, var(--sol-bg) 22%, var(--sol-text))","--tw-c-stone-400":"color-mix(in srgb, var(--sol-bg) 40%, var(--sol-text))","--tw-c-stone-500":"color-mix(in srgb, var(--sol-bg) 55%, var(--sol-text))","--tw-c-stone-600":"color-mix(in srgb, var(--sol-bg) 68%, var(--sol-text))","--tw-c-stone-700":"color-mix(in srgb, var(--sol-bg) 78%, var(--sol-text))","--tw-c-stone-800":"color-mix(in srgb, var(--sol-bg) 87%, var(--sol-text))","--tw-c-stone-900":"color-mix(in srgb, var(--sol-bg) 93%, var(--sol-text))","--tw-c-stone-950":"color-mix(in srgb, var(--sol-bg) 97%, var(--sol-text))","--tw-c-red-50":"color-mix(in srgb, #f0645a 8%, var(--sol-text))","--tw-c-red-100":"color-mix(in srgb, #f0645a 15%, var(--sol-text))","--tw-c-red-200":"color-mix(in srgb, #f0645a 30%, var(--sol-text))","--tw-c-red-300":"color-mix(in srgb, #f0645a 50%, var(--sol-text))","--tw-c-red-400":"color-mix(in srgb, #f0645a 75%, var(--sol-text))","--tw-c-red-500":"#f0645a","--tw-c-red-600":"color-mix(in srgb, #f0645a 85%, var(--sol-bg))","--tw-c-red-700":"color-mix(in srgb, #f0645a 70%, var(--sol-bg))","--tw-c-red-800":"color-mix(in srgb, #f0645a 55%, var(--sol-bg))","--tw-c-red-900":"color-mix(in srgb, #f0645a 42%, var(--sol-bg))","--tw-c-red-950":"color-mix(in srgb, #f0645a 28%, var(--sol-bg))","--tw-c-rose-50":"color-mix(in srgb, #f0645a 8%, var(--sol-text))","--tw-c-rose-100":"color-mix(in srgb, #f0645a 15%, var(--sol-text))","--tw-c-rose-200":"color-mix(in srgb, #f0645a 30%, var(--sol-text))","--tw-c-rose-300":"color-mix(in srgb, #f0645a 50%, var(--sol-text))","--tw-c-rose-400":"color-mix(in srgb, #f0645a 75%, var(--sol-text))","--tw-c-rose-500":"#f0645a","--tw-c-rose-600":"color-mix(in srgb, #f0645a 85%, var(--sol-bg))","--tw-c-rose-700":"color-mix(in srgb, #f0645a 70%, var(--sol-bg))","--tw-c-rose-800":"color-mix(in srgb, #f0645a 55%, var(--sol-bg))","--tw-c-rose-900":"color-mix(in srgb, #f0645a 42%, var(--sol-bg))","--tw-c-rose-950":"color-mix(in srgb, #f0645a 28%, var(--sol-bg))","--tw-c-orange-50":"color-mix(in srgb, #f08a4b 8%, var(--sol-text))","--tw-c-orange-100":"color-mix(in srgb, #f08a4b 15%, var(--sol-text))","--tw-c-orange-200":"color-mix(in srgb, #f08a4b 30%, var(--sol-text))","--tw-c-orange-300":"color-mix(in srgb, #f08a4b 50%, var(--sol-text))","--tw-c-orange-400":"color-mix(in srgb, #f08a4b 75%, var(--sol-text))","--tw-c-orange-500":"#f08a4b","--tw-c-orange-600":"color-mix(in srgb, #f08a4b 85%, var(--sol-bg))","--tw-c-orange-700":"color-mix(in srgb, #f08a4b 70%, var(--sol-bg))","--tw-c-orange-800":"color-mix(in srgb, #f08a4b 55%, var(--sol-bg))","--tw-c-orange-900":"color-mix(in srgb, #f08a4b 42%, var(--sol-bg))","--tw-c-orange-950":"color-mix(in srgb, #f08a4b 28%, var(--sol-bg))","--tw-c-amber-50":"color-mix(in srgb, #e3ad4a 8%, var(--sol-text))","--tw-c-amber-100":"color-mix(in srgb, #e3ad4a 15%, var(--sol-text))","--tw-c-amber-200":"color-mix(in srgb, #e3ad4a 30%, var(--sol-text))","--tw-c-amber-300":"color-mix(in srgb, #e3ad4a 50%, var(--sol-text))","--tw-c-amber-400":"color-mix(in srgb, #e3ad4a 75%, var(--sol-text))","--tw-c-amber-500":"#e3ad4a","--tw-c-amber-600":"color-mix(in srgb, #e3ad4a 85%, var(--sol-bg))","--tw-c-amber-700":"color-mix(in srgb, #e3ad4a 70%, var(--sol-bg))","--tw-c-amber-800":"color-mix(in srgb, #e3ad4a 55%, var(--sol-bg))","--tw-c-amber-900":"color-mix(in srgb, #e3ad4a 42%, var(--sol-bg))","--tw-c-amber-950":"color-mix(in srgb, #e3ad4a 28%, var(--sol-bg))","--tw-c-yellow-50":"color-mix(in srgb, #d8cd6b 8%, var(--sol-text))","--tw-c-yellow-100":"color-mix(in srgb, #d8cd6b 15%, var(--sol-text))","--tw-c-yellow-200":"color-mix(in srgb, #d8cd6b 30%, var(--sol-text))","--tw-c-yellow-300":"color-mix(in srgb, #d8cd6b 50%, var(--sol-text))","--tw-c-yellow-400":"color-mix(in srgb, #d8cd6b 75%, var(--sol-text))","--tw-c-yellow-500":"#d8cd6b","--tw-c-yellow-600":"color-mix(in srgb, #d8cd6b 85%, var(--sol-bg))","--tw-c-yellow-700":"color-mix(in srgb, #d8cd6b 70%, var(--sol-bg))","--tw-c-yellow-800":"color-mix(in srgb, #d8cd6b 55%, var(--sol-bg))","--tw-c-yellow-900":"color-mix(in srgb, #d8cd6b 42%, var(--sol-bg))","--tw-c-yellow-950":"color-mix(in srgb, #d8cd6b 28%, var(--sol-bg))","--tw-c-lime-50":"color-mix(in srgb, #d8cd6b 8%, var(--sol-text))","--tw-c-lime-100":"color-mix(in srgb, #d8cd6b 15%, var(--sol-text))","--tw-c-lime-200":"color-mix(in srgb, #d8cd6b 30%, var(--sol-text))","--tw-c-lime-300":"color-mix(in srgb, #d8cd6b 50%, var(--sol-text))","--tw-c-lime-400":"color-mix(in srgb, #d8cd6b 75%, var(--sol-text))","--tw-c-lime-500":"#d8cd6b","--tw-c-lime-600":"color-mix(in srgb, #d8cd6b 85%, var(--sol-bg))","--tw-c-lime-700":"color-mix(in srgb, #d8cd6b 70%, var(--sol-bg))","--tw-c-lime-800":"color-mix(in srgb, #d8cd6b 55%, var(--sol-bg))","--tw-c-lime-900":"color-mix(in srgb, #d8cd6b 42%, var(--sol-bg))","--tw-c-lime-950":"color-mix(in srgb, #d8cd6b 28%, var(--sol-bg))","--tw-c-green-50":"color-mix(in srgb, #7ec76b 8%, var(--sol-text))","--tw-c-green-100":"color-mix(in srgb, #7ec76b 15%, var(--sol-text))","--tw-c-green-200":"color-mix(in srgb, #7ec76b 30%, var(--sol-text))","--tw-c-green-300":"color-mix(in srgb, #7ec76b 50%, var(--sol-text))","--tw-c-green-400":"color-mix(in srgb, #7ec76b 75%, var(--sol-text))","--tw-c-green-500":"#7ec76b","--tw-c-green-600":"color-mix(in srgb, #7ec76b 85%, var(--sol-bg))","--tw-c-green-700":"color-mix(in srgb, #7ec76b 70%, var(--sol-bg))","--tw-c-green-800":"color-mix(in srgb, #7ec76b 55%, var(--sol-bg))","--tw-c-green-900":"color-mix(in srgb, #7ec76b 42%, var(--sol-bg))","--tw-c-green-950":"color-mix(in srgb, #7ec76b 28%, var(--sol-bg))","--tw-c-emerald-50":"color-mix(in srgb, #7ec76b 8%, var(--sol-text))","--tw-c-emerald-100":"color-mix(in srgb, #7ec76b 15%, var(--sol-text))","--tw-c-emerald-200":"color-mix(in srgb, #7ec76b 30%, var(--sol-text))","--tw-c-emerald-300":"color-mix(in srgb, #7ec76b 50%, var(--sol-text))","--tw-c-emerald-400":"color-mix(in srgb, #7ec76b 75%, var(--sol-text))","--tw-c-emerald-500":"#7ec76b","--tw-c-emerald-600":"color-mix(in srgb, #7ec76b 85%, var(--sol-bg))","--tw-c-emerald-700":"color-mix(in srgb, #7ec76b 70%, var(--sol-bg))","--tw-c-emerald-800":"color-mix(in srgb, #7ec76b 55%, var(--sol-bg))","--tw-c-emerald-900":"color-mix(in srgb, #7ec76b 42%, var(--sol-bg))","--tw-c-emerald-950":"color-mix(in srgb, #7ec76b 28%, var(--sol-bg))","--tw-c-teal-50":"color-mix(in srgb, #4ccac0 8%, var(--sol-text))","--tw-c-teal-100":"color-mix(in srgb, #4ccac0 15%, var(--sol-text))","--tw-c-teal-200":"color-mix(in srgb, #4ccac0 30%, var(--sol-text))","--tw-c-teal-300":"color-mix(in srgb, #4ccac0 50%, var(--sol-text))","--tw-c-teal-400":"color-mix(in srgb, #4ccac0 75%, var(--sol-text))","--tw-c-teal-500":"#4ccac0","--tw-c-teal-600":"color-mix(in srgb, #4ccac0 85%, var(--sol-bg))","--tw-c-teal-700":"color-mix(in srgb, #4ccac0 70%, var(--sol-bg))","--tw-c-teal-800":"color-mix(in srgb, #4ccac0 55%, var(--sol-bg))","--tw-c-teal-900":"color-mix(in srgb, #4ccac0 42%, var(--sol-bg))","--tw-c-teal-950":"color-mix(in srgb, #4ccac0 28%, var(--sol-bg))","--tw-c-cyan-50":"color-mix(in srgb, #4ccac0 8%, var(--sol-text))","--tw-c-cyan-100":"color-mix(in srgb, #4ccac0 15%, var(--sol-text))","--tw-c-cyan-200":"color-mix(in srgb, #4ccac0 30%, var(--sol-text))","--tw-c-cyan-300":"color-mix(in srgb, #4ccac0 50%, var(--sol-text))","--tw-c-cyan-400":"color-mix(in srgb, #4ccac0 75%, var(--sol-text))","--tw-c-cyan-500":"#4ccac0","--tw-c-cyan-600":"color-mix(in srgb, #4ccac0 85%, var(--sol-bg))","--tw-c-cyan-700":"color-mix(in srgb, #4ccac0 70%, var(--sol-bg))","--tw-c-cyan-800":"color-mix(in srgb, #4ccac0 55%, var(--sol-bg))","--tw-c-cyan-900":"color-mix(in srgb, #4ccac0 42%, var(--sol-bg))","--tw-c-cyan-950":"color-mix(in srgb, #4ccac0 28%, var(--sol-bg))","--tw-c-sky-50":"color-mix(in srgb, #6aa8e8 8%, var(--sol-text))","--tw-c-sky-100":"color-mix(in srgb, #6aa8e8 15%, var(--sol-text))","--tw-c-sky-200":"color-mix(in srgb, #6aa8e8 30%, var(--sol-text))","--tw-c-sky-300":"color-mix(in srgb, #6aa8e8 50%, var(--sol-text))","--tw-c-sky-400":"color-mix(in srgb, #6aa8e8 75%, var(--sol-text))","--tw-c-sky-500":"#6aa8e8","--tw-c-sky-600":"color-mix(in srgb, #6aa8e8 85%, var(--sol-bg))","--tw-c-sky-700":"color-mix(in srgb, #6aa8e8 70%, var(--sol-bg))","--tw-c-sky-800":"color-mix(in srgb, #6aa8e8 55%, var(--sol-bg))","--tw-c-sky-900":"color-mix(in srgb, #6aa8e8 42%, var(--sol-bg))","--tw-c-sky-950":"color-mix(in srgb, #6aa8e8 28%, var(--sol-bg))","--tw-c-blue-50":"color-mix(in srgb, #6aa8e8 8%, var(--sol-text))","--tw-c-blue-100":"color-mix(in srgb, #6aa8e8 15%, var(--sol-text))","--tw-c-blue-200":"color-mix(in srgb, #6aa8e8 30%, var(--sol-text))","--tw-c-blue-300":"color-mix(in srgb, #6aa8e8 50%, var(--sol-text))","--tw-c-blue-400":"color-mix(in srgb, #6aa8e8 75%, var(--sol-text))","--tw-c-blue-500":"#6aa8e8","--tw-c-blue-600":"color-mix(in srgb, #6aa8e8 85%, var(--sol-bg))","--tw-c-blue-700":"color-mix(in srgb, #6aa8e8 70%, var(--sol-bg))","--tw-c-blue-800":"color-mix(in srgb, #6aa8e8 55%, var(--sol-bg))","--tw-c-blue-900":"color-mix(in srgb, #6aa8e8 42%, var(--sol-bg))","--tw-c-blue-950":"color-mix(in srgb, #6aa8e8 28%, var(--sol-bg))","--tw-c-indigo-50":"color-mix(in srgb, #a28ee6 8%, var(--sol-text))","--tw-c-indigo-100":"color-mix(in srgb, #a28ee6 15%, var(--sol-text))","--tw-c-indigo-200":"color-mix(in srgb, #a28ee6 30%, var(--sol-text))","--tw-c-indigo-300":"color-mix(in srgb, #a28ee6 50%, var(--sol-text))","--tw-c-indigo-400":"color-mix(in srgb, #a28ee6 75%, var(--sol-text))","--tw-c-indigo-500":"#a28ee6","--tw-c-indigo-600":"color-mix(in srgb, #a28ee6 85%, var(--sol-bg))","--tw-c-indigo-700":"color-mix(in srgb, #a28ee6 70%, var(--sol-bg))","--tw-c-indigo-800":"color-mix(in srgb, #a28ee6 55%, var(--sol-bg))","--tw-c-indigo-900":"color-mix(in srgb, #a28ee6 42%, var(--sol-bg))","--tw-c-indigo-950":"color-mix(in srgb, #a28ee6 28%, var(--sol-bg))","--tw-c-violet-50":"color-mix(in srgb, #a28ee6 8%, var(--sol-text))","--tw-c-violet-100":"color-mix(in srgb, #a28ee6 15%, var(--sol-text))","--tw-c-violet-200":"color-mix(in srgb, #a28ee6 30%, var(--sol-text))","--tw-c-violet-300":"color-mix(in srgb, #a28ee6 50%, var(--sol-text))","--tw-c-violet-400":"color-mix(in srgb, #a28ee6 75%, var(--sol-text))","--tw-c-violet-500":"#a28ee6","--tw-c-violet-600":"color-mix(in srgb, #a28ee6 85%, var(--sol-bg))","--tw-c-violet-700":"color-mix(in srgb, #a28ee6 70%, var(--sol-bg))","--tw-c-violet-800":"color-mix(in srgb, #a28ee6 55%, var(--sol-bg))","--tw-c-violet-900":"color-mix(in srgb, #a28ee6 42%, var(--sol-bg))","--tw-c-violet-950":"color-mix(in srgb, #a28ee6 28%, var(--sol-bg))","--tw-c-purple-50":"color-mix(in srgb, #a28ee6 8%, var(--sol-text))","--tw-c-purple-100":"color-mix(in srgb, #a28ee6 15%, var(--sol-text))","--tw-c-purple-200":"color-mix(in srgb, #a28ee6 30%, var(--sol-text))","--tw-c-purple-300":"color-mix(in srgb, #a28ee6 50%, var(--sol-text))","--tw-c-purple-400":"color-mix(in srgb, #a28ee6 75%, var(--sol-text))","--tw-c-purple-500":"#a28ee6","--tw-c-purple-600":"color-mix(in srgb, #a28ee6 85%, var(--sol-bg))","--tw-c-purple-700":"color-mix(in srgb, #a28ee6 70%, var(--sol-bg))","--tw-c-purple-800":"color-mix(in srgb, #a28ee6 55%, var(--sol-bg))","--tw-c-purple-900":"color-mix(in srgb, #a28ee6 42%, var(--sol-bg))","--tw-c-purple-950":"color-mix(in srgb, #a28ee6 28%, var(--sol-bg))","--tw-c-fuchsia-50":"color-mix(in srgb, #e27aa9 8%, var(--sol-text))","--tw-c-fuchsia-100":"color-mix(in srgb, #e27aa9 15%, var(--sol-text))","--tw-c-fuchsia-200":"color-mix(in srgb, #e27aa9 30%, var(--sol-text))","--tw-c-fuchsia-300":"color-mix(in srgb, #e27aa9 50%, var(--sol-text))","--tw-c-fuchsia-400":"color-mix(in srgb, #e27aa9 75%, var(--sol-text))","--tw-c-fuchsia-500":"#e27aa9","--tw-c-fuchsia-600":"color-mix(in srgb, #e27aa9 85%, var(--sol-bg))","--tw-c-fuchsia-700":"color-mix(in srgb, #e27aa9 70%, var(--sol-bg))","--tw-c-fuchsia-800":"color-mix(in srgb, #e27aa9 55%, var(--sol-bg))","--tw-c-fuchsia-900":"color-mix(in srgb, #e27aa9 42%, var(--sol-bg))","--tw-c-fuchsia-950":"color-mix(in srgb, #e27aa9 28%, var(--sol-bg))","--tw-c-pink-50":"color-mix(in srgb, #e27aa9 8%, var(--sol-text))","--tw-c-pink-100":"color-mix(in srgb, #e27aa9 15%, var(--sol-text))","--tw-c-pink-200":"color-mix(in srgb, #e27aa9 30%, var(--sol-text))","--tw-c-pink-300":"color-mix(in srgb, #e27aa9 50%, var(--sol-text))","--tw-c-pink-400":"color-mix(in srgb, #e27aa9 75%, var(--sol-text))","--tw-c-pink-500":"#e27aa9","--tw-c-pink-600":"color-mix(in srgb, #e27aa9 85%, var(--sol-bg))","--tw-c-pink-700":"color-mix(in srgb, #e27aa9 70%, var(--sol-bg))","--tw-c-pink-800":"color-mix(in srgb, #e27aa9 55%, var(--sol-bg))","--tw-c-pink-900":"color-mix(in srgb, #e27aa9 42%, var(--sol-bg))","--tw-c-pink-950":"color-mix(in srgb, #e27aa9 28%, var(--sol-bg))"}}</script>
+
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+    <title>Codecast: all your coding agents in one workspace</title>
+    <!-- Safari on iOS draws its native "Open in the App Store" strip from this; the id matches SITE_LINKS.appStore. -->
+    <meta name="apple-itunes-app" content="app-id=6757820850" />
+    <meta name="description" content="Every session you run with Claude Code, Codex, Cursor, OpenCode and pi, on any machine, in one place: searchable, steerable from your phone, and linked to the code it wrote. Bring your team in when you want, with chat, calls, tasks and docs your agents work in too." />
+    <meta property="og:title" content="Codecast: all your coding agents in one workspace" />
+    <meta property="og:description" content="Run all your coding agents in one workspace, on your own or with your team." />
+    <meta property="og:site_name" content="codecast" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://codecast.sh" />
+    <meta property="og:image" content="https://codecast.sh/logo-final.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Codecast: all your coding agents in one workspace" />
+    <meta name="twitter:description" content="Run all your coding agents in one workspace, on your own or with your team." />
+    <meta name="twitter:image" content="https://codecast.sh/logo-final.png" />
+    <link rel="alternate" type="application/rss+xml" title="Codecast blog" href="/blog/rss.xml" />
+    <link rel="icon" href="/__jx77prj-after/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/__jx77prj-after/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/__jx77prj-after/favicon-16x16.png" />
+    <link rel="apple-touch-icon" href="/__jx77prj-after/apple-touch-icon.png" />
+    <!-- Published pages frame from the edge: connect before the first embed asks. -->
+    <link rel="preconnect" href="https://a.codecast.sh" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap" />
+    </noscript>
+    <script>
+      (function() {
+        // The homepage is light Classic for every visitor (its hero renders the
+        // real app's views, and globals.css restyles them under .dark and
+        // .minimal-style); the visitor's own theme starts when the app does.
+        // The same paths as lib/themeBootLock.ts, whose lock ThemeProvider starts with.
+        if (location.pathname === '/') return;
+        // A share link is mostly opened by people who have never used the
+        // app: with no saved choice, the page follows their system.
+        var saved = localStorage.getItem('codecast-theme');
+        var theme = saved || (location.pathname.indexOf('/share/') === 0 && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        // A guest's meeting page (app/meet) is the call's dark room whatever
+        // the system asks for: the loader before it must not flash light.
+        if (location.pathname.indexOf('/meet/') === 0) theme = 'dark';
+        document.documentElement.classList.add(theme);
+        var visualStyle = localStorage.getItem('codecast-visual-style');
+        if (visualStyle === 'minimal' || visualStyle === 'codex') {
+          document.documentElement.classList.add('minimal-style');
+        }
+        // Hosted mode in its Minimal look (ThemeProvider stores the flag):
+        // the first frame is already the family's paper, not the developer
+        // default the app would correct a moment later.
+        // A device last seen in hosted mode (laneBoot.ts LANE_HINT_KEY) with
+        // no look stored yet, as after a first signup, starts there too.
+        var hostedLook = localStorage.getItem('codecast-hosted-look');
+        if (hostedLook === '1' || (hostedLook === null && localStorage.getItem('codecast-lane') === 'simple')) {
+          document.documentElement.classList.add('minimal-style', 'hosted-mode');
+        } else {
+          // The color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts),
+          // or the default one when nothing is cached (plugins/colorThemeBoot.ts).
+          try {
+            var cachedTheme = localStorage.getItem('codecast-color-theme');
+            var themeVars = (cachedTheme ? JSON.parse(cachedTheme) : window.__ccDefaultColorTheme || {})[theme] || {};
+            var names = Object.keys(themeVars);
+            for (var i = 0; i < names.length; i++) document.documentElement.style.setProperty(names[i], themeVars[names[i]]);
+            if (names.length) document.documentElement.setAttribute('data-theme-vars', names.join(' '));
+          } catch (e) {}
+        }
+      })();
+    </script>
+    <script>
+      // A see-through desktop window (the shell's --transparent-window: the
+      // palette, the rings, the agent dock) paints nothing while it boots.
+      if (window.__CODECAST_ELECTRON__ && window.__CODECAST_ELECTRON__.isTransparentWindow) {
+        document.documentElement.classList.add('transparent-window');
+      }
+    </script>
+    <style>
+      html.transparent-window, html.transparent-window body { background: transparent !important; }
+      html.transparent-window #boot-shell { display: none; }
+    </style>
+    <style>
+      /* Mirrors AppLoader.tsx (monochrome mark + hairline shimmer on sol-bg) so
+         the static → React handoff is invisible — change them together. */
+      #boot-shell {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        align-items: center;
+        justify-content: center;
+        background: #FBF5E2;
+        color: #657b83;
+        opacity: 1;
+        z-index: 2147483647;
+      }
+      html.dark #boot-shell { background: #002b36; }
+      html.minimal-style #boot-shell { background: #ffffff; color: #8a8a85; }
+      html.dark.minimal-style #boot-shell { background: #161615; color: #7c7a74; }
+      html.hosted-mode.minimal-style #boot-shell#boot-shell { background: var(--pd-bg); color: var(--pd-ink-faint); }
+      #boot-shell[data-hidden="true"] { display: none; }
+      #boot-shell .indicator {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        align-items: center;
+        visibility: hidden;
+        opacity: 0;
+        animation: boot-loader-reveal 100ms ease-out 1s forwards;
+      }
+      #boot-shell .mark { opacity: 0.45; }
+      #boot-shell .bar {
+        position: relative;
+        width: 120px;
+        height: 2px;
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      #boot-shell .bar::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: currentColor;
+        opacity: 0.14;
+      }
+      #boot-shell .bar::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 36px;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.55;
+        animation: boot-loader-slide 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      }
+      @keyframes boot-loader-slide {
+        0% { transform: translateX(-40px); }
+        100% { transform: translateX(124px); }
+      }
+      @keyframes boot-loader-reveal {
+        to { visibility: visible; opacity: 1; }
+      }
+      /* Out of the page once the app paints, not just transparent: an
+         invisible full-window layer stays composited for the life of the app
+         and its bar animation keeps running on the main thread. */
+      #root:not(:empty) ~ #boot-shell { display: none; }
+
+      /* A hosted boot (<html data-lane> on /welcome, <html data-hosted-boot>
+         on an app page for a device last seen in hosted mode, both set in
+         <head> by plugins/laneBoot.ts, or the hosted look) opens on the
+         family's paper with the assistant's solid disc over the bar, drawn
+         from the --pd-* sheet that plugin also injects. AppLoader takes the
+         same form (data-hosted on its root), so the static to React hand-off
+         stays invisible there too. */
+      html[data-lane] #boot-shell#boot-shell,
+      html[data-hosted-boot] #boot-shell#boot-shell,
+      .app-loader[data-hosted] { background: var(--pd-bg); color: var(--pd-ink-faint); }
+      html[data-lane] #boot-shell .mark,
+      html[data-hosted-boot] #boot-shell .mark,
+      html.hosted-mode.minimal-style #boot-shell .mark,
+      .hosted-orb {
+        box-sizing: border-box;
+        width: 44px;
+        height: 44px;
+        padding: 10px 8px;
+        border-radius: 999px;
+        background: var(--pd-ink);
+        color: var(--pd-bg-raised);
+        opacity: 1;
+      }
+      .hosted-orb { display: grid; place-items: center; padding: 0; }
+
+      /* Desktop hand-off screen. Shown when the page is sent to the desktop
+         app (lib/desktopHandoff.ts showHandoffScreen): on the pre-boot path the
+         app never loads, so this is plain markup revealed by one attribute on
+         <html>; the React fallback (OpenInDesktopHandoff.tsx) reveals the same
+         markup. Opaque on purpose — nothing behind it should show. */
+      #cc-handoff { display: none; }
+      html[data-cc-handoff] #boot-shell { display: none; }
+      html[data-cc-handoff] #cc-handoff {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        background: #FBF5E2;
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+        z-index: 2147483647;
+      }
+      html.dark[data-cc-handoff] #cc-handoff { background: #002b36; }
+      #cc-handoff .card {
+        position: relative;
+        width: 100%;
+        max-width: 24rem;
+        padding: 1.5rem;
+        border: 1px solid rgba(42, 161, 152, 0.3);
+        border-radius: 0.75rem;
+        background: #eee8d5;
+        color: #002b36;
+        box-shadow: 0 25px 50px -12px rgba(42, 161, 152, 0.1);
+        animation: cc-handoff-in 200ms cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      html.dark #cc-handoff .card { background: #073642; color: #fdf6e3; }
+      @keyframes cc-handoff-in {
+        from { opacity: 0; transform: scale(0.95); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      #cc-handoff .head { display: flex; align-items: center; gap: 0.75rem; }
+      #cc-handoff .icon {
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: 0.5rem;
+        background: rgba(42, 161, 152, 0.1);
+        color: #2aa198;
+      }
+      #cc-handoff .title { font-size: 0.875rem; font-weight: 500; line-height: 1.25; }
+      #cc-handoff .sub { font-size: 0.75rem; line-height: 1.25; color: #657b83; }
+      #cc-handoff .actions { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1.25rem; }
+      #cc-handoff button {
+        font: inherit;
+        cursor: pointer;
+        border-radius: 0.375rem;
+        padding: 0.5rem 0.75rem;
+        font-size: 0.75rem;
+      }
+      #cc-handoff .primary {
+        border: 0;
+        background: #2aa198;
+        color: #FBF5E2;
+        font-weight: 500;
+        transition: opacity 150ms;
+      }
+      #cc-handoff .primary:hover { opacity: 0.9; }
+      #cc-handoff .secondary {
+        border: 1px solid #93a1a1;
+        background: transparent;
+        color: #657b83;
+        transition: color 150ms, border-color 150ms;
+      }
+      html.dark #cc-handoff .secondary { border-color: #586e75; }
+      #cc-handoff .secondary:hover { color: inherit; border-color: rgba(42, 161, 152, 0.4); }
+      #cc-handoff .tertiary {
+        border: 0;
+        background: transparent;
+        color: #657b83;
+        padding-top: 0.25rem;
+        padding-bottom: 0;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        text-decoration-color: rgba(101, 123, 131, 0.4);
+      }
+      #cc-handoff .tertiary:hover { color: inherit; }
+      /* Revealed when the browser refused to close the tab. */
+      #cc-handoff .kept { display: none; margin-top: 0.75rem; font-size: 11px; line-height: 1.6; color: #657b83; }
+      html[data-cc-handoff-kept] #cc-handoff .kept { display: block; }
+      #cc-handoff .keys { white-space: nowrap; }
+      #cc-handoff kbd {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        margin: 0 1px;
+        font: inherit;
+        font-size: 9px;
+        line-height: 1;
+        border: 1px solid rgba(147, 161, 161, 0.5);
+        border-radius: 4px;
+        background: #FBF5E2;
+        box-shadow: 0 1px 0 rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      }
+      html.dark #cc-handoff kbd { background: #002b36; border-color: rgba(88, 110, 117, 0.5); }
+      #cc-handoff .dismiss {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        border: 0;
+        background: transparent;
+        color: #657b83;
+        line-height: 1;
+        padding: 0.25rem 0.5rem;
+      }
+      #cc-handoff .dismiss:hover { color: inherit; }
+      #cc-handoff .always {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1rem;
+        font-size: 11px;
+        color: #657b83;
+        cursor: pointer;
+        -webkit-user-select: none;
+           -moz-user-select: none;
+                user-select: none;
+      }
+      #cc-handoff .always input { accent-color: #2aa198; cursor: pointer; }
+    </style>
+    <style data-pd-tokens="">/* Generated from src/tokens.ts by src/build.ts. Do not edit by hand. */
+
+:root {
+  --pd-font-ui: "Instrument Sans Variable", "Instrument Sans", system-ui, sans-serif;
+  --pd-font-read: "Newsreader Variable", "Newsreader", Georgia, serif;
+  --pd-font-mono: "Fragment Mono", ui-monospace, monospace;
+  --pd-radius: 6px;
+  --pd-radius-lg: 10px;
+  --pd-t-view: 150ms cubic-bezier(0.3, 0.9, 0.3, 1);
+  --pd-t-fast: 90ms ease-out;
+  --pd-t-ease: cubic-bezier(0.3, 0.9, 0.3, 1);
+  --pd-bg: #f6f3ec;
+  --pd-bg-raised: #fdfbf6;
+  --pd-bg-sunken: #efebe1;
+  --pd-bg-hover: #f0ecdf;
+  --pd-ink: #201c17;
+  --pd-ink-muted: #6b6355;
+  --pd-ink-faint: #8a806c;
+  --pd-rule: #e4ddce;
+  --pd-rule-strong: #cfc6b2;
+  --pd-accent: #c93a0e;
+  --pd-accent-ink: #fdfbf6;
+  --pd-accent-soft: #c93a0e14;
+  --pd-star: #c98a0e;
+  --pd-ok: #3d7a44;
+  --pd-danger: #b3261e;
+  --pd-shadow: 0 1px 2px rgba(32, 28, 23, 0.06), 0 8px 32px rgba(32, 28, 23, 0.09);
+  --pd-shadow-high: 0 2px 6px rgba(32, 28, 23, 0.1), 0 20px 60px rgba(32, 28, 23, 0.18);
+  --pd-selection: #c93a0e26;
+}
+
+:root[data-theme="dark"], :root.dark {
+  --pd-bg: #161310;
+  --pd-bg-raised: #1e1a15;
+  --pd-bg-sunken: #100e0b;
+  --pd-bg-hover: #241f19;
+  --pd-ink: #ece5d8;
+  --pd-ink-muted: #a49a8a;
+  --pd-ink-faint: #8f8676;
+  --pd-rule: #2b261f;
+  --pd-rule-strong: #3d372d;
+  --pd-accent: #ef5a24;
+  --pd-accent-ink: #161310;
+  --pd-accent-soft: #ef5a241f;
+  --pd-star: #d9a940;
+  --pd-ok: #6aa872;
+  --pd-danger: #e05b52;
+  --pd-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 32px rgba(0, 0, 0, 0.45);
+  --pd-shadow-high: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 60px rgba(0, 0, 0, 0.6);
+  --pd-selection: #ef5a2433;
+}
+</style>
+    <script>var __ccLaneBoot=(()=>{var r=Object.defineProperty;var L=Object.getOwnPropertyDescriptor;var x=Object.getOwnPropertyNames;var A=Object.prototype.hasOwnProperty;var O=(t,e)=>{for(var o in e)r(t,o,{get:e[o],enumerable:!0})},T=(t,e,o,d)=>{if(e&&typeof e=="object"||typeof e=="function")for(let n of x(e))!A.call(t,n)&&n!==o&&r(t,n,{get:()=>e[n],enumerable:!(d=L(e,n))||d.enumerable});return t};var _=t=>T(r({},"__esModule",{value:!0}),t);var S={};O(S,{HOSTED_BOOT_ATTR:()=>u,LANE_BOOT_TITLE:()=>a,LANE_CONVERSATION_ROUTE:()=>h,LANE_HINT_KEY:()=>s,LANE_PAGES:()=>p,LANE_ROOT:()=>c,LANE_ROOTS:()=>g,WELCOME_PATH:()=>i,hostedBoot:()=>b,isLanePath:()=>f,isUnderRoot:()=>m,markLanePage:()=>H,onLanePage:()=>l,readLaneHint:()=>E,writeLaneHint:()=>N});const c="/simple",i="/welcome",g=[c,i],p=[i],h=`${c}/c/:id`;function m(t,e){return t===e||t.startsWith(e+"/")}function f(t){return p.some(e=>m(t,e))}function l(){return typeof location<"u"&&f(location.pathname)}const a="Codecast",s="codecast-lane";function E(){try{const t=typeof localStorage>"u"?null:localStorage.getItem(s);return t==="simple"||t==="full"?t:null}catch{return null}}function N(t){try{typeof localStorage<"u"&&localStorage.setItem(s,t)}catch{}}const u="data-hosted-boot";function b(){if(typeof document>"u")return!1;const t=document.documentElement;return l()||t.hasAttribute(u)||t.classList.contains("hosted-mode")}function H(){if(l()){document.documentElement.setAttribute("data-lane",""),document.title=a;return}location.pathname!=="/"&&E()==="simple"&&(document.documentElement.setAttribute(u,""),document.title=a)}return _(S);})();
+;__ccLaneBoot.markLanePage()</script>
+    <script type="module" crossorigin src="/__jx77prj-after/assets/index-BpARccK_.js"></script>
+    <link rel="stylesheet" crossorigin href="/__jx77prj-after/assets/index-DR2znmRy.css">
+  </head>
+  <body class="font-mono">
+    <div id="root"></div>
+    <div id="boot-shell" aria-hidden="true">
+      <div class="indicator">
+        <svg class="mark" width="44" height="44" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path fill="currentColor" d="M484.642334,414.398438 C441.085785,414.100739 407.961426,431.836365 389.038177,470.938019 C359.991791,530.957275 397.919464,599.922302 462.212036,610.452393 C488.377197,614.737732 512.859131,609.315125 534.993835,594.283020 C536.985901,592.930176 538.769653,590.998291 541.395325,590.790649 C542.830750,592.057068 542.358704,593.648865 542.360229,595.064209 C542.383118,615.894470 542.245728,636.725830 542.454224,657.553894 C542.495239,661.645569 540.944946,663.478516 537.347595,664.804260 C457.310547,694.300720 365.884827,658.371399 330.527679,577.853210 C318.822357,551.196838 314.364532,523.336731 317.783875,494.457825 C326.474518,421.058838 381.311096,368.253448 444.614929,354.822266 C476.047852,348.153107 507.120667,349.994629 537.405273,361.541992 C541.135986,362.964569 542.456543,364.823730 542.420715,368.821503 C542.237122,389.316772 542.366028,409.814758 542.335571,430.311707 C542.333191,431.888306 542.886780,433.635895 541.039673,435.579559 C524.470764,423.311615 505.857056,415.935822 484.642334,414.398438z"/>
+          <path fill="currentColor" d="M595.160889,540.159180 C602.995361,532.661072 610.436890,525.255066 618.219727,518.227051 C621.594788,515.179443 621.862915,513.288818 618.369263,510.015167 C605.976135,498.402374 593.950073,486.398682 581.638672,474.697052 C578.746277,471.947968 577.631470,469.026062 577.653381,465.050171 C577.786804,440.902161 577.692810,416.752869 577.674988,392.604004 C577.673828,390.969238 577.674927,389.334503 577.674927,387.822937 C580.475952,386.927032 581.524963,388.753571 582.754211,389.949341 C611.163818,417.584045 639.573853,445.218567 667.919434,472.919006 C680.901062,485.605255 693.661133,498.519287 706.712463,511.132599 C709.948914,514.260376 709.647461,516.128052 706.514099,519.115662 C674.820679,549.334167 643.279907,579.712769 611.649353,609.997375 C601.908936,619.323242 592.027832,628.502197 582.202148,637.738831 C581.252808,638.631287 580.419067,639.758240 578.788452,639.713379 C577.032288,638.391235 577.739929,636.409241 577.736206,634.708374 C577.682861,610.393066 577.748169,586.077332 577.625610,561.762512 C577.608215,558.319458 578.534119,555.799866 581.153076,553.487549 C585.892944,549.302612 590.338135,544.783875 595.160889,540.159180z"/>
+        </svg>
+        <div class="bar"></div>
+      </div>
+    </div>
+    <div id="cc-handoff">
+      <div class="card" role="dialog" aria-label="Opened in Codecast desktop">
+        <button class="dismiss" data-cc-handoff-action="browser" aria-label="Dismiss">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+        <div class="head">
+          <span class="icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="20" height="14" x="2" y="3" rx="2" />
+              <path d="M8 21h8M12 17v4" />
+            </svg>
+          </span>
+          <div>
+            <div class="title">Opened in Codecast desktop</div>
+            <div class="sub">This page was sent to the app.</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" data-cc-handoff-action="close">Close this tab</button>
+          <button class="secondary" data-cc-handoff-action="browser">Open in browser</button>
+          <button class="tertiary" data-cc-handoff-action="retry">Didn&rsquo;t open? Reopen desktop app</button>
+        </div>
+        <p class="kept">
+          Your browser kept this tab open. Close it with
+          <span class="keys"><kbd data-cc-handoff-modifier>⌘</kbd><kbd>W</kbd></span>
+        </p>
+        <label class="always">
+          <input type="checkbox" data-cc-handoff-action="always" />
+          Always open Codecast links in browser
+        </label>
+      </div>
+    </div>
+  </body>
+</html>

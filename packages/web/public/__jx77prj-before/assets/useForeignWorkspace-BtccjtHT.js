@@ -1,0 +1,2 @@
+import{r as l}from"./vendor-BRSpyZc9.js";import{ai as p,f as t,b9 as k,ba as f,bb as m}from"./lineWorkspaceUrl-B9h2uFzW.js";import{u as d}from"./useSwitchWorkspace-pc8QRt75.js";function h(r){const n=d(),e=r?p(r):null,o=t(s=>{const i=k(s);return!!r&&!!e&&!!i&&!f(r,i)}),a=t(s=>s.currentUser?._id?String(s.currentUser._id):null),c=t(s=>e?m(e,s.teams,a):""),u=l.useCallback(()=>{e&&n(e.kind==="team"?e.id:null)},[e?.kind,e?.id,n]);return!o||!e?null:{name:c,switchTo:e.kind==="team"||e.id===a?u:null}}export{h as u};
+//# sourceMappingURL=useForeignWorkspace-BtccjtHT.js.map

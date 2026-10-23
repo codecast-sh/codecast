@@ -1,0 +1,2 @@
+import{k as n}from"./vendor-BRSpyZc9.js";import{bd as r}from"./lineWorkspaceUrl-B9h2uFzW.js";import{df as c}from"./index-BCkT4BQO.js";function m(){const a=r(),o=n(),t=a?a.pathname:o.pathname,s=a?a.searchParams.toString():o.search.replace(/^\?/,""),e=a?a.hash??"":o.hash;return{pathname:t,search:s?`?${s}`:"",hash:e,family:c(t)}}function u(){return m().family}export{u as a,m as u};
+//# sourceMappingURL=useRepoFamily-CfFd4jdP.js.map

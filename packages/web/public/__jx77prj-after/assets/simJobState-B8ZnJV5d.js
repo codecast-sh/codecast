@@ -1,0 +1,2 @@
+import{q as e}from"./page-CC5ISevg.js";function n(t){return t.status==="running"?{state:"running",job:t}:t.status==="done"?{state:"done",job:t}:{state:"failed",error:`The ${t.kind} ${t.status}${t.progress.text?`: ${t.progress.text}`:""}`,logTail:t.logTail??[]}}const r=(t,s)=>t.state!=="idle"||!s?t:n(s),i=t=>t.state==="starting"||t.state==="running",u=(t,s)=>t.status==="running"&&e(t.updatedAt,s);export{i as a,u as i,n as j,r as s};
+//# sourceMappingURL=simJobState-B8ZnJV5d.js.map

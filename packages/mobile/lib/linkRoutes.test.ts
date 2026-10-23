@@ -46,6 +46,12 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/settings/integrations')).toBe('/settings/mail');
   });
 
+  test('the Vault and a secret open the Vault settings page', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/vault')).toBe('/settings/vault');
+    expect(mobileRouteForUrl('/vault?s=sec-4')).toBe('/settings/vault?s=sec-4');
+    expect(mobileEntityRoute('secret', 'sec-12')).toBe('/settings/vault?s=sec-12');
+  });
+
   test("the web's short page names open the same screens", () => {
     expect(mobileRouteForUrl('https://codecast.sh/approvals')).toBe('/decisions');
     expect(mobileRouteForUrl('https://codecast.sh/plan')).toBe('/settings/plan');

@@ -1,0 +1,1 @@
+.call-stage{container:call-stage / inline-size}@container call-stage (width < 760px){.stage-word,.rt-seg-word{display:none}}@container call-stage (width < 640px){.stage-word-tight{display:none}}
