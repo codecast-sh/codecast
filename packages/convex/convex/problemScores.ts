@@ -31,6 +31,24 @@ import {
 } from "@codecast/shared/contracts/problemScore";
 
 const ASSIGN_CHUNK = 250;
+/**
+ * Every task patch streams to each client of the team, so writes go in small
+ * mutations with a pause between, one page per call; the caller calls again
+ * from `next` until it is null.
+ */
+const WRITE_PAGE = 200;
+const WRITE_CHUNK = 25;
+const WRITE_PAUSE_MS = 2_000;
+
+async function writePaced<T>(rows: T[], from: number, write: (chunk: T[]) => Promise<number>): Promise<{ written: number; of: number; next: number | null }> {
+  const page = rows.slice(from, from + WRITE_PAGE);
+  let written = 0;
+  for (let i = 0; i < page.length; i += WRITE_CHUNK) {
+    if (i) await new Promise((r) => setTimeout(r, WRITE_PAUSE_MS));
+    written += await write(page.slice(i, i + WRITE_CHUNK));
+  }
+  return { written, of: rows.length, next: from + WRITE_PAGE < rows.length ? from + WRITE_PAGE : null };
+}
 /** A batch is billed at half the list price. */
 const batchCost = (model: string, usage: ModelUsage) => modelCost(model, usage) / 2;
 
@@ -187,9 +205,9 @@ function meter(model: string, results: Array<{ usage: ModelUsage | null }>) {
   return { ...usage, cost_usd: Math.round(cost * 10_000) / 10_000, per_request_usd: results.length ? Math.round((cost / results.length) * 100_000) / 100_000 : 0 };
 }
 
-/** Reads a scoring batch; once it has ended, writes every score it holds. */
+/** Reads a scoring batch; once it has ended, writes one page of the scores it holds, from `from`. */
 export const collect = internalAction({
-  args: { batch_id: v.string() },
+  args: { batch_id: v.string(), from: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const state = await getBatch(args.batch_id);
     if (state.processing_status !== "ended") return { status: state.processing_status, counts: state.request_counts };
@@ -202,9 +220,8 @@ export const collect = internalAction({
       if (!score) { failed.push({ id: r.custom_id, why: r.error ?? `unparsed (${r.stop_reason})` }); continue; }
       rows.push({ id: r.custom_id as Id<"tasks">, scored: { ...score, at, version: SCORE_VERSION } });
     }
-    let written = 0;
-    for (let i = 0; i < rows.length; i += 100) written += await ctx.runMutation(internal.problemScores.record, { rows: rows.slice(i, i + 100) });
-    return { status: "ended", written, failed: failed.length, failures: failed.slice(0, 10), ...meter(SCORE_MODEL, results) };
+    const page = await writePaced(rows, args.from ?? 0, (chunk): Promise<number> => ctx.runMutation(internal.problemScores.record, { rows: chunk }));
+    return { status: "ended", ...page, failed: failed.length, failures: failed.slice(0, 10), ...meter(SCORE_MODEL, results) };
   },
 });
 
@@ -296,7 +313,7 @@ export const recordClusters = internalMutation({
  * what submitAssign returned (the labels in the order it chunked them).
  */
 export const collectAssign = internalAction({
-  args: { workspace: v.string(), judge: v.string(), batch_id: v.string(), labels: v.array(v.string()), families: v.array(v.object({ key: v.string(), name: v.string(), covers: v.string() })) },
+  args: { workspace: v.string(), judge: v.string(), batch_id: v.string(), from: v.optional(v.number()), labels: v.array(v.string()), families: v.array(v.object({ key: v.string(), name: v.string(), covers: v.string() })) },
   handler: async (ctx, args) => {
     const state = await getBatch(args.batch_id);
     if (state.processing_status !== "ended") return { status: state.processing_status, counts: state.request_counts };
@@ -319,9 +336,8 @@ export const collectAssign = internalAction({
       if (!key) continue;
       for (const id of l.ids) rows.push({ id: id as Id<"tasks">, key, name: nameOf.get(key) ?? key });
     }
-    let written = 0;
-    for (let i = 0; i < rows.length; i += 200) written += await ctx.runMutation(internal.problemScores.recordClusters, { rows: rows.slice(i, i + 200) });
-    return { status: "ended", written, placed_labels: keyOf.size, failed, ...meter(FAMILY_MODEL, results) };
+    const page = await writePaced(rows, args.from ?? 0, (chunk): Promise<number> => ctx.runMutation(internal.problemScores.recordClusters, { rows: chunk }));
+    return { status: "ended", ...page, placed_labels: keyOf.size, failed, ...meter(FAMILY_MODEL, results) };
   },
 });
 
