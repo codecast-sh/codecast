@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery, query } from "./functions";
+import { internalAction, internalMutation, internalQuery, query } from "./functions";
+import { internal } from "./_generated/api";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
 import { isUnblocked, TASK_PRIORITIES } from "@codecast/shared/tasks";
@@ -370,7 +371,7 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
 }
 
 export type SweepResult = {
-  started: Array<{ role_id: string; task_id: string; run_id: string }>;
+  started: Array<{ role_id: string; task_id: string; run_id: string; place?: RunPlace }>;
   skipped_capped: string[];
   // Roles whose next cause waits for a run on their machine to finish (LE6).
   skipped_busy: string[];
@@ -390,19 +391,26 @@ export type SweepResult = {
 // by the sweep's own limit, the free run slots and the hands left, and its
 // candidates are read for that many (rankedCandidates). `dry` decides the
 // same way and starts nothing (orgLine.explain).
-export async function sweepCore(ctx: Ctx, now = Date.now(), o: { dry?: boolean } = {}): Promise<SweepResult> {
+//
+// The pass is two steps so it commits at volume. Planning reads every role,
+// load and candidate, megabytes of rows that stations write all the time (a
+// task comment, a run's node), so it runs as a query, which no write can
+// fail. Each start is then its own small mutation (startPlanned) that reads
+// only the rows it changes and checks them again. As one mutation the pass
+// lost the write race on nearly every attempt (148 runs, 3 commits in 28
+// minutes on 2026-10-23).
+export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean } = {}): Promise<SweepResult> {
   const result: SweepResult = { started: [], skipped_capped: [], skipped_busy: [] };
   const roles: any[] = await ctx.db.query("org_roles").collect();
   // One load per runner and folder, shared by every role that runs there in
   // this pass: a pool's slots, else the runner's own machine.
   const loads: LineLoads = new Map();
-  for (const seed of roles) {
+  for (const role of roles) {
     if (result.started.length >= MAX_STARTS_PER_SWEEP) break;
-    if (seed.status !== "active" || !lineStartsOn(seed)) continue;
-    let role = seed;
+    if (role.status !== "active" || !lineStartsOn(role)) continue;
     const before = loads.size;
     const load = await lineLoadFor(ctx, role, now, loads, roles);
-    if (o.dry && loads.size > before) (result.loads ??= []).push({ runner: load.runner, project_path: (await seatOf(ctx, role)).project_path ?? "", working: load.working, cap: load.cap, pool: load.pool ? load.pool.slots.map((sl) => ({ ...sl })) : null });
+    if (o.loads && loads.size > before) (result.loads ??= []).push({ runner: load.runner, project_path: (await seatOf(ctx, role)).project_path ?? "", working: load.working, cap: load.cap, pool: load.pool ? load.pool.slots.map((sl) => ({ ...sl })) : null });
     const handsCap = capsFor(role).hands_per_day;
     const handsLeft = handsCap == null ? Infinity : handsCap - countersFor(role, now).hands;
     const slots = freeSlots(load);
@@ -414,10 +422,7 @@ export async function sweepCore(ctx: Ctx, now = Date.now(), o: { dry?: boolean }
     for (const task of candidates.slice(0, room)) {
       // A pool run goes to the machine with the most free slots, in its checkout.
       const place = claimSlot(load);
-      const runId = o.dry ? `dry${place ? `@${place.device}` : ""}` : await startLineRun(ctx, role, task, now, place);
-      result.started.push({ role_id: String(role._id), task_id: String(task._id), run_id: String(runId) });
-      // recordHandStart counts from the row it is given: read it back.
-      if (!o.dry) role = await ctx.db.get(role._id);
+      result.started.push({ role_id: String(role._id), task_id: String(task._id), run_id: "planned", ...(place ? { place } : {}) });
     }
     if (candidates.length > room && room < sweepLeft) {
       const why = wait ?? (handsLeft <= slots ? "hands" : "runs");
@@ -427,9 +432,70 @@ export async function sweepCore(ctx: Ctx, now = Date.now(), o: { dry?: boolean }
   return result;
 }
 
-export const sweep = internalMutation({
+/**
+ * One planned start, checked again against the rows it changes: the role may
+ * still start a hand, the task is still an open cause with no run, and a pool
+ * machine still has a free slot. Null when any of that moved since the plan;
+ * the next pass plans again.
+ */
+export async function startPlanned(ctx: Ctx, p: { role_id: string; task_id: string; place?: RunPlace }, now = Date.now()): Promise<string | null> {
+  const role = await ctx.db.get(p.role_id);
+  if (!role || !roleMayStartHands(role, now)) return null;
+  const task = await ctx.db.get(p.task_id);
+  if (!task || task.status !== "open" || task.workflow_run_id || task.ephemeral) return null;
+  if (p.place && !(await slotStillFree(ctx, role, p.place))) return null;
+  return String(await startLineRun(ctx, role, task, now, p.place));
+}
+
+// The planned machine's slot, counted from the runs on that machine alone.
+async function slotStillFree(ctx: Ctx, role: any, place: RunPlace): Promise<boolean> {
+  const { runner } = await seatOf(ctx, role);
+  const device = await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", runner).eq("device_id", place.device)).first();
+  const slot = (device?.line_slots ?? []).find((s: any) => place.project_path === s.root || place.project_path.startsWith(`${s.root.replace(/\/+$/, "")}/`));
+  if (!slot) return false;
+  let working = 0;
+  for (const status of WORKING_RUN_STATUSES) {
+    const runs: any[] = await ctx.db.query("workflow_runs").withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", place.device).eq("status", status)).collect();
+    working += runs.filter((r) => r.org_role_id || r.task_id).length;
+  }
+  return working < slot.runs;
+}
+
+/** The pass in one transaction, as the tests drive it; `dry` plans only (orgLine.explain). */
+export async function sweepCore(ctx: Ctx, now = Date.now(), o: { dry?: boolean } = {}): Promise<SweepResult> {
+  const plan = await planSweep(ctx, now, { loads: o.dry });
+  if (o.dry) return { ...plan, started: plan.started.map((s) => ({ ...s, run_id: `dry${s.place ? `@${s.place.device}` : ""}` })) };
+  const started: SweepResult["started"] = [];
+  for (const s of plan.started) {
+    const runId = await startPlanned(ctx, s, now);
+    if (runId) started.push({ ...s, run_id: runId });
+  }
+  return { ...plan, started };
+}
+
+const placeArg = v.optional(v.object({ device: v.string(), project_path: v.string() }));
+
+export const plan = internalQuery({
   args: {},
-  handler: async (ctx) => sweepCore(ctx),
+  handler: async (ctx): Promise<SweepResult> => planSweep(ctx),
+});
+
+export const startOne = internalMutation({
+  args: { role_id: v.id("org_roles"), task_id: v.id("tasks"), place: placeArg },
+  handler: async (ctx, args): Promise<string | null> => startPlanned(ctx, args),
+});
+
+export const sweep = internalAction({
+  args: {},
+  handler: async (ctx): Promise<SweepResult> => {
+    const planned: SweepResult = await ctx.runQuery(internal.orgLine.plan, {});
+    const started: SweepResult["started"] = [];
+    for (const s of planned.started) {
+      const runId: string | null = await ctx.runMutation(internal.orgLine.startOne, { role_id: s.role_id as Id<"org_roles">, task_id: s.task_id as Id<"tasks">, ...(s.place ? { place: s.place } : {}) });
+      if (runId) started.push({ ...s, run_id: runId });
+    }
+    return { ...planned, started };
+  },
 });
 
 /** What the next sweep would start, and which roles wait and why, starting nothing. */

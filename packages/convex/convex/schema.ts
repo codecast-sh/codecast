@@ -33,6 +33,7 @@ import { machineResourceTables } from "./machineResourcesSchema";
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { momentsTables } from "./momentsSchema";
 import { lineTrialTables } from "./lineTrialSchema";
+import { orgRoleTokenTables } from "./orgRoleTokensSchema";
 import { slackTables } from "./slackSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
 import { decisionValidator, intentSourceValidator, milestoneValidator, questionValidator, scoreValidator } from "./lib/initiativeValidators";
@@ -133,6 +134,7 @@ export default defineSchema({
   ...ingestTables,
   ...momentsTables,
   ...lineTrialTables,
+  ...orgRoleTokenTables,
   ...slackTables,
   ...authTables,
   users: defineTable({
@@ -1304,6 +1306,10 @@ export default defineSchema({
     // server channel.
     .index("by_user_killed", ["user_id", "inbox_killed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
+    // The rows that can hold a host's checkout as shared (cloudPlacement
+    // findSharedCheckoutOccupant): a start reads these, not every station the
+    // host runs, so a station's transcript writes never conflict with a spawn.
+    .index("by_owner_device_workspace", ["user_id", "owner_device_id", "cloud_workspace"])
     // Sparse and written only at a worker's start, queue and end: the fleet's
     // running and queued rows for one user (subagentFleet.ts).
     .index("by_user_subagent_slot", ["user_id", "subagent_slot", "subagent_slot_at"])
@@ -6209,6 +6215,22 @@ export default defineSchema({
       // characters, no ids, written for `for`, the title it names. A title
       // short enough to list needs none; a new title is named again.
       named: v.optional(v.object({ name: v.string(), for: v.string() })),
+      // The value of fixing it and the family of its cause (problemScores.ts,
+      // learning-loop.md LL15): written by the scoring pass, read by the
+      // line's ranking and the Problems view. `version` is the prompt's
+      // SCORE_VERSION; the cluster is dropped when a new score is written.
+      scored: v.optional(v.object({
+        score: v.number(),
+        harm: v.number(),
+        reach: v.number(),
+        fixability: v.number(),
+        reason: v.string(),
+        root_cause: v.string(),
+        cluster_key: v.optional(v.string()),
+        cluster_name: v.optional(v.string()),
+        at: v.number(),
+        version: v.string(),
+      })),
     })),
     // The ground node's fields (LE5): the goal the cause threatens ("none"
     // parks it), what kind of change it needs, how much review it needs, and

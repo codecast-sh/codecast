@@ -22,6 +22,32 @@ export function countersFor(role: { counters?: RoleCounters | null }, now: numbe
   return { day, hands: 0, wakes: 0, tokens: 0 };
 }
 
+// Today's tokens live beside the role, one org_role_tokens row per session
+// that works for it: every station's transcript sync adds to its own row, so
+// none of them writes the role, and a spawn or a sweep reading the role never
+// loses a write race to them. `counters.tokens` on the role is not written.
+type Db = { db: any };
+
+/** Adds `tokens` to what `conversationId` spent for its role today. */
+export async function addRoleTokens(ctx: Db, roleId: any, conversationId: any, tokens: number, now: number): Promise<void> {
+  if (!tokens) return;
+  const day = utcDay(now);
+  const row = await ctx.db.query("org_role_tokens").withIndex("by_conversation_day", (q: any) => q.eq("conversation_id", conversationId).eq("day", day)).first();
+  if (row) await ctx.db.patch(row._id, { tokens: row.tokens + tokens });
+  else await ctx.db.insert("org_role_tokens", { role_id: roleId, conversation_id: conversationId, day, tokens });
+}
+
+/** The tokens every session of the role spent today. */
+export async function roleTokensToday(ctx: Db, roleId: any, now: number): Promise<number> {
+  const rows: any[] = await ctx.db.query("org_role_tokens").withIndex("by_role_day", (q: any) => q.eq("role_id", roleId).eq("day", utcDay(now))).collect();
+  return rows.reduce((n, r) => n + (r.tokens ?? 0), 0);
+}
+
+/** Today's counters with the tokens read from their own rows: for a surface that shows them. */
+export async function countersNow(ctx: Db, role: { _id: any; counters?: RoleCounters | null }, now: number): Promise<RoleCounters> {
+  return { ...countersFor(role, now), tokens: await roleTokensToday(ctx, role._id, now) };
+}
+
 // The role's stored caps. A role starts with none and an absent daily limit
 // is no limit (orgCapacity.atCap); only what a person set holds.
 export type RoleCaps = RoleDailyCaps & { cards?: number; line_on?: boolean };

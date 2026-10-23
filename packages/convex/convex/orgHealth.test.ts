@@ -136,6 +136,8 @@ function fixtures(extra: Record<string, any[]> = {}) {
       { _id: "cm_old", team_id: TEAM, channel_id: "chat_channels_1", user_id: ME, content: "@growth old", mentions: [{ kind: "role", role_id: GROWTH, short_id: "or-1", handle: "growth" }], created_at: NOW - 10 * D },
     ],
     session_owners: [], managed_sessions: [], user_presence: [], project_updates: [], commits: [], artifacts: [], conversation_images: [], counters: [],
+    // Today's tokens: the standing session's own row (lib/orgCaps roleTokensToday).
+    org_role_tokens: [{ _id: "org_role_tokens_1", role_id: GROWTH, conversation_id: S_GROWTH, day: new Date(NOW).toISOString().slice(0, 10), tokens: 1000 }],
     ...extra,
   });
 }

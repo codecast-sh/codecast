@@ -1,7 +1,7 @@
 import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
 import { claimShareToken } from "./publicShare";
 import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
-import { countersFor } from "./lib/orgCaps";
+import { addRoleTokens } from "./lib/orgCaps";
 import { calibrationSlot } from "./usageCalibration";
 import { weightedTokens } from "@codecast/shared/contracts";
 import { linkLocalCommitToConversation } from "./gitActivity";
@@ -1119,13 +1119,8 @@ export async function rollUpUsage(
   };
   await recordUsageDays(ctx, conversation, turns);
   const roleId = conversation.standing_role_id ?? conversation.org_role_id;
-  if (roleId) {
-    const role = await ctx.db.get(roleId);
-    if (role) {
-      const counters = countersFor(role, now);
-      await ctx.db.patch(role._id, { counters: { ...counters, tokens: counters.tokens + input + output } });
-    }
-  }
+  // On the session's own row, never the role (lib/orgCaps addRoleTokens).
+  if (roleId) await addRoleTokens(ctx, roleId, conversation._id, input + output, now);
 }
 
 export const addMessage = mutation({

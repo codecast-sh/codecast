@@ -13,7 +13,7 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { listTeamMachines, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
 import { roleOfConversation } from "./lib/actor";
 import { canAccessTask } from "./lib/access";
-import { capsFor, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
+import { capsFor, countersFor, roleStartsOnItsOwn, roleTokensToday } from "./lib/orgCaps";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { charterLine, type CharterRow } from "./lib/orgCharter";
 import { applyHandoffLink, findHandoffSource, handoffChildFields } from "./handoff";
@@ -395,7 +395,7 @@ export const createSessionFromCli = mutation({
     // A review hand is gated by the role whose work it judges, not filed
     // under it, so its verdict is recorded as its own.
     const review = args.review_for_task ? await resolveReviewTarget(ctx, userId, args.review_for_task) : null;
-    if (review?.role) await gateRoleCaps(review.role);
+    if (review?.role) await gateRoleCaps(ctx, review.role);
     // A hand's first turn opens with the unattended opening and the hand
     // briefing (the-line.md L2): who it works for and how it ends its turn.
     // A workflow station is nested under its run's session, and the run's
@@ -469,7 +469,7 @@ export const createSessionFromCli = mutation({
 export async function gateHandStart(ctx: { db: any }, spawner: any | null): Promise<any | null> {
   const role = spawner ? await roleOfConversation(ctx, spawner) : null;
   if (!role) return null;
-  await gateRoleCaps(role);
+  await gateRoleCaps(ctx, role);
   return role;
 }
 
@@ -497,7 +497,7 @@ async function resolveReviewTarget(ctx: { db: any }, userId: Id<"users">, shortI
   return { task, role: null };
 }
 
-export async function gateRoleCaps(role: any): Promise<void> {
+export async function gateRoleCaps(ctx: { db: any }, role: any): Promise<void> {
   if (role.status === "paused") throw new Error(`${role.name} (@${role.handle}) is paused: no new hands until a person resumes it`);
   if (role.status === "retired") throw new Error(`${role.name} (@${role.handle}) is retired`);
   // Off, the role recommends and a person starts the work; it never asks a
@@ -511,7 +511,9 @@ export async function gateRoleCaps(role: any): Promise<void> {
   if (atCap(counters.hands, caps.hands_per_day)) {
     throw new Error(`${role.name} (@${role.handle}) reached today's limit of ${caps.hands_per_day} hands; write one line in the brief, pin that you are waiting for tomorrow, and wait`);
   }
-  if (atCap(counters.tokens, caps.tokens_per_day)) {
+  // Tokens are read only for a role with a token limit: their rows change with
+  // every transcript sync, and a spawn that reads them races every station.
+  if (caps.tokens_per_day != null && atCap(await roleTokensToday(ctx, role._id, now), caps.tokens_per_day)) {
     throw new Error(`${role.name} (@${role.handle}) reached today's limit; write one line in the brief, pin that you are waiting for tomorrow, and wait`);
   }
 }

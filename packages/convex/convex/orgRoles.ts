@@ -54,7 +54,7 @@ import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } f
 import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
 import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
-import { capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
+import { capsFor, countersNow, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
 import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, findRoleRoutine, findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
 import { autonomyChangeWords, defaultTrustFor, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
@@ -2162,7 +2162,7 @@ export async function roleForSession(ctx: Ctx, userId: Id<"users">, sessionRef: 
     line_workflow_slug: lineSlugOf(role),
     own_agent: conv.agent_type,
     is_standing: String(conv.standing_role_id ?? "") === String(role._id),
-    counters: countersFor(role, Date.now()),
+    counters: await countersNow(ctx, role, Date.now()),
     caps: capsFor(role),
   };
 }

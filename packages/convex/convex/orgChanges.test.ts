@@ -67,12 +67,17 @@ describe("org history round trips", () => {
   test("a new role has no daily limits, starts hands past any count, and a limit a person sets holds until lifted", async () => {
     const f = fixture(); const role = await f.role();
     expect((await f.db.get(role._id)).caps).toBeUndefined();
-    const busy = { ...(await f.db.get(role._id)), trust: "direct", counters: { day: new Date().toISOString().slice(0, 10), hands: 500, wakes: 900, tokens: 50_000_000 } };
-    await expect(gateRoleCaps(busy)).resolves.toBeUndefined();
+    const day = new Date().toISOString().slice(0, 10);
+    const busy = { ...(await f.db.get(role._id)), trust: "direct", counters: { day, hands: 500, wakes: 900, tokens: 0 } };
+    // Today's tokens are their own rows, one per session (lib/orgCaps roleTokensToday).
+    await f.db.insert("org_role_tokens", { role_id: role._id, conversation_id: "conversations_x", day, tokens: 50_000_000 });
+    await expect(gateRoleCaps(f.ctx(), busy)).resolves.toBeUndefined();
     expect(roleMayStartHands({ ...busy, caps: { line_on: true } }, Date.now())).toBe(true);
     await performSetCaps(f.ctx(), ME as any, { role_id: role._id, hands: 3 });
     expect((await f.db.get(role._id)).caps).toEqual({ hands_per_day: 3 });
-    await expect(gateRoleCaps({ ...busy, caps: { hands_per_day: 3 } })).rejects.toThrow("limit of 3 hands");
+    await expect(gateRoleCaps(f.ctx(), { ...busy, caps: { hands_per_day: 3 } })).rejects.toThrow("limit of 3 hands");
+    // A token limit reads the sessions' rows: 50M spent today is past 1000.
+    await expect(gateRoleCaps(f.ctx(), { ...busy, caps: { tokens_per_day: 1000 } })).rejects.toThrow("reached today's limit");
     expect(roleMayStartHands({ ...busy, caps: { hands_per_day: 3, line_on: true } }, Date.now())).toBe(false);
     await performSetCaps(f.ctx(), ME as any, { role_id: role._id, tokens: 1000 });
     expect((await f.db.get(role._id)).caps).toEqual({ hands_per_day: 3, tokens_per_day: 1000 });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { CAUSE_WINDOW, LINE_CARD_GATE_NODE, LINE_RUNS_PER_RUNNER, LINE_STARTED_PREFIX, MAX_STARTS_PER_SWEEP, lineCandidates, lineQueueFor, sweepCore } from "./orgLine";
+import { CAUSE_WINDOW, LINE_CARD_GATE_NODE, LINE_RUNS_PER_RUNNER, LINE_STARTED_PREFIX, MAX_STARTS_PER_SWEEP, lineCandidates, lineQueueFor, planSweep, startPlanned, sweepCore } from "./orgLine";
 import { lineSlugOf, normalizeLineSlug, performSetLine } from "./orgRoles";
 import { HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { normalizeGitOrigin } from "@codecast/shared/contracts";
@@ -487,6 +487,29 @@ describe("orgLine admission (LE6)", () => {
       const next = await sweepCore(ctx, NOW + 60_000);
       expect(next.started).toHaveLength(1);
       expect(tables.daemon_commands.at(-1)!.target_device_id).toBe("h1");
+    });
+
+    test("a planned start checks again what moved since the plan: the task, the role's hands, the host's slot", async () => {
+      const { ctx, tables } = fixtures({
+        role: caps({ hands_per_day: 100 }),
+        extra: { initiatives, tasks: causes(4), devices: [laptop, host("h1", 2)] },
+      });
+      const plan = await planSweep(ctx, NOW);
+      expect(plan.started.map((s) => s.place?.device)).toEqual(["h1", "h1"]);
+      expect(tables.workflow_runs).toHaveLength(0);
+      // The first cause started some other way since the plan: its start is dropped.
+      tables.tasks.find((t) => t._id === plan.started[0].task_id)!.status = "in_progress";
+      expect(await startPlanned(ctx, plan.started[0], NOW)).toBeNull();
+      // Another start took the host's last slots meanwhile.
+      tables.workflow_runs.push(...working(2, { runner_device: "h1" }).map((r, n) => ({ ...r, _id: `workflow_runs_h${n}` })));
+      expect(await startPlanned(ctx, plan.started[1], NOW)).toBeNull();
+      tables.workflow_runs.length = 0;
+      expect(await startPlanned(ctx, plan.started[1], NOW)).toBeTruthy();
+      expect(tables.workflow_runs[0]).toMatchObject({ runner_device: "h1", project_path: "/home/ubuntu/h1/growth" });
+      // A role out of hands starts nothing, whatever the plan said.
+      tables.org_roles[0].caps = { ...tables.org_roles[0].caps, hands_per_day: 1 };
+      const next = { role_id: plan.started[1].role_id, task_id: "tasks_c2" };
+      expect(await startPlanned(ctx, next, NOW)).toBeNull();
     });
 
     test("with no online host offering the checkout, the run stays on the runner's own machine and cap", async () => {

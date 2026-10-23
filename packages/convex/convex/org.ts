@@ -18,7 +18,7 @@ import { overlapsAmong, planProjectsOf, resolveRoleRef, rolesInBoundary, type Sc
 import { personReportsToMap } from "./orgPeople";
 import { pendingOnLadder } from "./sessionDecisions";
 import { isScopeless, type Scope } from "./lib/orgScope";
-import { capsFor, countersFor, trustOf } from "./lib/orgCaps";
+import { capsFor, countersNow, trustOf } from "./lib/orgCaps";
 import type { RoleDailyCaps } from "@codecast/shared/contracts/orgCapacity";
 import { findRoleRoutine } from "./lib/orgRoutine";
 import { roleWakeOf } from "@codecast/shared/contracts/rolePlaybook";
@@ -1450,7 +1450,7 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   const answered: any[] = await ctx.db.query("session_decisions").withIndex("by_status_created", (q: any) => q.eq("status", "answered").gte("created_at", dayStart)).take(500);
   for (const d of answered) if ((d.hops ?? []).some((h: any) => String(h.role_id) === String(role._id))) decisions.answered_today++;
 
-  const counters = countersFor(role, now);
+  const counters = await countersNow(ctx, role, now);
   const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
   const standing = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
   const uncounted = [standing, ...hands.map((h) => scan.sessions.get(h._id.toString())?.raw)].filter((c) => c && c.agent_type !== "claude_code").length;

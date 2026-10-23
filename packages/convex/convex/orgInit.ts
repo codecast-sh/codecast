@@ -35,7 +35,7 @@ import {
   resolveScopeRef,
   rolesInBoundary, performSetAuthority, performSetProjectLead } from "./orgRoles";
 import { performAcceptUpgrade, performCatalog, performUpsertInstance, hiredRowKey, templateLine } from "./orgTemplates";
-import { capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
+import { capsFor, countersNow, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
 import { autonomyChangeWords } from "@codecast/shared/contracts/roleAutonomy";
 import { findDecision } from "./sessionDecisions";
 import { extractRepoFromRemoteUrl, isRecRoomKey, threadStateHeadline } from "@codecast/shared/contracts";
@@ -354,7 +354,7 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
       trust: trustOf(role),
       starts_on_its_own: roleStartsOnItsOwn(role),
       caps,
-      counters: countersFor(role, now),
+      counters: await countersNow(ctx, role, now),
       reports_to: parent,
       scope: scopeNames,
       whole_workspace: isWholeWorkspaceRole(role),

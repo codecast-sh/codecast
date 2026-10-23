@@ -10,7 +10,7 @@ import { parseStandingSection } from "@codecast/shared/contracts/briefStanding";
 import { areaSignalsOf, areaStatusLine, areaStatusOf, emptyReached, handRouteOf, newestStandingFirst, type AreaGoal, type AreaInitiative, type AreaInput, type AreaReached, type AreaSession, type AreaStandingLine, type AreaWaitingSession, type RoleArea } from "@codecast/shared/contracts/orgAreas";
 import { readWorkspaceInitiatives, servedInitiatives } from "./lib/roleInitiatives";
 import { planProjectsOf } from "./orgRoles";
-import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
+import { capsFor, countersNow, utcDay } from "./lib/orgCaps";
 import { scopeIds } from "./lib/orgScope";
 import { ownsWork, projectsWithoutAnOwnerAmongWatchers } from "@codecast/shared/contracts/orgLead";
 import { atCap, capacity, capacityFlags, DAILY_CAP_KEYS, type HealthFlag, isOverloaded, overloadDetails, overloadRatio, type RoleLedger, type RoleLoad } from "@codecast/shared/contracts/orgCapacity";
@@ -594,7 +594,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       open_stalls: stalls + stuckHands + unseenWaits + goalStalls,
       cap_hit_days: activity.wakes_7d.cap_hit_days,
     };
-    const counters = countersFor(role, now);
+    const counters = await countersNow(ctx, role, now);
     const spend = {
       wakes_today: counters.wakes,
       wakes_7d_avg: activity.wakes_7d.total / 7,

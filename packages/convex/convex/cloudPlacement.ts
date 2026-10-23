@@ -88,10 +88,18 @@ export async function findSharedCheckoutOccupant(
   deviceId: string,
   match: CheckoutMatch,
 ): Promise<CheckoutOccupantRow | null> {
-  const owned = await ctx.db
-    .query("conversations")
-    .withIndex("by_owner_device", (q: any) => q.eq("user_id", userId).eq("owner_device_id", deviceId))
-    .collect();
+  // A merging start meets only shared rows (sharedCheckoutOccupant), so it
+  // reads only those: every start on a busy host otherwise read every station
+  // the host runs, and lost write races to their transcript syncs.
+  const owned = match.merging
+    ? await ctx.db
+      .query("conversations")
+      .withIndex("by_owner_device_workspace", (q: any) => q.eq("user_id", userId).eq("owner_device_id", deviceId).eq("cloud_workspace", "shared"))
+      .collect()
+    : await ctx.db
+      .query("conversations")
+      .withIndex("by_owner_device", (q: any) => q.eq("user_id", userId).eq("owner_device_id", deviceId))
+      .collect();
   const rows: CheckoutOccupantRow[] = owned.map((c: any) => ({
     conversation_id: c._id.toString(),
     short_id: c.short_id ?? null,
