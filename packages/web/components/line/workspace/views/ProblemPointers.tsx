@@ -14,9 +14,9 @@ import "./pointers.css";
 
 /** The Problems list over every process with no chip or search: its rows (each problem's one status) and its count per chip. */
 /** `process`: one line's list instead (the Line page's own line, or For you narrowed to it); its pointers then open that line's chip. */
-export function useAllProblems({ model, workspace, selection, process = null }: Pick<LineViewProps, "model" | "workspace" | "selection"> & { process?: string | null }) {
+export function useAllProblems({ model, workspace, selection, process = null, read = true }: Pick<LineViewProps, "model" | "workspace" | "selection"> & { process?: string | null; read?: boolean }) {
   const unfiltered = useMemo(() => ({ ...selection, status: null, process, q: null, sort: null }), [selection, process]);
-  return useProblemRows(model, workspace, unfiltered);
+  return useProblemRows(model, workspace, unfiltered, read);
 }
 
 /** The Problems list's count per chip, over every process (or `process`) with no chip or search. */

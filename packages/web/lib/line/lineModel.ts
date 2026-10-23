@@ -71,6 +71,7 @@ import type { LabelVerdict } from "./lineLabels";
 import { isEmptyFinding, repeatedFindings } from "./findingEvidence";
 import { faultsNaming, stepFaults, type LineFault } from "./lineFaults";
 import { decisionOutcome, gateCard, type DecisionOutcome } from "./decisionOutcome";
+import { drain, yieldEvery, type Sliced } from "../slicedWork";
 
 export { lineLabelKey, type LabelVerdict } from "./lineLabels";
 
@@ -863,7 +864,7 @@ type RowsIndex = {
 /** The indexes every build over the same rows reads, made once for them: one rebuild draws each process over one row set. */
 const rowsIndexes = new WeakMap<object, { runs: object; signals: object; index: RowsIndex }>();
 
-function rowsIndex(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], signals: ReadonlyArray<MapSignal>): RowsIndex {
+function* rowsIndexSteps(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], signals: ReadonlyArray<MapSignal>): Sliced<RowsIndex> {
   const hit = rowsIndexes.get(tasks);
   if (hit && hit.runs === runs && hit.signals === signals) return hit.index;
   const group = <T,>(rows: ReadonlyArray<T>, keyOf: (r: T) => string | null | undefined) => {
@@ -872,16 +873,25 @@ function rowsIndex(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], s
     return by;
   };
   const taskById = new Map(tasks.map((t) => [t._id, t]));
+  yield;
   const anyRunByTask = group(runs, (r) => r.task_id);
   const process = processIndex(runs as ReadonlyArray<GraphRun>, (id) => (taskById.get(id) as { project_id?: string | null } | undefined)?.project_id);
-  const index: RowsIndex = {
-    graphs: projectGraphs(runs as ReadonlyArray<GraphRun>, signals as ReadonlyArray<{ task_id: string; source: string }>),
-    taskById,
-    taskByRef: new Map(tasks.flatMap((t) => (t.short_id ? [[t.short_id, t] as const] : []))),
-    anyRunByTask,
-    signalsByTask: group(signals, (s) => s.task_id),
-    unrunByProcess: new Map([...group(tasks.filter((t) => t.cause && !anyRunByTask.has(t._id)), (t) => process.task(t._id))].map(([k, ts]) => [k, ts.map((t) => t._id)])),
-  };
+  const graphs = projectGraphs(runs as ReadonlyArray<GraphRun>, signals as ReadonlyArray<{ task_id: string; source: string }>);
+  yield;
+  const taskByRef = new Map(tasks.flatMap((t) => (t.short_id ? [[t.short_id, t] as const] : [])));
+  const signalsByTask = group(signals, (s) => s.task_id);
+  yield;
+  const unrunByProcess = new Map<string, string[]>();
+  const tick = yieldEvery(2000);
+  for (const t of tasks) {
+    if (tick()) yield;
+    if (!t.cause || anyRunByTask.has(t._id)) continue;
+    const k = process.task(t._id);
+    if (!k) continue;
+    const at = unrunByProcess.get(k);
+    if (at) at.push(t._id); else unrunByProcess.set(k, [t._id]);
+  }
+  const index: RowsIndex = { graphs, taskById, taskByRef, anyRunByTask, signalsByTask, unrunByProcess };
   rowsIndexes.set(tasks, { runs, signals, index });
   return index;
 }
@@ -893,8 +903,13 @@ function rowsIndex(runs: LineModelRows["runs"], tasks: LineModelRows["tasks"], s
  * the project's busiest.
  */
 export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel {
+  return drain(lineModelSteps(rows, graphKey));
+}
+
+/** buildLineModel, stopping every few runs and problems (lib/slicedWork): the line built in slices, off one long task. */
+export function* lineModelSteps(rows: LineModelRows, graphKey: string): Sliced<LineModel> {
   const signals = rows.signals ?? [];
-  const index = rowsIndex(rows.runs, rows.tasks, signals);
+  const index = yield* rowsIndexSteps(rows.runs, rows.tasks, signals);
   const { graphs, taskById, anyRunByTask, signalsByTask, taskByRef } = index;
   const key = graphKey || graphs[0]?.key || CODECAST_LINE;
   const isLine = isCodecastLine(key);
@@ -931,7 +946,13 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
     list.push(d);
     decisionsByRun.set(d.workflow_run_id, list);
   }
-  const reads = runs.map((r) => ({ run: r, task: r.task_id ? taskById.get(r.task_id) : undefined, read: readRun(r, r.task_id ? taskById.get(r.task_id) : undefined, decisionsByRun.get(r._id) ?? [], g) }));
+  const reads: Array<{ run: MapRun; task: LineModelRows["tasks"][number] | undefined; read: RunRead }> = [];
+  const readTick = yieldEvery(20);
+  for (const r of runs) {
+    if (readTick()) yield;
+    const task = r.task_id ? taskById.get(r.task_id) : undefined;
+    reads.push({ run: r, task, read: readRun(r, task, decisionsByRun.get(r._id) ?? [], g) });
+  }
 
   // ── labels by decision ──
   const labelsBy = new Map<string, DecisionLabel[]>();
@@ -1076,7 +1097,9 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
 
   // ── each step's decisions, and the runs as paths ──
   const runModels: LineRunModel[] = [];
+  const runTick = yieldEvery(40);
   for (const { run, task, read } of reads) {
+    if (runTick()) yield;
     const caseTitle = task?.title ?? run.task_title ?? "A run";
     const caseRef = task?.short_id ?? run.task_short_id ?? null;
     for (const v of read.visits) {
@@ -1149,7 +1172,9 @@ export function buildLineModel(rows: LineModelRows, graphKey: string): LineModel
   ];
   const coverage = deployCoverage(rows.deploys);
   const answers = (asked: IssueRead["asked"]) => asked.every(([kind, arg, was]) => (kind === "said" ? readById.get(arg)?.visits : foldFixAt(arg)) === was);
+  const issueTick = yieldEvery(5);
   for (const taskId of causeIds) {
+    if (issueTick()) yield;
     const task = taskById.get(taskId);
     const project = (task as { project_id?: string | null } | undefined)?.project_id ?? null;
     // The clock reaches a problem only through a run's age or end and a watch's deadline (causeWhere, causeHistory): one

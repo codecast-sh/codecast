@@ -140,9 +140,12 @@ function rowOf(issue: LineIssue, input: Parameters<typeof problemRow>[1]): Probl
   return row;
 }
 
+const NO_ROWS: Array<ProblemRow & { sig: string }> = [];
+
 /** Every problem's row with its one status, and the count per chip: what a page that only counts or looks a problem
- *  up reads, without the list's sections, chart and figures. */
-export function useProblemRows(model: LineModel, workspace: LineWorkspace, selection: LineSelection) {
+ *  up reads, without the list's sections, chart and figures. `read` false reads none (a page that looks one up only
+ *  sometimes): the rows are made when it turns true. */
+export function useProblemRows(model: LineModel, workspace: LineWorkspace, selection: LineSelection, read = true) {
   const range = isOverviewRange(selection.win) ? selection.win : DEFAULT_RANGE;
   const status = isStatusKey(selection.status) ? selection.status : null;
   const sort: ProblemSort = isProblemSort(selection.sort) ? selection.sort : null;
@@ -169,6 +172,7 @@ export function useProblemRows(model: LineModel, workspace: LineWorkspace, selec
   const kept = useRef(new Map<string, ProblemRow & { sig: string }>());
   const process = selection.process && workspace.problems.some((i) => i.process === selection.process) ? selection.process : null;
   const all = useMemo(() => {
+    if (!read) return NO_ROWS;
     const next = new Map<string, ProblemRow & { sig: string }>();
     const rows = unfoldedRows(model, workspace, win);
     const out = foldTwins(workspace.problems.filter((i) => !lessons.has(i.id) && (!process || i.process === process)).map((i) => rows.get(i.id)!), workspace.overlaps).map((r) => {
@@ -180,7 +184,7 @@ export function useProblemRows(model: LineModel, workspace: LineWorkspace, selec
     });
     kept.current = next;
     return out;
-  }, [model, workspace, process, lessons, win]);
+  }, [read, model, workspace, process, lessons, win]);
 
   const counts = useMemo(() => statusCounts(all, q, filter.found), [all, q, filter.found]);
   return { all, counts, process, filter, sort, range, win, q, projectName };

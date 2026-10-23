@@ -11,11 +11,13 @@ import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals"
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useSyncProjectTasks } from "../../hooks/useSyncTasks";
 import { useSyncWorkspaceProjects } from "../../hooks/useSyncProjects";
-import { isLineCard, lineRollup, type LineCauseTask, type LineFlowRun, type LineProject } from "../../lib/lineFlow";
+import { isLineCard, type LineCauseTask, type LineFlowRun, type LineProject } from "../../lib/lineFlow";
+import { lineRollup } from "../../lib/lineRollup";
 import { useLineAdmissions } from "./map/useLineAdmission";
 import { useSharedMemos } from "../../hooks/useSharedMemos";
 
 const RUNS_FEED = { limit: 200 };
+const NO_ROLLUP: ReturnType<typeof lineRollup> = [];
 
 const causeSig = (t: TaskItem & LineCauseTask) =>
   t.cause ? `${t.status}|${t.updated_at ?? 0}|${t.watch_until ?? 0}|${t.goal_ref ?? ""}|${t.cause.signal_count}|${t.cause.dissolved?.at ?? 0}|${t.cause.dissolved?.fixed_at ?? 0}|${t.priority ?? ""}|${t.closed_at ?? 0}|${t.resolved_at ?? 0}|${t.project_id ?? ""}|${t.readiness ?? ""}|${t.assignee ?? ""}` : `|${t.project_id ?? ""}`;
@@ -48,7 +50,7 @@ export function heldTask(tasks: Record<string, HeldTask> | undefined, ref: strin
  *  `workspace` reads the floor where the project lives (its stored access
  *  key) when that is not the active workspace, so a project opened from
  *  another team shows its line without moving the viewer's active team. */
-export function useLineFloor(project?: string | null, workspace?: string | null) {
+export function useLineFloor(project?: string | null, workspace?: string | null, { rollup: withRollup = true }: { rollup?: boolean } = {}) {
   // Kept outside the fiber (useSharedMemos): a discarded render of the line reads these rows back, the same arrays, so
   // nothing derived from them is computed twice.
   const { useShared, useSharedRows } = useSharedMemos("floor");
@@ -71,6 +73,7 @@ export function useLineFloor(project?: string | null, workspace?: string | null)
 
   const lineRows = useShared(() => ({ signals, tasks, runs, decisions: cards as Array<SessionDecisionItem & { created_at?: number }> }), [signals, tasks, runs, cards]);
   const admissions = useLineAdmissions(projects);
-  const rollup = useShared(() => lineRollup(lineRows, projects, now, undefined, admissions), [lineRows, projects, now, admissions]);
+  // The line app reads its roll-up in its own sliced job (useLineWorkspace), so it asks for none here.
+  const rollup = useShared(() => (withRollup ? lineRollup(lineRows, projects, now, undefined, admissions) : NO_ROLLUP), [withRollup, lineRows, projects, now, admissions]);
   return { now, tasks, projects, lineRows, rollup, admissions, ready };
 }

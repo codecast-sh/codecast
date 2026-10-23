@@ -198,7 +198,8 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
   const warm = useMemo(() => [order[at + 1], order[at - 1], order.find((n) => n.key === hovered)].filter((n) => n?.decisionId).map((n) => n!.decisionId!), [order, at, hovered]);
   const toProblem = (n: LineNeed | null) => (taskId: string) => select({ view: "problems", case: taskId, run: null, graph: n?.process ?? selection.graph });
   const toRun = (n: LineNeed | null) => (runId: string, taskId: string | null, step?: string) => select({ view: "problems", run: runId, graph: n?.process ?? selection.graph, ...(step ? { step } : {}) }, taskId);
-  const allProblems = useAllProblems({ model, workspace, selection, process: line });
+  // Only a problem the address names that is not in the list reads its row.
+  const allProblems = useAllProblems({ model, workspace, selection, process: line, read: !!missing });
   // A problem the address names that is not in the list: its name, where it stands, and what moved it.
   const left = useMemo(() => {
     if (!missing) return null;

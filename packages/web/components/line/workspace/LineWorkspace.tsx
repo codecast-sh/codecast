@@ -298,7 +298,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
 
         <div className="lw-app-body">
           {/* Until the feeds have answered, the count is the cache's: shown dim, so a number that is about to move never reads as settled. */}
-          <nav className="lw-nav" aria-label="Line" data-line-nav data-settling={ws.ready ? undefined : ""}>
+          <nav className="lw-nav" aria-label="Line" data-line-nav data-settling={ws.ready && ws.complete ? undefined : ""}>
             {LINE_VIEWS.map((v) => {
               const Icon = ICONS[v];
               return (
@@ -317,7 +317,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
             <main className="lw-stage" ref={stageRef}>
               {settings && model && !unresolved ? (
                 <LineSettingsStage projectId={projectId} line={drawnLine} lines={picks} projects={ws.projects} rollups={ws.allRollups} processOf={ws.process.project} href={settingsAt} />
-              ) : !model || unresolved ? <Skeleton /> : (
+              ) : !model || unresolved || (!ws.complete && selection.view !== "foryou") ? <Skeleton /> : (
                 // The page rises in only while the tab is on screen: a hidden tab runs no frames, so an entrance never
                 // finishes there, and Chrome keeps every page it replaced (and all that page read) until it would.
                 <div className="lw-stage-in" data-enter={documentShown() ? "" : undefined} key={scoped ? `${selection.view}:${selection.mode}:${model.graphKey}:${projectId ?? "all"}` : `foryou:${projectId ?? "all"}`}>
