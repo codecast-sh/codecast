@@ -11,9 +11,9 @@ import { lineRefHref } from "../../../lib/line/lineWorkspaceUrl";
 import { useLineCauseActions, useLineCauses, type LineCauseRow } from "./useLineCause";
 
 const STATUS_WORDS: Record<string, string> = {
-  open: "waiting for the line",
-  in_progress: "on the line",
-  in_review: "on the line",
+  open: "waiting for its flow",
+  in_progress: "in its flow",
+  in_review: "in its flow",
   done: "done",
   dropped: "dropped",
 };

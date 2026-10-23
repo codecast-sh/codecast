@@ -628,3 +628,7 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-seg[data-parallel] { border-style: solid; border-color: color-mix(in srgb, var(--lw-ink-3) 28%, transparent); }
 .fd-seg-par { font-weight: 500; color: var(--lw-ink-3); }
 .fd-seg[data-parallel] .fd-step-wrap { max-width: none; }
+/* A flow's page heads the app with the way back to every flow. */
+.lw-title-up { color: var(--lw-ink-3); text-decoration: none; font-weight: 600; }
+.lw-title-up:hover { color: var(--lw-ink); }
+.lw-title-sep { margin: 0 7px; color: var(--lw-ink-3); font-weight: 400; }

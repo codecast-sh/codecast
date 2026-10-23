@@ -59,7 +59,7 @@ export function LineSettingsStage({ projectId, line, lines, projects, rollups, p
   if (running.length > 1) {
     return (
       <div className="lw-stage-fill lset-pick" data-lset-pick="project">
-        <div className="lset-head"><h2 className="lset-head-t">{line ? processName(line).title : "Line"}</h2><span className="lset-dim">runs in {running.length} projects</span></div>
+        <div className="lset-head"><h2 className="lset-head-t">{line ? processName(line).title : "Flow"}</h2><span className="lset-dim">runs in {running.length} projects</span></div>
         <ul className="lset-pick-list" role="list">
           {running.map((k) => <li key={k}><Link href={href({ project: param(k), graph: line })} className="lset-pick-row" data-lset-pick-row={k}>{name(k)}</Link></li>)}
         </ul>
@@ -70,9 +70,9 @@ export function LineSettingsStage({ projectId, line, lines, projects, rollups, p
   const rows = lines.map((g) => ({ g, projects: projectsOfLine(g.key, rollups, processOf) })).filter((x) => x.projects.length > 0);
   return (
     <div className="lw-stage-fill lset-pick" data-lset-pick="line">
-      <div className="lset-head"><h2 className="lset-head-t">Settings</h2><span className="lset-dim">{rows.length ? "pick a line" : "no line has run here yet"}</span></div>
+      <div className="lset-head"><h2 className="lset-head-t">Settings</h2><span className="lset-dim">{rows.length ? "pick a flow" : "no flow has run here yet"}</span></div>
       <ul className="lset-pick-list" role="list">
-        <li><Link href="/line/settings?section=starts" className="lset-pick-row" data-lset-pick-row="starts"><span>Who starts work</span><span className="lset-dim">every line's switch and limits</span></Link></li>
+        <li><Link href="/flows/settings?section=starts" className="lset-pick-row" data-lset-pick-row="starts"><span>Who starts work</span><span className="lset-dim">every flow's switch and limits</span></Link></li>
         {rows.map(({ g, projects: ps }) => (
           <li key={g.key}>
             <Link href={href(ps.length === 1 ? { project: param(ps[0]), graph: g.key } : { graph: g.key })} className="lset-pick-row" data-lset-pick-row={g.key}>

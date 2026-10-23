@@ -1,19 +1,13 @@
 "use client";
-import { AuthGuard } from "../../../components/AuthGuard";
-import { ErrorBoundary } from "../../../components/ErrorBoundary";
-import { LinePage } from "../../../components/line/LinePage";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 
-// /line/settings?project=<p>&graph=<line>: the settings of a line, a page of
-// the line app (LineWorkspace `settings`), in the workspace /line reads and
-// with its nav and switchers. lineSettingsHref links here, with a ?section= or
-// ?station= to land on; with no project, the line names it, else the page
-// lists the lines.
+// /line/settings: the address flow settings had before /flows/settings, its query kept.
 export default function LineSettingsRoute() {
-  return (
-    <AuthGuard>
-      <ErrorBoundary name="Line settings">
-        <LinePage settings />
-      </ErrorBoundary>
-    </AuthGuard>
-  );
+  const router = useRouter();
+  const search = useSearchParams();
+  const q = search?.toString() ?? "";
+  const to = `/flows/settings${q ? `?${q}` : ""}`;
+  useWatchEffect(() => { router.replace(to); }, [router, to]);
+  return null;
 }

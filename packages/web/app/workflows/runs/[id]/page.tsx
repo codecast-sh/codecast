@@ -174,7 +174,7 @@ function RunDetailContent({ runId }: { runId: string }) {
   return (
     <div className="flex flex-col h-full overflow-hidden bg-sol-bg">
       <div ref={titlebarRef} className="flex items-center gap-3 px-5 py-3 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
-        <Link href={line ? (lineHere ? lineHere({ run: run._id, case: run.task_id ?? null }) : "/line") : "/workflows"} className="text-sol-text-dim hover:text-sol-text transition-colors" title={line ? "Back to the line" : "Back to workflows"}>
+        <Link href={line ? (lineHere ? lineHere({ run: run._id, case: run.task_id ?? null }) : "/flows") : "/workflows"} className="text-sol-text-dim hover:text-sol-text transition-colors" title={line ? "Back to flows" : "Back to workflows"}>
           <ChevronLeft className="w-4 h-4" />
         </Link>
         <div className="min-w-0 flex-1">
@@ -192,7 +192,7 @@ function RunDetailContent({ runId }: { runId: string }) {
           </div>
           {/* What ran, and how long and what it cost unless the card below says so. */}
           <p className="text-xs text-sol-text-dim mt-0.5 truncate" data-run-subtitle>
-            {line ? `Line run${projectTitle ? ` on ${projectTitle}` : ""}` : run.task_title || task?.title ? `Run of ${workflow?.name ?? run.workflow_name ?? "a workflow"}` : "Workflow run"}
+            {line ? `Flow run${projectTitle ? ` on ${projectTitle}` : ""}` : run.task_title || task?.title ? `Run of ${workflow?.name ?? run.workflow_name ?? "a workflow"}` : "Workflow run"}
             {run.goal_override && !run.task_title ? `: ${run.goal_override}` : ""}
             {counts && counts.sessions > 0 && <span> · {counts.sessions} {counts.sessions === 1 ? "session" : "sessions"}</span>}
             {!line && run.total_tokens ? <span title="Tokens across the run's sessions"> · {wfFmtTokens(run.total_tokens)} tok</span> : null}
@@ -227,7 +227,7 @@ function RunDetailContent({ runId }: { runId: string }) {
                 : <ReportChip href="#run-card-diff" title="The change's diff, on the card below">+{card.diff.added} −{card.diff.removed} in {card.diff.files} {card.diff.files === 1 ? "file" : "files"}</ReportChip>)}
               {/* This run played step by step, and its problem's whole life, in the project's line workspace (line-workspace.md LW1). */}
               {line && (
-                <ReportChip href={lineHere ? lineHere({ view: "replay", run: run._id, case: run.task_id ?? null }) : lineRefHref(run._id)} title={`Play this run through the line, step by step${projectForeign ? `, read from ${projectForeign.name}` : ""}`}>
+                <ReportChip href={lineHere ? lineHere({ view: "replay", run: run._id, case: run.task_id ?? null }) : lineRefHref(run._id)} title={`Play this run through its flow, step by step${projectForeign ? `, read from ${projectForeign.name}` : ""}`}>
                   Replay
                 </ReportChip>
               )}

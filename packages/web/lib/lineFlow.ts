@@ -209,7 +209,7 @@ export function admissionHold(a: LineAdmission): AdmissionHold | null {
   if (!a.role) return { why: "no one is in charge of this project's line, so nothing starts on its own", short: "No one in charge", stopped: "no one is in charge of this project's line" };
   const who = `@${a.role.handle}`;
   if (a.role.paused) return { why: `${who}, who runs this line, is paused, so nothing new starts`, short: "Paused", stopped: `${who}, who runs this line, is paused` };
-  if (!a.on) return { why: `${who}'s line is off, so nothing starts on its own`, short: "Line off", stopped: `${who}'s line is off` };
+  if (!a.on) return { why: `${who}'s flow is off, so nothing starts on its own`, short: "Flow off", stopped: `${who}'s flow is off` };
   if (a.hands != null && a.handsCap != null && a.hands >= a.handsCap) return { why: `${who} used all ${a.handsCap} of today's sessions`, short: "Today's limit reached" };
   if (a.busy != null && a.busy >= a.slots) return { why: `${a.busy} run${a.busy === 1 ? " is" : "s are"} working on its machine, the most it runs at once`, short: `${a.slots} of ${a.slots} places taken` };
   return null;
@@ -228,7 +228,7 @@ export function startAgainPlan(a: LineAdmission | undefined, n: number): StartAg
   const now = Math.min(n, free, handsLeft);
   const hold = now === 0
     ? (handsLeft === 0 ? `@${a.role.handle} used all ${a.handsCap} of today's sessions` : `All ${a.slots} places taken`)
-    : !a.on ? "Line off: only a press starts a run" : null;
+    : !a.on ? "Flow off: only a press starts a run" : null;
   return { now, rest: n - now, hold, slots: a.slots };
 }
 
@@ -346,7 +346,7 @@ export function admissionStall(a: LineAdmission, ranked: CauseRow[], lastStart: 
     const parts = notReadyReasons(ranked.map((r) => r.task)).map((r) => r.words);
     const n = ranked.length;
     const why = `none is ready to start${parts.length ? `: ${parts.join(", ")}` : ""}`;
-    return { why, short: "None ready", long: `${n === 1 ? "The problem here is" : `None of the ${n} problems here is`} ready to start${parts.length ? `: ${parts.join(", ")}` : ""}. The line starts only problems its first step marked ready`, top: null };
+    return { why, short: "None ready", long: `${n === 1 ? "The problem here is" : `None of the ${n} problems here is`} ready to start${parts.length ? `: ${parts.join(", ")}` : ""}. The flow starts only problems its first step marked ready`, top: null };
   }
   // Ready since ground last touched it: a cause first seen days ago and
   // grounded a minute ago has not waited on the sweep yet.
@@ -501,7 +501,7 @@ export function goalChip(ref: string | null | undefined, initiatives: GoalRow[],
   const raw = ref?.trim();
   if (!raw) return { ref: "", label: "not grounded", kind: "ungrounded", priority: null };
   if (raw === NO_GOAL) return { ref: raw, label: "no goal", kind: "parked", priority: null };
-  if (raw === LINE_GOAL) return { ref: raw, label: "the line itself", kind: "line", priority: "unranked" };
+  if (raw === LINE_GOAL) return { ref: raw, label: "the flow itself", kind: "line", priority: "unranked" };
   const [head, metric] = raw.split(":");
   const initiative = initiatives.find((i) => i.short_id === head);
   if (initiative) return { ref: raw, label: metric ? `${initiative.title} · ${metric}` : initiative.title, kind: "initiative", priority: initiative.priority ?? "unranked" };
@@ -814,10 +814,10 @@ export function lineHeadline(flow: LineFlow, now: number, scope?: string | null)
   if (causes.state.kind === "paused") parts.push({ text: `${plural(causes.count, "problem waits", "problems wait")} to start`, why: causes.state.why, tone: "warn", station: "causes" });
   else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "problem waits", "problems wait")} to start`, tone: "live", station: "causes" });
   if (watching.count > 0) parts.push({ text: `${plural(watching.count, "shipped fix is", "shipped fixes are")} being watched`, tone: "calm", station: "watching" });
-  if (!flow.started && parts.length === 0) return [{ text: "Nothing has reached the line yet", tone: "calm" }];
+  if (!flow.started && parts.length === 0) return [{ text: "Nothing has reached a flow yet", tone: "calm" }];
   const here = scope ? ` in ${scope}` : "";
   // An all-clear beside a warning reads as a contradiction: it is said only when nothing is wrong.
-  if (awaiting.count === 0 && !parts.some((p) => p.tone === "warn" || p.tone === "fail")) parts.push({ text: parts.length ? `nothing needs you${here}` : scope ? "Quiet: nothing being worked on, nothing needs you" : "The line is quiet: nothing being worked on, nothing needs you", tone: "clear" });
+  if (awaiting.count === 0 && !parts.some((p) => p.tone === "warn" || p.tone === "fail")) parts.push({ text: parts.length ? `nothing needs you${here}` : scope ? "Quiet: nothing being worked on, nothing needs you" : "Quiet: nothing being worked on, nothing needs you", tone: "clear" });
   return parts;
 }
 

@@ -9,6 +9,7 @@
 // each, for any graph's stations, and the shape a graph that is not
 // codecast's line takes on the map (its terminal steps folded into the map's
 // ends, its stations given a phase).
+import { DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
 import { CARD_GATE_NODE_ID, LINE_END_NODES } from "@codecast/shared/contracts/changeCard";
 import { DEFAULT_LINE_SLUG } from "@codecast/shared/contracts/orgProposal";
 import { isRepoLineSlug } from "@codecast/shared/contracts/lineProfile";
@@ -69,9 +70,9 @@ export const isCodecastLine = (key: string) => key === CODECAST_LINE || isRepoLi
 
 /** A graph's name as a reader says it. */
 export function graphTitle(key: string, name?: string | null): string {
-  if (key === CODECAST_LINE) return "Codecast's line";
-  if (isRepoLineSlug(key)) return "This repo's own line";
-  if (key.startsWith(`${CODECAST_LINE}-`)) return "Codecast's line, customized";
+  if (key === CODECAST_LINE) return DEFAULT_STEPS_LABEL;
+  if (isRepoLineSlug(key)) return "This repo's own steps";
+  if (key.startsWith(`${CODECAST_LINE}-`)) return `${DEFAULT_STEPS_LABEL}, customized`;
   // A process is named for itself, never for the version its newest run happened to run.
   const version = name?.trim().toLowerCase().replace(/\s+/g, "-");
   const raw = (version && version !== key && processKeyOf(version) === key ? key : name || key).replace(/[-_]+/g, " ").trim();

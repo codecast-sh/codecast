@@ -127,7 +127,7 @@ function JudgePage({ j, finder, wrong, ...props }: LineViewProps & { projectId: 
       </StageHead>
       {tab === "findings" && (finder
         ? <div className="sd-finder"><FinderPage {...props} selection={{ ...selection, source: finder }} /></div>
-        : <div className="lw-empty"><b>No findings filed</b>{j.name} has filed nothing the line holds.</div>)}
+        : <div className="lw-empty"><b>No findings filed</b>{j.name} has filed nothing the flow holds.</div>)}
       {tab === "reviews" && <AgentReviews projectId={projectId} judge={j.name} now={now} openMoment={(m) => select({ stage: "moments", item: m })} />}
       {tab === "prompt" && <Prompt j={j} />}
       {tab === "runs" && <Runs j={j} now={now} select={select} href={href} />}

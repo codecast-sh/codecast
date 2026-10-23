@@ -80,7 +80,7 @@ export function TrialCardPanel({ card: c, now, source, head = true, onClose, onP
               </div>
             ) : waiting && (
               <div className="ld-nosession" data-line-trial-no-session>
-                <ReaskNotice taskId={c.task_id} task={c.task_short_id} reason={c.stale_gate ? "Its step left the line, so an answer has nowhere to go." : "No session asked this, so nobody can take an answer."} />
+                <ReaskNotice taskId={c.task_id} task={c.task_short_id} reason={c.stale_gate ? "Its step left the flow, so an answer has nowhere to go." : "No session asked this, so nobody can take an answer."} />
               </div>
             )}
           </div>

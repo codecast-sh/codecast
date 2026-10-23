@@ -160,6 +160,10 @@ const ProductViewPage = lazy(() => import("@/app/view/page"));
 const LineSettings = lazy(() => import("@/app/line/settings/page"));
 const LineTrace = lazy(() => import("@/app/line/trace/[ref]/page"));
 const LineWorkspace = lazy(() => import("@/app/line/[project]/page"));
+const Flows = lazy(() => import("@/app/flows/page"));
+const FlowSettings = lazy(() => import("@/app/flows/settings/page"));
+const FlowTrace = lazy(() => import("@/app/flows/trace/[ref]/page"));
+const Flow = lazy(() => import("@/app/flows/[flow]/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazy(() => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
@@ -371,6 +375,7 @@ export const ROUTES: RouteEntry[] = [
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, so no `fullWidth` flag here.
   { path: "questions", component: cast(Questions), layout: "dashboardShell", tab: "/questions" },
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, like /questions.
+  { path: "flows", component: cast(Flows), layout: "dashboardShell", tab: "/flows" },
   { path: "line", component: cast(Line), layout: "dashboardShell", tab: "/line" },
   { path: "expectations", component: cast(Expectations), layout: "dashboardShell", tab: "/expectations" },
   { path: "trial", component: cast(Trial), layout: "dashboardShell", tab: "/trial" },
@@ -378,6 +383,9 @@ export const ROUTES: RouteEntry[] = [
   { path: "line/settings", component: cast(LineSettings), layout: "dashboardShell", tab: "/line/settings" },
   { path: "line/trace/:ref", component: cast(LineTrace), layout: "dashboardShell", tab: "/line/trace/:ref" },
   { path: "line/:project", component: cast(LineWorkspace), layout: "dashboardShell", tab: "/line/:project" },
+  { path: "flows/settings", component: cast(FlowSettings), layout: "dashboardShell", tab: "/flows/settings" },
+  { path: "flows/trace/:ref", component: cast(FlowTrace), layout: "dashboardShell", tab: "/flows/trace/:ref" },
+  { path: "flows/:flow", component: cast(Flow), layout: "dashboardShell", tab: "/flows/:flow" },
   { path: "decisions/stacks", component: cast(DecisionStacks), layout: "dashboardShell", tab: "/decisions/stacks" },
   { path: "decisions/stacks/:id", component: cast(DecisionStack), layout: "dashboardShell", tab: "/decisions/stacks/:id" },
   { path: "decisions/:id", component: cast(DecisionDetail), layout: "dashboardShell", tab: "/decisions/:id" },

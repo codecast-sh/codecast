@@ -68,7 +68,7 @@ export function FindTable({ workspace, select, href, heading }: Pick<LineViewPro
       {heading}
       <table className="ft-table">
         <thead>
-          <tr><th scope="col">Finder</th><th scope="col" className="ft-n" title={window.cut ? `The line holds findings from ${new Date(window.from).toLocaleString()}` : undefined}>Findings {windowWords}</th><th scope="col" className="ft-n">Not filed</th><th scope="col" className="ft-n">Marked wrong</th></tr>
+          <tr><th scope="col">Finder</th><th scope="col" className="ft-n" title={window.cut ? `Findings held from ${new Date(window.from).toLocaleString()}` : undefined}>Findings {windowWords}</th><th scope="col" className="ft-n">Not filed</th><th scope="col" className="ft-n">Marked wrong</th></tr>
         </thead>
         <tbody>
           {rows.map((r) => {
@@ -77,7 +77,7 @@ export function FindTable({ workspace, select, href, heading }: Pick<LineViewPro
               <tr key={r.row.key} onClick={(e) => { if (!(e.target as Element).closest("a")) open(r.row.key); }} data-line-finder={r.row.key}>
                 <th scope="row">
                   <a className="ft-name" href={href({ view: "line", source: r.row.key, step: null, finding: null })} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); open(r.row.key); }}>{r.name}</a>
-                  {r.filesHere && <span className="ft-here" title="Another product's judge: it files problems on this line">files here</span>}
+                  {r.filesHere && <span className="ft-here" title="Another product's judge: it files problems into this flow">files here</span>}
                 </th>
                 <td className="ft-n lw-num">{r.week}</td>
                 {/* Not filed opens the finder on those findings, the newest open, each with its way to a problem. */}

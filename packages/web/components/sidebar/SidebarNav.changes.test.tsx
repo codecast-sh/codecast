@@ -58,12 +58,12 @@ test("the row reads as active on /changes", () => {
 
 test("hosted mode keeps the everyday rows and drops the developer ones", () => {
   const html = rail(true, ACTIVE, surfaceMode(true, true));
-  for (const href of ["/changes", "/org", "/repo", "/files", "/pages", "/line", "/ops", "/windows", "/routines"]) expect(html).not.toContain(`href="${href}"`);
+  for (const href of ["/changes", "/org", "/repo", "/files", "/pages", "/flows", "/ops", "/windows", "/routines"]) expect(html).not.toContain(`href="${href}"`);
   for (const href of ["/tasks", "/docs", "/triggers"]) expect(html).toContain(`href="${href}"`);
   expect(html).toContain("Routines");
   expect(html).not.toContain(">Triggers<");
   // Developer mode, the default, keeps them all.
-  for (const href of ["/org", "/repo", "/files", "/pages", "/line", "/ops", "/windows"]) expect(rail(false)).toContain(`href="${href}"`);
+  for (const href of ["/org", "/repo", "/files", "/pages", "/flows", "/ops", "/windows"]) expect(rail(false)).toContain(`href="${href}"`);
 });
 
 test("Org is the first Work row, with its count and its two read views always under it; no project rows, no chevron, and no Org under Agents", () => {

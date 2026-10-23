@@ -22,7 +22,7 @@ export type MergeAllowanceRow = { on: boolean; allowed: boolean; reason: string 
 
 /** What the merge switch says under itself. */
 export function mergeStepWords(m: MergeAllowanceRow | null | undefined): string {
-  if (!m) return "Reading the line";
+  if (!m) return "Reading the flow";
   if (!m.on) return "Off: an approved branch is left for a person to merge.";
   const limit = m.limit === null ? "no daily limit" : `${m.used} of ${m.limit} today`;
   return m.allowed ? `On: approved branches merge into the default branch when their checks pass (${limit}).` : `On, but not now: ${m.reason}.`;
@@ -42,7 +42,7 @@ export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEd
     setBusy(true);
     try {
       await setLineMerge(role._id, next, per_day);
-      toast.success(next ? `${role.name}'s line merges on its own now` : `${role.name}'s line leaves merges to a person`);
+      toast.success(next ? `${role.name}'s flow merges on its own now` : `${role.name}'s flow leaves merges to a person`);
       setAsking(false);
     } catch (e: any) {
       const words = serverWords(e, "Could not change the merge step");

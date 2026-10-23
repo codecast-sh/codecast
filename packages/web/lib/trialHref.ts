@@ -1,8 +1,9 @@
 // Where a trial lives: /trial opened on one trial project, in the workspace that
 // project lives in (`ws`, a workspace key), so a Trial tag on a team's decision
 // lands on that trial even while the app sits on Personal. `card` opens one
-// card; `tab` opens one list (Failed, Stopped, ...); `from` is the /line address the
+// card; `tab` opens one list (Failed, Stopped, ...); `from` is the /flows address the
 // link was pressed on, so the page leads back to that very item. TrialReviewPage reads these back (trialAddress).
+import { readLineSelection } from "./line/lineWorkspaceUrl";
 export type TrialAddress = { ws: string | null; project: string | null; card: string | null; from: string | null };
 
 export function trialHref(to: { workspace?: string | null; project?: string | null; card?: string | null; tab?: string | null; from?: string | null } = {}): string {
@@ -21,17 +22,20 @@ export function trialAddress(search: { get(key: string): string | null } | null 
   return { ws: search?.get("ws") || null, project: search?.get("project") || null, card: search?.get("card") || null, from: lineFrom(search?.get("from")) };
 }
 
-/** A back address is only ever a /line page of this app: anything else (another origin, another route) is dropped. */
+/** A back address is only ever a /flows page of this app (or a /line one from before): anything else (another origin, another route) is dropped. */
 export function lineFrom(path: string | null | undefined): string | null {
-  return path && /^\/line(?:[/?#]|$)/.test(path) ? path : null;
+  return path && /^\/(?:flows|line)(?:[/?#]|$)/.test(path) ? path : null;
 }
 
-const LINE_VIEW_NAME: Record<string, string> = { foryou: "Decisions", inbox: "Decisions", problems: "Problems", runs: "Problems", timeline: "Problems", line: "Line", sources: "Line", process: "Line", graph: "Line", notebook: "Line", chat: "Line" };
+const LINE_VIEW_NAME: Record<string, string> = { flows: "Flows", foryou: "Decisions", inbox: "Decisions", problems: "Problems", runs: "Problems", timeline: "Problems", line: "Steps", sources: "Steps", process: "Steps", graph: "Steps", notebook: "Steps", chat: "Steps" };
 
-/** The back link's words: the /line view it returns to, by the nav's own name (Decisions without a view). */
+/** The back link's words: the view it returns to, by the nav's own name. An address with no view is the view it
+ *  opens (lineWorkspaceUrl readLineSelection), and a /line one from before opened on Decisions. */
 export function lineFromName(from: string): string {
-  const view = new URLSearchParams(from.split("?")[1] ?? "").get("view");
-  return (view && LINE_VIEW_NAME[view]) || "Decisions";
+  const [path, query = ""] = from.split("?");
+  const view = new URLSearchParams(query).get("view");
+  if (view) return LINE_VIEW_NAME[view] ?? "Decisions";
+  return path.startsWith("/flows") && readLineSelection(new URLSearchParams(query)).view === "flows" ? "Flows" : "Decisions";
 }
 
 /** The `ws` an address names, when it is a workspace the viewer is in (their own, or a team they belong to); else

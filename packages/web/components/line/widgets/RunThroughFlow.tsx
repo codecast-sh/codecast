@@ -70,7 +70,7 @@ function PoolPicker({ onRun }: { onRun: (flow: AppFlow) => void }) {
         {pool.map((f) => (
           <li key={f.slug}>
             <button type="button" role="option" aria-selected={f.slug === flow.slug} className="rtf-row" onClick={() => setPicked(f.slug)} onDoubleClick={() => onRun(f)} data-run-through-flow={f.slug}>
-              <span className="lw-flow-kind" data-kind={f.kind}>{f.kind === "line" ? "Line" : "Segment"}</span>
+              <span className="lw-flow-kind" data-kind={f.kind}>{f.kind === "line" ? "Flow" : "Segment"}</span>
               <b>{f.label}</b>
               <span className="rtf-path">{flowRowPath(f)}</span>
             </button>

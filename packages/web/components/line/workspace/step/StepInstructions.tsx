@@ -73,7 +73,7 @@ export function StepInstructions({ model, step: s, editing, onEditing, testRuns,
         <>
           <div className="sp-ins-bar">
             <span className="sp-ins-what">
-              {s.kind === "person" ? "The question as the line writes it" : `What ${s.label} is told`}
+              {s.kind === "person" ? "The question as the flow writes it" : `What ${s.label} is told`}
               {s.prompt.file && !home?.path && <code className="sp-ins-file">{s.prompt.file}</code>}
             </span>
             <span className="sp-ins-acts">
@@ -111,7 +111,7 @@ export function StepInstructions({ model, step: s, editing, onEditing, testRuns,
           <PromptView prompt={s.prompt} nodes={model.graph.nodes} text={draft} changed={diff?.changedAfter ?? null} editing={editing} onEdit={(text) => setStepDraft(s.id, text)} />
         </>
       ) : s.kind !== "person" ? (
-        <div className="sp-none">The line names {s.label} without its {noun}, so there is nothing to read or edit here.</div>
+        <div className="sp-none">The flow names {s.label} without its {noun}, so there is nothing to read or edit here.</div>
       ) : null}
 
       {panel === "test" && Try && s.prompt && !elsewhere && (

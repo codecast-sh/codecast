@@ -214,7 +214,7 @@ export function TaskLineChip({ task, className = "", watch = true }: { task: Tas
   return (
     <span
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] shrink-0 truncate max-w-[14rem] ${held ? "border-sol-yellow/40 text-sol-yellow" : tone === "paused" ? "border-sol-orange/40 text-sol-orange" : "border-sol-violet/40 text-sol-violet"} ${className}`}
-      title={held ? "A blocking decision holds this task at its station" : "On the line: the run's current node"}
+      title={held ? "A blocking decision holds this task at its station" : "In its flow: the run's current node"}
       data-task-line-chip={held ? "held" : "run"}
     >
       {held ? <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" /> : <GitBranch className="w-3 h-3" />}

@@ -43,6 +43,8 @@ import { sourceChipWords } from "../../../../lib/line/stepRuns";
 import { useAllProblems } from "./ProblemPointers";
 import { AssignDecision } from "./AssignDecision";
 import type { LineViewProps } from "./types";
+import { useOwnedFlows } from "../../../../hooks/useOwnedFlows";
+import { flowNeeds, flowOf } from "../../../../lib/line/ownedFlows";
 import "./foryou.css";
 
 const SCROLL_KEY = "line:foryou:scroll";
@@ -55,7 +57,12 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
   // picked there; the chip over the list lifts it.
   const line = selection.process;
   const lineProject = line ? selection.project : null;
-  const needs = useMemo(() => needsOfLine(workspace.needs.filter((n) => n.counted), line, lineProject), [workspace.needs, line, lineProject]);
+  // `flow` (a flow's owner, from the flow list's count) narrows the list to that flow's projects.
+  const flow = flowOf(useOwnedFlows(workspace), selection.flow);
+  const needs = useMemo(() => {
+    const all = needsOfLine(workspace.needs.filter((n) => n.counted), line, lineProject);
+    return flow ? flowNeeds(all, flow) : all;
+  }, [workspace.needs, line, lineProject, flow]);
   const processTitle = useMemo(() => new Map(workspace.processes.map((g) => [g.key, processName(g.key, g.title).title])), [workspace.processes]);
   // A row's product by name. The list holds decisions from every workspace, and the page's projects are its own
   // workspace's: another's are named from the store.
@@ -219,8 +226,12 @@ export function ForYouView({ model, workspace, selection, select, href, pinned }
   const from = (n: LineNeed) => { const o = n.caseId ? workspace.sources.get(n.caseId) : null; return o ? sourceChipWords(o) : null; };
   const ctx: RowCtx = { from, view, pinned: !!pinned, projectTitle, people, now, current, picked, cursor: reading ? null : order[cursorAt]?.key ?? null, onOpen: open, onPick: togglePick, onHover: setHovered, assigning, setAssigning };
   const scope = line ? (
-    <button type="button" className="fy-scope" aria-pressed onClick={() => select({ process: null, need: null }, undefined, { replace: true })} aria-label="Show the decisions of every line" data-line-foryou-process={line}>
+    <button type="button" className="fy-scope" aria-pressed onClick={() => select({ process: null, need: null }, undefined, { replace: true })} aria-label="Show the decisions of every flow" data-line-foryou-process={line}>
       {[processTitle.get(line) ?? line, lineProject ? projectTitle.get(lineProject) : null].filter(Boolean).join(" · ")}<X aria-hidden />
+    </button>
+  ) : flow ? (
+    <button type="button" className="fy-scope" aria-pressed onClick={() => select({ flow: null, need: null }, undefined, { replace: true })} aria-label="Show the decisions of every flow" data-line-foryou-flow={flow.owner.handle}>
+      {flow.owner.name}<X aria-hidden />
     </button>
   ) : null;
   const bar = (

@@ -50,8 +50,8 @@ export function kindWords(e: Pick<TimelineEvent, "kind" | "detail" | "split_from
 
 /** Where it came from, as a person names it: the finder, the judge, the event source, the session that asked. */
 export function sourceWords(e: Pick<TimelineEvent, "kind" | "source" | "session_title">): string {
-  if (e.kind === "decision_asked" || e.kind === "decision_answered" || e.kind === "decision_closed") return e.source === "line" ? "Line" : e.session_title || "A session";
-  if (e.source === "line") return "Line";
+  if (e.kind === "decision_asked" || e.kind === "decision_answered" || e.kind === "decision_closed") return e.source === "line" ? "Flow" : e.session_title || "A session";
+  if (e.source === "line") return "Flow";
   return sourceName(e.source);
 }
 

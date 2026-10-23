@@ -137,7 +137,7 @@ describe("conditionWords", () => {
     expect(conditionWords("outcome = success and category != prompt")).toBeNull();
     expect(conditionWords("outcome = failure and eval.exit_code = 1 and category != line")).toBe("failed");
     expect(conditionWords("handoff = needs_context or handoff = blocked")).toBe("needs you");
-    expect(conditionWords("review_verdict = changes and category = line")).toBe("review asked for changes and about the line itself");
+    expect(conditionWords("review_verdict = changes and category = line")).toBe("review asked for changes and about the flow itself");
     expect(conditionWords("investigate.json.outcome = failed or investigate.json.outcome = judge_defect")).toBe("failed or judge defect");
   });
 

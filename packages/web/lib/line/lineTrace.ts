@@ -10,7 +10,7 @@ import { plainWords } from "@codecast/shared/contracts/causeHistory";
 export { plainWords };
 
 /** An earlier visit of a loop: a run row keeps one status per station, its newest. */
-export const EARLIER_ROUND_WORDS = "An earlier round: the line keeps the details of a station's newest visit only";
+export const EARLIER_ROUND_WORDS = "An earlier round: the flow keeps the details of a station's newest visit only";
 
 export type TraceTask = LineCauseTask & { review_verdict?: { verdict: string } | null; comments?: Array<{ text?: string; content?: string }> | null };
 

@@ -29,7 +29,7 @@ function usePool(): AppFlow[] {
   return useMemo(() => appPool(workflows), [workflows]);
 }
 
-const KIND_WORD = { line: "Line", segment: "Segment" } as const;
+const KIND_WORD = { line: "Flow", segment: "Segment" } as const;
 
 function FlowHead({ flow, title, children }: { flow: AppFlow; title?: string | null; children?: React.ReactNode }) {
   return (

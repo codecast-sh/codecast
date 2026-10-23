@@ -16,7 +16,7 @@ describe("fork", () => {
   test("a fork is the shipped graph under the project's slug, and differs nowhere", () => {
     const fork = forkShippedLine(SHIPPED_LINE, project);
     expect(fork.slug).toBe("line-pj-mfx3ab");
-    expect(fork.name).toBe("Line for Codecast");
+    expect(fork.name).toBe("Steps for Codecast");
     expect(fork.source).toBe(SHIPPED_LINE.source);
     expect(fork.nodes.map((n) => n.id)).toEqual(SHIPPED_LINE.nodes.map((n) => n.id));
     expect(fork.edges).toEqual(SHIPPED_LINE.edges);

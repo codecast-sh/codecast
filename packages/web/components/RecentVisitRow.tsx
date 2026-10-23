@@ -34,7 +34,7 @@ export function PageIcon({ path, className }: { path: string; className: string 
   const orgKind = orgPageKind(path);
   if (orgKind === "goal") return <Flag className={className} />;
   if (orgKind === "project") return <FolderKanban className={className} />;
-  if (path.startsWith("/workflows") || path.startsWith("/routines") || path.startsWith("/line")) return <Workflow className={className} />;
+  if (path.startsWith("/workflows") || path.startsWith("/routines") || path.startsWith("/line") || path.startsWith("/flows")) return <Workflow className={className} />;
   if (path.startsWith("/triggers") || path.startsWith("/schedules")) return <Zap className={className} />;
   if (isOpsPath(path)) return <Radar className={className} />;
   return <LayoutGrid className={className} />;

@@ -52,7 +52,7 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
   return (
     <div className="lset-finders" data-lset-finders>
       {/* An undeclared finder's own box below says it once, with the action; no sentence repeats it. */}
-      {lp.finders.length === 0 && undeclared.length === 0 && <p className="lset-empty" data-lset-finders-empty>No source reports into this line yet. Add one below, such as Sentry, PostHog or an eval, and it reports what it sees on its own.</p>}
+      {lp.finders.length === 0 && undeclared.length === 0 && <p className="lset-empty" data-lset-finders-empty>No source reports into this flow yet. Add one below, such as Sentry, PostHog or an eval, and it reports what it sees on its own.</p>}
       {lp.finders.map((f) => {
         const health = bySource.get(f.source.toLowerCase());
         const key = `finders.${f.id}`;
@@ -102,7 +102,7 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
         const f = suggestFinder(s);
         return (
           <div key={s.source} className="lset-declare" data-lset-undeclared={s.source}>
-            <span className="lset-declare-words"><b>{s.source}</b> reported {s.week} in the last 7 days but is not in this line's settings, so nobody is told if it goes quiet.{canEdit ? ` Adding it ${groupingWords(f.fingerprint)}; you can change that after.` : ""}</span>
+            <span className="lset-declare-words"><b>{s.source}</b> reported {s.week} in the last 7 days but is not in this flow's settings, so nobody is told if it goes quiet.{canEdit ? ` Adding it ${groupingWords(f.fingerprint)}; you can change that after.` : ""}</span>
             {canEdit && <button type="button" className="lset-add" onClick={() => send([{ op: "set_finder", finder: f }])} data-lset-declare={s.source}>Add {s.source} to the settings</button>}
           </div>
         );

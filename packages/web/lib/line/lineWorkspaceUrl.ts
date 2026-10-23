@@ -1,8 +1,11 @@
-// The line app's selection lives in its URL (line-journeys.md LJ5), so any
-// state is a link and every view reads the same one. The line is one app over
-// the process; a project is a filter on it, never a line of its own:
+// The flows app's selection lives in its URL (line-journeys.md LJ5), so any
+// state is a link and every view reads the same one. `/flows` is one app over
+// every flow; `/flows/<owner>` is one flow's page (the role that owns it); a
+// project is a filter on either:
 //   project  the filter (a project's short id or row id); absent is every project
-//   view     foryou (the landing page), problems, line, deploys: the nav entries
+//   flow     a flow's owner handle: Decisions narrows to that flow's projects
+//   view     flows (the landing page: the flows, or one flow's overview),
+//            foryou (Decisions), timeline, problems, line (Steps), deploys: the nav entries
 //   mode     the Line page's mode: table (default) or map
 //   graph    which process (codecast's line, AgentWatch, ...) Line draws, and an open problem or run is read in
 //   process  Problems' narrowing to one process; absent, Problems lists every process, as For you does
@@ -26,6 +29,8 @@
 //   deploy   a deploy's ref (dp-N), open on the Deploys view (deploys.md DP7)
 //   card     a trial card's ref, decision a fix decision's (sd-N): kept for
 //            links already sent. For you settles either on its `need`.
+// An address with no view that names what For you reads (a need, a card, a
+// decision) opens For you, so links from before the flow list led still land.
 // Selecting a run keeps its case; selecting a case drops a run of another
 // case; moving to another step drops the tab; another view keeps only what it
 // reads; another graph or project drops what named the old one. Keys the line
@@ -34,9 +39,11 @@
 // write, as the view that holds their job now. Pure, so a test reads and
 // writes addresses.
 
-export const LINE_VIEWS = ["foryou", "timeline", "problems", "line", "flows", "deploys"] as const;
+export const LINE_VIEWS = ["flows", "foryou", "timeline", "problems", "line", "deploys"] as const;
 export type LineView = (typeof LINE_VIEWS)[number];
-export const DEFAULT_LINE_VIEW: LineView = "foryou";
+export const DEFAULT_LINE_VIEW: LineView = "flows";
+/** What only For you reads: an address naming one with no view opens For you. */
+const FORYOU_ONLY = ["need", "card", "decision"] as const;
 
 export const LINE_MODES = ["table", "map"] as const;
 export type LineMode = (typeof LINE_MODES)[number];
@@ -62,15 +69,15 @@ type LegacyView = keyof typeof LEGACY_VIEWS;
 /** A view as a link may name it: its own name, or an earlier one. */
 export type LineViewName = LineView | LegacyView;
 
-export type LineSelection = { view: LineView; mode: LineMode; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: boolean; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: boolean; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null; who: string | null; kind: string | null; area: string | null; order: string | null; group: string | null; deploy: string | null };
-export type LineSelectionPatch = Partial<{ view: LineViewName | null; mode: LineMode | "graph" | "notebook" | null; project: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: string | null; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: string | null; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null; who: string | null; kind: string | null; area: string | null; order: string | null; group: string | null; deploy: string | null }>;
+export type LineSelection = { view: LineView; mode: LineMode; project: string | null; flow: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: boolean; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: boolean; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null; who: string | null; kind: string | null; area: string | null; order: string | null; group: string | null; deploy: string | null };
+export type LineSelectionPatch = Partial<{ view: LineViewName | null; mode: LineMode | "graph" | "notebook" | null; project: string | null; flow: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: string | null; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: string | null; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null; who: string | null; kind: string | null; area: string | null; order: string | null; group: string | null; deploy: string | null }>;
 
 type Search = { get(key: string): string | null } | null | undefined;
 
-const KEYS = ["project", "view", "mode", "graph", "step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item", "who", "kind", "area", "order", "group", "deploy"] as const;
+const KEYS = ["project", "flow", "view", "mode", "graph", "step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item", "who", "kind", "area", "order", "group", "deploy"] as const;
 type Key = (typeof KEYS)[number];
 /** Where a key lives in the address: the drawer's tab has its own name, `tab` belongs to the page hosting the app. */
-const PARAM: Record<Key, string> = { project: "project", view: "view", mode: "mode", graph: "graph", step: "step", tab: "steptab", run: "run", case: "case", source: "source", finding: "finding", row: "row", ask: "ask", card: "card", decision: "decision", need: "need", status: "status", process: "process", quiet: "quiet", found: "found", q: "q", sort: "sort", win: "win", show: "show", stage: "stage", item: "item", who: "who", kind: "kind", area: "area", order: "order", group: "group", deploy: "deploy" };
+const PARAM: Record<Key, string> = { project: "project", flow: "flow", view: "view", mode: "mode", graph: "graph", step: "step", tab: "steptab", run: "run", case: "case", source: "source", finding: "finding", row: "row", ask: "ask", card: "card", decision: "decision", need: "need", status: "status", process: "process", quiet: "quiet", found: "found", q: "q", sort: "sort", win: "win", show: "show", stage: "stage", item: "item", who: "who", kind: "kind", area: "area", order: "order", group: "group", deploy: "deploy" };
 /** The drawer's tabs, which an older link named as `tab`. */
 const DRAWER_TABS = new Set(["prompt", "decisions", "try", "ask"]);
 const legacyTab = (search: Search) => { const t = search?.get("tab"); return t && DRAWER_TABS.has(t) ? t : null; };
@@ -80,12 +87,12 @@ const modeOf = (v: string | null | undefined): LineMode | null => (!v ? null : (
 /** The selection each view reads; moving to a view drops the rest, unless the move names it. */
 // The Problems list's own keys (LJ5): its status chip, its process, the quiet narrowing and a figure's or bar's narrowing
 // (`found`: "more", or a picked bar's start) are places; search, sort and window are not.
-const SELECTION_KEYS = ["step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item", "who", "kind", "area", "order", "group", "deploy"] as const;
+const SELECTION_KEYS = ["flow", "step", "tab", "run", "case", "source", "finding", "row", "ask", "card", "decision", "need", "status", "process", "quiet", "found", "q", "sort", "win", "show", "stage", "item", "who", "kind", "area", "order", "group", "deploy"] as const;
 const VIEW_KEEPS: Record<LineView, ReadonlyArray<(typeof SELECTION_KEYS)[number]>> = {
   // A decision rides into Problems only when the move names it: For you's reader settles one on its need, and a
   // problem's band shows its own without it, so a decision kept from another view would follow every later link.
   // For you's list keeps how it is filtered, ordered and grouped.
-  foryou: ["need", "card", "decision", "who", "kind", "area", "order", "group"], problems: ["case", "ask", "run", "step", "source", "finding", "row", "status", "process", "quiet", "found", "q", "sort", "win"], line: ["source", "finding", "stage", "item"], flows: ["item", "run"], deploys: ["deploy"],
+  foryou: ["flow", "need", "card", "decision", "who", "kind", "area", "order", "group"], problems: ["case", "ask", "run", "step", "source", "finding", "row", "status", "process", "quiet", "found", "q", "sort", "win"], line: ["source", "finding", "stage", "item"], flows: ["item", "run"], deploys: ["deploy"],
   // The timeline keeps its filters (kind: event groups, source: where from, show: steps) and the event open in it.
   timeline: ["kind", "source", "show", "item"],
 };
@@ -93,7 +100,7 @@ const VIEW_KEEPS: Record<LineView, ReadonlyArray<(typeof SELECTION_KEYS)[number]
 const STEP_VIEWS = new Set<LineView>(["line"]);
 /** The view that opens a run's page, where a step is that run's playhead. */
 const RUN_VIEWS = new Set<LineView>(["problems"]);
-/** What /line names when it names every project. */
+/** What the app names when it names every project. */
 const ALL = new Set(["all", ""]);
 
 /** A view name, its own or an earlier one, as the view and the mode it opens (null: the mode stays). */
@@ -105,7 +112,9 @@ function resolveView(v: string | null | undefined): [LineView, LineMode | null] 
 
 export function readLineSelection(search: Search): LineSelection {
   // An older link named a problem's own chart `view=timeline&case=…`: that is the problem's page.
-  const asked = search?.get("view") === "timeline" && search?.get("case") ? (["problems", null] as const) : resolveView(search?.get("view"));
+  const asked = search?.get("view") === "timeline" && search?.get("case") ? (["problems", null] as const)
+    : !search?.get("view") && FORYOU_ONLY.some((k) => search?.get(k)) ? (["foryou", null] as const)
+    : resolveView(search?.get("view"));
   const mode = search?.get("mode");
   const project = search?.get("project")?.trim() ?? "";
   return {
@@ -113,6 +122,7 @@ export function readLineSelection(search: Search): LineSelection {
     // A mode the address names wins over the one an earlier view name implies (view=process&mode=notebook is the table).
     mode: modeOf(mode) ?? asked?.[1] ?? DEFAULT_LINE_MODE,
     project: ALL.has(project) ? null : project,
+    flow: search?.get("flow") || null,
     graph: search?.get("graph") || null,
     step: search?.get("step") || null,
     tab: search?.get(PARAM.tab) || legacyTab(search) || (search?.get("view") === "chat" && search.get("step") ? "instructions" : null),
@@ -166,6 +176,8 @@ export function lineSelectionSearch(current: (Search & { toString(): string }) |
   const p: LineSelectionPatch = { ...patch };
   // A step names a place on the Line page: picked from a view that has no step of its own, it opens there.
   if (p.step && p.view === undefined && !STEP_VIEWS.has(before.view) && !(RUN_VIEWS.has(before.view) && (p.run ?? before.run))) p.view = "line";
+  // A need, card or decision opens For you from the flow list, which reads none of them.
+  if (p.view === undefined && before.view === DEFAULT_LINE_VIEW && FORYOU_ONLY.some((k) => p[k])) p.view = "foryou";
   if (p.view) {
     const named = p.view;
     const [view, mode] = resolveView(named) ?? [DEFAULT_LINE_VIEW, null];
@@ -216,6 +228,8 @@ export function lineSelectionSearch(current: (Search & { toString(): string }) |
   // One drawer at a time: a stage opened closes the step, a step opened closes the stage.
   if (p.stage && p.step === undefined) { del("step"); del("tab"); del("show"); }
   if (p.step && p.stage === undefined) { del("stage"); del("item"); }
+  // An address naming what only For you reads opens For you without saying so (readLineSelection).
+  if (q.get("view") === "foryou" && FORYOU_ONLY.some((k) => q.get(PARAM[k]))) q.delete("view");
   const s = q.toString();
   return s ? `?${s}` : "";
 }
@@ -223,7 +237,7 @@ export function lineSelectionSearch(current: (Search & { toString(): string }) |
 /** The keys that name a place: a change to any of them is a move Back and Forward walk. The drawer's tab, a finding
  *  opened in a list, a problem page's expanded run row and the answer box's focus change what a place shows, not the
  *  place: they replace, so reload and Back return to the place as it was left. */
-const PLACE_KEYS = ["project", "view", "graph", "step", "run", "case", "source", "card", "decision", "need", "status", "process", "quiet", "found", "stage", "item", "deploy"] as const;
+const PLACE_KEYS = ["project", "flow", "view", "graph", "step", "run", "case", "source", "card", "decision", "need", "status", "process", "quiet", "found", "stage", "item", "deploy"] as const;
 
 /** Whether moving from one address to the next is a new history entry (push) rather than a correction of the
  *  current one (replace): true when any place key differs, the default view and mode read as named. */
@@ -236,7 +250,7 @@ export function lineSelectionPushes(from: Search, to: Search): boolean {
 /** A project's name as a URL slug: lowercase words joined by dashes. */
 export const projectSlug = (name: string): string => name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-/** Slugs the line's own paths hold (/line/all, /line/settings, /line/trace): a project so named goes by its short id. */
+/** Slugs the app's own paths hold (/flows/settings, /flows/trace, and /line/all from before): a project so named goes by its short id. */
 const RESERVED_SLUG = /^(all|settings|trace)$/;
 
 type ProjectRef = { _id: string; short_id?: string | null; title?: string | null };
@@ -279,7 +293,7 @@ export function lineViewHome(view: LineView): LineSelectionPatch {
 }
 
 /** A view's name in the nav, in nav order. */
-export const LINE_VIEW_LABELS: Record<LineView, string> = { foryou: "Decisions", timeline: "Timeline", problems: "Problems", line: "Steps", flows: "Flows", deploys: "Deploys" };
+export const LINE_VIEW_LABELS: Record<LineView, string> = { flows: "Flows", foryou: "Decisions", timeline: "Timeline", problems: "Problems", line: "Steps", deploys: "Deploys" };
 export const LINE_MODE_LABELS: Record<LineMode, string> = { table: "Table", map: "Map" };
 
 /** The second key of the go chord (G, then this) for each view. The shell binds no digit: an open decision answers
@@ -289,10 +303,24 @@ export const LINE_VIEW_KEYS: Record<LineView, string> = { foryou: "f", timeline:
 /** The view the second key of the go chord opens; null for any other key. */
 export const lineViewForGoKey = (key: string): LineView | null => LINE_VIEWS.find((v) => LINE_VIEW_KEYS[v] === key.toLowerCase()) ?? null;
 
-/** The line app, `/line`, filtered to `project` (null: every project) with the selection `patch` names.
- *  `project` is how the line pages name a project (lineStations lineProjectParam). */
+/** The flows app, `/flows`, filtered to `project` (null: every project) with the selection `patch` names.
+ *  `project` is how the flow pages name a project (lineStations lineProjectParam). */
 export function lineWorkspaceHref(project: string | null, patch: LineSelectionPatch = {}): string {
-  return `/line${lineSelectionSearch(null, { ...patch, project })}`;
+  return `/flows${lineSelectionSearch(null, { ...patch, project })}`;
+}
+
+/** One flow's page, `/flows/<owner handle>`, with the selection `patch` names. */
+export function flowHref(owner: string, patch: LineSelectionPatch = {}): string {
+  return `/flows/${encodeURIComponent(owner)}${lineSelectionSearch(null, patch)}`;
+}
+
+/** The view and keys an address from before /flows (`/line?...`) meant, at its place under /flows: the old landing
+ *  page was Decisions, so an old address that names no view and names anything at all opens Decisions. */
+export function flowsAddressOf(search: (Search & { toString(): string }) | null | undefined): string {
+  const q = new URLSearchParams(search?.toString() ?? "");
+  if (!q.get("view") && [...q.keys()].length > 0) q.set("view", "foryou");
+  const s = q.toString();
+  return s ? `?${s}` : "";
 }
 
 /** The node the old map opened for the line's settings, and for the queue of problems. */
@@ -302,7 +330,7 @@ const QUEUE_NODE = "causes";
 /**
  * Where an old address goes now, or null when it stays. `/line/<project>`
  * (`path`, the segment) is the app filtered to that project, its query kept.
- * An old map address on /line (`?project=&node=`, `edge`, `trace`) keeps its
+ * An old map address on /line or /flows (`?project=&node=`, `edge`, `trace`) keeps its
  * meaning: a node opens that step, an edge the step it leaves, the problems'
  * queue the Problems view, the line's settings panel the settings page, a
  * trace the ref's own place.
@@ -314,21 +342,22 @@ export function lineWorkspaceRedirect(search: Search & { toString(): string } | 
   const trace = search?.get("trace");
   const edge = search?.get("edge");
   if (!path && !node && !trace && !edge) return null;
-  if (node === SETTINGS_NODE) return `/line/settings?${new URLSearchParams({ ...(project && !ALL.has(project) ? { project } : {}), ...(section ? { section } : {}) }).toString()}`;
-  if (trace) return `/line/trace/${encodeURIComponent(trace)}`;
+  if (node === SETTINGS_NODE) return `/flows/settings?${new URLSearchParams({ ...(project && !ALL.has(project) ? { project } : {}), ...(section ? { section } : {}) }).toString()}`;
+  if (trace) return `/flows/trace/${encodeURIComponent(trace)}`;
   const step = node && node !== QUEUE_NODE ? node : edge ? edge.split("->")[0] || null : search?.get("step") || null;
   // The project leads the address, and what the old one named stays named.
   const kept = new URLSearchParams(project && !ALL.has(project) ? { project } : {});
   for (const [k, v] of new URLSearchParams(search?.toString() ?? "")) if (!["project", "node", "edge", "section", "window", "trace"].includes(k)) kept.append(k, v);
-  return `/line${lineSelectionSearch(kept, { ...(step ? { step } : {}), ...(node === QUEUE_NODE ? { view: "problems" as const } : {}) })}`;
+  // An old address with no view meant Decisions, the landing page before the flow list.
+  return `/flows${flowsAddressOf(new URLSearchParams(lineSelectionSearch(kept, { ...(step ? { step } : {}), ...(node === QUEUE_NODE ? { view: "problems" as const } : {}) }).slice(1)))}`;
 }
 
-/** Any ref the line knows (a problem, a finding, a fingerprint, a run, a card)
- *  at its place in the line app: `/line/trace/<ref>` resolves it
- *  (LineRefRedirect). The path keeps its old name so links already sent still open. */
-export const lineRefHref = (ref: string) => `/line/trace/${encodeURIComponent(ref)}`;
+/** Any ref a flow knows (a problem, a finding, a fingerprint, a run, a card)
+ *  at its place in the flows app: `/flows/trace/<ref>` resolves it
+ *  (LineRefRedirect); `/line/trace/<ref>` from before redirects there. */
+export const lineRefHref = (ref: string) => `/flows/trace/${encodeURIComponent(ref)}`;
 
-/** The ref a /line/trace/<ref> segment names. The router may have decoded it
+/** The ref a /flows/trace/<ref> segment names. The router may have decoded it
  *  already, so a ref holding a bare "%" stays as it is rather than throwing. */
 export function lineRefOf(segment: string): string {
   try { return decodeURIComponent(segment).trim(); } catch { return segment.trim(); }

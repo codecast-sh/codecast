@@ -266,7 +266,7 @@ function ReleaseCard({ group }: { group: OpsGroup }) {
 function CauseCard({ group }: { group: OpsGroup }) {
   return (
     <div className="ops-card">
-      <div className="ops-card-head">Problem on the line</div>
+      <div className="ops-card-head">Problem in a flow</div>
       <div className="ops-card-body ops-ref-fit">
         {group.signal_task_id ? (
           <EntityIdPill type="task" id={group.signal_task_id} />

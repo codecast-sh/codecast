@@ -70,14 +70,19 @@ const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts
 const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
 // The decision queue: one question at a time, full width.
 const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
-// The line: the whole factory as one flow (the-line-end-to-end.md LE13).
+// The flows app: every flow, from a finding to a shipped, watched change (the-line-end-to-end.md LE13).
+const Flows = lazyPage("@/app/flows/page", () => import("@/app/flows/page"));
+const FlowSettings = lazyPage("@/app/flows/settings/page", () => import("@/app/flows/settings/page"));
+const FlowTrace = lazyPage("@/app/flows/trace/[ref]/page", () => import("@/app/flows/trace/[ref]/page"));
+// One flow's page, by its owner's handle (flows.md FL0).
+const Flow = lazyPage("@/app/flows/[flow]/page", () => import("@/app/flows/[flow]/page"));
+// The addresses from before /flows, each a redirect to its place there.
 const Line = lazyPage("@/app/line/page", () => import("@/app/line/page"));
 const Expectations = lazyPage("@/app/expectations/page", () => import("@/app/expectations/page"));
 const Trial = lazyPage("@/app/trial/page", () => import("@/app/trial/page"));
 const ProductViewPage = lazyPage("@/app/view/page", () => import("@/app/view/page"));
 const LineSettings = lazyPage("@/app/line/settings/page", () => import("@/app/line/settings/page"));
 const LineTrace = lazyPage("@/app/line/trace/[ref]/page", () => import("@/app/line/trace/[ref]/page"));
-// One project's line workspace (line-workspace.md LW1).
 const LineWorkspace = lazyPage("@/app/line/[project]/page", () => import("@/app/line/[project]/page"));
 const DecisionDetail = lazyPage("@/app/decisions/[id]/page", () => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazyPage("@/app/decisions/stacks/page", () => import("@/app/decisions/stacks/page"));
@@ -204,6 +209,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/ops\/(.+)$/, paramNames: ["rest"], component: Ops },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
   { pattern: /^\/questions$/, paramNames: [], component: Questions },
+  { pattern: /^\/flows$/, paramNames: [], component: Flows },
   { pattern: /^\/line$/, paramNames: [], component: Line },
   { pattern: /^\/expectations$/, paramNames: [], component: Expectations },
   { pattern: /^\/trial$/, paramNames: [], component: Trial },
@@ -211,6 +217,9 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/line\/settings$/, paramNames: [], component: LineSettings },
   { pattern: /^\/line\/trace\/([^/]+)$/, paramNames: ["ref"], component: LineTrace },
   { pattern: /^\/line\/([^/]+)$/, paramNames: ["project"], component: LineWorkspace },
+  { pattern: /^\/flows\/settings$/, paramNames: [], component: FlowSettings },
+  { pattern: /^\/flows\/trace\/([^/]+)$/, paramNames: ["ref"], component: FlowTrace },
+  { pattern: /^\/flows\/([^/]+)$/, paramNames: ["flow"], component: Flow },
   { pattern: /^\/threads$/, paramNames: [], component: Threads },
   { pattern: /^\/admin\/daemon-logs$/, paramNames: [], component: AdminDaemonLogs },
 ];

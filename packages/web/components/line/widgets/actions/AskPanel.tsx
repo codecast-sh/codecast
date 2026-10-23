@@ -128,7 +128,7 @@ export function AskPanel({ model, step, draft, projects }: AskSlotProps) {
         <div className="lw-save-note" data-tone={sent.error || (sent.result && !sent.result.started) ? "warn" : "ok"} aria-live="polite">
           {sent.error ? `Not filed: ${sent.error}`
             : !sent.result ? `Filing ${task?.short_id && task.short_id !== "ct-…" ? task.short_id : "the ask"}…`
-            : sent.result.started ? `Filed ${task?.short_id ?? sent.result.task_short_id}${sent.result.role_handle ? `; @${sent.result.role_handle}'s line is on it` : "; the line is on it"}. Its card comes back with before and after.`
+            : sent.result.started ? `Filed ${task?.short_id ?? sent.result.task_short_id}${sent.result.role_handle ? `; @${sent.result.role_handle}'s flow is on it` : "; its flow is on it"}. Its card comes back with before and after.`
             : `Filed ${task?.short_id ?? sent.result.task_short_id}, not started: ${sent.result.reason}`}
         </div>
       )}

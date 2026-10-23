@@ -16,7 +16,9 @@ describe("trialHref", () => {
     expect(trialHref({ from: "/tasks/ct-1" })).toBe("/trial");
     expect(lineFromName("/line?need=sd-600")).toBe("Decisions");
     expect(lineFromName("/line?view=problems&case=ct-1")).toBe("Problems");
-    expect(lineFromName("/line?view=line&step=prove")).toBe("Line");
+    expect(lineFromName("/line?view=line&step=prove")).toBe("Steps");
+    expect(lineFromName("/flows")).toBe("Flows");
+    expect(lineFromName("/flows?need=sd-600")).toBe("Decisions");
   });
 
   test("an address reads only a workspace the viewer is in", () => {

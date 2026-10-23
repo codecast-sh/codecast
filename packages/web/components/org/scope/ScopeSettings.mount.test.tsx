@@ -145,12 +145,12 @@ async function verify() {
   await render({ ...growth, trust: "direct" } as OrgRole);
   const edit = q<HTMLAnchorElement>("a[data-line-edit-link]")!;
   assert.ok(edit, "the Workflow section links to line settings");
-  assert.match(edit.getAttribute("href")!, /^\/line\/settings\?(project=[^&]+&)?section=stations$/);
+  assert.match(edit.getAttribute("href")!, /^\/flows\/settings\?(project=[^&]+&)?section=stations$/);
   assert.equal(q("[data-line-customized-note]"), null, "the shipped line is not called customized");
   state.projects = { pz: { _id: "pz", short_id: "pr-9", title: "Atlas", workspace: "user:fixture-user-me" } };
   await render({ ...growth, trust: "direct", line_workflow_slug: "line-pr-9" } as OrgRole);
-  assert.equal(q("[data-line-customized-note]")?.textContent, "Atlas's customized line");
-  assert.equal(q<HTMLAnchorElement>("a[data-line-edit-link]")!.getAttribute("href"), "/line/settings?project=pr-9&section=stations");
+  assert.equal(q("[data-line-customized-note]")?.textContent, "Atlas's customized steps");
+  assert.equal(q<HTMLAnchorElement>("a[data-line-edit-link]")!.getAttribute("href"), "/flows/settings?project=pr-9&section=stations");
   state.projects = {};
 
   // ── a viewer who cannot edit: the switch is there to read, not to press ──

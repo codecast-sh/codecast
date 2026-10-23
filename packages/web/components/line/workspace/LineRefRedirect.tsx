@@ -69,9 +69,9 @@ export function LineRefRedirect({ refParam }: { refParam: string }) {
     <div className="lw" data-line-ref={ref} data-line-ref-missing={missing ? "" : undefined}>
       {missing ? (
         <div className="lw-empty">
-          <b>Nothing on the line matches {ref || "that ref"}</b>
-          A problem (ct-N), a finding (sg-N), a run or a card (sd-N) opens its place on the line.
-          {" "}<Link href="/line" className="lw-link">The line</Link>
+          <b>No flow holds {ref || "that ref"}</b>
+          A problem (ct-N), a finding (sg-N), a run or a card (sd-N) opens its place in its flow.
+          {" "}<Link href="/flows" className="lw-link">Flows</Link>
         </div>
       ) : (
         <div className="lw-skeleton" aria-busy>{[60, 86, 48].map((w, i) => <i key={i} style={{ width: `${w}%` }} />)}</div>

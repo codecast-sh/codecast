@@ -1,4 +1,4 @@
-// Mounts the Stations section of /line/settings in jsdom (plan pl-838): it
+// Mounts the Stations section of /flows/settings in jsdom (plan pl-838): it
 // offers to customize only once the server said the project has no copy
 // (never while that is unknown), the fork goes as a create, the headline says
 // whether any role runs the copy, a station says "saved" only after a save
@@ -9,7 +9,7 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../../test-helpers/globals";
 import { closeDomWindow } from "../../../../test-helpers/domGlobals";
 
-const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh/line/settings?project=pr-1", pretendToBeVisual: true });
+const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh/flows/settings?project=pr-1", pretendToBeVisual: true });
 const matchMedia = (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} });
 const restoreGlobals = replaceGlobals({
   window: Object.assign(dom.window, { innerWidth: 1400, matchMedia }),
@@ -88,8 +88,8 @@ test("no Customize while the server has not said; once it says none, Customize s
 
   fork = null;
   await m.render();
-  expect(headline(m.host)).toBe("This project runs the shipped line.");
-  expect(m.host.textContent).toMatch(/roles keep the shipped line until you switch them/);
+  expect(headline(m.host)).toBe("This project runs the Standard steps.");
+  expect(m.host.textContent).toMatch(/roles keep the Standard steps until you switch them/);
   await act(async () => { m.host.querySelector<HTMLButtonElement>("[data-customize-line]")!.click(); });
   expect(calls).toHaveLength(1);
   const [action, [wf, opts]] = calls[0] as [string, [any, any]];
@@ -176,7 +176,7 @@ test("a published project edits its repo's line through the profile's edit path"
   } as any);
   const m = await mount();
   expect(m.host.querySelector("[data-line-stations]")!.getAttribute("data-line-home")).toBe("repo");
-  expect(headline(m.host)).toBe("This project's repo has no line of its own yet, so its runs use their role's line or the shipped one.");
+  expect(headline(m.host)).toBe("This project's repo has no steps of its own yet, so its runs use their owner's steps or the Standard ones.");
   expect(m.host.querySelector("[data-customize-line]")).toBeNull();
 
   await act(async () => { m.host.querySelector<HTMLButtonElement>("[data-node='prove']")!.click(); });

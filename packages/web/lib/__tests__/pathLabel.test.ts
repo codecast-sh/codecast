@@ -23,7 +23,8 @@ describe("pathLabel — query strings never leak into labels", () => {
     expect(pathLabel("/org?proposal=nope")).toBe("Org");
     expect(pathLabel("/org")).toBe("Org");
     expect(pathLabel("/chat/chan123?x=1")).toBe("Chat");
-    expect(pathLabel("/line")).toBe("The line");
+    expect(pathLabel("/flows")).toBe("Flows");
+    expect(pathLabel("/line")).toBe("Flows");
   });
 
   it("still titles a Files tab by the open file from its query", () => {

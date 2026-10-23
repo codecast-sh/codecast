@@ -1,25 +1,15 @@
 "use client";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AuthGuard } from "../../components/AuthGuard";
-import { ErrorBoundary } from "../../components/ErrorBoundary";
-import { LinePage } from "../../components/line/LinePage";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { lineWorkspaceRedirect } from "../../lib/line/lineWorkspaceUrl";
+import { flowsAddressOf, lineWorkspaceRedirect } from "../../lib/line/lineWorkspaceUrl";
 
-// /line: the line app (line-workspace.md LW1), every project or the one
-// `?project=` names. An old map address (`node`, `edge`, `trace`) goes where
-// it now lives.
+// /line: the address the flows app had before /flows. It goes to /flows with
+// what it named kept: an old map address where that now lives, any other at the
+// same view (Decisions when it named none, the landing page then).
 export default function LineRoute() {
   const router = useRouter();
   const search = useSearchParams();
-  const to = lineWorkspaceRedirect(search);
-  useWatchEffect(() => { if (to) router.replace(to); }, [router, to]);
-  if (to) return null;
-  return (
-    <AuthGuard>
-      <ErrorBoundary name="Line">
-        <LinePage />
-      </ErrorBoundary>
-    </AuthGuard>
-  );
+  const to = lineWorkspaceRedirect(search) ?? `/flows${flowsAddressOf(search)}`;
+  useWatchEffect(() => { router.replace(to); }, [router, to]);
+  return null;
 }

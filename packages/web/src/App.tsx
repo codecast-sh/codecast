@@ -3,7 +3,7 @@ import { BootFallback } from "@/components/BootFallback";
 import { ReloadOutsideApp } from "@/components/ReloadOutsideApp";
 import { RouteFallback } from "@/components/RouteFallback";
 import { Routes, Route } from "react-router";
-import { loadLinePage, loadLineProjectPage, loadLineSettingsPage } from "./earlyRoutes";
+import { loadFlowPage, loadFlowSettingsPage, loadFlowsPage } from "./earlyRoutes";
 import { Providers } from "./providers";
 import { TransparentWindowLayout } from "./layouts/TransparentWindowLayout";
 import { SettingsLayout } from "./layouts/SettingsLayout";
@@ -72,13 +72,17 @@ const Search = lazy(() => import("@/app/search/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
-const Line = lazy(loadLinePage);
+const Line = lazy(() => import("@/app/line/page"));
+const Flows = lazy(loadFlowsPage);
 const Expectations = lazy(() => import("@/app/expectations/page"));
 const Trial = lazy(() => import("@/app/trial/page"));
 const ProductViewPage = lazy(() => import("@/app/view/page"));
-const LineSettings = lazy(loadLineSettingsPage);
+const LineSettings = lazy(() => import("@/app/line/settings/page"));
+const FlowSettings = lazy(loadFlowSettingsPage);
+const FlowTrace = lazy(() => import("@/app/flows/trace/[ref]/page"));
+const Flow = lazy(loadFlowPage);
 const LineTrace = lazy(() => import("@/app/line/trace/[ref]/page"));
-const LineWorkspace = lazy(loadLineProjectPage);
+const LineWorkspace = lazy(() => import("@/app/line/[project]/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazy(() => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
@@ -292,6 +296,7 @@ export function App() {
               <Route path="search" element={<E name="Search"><Search /></E>} />
               <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
               <Route path="questions" element={<E name="Questions"><Questions /></E>} />
+              <Route path="flows" element={<E name="Flows"><Flows /></E>} />
               <Route path="line" element={<E name="Line"><Line /></E>} />
               <Route path="expectations" element={<E name="Expectations"><Expectations /></E>} />
               <Route path="trial" element={<E name="Trial"><Trial /></E>} />
@@ -299,6 +304,9 @@ export function App() {
               <Route path="line/settings" element={<E name="Line settings"><LineSettings /></E>} />
               <Route path="line/trace/:ref" element={<E name="Line trace"><LineTrace /></E>} />
               <Route path="line/:project" element={<E name="Line workspace"><LineWorkspace /></E>} />
+              <Route path="flows/settings" element={<E name="Flow settings"><FlowSettings /></E>} />
+              <Route path="flows/trace/:ref" element={<E name="Flow trace"><FlowTrace /></E>} />
+              <Route path="flows/:flow" element={<E name="Flow"><Flow /></E>} />
               <Route path="decisions/stacks" element={<E name="DecisionStacks"><DecisionStacks /></E>} />
               <Route path="decisions/stacks/:id" element={<E name="DecisionStack"><DecisionStack /></E>} />
               <Route path="decisions/:id" element={<E name="DecisionDetail"><DecisionDetail /></E>} />

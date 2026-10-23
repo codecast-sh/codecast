@@ -469,7 +469,7 @@ export function buildLoopSteps(rows: LoopRows): LoopSteps {
   const open = (rows.problems ?? []).filter((p) => p.cause && p.status !== "done" && p.status !== "dropped").length;
   const newProblems = grouped.filter((d) => d.decided.startsWith("Opened")).length;
   steps.push({
-    id: "line", stage: "line", stages: ["line"], kind: "session", where: "codecast", label: "The line",
+    id: "line", stage: "line", stages: ["line"], kind: "session", where: "codecast", label: "The flow",
     purpose: "Fixes each problem: proves it, builds the change, asks you, ships it and watches.",
     version: null, mode: null, file: null, source: null,
     health: { tone: open ? "ok" : "new", words: open ? `${plural(open, "problem")} open` : "no problems open", day: 0, week: 0, spark: new Array(7).fill(0), failed: 0, right: 0, wrong: 0, costUsd: null },

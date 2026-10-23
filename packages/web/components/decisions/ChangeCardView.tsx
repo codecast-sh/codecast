@@ -1135,7 +1135,7 @@ export function ChangeCardAnswer({
         {/* Closing with no verdict is not a fourth answer: it says what it
             does and sits at the row's far end, away from Drop. */}
         {onDismiss && !line && (
-          <button onClick={onDismiss} className="cc-dismiss" title="Close with no verdict: nothing goes back to the agent, and a line run stops here" aria-label="Close without answering">
+          <button onClick={onDismiss} className="cc-dismiss" title="Close with no verdict: nothing goes back to the agent, and a flow run stops here" aria-label="Close without answering">
             {showKeys ? <KeyCap size="xs">x</KeyCap> : null}<span>close without answering</span>
           </button>
         )}

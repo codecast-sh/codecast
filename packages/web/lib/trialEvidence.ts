@@ -91,7 +91,7 @@ export function trialHold(c: Pick<TrialCardRow, "status" | "card" | "proposal" |
   if (c.rebuilding) return { kind: "rebuilding", words: `Rebuilding on main${c.rebuilding.node ? ` · ${c.rebuilding.node.replace(/_/g, " ")}` : ""}` };
   if (c.status !== "waiting") return null;
   // The line dropped the step this card waits at: no answer has anywhere to go until its run is picked up at a step the line still has.
-  if (c.stale_gate) return { kind: "stale_gate", words: "Its step left the line" };
+  if (c.stale_gate) return { kind: "stale_gate", words: "Its step left the flow" };
   if (c.judge_fix?.ab.verdict === "few_controls") return { kind: "controls", words: `${c.judge_fix.ab.controls.moments} of ${JUDGE_FIX_MIN_CONTROLS} kept-finding moments · rerun when there are more` };
   // A branch behind main is not being rebuilt until someone sends it back (cast line trial rebuild): say what it is.
   const base = c.card?.checks.find((k) => k.name === BASE_CHECK && !k.ok);

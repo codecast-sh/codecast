@@ -27,7 +27,7 @@ export function leftWhy(h: Pick<CauseHistory, "attempts" | "closes" | "occurrenc
     if (a.end != null && !a.live && !h.closes.some((c) => c.runId === a.runId)) events.push({ at: a.end, runId: a.runId, moved: `Run ${a.n} ended ${ago(a.end)}: ${a.outcome.text}` });
     const c = a.card;
     if (c?.answer && c.answeredAt) {
-      const who = c.answeredBy ? names.get(c.answeredBy) ?? "a teammate" : "the line";
+      const who = c.answeredBy ? names.get(c.answeredBy) ?? "a teammate" : "the flow";
       events.push({ at: c.answeredAt, runId: a.runId, moved: `Answered by ${who} ${ago(c.answeredAt)}: ${c.answer}` });
     }
   }

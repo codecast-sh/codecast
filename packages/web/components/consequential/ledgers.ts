@@ -165,7 +165,7 @@ export function startAgainLedger(r: { problem: string; project: string | null; b
 /** A problem whose findings say nothing, kept as real anyway: the line takes it up, so a run starts now, after the
  *  problems queued ahead (`ahead`), or not at all while its line is off (`off`, the keep waits for the switch). */
 export function keepRealLedger(r: { problem: string; project: string | null; empty: number; of: number; now: boolean; ahead: number | null; off: boolean; cost?: RunCost | null; about?: string | null }): SwitchLedger {
-  const starts = r.off ? { value: "0", label: "start: its line is off" } : r.now ? { value: "1", label: "run starts now" } : { value: "1", label: r.ahead ? `run, after ${r.ahead} queued` : "run, next in line" };
+  const starts = r.off ? { value: "0", label: "start: its flow is off" } : r.now ? { value: "1", label: "run starts now" } : { value: "1", label: r.ahead ? `run, after ${r.ahead} queued` : "run, next in line" };
   return {
     name: "Keep it as a problem",
     subject: r.problem,

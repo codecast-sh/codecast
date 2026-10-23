@@ -50,7 +50,7 @@ export function lineCauseFields(opts: { subject: string; label: string; words: s
   const words = opts.words.trim();
   const draft = opts.draft?.text.trim() ? opts.draft : undefined;
   if (!words && !draft) return null;
-  const fallback = draft ? `Change the ${opts.label} station's ${draft.field}` : `Change ${opts.label} on the line`;
+  const fallback = draft ? `Change the ${opts.label} station's ${draft.field}` : `Change ${opts.label} in the flow`;
   const parts = [words || `A proposed ${draft!.field} for ${opts.label}, written in its editor.`];
   if (draft) {
     // A fence longer than any backtick run inside keeps the text exact.

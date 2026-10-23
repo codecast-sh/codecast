@@ -178,7 +178,7 @@ async function verifyProjectHeader() {
   assert.doesNotMatch(header.textContent!, /The org chart, roles and scopes\./);
 
   // ── five tabs, kept in the URL ──
-  assert.deepEqual(qa("[data-intent-header] [data-scope-tab]").map((t) => t.getAttribute("data-scope-tab")), ["tasks", "timeline", "about", "line", "expectations"]);
+  assert.deepEqual(qa("[data-intent-header] [data-scope-tab]").map((t) => t.getAttribute("data-scope-tab")), ["tasks", "timeline", "about", "flow", "expectations"]);
   assert.equal(q("[data-project-page]")!.getAttribute("data-scope-tab-active"), "tasks");
   assert.equal(q("[data-scope-tab='tasks']")!.getAttribute("aria-current"), "page");
   assert.ok(q(`[data-task-list='${PID}']`), "it opens on the project's tasks");
@@ -266,11 +266,12 @@ async function verifyProjectHeader() {
   assert.match(q("[data-foreign-workspace]")!.textContent!, /This project lives in Codecast\. Switch to see its tasks\./);
   assert.equal(q("[data-task-list]"), null);
   assert.equal(q("[data-project-line]"), null);
-  // Its Line tab reads where the project lives, so it shows from here, under a note naming that workspace.
+  // Its Flow tab reads where the project lives, so it shows from here, under a note naming that workspace; a
+  // link from before names it `tab=line`.
   env.search = "tab=line";
   await mount();
-  assert.match(q("[data-foreign-workspace]")!.textContent!, /This project lives in Codecast\. You are reading its line from here; switch to work in it\./);
-  assert.ok(q("[data-project-line]"), "the Line tab renders from another workspace");
+  assert.match(q("[data-foreign-workspace]")!.textContent!, /This project lives in Codecast\. You are reading its flow from here; switch to work in it\./);
+  assert.ok(q("[data-project-line]"), "the Flow tab renders from another workspace");
   assert.equal(q("[data-task-list]"), null);
   env.search = "";
 

@@ -549,7 +549,7 @@ function clauseWords(clause: string): string | null {
   if (lhs === "review_verdict") return not ? null : REVIEW_WORDS[value] ?? `review ${humanize(value)}`;
   // A handoff reads as what it means for the reader: the work is done, or it needs a person.
   if (lhs === "handoff") return not ? null : value === "done" ? "done" : value === "needs_context" || value === "blocked" ? "needs you" : `handed off ${humanize(value)}`;
-  if (lhs === "category") return not ? null : value === "line" ? "about the line itself" : `a ${humanize(value)} problem`;
+  if (lhs === "category") return not ? null : value === "line" ? "about the flow itself" : `a ${humanize(value)} problem`;
   if (lhs === "risk") return not ? null : value === "plan" ? "needs a plan" : `${humanize(value)} risk`;
   if (lhs === "readiness") return not ? `not ${humanize(value)}` : humanize(value);
   if (lhs === "goal_ref") return value === "none" ? (not ? null : "no goal") : null;

@@ -43,10 +43,10 @@ export const APP_SURFACES: AppSurface[] = [
   dash("search", "search across sessions, docs, tasks and people"),
   dash("notifications", "notification list"),
   dash("questions", "agent questions waiting for an answer"),
-  dash("line", "the line: findings, problems, runs, cards, watch and closed, as one flow"),
+  dash("flows", "the team's flows, one per owner role, and the pool run by hand; findings, problems, runs, cards, watch and closed"),
   dash("expectations", "every project's expectations: how its product should behave, with breaks per line"),
-  dash("trial", "trial runs of the line: each gate a card, answered as a rehearsal that ships nothing"),
-  dash("line/settings", "one project's line: its finders, principles, check commands and limits, editable in its file"),
+  dash("trial", "trial runs of a flow: each gate a card, answered as a rehearsal that ships nothing"),
+  dash("flows/settings", "one project's flow: its finders, principles, check commands and limits, editable in its file"),
   dash("decisions/stacks", "decision stacks: open first with progress and due, done ones folded"),
   dash("threads", "thread list"),
   dash("docs", "documents index"),
@@ -121,6 +121,9 @@ export const APP_SURFACE_EXCLUDED_PATHS = new Set<string>([
   "slack/connect",
   // One connected app's screen of one thing: needs ?ref (contracts/productView.ts).
   "view",
+  // Addresses from before /flows: each redirects to its place there.
+  "line",
+  "line/settings",
 ]);
 
 export function findAppSurface(nameOrPath: string): AppSurface | undefined {

@@ -54,7 +54,7 @@ const history = { occurrences: [], occurrencesFrom: "history", since: null, capp
 const issue = (id: string) => ({ id, ref: `ct-${id}`, title: `Problem ${id}`, status: "open", findings: 1, quotes: [], runs: [], lastRunAt: 0, where: { tone: "calm", end: null, text: "" }, history, process: "line" });
 const tasks = ["6", "20"].map((id) => ({ _id: id, short_id: `ct-${id}`, status: "open", readiness: "ready", goal_ref: "g-1", assignee: null, workflow_run_id: null, project_id: "p1", cause: { signal_count: 2, first_seen: 0, last_seen: 0, fingerprints: [] } }));
 const workspace = {
-  needs, now, ready: true, processes: [{ key: "line", title: "Codecast's line" }], projects: [{ _id: "p1", title: "Callers" }], project: null, open: 12,
+  needs, now, ready: true, processes: [{ key: "line", title: "Standard" }], projects: [{ _id: "p1", title: "Callers" }], project: null, open: 12,
   problems: [issue("6"), issue("20")], allInbox: groups, rows: { tasks, signals: [] }, admissions: new Map(), trialProjects: new Set(), trialRuns: new Set(), names: new Map(), sources: new Map(), overlaps: new Map(),
 } as any;
 const empty = { problems: [], allInbox: [], rows: { tasks: [], signals: [] } };

@@ -11,6 +11,7 @@ import { choiceWords, closedAtStep, isLiveRun, runEnd } from "@codecast/shared/c
 import { LINE_PHASES, phaseOfStation, type LinePhaseKey } from "@codecast/shared/contracts/linePhases";
 import { runNodeLine, runNodeRows, scriptLine, type RunNodeRow } from "../workflowRun";
 import { SHIPPED_LINE } from "./shippedLine.generated";
+import { lineRefHref } from "./lineWorkspaceUrl";
 
 // ── the shape a report reads ─────────────────────────────────────────────────
 
@@ -129,7 +130,7 @@ const WORDS: Record<string, { done: string; failed?: string; live?: string }> = 
   red: { done: "The test failed before the change, as it should", failed: "The test did not show the problem" },
   dissolve: { done: "Closed: the problem did not reproduce" },
   implement: { done: "Built the change", failed: "Build stopped", live: "Building the change" },
-  implement_line: { done: "Built the change to the line", failed: "Build stopped", live: "Building the change to the line" },
+  implement_line: { done: "Built the change to the flow", failed: "Build stopped", live: "Building the change to the flow" },
   reopen: { done: "Sent back to build with the note" },
   verify: { done: "Checks passed", failed: "Checks failed", live: "Running the checks" },
   green: { done: "The test passes with the change", failed: "The test still fails" },
@@ -395,7 +396,7 @@ export function stationEnd(row: Pick<RunNodeRow, "id" | "session" | "status"> & 
   if (quiet?.[1] === row.id && s && (s.message_count ?? 0) > 0 && !s.state && !s.result?.trim() && !s.handoff) {
     const after = s.updated_at && row.completed_at ? Math.round((s.updated_at - row.completed_at) / 60_000) : 0;
     const on = s.is_active ? "; its session is still working" : after >= 1 ? `; its session kept working ${after}m after` : "";
-    return { kind: "went_quiet", step: `Went quiet without a report, and the line took that as its end${on}`, stop: (st) => `${st}'s session went quiet without a report and the line took that as its end${on}` };
+    return { kind: "went_quiet", step: `Went quiet without a report, and the flow took that as its end${on}`, stop: (st) => `${st}'s session went quiet without a report and the flow took that as its end${on}` };
   }
   return null;
 }
@@ -438,12 +439,12 @@ const DOES: Record<string, string> = {
   plan_gate: "Read the plan before anything is built, then decide",
   analyze: "Reads the problem and its reports",
   prove: "Writes a test that shows the problem",
-  prove_line: "Names the recorded runs where the line itself did what the problem describes",
-  red: "Runs the test before the change, to see it fail; for a change to the line, checks the named runs against the records",
+  prove_line: "Names the recorded runs where the flow itself did what the problem describes",
+  red: "Runs the test before the change, to see it fail; for a change to the flow, checks the named runs against the records",
   dissolve: "Closes the problem when it does not reproduce",
   unproven: "Stops when the problem could be neither shown nor ruled out",
   implement: "Builds the change",
-  implement_line: "Builds a change to the line itself",
+  implement_line: "Builds a change to the flow itself",
   ask: "A person answers the builder's question, or drops the problem",
   reopen: "Sends the change back to build with the person's note",
   stopped: "Stops when the planner or the builder cannot go on, and leaves the problem open with why",
@@ -517,7 +518,7 @@ function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null, opts:
       label: stepLabel(row),
       state: "noted",
       result: landed ? `Landed by hand${at ? ` ${shortDay(at)}` : ""}` : "Left to a person to land",
-      note: "the line could not merge it",
+      note: "the flow could not merge it",
       ...(ref ? { href: `/tasks/${ref}`, hrefTitle: "The task's comments say why the merge was left and what is left to land" } : {}),
       at: row.completed_at ?? row.started_at,
     };
@@ -530,7 +531,7 @@ function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null, opts:
     return { id: row.id, label: stepLabel(row), state: "noted", result: UNAPPROVED_STEP, note: cardTimeoutWords(run) ?? "decision withdrawn unanswered", at: row.completed_at ?? row.started_at };
   }
   const owned = ownedElsewhere(run, row.id);
-  if (owned) return { id: row.id, label: stepLabel(row), state: "done", result: OWNED_WORDS, ...(owned.ref ? { href: `/line/trace/${owned.ref}`, hrefTitle: `Trace ${owned.ref}, the task that owns it` } : {}), at: row.completed_at ?? row.started_at };
+  if (owned) return { id: row.id, label: stepLabel(row), state: "done", result: OWNED_WORDS, ...(owned.ref ? { href: lineRefHref(owned.ref), hrefTitle: `Trace ${owned.ref}, the task that owns it` } : {}), at: row.completed_at ?? row.started_at };
   // A proposal's gate (AgentWatch) approved building the fix: said so, never as a bare "Done".
   if (!gate && row.status === "completed") {
     const scope = approvalScope(row.id, row.outcome);
@@ -780,7 +781,7 @@ export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.
     // A merge the line could not do, on a cause that is done, landed by hand.
     const byHand = nodeOf(run, "merge")?.status === "failed" && task?.status === "done";
     // A row leads with its own day, so its sentence leaves the day out.
-    const shipped = brief ? (byHand ? "Shipped by hand" : "Shipped") : byHand ? `Shipped by hand ${shortDay(ended!.at)} after the line could not merge it` : `Shipped ${shortDay(ended!.at)}`;
+    const shipped = brief ? (byHand ? "Shipped by hand" : "Shipped") : byHand ? `Shipped by hand ${shortDay(ended!.at)} after the flow could not merge it` : `Shipped ${shortDay(ended!.at)}`;
     // LM3: a watch that reopens moves the cause to open; any other status
     // after a ship is a later run's or a person's, and this run still shipped.
     // A graph that keeps its cause open through the watch (AgentWatch) is still watching, not reopened.
@@ -1030,7 +1031,7 @@ function loopEnd(run: Partial<Pick<ReportRun, "node_statuses">>, stepId: string,
     return { key: `review:${stepId}`, step: stepId, label: "Handed off for review", review: { ask: reviewAsk(s.handoff.note ?? "") ?? (s.state?.split("\n")[0].trim() || null), gate: check ? checkAt(check) : null } };
   }
   const infra = [...nodes].reverse().map((n) => (n.status === "failed" ? machineFault(nodeText(n)) : null)).find(Boolean);
-  if (infra) return { key: `infra:${stepId}`, step: stepId, label: `Line machine: ${infra}` };
+  if (infra) return { key: `infra:${stepId}`, step: stepId, label: `Flow machine: ${infra}` };
   if (!settled || check) return null;
   // The script that sends this station back (an edge from a command into it) and printed why.
   const back = SHIPPED_LINE.edges.filter((e) => e.to === stepId && !AGENT_STATIONS.has(e.from)).map((e) => nodes.find((n) => n.node_id === e.from)).find((n) => n && n.status === "completed" && nodeText(n).trim());
@@ -1106,7 +1107,7 @@ export function stopWords(run: ReportRun, at = labelOf(run, run.current_node_id)
     // did or what happened to it: a handoff, a start that never came, a kill.
     const node = nodeOf(run, m[1]);
     const end = node ? stationEnd({ id: m[1], status: node.status as RunNodeRow["status"], session: node.session as RunNodeRow["session"], session_id: node.session_id, completed_at: node.completed_at }, run) : null;
-    if (end) return `Stopped at ${st}: ${end.stop(st)}${end.kind === "handoff" ? ", and the line had no route for that" : ""}.`;
+    if (end) return `Stopped at ${st}: ${end.stop(st)}${end.kind === "handoff" ? ", and the flow had no route for that" : ""}.`;
     // What the person can do next, never the engine's gap (LL6): the graph is fixed where it lacks the route.
     // Finished with nothing said: there is nothing to review, only to start again.
     if (finishedAtDeadEnd(run) && failCause(run).key.startsWith("deadend-silent")) return `Stopped at ${st}: ${st} ended without a report; start again or close the problem.`;
@@ -1194,7 +1195,7 @@ export function versionChange(nodes: ReportRun["graph_nodes"] | null, prev: Repo
   const added = nodes.filter((n) => !was.has(n.id)).map((n) => n.id);
   const removed = prev.filter((n) => !now.has(n.id)).map((n) => n.id);
   const parts = [edited.length ? `${names(edited)} edited` : "", added.length ? `${names(added)} added` : "", removed.length ? `${names(removed)} removed` : ""].filter(Boolean);
-  return parts.length ? parts.join(", ") : "Line settings edited";
+  return parts.length ? parts.join(", ") : "Flow settings edited";
 }
 
 /**

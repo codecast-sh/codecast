@@ -69,7 +69,7 @@ function AnswerStart({ start, lead }: { start: ReturnType<typeof useAnswerStart>
   if (start.under === "off" && start.projectId) {
     return (
       <p className="ask-next" data-line-ask-start="off">
-        <span>{lead} waits: {start.project ? `${start.project}'s` : "its"} line is off</span>
+        <span>{lead} waits: {start.project ? `${start.project}'s` : "its"} flow is off</span>
         <LineStartControl projectId={start.projectId} project={start.project ?? undefined} className="lw-link ask-turn-on" label="Turn it on…" triggerProps={{ "data-line-ask-turn-on": "" }} />
       </p>
     );

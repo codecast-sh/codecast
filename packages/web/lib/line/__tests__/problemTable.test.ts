@@ -158,8 +158,8 @@ describe("problemStand: one status a problem, first match wins", () => {
     expect(stand(issue("a", { status: "done", h: { closes, cameBack: true } }), { task: task({ status: "done" }) })).toEqual({ status: "notstarted", phrase: "Returned after it was closed", ready: false });
   });
   test("not started says ready or queued, or the one thing that blocks it", () => {
-    expect(stand(issue("a"), { task: task() })).toEqual({ status: "notstarted", phrase: "Ready: no line set up", ready: true });
-    expect(stand(issue("a"), { task: task(), lineOn: false }).phrase).toBe("Ready: line off");
+    expect(stand(issue("a"), { task: task() })).toEqual({ status: "notstarted", phrase: "Ready: no flow set up", ready: true });
+    expect(stand(issue("a"), { task: task(), lineOn: false }).phrase).toBe("Ready: flow off");
     expect(stand(issue("a"), { task: task(), lineOn: true }).phrase).toBe("Queued");
     // A trial whose dispatcher held says so in place of Queued and is blocked: nothing will start it (AgentWatch Trial,
     // "11 ready" over 11 rows all "Trial held"). A blocked one keeps its own reason.
@@ -178,7 +178,7 @@ describe("problemStand: one status a problem, first match wins", () => {
     // Nothing else starts it, so its row carries the start (ct-57552, ct-57644): the act, through the paced review.
     expect(stand(issue("a", { h: { attempts: [attempt({ runId: "r0", n: 2 })] } }), { task: task({ workflow_run_id: "r0" }) })).toEqual({ status: "notstarted", phrase: "Run 2 ended: start by hand", ready: false, act: "start" });
     expect(stand(issue("a", { h: { attempts: [attempt({ runId: "r0", n: 6 })] } }), { task: task({ workflow_run_id: "r0", goal_ref: "" }) }).phrase).toBe("Needs a goal");
-    expect(blocked({ status: "in_progress" }).phrase).toBe("In progress outside the line");
+    expect(blocked({ status: "in_progress" }).phrase).toBe("In progress outside a flow");
     // A run parked it because main already carries the fix (ct-59687): one state, the park record's, everywhere.
     const parked = stand(issue("a", { h: { attempts: [attempt({ ended: "parked" })] } }), { task: task({ readiness: "not_actionable", workflow_run_id: "r1", readiness_note: "Already fixed on main by fc0d85ba65 (classifies both files); CI on it in progress" }) });
     // Closing it as fixed is the line's queue's, on its row: it never waits on you, and never sits under Not started.
@@ -318,7 +318,7 @@ describe("the table", () => {
     expect(s.folded).toBe(false);
     expect(s.subs!.map((b) => [b.label, b.projectId, b.ready, b.blocked, b.rows.length])).toEqual([["Callers", "p1", 1, 1, 2]]);
     expect(s.subs!.every((b) => b.ready! + b.blocked! === b.rows.length)).toBe(true);
-    expect(s.rows.map((r) => r.stand.phrase)).toEqual(["Ready: no line set up", "Not grounded yet"]);
+    expect(s.rows.map((r) => r.stand.phrase)).toEqual(["Ready: no flow set up", "Not grounded yet"]);
   });
 
   test("a column sorts the whole list flat; the search matches the title, ref, project and source, and opens folded groups", () => {

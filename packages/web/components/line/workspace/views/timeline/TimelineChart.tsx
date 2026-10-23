@@ -140,7 +140,7 @@ export type TimelineChartProps = {
  *  The address is read at the click, so drawing the chart needs no router. */
 function openDeploy(ref: string): void {
   const { pathname, search } = window.location;
-  navigateHere(pathname.startsWith("/line") ? `/line${lineSelectionSearch(new URLSearchParams(search), { view: "deploys", deploy: ref })}` : lineWorkspaceHref(null, { view: "deploys", deploy: ref }));
+  navigateHere(pathname.startsWith("/flows") ? `${pathname}${lineSelectionSearch(new URLSearchParams(search), { view: "deploys", deploy: ref })}` : lineWorkspaceHref(null, { view: "deploys", deploy: ref }));
 }
 
 /** The project's live deploys that carried none of this problem's fixes (coverage.live less h.deploys). */

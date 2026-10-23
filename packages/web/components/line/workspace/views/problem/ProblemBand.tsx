@@ -243,12 +243,12 @@ export function ProblemBand(p: ProblemBandProps) {
         {/* What the headline counts: findings and the line's own failures on the fault. */}
         <Fact k="Since" tone={b.since > 0 || b.faults.length ? "bad" : "ok"}>{[
           b.since > 0 ? `${b.since} ${b.since === 1 ? "finding" : "findings"}` : null,
-          b.faults.length ? `${b.faults.length} line ${b.faults.length === 1 ? "failure" : "failures"}` : null,
+          b.faults.length ? `${b.faults.length} flow ${b.faults.length === 1 ? "failure" : "failures"}` : null,
         ].filter(Boolean).join(" · ") || "No findings"}{b.sinceOff > 0 ? `, and ${b.sinceOff} about something else` : ""}</Fact>
       </>;
       // The line's own runs that failed on this very fault after it went live: each one, in the words its step printed.
       thing = b.faults.length > 0 && (
-        <ul className="pb-since" aria-label="The line failed on it since" data-line-band-faults={b.faults.length}>
+        <ul className="pb-since" aria-label="The flow failed on it since" data-line-band-faults={b.faults.length}>
           {b.faults.map((f) => (
             <li key={`${f.runId}:${f.step}`} className="pb-since-g">
               <button type="button" className="lw-link pb-since-act" onClick={() => p.onRun(f.runId, f.caseId)} data-line-band-fault={f.runId}>{f.stepLabel} · {f.caseRef ?? "a run"}</button>
@@ -280,7 +280,7 @@ export function ProblemBand(p: ProblemBandProps) {
         )}
         {b.change && b.change.files > 0 && <Fact k="Change"><span className="pb-stat">{b.change.files} {b.change.files === 1 ? "file" : "files"} <b data-k="add">+{b.change.added}</b> <b data-k="del">−{b.change.removed}</b></span>{b.change.pr && <Out href={b.change.pr}>the pull request</Out>}</Fact>}
         {/* Who merges it, and where: the line when its merge step is on, else a person on the fix's pull request. */}
-        {off != null && <Fact k="Merges">{off ? "A person, on the pull request" : "The line, once checks pass"}</Fact>}
+        {off != null && <Fact k="Merges">{off ? "A person, on the pull request" : "The flow, once checks pass"}</Fact>}
       </>;
       const approved = [b.by, b.ref, b.at != null ? dayWords(b.at) : null].filter(Boolean).join(" · ") || "Yes";
       acts = <>
@@ -387,15 +387,15 @@ export function ProblemBand(p: ProblemBandProps) {
       if (b.lineOn === false) {
         // The project's start switch, through the one review every paid switch goes through.
         // This problem's own state only: the line-wide queue says nothing about it.
-        facts = <>{b.reason && <Fact k="Waiting on">{b.reason}</Fact>}<Fact k="Line" tone="warn">Off</Fact></>;
+        facts = <>{b.reason && <Fact k="Waiting on">{b.reason}</Fact>}<Fact k="Flow" tone="warn">Off</Fact></>;
         acts = <LineStartControl projectId={p.projectId} project={p.projectTitle ?? undefined} className="lw-act" label={`Turn on ${p.projectTitle ? `${p.projectTitle}'s` : "its"} line…`} triggerProps={{ "data-primary": "", "data-line-band-turn-on": "" }} />;
       } else if (b.lineOn == null) {
         // No role starts this project's line: the step that sets one up.
-        facts = <>{b.reason && <Fact k="Waiting on">{b.reason}</Fact>}<Fact k="Line" tone="warn">Not set up</Fact></>;
+        facts = <>{b.reason && <Fact k="Waiting on">{b.reason}</Fact>}<Fact k="Flow" tone="warn">Not set up</Fact></>;
         acts = p.projectId && <a className="lw-act" data-primary="" href={lineSettingsHref({ project: p.projectId })} data-line-band-setup>Set up {p.projectTitle ? `${p.projectTitle}'s` : "its"} line</a>;
       } else {
         // Queued: it starts when the line has a free place; the line-wide queue is not this problem's.
-        facts = <>{b.reason ? <Fact k="Waiting on">{b.reason}</Fact> : <Fact k="Starts">When the line has a free place</Fact>}<Fact k="Line" tone="ok">On</Fact></>;
+        facts = <>{b.reason ? <Fact k="Waiting on">{b.reason}</Fact> : <Fact k="Starts">When the flow has a free place</Fact>}<Fact k="Flow" tone="ok">On</Fact></>;
       }
       break;
   }

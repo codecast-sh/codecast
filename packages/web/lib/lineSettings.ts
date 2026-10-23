@@ -52,7 +52,7 @@ const COMMAND_FIELDS: Record<(typeof COMMAND_KEYS)[number], FieldWords & { label
 
 /** The sections as written; LINE_SECTIONS below adds each field's kind. Finders (Listens to) render their own rows. */
 const SECTION_DECLS: Array<Omit<LineSection, "fields"> & { fields: FieldDecl[] }> = [
-  { id: "listens", title: "Sources", what: "What reports problems into this line on its own, like an error tracker or the evals: what each watches, how much it reported, and whether it has gone quiet.", fields: [] },
+  { id: "listens", title: "Sources", what: "What reports problems into this flow on its own, like an error tracker or the evals: what each watches, how much it reported, and whether it has gone quiet.", fields: [] },
   {
     id: "holds",
     title: "Holds work to",
@@ -209,11 +209,11 @@ export function lineWriteGate(lp: Facts, roster: RosterDevice[] | null, checkout
   // editable, and the first edit writes the file on the viewer's machine that
   // last ran a session there, whose republish makes it the line (LX5).
   if (!lp && checkout) return { writable: true, device: "your machine with this checkout", file, first: true };
-  if (!lp) return { writable: false, device: null, file, reason: "This line's settings live in a file in the project's repository, and no machine has uploaded them yet. Run one session in the project's folder on your machine: the settings then show here, and your first change writes the file and uploads it." };
+  if (!lp) return { writable: false, device: null, file, reason: "This flow's settings live in a file in the project's repository, and no machine has uploaded them yet. Run one session in the project's folder on your machine: the settings then show here, and your first change writes the file and uploads it." };
   if (!lp.root || !lp.device_id || !hasProfileFacts(lp)) {
     return { writable: false, device: null, file, reason: "An older codecast uploaded these settings without saying which machine holds the file, so edits have nowhere to go. They become editable here once that machine runs the current codecast and uploads them again." };
   }
-  if (lp.default === false) return { writable: false, device: null, file, reason: "Only this project's sources are set, from another project's settings file. Change them on that project's line." };
+  if (lp.default === false) return { writable: false, device: null, file, reason: "Only this project's sources are set, from another project's settings file. Change them in that project's flow settings." };
   if (!roster) return { writable: true, device: "the publishing machine", file };
   const device = roster.find((d) => d.device_id === lp.device_id);
   if (!device) return { writable: false, device: null, file, reason: "The file is on a teammate's machine. Its owner can edit it, here or in the file." };
@@ -234,8 +234,8 @@ export function editOutcome(answer: CommandAnswer): EditOutcome {
   if (!answer?.executed_at) return { state: "waiting" };
   if (answer.error) {
     if (answer.error === "expired_ttl") return { state: "refused", message: `The machine did not pick the edit up within ${Math.round(DAEMON_COMMAND_TTL_MS / 60_000)} minutes, so it was dropped. Nothing reached the file.` };
-    if (/^Unknown command/.test(answer.error)) return { state: "refused", message: "That machine runs an older cast that cannot edit the line. Update it with cast update, then edit again." };
-    if (/unknown edit op "(set|reset)_station"/.test(answer.error)) return { state: "refused", message: "That machine runs an older cast that cannot edit the line's stations. Update it with cast update, then edit again." };
+    if (/^Unknown command/.test(answer.error)) return { state: "refused", message: "That machine runs an older cast that cannot edit the flow. Update it with cast update, then edit again." };
+    if (/unknown edit op "(set|reset)_station"/.test(answer.error)) return { state: "refused", message: "That machine runs an older cast that cannot edit the flow's steps. Update it with cast update, then edit again." };
     return { state: "refused", message: answer.error.replace(/^.*?\.codecast\/line\.toml: /, "").replace(/^\[line(\.\w+)?\]\s*/, "") };
   }
   try {
@@ -347,7 +347,7 @@ export function lineEditStates(rows: LineEditRow[], lp: Facts, now: number): Rec
 // ---------------------------------------------------------------- links in
 
 /** Where a link into the settings page lands: a profile section or the stations. */
-export type LineSettingsSection = LineSection["id"] | "stations";
+export type LineSettingsSection = LineSection["id"] | "stations" | "starts";
 export const LINE_SETTINGS_SECTIONS: readonly LineSettingsSection[] = [...LINE_SECTIONS.map((s) => s.id), "stations"];
 
 export type LineSettingsTarget = {
@@ -367,7 +367,7 @@ export function lineSettingsHref(t: LineSettingsTarget = {}): string {
   if (section) q.set("section", section);
   if (t.station) q.set("station", t.station);
   const s = q.toString();
-  return s ? `/line/settings?${s}` : "/line/settings";
+  return s ? `/flows/settings?${s}` : "/flows/settings";
 }
 
 
@@ -382,9 +382,9 @@ export function lineSettingsTarget(search: { get(key: string): string | null } |
 /** The setting that fills each station of the Line page when it is empty:
  *  what feeds it, said as the thing to set. Keyed by the page's station key. */
 export const LINE_STATION_SETTINGS: Record<string, { section: LineSettingsSection; say: string }> = {
-  sense: { section: "listens", say: "Set what this line listens to" },
-  causes: { section: "listens", say: "Set what this line listens to" },
-  build: { section: "stations", say: "See who runs this line" },
+  sense: { section: "listens", say: "Set what this flow listens to" },
+  causes: { section: "listens", say: "Set what this flow listens to" },
+  build: { section: "stations", say: "See who runs this flow" },
   awaiting: { section: "checks", say: "Set the checks a change passes" },
   watching: { section: "limits", say: "Set how long a shipped change is watched" },
   closed: { section: "checks", say: "Set how a change ships" },

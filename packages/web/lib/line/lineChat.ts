@@ -37,7 +37,7 @@ export const lineChatThread = (row: LineChatItem | undefined, sends: readonly Li
 export function answererWords(owner: LineChatItem["owner"] | undefined, ready: boolean): { name: string; why: string } {
   if (owner?.via === "lead") return { name: owner.name, why: "A session of its own answers for this line, under the project's lead, so your questions never mix with the lead's other work." };
   if (owner) return { name: owner.name, why: "A session of its own answers for this line." };
-  if (!ready) return { name: "the line", why: "" };
+  if (!ready) return { name: "the flow", why: "" };
   return { name: "a new line session", why: "Your first message starts a session briefed on the line, under the project's lead when it has one." };
 }
 

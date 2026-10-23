@@ -919,13 +919,13 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   },
   createOrgRole: org((ctx) => `Created the role ${quoted((ctx.args[0] as { name?: string })?.name, "role")}`),
   updateOrgRole: org((ctx) => `Edited ${roleName(ctx.before, ctx.args[0] as string)}`),
-  setRoleLine: org((ctx) => `Changed the line of ${roleName(ctx.before, ctx.args[0] as string)}`),
+  setRoleLine: org((ctx) => `Changed the steps of ${roleName(ctx.before, ctx.args[0] as string)}`),
   // A project's customized line (writer: workflows). The fork mints the row,
   // a create, so it is not recorded; each later save undoes to the prior graph.
   saveLineWorkflow: viaWriter((ctx) => {
     const wf = ctx.args[0] as { slug?: string; name?: string } | undefined;
     const before = Object.values((ctx.before?.workflows ?? {}) as Record<string, any>).some((w) => w?.slug === wf?.slug);
-    return before ? `Edited the stations of ${quoted(wf?.name, "the line")}` : null;
+    return before ? `Edited the stations of ${quoted(wf?.name, "the steps")}` : null;
   }),
   followOrgChannel: org((ctx) => `${ctx.args[2] ? "Followed" : "Unfollowed"} a channel for a role`),
   staffHeadOfPeople: org(() => "Staffed the Head of People"),

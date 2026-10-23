@@ -24,11 +24,11 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/decisions(\/|$)/,
   // The trial's review page: a card list beside the card, each its own scroll.
   /^\/trial$/,
-  // The line owns its canvas: six stations side by side, each its own scroll.
+  // The flows app owns its canvas: six stations side by side, each its own scroll.
   // Its settings page is the same floor, with its own index and scroll.
   // A trace (LX4) is the same canvas: the map beside the story.
   // A project's workspace (line-workspace.md LW1) owns its canvas too.
-  /^\/line(\/[^/]+|\/trace\/[^/]+)?$/,
+  /^\/(line|flows)(\/[^/]+|\/trace\/[^/]+)?$/,
   // Chat owns its whole canvas: three columns, each with its own scroll region.
   /^\/chat(\/|$)/,
   // The public rooms are the same three column surface.

@@ -172,7 +172,7 @@ export function UserMenu() {
     page(FileText, "Documents", "/docs"),
     page(SquareTerminal, "Sessions", "/sessions"),
     page(CalendarClock, "Workflows", "/routines"),
-    page(Waypoints, "Line", "/line"),
+    page(Waypoints, "Flows", "/flows"),
   ].filter(Boolean);
 
   const handleEnvSwitch = () => {

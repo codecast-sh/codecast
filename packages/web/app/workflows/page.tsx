@@ -661,7 +661,7 @@ export function RunsTab() {
         <div ref={titlebarRef} className="flex items-baseline gap-2 mb-3">
           <Workflow className="w-4 h-4 text-sol-cyan self-center" />
           <h1 className="text-lg font-semibold text-sol-text">Runs</h1>
-          <span className="text-xs text-sol-text-dim">every passage along a line, newest first</span>
+          <span className="text-xs text-sol-text-dim">every run of a flow, newest first</span>
           <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>
         </div>
         {runs.length === 0 ? (

@@ -1,4 +1,4 @@
-// Mounts /line/settings in jsdom on a project whose line profile the store
+// Mounts /flows/settings in jsdom on a project whose line profile the store
 // holds (plan pl-838): the sections read in order with each value's source,
 // an unset command says what its station does, the finders show their health
 // from the same Sense derivation the line page uses, the Stations slot gets
@@ -11,7 +11,7 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../../test-helpers/globals";
 import { closeDomWindow } from "../../../../test-helpers/domGlobals";
 
-const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh/line/settings?project=pr-1", pretendToBeVisual: true });
+const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "https://local.codecast.sh/flows/settings?project=pr-1", pretendToBeVisual: true });
 const matchMedia = (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} });
 const restoreGlobals = replaceGlobals({
   window: Object.assign(dom.window, { innerWidth: 1400, matchMedia }),
@@ -55,7 +55,7 @@ mock.module("../../../../hooks/useQueryNoThrow", () => ({
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
 mock.module("next/navigation", () => ({
   useRouter: () => ({ push() {}, replace() {} }),
-  usePathname: () => "/line/settings",
+  usePathname: () => "/flows/settings",
   useSearchParams: () => new URLSearchParams(search),
 }));
 // The Stations section is its own worker's (ct-56913); the slot is what this page owns.

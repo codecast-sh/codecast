@@ -37,7 +37,7 @@ describe("lineTimeline", () => {
     expect(timelineRows(all, { sources: new Set(["acme-web"]) }).map((e) => e._id)).toEqual(["event:e1"]);
     expect(timelineRows(all, { project: "p1" }).map((e) => e._id)).not.toContain("event:e1");
     expect(groupCounts(all, null)).toMatchObject({ conversations: 1, findings: 1, problems: 1, errors: 1 });
-    expect(timelineSources(all, null).map((s) => s.label)).toEqual(["Acme moments", "Acme web", "Codecast comms judge", "Line"]);
+    expect(timelineSources(all, null).map((s) => s.label)).toEqual(["Acme moments", "Acme web", "Codecast comms judge", "Flow"]);
   });
 
   test("a moment becomes its finding, then the problem, its run and the decision waiting on you", () => {

@@ -47,7 +47,7 @@ describe("goalChip", () => {
     expect(goalChip("pj-a", initiatives, projects)).toMatchObject({ kind: "project", priority: "unranked" });
     expect(goalChip("none", initiatives, projects)).toMatchObject({ kind: "parked", priority: null });
     // A change to the line itself serves the line's own goal: grounded, never parked.
-    expect(goalChip("line", initiatives, projects)).toMatchObject({ kind: "line", label: "the line itself", priority: "unranked" });
+    expect(goalChip("line", initiatives, projects)).toMatchObject({ kind: "line", label: "the flow itself", priority: "unranked" });
     expect(goalChip(undefined, initiatives, projects)).toMatchObject({ kind: "ungrounded", priority: null });
   });
   it("never prints a ref it cannot name", () => {
@@ -198,7 +198,7 @@ describe("buildLineFlow", () => {
     const why = (a: LineAdmission) => flow({ tasks: [ready("a")], admission: a }).causes.state;
     expect(why(adm({ role: null }))).toMatchObject({ kind: "paused", why: "no one is in charge of this project's line, so nothing starts on its own" });
     expect(why(adm({ role: { ...role, paused: true } }))).toMatchObject({ kind: "paused", why: "@aq-line, who runs this line, is paused, so nothing new starts" });
-    expect(why(adm({ on: false }))).toMatchObject({ kind: "paused", why: "@aq-line's line is off, so nothing starts on its own" });
+    expect(why(adm({ on: false }))).toMatchObject({ kind: "paused", why: "@aq-line's flow is off, so nothing starts on its own" });
     expect(why(adm({ hands: 6 }))).toMatchObject({ kind: "paused", why: "@aq-line used all 6 of today's sessions" });
     expect(why(adm({ busy: 2 }))).toMatchObject({ kind: "paused", why: "2 runs are working on its machine, the most it runs at once" });
     expect(why(adm({}))).toMatchObject({ kind: "running", why: "1 queued; the next starts within two minutes" });
@@ -208,9 +208,9 @@ describe("buildLineFlow", () => {
     // The line's start switch off (LL5): the map says so and offers the top
     // ready cause to start by hand.
     const off = flow({ tasks: [ready("a")], admission: adm({ on: false }) }).causes;
-    expect(off.hold).toMatchObject({ short: "Line off", top: { task: { _id: "a" } } });
+    expect(off.hold).toMatchObject({ short: "Flow off", top: { task: { _id: "a" } } });
     // The headline says it, and links the queue.
-    expect(lineHeadline(flow({ tasks: [cause("a"), cause("b")], admission: adm({ on: false }) }), NOW)[0]).toMatchObject({ text: "2 problems wait to start", why: "@aq-line's line is off, so nothing starts on its own", tone: "warn", station: "causes" });
+    expect(lineHeadline(flow({ tasks: [cause("a"), cause("b")], admission: adm({ on: false }) }), NOW)[0]).toMatchObject({ text: "2 problems wait to start", why: "@aq-line's flow is off, so nothing starts on its own", tone: "warn", station: "causes" });
   });
 
   // Round 10: "on at 5 slots, 0 busy" beside causes waiting 20h said nothing
@@ -319,9 +319,9 @@ describe("lineHeadline", () => {
   });
   it("ends calm when nothing waits", () => {
     expect(text(flow({ tasks: [cause("a")], runs: [run("r1", { task_id: "a" })] }))).toBe("1 problem being worked on, nothing needs you");
-    expect(text(flow({ tasks: [cause("a", { status: "done", closed_at: NOW - 9 * DAY })] }))).toBe("The line is quiet: nothing being worked on, nothing needs you");
-    expect(text(flow({ runs: [run("r1")] }))).toBe("Nothing has reached the line yet");
-    expect(text(flow({}))).toBe("Nothing has reached the line yet");
+    expect(text(flow({ tasks: [cause("a", { status: "done", closed_at: NOW - 9 * DAY })] }))).toBe("Quiet: nothing being worked on, nothing needs you");
+    expect(text(flow({ runs: [run("r1")] }))).toBe("Nothing has reached a flow yet");
+    expect(text(flow({}))).toBe("Nothing has reached a flow yet");
   });
   it("points the actionable parts at their stations and says all clear in its own tone", () => {
     const parts = lineHeadline(flow({ tasks: [cause("a"), cause("b")] }), NOW);
@@ -452,7 +452,7 @@ describe("trialHold: why a trial's ready problems sit idle", () => {
 describe("startAgainPlan", () => {
   const a = (o: Partial<LineAdmission> = {}): LineAdmission => ({ role: { id: "r", handle: "union-lead", paused: false }, on: true, slots: 5, busy: 0, hands: null, handsCap: null, ...o });
   test("a line that is off still takes its own pace: 5 of 29 start, the review says the press starts them (Union Prove)", () => {
-    expect(startAgainPlan(a({ on: false }), 29)).toEqual({ now: 5, rest: 24, hold: "Line off: only a press starts a run", slots: 5 });
+    expect(startAgainPlan(a({ on: false }), 29)).toEqual({ now: 5, rest: 24, hold: "Flow off: only a press starts a run", slots: 5 });
     expect(startAgainPlan(a({ on: false }), 1)).toMatchObject({ now: 1, rest: 0 });
   });
   test("on: as many as the free places and the day's sessions allow, nothing to say", () => {

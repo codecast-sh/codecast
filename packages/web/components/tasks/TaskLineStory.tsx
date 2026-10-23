@@ -116,7 +116,7 @@ function Story({ task, runs, allRuns }: { task: StoryTask; runs: ReportRun[]; al
           {switchOpen ? "Hide the switch" : "Start problems on their own"}
         </button>
       )}
-      <Link href={lineRefHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="This problem's life on its line: every report, every attempt to fix it, ships, deploys and what came back" data-cause-trace>Timeline<ArrowUpRight className="w-3 h-3" /></Link>
+      <Link href={lineRefHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="This problem's life in its flow: every report, every attempt to fix it, ships, deploys and what came back" data-cause-trace>Timeline<ArrowUpRight className="w-3 h-3" /></Link>
     </span>
   );
   // Readiness is about admission: once the cause is closed it has no more to say.
@@ -225,7 +225,7 @@ function SignalRow({ s, now }: { s: LineSignal; now: number }) {
   const review = findingReviewWords(s);
   return (
     <li className="flex items-baseline gap-1 rounded hover:bg-sol-bg-alt/60 min-w-0" data-cause-signal={s.short_id ?? s._id}>
-      <Link href={lineRefHref(s.short_id || s._id)} className="flex-1 min-w-0 px-1 py-0.5 text-[12px]" title="This finding's problem on its line" data-signal-trace>
+      <Link href={lineRefHref(s.short_id || s._id)} className="flex-1 min-w-0 px-1 py-0.5 text-[12px]" title="This finding's problem in its flow" data-signal-trace>
         <span className="flex items-baseline gap-2 min-w-0">
           <span className="w-[8.5rem] shrink-0 truncate text-sol-text-dim" title={judge ? `${judge}${s.judge_version ? ` ${s.judge_version}` : ""}, in ${s.source}` : s.source} data-signal-judge>{judge ?? sourceLabel(s.source)}</span>
           <span className="min-w-0 truncate text-sol-text">{findingTitle(s)}</span>

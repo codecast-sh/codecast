@@ -532,5 +532,5 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'p', action: 'evalsSim.play', when: 'evalsSim', description: 'Play or pause the deliveries' },
   // A project's line workspace (components/line/workspace/LineWorkspace): the
   // way to its settings, the comma of the app's settings chord without the modifier.
-  { key: ',', action: 'line.settings', when: 'line', description: "Open this line's settings" },
+  { key: ',', action: 'line.settings', when: 'line', description: "Open this flow's settings" },
 ];

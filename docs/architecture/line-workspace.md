@@ -7,10 +7,10 @@ onward.
 
 ## LW1. One app over the process
 
-`/line` is the app. A project is a filter on it, never a line of its own:
+`/flows` is the app. A project is a filter on it, never a line of its own:
 every project's problems run through the same processes (the graphs that
 exist: codecast's line, and a product's own such as Union's AgentWatch).
-`/line/<project>` opens `/line?project=<project>`, and a project's Line tab
+`/line/<project>` (an address from before) opens `/flows?project=<project>`, and a project's Flow tab
 draws the same app pinned to that project.
 
 The header holds the process picker (each graph with how many runs it has),
@@ -40,7 +40,7 @@ The left nav opens six views, on keys 1 to 6:
   what Retry does.
 - **Sources**: where problems come from. Each source with what it filed, and
   its findings; a finding opens its problem.
-- **Problems**, the home (`/line` opens here): a strip of the fixes waiting
+- **Problems**, the home (`/flows` opens here): a strip of the fixes waiting
   for you (into the Inbox), then one chart of every problem's findings over
   24h, 7d or 30d, stacked by problem (the busiest six colored, the rest gray),
   what came back after a close hatched red, and closes and shipped fixes

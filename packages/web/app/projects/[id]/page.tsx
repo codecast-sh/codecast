@@ -3,7 +3,7 @@
 // the Projects list, its name, status, lead, the goals it serves, Share) over
 // its tabs: Tasks, the list /tasks uses; Timeline, everything that happened
 // with the update composer on top; About, what it is for, its charter and its
-// repositories; Line, the project's flow; and Expectations, how its product
+// repositories; Flow, how its problems run; and Expectations, how its product
 // should behave. The address names a
 // project by its `pj-` id; an older link by its Convex id moves to that form
 // once the store names it.
@@ -44,9 +44,9 @@ import { useSurface } from "../../../lib/surfaces";
 const api = _api as any;
 
 // The board's three faces. Tasks is the default: a project is somewhere to
-// work. Timeline is what happened, with the next update on top; Line is how
+// work. Timeline is what happened, with the next update on top; Flow is how
 // work flows through it.
-const PROJECT_TABS = ["tasks", "timeline", "about", "line", "expectations"] as const;
+const PROJECT_TABS = ["tasks", "timeline", "about", "flow", "expectations"] as const;
 type ProjectTab = (typeof PROJECT_TABS)[number];
 const PROJECT_ACCENT = "var(--sol-cyan)";
 const TABS: IntentTab<ProjectTab>[] = [
@@ -54,13 +54,13 @@ const TABS: IntentTab<ProjectTab>[] = [
   { key: "timeline", label: "Timeline", icon: History },
   // What it is for, its charter, its repositories.
   { key: "about", label: "About", icon: Info },
-  // The project's line (LM7): its flow, sources, stations, versions.
-  { key: "line", label: "Line", icon: Workflow },
+  // The project's flow (LM7): its sources, steps, versions.
+  { key: "flow", label: "Flow", icon: Workflow },
   // How its product should behave (the-line-model.md LM5), each line quoted from where it was said.
   { key: "expectations", label: "Expectations", icon: ScrollText },
 ];
 /** Tabs the board no longer has, read as the one that holds them now. */
-const OLD_TABS: Record<string, ProjectTab> = { updates: "timeline", overview: "tasks" };
+const OLD_TABS: Record<string, ProjectTab> = { updates: "timeline", overview: "tasks", line: "flow" };
 
 
 function ProjectDetailContent() {
@@ -94,8 +94,8 @@ function ProjectDetailContent() {
   const { tab: picked, setTab } = useIntentTab(PROJECT_TABS, `/projects/${address}`);
   const lineShown = useSurface("nav.line");
   const asked: ProjectTab = OLD_TABS[search.get("tab") ?? ""] ?? picked;
-  const tab: ProjectTab = asked === "line" && !lineShown ? "tasks" : asked;
-  const tabs = lineShown ? TABS : TABS.filter((t) => t.key !== "line");
+  const tab: ProjectTab = asked === "flow" && !lineShown ? "tasks" : asked;
+  const tabs = lineShown ? TABS : TABS.filter((t) => t.key !== "flow");
 
   // One project, one address (D17): an older link by Convex id moves to the
   // `pj-` form once the store names it, keeping the open task and the tab.
@@ -158,10 +158,10 @@ function ProjectDetailContent() {
 
       {/* The Line and Expectations tabs read where the project lives, so they
           show from any workspace, under a note that names that workspace. */}
-      {foreign && (tab === "line" || tab === "expectations") ? (
+      {foreign && (tab === "flow" || tab === "expectations") ? (
         <div className={body}>
           <div className="max-w-[78rem] mx-auto px-4 sm:px-6 pt-5"><ForeignWorkspaceNotice foreign={foreign} what="project" readable /></div>
-          {tab === "line" ? <ProjectLineTab projectId={project._id} /> : <ExpectationsTab projectId={project._id} />}
+          {tab === "flow" ? <ProjectLineTab projectId={project._id} /> : <ExpectationsTab projectId={project._id} />}
         </div>
       ) : foreign ? (
         <div className={body}>

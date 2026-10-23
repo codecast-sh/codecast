@@ -41,7 +41,7 @@ export function passCount(detail: string | undefined): { pass: number; of: numbe
  */
 /** A problem's page, at its findings; `finding` opens one of them. */
 export const problemFindingsHref = (taskId: string, finding?: string): string =>
-  `/line?view=problems&case=${encodeURIComponent(taskId)}${finding ? `&finding=${encodeURIComponent(finding)}` : ""}`;
+  `/flows?view=problems&case=${encodeURIComponent(taskId)}${finding ? `&finding=${encodeURIComponent(finding)}` : ""}`;
 
 export type CheckState = "red" | "idle" | "green";
 export type CheckRow = { name: string; detail: string; state: CheckState };
@@ -68,7 +68,7 @@ export function trialFacts(c: TrialCardRow, verify?: VerifyFigure | null): Fact[
   const out: Fact[] = [];
   const card = c.card;
   // The run holds every check's and the proof's own output; the pull request holds the diff, once there is one.
-  const runHref = c.run_id ? `/line?view=runs&run=${c.run_id}` : undefined;
+  const runHref = c.run_id ? `/flows?view=problems&run=${c.run_id}` : undefined;
   if (card) {
     // The proof test's own pass counts when its output says them, else how many proof cases failed before and after.
     const was = passCount(card.proof.before[0]?.detail);

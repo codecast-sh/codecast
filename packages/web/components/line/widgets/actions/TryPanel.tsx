@@ -57,10 +57,10 @@ export function TryPanel({ model, step, draft, runs }: TrySlotProps) {
     }
   };
 
-  if (!step.prompt) return <div className="lw-empty"><b>Nothing to test</b>The line names this step without its instructions.</div>;
+  if (!step.prompt) return <div className="lw-empty"><b>Nothing to test</b>The flow names this step without its instructions.</div>;
   // Why the run button cannot be pressed, said beside it: a disabled button never stands alone.
-  const blocked = !workflowId ? "This line has no saved copy to run from, so nothing can be tested here. Ask an agent to change it instead."
-    : can === undefined ? "Checking where this line is saved"
+  const blocked = !workflowId ? "These steps have no saved copy to run from, so nothing can be tested here. Ask an agent to change it instead."
+    : can === undefined ? "Checking where these steps are saved"
     : !chosen.length ? "Tick at least one case to run it on."
     : null;
 
@@ -75,7 +75,7 @@ export function TryPanel({ model, step, draft, runs }: TrySlotProps) {
       </div>
 
       {can && !can.editable ? (
-        <div className="lw-empty"><b>This line is saved on another machine</b>{can.reason} Test it there, or ask an agent to change it: that works from any machine.</div>
+        <div className="lw-empty"><b>These steps are saved on another machine</b>{can.reason} Test it there, or ask an agent to change it: that works from any machine.</div>
       ) : candidates.length === 0 ? (
         <div className="lw-empty"><b>No finished run of this step yet</b>A test replays problems the step already handled. Saving does not need one.</div>
       ) : (
@@ -105,7 +105,7 @@ export function TryPanel({ model, step, draft, runs }: TrySlotProps) {
             <button type="button" className="lw-act" data-hot="" onClick={start} disabled={!!blocked} aria-busy={can === undefined || undefined} data-line-try-run>
               {can === undefined && workflowId ? <span className="lw-spin" aria-hidden /> : null}{draft ? "Test this edit" : "Run again"} on {chosen.length} {chosen.length === 1 ? "case" : "cases"}
             </button>
-            <span className="lw-try-fine" data-line-try-blocked={blocked ? "" : undefined}>{blocked ?? "Each case runs as the step would, where the line is saved. Every write it attempts is refused; nothing ships."}</span>
+            <span className="lw-try-fine" data-line-try-blocked={blocked ? "" : undefined}>{blocked ?? "Each case runs as the step would, where the steps are saved. Every write it attempts is refused; nothing ships."}</span>
           </div>
           {error && <div className="lw-save-note" data-tone="bad">{error}</div>}
         </>

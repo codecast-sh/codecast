@@ -639,12 +639,12 @@ export function useLineSelection(): { selection: LineSelection; select: LineSele
   const pathname = usePathname();
   const search = useSearchParams();
   const selection = useMemo(() => readLineSelection(search), [search]);
-  const href = useCallback((patch: LineSelectionPatch, runCase?: string | null) => `${pathname ?? "/line"}${lineSelectionSearch(search, patch, runCase)}`, [pathname, search]);
+  const href = useCallback((patch: LineSelectionPatch, runCase?: string | null) => `${pathname ?? "/flows"}${lineSelectionSearch(search, patch, runCase)}`, [pathname, search]);
   const select = useCallback<LineSelect>((patch, runCase, opts) => {
     const next = lineSelectionSearch(search, patch, runCase);
     const now = search?.toString() ?? "";
     if (next === (now ? `?${now}` : "")) return;
-    const to = `${pathname ?? "/line"}${next}`;
+    const to = `${pathname ?? "/flows"}${next}`;
     if (!opts?.replace && (opts?.push || lineSelectionPushes(search, new URLSearchParams(next)))) router.push(to, { scroll: false });
     else router.replace(to, { scroll: false });
   }, [router, pathname, search]);

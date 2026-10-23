@@ -44,7 +44,7 @@ function ProjectFrame({ app, ws }: { app: ReactNode; ws: LineWorkspaceModel }) {
         </div>
       )}
 
-      {/* Versions of codecast's line: only a project that runs it has any; no section, no note, for one that does not. */}
+      {/* Versions of codecast's steps: only a project that runs it has any; no section, no note, for one that does not. */}
       {!empty && versions.length > 0 && <Versions versions={versions} />}
     </div>
   );
@@ -55,7 +55,7 @@ const usd = (n: number | null) => (n == null ? "" : n >= 10 ? `$${n.toFixed(0)}`
 
 function Versions({ versions }: { versions: LineVersion[] }) {
   return (
-    <ReportSection title="Versions of codecast's line" aside="each time its steps changed, what changed and what the runs after it delivered, newest first">
+    <ReportSection title="Versions of codecast's steps" aside="each time its steps changed, what changed and what the runs after it delivered, newest first">
         <table className="cast-table w-full text-[12.5px] tabular-nums" data-line-versions>
           <thead>
             <tr className="text-left text-[11px] text-sol-text-dim">

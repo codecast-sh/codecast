@@ -234,10 +234,10 @@ export function notStartedWhy(f: NotStartedFacts): { phrase: string; ready: bool
   const t = f.task;
   const blocked = (phrase: string) => ({ phrase, ready: false });
   // A trial's dispatcher that holds (its runs used, its spend cap) starts none of them: held, never ready.
-  const idle = f.lineOn ? (f.idle ? blocked(f.idle) : { phrase: "Queued", ready: true }) : { phrase: f.lineOn === false ? "Ready: line off" : "Ready: no line set up", ready: true };
+  const idle = f.lineOn ? (f.idle ? blocked(f.idle) : { phrase: "Queued", ready: true }) : { phrase: f.lineOn === false ? "Ready: flow off" : "Ready: no flow set up", ready: true };
   if (!t) return idle;
   if (f.awaitsFindings) return blocked(`Waiting for more findings (has ${t.cause?.signal_count ?? 0})`);
-  if (t.status === "in_progress") return blocked("In progress outside the line");
+  if (t.status === "in_progress") return blocked("In progress outside a flow");
   if (t.status !== "open") return blocked(f.cameBack ? "Returned after it was closed" : "Not open");
   // A run holds it only while that run is live, and then it is named.
   const held = t.workflow_run_id ? f.attempts?.find((a) => a.runId === t.workflow_run_id) : undefined;
@@ -528,7 +528,7 @@ export function bandLine(b: ProblemBand): { text: string; tone: "you" | "bad" | 
     case "morefindings": return { text: `Waiting for more findings (has ${b.has})`, tone: "none" };
     case "returned": return { text: `Closed ${dayWords(b.at)} as ${b.how}, ${b.since} ${b.since === 1 ? "finding" : "findings"} since`, tone: "warn" };
     case "closed": return { text: `Closed${b.at ? ` ${dayWords(b.at)}` : ""}`, tone: "none" };
-    case "notstarted": return { text: b.reason ?? (b.lineOn ? "Queued" : b.lineOn === false ? "Ready: line off" : "Ready: no line set up"), tone: "none" };
+    case "notstarted": return { text: b.reason ?? (b.lineOn ? "Queued" : b.lineOn === false ? "Ready: flow off" : "Ready: no flow set up"), tone: "none" };
   }
 }
 

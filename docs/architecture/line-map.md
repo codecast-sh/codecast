@@ -7,16 +7,16 @@ numbered LX1 onward so code can cite them.
 
 ## LX1. One surface
 
-The line is one app over the process, at `/line` (line-workspace.md LW1). A
+The line is one app over the process, at `/flows` (line-workspace.md LW1). A
 project is a filter on it (`?project=`), never a line of its own:
-`/line/<project>` opens the app filtered to that project, and a project's Line
+`/line/<project>` (an address from before) opens the app filtered to that project, and a project's Flow
 tab (`/projects/<id>?tab=line`) draws the same app pinned to it, followed by
 what each version of the line delivered. The app's state lives in its URL, so
 every view, step, run and problem is a link; an old map address (`?node=`,
 `?edge=`, `?trace=`) opens where that thing lives now.
 
 A project's own values (who leads its line, its auto-start switch and slots,
-its finders) are set at `/line/settings?project=<p>`, reachable from the app's
+its finders) are set at `/flows/settings?project=<p>`, reachable from the app's
 header and from any Inbox row about that project.
 
 The task page's cause story, the run page and the decision card each link into
@@ -100,7 +100,7 @@ An edge's panel is the items that crossed it.
 
 ## LX4. Trace
 
-A trace follows one thing through the line. `/line/trace/<ref>` takes any
+A trace follows one thing through the line. `/flows/trace/<ref>` takes any
 ref the line knows: a signal, a fingerprint, a cause task, a run or a card
 decision, and reads the cause from the workspace it lives in. The same trace
 draws on the map from any item (`?trace=`).

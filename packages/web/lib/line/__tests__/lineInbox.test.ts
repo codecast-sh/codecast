@@ -42,7 +42,7 @@ describe("the line's inbox", () => {
       runs: [{ _id: "r4", task_id: "4", status: "failed", fail_reason: "prove timed out", created_at: now - 3 * H, updated_at: now - 2 * H }] as never,
       decisions: [{ _id: "d1", short_id: "sd-1", status: "pending", blocking: true, task_id: "1", workflow_run_id: "r1", created_at: now - H }],
       projects: [{ _id: "p1", title: "Codecast" }],
-      rollups: [rollup({ causes: 3, hold: "@lead's line is off, so nothing starts on its own", startingOff: true })],
+      rollups: [rollup({ causes: 3, hold: "@lead's flow is off, so nothing starts on its own", startingOff: true })],
       admissions: new Map([["p1", off]]),
       now,
     });
@@ -52,7 +52,7 @@ describe("the line's inbox", () => {
     expect(by.decide[0]).toMatchObject({ title: "Problem 1", ref: "ct-1", cardRef: "sd-1", runId: "r1" });
     expect(by.confirm[0]).toMatchObject({ ref: "ct-2", detail: null, ask: "Which tenant saw it?" });
     expect(by.failed[0]).toMatchObject({ ref: "ct-4", runId: "r4", detail: "prove timed out" });
-    expect(by.stuck[0]).toMatchObject({ title: "Codecast", detail: "Line off", waiting: 3, switchOff: true });
+    expect(by.stuck[0]).toMatchObject({ title: "Codecast", detail: "Flow off", waiting: 3, switchOff: true });
     // For you counts the decision a session presents; a new problem to confirm, a failed run and the project that cannot start are listed, never counted.
     expect(inboxCount(groups)).toBe(1);
   });

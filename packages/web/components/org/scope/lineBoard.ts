@@ -7,6 +7,7 @@
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { stationOrder } from "../../../lib/taskLine";
 import { taskStatusKey } from "../../../lib/taskStatuses";
+import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
 
 export type LineTaskLike = {
   _id: string;
@@ -53,7 +54,7 @@ export function evidenceCount(task: LineTaskLike, artifacts: Array<{ task_id?: s
  *  The web has no copy of the sources; it needs only the names a role's line
  *  may resolve to when the host has pushed no workflow of that slug. */
 export const SHIPPED_LINE_TEMPLATES: ReadonlyArray<{ slug: string; name: string }> = [
-  { slug: "line", name: "Standard" },
+  { slug: DEFAULT_LINE_SLUG, name: DEFAULT_STEPS_LABEL },
   { slug: "feature", name: "Feature" },
   { slug: "plan-autopilot", name: "Plan autopilot" },
 ];

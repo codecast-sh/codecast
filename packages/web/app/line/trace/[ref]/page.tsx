@@ -1,17 +1,13 @@
 "use client";
-import { useParams } from "next/navigation";
-import { AuthGuard } from "../../../../components/AuthGuard";
-import { ErrorBoundary } from "../../../../components/ErrorBoundary";
-import { LineRefRedirect } from "../../../../components/line/workspace/LineRefRedirect";
+import { useParams, useRouter } from "next/navigation";
+import { useWatchEffect } from "../../../../hooks/useWatchEffect";
+import { lineRefHref, lineRefOf } from "../../../../lib/line/lineWorkspaceUrl";
 
-// /line/trace/<ref>: any ref the line knows opens its place in its project's workspace (line-workspace.md LW1).
+// /line/trace/<ref>: the address a ref's trace had before /flows/trace/<ref>.
 export default function LineTraceRoute() {
   const { ref } = useParams<{ ref: string }>();
-  return (
-    <AuthGuard>
-      <ErrorBoundary name="Line">
-        <LineRefRedirect refParam={ref ?? ""} />
-      </ErrorBoundary>
-    </AuthGuard>
-  );
+  const router = useRouter();
+  const to = lineRefHref(lineRefOf(ref ?? ""));
+  useWatchEffect(() => { router.replace(to); }, [router, to]);
+  return null;
 }

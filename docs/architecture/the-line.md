@@ -1,8 +1,8 @@
-# The line: stations, gates, evidence, runs
+# Flows: stations, gates, evidence, runs
 
-One system for automated work with people in the loop. A scope owns a line.
-A task moves along it through stations. A run is one passage. A gate on the
-line is a decision in the person's queue. Evidence attaches to the task at the
+One system for automated work with people in the loop. A role owns a flow
+(flows.md FL0). A task moves along its steps through stations. A run is one
+passage. A gate in the flow is a decision in the person's queue. Evidence attaches to the task at the
 station that produced it. Chains are runs. Sections are numbered so code can
 cite them.
 
@@ -13,9 +13,9 @@ Nine words, each with one meaning and one table behind it.
 | Word | Meaning | Table |
 |---|---|---|
 | scope | what a role owns: projects and plans (scopes-and-feed.md F1) | `org_roles.scope` |
-| line | the workflow a scope's tasks run on; one per scope; shipped `line` by default | `org_roles.line_workflow_slug`, `workflows` |
+| flow | what a scope's tasks run through: its steps (the workflow), intake, switch and decider; one per owner role; the shipped `line` steps by default (flows.md FL0) | `org_roles.line_workflow_slug`, `workflows` |
 | station | a task status. The team's statuses, in order, are the stations | `tasks.status` / `status_id` |
-| run | one task's passage along a line | `workflow_runs` |
+| run | one task's passage through a flow | `workflow_runs` |
 | gate | a workflow node where a person decides. A gate IS a decision | `session_decisions` with `workflow_run_id` |
 | hold | a pending blocking decision bound to a task keeps it at its station | `session_decisions.task_id` + `station` |
 | evidence | what a station produced: pages, images, docs, files, a PR, verification text | `artifacts.task_id`, `tasks.*` |
@@ -25,7 +25,7 @@ Nine words, each with one meaning and one table behind it.
 Nothing else is coined. A chain (agent-definitions.md D5) is a linear workflow
 and its run is a run.
 
-## L2. A scope owns a line
+## L2. A role owns a flow
 
 `org_roles.line_workflow_slug?: string`, default `line`. Resolution, in order:
 a path on disk, the caller's own `workflows` row by slug, a shipped template by

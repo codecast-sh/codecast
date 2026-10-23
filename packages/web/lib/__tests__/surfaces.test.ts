@@ -184,7 +184,7 @@ describe("pages belong to surfaces", () => {
   test("a page and everything under it share its surface; the longest match wins", () => {
     expect(pageSurface("/ops")).toBe("nav.ops");
     expect(pageSurface("/ops/issues?x=1")).toBe("nav.ops");
-    expect(pageSurface("/line/settings")).toBe("nav.line");
+    expect(pageSurface("/flows/settings")).toBe("nav.line");
     expect(pageSurface("/changes?d=2026-10-05")).toBe("nav.changes");
     expect(pageSurface("/settings/devices")).toBe("settings.machines");
     expect(pageSurface("/settings")).toBeNull();
@@ -308,12 +308,12 @@ describe("staff-only surfaces", () => {
   test("the line shows to staff and to nobody else, in either mode", () => {
     for (const hosted of [false, true]) {
       expect(surfaceMode(hosted, false, true).showsPage("/line")).toBe(!hosted);
-      for (const path of ["/line", "/line/settings", "/trial/x"]) {
+      for (const path of ["/line", "/flows/settings", "/trial/x"]) {
         expect(surfaceMode(hosted, false, false).showsPage(path)).toBe(false);
         expect(hiddenPageRedirect(path, surfaceMode(hosted, false, false))).not.toBeNull();
       }
     }
-    expect(surfaceMode(false, false, true).showsPage("/line/settings")).toBe(true);
+    expect(surfaceMode(false, false, true).showsPage("/flows/settings")).toBe(true);
     expect(surfaceMode(false, false, false).showsPage("/tasks")).toBe(true);
   });
 

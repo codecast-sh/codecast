@@ -98,7 +98,7 @@ export function FinderPage({ workspace, selection, select, href }: LineViewProps
             <b>None in {workspace.project.title}</b>
             <button type="button" className="lw-act" onClick={() => select({ project: null })}>All projects<span className="lw-num">{elsewhere.get(row.key)}</span></button>
           </div>
-        ) : <div className="lw-empty"><b>No findings held</b>Nothing from {row.name} is in the window the line holds.</div>
+        ) : <div className="lw-empty"><b>No findings held</b>Nothing from {row.name} is in the window the flow holds.</div>
       ) : (
         <div className="fp-body">
           {asks.length > 0 && <TeamAsks asks={asks} open={open?._id ?? null} toggle={toggle} who={who as unknown as (s: FinderSignal) => string} tasks={tasks} onProblem={(id) => select({ view: "problems", case: id, run: null, source: null, finding: null })} problemHref={(id) => href({ view: "problems", case: id, run: null, source: null, finding: null })} />}

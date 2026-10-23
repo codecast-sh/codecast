@@ -16,7 +16,7 @@ test("each figure a person ships on opens the thing it counts; Live now links to
   expect(by.Checks.opens).toBe("checks");
   expect(by.Reaches.opens).toBe("reach");
   expect(by.Diff.opens).toBe("diff");
-  expect(by["Live now"].href).toBe("/line?view=problems&case=ct-1");
+  expect(by["Live now"].href).toBe("/flows?view=problems&case=ct-1");
 });
 
 test("a card with no branch read keeps Diff a plain figure", () => {

@@ -86,7 +86,7 @@ const StepsPage = memo(function StepsPage({ model, workspace: ws, selection, sel
         <div className="lst-bar-r">{toggle}</div>
       </header>
       {/* The line's queue: they open Problems' chips, where each row's act and each project's start control live. */}
-      <ProblemPointers keys={NOT_TAKEN} counts={counts} href={href} process={line} className="lst-pointers" label="The line's queue" />
+      <ProblemPointers keys={NOT_TAKEN} counts={counts} href={href} process={line} className="lst-pointers" label="The flow's queue" />
 
       {rows.length ? (
         <table className="lst-table">

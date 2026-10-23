@@ -507,6 +507,7 @@ const PAGE_SURFACES: Record<string, DevSurface> = {
   "/projects": "nav.projects",
   "/repo": "nav.code",
   "/files": "nav.files",
+  "/flows": "nav.line",
   "/line": "nav.line",
   "/expectations": "nav.projects",
   "/trial": "nav.line",

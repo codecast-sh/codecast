@@ -1,16 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { caseRefs, lineFilterParam, lineSelectionPushes, lineSelectionSearch, lineViewForGoKey, lineWorkspaceHref, lineWorkspaceRedirect, readLineSelection, resolveLineProject, lineViewHome } from "../lineWorkspaceUrl";
+import { caseRefs, flowHref, flowsAddressOf, lineFilterParam, lineSelectionPushes, lineSelectionSearch, lineViewForGoKey, lineWorkspaceHref, lineWorkspaceRedirect, readLineSelection, resolveLineProject, lineViewHome } from "../lineWorkspaceUrl";
 
 const q = (s: string) => new URLSearchParams(s);
 
 describe("the line app's selection in the URL", () => {
-  test("reads every key; no view is For you, an unknown one too; no project is every project", () => {
-    expect(readLineSelection(q("project=pr-1&view=problems&graph=agentwatch&step=prove&run=r1&case=t1&need=sd-6"))).toEqual({ view: "problems", mode: "table", project: "pr-1", graph: "agentwatch", step: "prove", tab: null, run: "r1", case: "t1", source: null, finding: null, row: null, ask: false, card: null, decision: null, need: "sd-6", status: null, process: null, quiet: false, found: null, q: null, sort: null, win: null, show: null, stage: null, item: null, who: null, kind: null, area: null, order: null, group: null, deploy: null });
+  test("reads every key; no view is the flow list, an unknown one too, and a need with no view is For you; no project is every project", () => {
+    expect(readLineSelection(q("project=pr-1&view=problems&graph=agentwatch&step=prove&run=r1&case=t1&need=sd-6"))).toEqual({ view: "problems", mode: "table", project: "pr-1", graph: "agentwatch", step: "prove", tab: null, run: "r1", case: "t1", source: null, finding: null, row: null, ask: false, card: null, decision: null, need: "sd-6", flow: null, status: null, process: null, quiet: false, found: null, q: null, sort: null, win: null, show: null, stage: null, item: null, who: null, kind: null, area: null, order: null, group: null, deploy: null });
     expect(readLineSelection(q("step=dissolve&steptab=try")).tab).toBe("try");
     expect(readLineSelection(q("step=dissolve&tab=try")).tab).toBe("try");
     expect(readLineSelection(q("tab=line&step=dissolve")).tab).toBeNull();
-    expect(readLineSelection(q("")).view).toBe("foryou");
-    expect(readLineSelection(q("view=nope")).view).toBe("foryou");
+    expect(readLineSelection(q("")).view).toBe("flows");
+    expect(readLineSelection(q("need=sd-6")).view).toBe("foryou");
+    expect(readLineSelection(q("view=nope")).view).toBe("flows");
     expect(readLineSelection(q("")).project).toBeNull();
     expect(readLineSelection(q("project=all")).project).toBeNull();
   });
@@ -37,7 +38,7 @@ describe("the line app's selection in the URL", () => {
     expect(lineSelectionSearch(q("view=chat&step=prove"), {})).toBe("?view=line&step=prove&steptab=instructions");
     // Problems' process narrowing is the list's own place: kept while a problem opens, dropped for another view.
     expect(lineSelectionSearch(q("view=problems&process=agentwatch"), { case: "ct-4" })).toBe("?view=problems&process=agentwatch&case=ct-4");
-    expect(lineSelectionSearch(q("view=problems&process=agentwatch"), { view: "foryou" })).toBe("");
+    expect(lineSelectionSearch(q("view=problems&process=agentwatch"), { view: "foryou" })).toBe("?view=foryou");
     expect(lineSelectionSearch(q("view=runs&run=r1"), { case: "t1", run: "r1" })).toBe("?view=problems&run=r1&case=t1");
   });
 
@@ -48,7 +49,8 @@ describe("the line app's selection in the URL", () => {
     expect(lineSelectionSearch(q("view=problems&case=t1&decision=sd-5"), { case: "t2", run: null })).toBe("?view=problems&case=t2");
     expect(lineSelectionSearch(q("view=problems&case=t1&decision=sd-5"), { case: null })).toBe("?view=problems");
     expect(lineSelectionSearch(q("view=line&mode=map&step=prove"), { mode: "table" })).toBe("?view=line&step=prove");
-    expect(lineSelectionSearch(q("view=problems"), { view: "foryou" })).toBe("");
+    expect(lineSelectionSearch(q("view=problems"), { view: "foryou" })).toBe("?view=foryou");
+    expect(lineSelectionSearch(q("view=problems"), { view: "flows" })).toBe("");
     expect(lineSelectionSearch(q(""), { view: "problems" })).toBe("?view=problems");
   });
 
@@ -87,7 +89,7 @@ describe("the line app's selection in the URL", () => {
 
   test("another page keeps only the selection it reads", () => {
     expect(lineSelectionSearch(q("view=problems&run=r1&case=t1&step=prove"), { view: "line" })).toBe("?view=line");
-    expect(lineSelectionSearch(q("view=problems&case=t1"), { view: "foryou" })).toBe("");
+    expect(lineSelectionSearch(q("view=problems&case=t1"), { view: "foryou" })).toBe("?view=foryou");
     expect(lineSelectionSearch(q("need=sd-5"), { view: "problems" })).toBe("?view=problems");
     expect(lineSelectionSearch(q("view=line&source=s&step=x"), { view: "problems", case: "t1" })).toBe("?view=problems&source=s&case=t1");
     // A step open on Line never follows to a page with no step of its own.
@@ -109,7 +111,7 @@ describe("the line app's selection in the URL", () => {
     expect(lineSelectionSearch(from, { step: "plan" })).toBe("?tab=line&view=line&step=plan");
     expect(lineSelectionSearch(q("tab=line&step=plan"), { tab: "work" })).toBe("?tab=line&step=plan&steptab=work");
     expect(lineSelectionSearch(q("tab=line&view=line&step=plan&steptab=work"), { step: "build" })).toBe("?tab=line&view=line&step=build");
-    expect(lineSelectionSearch(q("tab=line&view=line&step=plan"), { view: "foryou" })).toBe("?tab=line");
+    expect(lineSelectionSearch(q("tab=line&view=line&step=plan"), { view: "foryou" })).toBe("?tab=line&view=foryou");
     // The Problems page's own keys ride along untouched.
     expect(lineSelectionSearch(q("view=problems&status=failed"), { case: "t1" })).toBe("?view=problems&status=failed&case=t1");
   });
@@ -133,9 +135,9 @@ describe("For you: a list with the open need beside it", () => {
   });
 
   test("arriving from another page opens the list, unless the move names the need", () => {
-    expect(lineSelectionSearch(q("view=problems&run=r1&case=t1&step=s"), { view: "foryou" })).toBe("");
+    expect(lineSelectionSearch(q("view=problems&run=r1&case=t1&step=s"), { view: "foryou" })).toBe("?view=foryou");
     expect(lineSelectionSearch(q("view=problems"), { view: "foryou", need: "sd-5" })).toBe("?need=sd-5");
-    expect(lineSelectionSearch(q("view=problems"), lineViewHome("foryou"))).toBe("");
+    expect(lineSelectionSearch(q("view=problems"), lineViewHome("foryou"))).toBe("?view=foryou");
   });
 });
 
@@ -162,7 +164,7 @@ describe("history: which moves Back and Forward walk", () => {
     expect(push("view=problems&case=t1", "view=problems&case=t1&finding=f1")).toBe(false);
     expect(push("view=problems&case=t1", "view=problems&case=t1&row=r2")).toBe(false);
     expect(push("view=problems", "view=problems&q=eval")).toBe(false);
-    expect(push("", "view=foryou")).toBe(false);
+    expect(push("", "view=flows")).toBe(false);
     expect(push("tab=line", "tab=line&other=1")).toBe(false);
   });
 });
@@ -173,16 +175,17 @@ describe("the line app's address", () => {
     expect(["1", "2", "3", "x", "l"].map(lineViewForGoKey)).toEqual([null, null, null, null, null]);
   });
 
-  test("one project is a filter on /line", () => {
-    expect(lineWorkspaceHref("pr-12")).toBe("/line?project=pr-12");
-    expect(lineWorkspaceHref(null)).toBe("/line");
-    expect(lineWorkspaceHref("pr-12", { view: "replay", run: "r1" })).toBe("/line?project=pr-12&view=problems&run=r1");
+  test("one project is a filter on /flows", () => {
+    expect(lineWorkspaceHref("pr-12")).toBe("/flows?project=pr-12");
+    expect(lineWorkspaceHref(null)).toBe("/flows");
+    expect(lineWorkspaceHref("pr-12", { view: "replay", run: "r1" })).toBe("/flows?project=pr-12&view=problems&run=r1");
   });
 
   test("/line/<project> opens the app filtered to it, keeping what the address named", () => {
-    expect(lineWorkspaceRedirect(q(""), "pr-12")).toBe("/line?project=pr-12");
-    expect(lineWorkspaceRedirect(q("view=replay&run=r1&case=t1"), "pr-12")).toBe("/line?project=pr-12&view=problems&run=r1&case=t1");
-    expect(lineWorkspaceRedirect(q("graph=agentwatch&step=prove"), "pr-12")).toBe("/line?project=pr-12&graph=agentwatch&step=prove&view=line");
+    // An old address with no view opened Decisions, the landing page then.
+    expect(lineWorkspaceRedirect(q(""), "pr-12")).toBe("/flows?project=pr-12&view=foryou");
+    expect(lineWorkspaceRedirect(q("view=replay&run=r1&case=t1"), "pr-12")).toBe("/flows?project=pr-12&view=problems&run=r1&case=t1");
+    expect(lineWorkspaceRedirect(q("graph=agentwatch&step=prove"), "pr-12")).toBe("/flows?project=pr-12&graph=agentwatch&step=prove&view=line");
   });
 
   test("/line itself stays", () => {
@@ -192,12 +195,12 @@ describe("the line app's address", () => {
   });
 
   test("what the old map's address opened keeps its meaning", () => {
-    expect(lineWorkspaceRedirect(q("project=pr-12&node=investigate"))).toBe("/line?project=pr-12&view=line&step=investigate");
-    expect(lineWorkspaceRedirect(q("project=pr-12&edge=prove->card"))).toBe("/line?project=pr-12&view=line&step=prove");
-    expect(lineWorkspaceRedirect(q("project=pr-12&node=causes&section=health"))).toBe("/line?project=pr-12&view=problems");
-    expect(lineWorkspaceRedirect(q("project=pr-12&node=line&section=health"))).toBe("/line/settings?project=pr-12&section=health");
-    expect(lineWorkspaceRedirect(q("project=pr-12&trace=ct-1"))).toBe("/line/trace/ct-1");
-    expect(lineWorkspaceRedirect(q("project=pr-12&node=prove&window=30d&graph=agentwatch"))).toBe("/line?project=pr-12&graph=agentwatch&view=line&step=prove");
+    expect(lineWorkspaceRedirect(q("project=pr-12&node=investigate"))).toBe("/flows?project=pr-12&view=line&step=investigate");
+    expect(lineWorkspaceRedirect(q("project=pr-12&edge=prove->card"))).toBe("/flows?project=pr-12&view=line&step=prove");
+    expect(lineWorkspaceRedirect(q("project=pr-12&node=causes&section=health"))).toBe("/flows?project=pr-12&view=problems");
+    expect(lineWorkspaceRedirect(q("project=pr-12&node=line&section=health"))).toBe("/flows/settings?project=pr-12&section=health");
+    expect(lineWorkspaceRedirect(q("project=pr-12&trace=ct-1"))).toBe("/flows/trace/ct-1");
+    expect(lineWorkspaceRedirect(q("project=pr-12&node=prove&window=30d&graph=agentwatch"))).toBe("/flows?project=pr-12&graph=agentwatch&view=line&step=prove");
   });
 });
 
@@ -232,8 +235,9 @@ describe("resolveLineProject", () => {
 test("the nav opens a page's home: nothing open elsewhere rides along, and the page in front closes its detail", () => {
   const from = new URLSearchParams("view=inbox&case=t1&decision=sd-5&graph=agentwatch&project=union");
   // From the old Inbox with a problem open, Problems is the list.
-  expect(lineSelectionSearch(from, lineViewHome("problems"))).toBe("?graph=agentwatch&project=union&view=problems");
-  expect(lineSelectionSearch(new URLSearchParams("need=sd-5"), lineViewHome("foryou"))).toBe("");
+  expect(lineSelectionSearch(from, lineViewHome("problems"))).toBe("?view=problems&graph=agentwatch&project=union");
+  expect(lineSelectionSearch(new URLSearchParams("need=sd-5"), lineViewHome("foryou"))).toBe("?view=foryou");
+  expect(lineSelectionSearch(new URLSearchParams("view=foryou"), lineViewHome("flows"))).toBe("");
   // Clicking Problems on a problem's page goes back to the list.
   expect(lineSelectionSearch(new URLSearchParams("view=problems&case=t1&decision=sd-5"), lineViewHome("problems"))).toBe("?view=problems");
   expect(lineSelectionSearch(new URLSearchParams("view=line&source=agentwatch&finding=s1"), lineViewHome("line"))).toBe("?view=line");
@@ -283,4 +287,15 @@ describe("For you's list in the address", () => {
     const away = lineSelectionSearch(q(next), { view: "problems" });
     expect(readLineSelection(q(away))).toMatchObject({ who: null, kind: null, area: null, order: null, group: null });
   });
+});
+
+test("addresses from before /flows land where they meant: no view was Decisions, the landing page then", () => {
+  expect(flowsAddressOf(q(""))).toBe("");
+  expect(flowsAddressOf(q("need=sd-5"))).toBe("?need=sd-5&view=foryou");
+  expect(flowsAddressOf(q("project=pr-1"))).toBe("?project=pr-1&view=foryou");
+  expect(flowsAddressOf(q("view=problems&case=ct-1"))).toBe("?view=problems&case=ct-1");
+  expect(flowHref("calling")).toBe("/flows/calling");
+  expect(flowHref("calling", { view: "problems" })).toBe("/flows/calling?view=problems");
+  expect(lineWorkspaceHref(null, { view: "foryou", flow: "calling" })).toBe("/flows?flow=calling&view=foryou");
+  expect(readLineSelection(q("view=foryou&flow=calling")).flow).toBe("calling");
 });

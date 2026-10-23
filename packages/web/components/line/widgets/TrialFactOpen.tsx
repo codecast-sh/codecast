@@ -34,7 +34,7 @@ export function TrialFactOpen({ card: c, open }: { card: TrialCardRow; open: Fac
   );
 }
 
-const runHref = (c: TrialCardRow) => (c.run_id ? `/line?view=problems&case=${encodeURIComponent(c.task_short_id || c.task_id)}&run=${encodeURIComponent(c.run_id)}` : null);
+const runHref = (c: TrialCardRow) => (c.run_id ? `/flows?view=problems&case=${encodeURIComponent(c.task_short_id || c.task_id)}&run=${encodeURIComponent(c.run_id)}` : null);
 
 /** The proof test's own runs: its command and output on the base, then on the branch. */
 function Proof({ card: c }: { card: TrialCardRow }) {

@@ -174,9 +174,9 @@ its own:
 - the project page's Line tab leads with the project's line map (its flow and
   data, a panel per node where every value is read and edited, and the
   composer), then its expectations and its versions;
-- `/line` shows the same map for one project at a time, with a switcher across
+- `/flows` shows the same map for one project at a time, with a switcher across
   the team's lines and a roll-up that counts every line;
-- `/line/trace/<ref>` follows one thing (a signal, a fingerprint, a cause, a
+- `/flows/trace/<ref>` follows one thing (a signal, a fingerprint, a cause, a
   run or a card) from where it was seen to its outcome.
 
 ## LM8. The working view, "done", and the measure

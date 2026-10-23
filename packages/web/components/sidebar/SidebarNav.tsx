@@ -400,13 +400,13 @@ export function SidebarNavView({
           standing things that set it running. */}
       <RailHeading label={words.agentsGroup} isNarrow={isNarrow} />
       <div data-rail-group="agents" className="text-sm">
-        {showsPage("/line") && <NavSection
-          label={page("/line", "Line")}
-          href="/line"
+        {showsPage("/flows") && <NavSection
+          label={page("/flows", "Flows")}
+          href="/flows"
           isActive={active.line}
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
-          title="The line: from a finding to a shipped, watched change"
+          title="Flows: from a finding to a shipped, watched change"
           icon={<Waypoints className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         {routines}

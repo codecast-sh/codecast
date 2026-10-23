@@ -147,21 +147,21 @@ describe("StationStrip", () => {
     useInboxStore.setState({ workflowRuns: { [RUN_ID]: run } } as any);
     let m = await mount(<StationStrip task={task({ workflow_run_id: RUN_ID, project_id: "p1" }) as any} />);
     let link = m.container.querySelector("a[data-station-settings]") as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe("/line/settings?project=p1&section=stations&station=review");
+    expect(link.getAttribute("href")).toBe("/flows/settings?project=p1&section=stations&station=review");
     expect(m.container.querySelector("[data-line-customized]")).toBeNull();
     await act(() => m.root.unmount());
 
     // The project's customized copy: the link names the project it forks for, with the chip.
-    const forkRun = { ...run, workflow_id: WF_ID, workflow_name: "Line for Codecast" };
+    const forkRun = { ...run, workflow_id: WF_ID, workflow_name: "Steps for Codecast" };
     useInboxStore.setState({
       workflowRuns: { [RUN_ID]: forkRun },
-      workflows: { [WF_ID]: { _id: WF_ID, slug: "line-pr-1", name: "Line for Codecast", nodes: [{ id: "review", label: "Review" }] } },
+      workflows: { [WF_ID]: { _id: WF_ID, slug: "line-pr-1", name: "Steps for Codecast", nodes: [{ id: "review", label: "Review" }] } },
       projects: { p1: { _id: "p1", short_id: "pr-1", title: "Codecast", workspace: "user:u1" } },
       currentUser: { _id: "u1" },
     } as any);
     m = await mount(<StationStrip task={task({ workflow_run_id: RUN_ID }) as any} />);
     link = m.container.querySelector("a[data-station-settings]") as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe("/line/settings?project=pr-1&section=stations&station=review");
+    expect(link.getAttribute("href")).toBe("/flows/settings?project=pr-1&section=stations&station=review");
     expect(m.container.querySelector("[data-line-customized]")?.textContent).toBe("customized");
     await act(() => m.root.unmount());
 

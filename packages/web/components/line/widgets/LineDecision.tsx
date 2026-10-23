@@ -216,7 +216,7 @@ export function LineDecisionBody({ decision, detail, answerable, source, onProbl
   const answers: ReactNode = (
     <section className="ld-answers" data-line-decision-answers aria-label="Your answer" data-reading={reading && docked ? "" : undefined} inert={reading && docked ? true : undefined}>
       {stale ? (
-        <ReaskNotice taskId={trialCard!.task_id} task={ref ?? trialCard!.task_short_id} reason="Its step left the line, so an answer has nowhere to go." />
+        <ReaskNotice taskId={trialCard!.task_id} task={ref ?? trialCard!.task_short_id} reason="Its step left the flow, so an answer has nowhere to go." />
       ) : docked ? (
         <>
           {/* Asking the session before answering sits with the answers, so it is in view at every scroll. */}

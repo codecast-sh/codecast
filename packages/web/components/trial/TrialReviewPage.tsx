@@ -253,7 +253,7 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
         </div>
         {owed && <span className="rounded border border-sol-yellow/40 px-1.5 py-0.5 text-[11px] text-sol-yellow" title="The trial never runs a change's evals: they write to the database they point at. A card that owes them says so beside its answer." data-trial-evals>Evals not run in the trial</span>}
         {/* Whether the dispatcher is held and by which limit, the act that lifts it, and the spend against its cap. */}
-        <TrialLimitsBar spend={spend} project={project} held={dispatchHeld} heldHref={project ? `/line?view=problems&status=notstarted&project=${encodeURIComponent(lineFilterParam(project, projects))}` : null} />
+        <TrialLimitsBar spend={spend} project={project} held={dispatchHeld} heldHref={project ? `/flows?view=problems&status=notstarted&project=${encodeURIComponent(lineFilterParam(project, projects))}` : null} />
       </header>
 
       <div className="flex min-h-0 flex-1">

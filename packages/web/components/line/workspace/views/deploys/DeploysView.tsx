@@ -72,7 +72,7 @@ export function DeploysView({ workspace, selection, select, href }: LineViewProp
       </div>
       <div className="dpv-reader">
         <ActivityPlot chart={chart} onPick={(sid) => select({ deploy: sid })} />
-        {picked ? <DeployDetail d={picked} issues={issues} now={now} problemHref={(taskId) => href({ view: "problems", case: taskId, run: null })} /> : <p className="dpv-none">No deploy of this line is recorded yet</p>}
+        {picked ? <DeployDetail d={picked} issues={issues} now={now} problemHref={(taskId) => href({ view: "problems", case: taskId, run: null })} /> : <p className="dpv-none">No deploy of this flow is recorded yet</p>}
       </div>
     </div>
   );
@@ -89,19 +89,19 @@ function WaitingBlock({ group, projectTitle, profileDeploy, showProject, now, on
   const fixes = group.fixes;
   const ledger: SwitchLedger = {
     name: `Deploy to ${target}`,
-    subject: projectTitle ?? "This line",
+    subject: projectTitle ?? "This flow",
     shift: null,
     figures: [{ value: String(fixes.length), label: fixes.length === 1 ? "fix goes out" : "fixes go out together", tone: "warn" }],
     rows: [
       { k: "Fixes", v: `${fixes.length}`, list: fixes.map((f) => `${f.ref ?? ""} ${f.title}`.trim()) },
       { k: "Target", v: target, tone: "warn" },
       { k: "Runs", v: profileDeploy?.command ?? "No deploy path" },
-      { k: "On", v: "The machine that publishes this line" },
+      { k: "On", v: "The machine that publishes this flow" },
       { k: "To undo", v: "Deploy the previous version" },
     ],
     confirm: `Deploy ${fixes.length} fix${fixes.length === 1 ? "" : "es"}`,
     keep: "Not now",
-    ...(profileDeploy?.command ? {} : { blocked: "This line has no deploy path" }),
+    ...(profileDeploy?.command ? {} : { blocked: "This flow has no deploy path" }),
   };
   const go = async () => {
     setReviewing(false);
@@ -200,7 +200,7 @@ function DeploySteps({ steps, now }: { steps: DeployStepView[]; now: number }) {
           </li>
         );
       })}
-      {returned && <li className="dpv-step" data-state="failed" data-step="returned"><span className="dpv-step-dot" aria-hidden /><span className="dpv-step-name">Back to the line</span></li>}
+      {returned && <li className="dpv-step" data-state="failed" data-step="returned"><span className="dpv-step-dot" aria-hidden /><span className="dpv-step-name">Back to the flow</span></li>}
     </ol>
   );
 }
@@ -262,7 +262,7 @@ function DeployDetail({ d, issues, now, problemHref }: { d: LineDeploy; issues: 
       </header>
       <dl className="dpv-facts">
         <div><dt>When</dt><dd className="lw-num">{when(d.at)}</dd></div>
-        <div><dt>Started by</dt><dd>{d.started_by && d.started_by.kind !== "source" ? d.started_by.name : "The team's deploy path"}{d.trigger === "outside" ? <span className="dpv-dim"> · outside the line</span> : d.trigger === "person" ? <span className="dpv-dim"> · from the line</span> : d.trigger === "role" ? <span className="dpv-dim"> · the line's role</span> : null}</dd></div>
+        <div><dt>Started by</dt><dd>{d.started_by && d.started_by.kind !== "source" ? d.started_by.name : "The team's deploy path"}{d.trigger === "outside" ? <span className="dpv-dim"> · outside a flow</span> : d.trigger === "person" ? <span className="dpv-dim"> · from a flow</span> : d.trigger === "role" ? <span className="dpv-dim"> · the flow's owner</span> : null}</dd></div>
         <div><dt>Reported by</dt><dd>{d.source}</dd></div>
         {d.sha && <div><dt>Commit</dt><dd><code className="dpv-sha">{d.sha.slice(0, 10)}</code>{d.previous_sha && <span className="dpv-dim"> from <code className="dpv-sha">{d.previous_sha.slice(0, 7)}</code></span>}</dd></div>}
         {a && <div><dt>Watched</dt><dd className="lw-num">{ageShort(a.to - a.from)}{a.open ? " so far" : ", to the next deploy"}</dd></div>}
@@ -272,7 +272,7 @@ function DeployDetail({ d, issues, now, problemHref }: { d: LineDeploy; issues: 
 
       <section className="dpv-sec">
         <h3 className="dpv-sec-h">Carried<span className="lw-num">{rows.length}</span></h3>
-        {rows.length === 0 ? <p className="dpv-none">No line fix went out in it</p> : (
+        {rows.length === 0 ? <p className="dpv-none">No flow fix went out in it</p> : (
           <table className="dpv-table">
             <thead><tr><th>Problem</th><th>Shipped by</th><th className="dpv-n">Week before</th><th className="dpv-n">Week after</th></tr></thead>
             <tbody>

@@ -1,7 +1,8 @@
-// Who starts work (lib/line/lineStarts): each role that leads a project with a line is one row, with its projects and their
+// Who starts work (lib/line/lineStarts): each owned flow is one row, with its projects and their
 // waiting and ready problems summed; the review of a change of limits names only what changes and what it starts.
 import { describe, expect, test } from "bun:test";
 import { limitsLedger, roleLines } from "../lineStarts";
+import { ownedFlows } from "../ownedFlows";
 
 const role = (id: string, handle: string, projects: string[], over: Record<string, unknown> = {}) => ({
   _id: id, short_id: `or-${id}`, scope_type: "team", host_user_id: "u", name: `${handle} lead`, handle, status: "active",
@@ -10,12 +11,12 @@ const role = (id: string, handle: string, projects: string[], over: Record<strin
 const rollup = (key: string, ready: number, notReady: number) => ({ key, title: key, ready, notReady: notReady ? [{ count: notReady, words: "held" }] : [] }) as never;
 
 describe("who starts work", () => {
-  test("one row per role leading a line, its projects' problems summed; a project no role leads is not a row", () => {
-    const rows = roleLines(
-      [role("1", "calling", ["p1"]), role("2", "agent-quality", ["p2", "p3"])],
-      [{ _id: "p1", title: "Callers" }, { _id: "p2", title: "AgentWatch" }, { _id: "p3", title: "Agent Quality" }] as never,
-      [rollup("p1", 69, 39), rollup("p2", 100, 20), rollup("p3", 77, 24), rollup("p9", 3, 0)],
-    );
+  test("one row per owned flow, its projects' problems summed; a project no role leads is not a row", () => {
+    const roles = [role("1", "calling", ["p1"]), role("2", "agent-quality", ["p2", "p3"])];
+    const projects = [{ _id: "p1", title: "Callers" }, { _id: "p2", title: "AgentWatch" }, { _id: "p3", title: "Agent Quality" }, { _id: "p9", title: "Loose" }];
+    const lead = (id: string) => ({ role: { id, handle: "", paused: false }, on: true, slots: 5, busy: null, hands: null, handsCap: null });
+    const admissions = new Map([["p1", lead("1")], ["p2", lead("2")], ["p3", lead("2")]]) as never;
+    const rows = roleLines(ownedFlows(projects, admissions, roles), [rollup("p1", 69, 39), rollup("p2", 100, 20), rollup("p3", 77, 24), rollup("p9", 3, 0)]);
     expect(rows.map((r) => [r.role.handle, r.projects.map((p) => p.title), r.waiting, r.ready])).toEqual([
       ["agent-quality", ["AgentWatch", "Agent Quality"], 221, 177],
       ["calling", ["Callers"], 108, 69],

@@ -21,6 +21,7 @@ import { lineSlugOf } from "@codecast/shared/contracts/orgProposal";
 import { DAILY_CAP_KEYS } from "@codecast/shared/contracts/orgCapacity";
 import { useLineForks } from "../../../hooks/useLineForks";
 import { lineSettingsHref } from "../../../lib/lineSettings";
+import { flowHref } from "../../../lib/line/lineWorkspaceUrl";
 import { lineIntentEchoed, orgRoleReparentMakesCycle, type OrgIntent, type OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { SelectBox } from "../../ui/select-box";
 import { GatedScopeEditor, InlineEdit } from "./ScopeEditors";
@@ -203,7 +204,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   const { workflows } = useWorkflows();
   const lineSlug: string = lineSlugOf({ line_workflow_slug: (role as any).line_workflow_slug ?? lineRow?.line_workflow_slug });
   const lineChoices = useMemo(() => lineOptions(workflows, lineSlug), [workflows, lineSlug]);
-  // Where "Edit this line" goes: the project whose customized copy the slug
+  // Where "Edit steps" goes: the project whose customized copy the slug
   // is, else the one project in the role's area; with several, the settings
   // page asks which.
   const forks = useLineForks();
@@ -260,7 +261,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         <OverlapWarning overlaps={overlaps} projectName={projectName} planName={planName} />
       </Section>
 
-      <Section title="Workflow" hint="The steps a task in its area goes through, from started to done.">
+      <Section title="Flow" hint="The steps its flow runs a problem through, from started to shipped.">
         <div className="flex items-center gap-2 flex-wrap">
           {!canEdit && <span className="text-[13px] font-medium" style={{ color: "var(--sol-text)", fontFamily: "var(--font-mono)" }}>{lineSlug}</span>}
           {canEdit && (
@@ -268,7 +269,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
               value={lineSlug}
               onChange={(e) => { const next = e.target.value; if (next && next !== lineSlug) setRoleLine(role._id, next); }}
               className="text-[12px]"
-              aria-label="Workflow"
+              aria-label="Steps"
               data-line-picker
             >
               {lineChoices.map((o) => <option key={o.slug} value={o.slug}>{o.label}</option>)}
@@ -276,11 +277,14 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
           )}
           {forkOf && (
             <span className="text-[11.5px]" style={{ color: "var(--sol-magenta)" }} data-line-customized-note>
-              {forkOf.title ? `${forkOf.title}'s customized line` : "a customized line"}
+              {forkOf.title ? `${forkOf.title}'s customized steps` : "customized steps"}
             </span>
           )}
           <Link href={lineSettingsHref({ project: lineProject, section: "stations" })} className="ml-auto text-[11.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} data-line-edit-link>
-            Edit this line
+            Edit steps
+          </Link>
+          <Link href={flowHref(role.handle)} className="text-[11.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} data-role-flow-link>
+            Open its flow
           </Link>
         </div>
         {!isRoot && <MergeStepSwitch role={role} canEdit={canEdit} merge={lineRow?.merge ?? null} />}

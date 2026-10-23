@@ -115,8 +115,8 @@ describe("problemBand: one state per problem", () => {
     expect(b).toMatchObject({ kind: "closed", at: NOW - 72 * H, how: "Dropped" });
   });
   test("not started with the line off says so; with no goal says why", () => {
-    expect(bandLine(problemBand(input({ lineOn: false, task: { status: "open", goal_ref: "in-1", readiness: "ready" } }))).text).toBe("Ready: line off");
-    expect(bandLine(problemBand(input({ lineOn: null, task: { status: "open", goal_ref: "in-1", readiness: "ready" } }))).text).toBe("Ready: no line set up");
+    expect(bandLine(problemBand(input({ lineOn: false, task: { status: "open", goal_ref: "in-1", readiness: "ready" } }))).text).toBe("Ready: flow off");
+    expect(bandLine(problemBand(input({ lineOn: null, task: { status: "open", goal_ref: "in-1", readiness: "ready" } }))).text).toBe("Ready: no flow set up");
     // The one blocker, in the words the Problems row says (notStartedWhy).
     expect(problemBand(input({ task: { status: "open" } }))).toMatchObject({ kind: "notstarted", reason: "Not grounded yet" });
   });

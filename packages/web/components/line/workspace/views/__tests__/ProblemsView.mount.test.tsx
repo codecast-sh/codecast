@@ -179,7 +179,7 @@ test("the URL drives the list: a chip opens its group, the search narrows and op
   let { host, root } = await mount(React.createElement(ProblemsView, props({ status: "notstarted" }, failModel)));
   expect(ids(host)).toEqual(["t9"]);
   expect(host.querySelector(".lwp-sub-h")?.textContent).toContain("1 ready");
-  expect(host.querySelector('.lwp-row[data-line-issue="t9"] .lwp-c-status')?.textContent).toBe("Ready: no line set up");
+  expect(host.querySelector('.lwp-row[data-line-issue="t9"] .lwp-c-status')?.textContent).toBe("Ready: no flow set up");
   act(() => root.unmount());
   ({ host, root } = await mount(React.createElement(ProblemsView, props({ q: "merged before" }, failModel))));
   expect(ids(host)).toEqual(["t8"]);

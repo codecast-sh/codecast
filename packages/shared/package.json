@@ -24,6 +24,7 @@
     "./contracts/plainText": "./contracts/plainText.ts",
     "./contracts/commitDiffs": "./contracts/commitDiffs.ts",
     "./contracts/orgProposal": "./contracts/orgProposal.ts",
+    "./contracts/lineSlug": "./contracts/lineSlug.ts",
     "./contracts/convexErrors": "./contracts/convexErrors.ts",
     "./contracts/orgChange": "./contracts/orgChange.ts",
     "./contracts/orgChangeWords": "./contracts/orgChangeWords.ts",

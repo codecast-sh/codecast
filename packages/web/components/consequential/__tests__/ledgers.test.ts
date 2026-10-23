@@ -55,8 +55,8 @@ test("a role with no daily cap says so, never a default", () => {
 });
 
 test("start these again at the line's pace: what starts now, what waits, and the line off said first", () => {
-  const l = L.startTheseAgainLedger({ cause: "Its session never started at Prove", count: 5, rest: 24, slots: 5, first: ["a", "b", "c", "d", "e"], projects: ["Agent Quality"], hold: "Line off: only a press starts a run" });
-  assert.equal(l.alert, "Line off: only a press starts a run");
+  const l = L.startTheseAgainLedger({ cause: "Its session never started at Prove", count: 5, rest: 24, slots: 5, first: ["a", "b", "c", "d", "e"], projects: ["Agent Quality"], hold: "Flow off: only a press starts a run" });
+  assert.equal(l.alert, "Flow off: only a press starts a run");
   assert.deepEqual(l.figures.map((f) => `${f.value} ${f.label}`), ["5 runs start now", "24 wait here", "$? not priced"]);
   assert.equal(l.rows.find((r) => r.k === "Then")?.v, "24 stay here until you press again");
   assert.deepEqual(l.rows.find((r) => r.k === "Starting")?.list, ["a", "b", "c", "d", "e"]);

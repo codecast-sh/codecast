@@ -6,6 +6,7 @@
 // the same stations in the same order. Pure: no store, no React.
 import { flowGraphAttr as graphAttr, flowPathWords, foldFlow, publishableFlowSource, segmentTopOf, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import { SHIPPED_FLOWS } from "./shippedFlows.generated";
+import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
 
 export type ShippedFlow = PoolFlowSummary & { name: string; nodes: FlowNodeIn[]; edges: FlowEdgeIn[] };
 
@@ -55,7 +56,8 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
 
 /** The pool: every shipped flow, then each published one the shipped set does not already name. */
 export function appPool(pushed: ReadonlyArray<PushedFlowRow> = []): AppFlow[] {
-  const shipped = SHIPPED_FLOWS.map((f) => ({ ...f, where: "shipped" as const, workflowId: null }));
+  // The shipped template's graph names no label of its own; people read it as the Standard steps.
+  const shipped = SHIPPED_FLOWS.map((f) => ({ ...f, ...(f.slug === DEFAULT_LINE_SLUG && f.label === "Line" ? { label: DEFAULT_STEPS_LABEL } : {}), where: "shipped" as const, workflowId: null }));
   const names = new Set(shipped.map((f) => f.slug));
   // A pushed graph joins the pool only when it says what kind of flow it is and is no session's draft, never a probe or a trial's copy.
   const joins = pushed.filter((r) => !names.has(r.slug) && r.nodes.length && publishableFlowSource(r.source));

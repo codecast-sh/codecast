@@ -877,9 +877,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             files: isVault,
             pages: isPages,
             sessions: !!isSessions,
-            // A line is the workflow a project runs: every workflow page
-            // (definitions, runs, dynamic) lives under Line.
-            line: pathname === "/line" || pathname?.startsWith("/line/") || isWorkflows,
+            // A flow's steps are a workflow: every workflow page
+            // (definitions, runs, dynamic) lives under Flows.
+            line: pathname === "/flows" || pathname?.startsWith("/flows/") || pathname === "/line" || pathname?.startsWith("/line/") || isWorkflows,
             triggers: isTriggers,
             ops: isOpsPath(pathname),
             ...orgRows,

@@ -95,7 +95,7 @@ const cloneEdges = (edges: LineEdge[]): LineEdge[] => edges.map((e) => ({ ...e }
 export function forkShippedLine(shipped: ShippedLine, project: { _id: string; short_id?: string | null; title?: string | null }): LineWorkflow {
   return {
     slug: lineForkSlug(project),
-    name: project.title ? `Line for ${project.title}` : "Line",
+    name: project.title ? `Steps for ${project.title}` : "Steps",
     ...(shipped.goal ? { goal: shipped.goal } : {}),
     // The raw template: a pushed row reads its graph attributes (the stack)
     // back from `source` (cli daemonGraph.ts), and the nodes carry the text.

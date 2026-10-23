@@ -106,7 +106,7 @@ describe("editOutcome", () => {
     expect(editOutcome({ executed_at: 1, error: "/src/app/.codecast/line.toml: [line] size_budget must be a positive integer" })).toEqual({ state: "refused", message: "size_budget must be a positive integer" });
     expect(editOutcome({ executed_at: 1, error: "expired_ttl" })).toMatchObject({ state: "refused", message: expect.stringMatching(/within 5 minutes.*Nothing reached the file/) });
     expect(editOutcome({ executed_at: 1, error: "Unknown command: line_profile_edit" })).toMatchObject({ state: "refused", message: expect.stringMatching(/older cast/) });
-    expect(editOutcome({ executed_at: 1, error: 'unknown edit op "set_station" (ops: set, remove, set_finder, remove_finder)' })).toMatchObject({ state: "refused", message: expect.stringMatching(/older cast that cannot edit the line's stations/) });
+    expect(editOutcome({ executed_at: 1, error: 'unknown edit op "set_station" (ops: set, remove, set_finder, remove_finder)' })).toMatchObject({ state: "refused", message: expect.stringMatching(/older cast that cannot edit the flow's steps/) });
     expect(editOutcome({ executed_at: 1, result: JSON.stringify({ changed: true, published: { ok: true } }) })).toEqual({ state: "saved" });
     expect(editOutcome({ executed_at: 1, result: JSON.stringify({ changed: true, published: { ok: false, detail: "no project" } }) })).toMatchObject({ state: "saved", note: expect.stringMatching(/republish failed: no project/) });
     // A daemon that republishes after it answers: written, and the row follows.
@@ -130,10 +130,10 @@ describe("lineEditStatus", () => {
 
 describe("links into the settings page", () => {
   test("one address: project, then section, and a station implies Stations", () => {
-    expect(lineSettingsHref()).toBe("/line/settings");
-    expect(lineSettingsHref({ project: "pj-a", section: "limits" })).toBe("/line/settings?project=pj-a&section=limits");
-    expect(lineSettingsHref({ project: "pj-a", section: "checks", station: "verify" })).toBe("/line/settings?project=pj-a&section=stations&station=verify");
-    expect(lineSettingsHref({ project: null, section: null })).toBe("/line/settings");
+    expect(lineSettingsHref()).toBe("/flows/settings");
+    expect(lineSettingsHref({ project: "pj-a", section: "limits" })).toBe("/flows/settings?project=pj-a&section=limits");
+    expect(lineSettingsHref({ project: "pj-a", section: "checks", station: "verify" })).toBe("/flows/settings?project=pj-a&section=stations&station=verify");
+    expect(lineSettingsHref({ project: null, section: null })).toBe("/flows/settings");
   });
   test("the page reads back what the link asked, and ignores a section it does not have", () => {
     const read = (q: string) => lineSettingsTarget(new URLSearchParams(q));

@@ -70,7 +70,7 @@ describe("runPath", () => {
   test("ship, merge and watch are one row that says whether the change landed; a merge left to a person did not land", () => {
     const ship = phase("ship");
     expect(ship.steps.map((s) => [s.id, s.state])).toEqual([["ship", "done"]]);
-    expect(ship.steps[0]).toMatchObject({ label: "Ship", note: "the line could not merge it", href: "/tasks/ct-56750" });
+    expect(ship.steps[0]).toMatchObject({ label: "Ship", note: "the flow could not merge it", href: "/tasks/ct-56750" });
     expect(ship.steps[0].result).toMatch(/^Landed by hand \w+ \d+$/);
     expect(ship.state).toBe("done");
     const open = runPath(shippedRun, null, { status: "in_progress" }).find((p) => p.key === "ship")!;
@@ -130,8 +130,8 @@ describe("runOutcome", () => {
   const now = T0 + DAY;
   test("shipped says where the watch stands", () => {
     const day = shortDay(T0);
-    expect(runOutcome(shippedRun, { short_id: "ct-56750", status: "done", watch_until: T0 + 7 * DAY }, now).text).toBe(`Shipped by hand ${day} after the line could not merge it. Watching for the problem to come back until ${shortDay(T0 + 7 * DAY)}.`);
-    expect(runOutcome(shippedRun, { status: "done", watch_until: null, resolved_at: T0 + 8 * DAY }, now).text).toBe(`Shipped by hand ${day} after the line could not merge it. The watch ended quiet.`);
+    expect(runOutcome(shippedRun, { short_id: "ct-56750", status: "done", watch_until: T0 + 7 * DAY }, now).text).toBe(`Shipped by hand ${day} after the flow could not merge it. Watching for the problem to come back until ${shortDay(T0 + 7 * DAY)}.`);
+    expect(runOutcome(shippedRun, { status: "done", watch_until: null, resolved_at: T0 + 8 * DAY }, now).text).toBe(`Shipped by hand ${day} after the flow could not merge it. The watch ended quiet.`);
     expect(runOutcome(shippedRun, { status: "open" }, now)).toMatchObject({ tone: "failed", text: `Shipped ${day}, then reopened: the problem came back during the watch.` });
   });
 
@@ -191,7 +191,7 @@ describe("lineVersions", () => {
     expect(versionChange(a, undefined)).toBe("First recorded version");
     expect(versionChange([{ id: "prove", h: "19" }, { id: "review", h: "22" }, { id: "unscored", h: "33" }], a)).toBe("Prove edited");
     expect(versionChange([{ id: "prove", h: "11" }, { id: "review", h: "29" }, { id: "eval", h: "44" }], a)).toBe("Review edited, Eval added, Unscored removed");
-    expect(versionChange(a, a)).toBe("Line settings edited");
+    expect(versionChange(a, a)).toBe("Flow settings edited");
     expect(versionChange(a, null)).toBe("Edited; which stations was not recorded yet");
     const v1: ReportRun = { ...shippedRun, _id: "v1", graph_hash: "h1", graph_nodes: a, created_at: T0 };
     const v2: ReportRun = { ...shippedRun, _id: "v2", graph_hash: "h2", graph_nodes: [{ id: "prove", h: "19" }, { id: "review", h: "22" }, { id: "unscored", h: "33" }], created_at: T0 + DAY };
@@ -359,7 +359,7 @@ describe("a station's words are what happened to it (ct-57659's runs, 2026-10-07
 
   test("a builder that handed off needs_context stopped to ask, it did not fail outright", () => {
     expect(step(ct57659Run3, "implement_line").result).toBe("Handed off needs_context: stopped to ask for context");
-    expect(runOutcome(ct57659Run3).text).toBe("Stopped at Build line: Build line stopped to ask for context (a needs_context handoff), and the line had no route for that.");
+    expect(runOutcome(ct57659Run3).text).toBe("Stopped at Build line: Build line stopped to ask for context (a needs_context handoff), and the flow had no route for that.");
   });
 
   test("script stations read as one sentence, never their raw output", () => {

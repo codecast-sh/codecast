@@ -19,7 +19,7 @@ export function LineChip({ children, tone = "muted", ...rest }: { children: Reac
 }
 
 export function CustomizedLineChip({ project, href }: { project?: string | null; href?: string }) {
-  const title = `Runs ${project ? `${project}'s` : "this project's"} customized line, not the shipped one`;
+  const title = `Runs ${project ? `${project}'s` : "this project's"} customized steps, not the Standard ones`;
   if (href) {
     return (
       <Link href={href} onClick={(e) => e.stopPropagation()} className={`${CLASS} hover:underline`} style={toneStyle("magenta")} title={`${title}. Open its stations.`} data-line-customized>

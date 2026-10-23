@@ -40,8 +40,8 @@ function useRunProgress(row: ShipTargetRow | undefined): ShipProgress | null {
       const line = row?.line;
       const ship = line?.ship;
       if (line?.merge) return { phase: "merged", text: `Merged ${line.merge.branch} into ${line.merge.into}`, pr: null };
-      if (!ship || ship.status === "pending") return { phase: "starting", text: "Answered Ship on the card; the line's ship station is next", pr: null };
-      if (ship.status === "running") return { phase: "working", text: "The line's ship station is running", pr: null };
+      if (!ship || ship.status === "pending") return { phase: "starting", text: "Answered Ship on the card; the flow's ship step is next", pr: null };
+      if (ship.status === "running") return { phase: "working", text: "The flow's ship step is running", pr: null };
       if (ship.status === "failed" || ship.outcome === "failure") return { phase: "failed", text: `Failed: ${ship.preview ?? line?.fail_reason ?? "the ship station"}`, pr: null };
       return { phase: "done", text: ship.preview ?? "Shipped", pr: null };
     }

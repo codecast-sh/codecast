@@ -21,7 +21,7 @@ export function AskAgain({ taskId, projectId, className }: { taskId: string; pro
         className="line-ask-again"
         disabled={busy}
         onClick={() => { setSent(true); start(taskId); }}
-        title="Starts the line on this problem again. The fix is saved on its branch, so the new run picks it up and brings you its proposal to answer."
+        title="Starts the flow on this problem again. The fix is saved on its branch, so the new run picks it up and brings you its proposal to answer."
       >
         <RotateCcw className="w-3 h-3 shrink-0" />{busy ? "Starting" : "Ask for the proposal again"}
       </button>

@@ -59,7 +59,7 @@ describe("projectGraphs", () => {
     const g = projectGraphs(runs, signals);
     expect(g.map((x) => x.key)).toEqual(["agentwatch", "line"]);
     expect(g[0]).toMatchObject({ title: "AgentWatch", runs: 2, causes: 2, runId: "r1", workflowId: "w_aw", nodeIds: ["bind"], work: "2 problems, found by AgentWatch and union.eval" });
-    expect(g[1]).toMatchObject({ title: "Codecast's line", live: 1, workflowId: null, work: "1 problem, filed by people" });
+    expect(g[1]).toMatchObject({ title: "Standard", live: 1, workflowId: null, work: "1 problem, filed by people" });
   });
 
   test("given the queue, each waiting cause counts once, on the graph its newest run ran, so the graphs sum to the waiting ones that ran", () => {
@@ -174,7 +174,7 @@ describe("processKeyOf", () => {
     expect(graphTitle("agentwatch-judge")).toBe("AgentWatch judges");
   });
   test("the picker names a process by what it fixes, and folds a route of a product's graph under that product", () => {
-    expect(processName("line")).toEqual({ title: "Codecast's line", fixes: "codecast", parent: null });
+    expect(processName("line")).toEqual({ title: "Standard", fixes: "codecast", parent: null });
     expect(processName("agentwatch")).toEqual({ title: "AgentWatch", fixes: "Union's agents", parent: null });
     expect(processName("agentwatch-judge")).toEqual({ title: "Judges", fixes: "AgentWatch's judges", parent: "agentwatch" });
   });

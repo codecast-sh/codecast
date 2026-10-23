@@ -142,7 +142,7 @@ function Verdict({ m }: { m: LineMomentRow }) {
   const breaks = `${v.found} ${v.found === 1 ? "break" : "breaks"}`;
   const taken = v.filed === 0 ? "not filed" : v.filed >= v.found ? "filed" : `${v.filed} filed`;
   return (
-    <span className="sd-verdict" data-tone={v.filed ? "filed" : "unfiled"} title={v.filed < v.found ? `${v.found - v.filed} the judges saw that the line did not take: held, out of scope, or already on the board from another moment` : "on a problem now"}>
+    <span className="sd-verdict" data-tone={v.filed ? "filed" : "unfiled"} title={v.filed < v.found ? `${v.found - v.filed} the judges saw that the flow did not take: held, out of scope, or already on the board from another moment` : "on a problem now"}>
       <b>{breaks}</b><span>{taken}</span>
     </span>
   );

@@ -56,7 +56,7 @@ async function verify() {
   const other = tree.roles.find((r) => r._id !== growth._id && r.status !== "retired") ?? tree.roles.find((r) => r._id !== growth._id)!;
 
   // ── the merge switch: off by default, says so; on without a grant asks for the limit and writes it in one act ──
-  assert.equal(mergeStepWords(null), "Reading the line");
+  assert.equal(mergeStepWords(null), "Reading the flow");
   assert.match(mergeStepWords({ on: false, allowed: false, reason: "merge is off", used: 0, limit: null }), /left for a person/);
   assert.match(mergeStepWords({ on: true, allowed: true, reason: null, used: 1, limit: 3 }), /1 of 3 today/);
   assert.match(mergeStepWords({ on: true, allowed: false, reason: "the role's merge authority has expired", used: 0, limit: 3 }), /not now: the role's merge authority has expired/);

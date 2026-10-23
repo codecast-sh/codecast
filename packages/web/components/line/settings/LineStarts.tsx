@@ -15,11 +15,10 @@ import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
-import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
+import { useOwnedFlows } from "../../../hooks/useOwnedFlows";
 import type { LineProject, RollupRow } from "../../../lib/lineFlow";
 import { limitChangeRows, limitsLedger, roleLines, type RoleLine } from "../../../lib/line/lineStarts";
-import type { OrgRole } from "../../org/orgTypes";
-import { admissionOf, capsWith, lineSwitchFields } from "../map/useLineAdmission";
+import { admissionOf, capsWith, lineSwitchFields, useLineAdmissions } from "../map/useLineAdmission";
 import { ConsequentialSwitch, SwitchReview, type SwitchLedger } from "../../consequential/ConsequentialSwitch";
 import { lineStartLedger, startsAtOnce } from "../../consequential/lineStartLedger";
 import { useRunCost } from "../../consequential/useRunCost";
@@ -30,21 +29,21 @@ const MAX_CARDS = 50;
 const MAX_PER_DAY = 200;
 
 export function LineStarts({ projects, rollups }: { projects: ReadonlyArray<LineProject>; rollups: ReadonlyArray<RollupRow> }) {
-  useSyncOrgTreeFeeder();
   const roles = useInboxStore((s) => s.orgTree?.roles);
-  const rows = useMemo(() => (roles ? roleLines(roles as OrgRole[], projects, rollups) : []), [roles, projects, rollups]);
+  const flows = useOwnedFlows({ projects: projects as LineProject[], admissions: useLineAdmissions(projects) });
+  const rows = useMemo(() => roleLines(flows, rollups), [flows, rollups]);
   return (
     <div className="lw-stage-fill lst" data-line-starts="">
       <div className="lst-head">
         <h2 className="lst-title">Who starts work</h2>
-        <span className="lst-dim lw-num">{rows.length} {rows.length === 1 ? "line" : "lines"}</span>
+        <span className="lst-dim lw-num">{rows.length} {rows.length === 1 ? "flow" : "flows"}</span>
       </div>
-      {!roles ? <p className="lst-dim lst-empty">Loading the roles</p> : rows.length === 0 ? <p className="lst-dim lst-empty">No role leads a project with a line</p> : (
+      {!roles ? <p className="lst-dim lst-empty">Loading the roles</p> : rows.length === 0 ? <p className="lst-dim lst-empty">No role owns a flow yet</p> : (
         <table className="lst-table">
           <thead>
             <tr>
-              <th>Lead</th>
-              <th>Line</th>
+              <th>Owner</th>
+              <th>Flow</th>
               <th data-num="">Cards</th>
               <th data-num="">A day</th>
               <th data-num="" data-col="waiting">Waiting</th>
@@ -106,7 +105,7 @@ function RoleRow({ line }: { line: RoleLine }) {
       </td>
       <td>
         <ConsequentialSwitch on={admission.on} ledger={onLedger} onTurnOn={() => write(true)} onTurnOff={() => write(false)} trigger={({ on, press, reviewing }) => (
-          <button type="button" role="switch" aria-checked={on} aria-haspopup={on ? undefined : "dialog"} aria-expanded={on ? undefined : reviewing} onClick={press} className="lst-switch" data-line-starts-switch={on ? "on" : "off"} aria-label={`@${role.handle}'s line`}>
+          <button type="button" role="switch" aria-checked={on} aria-haspopup={on ? undefined : "dialog"} aria-expanded={on ? undefined : reviewing} onClick={press} className="lst-switch" data-line-starts-switch={on ? "on" : "off"} aria-label={`@${role.handle}'s flow`}>
             <span className="lst-knob" aria-hidden />{on ? "On" : "Off"}
           </button>
         )} />

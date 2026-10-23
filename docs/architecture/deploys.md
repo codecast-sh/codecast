@@ -162,7 +162,7 @@ through `packages/convex/run.sh`.
 ## DP7. Where deploys show
 
 - `dp-N` is a reference everywhere (entity type `deploy`): a pill with its
-  state, opening `/line?view=deploys&deploy=dp-N`.
+  state, opening `/flows?view=deploys&deploy=dp-N`.
 - The Line app's Deploys view: what waits to go out per project with its
   Deploy press (through the shared confirm flow) and, on a role-trigger line,
   the role that sends it with today's deploys against its limit or why it

@@ -32,7 +32,7 @@ function Fallback({ children }: { children: React.ReactNode }) {
 }
 
 const WIDGET_WORDS: Record<LineFenceSpec["widget"], string> = {
-  graph: "the line's graph", step: "a step", prompt: "a step's prompt", diff: "a prompt change", decision: "a decision",
+  graph: "the flow's steps", step: "a step", prompt: "a step's prompt", diff: "a prompt change", decision: "a decision",
   decisions: "a step's decisions", "before-after": "a before and after comparison", run: "a run", problem: "a problem's history",
 };
 
@@ -66,7 +66,7 @@ export default function LineFence({ code }: { code: string }) {
 function LineFenceSpecView({ spec }: { spec: LineFenceSpec }) {
   const projectId = useLineProjectId(spec.project);
   if (!projectId) {
-    return <Fallback><b>{WIDGET_WORDS[spec.widget].replace(/^./, (c) => c.toUpperCase())}</b> from the line of project {spec.project}, which is not one you can open here.</Fallback>;
+    return <Fallback><b>{WIDGET_WORDS[spec.widget].replace(/^./, (c) => c.toUpperCase())}</b> from the flow of project {spec.project}, which is not one you can open here.</Fallback>;
   }
   return <LineFenceIn spec={spec} projectId={projectId} />;
 }
@@ -117,7 +117,7 @@ function LineFenceLive({ spec, projectId, taskId }: { spec: LineFenceSpec; proje
     };
   }, [router, param, graph]);
 
-  if (!model) return <Fallback>Reading the line…</Fallback>;
+  if (!model) return <Fallback>Reading the flow…</Fallback>;
   return (
     <LineNavProvider nav={nav}>
       <div className="lw-widget" data-line-fence={spec.widget}>

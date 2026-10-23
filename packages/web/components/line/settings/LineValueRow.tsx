@@ -102,7 +102,7 @@ export function InlineEdit({ text, placeholder, multiline, disabled, label, disp
 export function SourceTag({ source }: { source: LineValueSource | null }) {
   if (!source) return <span className="lset-src" data-src="unknown" title="Published by an older cast, which did not say">?</span>;
   return (
-    <span className="lset-src" data-src={source} title={source === "file" ? "Set in the line's file" : "Not set in the file: the line's default"}>
+    <span className="lset-src" data-src={source} title={source === "file" ? "Set in the flow's file" : "Not set in the file: the default"}>
       {source === "file" ? "file" : "default"}
     </span>
   );
@@ -176,7 +176,7 @@ export function LineValueRow({ label, what, unit, children, source, status, note
           {children}
           {unit && <span className="lset-unit">{unit}</span>}
           {source === "file" && onReset && (
-            <button type="button" className="lset-to-default" onClick={onReset} title={`Remove it from the file; the line then uses the default: ${defaultText || "unset"}`} data-lset-to-default>
+            <button type="button" className="lset-to-default" onClick={onReset} title={`Remove it from the file; the flow then uses the default: ${defaultText || "unset"}`} data-lset-to-default>
               use default
             </button>
           )}

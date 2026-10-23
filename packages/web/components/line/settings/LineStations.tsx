@@ -103,7 +103,7 @@ export function useProjectStations(projectId: string) {
 export function StationDefinition({ projectId, stationId }: { projectId: string; stationId: string }) {
   const m = useProjectStations(projectId);
   const node = m.nodes.find((n) => n.id === stationId);
-  if (!node) return <p className="lset-empty">This station is not on this project's line.</p>;
+  if (!node) return <p className="lset-empty">This station is not in this project's steps.</p>;
   const { repo } = m;
   return (
     <div className="space-y-2" data-station-definition={stationId}>
@@ -126,7 +126,7 @@ export function StationDefinition({ projectId, stationId }: { projectId: string;
           ? (repo.gate.writable ? `Edits are written to the repo on ${repo.gate.device}, checked, and republished. Each run records the version it ran.` : repo.gate.reason)
           : m.customized
             ? (m.onFork.length ? "Edits save to this project's customized copy, which a role runs." : "Edits save to this project's customized copy. No role runs it yet.")
-            : <>This project runs the shipped line, read only here. <button type="button" className="underline underline-offset-2" onClick={m.customize} data-customize-line>Customize this line</button> to edit its stations.</>}
+            : <>This project runs the shipped line, read only here. <button type="button" className="underline underline-offset-2" onClick={m.customize} data-customize-line>Customize steps</button> to edit its stations.</>}
       </p>
     </div>
   );
@@ -194,9 +194,9 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
         <div className="min-w-0 max-w-[64ch]">
           <div className="text-[13px]" style={{ color: "var(--sol-text)" }} data-line-stations-headline>
             {fork === undefined
-              ? <span style={{ color: "var(--sol-text-dim)" }}>Looking for this project's copy of the line…</span>
+              ? <span style={{ color: "var(--sol-text-dim)" }}>Looking for this project's copy of the steps…</span>
               : !customized
-                ? <>This project runs the shipped line.</>
+                ? <>This project runs the Standard steps.</>
                 : onFork.length === 0
                   ? <>Your customized copy, {copy}. No role runs it yet.</>
                   : <>{roles(onFork.length)} {onFork.length === 1 ? "runs" : "run"} this project's customized copy, {copy}.</>}
@@ -204,13 +204,13 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
           {fork !== undefined && (
             <div className="text-[11.5px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>
               {!customized
-                ? "Click a station to read its prompt or script. Customizing makes an editable copy for this project; roles keep the shipped line until you switch them, and the copy no longer follows later updates to the shipped line."
+                ? "Click a station to read its prompt or script. Customizing makes an editable copy for this project; roles keep the Standard steps until you switch them, and the copy no longer follows later updates to them."
                 : `${changedCount === 0 ? "Every station matches shipped." : `${changedCount} ${changedCount === 1 ? "station differs" : "stations differ"} from shipped.`} Click a station to edit${changedCount ? " or reset" : ""} it.${onFork.length === 0 ? " Switch a role to the copy below for its runs to use it." : ""}`}
             </div>
           )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {fork === null && <button type="button" className="lset-primary" onClick={customize} data-customize-line>Customize this line</button>}
+          {fork === null && <button type="button" className="lset-primary" onClick={customize} data-customize-line>Customize steps</button>}
           {customized && changedCount > 0 && <button type="button" className="lset-ghost" onClick={resetAll} data-reset-all>Reset all to shipped</button>}
           {customized && (
             <ConfirmButton
@@ -274,14 +274,14 @@ function RepoLineHeader({ repo, changedCount, onResetAll }: { repo: ReturnType<t
         <div className="text-[13px]" style={{ color: "var(--sol-text)" }} data-line-stations-headline>
           {own
             ? <>This project's line lives in its repo, in {dir}{repo.version ? <>, at version <code data-line-version style={{ color: "var(--sol-text-muted)" }}>{repo.version.slice(0, 8)}</code></> : null}.</>
-            : <>This project's repo has no line of its own yet, so its runs use their role's line or the shipped one.</>}
+            : <>This project's repo has no steps of its own yet, so its runs use their owner's steps or the Standard ones.</>}
         </div>
         <div className="text-[11.5px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>
           {!repo.gate.writable
             ? repo.gate.reason
             : own
               ? `${changedCount === 0 ? "Every station matches shipped." : `${changedCount} ${changedCount === 1 ? "station differs" : "stations differ"} from shipped.`} Click a station to edit${changedCount ? " or reset" : ""} it. An edit is written to the repo on ${repo.gate.device} and checked before it lands; each run records the version it ran.`
-              : `Click a station to read it. Editing one writes the line into the repo, in ${REPO_LINE_REL_DIR}, on ${repo.gate.device}; runs in that checkout use it from then on.`}
+              : `Click a station to read it. Editing one writes the steps into the repo, in ${REPO_LINE_REL_DIR}, on ${repo.gate.device}; runs in that checkout use it from then on.`}
         </div>
       </div>
       {own && repo.writable && changedCount > 0 && (
@@ -342,7 +342,7 @@ function StationPanel({ ref, arrived, node, projectId, line = SHIPPED_LINE, edit
   };
   const saveKeys = <><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></>;
   const editHint = offerSend
-    ? <>Edit the {field}, then send it through the line or apply it now</>
+    ? <>Edit the {field}, then send it through its flow or apply it now</>
     : <>Edit the {field}; it saves when you leave the field, or on {saveKeys}</>;
 
   return (
@@ -403,7 +403,7 @@ function StationPanel({ ref, arrived, node, projectId, line = SHIPPED_LINE, edit
                 ? <>{status}{!pending && editHint}</>
               : savedAt
                 ? <span key={savedAt} className="lset-status" data-state={runsIt ? "saved" : "warn"} role="status">
-                    {runsIt ? `Saved. A run of the customized line started after this reads the new ${field}.` : "Saved to the copy. No role runs it yet, so no run reads it."}
+                    {runsIt ? `Saved. A run of the customized steps started after this reads the new ${field}.` : "Saved to the copy. No role runs it yet, so no run reads it."}
                   </span>
                 : editHint}
           </div>
@@ -464,9 +464,9 @@ function RunsThisLine({ rows, forkSlug, hostedHere, setRoleLine, repoLine }: {
 
   return (
     <div data-runs-this-line>
-      <div className="lset-label mb-1">Roles that run this project's line</div>
+      <div className="lset-label mb-1">Roles that run this project's flow</div>
       {repoLine && rows.length > 0 && (
-        <p className="lset-empty" data-runs-repo-line>A run for a task in this project's checkout uses the repo's line when it has one, whichever line the role names below.</p>
+        <p className="lset-empty" data-runs-repo-line>A run for a task in this project's checkout uses the repo's steps when it has them, whichever steps the role names below.</p>
       )}
       {rows.length === 0 ? (
         <p className="lset-empty" data-runs-this-line-empty>
@@ -490,9 +490,9 @@ function RunsThisLine({ rows, forkSlug, hostedHere, setRoleLine, repoLine }: {
                     <span className="lset-dim text-[12px]">runs</span>
                     <LineChip tone={onFork ? "magenta" : "muted"}>{onFork ? "this project's copy" : labelOf(slug)}</LineChip>
                     <span className="flex-1" />
-                    {forkSlug && !onFork && mine && <button type="button" className="lset-ghost" onClick={() => setRoleLine(role._id, forkSlug)}>Run the customized line</button>}
-                    {forkSlug && !onFork && !mine && <span className="lset-dim text-[11px]">Runs on a teammate's machine, which has no copy of your customized line</span>}
-                    {onFork && <button type="button" className="lset-ghost" onClick={() => setRoleLine(role._id, "line")}>Back to shipped</button>}
+                    {forkSlug && !onFork && mine && <button type="button" className="lset-ghost" onClick={() => setRoleLine(role._id, forkSlug)}>Run the customized steps</button>}
+                    {forkSlug && !onFork && !mine && <span className="lset-dim text-[11px]">Runs on a teammate's machine, which has no copy of your customized steps</span>}
+                    {onFork && <button type="button" className="lset-ghost" onClick={() => setRoleLine(role._id, "line")}>Use Standard steps</button>}
                   </div>
                 </div>
               </div>

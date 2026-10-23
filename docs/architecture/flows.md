@@ -5,22 +5,50 @@ Sources and flows belong to the team; a project is a home for problems
 watched problems. Most changes do not start as a finding: a person or an agent
 in an ordinary session writes them. This document makes both kinds run through
 the same structured flows, drawn from one pool, so every change goes through a
-process people and agents can see. Sections are FL1 onward so code can cite
+process people and agents can see. Sections are FL0 onward so code can cite
 them.
+
+## FL0. A flow, and who owns it
+
+A flow is four things: its steps (the graph a run walks), what it takes in
+(the finders and projects that feed it), an on switch, and who decides at the
+end. A flow that starts work by itself has an owner: the role that leads its
+projects. The owner answers the flow's asks first and recommends on its cards,
+through the role ladder every decision climbs (`sessionDecisions.routeFor`).
+
+An owned flow is derived from its owner role, never stored on its own
+(`web/lib/line/ownedFlows.ts`):
+
+| Part | Where it lives |
+|---|---|
+| Steps | `org_roles.line_workflow_slug`, the shipped template when unset (read as "Standard"); a version per finding source by `workflows.serves` |
+| Takes from | the projects the role leads (`projects.owner_role_id`, `lineRoleOf`) and the finders that file into them (`projects.line_profile.finders`) |
+| On switch | `org_roles.caps.line_on`, with the role's `trust` (`lineStartsOn`) |
+| Decides | the person the role's reporting line ends at; the workspace owner for protected categories (line-profile.md LP6) |
+| Merge, review agent | `org_roles.line_merge`, `org_roles.review_backend` |
+
+One role owns at most one flow. Many flows may run the same steps: every flow
+on the shipped template shares it, and customizing steps copies the graph into
+the project's repo. A flow is named by its owner (`/flows/<handle>`, titled
+with the role's name). Flows in the pool with no owner (`change` and the
+segments) are run by hand: steps only, decided by the person who answers for
+the change.
 
 ## FL1. Words
 
 | Word | Meaning | Home |
 |---|---|---|
 | flow | one graph in the pool: a `.cast` file the runner executes | `.codecast/flows/<slug>.cast`, a shipped template, or a `workflows` row |
-| line | a flow that takes a change all the way to done | a flow whose graph says `kind="line"`, or the shipped `line` |
+| owned flow | a flow a role owns, which starts its projects' problems by itself while on (FL0) | the owner role's fields |
+| whole flow | a flow that takes a change all the way to done | a flow whose graph says `kind="line"`, or the shipped `line` |
 | segment | a flow that does one part of the path, such as check, eval, review, decide or ship, or prove then implement | a flow whose graph says `kind="segment"` |
-| pool | every flow a team can run: shipped, the repo's, and the team's pushed ones | `cast flow ls`, the Flows view on /line |
+| pool | every graph a team can run: shipped, the repo's, and the team's pushed ones | `cast flow ls`, the flow list on /flows |
 | change | what runs through a flow: a task's branch, a session's own edits, a branch, a pull request | the run's bound task, `$branch`, `$worktree` |
 
-"Line" keeps its meaning (the-line.md L1): a line is a flow, and every flow is
-run, versioned, gated and drawn exactly as the line is. Nothing here adds an
-engine, a decision rail or an evidence model.
+Every flow is run, versioned, gated and drawn the same way (the-line.md).
+Nothing here adds an engine, a decision rail or an evidence model. Identifiers
+keep their names: the shipped slug `line`, `kind="line"`, `.codecast/line.toml`,
+the `org_roles.line_*` fields and the `cast line` commands.
 
 ## FL2. The pool
 
@@ -181,10 +209,17 @@ the route it took, red only where it stopped.
   step, the ways it can end, how to stop. Confirming asks the session to run
   its own change through it. The pool's feed is read only while the list is
   open.
-- **On /line**, the Flows view (G then W) lists the pool with each flow's
-  path and its runs, and opens one: drawn, what it takes, what it is made of,
-  what it is part of, and the changes that ran through it, each opening its
-  live run card.
+- **On /flows**, the landing view (G then W) lists the owned flows, one row
+  each: owner, on switch, the projects it takes from, who decides, its steps,
+  and what it holds now. The decisions count opens Decisions narrowed to that
+  flow (`?view=foryou&flow=<handle>`), the queued count its problems. Under
+  them, the pool run by hand and the segments, each opening its detail: drawn,
+  what it takes, what it is made of, what it is part of, and the changes that
+  ran through it, each opening its live run card.
+- **On /flows/<handle>**, one flow's page: its overview (counts, owner,
+  switch, projects, decider, merge, steps drawn) and the same Decisions,
+  Timeline, Problems, Steps and Deploys views over its projects, one picked at
+  a time. `/line` addresses from before redirect to their place under /flows.
 
 ## FL7. What agents see
 

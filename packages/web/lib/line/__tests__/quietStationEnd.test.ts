@@ -18,7 +18,7 @@ describe("a station whose session went quiet without a report", () => {
   test("is its own cause, named by how it ended, and how long the session went on after", () => {
     const run = quietRun({ is_active: false, updated_at: 1_791_909_224_487 });
     expect(failCause(run)).toMatchObject({ key: "quiet:prove", label: "Prove's session went quiet without a report" });
-    expect(stepFailWords(run, "prove")).toBe("Prove's session went quiet without a report and the line took that as its end; its session kept working 10m after.");
+    expect(stepFailWords(run, "prove")).toBe("Prove's session went quiet without a report and the flow took that as its end; its session kept working 10m after.");
     expect(stepFailWords(run, "prove")).not.toMatch(/start again or close/);
   });
   test("a session still at work says so", () => {

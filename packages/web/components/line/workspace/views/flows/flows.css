@@ -46,3 +46,35 @@
 .flv-diagram .fd-seg-name { font-size: var(--lw-fs-xs); }
 .flv-steps { margin-left: auto; font-size: var(--lw-fs-sm); font-weight: 600; padding: 3px 11px; border-radius: 7px; border: 1px solid var(--lw-rule); background: var(--lw-card); color: var(--lw-ink-2); cursor: pointer; }
 .flv-steps:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
+
+/* The flow list (/flows): one row per owned flow, then the pool. */
+.flh { display: flex; flex-direction: column; gap: 26px; }
+.flh-table { width: 100%; border-collapse: collapse; font-size: var(--lw-fs-sm); }
+.flh-table th { text-align: left; font-size: var(--lw-fs-2xs); font-weight: 600; color: var(--lw-ink-3); padding: 0 10px 6px 0; white-space: nowrap; }
+.flh-table td { padding: 8px 10px 8px 0; border-top: 1px solid var(--lw-rule); vertical-align: baseline; }
+.flh-table [data-num] { text-align: right; font-variant-numeric: tabular-nums; }
+.flh-name a { display: inline-flex; align-items: baseline; gap: 7px; color: var(--lw-ink); text-decoration: none; }
+.flh-name a:hover b { text-decoration: underline; }
+.flh-name span { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.flh-dim { color: var(--lw-ink-2); }
+.flh-on { font-size: var(--lw-fs-xs); font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--lw-rule); color: var(--lw-ink-3); text-decoration: none; }
+.flh-on[data-on] { color: var(--sol-green); border-color: color-mix(in srgb, var(--sol-green) 45%, transparent); }
+.flh-count { font-weight: 700; color: var(--lw-ink); text-decoration: none; }
+.flh-count[data-tone="ask"] { color: var(--sol-magenta); }
+.flh-count:hover { text-decoration: underline; }
+.flh-zero { color: var(--lw-ink-3); }
+.flh-pool { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 22px; }
+.flh-pool ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.flv-back { align-self: flex-start; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); background: none; border: 0; padding: 0; cursor: pointer; }
+.flv-back::before { content: "‹ "; }
+.flv-back:hover { color: var(--lw-ink); }
+
+/* One flow's overview (/flows/<owner>). */
+.flo-counts { display: flex; gap: 10px; }
+.flo-count { display: inline-flex; align-items: baseline; gap: 6px; padding: 8px 14px; border-radius: 9px; border: 1px solid var(--lw-rule); background: var(--lw-card); color: var(--lw-ink-2); font-size: var(--lw-fs-sm); text-decoration: none; }
+.flo-count b { font-size: var(--lw-fs-xl); color: var(--lw-ink); }
+a.flo-count:hover { border-color: var(--lw-ink-3); }
+.flo-count[data-tone="ask"] b { color: var(--sol-magenta); }
+.flo-count[data-quiet] { cursor: default; }
+.flo .flv-head { margin-top: 6px; }
+.flo .flv-head .flv-h { margin: 0; }

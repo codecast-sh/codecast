@@ -62,9 +62,10 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
   // the address alone gives its kind, never its id.
   if (clean.startsWith("/workflows/runs/")) return "Run";
   // A trace (line-map.md LX4) titles by the ref it follows.
-  if (clean.startsWith("/line/trace/")) { const r = clean.split("/")[3]; return r ? `Trace ${decodeURIComponent(r)}` : "Trace"; }
-  // A project's line workspace: the store names the project (tabTitle).
-  if (/^\/line\/[^/]+$/.test(clean) && clean !== "/line/settings") return "Line";
+  if (clean.startsWith("/flows/trace/") || clean.startsWith("/line/trace/")) { const r = clean.split("/")[3]; return r ? `Trace ${decodeURIComponent(r)}` : "Trace"; }
+  // One flow's page, by its owner's handle.
+  if (/^\/flows\/[^/]+$/.test(clean) && clean !== "/flows/settings") return "Flow";
+  if (/^\/line\/[^/]+$/.test(clean) && clean !== "/line/settings") return "Flows";
   if (clean.startsWith("/projects/") && clean.split("/")[2]) return "Project";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";
@@ -166,8 +167,10 @@ export function pathLabel(path: string, ui?: { lane?: string } | null): string {
     "/inbox": "Inbox",
     "/feed": "Feed",
     "/crosstalk": "Crosstalk",
-    "/line": "The line",
-    "/line/settings": "Line settings",
+    "/flows": "Flows",
+    "/flows/settings": "Flow settings",
+    "/line": "Flows",
+    "/line/settings": "Flow settings",
     "/org": "Org",
     "/map": "Session Map",
     "/goals": "Goals",

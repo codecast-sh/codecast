@@ -155,6 +155,6 @@ describe("a loop the station itself settled", () => {
     const { failCause } = require("../runReport");
     const c = failCause(machine);
     expect(c.key).toBe("infra:implement");
-    expect(c.label).toBe("Line machine: layer 3 cannot run: L3_DATABASE_URL is not set");
+    expect(c.label).toBe("Flow machine: layer 3 cannot run: L3_DATABASE_URL is not set");
   });
 });

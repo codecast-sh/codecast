@@ -56,7 +56,7 @@ export function BlockerFix({ file, reason, step, problems }: {
   }
   if (!filing) return <button type="button" className="lw-act" data-primary="" onClick={() => setFiling(true)} data-line-blocker-file={file}>File the fix…</button>;
   const refs = problems.map((p) => p.ref).filter(Boolean).join(", ");
-  const description = `${step} is blocked on ${refs || "the line"} until this lands on main.\n\n${step} said: ${reason}`;
+  const description = `${step} is blocked on ${refs || "the flow"} until this lands on main.\n\n${step} said: ${reason}`;
   const file_ = () => {
     setErr(null);
     void useInboxStore.getState().createTask({ title: title.trim(), description, ...(projectId ? { project_id: projectId } : {}) })

@@ -282,7 +282,7 @@ function StaleGate({ node }: { node: string }) {
   return (
     <div className="rounded-md border border-sol-yellow/40 bg-sol-yellow/5 px-3 py-2.5 text-[12.5px]" data-trial-stale-gate={node}>
       <div className="font-medium text-sol-yellow">No answer to give</div>
-      <div className="mt-0.5 text-sol-text-muted">The line dropped its <span className="font-mono text-sol-text">{node.replace(/_/g, " ")}</span> step</div>
+      <div className="mt-0.5 text-sol-text-muted">The flow dropped its <span className="font-mono text-sol-text">{node.replace(/_/g, " ")}</span> step</div>
     </div>
   );
 }

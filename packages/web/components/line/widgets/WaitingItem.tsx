@@ -280,7 +280,7 @@ function TrialCardNeed({ need, onProblem, onRun, head, runShown }: { need: LineN
       <div className="lwn-col">
         {head && <NeedHead need={need} onProblem={onProblem} />}
         <NotPresented need={need} onRun={onRun} runShown={runShown} />
-        {card?.status === "waiting" && !answersAtGate(card) && <ReaskNotice taskId={card.task_id} task={card.task_short_id} reason={card.stale_gate ? "Its step left the line, so an answer has nowhere to go." : "No session asked this, so nobody can take an answer."} />}
+        {card?.status === "waiting" && !answersAtGate(card) && <ReaskNotice taskId={card.task_id} task={card.task_short_id} reason={card.stale_gate ? "Its step left the flow, so an answer has nowhere to go." : "No session asked this, so nobody can take an answer."} />}
       </div>
     </div>
   );
@@ -644,9 +644,9 @@ function Assigned({ need, onProblem, evidence }: { need: LineNeed; onProblem: (t
             </div>
           )}
         </dl>
-        {state === "closed" ? <span className="lw-oc" data-tone="ok">Closed</span> : state === "handed" ? <span className="lw-oc" data-tone="none">With the line</span> : ref && (
+        {state === "closed" ? <span className="lw-oc" data-tone="ok">Closed</span> : state === "handed" ? <span className="lw-oc" data-tone="none">With the flow</span> : ref && (
           <>
-            <button type="button" className="lw-act" title="Unassign it: the line can start it" data-line-need-hand-back onClick={() => void useInboxStore.getState().updateTask(ref, { assignee: null as unknown as string })}>Hand to the line</button>
+            <button type="button" className="lw-act" title="Unassign it: its flow can start it" data-line-need-hand-back onClick={() => void useInboxStore.getState().updateTask(ref, { assignee: null as unknown as string })}>Hand to the flow</button>
             <button type="button" className="lw-act" data-primary="" data-line-need-close onClick={() => void useInboxStore.getState().updateTaskStatus(ref, "done")}>Close</button>
           </>
         )}
