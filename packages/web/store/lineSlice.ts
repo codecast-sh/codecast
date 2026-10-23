@@ -42,6 +42,11 @@ export type LineSliceActions = {
   /** Stop a live run (convex workflow_runs cancelRunByPerson): it ends at once, as a person's cancel. */
   stopLineRun: (runId: string) => Promise<{ ok: true } | null | undefined>;
   labelDecision: (runId: string, nodeId: string, verdict: LabelVerdict | null, note?: string | null) => void;
+  /** A live flow's switch (convex liveFlows.setOn, human only): the row reads on or off at once. */
+  setLiveFlowOn: (id: string, on: boolean) => void;
+  /** Save a flow a session ran into the team's library (convex flowLibrary.save): the row reads saved at once, under the
+   *  slug it asks for, as a new version when that slug is saved already. */
+  saveSessionFlow: (id: string, opts?: { slug?: string; label?: string; variant_of?: string }) => void;
   // Local echoes of sendLineChat, by project id. Ephemeral: the chat's feed
   // retires each once the server row carries its client id.
   lineChatSends: Record<string, LineChatSend[]>;
@@ -190,6 +195,19 @@ export function createLineSlice(): LineSliceActions {
         ...(run?.workspace ? { workspace: run.workspace } : {}), ...(run?.team_id ? { team_id: String(run.team_id) } : {}),
       };
     }) as LineSliceActions["labelDecision"],
+
+    setLiveFlowOn: action(function (this: { liveFlows: Record<string, any> }, id: string, on: boolean) {
+      const row = this.liveFlows[id];
+      if (row) row.on = on;
+    }) as LineSliceActions["setLiveFlowOn"],
+
+    saveSessionFlow: action(function (this: { sessionFlows: Record<string, any> }, id: string, opts?: { slug?: string; label?: string; variant_of?: string }) {
+      const row = this.sessionFlows[id];
+      if (!row) return;
+      // The server's default: the last saved slug, else the label's.
+      const slug = opts?.slug ?? row.saved?.slug ?? String(row.label ?? row.name ?? row.graph_hash).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      row.saved = { slug, version: (row.saved?.slug === slug ? row.saved.version : 0) + 1 };
+    }) as LineSliceActions["saveSessionFlow"],
 
     // A step's save (line-workspace.md LW4): the drawn graph's copy of the
     // step paints the new text at once, and a sessionCommands row (keyed by

@@ -1,5 +1,6 @@
 import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
 import { deliverableAttachments } from "../lib/pendingUploads";
+import { FLOW_SYNC_COLLECTIONS } from "./clientSyncRegistry.flows";
 
 export type PersistenceKind = "collection" | "meta";
 export type DispatchTableKind = "collection" | "singleton";
@@ -882,6 +883,8 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, altKey: "client_key", deepFields: ["carries", "after", "commits"] },
     feeds: ["lineWorkspace.deploys"],
   },
+  // The flows view's collections (live flows, session flows) live beside this file.
+  ...FLOW_SYNC_COLLECTIONS,
   // Everything that entered a workspace's line, one row per event (convex
   // lineTimeline.page): a moment, a judge's read, a finding, a problem opened or
   // merged or closed, an error, a replay, a run and its stations, a deploy. A
@@ -1940,6 +1943,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   stationInputs: "shared",
   lineOccurrences: "shared",
   lineDeploys: "shared",
+  liveFlows: "shared",
+  sessionFlows: "shared",
   lineTimeline: "shared",
   lineCards: "shared",
   lineChats: "shared",

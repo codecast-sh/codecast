@@ -1,10 +1,11 @@
 "use client";
-// The Problems table (line-journeys.md LJ8.2): four columns. The problem (its
-// whole title on up to two lines, its ref and project beneath), how often it
-// happened in the window with an arrow against the window before, where it
-// stands in one phrase, and when it was last seen. Rows sit under their status
-// group; a failure cause and a project not started are headings that carry the
-// group's one act. The whole row is the link to the problem.
+// The Problems table (line-journeys.md LJ8.2): five columns. The problem (its
+// whole title on up to two lines, its ref and project beneath), its score (the
+// value of fixing it next), how often it happened in the window with an arrow
+// against the window before, where it stands in one phrase, and when it was
+// last seen. Rows sit under their family, best score first, or under their
+// status group; a failure cause and a project not started are headings that
+// carry the group's one act. The whole row is the link to the problem.
 import { memo, useMemo, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import { ageShort } from "../../../../../lib/lineFlow";
@@ -14,6 +15,7 @@ import { problemListName, rowTrend, type ProblemRow, type ProblemSection, type P
 import type { StatusKey } from "../../../../../lib/line/problemStatus";
 import type { OverviewRange } from "../../../../../lib/line/problemsOverview";
 import { RowStrip } from "./RowStrip";
+import { scoreBand } from "../../../../../lib/line/problemScore";
 
 /** The column heads: Findings and Last sort the whole list flat; Status returns to the page's own grouped order. */
 export function ProblemTableHead({ range, sort, onSort, grouped, day }: { range: OverviewRange; sort: ProblemSort; onSort: (s: ProblemSort) => void; /** One chip is on: the list is that group whatever the sort, so Status sorts nothing. */ grouped: boolean; /** A picked bar: the column counts that day ("Oct 9"). */ day?: string | null }) {
@@ -30,6 +32,7 @@ export function ProblemTableHead({ range, sort, onSort, grouped, day }: { range:
   return (
     <div className="lwp-tr lwp-th" role="row">
       <span className="lwp-c-title" role="columnheader">Problem</span>
+      {head("score", "Score", "lwp-c-score")}
       {head("findings", `Findings ${day ?? range}`, "lwp-c-find")}
       {grouped ? <span className="lwp-c-status" role="columnheader">Status</span> : head(null, "Status", "lwp-c-status")}
       {/* When the problem was last seen, never when a run last wrote or it started waiting (For you's clock). */}
@@ -61,8 +64,10 @@ export function ProblemTable({ sections, now, range, win, day, showProject, proj
   /** The act an open group's heading carries (Needs a new ask: ask again for all of them). */
   sectionAct?: (status: StatusKey, rows: ReadonlyArray<ProblemRow>) => ReactNode;
 }) {
+  // Under family headings a row does not repeat its family; listed by status or flat, it names it beneath.
+  const byFamily = sections.some((s) => s.key.startsWith("family:"));
   const one = (r: ProblemRow) => {
-    const row = <Row key={r.id} row={r} range={range} win={win} dayN={day ? countIn(r.issue, day.from, day.to) : null} age={r.seenAt ? ageShort(now - r.seenAt) : ""} project={showProject ? projectName(r.projectId) : ""} process={processOf?.(r) ?? ""} href={href(r.id)} open={open} />;
+    const row = <Row key={r.id} row={r} family={byFamily ? "" : r.score?.family?.name ?? ""} range={range} win={win} dayN={day ? countIn(r.issue, day.from, day.to) : null} age={r.seenAt ? ageShort(now - r.seenAt) : ""} project={showProject ? projectName(r.projectId) : ""} process={processOf?.(r) ?? ""} href={href(r.id)} open={open} />;
     const act = rowAct?.(r);
     // The act sits under the row's status, outside its link: a press acts, never opens the problem.
     return act ? <div key={r.id} className="lwp-rowbox">{row}<div className="lwp-tr lwp-row-act" data-line-row-act={r.id}><span className="lwp-row-act-c">{act}</span></div></div> : row;
@@ -84,15 +89,15 @@ export function ProblemTable({ sections, now, range, win, day, showProject, proj
   return (
     <div className="lwp-table" role="grid" aria-label="Problems">
       {sections.map((s) => (
-        <div key={s.status ?? "flat"} role="rowgroup" className="lwp-group" data-line-problem-group={s.status ?? "flat"} data-count={s.n}>
-          {s.status && (s.folded ? (
+        <div key={s.key} role="rowgroup" className="lwp-group" data-line-problem-group={s.key} data-count={s.n}>
+          {s.key !== "flat" && (s.folded && s.status ? (
             <button type="button" className="lwp-section" data-folded="" data-status={s.status} onClick={() => onStatus(s.status!)} data-line-problem-section={s.status}>
               <span>{s.label}</span><span className="lw-num">{s.n}</span><ChevronRight aria-hidden />
             </button>
           ) : (
-            <div className="lwp-section" role="row" data-status={s.status} data-line-problem-section={s.status}>
+            <div className="lwp-section" role="row" data-status={s.status ?? undefined} data-line-problem-section={s.key}>
               <span role="gridcell">{s.label}</span><span className="lw-num">{s.n}</span>
-              {sectionAct && <span className="lwp-section-act">{sectionAct(s.status!, s.rows)}</span>}
+              {sectionAct && s.status && <span className="lwp-section-act">{sectionAct(s.status, s.rows)}</span>}
             </div>
           ))}
           {!s.folded && (s.subs ? s.subs.map((sub) => (
@@ -126,12 +131,12 @@ export function ProblemTable({ sections, now, range, win, day, showProject, proj
   );
 }
 
-const Row = memo(function Row({ row: r, range, win, dayN, age, project, process, href, open }: { row: ProblemRow; range: OverviewRange; win: OverviewWindow; dayN: number | null; age: string; project: string; process: string; href: string; open: (id: string) => void }) {
+const Row = memo(function Row({ row: r, family, range, win, dayN, age, project, process, href, open }: { row: ProblemRow; family: string; range: OverviewRange; win: OverviewWindow; dayN: number | null; age: string; project: string; process: string; href: string; open: (id: string) => void }) {
   // Under a picked bar the cell is that day's count, with no arrow: the comparison is the window's, not the day's.
   const trend = dayN == null ? rowTrend(r) : null;
   const h = r.issue.history;
   const strip = useMemo(() => rowStrip(h, win), [h, win]);
-  const under = [r.issue.ref, process, project, r.dupOf && !r.foldedInto ? `same as ${r.dupOf}` : null, r.twins?.length ? `also ${r.twins.map((t) => t.issue.ref).filter(Boolean).join(", ")}` : null].filter(Boolean).join(" · ");
+  const under = [r.issue.ref, family, process, project, r.dupOf && !r.foldedInto ? `same as ${r.dupOf}` : null, r.twins?.length ? `also ${r.twins.map((t) => t.issue.ref).filter(Boolean).join(", ")}` : null].filter(Boolean).join(" · ");
   return (
     <a
       className="lwp-tr lwp-row"
@@ -150,6 +155,7 @@ const Row = memo(function Row({ row: r, range, win, dayN, age, project, process,
         <span className="lwp-title">{problemListName(r.issue)}</span>
         {under && <span className="lwp-under">{under}</span>}
       </span>
+      <span className="lwp-c-score" role="gridcell" data-band={r.score ? scoreBand(r.score.score) : undefined} title={r.score?.reason}>{r.score?.score ?? ""}</span>
       <span className="lwp-c-find" role="gridcell" data-trend={trend ?? undefined} title={r.before == null ? `${r.findings} in all` : `${r.before} in the ${range} before, ${r.findings} in all`}>
         <RowStrip strip={strip} words={stripWords(strip, h, range)} />
         <span className="lw-num">{dayN ?? r.inWindow}</span>

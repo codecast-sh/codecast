@@ -14,6 +14,7 @@ import type { ProblemSource } from "./stepRuns";
 import type { Overlap } from "./overlap";
 import { countIn, stripSig, type OverviewWindow } from "./problemsOverview";
 import { problemStand, STATUS_LABELS, STATUS_ORDER, type ProblemFacts, type ProblemStand, type StatusKey } from "./problemStatus";
+import { scoreOf, type ProblemScoreFacts } from "./problemScore";
 
 /** Where a problem stands, as a person acts on it. */
 export type ProblemStatus = "waiting" | "running" | "open" | "watching" | "closed";
@@ -210,6 +211,8 @@ export type ProblemRow = {
   hay: string;
   /** It is a problem with the line itself, about these steps (ProblemFacts aboutSteps). */
   aboutSteps: ReadonlyArray<string>;
+  /** Its score and family (tasks.cause.scored); null until the scoring pass reads it. */
+  score: ProblemScoreFacts | null;
 };
 
 export type ProblemRowsInput = {
@@ -252,6 +255,7 @@ export function problemRow(issue: LineIssue, input: ProblemRowsInput): ProblemRo
     dupOf: o && o.set.length > 1 && o.primary !== issue.id ? o.primaryRef : null,
     hay: [issue.title, issue.ref ?? "", input.projectName(projectId), ...from].join("\n").toLowerCase(),
     aboutSteps: facts.aboutSteps ?? [],
+    score: scoreOf(facts.task),
   };
 }
 
@@ -286,7 +290,11 @@ export type FoundFilter = "more" | { from: number; to: number } | null;
 
 /** What narrows the table: one status chip (null: All), only the fixes quiet since they reached production, the search,
  *  and a figure's or a bar's narrowing. */
-export type ProblemFilter = { status: StatusKey | null; quiet: boolean; q: string; found?: FoundFilter };
+/** `group`: the page's sections, by family (the default) or by status. */
+export type ProblemFilter = { status: StatusKey | null; quiet: boolean; q: string; found?: FoundFilter; group?: ProblemGroup };
+export type ProblemGroup = "family" | "status";
+export const PROBLEM_GROUPS: ReadonlyArray<ProblemGroup> = ["family", "status"];
+export const problemGroupOf = (v: string | null | undefined): ProblemGroup => (v === "status" ? "status" : "family");
 
 /** Findings of one row inside the picked bar. */
 const foundIn = (r: ProblemRow, f: Exclude<FoundFilter, "more" | null>) => countIn(r.issue, f.from, f.to);
@@ -340,14 +348,17 @@ export function emptyWays(counts: { all: number; by: Record<StatusKey, number> }
 
 // ── order and groups ─────────────────────────────────────────────────────────
 
-/** `null` is the page's own order: grouped by status, busiest first inside a group. A column sorts the whole list flat. */
-export type ProblemSort = "findings" | "last" | null;
-export const isProblemSort = (v: string | null | undefined): v is Exclude<ProblemSort, null> => v === "findings" || v === "last";
+/** `null` is the page's own order: grouped (by family, or by status), best score first inside a group. A column sorts
+ *  the whole list flat. */
+export type ProblemSort = "score" | "findings" | "last" | null;
+export const isProblemSort = (v: string | null | undefined): v is Exclude<ProblemSort, null> => v === "score" || v === "findings" || v === "last";
 
 const byRef = (a: ProblemRow, b: ProblemRow) => (a.issue.ref ?? a.id).localeCompare(b.issue.ref ?? b.id);
 const byFindings = (a: ProblemRow, b: ProblemRow) => b.inWindow - a.inWindow || b.findings - a.findings || b.lastAt - a.lastAt || byRef(a, b);
 const byLast = (a: ProblemRow, b: ProblemRow) => b.seenAt - a.seenAt || b.lastAt - a.lastAt || byRef(a, b);
-const sorter = (s: ProblemSort) => (s === "last" ? byLast : byFindings);
+/** Best score first; an unscored problem after every scored one, busiest first. */
+const byScore = (a: ProblemRow, b: ProblemRow) => (b.score?.score ?? -1) - (a.score?.score ?? -1) || byFindings(a, b);
+const sorter = (s: ProblemSort) => (s === "last" ? byLast : s === "findings" ? byFindings : byScore);
 
 /** Rows under one heading inside a group: a failure cause, or a project's problems not started. */
 export type ProblemSub = {
@@ -386,7 +397,9 @@ export function lineProblemsAt(rows: ReadonlyArray<ProblemRow>, steps: ReadonlyS
 }
 
 export type ProblemSection = {
-  /** Null for a flat list under a column sort. */
+  /** The section's own key: its status, its family's key, or "flat". */
+  key: string;
+  /** Null for a flat list under a column sort, and for a family. */
   status: StatusKey | null;
   label: string;
   n: number;
@@ -452,7 +465,8 @@ export function problemSections(rows: ReadonlyArray<ProblemRow>, f: ProblemFilte
   // A picked bar lists its problems busiest that day first, unless a column sorts.
   const day = f.found && f.found !== "more" ? f.found : null;
   const cmp = day && !sort ? (a: ProblemRow, b: ProblemRow) => foundIn(b, day) - foundIn(a, day) || byFindings(a, b) : sorter(sort);
-  if (!f.status && sort) return kept.length ? [{ status: null, label: "", n: kept.length, folded: false, subs: null, rows: [...kept].sort(cmp) }] : [];
+  if (!f.status && sort) return kept.length ? [{ key: "flat", status: null, label: "", n: kept.length, folded: false, subs: null, rows: [...kept].sort(cmp) }] : [];
+  if (f.group === "family" && !(f.status && SUBBED.has(f.status))) return familySections(kept, f, cmp);
   const out: ProblemSection[] = [];
   for (const status of STATUS_ORDER) {
     const mine = kept.filter((r) => r.stand.status === status).sort(cmp);
@@ -460,8 +474,33 @@ export function problemSections(rows: ReadonlyArray<ProblemRow>, f: ProblemFilte
     const folded = !f.status && !f.q.trim() && !f.found && FOLDED_IN_ALL.has(status);
     // A sub-group is drawn where its heading carries the act: Failed always, Not started when it is the page.
     const subs = status === "failed" || (status === "notstarted" && f.status === "notstarted") ? subsOf(status, mine, projectName, rows, startOrder) : null;
-    out.push({ status, label: STATUS_LABELS[status], n: mine.length, folded, subs, rows: subs ? subs.flatMap((s) => s.rows) : mine });
+    out.push({ key: status, status, label: STATUS_LABELS[status], n: mine.length, folded, subs, rows: subs ? subs.flatMap((s) => s.rows) : mine });
   }
+  return out;
+}
+
+/** The statuses whose own headings carry an act (Failed by cause, Not started by project): under their chip the page
+ *  keeps them, whatever the grouping. */
+const SUBBED: ReadonlySet<StatusKey> = new Set(["failed", "notstarted"]);
+
+/** By family: one section per family, the family with the best score first, each best score first; problems no family
+ *  holds yet after them, then Closed folded to its heading, as under status. */
+function familySections(kept: ReadonlyArray<ProblemRow>, f: ProblemFilter, cmp: (a: ProblemRow, b: ProblemRow) => number): ProblemSection[] {
+  const closed = kept.filter((r) => r.stand.status === "closed");
+  const by = new Map<string, ProblemSection>();
+  for (const r of kept) {
+    if (r.stand.status === "closed" && !f.status) continue;
+    const fam = r.score?.family;
+    const key = fam ? `family:${fam.key}` : r.score ? "family:none" : "family:unscored";
+    const label = fam?.name ?? (r.score ? "No family yet" : "Not scored yet");
+    const sec = by.get(key) ?? by.set(key, { key, status: null, label, n: 0, folded: false, subs: null, rows: [] }).get(key)!;
+    sec.rows.push(r);
+    sec.n++;
+  }
+  const top = (s: ProblemSection) => (s.key === "family:unscored" ? -2 : s.key === "family:none" ? -1 : Math.max(...s.rows.map((r) => r.score?.score ?? 0)));
+  const out = [...by.values()].map((s) => ({ ...s, rows: s.rows.sort(cmp) })).sort((a, b) => top(b) - top(a) || b.n - a.n || a.label.localeCompare(b.label));
+  const folded = !f.q.trim() && !f.found;
+  if (closed.length && !f.status) out.push({ key: "closed", status: "closed", label: STATUS_LABELS.closed, n: closed.length, folded, subs: null, rows: closed.slice().sort(cmp) });
   return out;
 }
 
@@ -472,7 +511,7 @@ export const shownOrder = (sections: ReadonlyArray<ProblemSection>): string[] =>
 
 /** Everything a row draws, so a model rebuild keeps the rows that did not move. */
 export const problemRowSig = (r: ProblemRow): string =>
-  [r.id, r.issue.title, r.issue.ref ?? "", r.stand.status, r.stand.phrase, r.stand.cause?.key ?? "", r.stand.quiet ? 1 : 0, r.stand.ready ? 1 : 0, r.stand.act ?? "", r.stand.gate ?? "", r.series ? 1 : 0, r.projectId ?? "", r.inWindow, r.before ?? "", r.seenAt, r.dupOf ?? "", r.hay.length, r.aboutSteps.join(","), r.foldedInto ?? "", (r.twins ?? []).map((t) => t.id).join(","), stripSig(r.issue.history)].join("|");
+  [r.id, r.issue.title, r.issue.ref ?? "", r.stand.status, r.stand.phrase, r.stand.cause?.key ?? "", r.stand.quiet ? 1 : 0, r.stand.ready ? 1 : 0, r.stand.act ?? "", r.stand.gate ?? "", r.series ? 1 : 0, r.projectId ?? "", r.inWindow, r.before ?? "", r.seenAt, r.dupOf ?? "", r.hay.length, r.aboutSteps.join(","), r.foldedInto ?? "", (r.twins ?? []).map((t) => t.id).join(","), r.score ? `${r.score.score}:${r.score.family?.key ?? ""}:${r.score.family?.name ?? ""}` : "", stripSig(r.issue.history)].join("|");
 
 // ── what the workspace counts ────────────────────────────────────────────────
 

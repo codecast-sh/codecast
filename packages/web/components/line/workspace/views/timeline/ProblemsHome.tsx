@@ -19,7 +19,7 @@ import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
 import { BEFORE_WORDS, OVERVIEW_RANGES, DEFAULT_RANGE } from "../../../../../lib/line/problemsOverview";
 import { bucketWords } from "../../../../../lib/line/timeline";
 import { gateOpenWords, STATUS_LABELS, STATUS_ORDER, type StatusKey } from "../../../../../lib/line/problemStatus";
-import { emptyWays, problemListName, type ProblemSort, type ProblemSub } from "../../../../../lib/line/problemTable";
+import { emptyWays, PROBLEM_GROUPS, problemListName, type ProblemSort, type ProblemSub } from "../../../../../lib/line/problemTable";
 import { StartTheseAgain } from "./StartTheseAgain";
 import { LineStartControl } from "../../../../consequential/lineStart";
 import { useLineAdmission } from "../../../map/useLineAdmission";
@@ -234,6 +234,11 @@ export function ProblemsHome({ list, workspace, selection, select, href, drawerO
                 {found === "more" ? `Found more than ${BEFORE_WORDS[range]}` : `Found ${bucketWords(found.from, list.win.step)}`}<X aria-hidden />
               </button>
             )}
+          </div>
+          <div className="lw-seg lwp-group-pick" role="tablist" aria-label="Group the problems by">
+            {PROBLEM_GROUPS.map((g) => (
+              <button key={g} type="button" role="tab" aria-selected={filter.group === g} onClick={() => select({ group: g === "family" ? null : g, sort: null }, undefined, { replace: true })} data-line-problem-group-by={g}>{g === "family" ? "By family" : "By status"}</button>
+            ))}
           </div>
           <label className="lwp-search">
             <Search aria-hidden />

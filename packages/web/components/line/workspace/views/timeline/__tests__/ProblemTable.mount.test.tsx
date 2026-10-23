@@ -62,7 +62,7 @@ async function mount() {
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(() => root.render(
-    <ProblemTable sections={[{ status: null, label: "", n: rows.length, rows } as never]} now={NOW} range="7d" win={win} showProject={false}
+    <ProblemTable sections={[{ key: "flat", status: null, label: "", n: rows.length, rows } as never]} now={NOW} range="7d" win={win} showProject={false}
       projectName={() => ""} href={(id) => `/line?case=${id}`} open={() => {}} onStatus={() => {}} />,
   ));
   return { container, unmount: () => act(() => root.unmount()) };

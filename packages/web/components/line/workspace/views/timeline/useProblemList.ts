@@ -21,7 +21,7 @@ import { landingOutput, newestRuns } from "../../../../../lib/line/problemPage";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import { inStartOrder, type RankTask } from "../../../../../lib/line/lineStartOrder";
 import {
-  foldTwins, isProblemSort, problemRow, lineStepsOf, lessonOnlyIds, problemOrder, problemRowSig, problemSections, searchProblems, shownOrder, statusCounts,
+  foldTwins, isProblemSort, problemGroupOf, problemRow, lineStepsOf, lessonOnlyIds, problemOrder, problemRowSig, problemSections, searchProblems, shownOrder, statusCounts,
   type FoundFilter, type ProblemFilter, type ProblemRow, type ProblemSort,
 } from "../../../../../lib/line/problemTable";
 import type { LineSelection } from "../../../../../lib/line/lineWorkspaceUrl";
@@ -161,7 +161,8 @@ export function useProblemRows(model: LineModel, workspace: LineWorkspace, selec
   const bar = selection.found && selection.found !== "more" ? bucketAt(win, Number(selection.found)) : null;
   const found: FoundFilter = selection.found === "more" ? "more" : bar;
   const foundKey = found === "more" ? "more" : found ? String(found.from) : "";
-  const filter: ProblemFilter = useMemo(() => ({ status, quiet, q, found }), [status, quiet, q, foundKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const group = problemGroupOf(selection.group);
+  const filter: ProblemFilter = useMemo(() => ({ status, quiet, q, found, group }), [status, quiet, q, foundKey, group]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const projectName = useMemo(() => projectNamer(workspace.projects), [workspace.projects]);
 

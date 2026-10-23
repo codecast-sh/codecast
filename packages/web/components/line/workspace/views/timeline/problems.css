@@ -43,16 +43,23 @@
 .lwp-none { display: grid; justify-items: center; gap: 8px; }
 .lwp-none-ways { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
 
-/* ── the table: four columns ─────────────────────────────────────────── */
+/* ── the table: five columns ─────────────────────────────────────────── */
 
 .lwp-table { font-size: var(--lw-fs-base); min-width: 0; padding-bottom: 64px; }
-.lwp-tr { display: grid; align-items: start; column-gap: var(--lw-s5); padding: 0 var(--lw-s5); grid-template-columns: minmax(0, 1fr) 236px minmax(150px, 230px) 76px; }
+.lwp-tr { display: grid; align-items: start; column-gap: var(--lw-s5); padding: 0 var(--lw-s5); grid-template-columns: minmax(0, 1fr) 48px 236px minmax(150px, 230px) 76px; }
 .lwp-th { align-items: center; height: 28px; border-bottom: 1px solid var(--lw-rule); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-weight: 500; white-space: nowrap; }
 .lwp-th button { all: unset; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; border-radius: 4px; }
 .lwp-th button:hover, .lwp-th button[data-on] { color: var(--lw-ink); }
 .lwp-th button:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: 2px; }
 .lwp-sort { width: 11px; height: 11px; }
-.lwp-th .lwp-c-find, .lwp-th .lwp-c-last { display: flex; justify-content: flex-end; }
+.lwp-th .lwp-c-find, .lwp-th .lwp-c-last, .lwp-th .lwp-c-score { display: flex; justify-content: flex-end; }
+/* A problem's score: the value of fixing it next, the order the line takes problems in. */
+.lwp-row .lwp-c-score { text-align: right; font-size: var(--lw-fs-sm); line-height: 1.5; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--lw-ink-3); }
+.lwp-row .lwp-c-score[data-band="high"] { color: var(--lw-ink); }
+.lwp-row .lwp-c-score[data-band="mid"] { color: var(--lw-ink-2); }
+.lwp-row .lwp-c-score[data-band="low"] { font-weight: 500; }
+/* The page's grouping: by family or by status. */
+.lwp-group-pick { display: inline-flex; margin-left: auto; }
 
 .lwp-section {
   all: unset; box-sizing: border-box; display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 18px var(--lw-s5) 6px;
@@ -128,14 +135,15 @@ button.lwp-section svg { width: 13px; height: 13px; margin-left: auto; align-sel
 @container lwp (max-width: 760px) {
   .lwp-top { flex-wrap: wrap; padding: var(--lw-s4) var(--lw-s3) var(--lw-s2); }
   .lwp-bar { flex-wrap: wrap; padding: var(--lw-s3) var(--lw-s3) var(--lw-s2); }
-  .lwp-tr { grid-template-columns: minmax(0, 1fr) 52px 40px; padding: 0 var(--lw-s3); column-gap: var(--lw-s3); }
+  .lwp-tr { grid-template-columns: minmax(0, 1fr) 30px 52px 40px; padding: 0 var(--lw-s3); column-gap: var(--lw-s3); }
   .lwp-th .lwp-c-status { display: none; }
   .lwp-c-find > svg.lwp-strip { display: none; }
   /* The status drops under the title, so a narrow pane still says where each problem stands. */
   .lwp-row .lwp-c-status { grid-column: 1; grid-row: 2; }
   .lwp-row .lwp-c-title { grid-column: 1; grid-row: 1; }
-  .lwp-row .lwp-c-find { grid-column: 2; grid-row: 1; }
-  .lwp-row .lwp-c-last { grid-column: 3; grid-row: 1; }
+  .lwp-row .lwp-c-score { grid-column: 2; grid-row: 1; }
+  .lwp-row .lwp-c-find { grid-column: 3; grid-row: 1; }
+  .lwp-row .lwp-c-last { grid-column: 4; grid-row: 1; }
   .lwp-section, .lwp-sub-h { padding-left: var(--lw-s3); padding-right: var(--lw-s3); }
   .lwp-sub-h { flex-wrap: wrap; }
 }

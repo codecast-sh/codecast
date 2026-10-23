@@ -78,3 +78,51 @@ a.flo-count:hover { border-color: var(--lw-ink-3); }
 .flo-count[data-quiet] { cursor: default; }
 .flo .flv-head { margin-top: 6px; }
 .flo .flv-head .flv-h { margin: 0; }
+
+/* The library (flows doc of Oct 23): the live flow's panel, the tree of flows with each variant's changes, the
+   segments shelf and the flows sessions used. */
+.fll-live { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 16px; border: 1px solid var(--lw-rule); border-radius: 12px; background: var(--lw-card); }
+.fll-live[data-on] { border-color: color-mix(in srgb, var(--sol-green) 40%, var(--lw-rule)); }
+.fll-live-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.fll-live-k { font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--lw-ink-3); }
+.fll-live[data-on] .fll-live-k { color: var(--sol-green); }
+.fll-live-name { all: unset; cursor: pointer; font-size: var(--lw-fs-lg); font-weight: 700; color: var(--lw-ink); }
+.fll-live-name:hover { text-decoration: underline; }
+.fll-switch { cursor: pointer; background: none; }
+.fll-live-figs { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fll-live-figs b { color: var(--lw-ink); font-weight: 700; }
+.fll-live-wait { margin: 0; font-size: var(--lw-fs-sm); color: var(--sol-yellow); }
+.fll-live-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 24px; align-items: start; }
+.fll-h-note { font-weight: 500; color: var(--lw-ink-3); }
+.fll-queue td { padding-top: 6px; padding-bottom: 6px; }
+.fll-q-name a { display: inline-flex; gap: 8px; align-items: baseline; color: var(--lw-ink); text-decoration: none; }
+.fll-q-name a:hover { text-decoration: underline; }
+.fll-q-ref { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-variant-numeric: tabular-nums; }
+.fll-score { font-variant-numeric: tabular-nums; color: var(--lw-ink-3); }
+.fll-score[data-band="high"] { color: var(--lw-ink); }
+.fll-score[data-band="mid"] { color: var(--lw-ink-2); }
+.fll-more { all: unset; cursor: pointer; margin-top: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); }
+.fll-more:hover { color: var(--lw-ink); text-decoration: underline; }
+.fll-running { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.fll-run { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 8px; padding: 5px 8px; border-radius: 7px; text-decoration: none; font-size: var(--lw-fs-sm); color: var(--lw-ink-2); }
+.fll-run:hover { background: var(--lw-card-2); color: var(--lw-ink); }
+.fll-run-ref { font-variant-numeric: tabular-nums; color: var(--lw-ink); }
+.fll-run-step { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fll-run-age { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.fll-tree, .fll-branch { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.fll-branch { margin-left: 18px; padding-left: 10px; border-left: 1px solid var(--lw-rule); }
+.fll-row .flv-row-name { display: inline-flex; align-items: baseline; gap: 8px; }
+.fll-tag { font-size: var(--lw-fs-2xs); font-weight: 600; padding: 0 6px; border-radius: 999px; border: 1px solid var(--lw-rule); color: var(--lw-ink-3); }
+.fll-tag[data-tag="spine"] { color: var(--sol-green); border-color: color-mix(in srgb, var(--sol-green) 45%, transparent); }
+.fll-changes { grid-column: 1; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.fll-ch { display: inline-flex; align-items: baseline; gap: 5px; font-size: var(--lw-fs-2xs); padding: 1px 7px; border-radius: 6px; background: var(--lw-card-2); color: var(--lw-ink-2); }
+.fll-ch i { font-style: normal; color: var(--lw-ink-3); }
+.fll-ch[data-ch="added"] { color: var(--sol-green); }
+.fll-ch[data-ch="removed"] { color: var(--sol-red); }
+.fll-ch[data-ch="serves"] { color: var(--sol-blue); }
+.fll-shelf { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.fll-seg { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 11px; border-radius: 8px; border: 1px solid var(--lw-rule); background: var(--lw-card); font-size: var(--lw-fs-sm); color: var(--lw-ink); }
+.fll-seg span { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.fll-seg:hover { border-color: var(--lw-ink-3); }
+.fll-sessions .flh-name { display: flex; flex-direction: column; gap: 1px; }
+@container (max-width: 760px) { .fll-live-cols { grid-template-columns: minmax(0, 1fr); } }
