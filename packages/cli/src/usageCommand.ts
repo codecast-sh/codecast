@@ -25,7 +25,7 @@ import {
   type CcUsage,
   type RecoveryMode,
 } from "@codecast/shared/contracts";
-import { activeAccountSummary, launchProfileName, listProfiles, readActiveCredential, readUsageCache } from "./ccAccounts.js";
+import { accountTokenInfo, activeAccountSummary, launchProfileName, listProfiles, readActiveCredential, readUsageCache } from "./ccAccounts.js";
 import type { UsageRetryState } from "./usageRetry.js";
 
 export interface UsageProfile {
@@ -37,6 +37,12 @@ export interface UsageProfile {
   // failures). Local to this machine — the heartbeat can't carry it, see the
   // UsageCache comment in ccAccounts.ts.
   retry?: UsageRetryState;
+  // What decides whether auto-switch may land on it (fallbackProfiles), so the
+  // accounts this command counts as headroom are the ones auto-switch would pick.
+  login_expired_at?: number;
+  access_refused_at?: number;
+  setup_token?: { expires_at: number } | null;
+  reserved_for?: string;
 }
 
 export interface RecoveryFlags {
@@ -100,6 +106,10 @@ export function loadLocalUsageProfiles(credential: string | null = readActiveCre
     active: launch ? p.name === launch : p.active,
     usage: cache[p.uuid || p.email || ""],
     retry: retries?.[p.uuid || p.email || ""],
+    login_expired_at: p.login_expired_at,
+    access_refused_at: p.access_refused_at,
+    setup_token: accountTokenInfo(p.name),
+    reserved_for: p.reserved_for,
   }));
   const active = activeAccountSummary(credential);
   const activeKey = active?.uuid || active?.email;
