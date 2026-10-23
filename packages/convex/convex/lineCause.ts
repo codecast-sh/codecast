@@ -19,8 +19,8 @@ import { parseWorkspaceKey } from "./lib/accessKeys";
 import { allRolesInBoundary, userCanAccessRole } from "./lib/orgAccess";
 import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { commitSignal, normalizeSignal } from "./signals";
-import { startLineRun } from "./orgLine";
-import { cancelCore } from "./workflow_runs";
+import { admitRoleRun, requeueForSweep, startLineRun } from "./orgLine";
+import { cancelCore, liveRunRefusal } from "./workflow_runs";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 
 export const LINE_SUBJECT_PREFIX = "line:";
@@ -84,9 +84,14 @@ export async function startLineCauseCore(ctx: any, userId: Id<"users">, taskId: 
   if (role.status !== "active") throw new ConvexError(`@${role.handle} is paused, so its line starts nothing`);
   if (!(await userCanAccessRole(ctx, userId, role))) throw new ConvexError("You cannot start this project's line");
   await endStalledRun(ctx, task);
-  // createRunCore refuses a cause that already holds a live run.
-  const runId = await startLineRun(ctx, role, task);
-  return { run_id: runId, role_handle: role.handle };
+  // Started by hand, the run takes the sweep's admission (LE6): a free slot where the role's runs work, else the
+  // problem goes back to the queue and the sweep starts it in rank order. A live run refuses either way.
+  const refusal = await liveRunRefusal(ctx, await ctx.db.get(taskId));
+  if (refusal) throw new ConvexError(refusal);
+  const room = await admitRoleRun(ctx, role, Date.now());
+  if ("waiting" in room) return { run_id: null, role_handle: role.handle, queued: await requeueForSweep(ctx, role, task, userId, Date.now(), room.waiting) };
+  const runId = await startLineRun(ctx, role, task, Date.now(), room.place);
+  return { run_id: runId as Id<"workflow_runs"> | null, role_handle: role.handle };
 }
 
 /** A runner picks an answered card up within seconds; a run at the card gate

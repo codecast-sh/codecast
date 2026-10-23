@@ -32,6 +32,24 @@ export function registerLineCommand(program: Command, deps: GroupDeps): void {
       if (options.json) console.log(JSON.stringify({ since: options.since, traces, by_role: rollupByRole(traces) }, null, 2));
       else console.log(formatFixloop(traces));
     });
+  // A problem whose run failed or was cancelled, back in the line's queue (the-line-end-to-end.md LE6).
+  line
+    .command("requeue <tasks...>")
+    .description("Put problems whose run failed or was cancelled back in the line's queue: open, unblocked, with no run, so the sweep starts each in rank order on a machine with a free slot (cast workflow resume continues a run on its own branch instead)")
+    .option("--json", "Machine-readable output")
+    .action(async (tasks: string[], options: { json?: boolean }) => {
+      const out: Array<{ task: string; queued?: string; error?: string }> = [];
+      for (const task of tasks) {
+        try {
+          out.push(await apiPost(deps, "/cli/line/requeue", { task }, { exitOnError: false, describeError: cliErrorMessage }));
+        } catch (e) {
+          out.push({ task, error: (e as Error).message });
+        }
+      }
+      if (options.json) console.log(JSON.stringify(out, null, 2));
+      else for (const r of out) console.log(r.error ? `${r.task}: ${r.error}` : r.queued);
+      if (out.some((r) => r.error)) process.exitCode = 1;
+    });
   line
     .command("merge")
     .description("Merge an approved run's branch into the default branch when the role's line allows it (the shipped line's merge node)")

@@ -20943,7 +20943,7 @@ workflow
   .option("--plan <short_id>", "Bind workflow to a plan (injects plan context)")
   .option("--review-backend <agent>", "Agent for the review station (claude, codex, ...)")
   .option("--force", "Start even though the task already has a live run (one problem holds one run)")
-  .option("--detach", "Hand the run to this machine's daemon and return at once with its id")
+  .option("--detach", "Hand the run to a daemon and return at once with its id: this machine's, or for a problem whose role's line has a pool of machines, the one with the most free slots (with none free, the problem waits in the line's queue)")
   .option("--json", "With --detach: print {run_id, task} as JSON")
   .action(async (fileArg: string | undefined, options: any) => {
     const { parseWorkflowSource } = await import("./workflow/parser.js");
@@ -21077,9 +21077,14 @@ workflow
           ...(options.force ? { force: true } : {}),
           ...(options.detach ? { detach: true, run_on_device: deviceId() } : {}),
         });
+        if (createResult?.queued) { // the role's machines are full: nothing starts here, and the problem waits in the line's queue
+          console.log(options.json ? JSON.stringify({ run_id: null, task: runOpts.taskId ?? null, queued: createResult.queued }) : createResult.queued);
+          return;
+        }
         if (createResult?.run_id) {
           runOpts.runId = createResult.run_id;
           runOpts.runSession = createResult.primary_conversation_id;
+          runOpts.runnerDevice = createResult.runner_device;
           runOpts.spawnerSession ??= createResult.spawner_conversation_id || undefined;
         }
       } catch (err: any) {
@@ -21095,7 +21100,7 @@ workflow
       // The daemon executes it (`cast workflow run-daemon`); nothing runs here.
       if (!runOpts.runId) { console.error("--detach needs a registered run: sign in, and leave out --dry-run"); process.exit(1); }
       if (options.json) console.log(JSON.stringify({ run_id: runOpts.runId, task: runOpts.taskId ?? null }));
-      else console.log(`Run ${runOpts.runId} handed to this machine's daemon${runOpts.taskId ? ` for ${runOpts.taskId}` : ""}`);
+      else console.log(`Run ${runOpts.runId} handed to ${runOpts.runnerDevice ? `the line's machine ${runOpts.runnerDevice}` : "this machine's daemon"}${runOpts.taskId ? ` for ${runOpts.taskId}` : ""}`);
       return;
     }
 

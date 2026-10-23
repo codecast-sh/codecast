@@ -23,6 +23,7 @@ import { runSuperseded } from "./lib/superseded";
 import { resolveOwnerDevice } from "./devices";
 import { openRunPrice } from "./lib/trialRunPrices";
 import { isLineRunSlug, lineVersionFor } from "./workflows";
+import { admitRoleRun, requeueForSweep } from "./orgLine";
 
 type Ctx = { db: any };
 
@@ -760,6 +761,21 @@ export const createFromCli = mutation({
     // A line run: the shipped line or a role's, or a line version (one that serves a scenario).
     const lineRun = isLineRunSlug(args.workflow_name) || !!((workflowDocId ? await ctx.db.get(workflowDocId) : null) as any)?.serves?.length;
 
+    // A detached line run on a problem whose role's runs work on a pool of
+    // machines takes the sweep's admission (the-line-end-to-end.md LE6): the
+    // pool machine with the most free runs, in its checkout, never the asking
+    // machine. With the pool full nothing starts, and the problem goes back to
+    // the line's queue for the sweep to start in rank order.
+    const lead = args.detach && lineRun && taskRow ? await projectLeadRole(ctx, taskRow) : null;
+    const room = lead ? await admitRoleRun(ctx, lead, now) : null;
+    const pooled = room?.pooled && room.runner === String(userId) ? room : null;
+    if (pooled && "waiting" in pooled) {
+      const refusal = await liveRunRefusal(ctx, taskRow, args.force);
+      if (refusal) throw new Error(refusal);
+      return { run_id: null, queued: await requeueForSweep(ctx, lead, taskRow, userId, now, pooled.waiting), primary_conversation_id: null, spawner_conversation_id: null };
+    }
+    const place = pooled && "place" in pooled ? pooled.place : undefined;
+
     const { run_id, primary_conversation_id } = await createRunCore(ctx, userId, {
       workflow_name: workflowName,
       workflow_goal: args.workflow_goal,
@@ -767,16 +783,19 @@ export const createFromCli = mutation({
       task: taskRow,
       plan: planRow,
       goal_override: args.goal_override,
-      project_path: args.project_path,
+      project_path: place?.project_path ?? args.project_path,
       spawner_conversation_id: spawner?._id,
+      ...(place ? { org_role_id: lead._id } : {}),
       force: args.force,
       fresh_branch: args.detach && lineRun,
       now,
     });
-    if (args.detach) await queueRunOnDaemon(ctx, userId, run_id, { device: args.run_on_device, ...(version ? { slug: version.slug } : {}), now });
+    // A placed run names its machine from the start, so the pool counts it there before a runner claims it.
+    if (place) await ctx.db.patch(run_id, { runner_device: place.device });
+    if (args.detach) await queueRunOnDaemon(ctx, userId, run_id, { device: place?.device ?? args.run_on_device, ...(version ? { slug: version.slug } : {}), now });
     // The session the run speaks as, resolved here when the caller had none,
     // so a runner in the foreground asks its failure decisions through it.
-    return { run_id, primary_conversation_id, spawner_conversation_id: spawner?._id ?? null };
+    return { run_id, primary_conversation_id, spawner_conversation_id: spawner?._id ?? null, ...(place ? { runner_device: place.device } : {}) };
   },
 });
 

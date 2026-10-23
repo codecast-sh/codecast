@@ -4152,6 +4152,7 @@ cliRoute("/cli/role/line/set", async (ctx, body) => ctx.runMutation(api.orgRoles
 cliRoute("/cli/role/line/merge", async (ctx, body) => ctx.runMutation(api.orgLineMerge.setLineMerge, body));
 cliRoute("/cli/line/merge/check", async (ctx, body) => ctx.runQuery(api.orgLineMerge.check, body));
 cliRoute("/cli/line/merge/record", async (ctx, body) => ctx.runMutation(api.orgLineMerge.record, body));
+cliRoute("/cli/line/requeue", async (ctx, body) => ctx.runMutation(api.orgLine.requeueFromCli, body));
 // The line's deploy stage (deploys.md DP2): what waits to go out, one deploy that sends it, and the deploy path's reports.
 cliRoute("/cli/line/deploy/stage", async (ctx, body) => ctx.runQuery(api.deploys.stage, body));
 cliRoute("/cli/line/deploy/request", async (ctx, body) => ctx.runMutation(api.deploys.request, body));

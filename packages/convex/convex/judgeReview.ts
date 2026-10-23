@@ -226,8 +226,9 @@ async function startDiagnosis(ctx: any, finding: Doc<"signals">, now: number, wa
   }
   const room = await admitRoleRun(ctx, place.role, now, loads);
   if ("waiting" in room) {
-    waits?.set(project, room.waiting);
-    const next = { ...review, waiting_on: room.waiting };
+    const waiting_on = `${room.waiting}; the diagnosis starts when one finishes.`;
+    waits?.set(project, waiting_on);
+    const next = { ...review, waiting_on };
     if (next.waiting_on !== review.waiting_on) await ctx.db.patch(finding._id, { judge_review: next });
     return next;
   }

@@ -512,6 +512,70 @@ describe("orgLine admission (LE6)", () => {
       expect(await startPlanned(ctx, next, NOW)).toBeNull();
     });
 
+    // A failed problem started again by hand (cast workflow run --task --detach, Start a fix): the sweep's admission, never the asking machine.
+    const failed = (n: number) => cause({ _id: `tasks_c${n}`, short_id: `ct-c${n}`, status: "in_progress", execution_status: "blocked", execution_concerns: "Dissolve killed it", workflow_run_id: `workflow_runs_dead${n}`, created_at: NOW - 10_000 + n });
+    const dead = (n: number) => ({ _id: `workflow_runs_dead${n}`, user_id: HOST, status: "failed", org_role_id: ROLE, task_id: `tasks_c${n}`, runner_device: "dev-laptop", node_statuses: [] });
+    const TOKEN = "pool-token";
+    const handStart = async (devices: any[], runs: any[] = []) => {
+      const { hashToken } = await import("./apiTokens");
+      const f = fixtures({ role: caps({ hands_per_day: 100 }), extra: { initiatives, tasks: [failed(0), failed(1)], devices, workflow_runs: [dead(0), dead(1), ...runs], api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(TOKEN) }] } });
+      const { createFromCli } = await import("./workflow_runs");
+      const run = (short: string) => (createFromCli as any)._handler(f.ctx, { api_token: TOKEN, workflow_name: "line", task_id: short, project_path: "/Users/me/growth", detach: true, run_on_device: "dev-laptop" });
+      return { ...f, run };
+    };
+
+    test("a detached run started by hand goes to the pool host with the most free slots, in its checkout", async () => {
+      const { tables, run } = await handStart([laptop, host("h1", 1), host("h2", 2)]);
+      const out = await run("ct-c0");
+      expect(out).toMatchObject({ runner_device: "h2" });
+      const started = tables.workflow_runs.find((r) => r._id === out.run_id)!;
+      expect(started).toMatchObject({ runner_device: "h2", project_path: "/home/ubuntu/h2/growth", org_role_id: ROLE, task_id: "tasks_c0" });
+      expect(tables.daemon_commands.at(-1)!.target_device_id).toBe("h2");
+      expect(tables.tasks.find((t) => t._id === "tasks_c0")).toMatchObject({ status: "in_progress", workflow_run_id: out.run_id });
+    });
+
+    test("with the pool full, a run started by hand starts nothing and the problem waits in the queue for the sweep", async () => {
+      const { ctx, tables, run } = await handStart([laptop, host("h1", 1)], working(1, { runner_device: "h1" }));
+      const out = await run("ct-c0");
+      expect(out.run_id).toBeNull();
+      expect(out.queued).toBe("1 run is working on @growth's machines, so ct-c0 is back in the line's queue; @growth's sweep starts it in rank order when a run finishes.");
+      expect(tables.workflow_runs.filter((r) => r.task_id === "tasks_c0")).toHaveLength(1);
+      expect(tables.daemon_commands).toHaveLength(0);
+      const t = tables.tasks.find((r) => r._id === "tasks_c0")!;
+      expect([t.status, t.workflow_run_id, t.execution_status, t.execution_concerns]).toEqual(["open", undefined, undefined, undefined]);
+      // The pool frees up: the sweep starts it on the host.
+      tables.workflow_runs.find((r) => r._id === "workflow_runs_w0")!.status = "completed";
+      const next = await sweepCore(ctx, NOW);
+      expect(next.started).toEqual([expect.objectContaining({ task_id: "tasks_c0", place: { device: "h1", project_path: "/home/ubuntu/h1/growth" } })]);
+    });
+
+    test("Start a fix on the web takes the same admission", async () => {
+      const { startLineCauseCore } = await import("./lineCause");
+      const free = await handStart([laptop, host("h1", 1)]);
+      expect(await startLineCauseCore(free.ctx, HOST as any, "tasks_c0" as any)).toMatchObject({ role_handle: "growth" });
+      expect(free.tables.workflow_runs.find((r) => r.task_id === "tasks_c0" && r.status === "pending")).toMatchObject({ runner_device: "h1", project_path: "/home/ubuntu/h1/growth" });
+      const full = await handStart([laptop, host("h1", 1)], working(1, { runner_device: "h1" }));
+      const out = await startLineCauseCore(full.ctx, HOST as any, "tasks_c1" as any);
+      expect(out).toMatchObject({ run_id: null, queued: expect.stringContaining("ct-c1 is back in the line's queue") });
+      expect(full.tables.tasks.find((t) => t._id === "tasks_c1")!.status).toBe("open");
+    });
+
+    test("cast line requeue puts a failed problem back for the sweep; a live, closed or trial problem is refused", async () => {
+      const { requeueCore } = await import("./orgLine");
+      const { ctx, tables } = await handStart([laptop, host("h1", 2)]);
+      expect(await requeueCore(ctx, HOST as any, "ct-c0", NOW)).toEqual({ task: "ct-c0", queued: "ct-c0 is back in the line's queue; @growth's sweep starts it in rank order." });
+      const t = tables.tasks.find((r) => r._id === "tasks_c0")!;
+      expect([t.status, t.workflow_run_id, t.execution_status]).toEqual(["open", undefined, undefined]);
+      // The dead run stays on its task's run list.
+      expect(tables.workflow_runs.find((r) => r._id === "workflow_runs_dead0")!.task_id).toBe("tasks_c0");
+      tables.workflow_runs.find((r) => r._id === "workflow_runs_dead1")!.status = "running";
+      await expect(requeueCore(ctx, HOST as any, "ct-c1", NOW)).rejects.toThrow(/is running: cancel it/);
+      tables.tasks.find((r) => r._id === "tasks_c1")!.status = "done";
+      await expect(requeueCore(ctx, HOST as any, "ct-c1", NOW)).rejects.toThrow(/is done/);
+      await expect(requeueCore(ctx, MATE as any, "ct-nope", NOW)).rejects.toThrow(/no such problem/);
+      expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_c0"]);
+    });
+
     test("with no online host offering the checkout, the run stays on the runner's own machine and cap", async () => {
       for (const devices of [[laptop], [laptop, host("h1", 4, { line_slots: [] })], [laptop, host("h1", 4, { last_seen: NOW - 3_600_000 })], [{ ...laptop, git_plane: [] }, host("h1", 4)]]) {
         const { ctx, tables } = fixtures({ role: caps({ hands_per_day: 100 }), extra: { initiatives, tasks: causes(3), devices } });

@@ -22,7 +22,8 @@ import type { LineChatSend } from "../lib/line/lineChat";
 export type LineSliceActions = {
   editLineProfile: (requestId: string, projectId: string, edits: LineProfileEdit[]) => Promise<{ command_id: string } | null | undefined>;
   fileLineCause: (clientKey: string, projectId: string, fields: LineCauseFields) => Promise<{ task_id: string; task_short_id: string } | null | undefined>;
-  startLineCause: (taskId: string) => Promise<{ run_id: string; role_handle: string } | null | undefined>;
+  /** `queued`: the role's machines are full, so the problem went back to the line's queue instead of starting (convex lineCause). */
+  startLineCause: (taskId: string) => Promise<{ run_id: string | null; role_handle: string; queued?: string } | null | undefined>;
   /** "Make this a problem" on a finding nothing filed: a problem of its own (convex signals makeProblemOfFindingCore). */
   makeProblemOfFinding: (signalId: string, more?: string[], title?: string, into?: string) => Promise<{ task_id: string; task_short_id: string | null; created: boolean } | null | undefined>;
   /** "Not this problem": the finding, and its problem's findings under the same key, leave for a problem of their own

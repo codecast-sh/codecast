@@ -1,22 +1,23 @@
-import { v } from "convex/values";
-import { internalAction, internalMutation, internalQuery, query } from "./functions";
+import { ConvexError, v } from "convex/values";
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
-import { isUnblocked, TASK_PRIORITIES } from "@codecast/shared/tasks";
+import { isTerminalTaskStatus, isUnblocked, TASK_PRIORITIES } from "@codecast/shared/tasks";
 import { readinessLookups } from "./lib/taskGraph";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
 import { capsFor, countersFor } from "./lib/orgCaps";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { recordHandStart } from "./spawn";
-import { insertTaskComment } from "./tasks";
-import { createRunCore, queueRunOnDaemon } from "./workflow_runs";
+import { insertTaskComment, moveTaskStatus } from "./tasks";
+import { createRunCore, isLiveRunStatus, queueRunOnDaemon } from "./workflow_runs";
+import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineVersionFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
 import { linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
-import { allRolesInBoundary, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
+import { allRolesInBoundary, projectLeadRole, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownsWork, projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { chainHeadOf } from "@codecast/shared/contracts/orgAssignee";
@@ -24,7 +25,7 @@ import { LINE_GOAL, NO_GOAL, type GoalPriority } from "@codecast/shared/contract
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { priority as linePriority, type Severity } from "./lib/linePriority";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { accessJudgeFor } from "./lib/access";
+import { accessJudgeFor, canAccessTask } from "./lib/access";
 import { trialProjectOf } from "./lineTrial";
 
 // The line (docs/architecture/the-line.md L2, L9). A scope owns one workflow,
@@ -273,11 +274,55 @@ export function claimSlot(load: LineLoad): RunPlace | undefined {
  * LL11) goes through the same admission: a slot where its runs work, or the
  * reason it waits, for its own sweep to start it later.
  */
-export async function admitRoleRun(ctx: Ctx, role: any, now: number, loads: LineLoads): Promise<{ place?: RunPlace } | { waiting: string }> {
+export type Admission = { runner: string; pooled: boolean } & ({ place?: RunPlace } | { waiting: string });
+
+export async function admitRoleRun(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map()): Promise<Admission> {
   const load = await lineLoadFor(ctx, role, now, loads);
-  if (freeSlots(load) <= 0) return { waiting: `${load.working} runs are working on @${role.handle}'s machine${load.pool ? "s" : ""}; the diagnosis starts when one finishes.` };
-  return { place: claimSlot(load) };
+  const at = { runner: load.runner, pooled: !!load.pool };
+  if (freeSlots(load) <= 0) return { ...at, waiting: `${load.working} run${load.working === 1 ? " is" : "s are"} working on @${role.handle}'s machine${load.pool ? "s" : ""}` };
+  return { ...at, place: claimSlot(load) };
 }
+
+/**
+ * A problem back in the line's queue: open, with no run, and no longer blocked
+ * by the run that failed, so the sweep starts it in rank order. A lead puts a
+ * failed problem back this way (`cast line requeue`), and a problem started by
+ * hand while its role's machines are full lands here rather than on a machine
+ * (`why` says that). The ended run stays on the task's run list.
+ */
+export async function requeueForSweep(ctx: Ctx, role: any, task: any, actor: Id<"users">, now: number, why?: string): Promise<string> {
+  const fresh = await ctx.db.get(task._id);
+  await moveTaskStatus(ctx, fresh, "open", { actorUserId: actor, now, extra: { workflow_run_id: undefined, execution_status: undefined, execution_concerns: undefined } });
+  const when = roleMayStartHands(role, now) ? "@" + role.handle + "'s sweep starts it in rank order" + (why ? " when a run finishes" : "") : `@${role.handle}'s line starts nothing now, so it waits until the line is on`;
+  return `${why ? `${why}, so ` : ""}${task.short_id} is back in the line's queue; ${when}.`;
+}
+
+/**
+ * `cast line requeue <task>`: a lead puts a problem whose run failed or was
+ * cancelled back on the line. Refused for a closed problem, a trial problem
+ * (cast line trial rerun), one in no led project, and one whose run is live.
+ */
+export async function requeueCore(ctx: Ctx, userId: Id<"users">, ref: string, now = Date.now()): Promise<{ task: string; queued: string }> {
+  const task: any = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
+  if (!task || !(await canAccessTask(ctx as any, userId, task))) throw new ConvexError(`${ref}: no such problem`);
+  if (isTerminalTaskStatus(task.status)) throw new ConvexError(`${ref} is ${task.status}: a closed problem is not put back on the line`);
+  if (await trialProjectOf(ctx, task)) throw new ConvexError(`${ref} is a trial problem: cast line trial rerun ${ref} runs it again under the trial's budget`);
+  const role = await projectLeadRole(ctx, task);
+  if (!role) throw new ConvexError(`${ref}: no role leads its project, so no line would start it`);
+  if (!(await userCanAccessRole(ctx, userId, role))) throw new ConvexError(`${ref}: you cannot steer @${role.handle}'s line`);
+  const run: any = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
+  if (run && isLiveRunStatus(run.status)) throw new ConvexError(`${ref}'s run ${run._id} is ${run.status}: cancel it from its run page first, or let it finish`);
+  return { task: task.short_id, queued: await requeueForSweep(ctx, role, task, userId, now) };
+}
+
+export const requeueFromCli = mutation({
+  args: { api_token: v.string(), task: v.string() },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new ConvexError("Unauthorized");
+    return requeueCore(ctx, auth.userId, args.task.trim());
+  },
+});
 
 
 // LP6: the person who answers a role's cards is the person at the top of its

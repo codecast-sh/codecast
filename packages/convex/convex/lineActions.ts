@@ -377,6 +377,7 @@ export async function askLineAgentCore(ctx: any, userId: Id<"users">, clientKey:
   if (task?.workflow_run_id) return { ...filed, started: true as const, run_id: task.workflow_run_id };
   try {
     const started = await startLineCauseCore(ctx, userId, filed.task_id as Id<"tasks">);
+    if (!started.run_id) return { ...filed, started: false as const, reason: started.queued! };
     return { ...filed, started: true as const, run_id: started.run_id, role_handle: started.role_handle };
   } catch (err) {
     if (!(err instanceof ConvexError)) throw err;
