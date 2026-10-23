@@ -189,8 +189,8 @@ export function jsonDepths(t: string): Uint16Array {
  *  head, read even when the head was cut off mid-object (a step's preview is
  *  the first few hundred characters). `top` reads only the object's own
  *  fields: a nested object's "why" is not the result's why. */
-function headField(text: string, key: string, top = false): { value: string; cut: boolean } | undefined {
-  const at = top ? jsonDepths(text) : null;
+function headField(text: string, key: string, top = false, depths?: () => Uint16Array): { value: string; cut: boolean } | undefined {
+  const at = top ? depths?.() ?? jsonDepths(text) : null;
   const m = [...text.matchAll(new RegExp(`"(?:${key})"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)(")?`, "g"))].find((x) => !at || at[x.index!] === 1);
   if (!m) return undefined;
   const body = m[1].replace(/\\u?[0-9a-fA-F]{0,3}$/, "");
@@ -219,8 +219,11 @@ export function scriptLine(line: string | undefined): string | undefined {
   try { obj = JSON.parse(text.slice(0, text.lastIndexOf("}") + 1)); } catch {}
   // A whole object is read by its own top-level keys, so a finding's words
   // never stand in for the result's summary; a cut head by the first match.
+  // One depth map per output, read lazily: each key looked up in a cut head reads the same one.
+  let depths: Uint16Array | undefined;
+  const depthsOf = () => (depths ??= jsonDepths(text));
   const field = (key: string) => {
-    if (!obj) return headField(text, key, true);
+    if (!obj) return headField(text, key, true, depthsOf);
     const v = obj[key];
     return typeof v === "string" ? { value: v, cut: false } : undefined;
   };

@@ -1,0 +1,7 @@
+import{aj as t}from"./index-DcUHIs2h.js";import"./vendor-BRSpyZc9.js";import"./lineWorkspaceUrl-Dr1fY_US.js";import"./index-xfxoXilq.js";import"./dexie-BEFYTs6O.js";import"./convex-pL9slGJ3.js";import"./sentry-C0kWfPzV.js";import"./highlight-9pfC9kl-.js";import"./ui-DVb64tq5.js";import"./diff-05CVVOnl.js";import"./markdown-B7kiGmIT.js";/**
+ * @license lucide-react v0.556.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const a=[["path",{d:"M16.051 12.616a1 1 0 0 1 1.909.024l.737 1.452a1 1 0 0 0 .737.535l1.634.256a1 1 0 0 1 .588 1.806l-1.172 1.168a1 1 0 0 0-.282.866l.259 1.613a1 1 0 0 1-1.541 1.134l-1.465-.75a1 1 0 0 0-.912 0l-1.465.75a1 1 0 0 1-1.539-1.133l.258-1.613a1 1 0 0 0-.282-.866l-1.156-1.153a1 1 0 0 1 .572-1.822l1.633-.256a1 1 0 0 0 .737-.535z",key:"1m8t9f"}],["path",{d:"M8 15H7a4 4 0 0 0-4 4v2",key:"l9tmp8"}],["circle",{cx:"10",cy:"7",r:"4",key:"e45bow"}]],y=t("user-star",a);export{a as __iconNode,y as default};
+//# sourceMappingURL=user-star-CGf2VCde.js.map

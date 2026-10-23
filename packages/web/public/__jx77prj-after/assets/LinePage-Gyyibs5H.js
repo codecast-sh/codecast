@@ -1,0 +1,2 @@
+import{r as t,j as s}from"./vendor-BRSpyZc9.js";import{a as c,r as i}from"./lineWorkspaceUrl-Dr1fY_US.js";import{u as n}from"./useLineWorkspace-SySD0qyG.js";import{u as p,W as m}from"./index-DcUHIs2h.js";import{L as u}from"./LineWorkspace-7H23WzNM.js";function j({settings:o=!1}={}){const r=c(),a=t.useMemo(()=>i(r),[r]),e=n(a);return p(e.key),s.jsx(m,{value:e.key,children:s.jsx(u,{space:e,settings:o})})}export{j as L};
+//# sourceMappingURL=LinePage-Gyyibs5H.js.map
