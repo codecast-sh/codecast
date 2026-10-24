@@ -125,6 +125,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   commitReviewComment: DRAFT,
   removeReviewComment: DRAFT,
   clearReviewComments: DRAFT,
+  saveQuoteDrafts: INTERNAL,
+  removeQuoteDrafts: INTERNAL,
   setSessionTargetDevice: DRAFT,
   setStableContextPrefs: DRAFT,
 

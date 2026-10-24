@@ -33,7 +33,7 @@ import { KeyCap, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { appendToDraft } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
-import { attachReviewToMessage, batchSendWords, quotedImages } from "../lib/reviewActions";
+import { attachReviewForSend, attachReviewToMessage, batchSendWords, quotedImages } from "../lib/reviewActions";
 import { useShallow } from "zustand/react/shallow";
 import { uploadMarkedImage } from "../lib/markedImage";
 import { enterReviewFromComposer } from "../lib/reviewNav";
@@ -1759,7 +1759,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Each quoted picture is sent as a copy with its notes' points drawn on as
     // numbered markers; the bubble shows the original until that copy lands.
     const quoted = forking ? [] : quotedImages(conversationId);
-    message = attachReviewToMessage(conversationId, message, quoted.length ? submitImages.length + 1 : undefined);
+    // The quotes it takes ride the send as ids too, so the server stamps their
+    // records sent (lib/quoteDraftWire; empty unless the person turned it on).
+    const review = attachReviewForSend(conversationId, message, quoted.length ? submitImages.length + 1 : undefined);
+    message = review.text;
+    const quoteIds = review.quoteIds;
     // "Send together" (lib/jointSend): others' live drafts fold in as named parts.
     if (!forking) message = takeJointSend(conversationId, message);
     const quotedOriginals: OptimisticImage[] = quoted.map(q => ({ media_type: "image/png", storage_id: q.storageId }));
@@ -1843,7 +1847,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             useInboxStore.getState().stampPendingDispatchContent(resolvedId, clientId, expandedContent);
           }
         }
-        sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId);
+        if (quoteIds.length > 0) sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId, quoteIds);
+        else sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId);
         // Hand the resolved id + the send's clientId to the popup so it can paint
         // this same message optimistically in the MAIN window (send & open) without
         // a second send — same clientId means it dedupes against the server echo.

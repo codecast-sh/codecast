@@ -125,8 +125,18 @@ const CALLER_REPORTED_ACTIONS = new Set([
   "removeCallGuest",
 ]);
 
+// The quote record's writes (store saveQuoteDrafts / removeQuoteDrafts). The
+// composer's batch is the person's state and works the same without them, so
+// a refusal (a backend from before quoteDrafts, a conversation since lost) is
+// news to nobody: no toast, no failure mark, no error report.
+const QUIET_ACTIONS = new Set(["saveQuoteDrafts", "removeQuoteDrafts"]);
+
 /** The handler `_setDispatchError` takes: a dispatch gave up after its retries. */
 export function applyDispatchFailure(action: string, error: unknown, args?: unknown): void {
+  if (QUIET_ACTIONS.has(action)) {
+    console.warn(`[sync] ${action} not recorded`, error);
+    return;
+  }
   console.error(`[sync] dispatch failed after retries: ${action}`, error);
   // The write the person (or an effect) asked for never landed. Report it with
   // the window's recent write trail, so the report names what led up to it.

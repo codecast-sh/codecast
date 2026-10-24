@@ -27,6 +27,8 @@ import { createReviewComment, exitReviewMode, setBlockVerdict, undoLastVerdict }
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { stepReviewBlock } from "../lib/reviewNav";
 import { altChordDirection, matchesAction } from "../shortcuts";
+import { useCollectionRows } from "../hooks/useCollectionRows";
+import { quoteDraftsOn } from "../lib/quoteDraftWire";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useCommentTools } from "../hooks/useCommentTools";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -81,6 +83,39 @@ type Props = {
 // remount of the message doesn't scroll back to it.
 let landedHash: string | null = null;
 
+/** A row of the quoteDrafts collection (convex quoteDrafts.listForConversation). */
+type QuoteRecord = {
+  _id: string;
+  client_id: string | null;
+  conversation_id: string | null;
+  message_id: string | null;
+  block_index: number | null;
+  quote: string;
+  body: string;
+  verdict: "approve" | "cut" | null;
+  created_at: number;
+  sent_at: number | null;
+  sent_to_conversation_id: string | null;
+  answered_message_id: string | null;
+};
+type SentState = { conversationId: string | null; answeredMessageId: string | null };
+type RailComment = PendingComment & { sent?: SentState };
+
+const quoteRecordSig = (r: QuoteRecord) => `${r._id}:${r.sent_at ?? ""}:${r.answered_message_id ?? ""}:${r.block_index ?? ""}`;
+
+function sentQuoteItem(r: QuoteRecord): RailComment {
+  return {
+    id: r.client_id ?? r._id,
+    messageId: r.message_id ?? "",
+    blockIndex: r.block_index ?? 0,
+    quote: r.quote,
+    body: r.body,
+    createdAt: r.created_at,
+    ...(r.verdict ? { verdict: r.verdict } : {}),
+    sent: { conversationId: r.sent_to_conversation_id, answeredMessageId: r.answered_message_id },
+  };
+}
+
 function MessageReviewImpl({ conversationId, messageId, content, renderBlock, linkable }: Props) {
   const scrollToBlock = useReviewComposer()?.scrollToBlock;
   const { user: author } = useCurrentUser();
@@ -100,7 +135,21 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
   // exactly while this message has pending comments — submit/cancel/removing the
   // last comment collapses it back to full width automatically. The keyboard
   // layer (r/arrows/c/q) still uses reviewMessageId, but it's optional sugar.
-  const engaged = myComments.length > 0;
+  // With the quote record on (lib/quoteDraftWire), the quotes already sent
+  // from this message stay on the rail, marked sent, then answered. They are
+  // the server's rows (quoteDrafts), read-only: the batch holds only what waits.
+  const recordOn = useInboxStore(quoteDraftsOn);
+  const sentWhere = useCallback(
+    (r: QuoteRecord) => recordOn && r.conversation_id === conversationId && r.message_id === messageId && r.sent_at != null,
+    [recordOn, conversationId, messageId],
+  );
+  const sentRecords = useCollectionRows<QuoteRecord>("quoteDrafts", { where: sentWhere, sig: quoteRecordSig });
+  const sentQuotes = useMemo(() => {
+    const waiting = new Set(myComments.map((c) => c.id));
+    return sentRecords.filter((r) => !waiting.has(r.client_id ?? r._id)).map(sentQuoteItem);
+  }, [sentRecords, myComments]);
+  const railComments = useMemo<RailComment[]>(() => (sentQuotes.length ? [...myComments, ...sentQuotes] : myComments), [myComments, sentQuotes]);
+  const engaged = railComments.length > 0;
 
   // Persisted teammate comments on THIS message drive the right rail. A primitive
   // count keeps the selector cheap (re-renders only when it changes); the anchor
@@ -168,20 +217,20 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
   const placements = useMemo(() => {
     const out = new Map<string, ProsePlacement>();
     if (blockTexts.length === 0) return out;
-    for (const c of myComments) {
+    for (const c of railComments) {
       if (c.filePath || !c.quote) continue;
       out.set(c.id, resolveProseAnchor({ text: c.quote, index: c.blockIndex }, blockTexts));
     }
     return out;
-  }, [myComments, blockTexts]);
+  }, [railComments, blockTexts]);
   const drawnBlock = useCallback((c: PendingComment) => placements.get(c.id)?.index ?? c.blockIndex, [placements]);
 
   // Drop a stuck peek highlight: removing a chip via its Remove button unmounts it
   // before onMouseLeave fires, so clear the peek when its block no longer has any
   // comment (or all comments are gone) — otherwise the overlay lingers.
   useWatchEffect(() => {
-    if (peekBlock !== null && !myComments.some((c) => drawnBlock(c) === peekBlock)) setPeekBlock(null);
-  }, [myComments, peekBlock, drawnBlock]);
+    if (peekBlock !== null && !railComments.some((c) => drawnBlock(c) === peekBlock)) setPeekBlock(null);
+  }, [railComments, peekBlock, drawnBlock]);
 
   // ----- measure each quote unit's vertical position + available left margin -----
   const measure = useCallback(() => {
@@ -282,17 +331,17 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
   }, [content, measureActive, measure]);
 
   // ----- stack rail cards: anchor to their block, push down to avoid overlap -----
-  const sortedComments = useMemo(
-    () => [...myComments].sort((a, b) => drawnBlock(a) - drawnBlock(b) || a.createdAt - b.createdAt),
-    [myComments, drawnBlock],
-  );
+  const byPlace = useCallback((a: PendingComment, b: PendingComment) => drawnBlock(a) - drawnBlock(b) || a.createdAt - b.createdAt, [drawnBlock]);
+  const sortedComments = useMemo(() => [...myComments].sort(byPlace), [myComments, byPlace]);
+  // Every card on the rail, sent quotes included, in the order they stack.
+  const railCards = useMemo<RailComment[]>(() => (sentQuotes.length ? [...railComments].sort(byPlace) : sortedComments), [railComments, sentQuotes, sortedComments, byPlace]);
 
   const restack = useCallback(() => {
     if (!engaged) return;
     const GAP = 8;
     let prevBottom = -Infinity;
     const tops: Record<string, number> = {};
-    for (const c of sortedComments) {
+    for (const c of railCards) {
       const anchor = rects[drawnBlock(c)]?.top ?? 0;
       const top = Math.max(anchor, prevBottom + GAP);
       const h = cardRefs.current.get(c.id)?.offsetHeight ?? 90;
@@ -304,7 +353,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
       return same ? prev : tops;
     });
     if (Number.isFinite(prevBottom)) setRailBottom(prevBottom + GAP * 2);
-  }, [sortedComments, rects, engaged, drawnBlock]);
+  }, [railCards, rects, engaged, drawnBlock]);
 
   useLayoutEffect(() => { restack(); }, [restack, editingId]);
 
@@ -649,7 +698,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
           // the transcript and needs no reservation.
           style={railInMargin ? undefined : { minHeight: railBottom }}
         >
-          {sortedComments.map((c, i) => (
+          {railCards.map((c) => (
             <div
               key={c.id}
               ref={(el) => {
@@ -660,13 +709,22 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
               data-review-comment={c.id}
               style={{ top: stackTops[c.id] ?? rects[drawnBlock(c)]?.top ?? 0 }}
             >
-              {c.id === editingId ? (
+              {c.sent ? (
+                <SentQuoteChip
+                  comment={c}
+                  author={author}
+                  sent={c.sent}
+                  placement={placements.get(c.id)}
+                  onPeek={() => setPeekBlock(drawnBlock(c))}
+                  onPeekEnd={() => setPeekBlock(null)}
+                />
+              ) : c.id === editingId ? (
                 <CommentEditor
                   conversationId={conversationId}
                   comment={c}
                   author={author}
                   onDone={focusRegion}
-                  onStep={sortedComments.length > 1 ? (delta) => stepEditor(i, delta) : undefined}
+                  onStep={sortedComments.length > 1 ? (delta) => stepEditor(sortedComments.indexOf(c), delta) : undefined}
                 />
               ) : (
                 <CommentChip
@@ -768,6 +826,53 @@ const CommentChip = memo(function CommentChip({
             {active && <KeyCap size="xs">⌫</KeyCap>}
           </button>
         </div>
+      </div>
+    </div>
+  );
+});
+
+// A quote that went out with a message: its words and verdict as they were
+// sent, and where it stands. "Answered" opens the reply that answered it.
+const SentQuoteChip = memo(function SentQuoteChip({
+  comment,
+  author,
+  sent,
+  placement,
+  onPeek,
+  onPeekEnd,
+}: {
+  comment: PendingComment;
+  author: any;
+  sent: SentState;
+  placement?: ProsePlacement;
+  onPeek: () => void;
+  onPeekEnd: () => void;
+}) {
+  const answered = !!sent.answeredMessageId;
+  const openAnswer = () => {
+    if (sent.answeredMessageId && sent.conversationId) {
+      useInboxStore.getState().requestNavigate(sent.conversationId, { scrollToMessageId: sent.answeredMessageId });
+    }
+  };
+  return (
+    <div className="cc-comment-chip" data-quote-state={answered ? "answered" : "sent"} onMouseEnter={onPeek} onMouseLeave={onPeekEnd}>
+      {comment.body ? <CommentAvatar author={author} /> : null}
+      <div className="cc-comment-main">
+        {answered ? (
+          <button type="button" className="cc-quote-state" data-state="answered" onClick={openAnswer} title="Open the reply">Answered</button>
+        ) : (
+          <span className="cc-quote-state" data-state="sent">Sent</span>
+        )}
+        {comment.verdict && <VerdictLabel verdict={comment.verdict} />}
+        <ProsePlacementChip placement={placement} />
+        {comment.body ? (
+          <div className="cc-comment-body">{comment.body}</div>
+        ) : (
+          <div className="cc-comment-quote">
+            <span className="cc-comment-quote-mark">❝</span>
+            {(comment.quote || "").replace(/\s+/g, " ").trim().slice(0, 90)}
+          </div>
+        )}
       </div>
     </div>
   );

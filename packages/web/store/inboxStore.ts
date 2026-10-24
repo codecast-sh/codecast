@@ -33,7 +33,7 @@ import {
   bindUndoStore,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
-import { rekeyUndoIds, sameShape, withoutUndo } from "@platform/engine";
+import { afterCommit, rekeyUndoIds, sameShape, withoutUndo } from "@platform/engine";
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, freshHomeLaunchPending, hasViewNavigated, recordNavEvent, settleFreshHomeLaunch, type ViewNavSource } from "./viewNav";
@@ -280,6 +280,7 @@ import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/setting
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import type { AgentChainSpec, AgentDefinitionSpec } from "@codecast/shared/contracts";
 import type { PendingComment } from "../lib/quoteFormat";
+import { isRecordedQuote, mirrorQuoteBatch, type QuoteDraftWire } from "../lib/quoteDraftWire";
 import type { Comment as CommentRow } from "../lib/commentThread";
 import { pushInboxViewHistory, isApplyingViewHistory, sameInboxView, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 import { sessionFocusKind, type SessionFocusKind } from "../lib/inboxRouting";
@@ -1890,6 +1891,9 @@ export type ClientUI = {
   // only the ones somebody personified by hand (session-characters.md S2).
   // Off by default: a face is a choice, not something that happens to you.
   personify_sessions?: boolean;
+  // Keep a server record of the composer's quotes (lib/quoteDraftWire), so a
+  // quote shows sent, then answered, after its message goes. Off by default.
+  quote_drafts?: boolean;
   // Opt in to the teammate-comment tools (the gutter "comment" handle + the
   // header toggle when a conversation has none yet). Off by default — you still
   // SEE and can reply to comments others leave regardless of this.
@@ -5684,10 +5688,14 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setReviewEditingId: (id: string | null) => void;
   addReviewComment: (conversationId: string, comment: PendingComment) => void;
   commitReviewComment: (conversationId: string, id: string, body: string) => void;
-  removeReviewComment: (conversationId: string, id: string) => void;
+  /** `sent`: the item rides a message that stamps its record, so the record stays. */
+  removeReviewComment: (conversationId: string, id: string, sent?: boolean) => void;
   applyReviewVerdict: (conversationId: string, item: PendingComment) => void;
   clearReviewVerdict: (conversationId: string, id: string) => void;
-  clearReviewComments: (conversationId: string) => void;
+  /** `sent`: ids riding a message that stamps their records, which stay. */
+  clearReviewComments: (conversationId: string, sent?: string[]) => void;
+  saveQuoteDrafts: (conversationId: string, drafts: QuoteDraftWire[]) => void;
+  removeQuoteDrafts: (clientIds: string[]) => void;
   getReviewComments: (conversationId: string) => PendingComment[];
 
   // ── Comment rail (ephemeral UI; teammate comment thread on the right) ──
@@ -5863,7 +5871,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   releaseQueued: (convId: string) => void;
   reorderQueued: (convId: string, messageId: string, beforeId: string | null) => void;
   mergeQueued: (convId: string, messageId: string, intoId: string) => void;
-  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
+  /** `quoteIds`: the composer quotes this message carries, stamped sent by the server (quoteDrafts.ts). */
+  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string, quoteIds?: string[]) => void;
   // sendMessage for a conversation that may still be a local stub (a session
   // started a moment ago): resolves the real id first, then sends under the
   // same client id as the optimistic bubble.
@@ -9320,8 +9329,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // The writers below are sync(): a mutative draft + IDB write-through, no
   // server dispatch — the same path the composer's drafts take. A raw set()
   // here would keep the batch in memory only and lose every note on reload.
+  // Each one then hands what it touched to the quote record once the write
+  // commits (mirrorQuoteBatch: nothing unless the person turned it on).
   addReviewComment: sync(function (this: Draft, conversationId: string, comment: PendingComment) {
     (this.reviewComments[conversationId] ??= []).push(comment);
+    afterCommit(() => mirrorQuoteBatch(get(), conversationId, [comment.id]));
   }),
   // Set a comment's note (may be empty → stays a bare quote). This is what the
   // note editor's "Save" does, and what it does while you type.
@@ -9329,12 +9341,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const c = this.reviewComments[conversationId]?.find((c) => c.id === id);
     if (!c || c.body === body) return;
     c.body = body;
+    afterCommit(() => mirrorQuoteBatch(get(), conversationId, [id]));
   }),
   // A typed verdict on a block: lands on the block's existing quote when it
   // has one, else joins the batch as `item` (lib/reviewActions setBlockVerdict).
   applyReviewVerdict: sync(function (this: Draft, conversationId: string, item: PendingComment) {
     const list = (this.reviewComments[conversationId] ??= []);
     const have = list.find((c) => c.messageId === item.messageId && c.blockIndex === item.blockIndex && !c.image && !c.page && !c.proposal);
+    const touched = have ? have.id : item.id;
+    afterCommit(() => mirrorQuoteBatch(get(), conversationId, [touched]));
     if (!have) return void list.push(item);
     have.verdict = item.verdict;
     have.verdictAt = item.verdictAt;
@@ -9344,11 +9359,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!c) return;
     delete c.verdict;
     delete c.verdictAt;
+    afterCommit(() => mirrorQuoteBatch(get(), conversationId, [id]));
   }),
-  removeReviewComment: sync(function (this: Draft, conversationId: string, id: string) {
+  removeReviewComment: sync(function (this: Draft, conversationId: string, id: string, sent?: boolean) {
     const list = this.reviewComments[conversationId] ?? [];
     const removed = list.find((c) => c.id === id);
     if (!removed) return;
+    if (!sent && isRecordedQuote(conversationId, removed)) afterCommit(() => mirrorQuoteBatch(get(), conversationId, [], [id]));
     const next = list.filter((c) => c.id !== id);
     if (next.length) this.reviewComments[conversationId] = next;
     else delete this.reviewComments[conversationId];
@@ -9364,10 +9381,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
       this.reviewEditingId = null;
     }
   }),
-  clearReviewComments: sync(function (this: Draft, conversationId: string) {
-    if (!this.reviewComments[conversationId]) return;
+  clearReviewComments: sync(function (this: Draft, conversationId: string, sent?: string[]) {
+    const list = this.reviewComments[conversationId];
+    if (!list) return;
+    const keep = new Set(sent ?? []);
+    const dropped = list.filter((c) => !keep.has(c.id) && isRecordedQuote(conversationId, c)).map((c) => c.id);
+    if (dropped.length) afterCommit(() => mirrorQuoteBatch(get(), conversationId, [], dropped));
     delete this.reviewComments[conversationId];
   }),
+  // The quote record's writes (convex quoteDrafts.ts through dispatch). They
+  // change nothing here: the batch above is the composer's state, and the
+  // server's rows come back through the quoteDrafts feed. A refusal (an older
+  // backend without these functions, a conversation since lost) is dropped
+  // quietly (lib/dispatchBinding): the batch works the same without them.
+  saveQuoteDrafts: action(function (this: Draft, _conversationId: string, _drafts: QuoteDraftWire[]) {}),
+  removeQuoteDrafts: action(function (this: Draft, _clientIds: string[]) {}),
   getReviewComments: (conversationId: string) => get().reviewComments[conversationId] ?? [],
 
   pendingSessionCreates: {},
@@ -10923,7 +10951,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (row?.inflight) row.inflight = mergeQueueRows(row.inflight, messageId, intoId);
   }),
 
-  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
+  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string, _quoteIds?: string[]) {
     clearSessionSnoozeInDraft(this, _convId);
     notePendingMessageSendRequested(_clientId);
     // A message into a session that is asking you something IS the answer —

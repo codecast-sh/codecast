@@ -60,6 +60,7 @@ import { ReviewComposerContext } from "./reviewContext";
 import { ReviewScrollIndicators } from "./ReviewNavigation";
 import { useReviewNavigation } from "../hooks/useReviewNavigation";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
+import { useSyncQuoteDrafts } from "../hooks/useSyncQuoteDrafts";
 import { useSyncConversationExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../hooks/useSyncExternalEvents";
 import { ExternalEventRow } from "./feed/ExternalEventRow";
 import { externalEventRowToExternalEvent, isQuietExternalEvent, type ExternalEventRecord } from "../lib/externalEvents";
@@ -636,6 +637,7 @@ const ConversationViewInner = (
   // Pipe this conversation's comment thread into the inbox cache once; the dock
   // and the inline per-message threads all read from the store.
   useConversationCommentsSync(conversation?._id?.toString());
+  useSyncQuoteDrafts(conversation?._id?.toString());
   // Git activity for this conversation: the feeder subscribes, the store keeps
   // the rows, and the timeline memo below reads them. Same shape as comments.
   useSyncConversationExternalEvents(conversation?._id?.toString());

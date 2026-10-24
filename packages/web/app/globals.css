@@ -2518,6 +2518,37 @@ diffs-container {
 .cc-comment-chip-active {
   border-left-color: var(--sol-cyan);
 }
+/* A quote that went out with a message (MessageReview SentQuoteChip): read
+   only, dimmed until the agent's reply answers it. */
+.cc-comment-chip[data-quote-state] {
+  cursor: default;
+}
+.cc-comment-chip[data-quote-state="sent"] {
+  opacity: 0.7;
+}
+.cc-comment-chip[data-quote-state]:hover {
+  border-left-color: var(--sol-border);
+}
+.cc-comment-chip[data-quote-state="answered"] {
+  border-left-color: color-mix(in srgb, var(--sol-green) 60%, var(--sol-border));
+}
+.cc-quote-state {
+  font-weight: 600;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  margin-right: 0.4rem;
+  color: var(--sol-text-muted);
+}
+.cc-quote-state[data-state="answered"] {
+  color: var(--sol-green);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.cc-quote-state[data-state="answered"]:hover {
+  text-decoration: underline;
+}
 .cc-comment-editor {
   border-left-color: var(--sol-cyan);
 }

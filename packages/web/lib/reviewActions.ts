@@ -11,6 +11,7 @@ import { humanizeConvexError } from "@codecast/shared/contracts";
 import { proposalSeen } from "../components/org/proposalHooks";
 import { orgVerdictRevisedNotice, type OrgReplyInput, type OrgReplyOpts } from "../store/orgSlice";
 import { toolCallGist } from "./toolCallGist";
+import { isRecordedQuote, quoteDraftsOn } from "./quoteDraftWire";
 
 export type PopulateFn = (text: string, opts?: { append?: boolean }) => void;
 
@@ -91,6 +92,15 @@ export function quoteToComposer(text: string, populate: PopulateFn): void {
 // A whole take is the send: the proposal answers in the batch are applied
 // (takeProposalAnswers) and their words lead the message, then the quotes.
 export function takeReviewBatch(conversationId: string, messageId?: string, firstImageNumber?: number): string {
+  return takeBatch(conversationId, messageId, firstImageNumber, false).text;
+}
+
+// The take a send makes when it carries the quote record (lib/quoteDraftWire):
+// the same text, plus the ids of the recorded quotes it took, for the send to
+// hand the server (store sendMessage's quoteIds) so it stamps them sent. Their
+// records stay; with the record off, `quoteIds` is empty and this is
+// takeReviewBatch.
+function takeBatch(conversationId: string, messageId: string | undefined, firstImageNumber: number | undefined, sending: boolean): { text: string; quoteIds: string[] } {
   const s = useInboxStore.getState();
   const answers = messageId ? "" : takeProposalAnswers(conversationId, { sentIn: conversationId });
   const taken = sortPendingComments(s
@@ -103,22 +113,34 @@ export function takeReviewBatch(conversationId: string, messageId?: string, firs
   }));
   const quotes = formatPendingComments(taken, numbers, pinNumbers(s.getReviewComments(conversationId)));
   const text = [answers, quotes].filter(Boolean).join("\n\n");
-  if (!text) return "";
+  if (!text) return { text: "", quoteIds: [] };
+  const quoteIds = sending && quoteDraftsOn(s) ? taken.filter((c) => isRecordedQuote(conversationId, c)).map((c) => c.id) : [];
+  const sent = new Set(quoteIds);
   if (messageId) {
-    taken.forEach((c) => s.removeReviewComment(conversationId, c.id));
+    taken.forEach((c) => s.removeReviewComment(conversationId, c.id, sent.has(c.id)));
   } else {
-    s.clearReviewComments(conversationId);
+    s.clearReviewComments(conversationId, quoteIds);
     s.setReviewTarget(null);
     s.setReviewEditingId(null);
   }
-  return text;
+  return { text, quoteIds };
 }
 
 // Build the outgoing message: the pending batch (if any) prepended to the typed
 // reply, clearing the batch. The composer's send path calls this so a plain send
 // carries the quotes. With nothing pending it returns `typed` untouched.
 export function attachReviewToMessage(conversationId: string, typed: string, firstImageNumber?: number): string {
-  const batch = takeReviewBatch(conversationId, undefined, firstImageNumber);
+  return withReply(takeReviewBatch(conversationId, undefined, firstImageNumber), typed);
+}
+
+// attachReviewToMessage for a send that goes through store sendMessage: the
+// same text, and the recorded quotes it carries for sendMessage's quoteIds.
+export function attachReviewForSend(conversationId: string, typed: string, firstImageNumber?: number): { text: string; quoteIds: string[] } {
+  const { text, quoteIds } = takeBatch(conversationId, undefined, firstImageNumber, true);
+  return { text: withReply(text, typed), quoteIds };
+}
+
+function withReply(batch: string, typed: string): string {
   if (!batch) return typed;
   const reply = (typed || "").trim();
   return reply ? `${batch}\n\n${reply}` : batch;

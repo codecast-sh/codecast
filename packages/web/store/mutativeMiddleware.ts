@@ -195,6 +195,12 @@ export const OUTBOX_COALESCE_KEYS: Record<string, (args: any[]) => string | null
   // A label's args are its whole wanted state (verdict and note), so a burst
   // of presses on one decision queued offline lands as the last one.
   labelDecision: (args) => (typeof args[0] === "string" && typeof args[1] === "string" ? `labelDecision:${args[0]}:${args[1]}` : null),
+  // One quote's whole record (a note saved as it is typed): a burst queued
+  // offline lands as the last save. A save of several quotes never coalesces.
+  saveQuoteDrafts: (args) =>
+    typeof args[0] === "string" && Array.isArray(args[1]) && args[1].length === 1 && typeof args[1][0]?.client_id === "string"
+      ? `saveQuoteDrafts:${args[0]}:${args[1][0].client_id}`
+      : null,
 };
 
 export function outboxCoalesceKeyFor(action: string, args: any[]): string | null {

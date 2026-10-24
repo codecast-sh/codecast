@@ -787,12 +787,19 @@ export async function pendingRowsFor(
     .query("review_comments")
     .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", pullRequestId))
     .collect();
-  // A pending note the reviewer resolved (handed to a session and resolved)
-  // is done: it leaves the batch and never goes to GitHub. Discard still
-  // clears it.
+  // A pending note the reviewer handed to a session and resolved is done: it
+  // leaves the batch and never goes to GitHub. Discard still clears it.
   return rows
-    .filter((r) => r.pending_review && String(r.author_user_id) === String(userId) && (opts.includeResolved || !r.resolved))
+    .filter((r) => r.pending_review && String(r.author_user_id) === String(userId) && (opts.includeResolved || !handedOffAndResolved(r)))
     .sort((a, b) => a.created_at - b.created_at);
+}
+
+/** Resolved by its own author after it was sent to a session. Only that counts:
+ *  a pending note resolved any other way (before pending drafts were kept out
+ *  of line threads, a teammate resolving the line also stamped the draft)
+ *  still belongs to its author's review. */
+export function handedOffAndResolved(r: Pick<Doc<"review_comments">, "resolved" | "resolved_at" | "resolved_by" | "sent_at" | "author_user_id">): boolean {
+  return !!r.resolved && r.sent_at != null && (r.resolved_at ?? 0) >= r.sent_at && r.resolved_by != null && String(r.resolved_by) === String(r.author_user_id);
 }
 
 export const pendingReview = query({
