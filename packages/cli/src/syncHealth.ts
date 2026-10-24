@@ -239,15 +239,24 @@ export async function getStuckSyncs(options: {
   return out.sort((a, b) => (b.unsyncedBytes - a.unsyncedBytes) || (b.fileSize - a.fileSize));
 }
 
+// The heartbeat reads this, and the heartbeat is the machine's presence, so it
+// never waits on the scan: the scan stats every ledger file (27k on a busy
+// laptop, over a minute under load), and a beat that awaited it reached the
+// server minutes late and read as offline (2026-10-23). Callers get the last
+// finished scan; one scan runs at a time, the next 30s after it finished.
 export function createStuckSyncReader(scan = getStuckSyncs, now = Date.now) {
+  let last: StuckSync[] = [];
   let nextCheck = 0;
-  let result: Promise<StuckSync[]> | undefined;
-  return () => {
-    if (!result || now() >= nextCheck) {
-      nextCheck = now() + 30_000;
-      result = scan();
+  let running = false;
+  return (): StuckSync[] => {
+    if (!running && now() >= nextCheck) {
+      running = true;
+      scan().then((r) => { last = r; }, () => {}).finally(() => {
+        running = false;
+        nextCheck = now() + 30_000;
+      });
     }
-    return result;
+    return last;
   };
 }
 
