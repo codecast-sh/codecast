@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AccountUsageBars } from "../AccountUsageMeter";
+import { AccountUsageBars, LoginExpiredBadge } from "../AccountUsageMeter";
 
 describe("AccountUsageBars", () => {
   test("renders limits without the model mix", () => {
@@ -44,5 +44,28 @@ describe("AccountUsageBars", () => {
     // The window that hasn't rolled still reads normally.
     expect(html).toContain("21%");
     expect(html).toContain("as of 17h ago");
+  });
+});
+
+describe("LoginExpiredBadge", () => {
+  const year = 365 * 86_400_000;
+  test("an expired saved login reads as expired", () => {
+    expect(renderToStaticMarkup(<LoginExpiredBadge profile={{ login_expired_at: 1 }} />)).toContain("login expired");
+  });
+
+  test("a live minted token carries the profile, so its dead saved login is not shown", () => {
+    // The reported state: a token minted for the profile, and the row still
+    // said "login expired" beside the new token chip.
+    const html = renderToStaticMarkup(
+      <LoginExpiredBadge profile={{ login_expired_at: 1, setup_token: { expires_at: Date.now() + year } }} />,
+    );
+    expect(html).toBe("");
+  });
+
+  test("an expired minted token leaves the dead login showing", () => {
+    const html = renderToStaticMarkup(
+      <LoginExpiredBadge profile={{ login_expired_at: 1, setup_token: { expires_at: Date.now() - 1 } }} />,
+    );
+    expect(html).toContain("login expired");
   });
 });

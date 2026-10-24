@@ -10,7 +10,7 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { RefreshCw } from "lucide-react";
-import { isWindowRolled, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { isWindowRolled, profileNeedsSignIn, worstUsagePercent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { formatAgo, formatCountdown, labeledUsageWindows } from "@codecast/shared/contracts";
 import { usageTone } from "../lib/usageTone";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -158,11 +158,15 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
   );
 }
 
+type SignInProfile = { name: string; email?: string; login_expired_at?: number | null; setup_token?: { expires_at: number } };
+
 /** "login expired" next to a profile whose saved login the daemon could not
  * refresh: switching there lands on a dead credential until that account
- * signs in again. Renders nothing for a live profile. */
-export function LoginExpiredBadge({ profile }: { profile: { login_expired_at?: number | null } }) {
-  if (!profile.login_expired_at) return null;
+ * signs in again. Renders nothing for a live profile, or one a minted token
+ * carries (its token chip is the state then). */
+export function LoginExpiredBadge({ profile }: { profile: Omit<SignInProfile, "name"> }) {
+  const now = useCoarseNowLocal();
+  if (!profileNeedsSignIn(profile, now)) return null;
   return (
     <span
       className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-[10px] text-sol-red"
@@ -203,7 +207,7 @@ export function ProfileSignInButton({
   force = false,
 }: {
   device: SignInDevice;
-  profile: { name: string; email?: string; login_expired_at?: number | null };
+  profile: SignInProfile;
   className?: string;
   // A failed machine switch that found a dead snapshot should still offer
   // sign-in even if the heartbeat has not yet stamped login_expired_at.
@@ -211,7 +215,7 @@ export function ProfileSignInButton({
 }) {
   const openSignIn = useInboxStore((s) => s.openProfileSignIn);
   const now = useCoarseNowLocal();
-  if ((!force && !profile.login_expired_at) || device.is_remote || device.online === false) return null;
+  if ((!force && !profileNeedsSignIn(profile, now)) || device.is_remote || device.online === false) return null;
   const phase = profileFlowPhase(device, profile.name, now);
   const machine = device.label || "the selected machine";
   const open = (start: boolean) => openSignIn({ deviceId: device.device_id, profile: profile.name, start });

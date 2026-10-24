@@ -8,7 +8,7 @@ import { Stack } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { formatCountdown, peggedWindow, worstUsagePercent } from '@codecast/shared/contracts';
-import { profileHasSetupToken } from '@codecast/convex/convex/ccAccountsShared';
+import { profileHasSetupToken, profileNeedsSignIn } from '@codecast/convex/convex/ccAccountsShared';
 import { machineSwitchBlock, profileIsFleetAccount } from '@codecast/web/lib/machineAccountSwitch';
 import { useMachineSwitchState } from '@codecast/web/hooks/useMachineSwitchState';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
@@ -105,7 +105,7 @@ function MachineAccounts({ device, single }: { device: AccountDevice; single: bo
             now={now}
             current={profileIsFleetAccount(p, fleet)}
             switching={sw.switching === p.name}
-            expired={!!p.login_expired_at && !profileHasSetupToken(p, now)}
+            expired={profileNeedsSignIn(p, now)}
             onPress={() => onRow(p)}
           />
         ))}

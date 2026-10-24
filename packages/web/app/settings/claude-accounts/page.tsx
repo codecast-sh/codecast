@@ -17,6 +17,7 @@ import {
   isExhaustionCurrent,
   isValidProfileName,
   profileHasToken,
+  profileNeedsSignIn,
   type CcUsage,
 } from "@codecast/convex/convex/ccAccountsShared";
 import { AppLoader } from "../../../components/AppLoader";
@@ -179,8 +180,8 @@ function SaveCurrentForm({ device, suggestedName }: { device: DeviceAccounts; su
 
 function SessionAccountsStatus({ device }: { device: DeviceAccounts }) {
   const now = useCoarseNow(30_000);
-  const ready = device.profiles.filter((p) => profileHasToken(p, now) && !p.login_expired_at);
-  const needSignIn = device.profiles.filter((p) => !!p.login_expired_at);
+  const needSignIn = device.profiles.filter((p) => profileNeedsSignIn(p, now));
+  const ready = device.profiles.filter((p) => profileHasToken(p, now) && !profileNeedsSignIn(p, now));
   const total = device.profiles.length;
 
   return (
