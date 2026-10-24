@@ -2,7 +2,7 @@
 // when it is a plain folder inside home; a recorded repo or a foreign path
 // keeps the refusal banner.
 import { describe, expect, test } from "bun:test";
-import { creatableStartFolder } from "./daemon";
+import { creatableStartFolder } from "./resumePlacement";
 
 const home = "/Users/ada";
 const plain = { git_root: null, git_remote_url: null };

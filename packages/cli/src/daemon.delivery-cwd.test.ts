@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { conversationNamesRepo, noLocalCheckoutError, placeFreshDeliverySession } from "./daemon.js";
+import { conversationNamesRepo, noLocalCheckoutError, placeFreshDeliverySession } from "./resumePlacement.js";
 import { resolveResumeCwd } from "./projectPathResolver.js";
 
 // 2026-09-22: a session that had run for three hours in /Users/ashot/src/codecast

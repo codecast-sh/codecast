@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { noLocalCheckoutBannerActionable } from "./daemon.js";
+import { noLocalCheckoutBannerActionable } from "./resumePlacement.js";
 
 // The predicate gates a red "No local checkout for <remote> (recorded path X
 // doesn't exist here). Clone it first." banner. It is consulted ONLY after every
