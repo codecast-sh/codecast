@@ -22,7 +22,7 @@ Every user action renders from the local store synchronously: the optimistic wri
 
 Why: losing or scrambling what a person did destroys trust faster than any other bug, and a second optimism layer beside the store's is where the losses came from.
 
-Evidence: 8 corrections across 7 sessions: codecast/2907ac83, codecast/3d59bf6c, codecast/6d17a0fa, codecast/638ee419, codecast/jx7c3x7, codecast/be5f2068, codecast/d9511a43. Recorded in CLAUDE.md (Store).
+Evidence: 10 corrections across 9 sessions: codecast/2907ac83, codecast/3d59bf6c, codecast/6d17a0fa, codecast/638ee419, codecast/jx7c3x7, codecast/be5f2068, codecast/d9511a43, codecast/0853ea59, codecast/ea723145. Recorded in CLAUDE.md (Store).
 
 ### CC-store-3 Workspace is access, team_id is routing
 
@@ -66,7 +66,7 @@ Work happens in the main checkout, with no branch, pull request or worktree unle
 
 Why: mandatory overhead on every task and inherited gates slowed the owner's main-branch workflow and buried the board in noise.
 
-Evidence: 10 corrections across 7 sessions: codecast/b8189b1a, codecast/e277f266, codecast/30f7f14e, codecast/af185144, codecast/26a56b6e, codecast/jx7b0e1, codecast/jx780bb. Recorded in CLAUDE.md (Working directory; Git history).
+Evidence: 11 corrections across 8 sessions: codecast/b8189b1a, codecast/e277f266, codecast/30f7f14e, codecast/af185144, codecast/26a56b6e, codecast/jx7b0e1, codecast/jx780bb, codecast/5ae87b50. Recorded in CLAUDE.md (Working directory; Git history).
 
 ### CC-ship-3 Finish the work instead of filing it
 
@@ -84,7 +84,7 @@ Before changing or rebuilding something, list everything the current version doe
 
 Why: redesigns silently dropped features the owner relied on, and a broken tool that used to work is a release blocker.
 
-Evidence: 14 corrections across 11 sessions [PR-verify-2]: codecast/c26c9845, codecast/4b84ce1d, codecast/jx7evm9, codecast/91cd1654, codecast/a9c89211, codecast/0f83ee96, codecast/1ee27c51, codecast/378a9c20, codecast/fb8e21ef, codecast/c6f40e40, codecast/3f51d2f8.
+Evidence: 15 corrections across 12 sessions [PR-verify-2]: codecast/c26c9845, codecast/4b84ce1d, codecast/jx7evm9, codecast/91cd1654, codecast/a9c89211, codecast/0f83ee96, codecast/1ee27c51, codecast/378a9c20, codecast/fb8e21ef, codecast/c6f40e40, codecast/3f51d2f8, codecast/fa8d6b6a.
 
 ### CC-verify-2 A prompt change is proven on frozen moments
 
@@ -154,7 +154,7 @@ Before a direction that is costly to undo (a schema, a protocol, a migration), t
 
 Why: cards with bare ids and buried asks could not be decided without opening the session, which defeats the queue, and directions nobody examined wasted the build.
 
-Evidence [PR-agents-3]: codecast/30f7f14e, codecast/fb8e21ef, codecast/jx7fk24, codecast/7f143785, codecast/717f2b8e, codecast/378a9c20.
+Evidence [PR-agents-3]: codecast/30f7f14e, codecast/fb8e21ef, codecast/jx7fk24, codecast/7f143785, codecast/717f2b8e, codecast/378a9c20, codecast/45e09d37.
 
 ### CC-agents-3 Strongest model decides, briefed in full
 
@@ -179,3 +179,11 @@ Agent sessions, evals, judges and trial runs use the owner's subscription logins
 Why: runs routed to metered keys turned covered work into bills, and caps that added quota to dollars stopped runs that cost nothing and asked the owner to approve spend that need not exist.
 
 Evidence: 4 corrections across 2 sessions: codecast/378a9c20, codecast/1f6146fa.
+
+### CC-agents-6 The team's own roles and agents run open by default
+
+Roles, leads and agent sessions start work, spend and admit runs freely unless a person turned a limit on. A cap, budget, approval gate or concurrency ceiling is an option a team can choose, shipped off for new and existing roles alike, and when one is on it states what it protects. Volume the owner asked for is limited only by what the machines can actually carry, never by a count of unanswered asks or a rule nobody chose.
+
+Why: limits added by default stalled the work the owner had just asked for, and every one of them had to be found, explained and removed by hand before anything moved.
+
+Evidence: 3 corrections across 3 sessions [PR-product-2]: codecast/92d5aeac, codecast/fb8e21ef, codecast/378a9c20. Union holds the same rule for access as UN-process-4.
