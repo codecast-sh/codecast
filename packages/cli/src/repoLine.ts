@@ -71,7 +71,7 @@ export function repoLineFor(cwd: string): ResolvedWorkflowSource | null {
 }
 
 /**
- * The line version a problem runs (workflows.lineVersionFor, picked by the
+ * The line version a problem runs (workflows.lineRouteFor, picked by the
  * graph that serves its oldest finding's source), as its file on this
  * machine: null when no version serves it or its file lives elsewhere, and
  * then the run in this process takes the repo's or role's line.

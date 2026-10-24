@@ -22,7 +22,7 @@ import { verifyApiToken } from "./apiTokens";
 import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
 import { workspaceGrantsAccess } from "./lib/access";
 import { recordGraphVersion } from "./workflows";
-import { isExtendsPath } from "./flowLibrary";
+import { extendsFile, isExtendsPath } from "./lib/flowRoute";
 
 type Snapshot = NonNullable<Doc<"workflow_versions">["snapshot"]>;
 
@@ -89,13 +89,8 @@ async function baseOf(ctx: any, row: Doc<"workflows">): Promise<Doc<"workflows">
     const pool: Doc<"workflows">[] = row.workspace ? await ctx.db.query("workflows").withIndex("by_workspace", (q: any) => q.eq("workspace", row.workspace)).collect() : [];
     return pool.find((w) => w.slug === ext && w._id !== row._id) ?? null;
   }
-  if (!row.origin?.file) return null;
-  const parts = row.origin.file.split("/").slice(0, -1);
-  for (const p of ext.split("/")) {
-    if (p === "..") parts.pop();
-    else if (p && p !== ".") parts.push(p);
-  }
-  const file = parts.join("/");
+  const file = extendsFile(row);
+  if (!file) return null;
   const rows: Doc<"workflows">[] = await ctx.db.query("workflows").withIndex("by_user_id", (q: any) => q.eq("user_id", row.user_id)).collect();
   const hits = rows.filter((w) => w._id !== row._id && w.origin?.file === file);
   return hits.find((w) => w.origin?.root === row.origin?.root) ?? hits.sort((a, b) => b.updated_at - a.updated_at)[0] ?? null;

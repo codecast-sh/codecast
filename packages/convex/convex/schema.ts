@@ -7833,7 +7833,7 @@ export default defineSchema({
       nodes: v.array(v.object({ id: v.string(), h: v.string() })),
     })),
     // A line version's scenario (the graph's `serves`): the finding sources
-    // whose problems it runs. workflows.lineVersionFor picks by them when a
+    // whose problems it runs. workflows.lineRouteFor picks by them when a
     // line run starts on a problem; written only by a push from a file.
     serves: v.optional(v.array(v.string())),
     // The library flow this one is a variant of, by slug, when it was saved

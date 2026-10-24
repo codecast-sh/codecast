@@ -23,6 +23,7 @@ import { isTeamMember, parseWorkspaceKey, workspaceGrantsAccess } from "./lib/ac
 
 import { isLineRunSlug, upsertWorkflowFor } from "./workflows";
 import { recordWorkflowVersion } from "./flowVersions";
+import { isExtendsPath } from "./lib/flowRoute";
 
 export type RunGraph = {
   hash: string; name: string; label?: string; source: string;
@@ -156,8 +157,6 @@ export const sessionFlows = query({
   },
 });
 
-/** An `extends` that names a file (a path, or a .cast), not a library flow by slug. */
-export const isExtendsPath = (ext: string) => ext.includes("/") || ext.endsWith(".cast");
 
 const slugOf = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 

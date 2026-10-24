@@ -22,7 +22,7 @@ import { alignGateChoices } from "./lib/gateChoices";
 import { runSuperseded } from "./lib/superseded";
 import { resolveOwnerDevice } from "./devices";
 import { openRunPrice } from "./lib/trialRunPrices";
-import { isLineRunSlug, lineVersionFor } from "./workflows";
+import { isLineRunSlug, lineRouteFor } from "./workflows";
 import { recordRoutineRunGraph, recordScriptRunGraph } from "./flowLibrary";
 import { libraryOfRun, runFlowVersions } from "./flowVersions";
 import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
@@ -751,9 +751,11 @@ export const createFromCli = mutation({
     let workflowDocId: any = args.workflow_id ? (args.workflow_id as any) : undefined;
     let workflowName = args.workflow_name;
     // A line run the daemon executes takes the problem's line version
-    // (workflows.lineVersionFor); a run in the calling process runs the graph
+    // (workflows.lineRouteFor); a run in the calling process runs the graph
     // that process already chose (cast workflow run asks for the version first).
-    const version = args.detach && isLineRunSlug(args.workflow_name) ? await lineVersionFor(ctx, userId, taskRow) : null;
+    const route = args.detach && isLineRunSlug(args.workflow_name) ? await lineRouteFor(ctx, userId, taskRow) : null;
+    if (route?.waiting) throw new Error(`${taskRow?.short_id ?? "this problem"} waits: ${route.waiting} in its team's live flow`);
+    const version = route?.workflow ?? null;
     if (version) { workflowDocId = version._id; workflowName = version.name; }
     if (!workflowDocId) {
       const wf = await ctx.db.query("workflows")

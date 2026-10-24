@@ -119,7 +119,7 @@ export interface WorkflowGraph {
   on_failure?: "stop";
   // The finding sources whose problems this line version runs (`serves`, one
   // graph per scenario): a line run started for a problem takes the version
-  // that serves the source of its oldest finding (workflows.lineVersionFor).
+  // that serves the source of its oldest finding (workflows.lineRouteFor).
   serves?: string[];
   // What the flow is in the pool (flows.md FL2): a whole line or a segment,
   // its name and one line a picker shows, and what it needs from the change.

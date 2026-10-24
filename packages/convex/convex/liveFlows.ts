@@ -17,6 +17,9 @@ import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
 import { utcDay } from "./lib/orgCaps";
 import { WORKING_RUN_STATUSES } from "./lib/linePlacement";
 import { byStartOrder, startValue } from "./lib/linePriority";
+import { problemSourceOf } from "./workflows";
+import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
+import { flowRouteFor } from "./lib/flowRoute";
 import { agentAssignee, claimSlot, freeSlots, isReadyCause, lineLoadFor, lineOwnerOf, takeAdmissible, type LineLoad, type LineLoads } from "./orgLine";
 
 type Ctx = { db: any };
@@ -43,12 +46,6 @@ export const flowRoles = (flow: { team_id?: any }, roles: any[]): any[] => roles
 export async function liveFlowFor(ctx: Ctx, teamId: string | null | undefined): Promise<any | null> {
   if (!teamId) return null;
   return ctx.db.query("live_flows").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).first();
-}
-
-// The source of a problem: its first finding's, as workflows.lineVersionFor reads it.
-async function sourceOf(ctx: Ctx, task: any): Promise<string | null> {
-  const first = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).order("asc").first();
-  return first?.source?.trim().toLowerCase() ?? null;
 }
 
 /**
@@ -88,10 +85,16 @@ export async function liveFlowCandidates(ctx: Ctx, flow: any, roles: any[], limi
     const owner = await lineOwnerOf(ctx, c.task, team);
     if (!owner || owner.status !== "active" || owner.handing_over?.retire) return false;
     if (c.task.assignee && c.task.assignee !== agentAssignee(owner) && c.task.assignee !== String(owner._id)) return false;
-    if (flow.sources?.length && c.task.source === "signal" && !flow.sources.includes((await sourceOf(ctx, c.task)) ?? "")) return false;
+    if (flow.sources?.length && c.task.source === "signal" && !flow.sources.includes((await problemSourceOf(ctx, c.task)) ?? "")) return false;
     c.role = owner;
     return true;
   });
+}
+
+/** The route a judge problem takes under this flow: its family's judge member, or the words it waits on. */
+async function judgeRouteOf(ctx: Ctx, flow: any) {
+  const rows: any[] = await ctx.db.query("workflows").withIndex("by_workspace", (q: any) => q.eq("workspace", flow.workspace)).collect();
+  return flowRouteFor({ flow: { ...flow, on: true }, spine: await ctx.db.get(flow.workflow_id), rows, source: null, judge: true });
 }
 
 export type LivePlanned = { role_id: string; task_id: string; place?: { device: string; project_path: string }; live_flow_id: string };
@@ -111,10 +114,13 @@ export async function planLiveFlow(ctx: Ctx, flow: any, roles: any[], now: numbe
   const hold = flowHold(flow, now);
   const offWords = !flow.on ? "the flow is off" : hold ? holdWords(hold) : handsLeft <= 0 ? "hands cap reached" : null;
   const candidates = await liveFlowCandidates(ctx, flow, roles, Math.max(take, 0) + 16);
+  // A judge problem waits while the flow's family has no judge route (lib/flowRoute); every other problem has a graph.
+  const judgeRoute = candidates.some((c) => isJudgeProblem(c.task.cause)) ? await judgeRouteOf(ctx, flow) : null;
   const starts: LivePlanned[] = [];
   const queue: Array<LiveCandidate & { waiting: string | null }> = [];
   for (const c of candidates) {
     let waiting = offWords;
+    if (!waiting && isJudgeProblem(c.task.cause)) waiting = judgeRoute?.waiting ?? null;
     if (!waiting && starts.length >= take) waiting = "waits for the next pass";
     let load: LineLoad | null = null;
     if (!waiting) {

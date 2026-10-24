@@ -9,6 +9,8 @@ import { createDataContext } from "./data";
 import { computeWorkspaceKey, isTeamMember } from "./lib/access";
 import { workflowEdgeValidator, workflowNodeValidator } from "./lib/workflowGraphValidators";
 import { libraryOfFlow, recordWorkflowVersion } from "./flowVersions";
+import { flowRouteFor, type FlowRoute } from "./lib/flowRoute";
+import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
 
 const nodeV = workflowNodeValidator;
 const edgeV = workflowEdgeValidator;
@@ -41,7 +43,7 @@ const upsertArgs = {
   // Only a push from a file in a checkout carries it (cli lineGraphEdit.graphOrigin).
   origin: v.optional(graphOriginV),
   // The finding sources whose problems this line version runs (the graph's
-  // `serves`): lineVersionFor routes a line run on a problem by them.
+  // `serves`): lineRouteFor routes a line run on a problem by them.
   serves: v.optional(v.array(v.string())),
   // `cast flow publish` (flows.md FL2): the workspace whose pool the flow
   // joins, named by the publisher. Any other push leaves where the row lives.
@@ -314,21 +316,47 @@ export const webGet = query({
 /** A run of the line (the shipped `line` or a role's `line-<x>`), as opposed to any other workflow. */
 export const isLineRunSlug = (slug: string | null | undefined) => !!slug && (slug === "line" || slug.startsWith("line-"));
 
-/**
- * The line version a run on this problem takes (the-line-model.md LM1: one
- * spine, a version per scenario): the runner's pushed graph that serves the
- * source of the problem's oldest finding, the newest push when two do. Null
- * for a task that is not a problem, a problem with no findings, or a source
- * no version serves; the run then takes the line it was started with.
- */
-export async function lineVersionFor(ctx: any, userId: Id<"users">, task: { _id: Id<"tasks">; source?: string } | null | undefined) {
+/** The source of a problem: its oldest finding's, lowercased; null for a task that is not a problem or has no findings. */
+export async function problemSourceOf(ctx: any, task: { _id: Id<"tasks">; source?: string } | null | undefined): Promise<string | null> {
   if (!task || task.source !== "signal") return null;
   const first = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).order("asc").first();
-  const source = first?.source?.trim().toLowerCase();
-  if (!source) return null;
+  return first?.source?.trim().toLowerCase() || null;
+}
+
+type RouteTask = { _id: Id<"tasks">; source?: string; workspace?: string; cause?: any };
+
+/**
+ * The route a task takes under its workspace's live flow (lib/flowRoute): a
+ * member of the flow's family, whoever runs it. Null when the workspace has
+ * no live flow that is on.
+ */
+export async function liveFlowRouteOf(ctx: any, task: RouteTask | null | undefined): Promise<FlowRoute<Doc<"workflows">> | null> {
+  if (!task?.workspace) return null;
+  const flows: any[] = await ctx.db.query("live_flows").withIndex("by_workspace", (q: any) => q.eq("workspace", task.workspace)).collect();
+  const flow = flows.find((f) => f.on);
+  if (!flow) return null;
+  const rows: Doc<"workflows">[] = await ctx.db.query("workflows").withIndex("by_workspace", (q: any) => q.eq("workspace", flow.workspace)).collect();
+  return flowRouteFor({ flow, spine: await ctx.db.get(flow.workflow_id), rows, source: await problemSourceOf(ctx, task), judge: isJudgeProblem(task.cause) });
+}
+
+/**
+ * The line version a run on this task takes (the-line-model.md LM1: one
+ * spine, a version per scenario). Under a live flow that is on, the flow's
+ * family picks it (liveFlowRouteOf), and `waiting` says why a problem it
+ * routes nowhere yet must not start. Otherwise the runner's pushed graph
+ * that serves the source of the problem's oldest finding, the newest push
+ * when two do; null for a task that is not a problem, a problem with no
+ * findings, or a source no version serves, and the run then takes the line
+ * it was started with.
+ */
+export async function lineRouteFor(ctx: any, userId: Id<"users">, task: RouteTask | null | undefined): Promise<{ workflow: Doc<"workflows"> | null; waiting?: string }> {
+  const route = await liveFlowRouteOf(ctx, task);
+  if (route) return route.workflow ? { workflow: route.workflow } : { workflow: null, waiting: route.waiting };
+  const source = await problemSourceOf(ctx, task);
+  if (!source) return { workflow: null };
   const rows = await ctx.db.query("workflows").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
   const serving = rows.filter((w: any) => (w.serves ?? []).includes(source));
-  return serving.sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0] ?? null;
+  return { workflow: serving.sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0] ?? null };
 }
 
 /** `cast workflow run --task` asks which version the problem runs, to run it from its file on this machine. */
@@ -338,7 +366,8 @@ export const lineVersionForCli = query({
     const result = await verifyApiToken(ctx, args.api_token);
     if (!result) return { error: "Unauthorized" };
     const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", args.task)).first();
-    const row = await lineVersionFor(ctx, result.userId, task);
+    const { workflow: row, waiting } = await lineRouteFor(ctx, result.userId, task);
+    if (waiting) return { version: null, waiting };
     return { version: row ? { slug: row.slug, name: row.name, origin: row.origin ? { device_id: row.origin.device_id, root: row.origin.root, file: row.origin.file } : null, ...(await libraryOfFlow(ctx, row._id)) } : null };
   },
 });

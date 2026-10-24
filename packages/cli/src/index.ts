@@ -20950,11 +20950,15 @@ workflow
     // that (line-map.md LX5); else the calling session's role owns a line
     // (the-line.md L2); a session outside a role runs the shipped "line".
     const { chooseLineSource, lineVersionFile } = await import("./repoLine.js");
-    // A problem runs its scenario's line version (workflows.lineVersionFor); in this process, from its file here.
+    // A problem runs its scenario's line version (workflows.lineRouteFor); in this process, from its file here.
     const taskRef = typeof options.task === "string" ? options.task : null;
-    const causeLine = !fileArg && taskRef
-      ? lineVersionFile((await cliPost("/cli/workflows/line-version", { task: taskRef }).catch(() => null))?.version, deviceId())
-      : null;
+    const lineVersion = !fileArg && taskRef ? await cliPost("/cli/workflows/line-version", { task: taskRef }).catch(() => null) : null;
+    // A problem the team's live flow routes nowhere yet (a judge problem with no judge flow) waits, never runs another line.
+    if (lineVersion?.waiting) {
+      console.error(`${taskRef} waits: ${lineVersion.waiting} in its team's live flow`);
+      process.exit(1);
+    }
+    const causeLine = lineVersion ? lineVersionFile(lineVersion.version, deviceId()) : null;
     const choice = chooseLineSource({
       file: fileArg, taskBound: !!options.task, cwd: process.cwd(), causeLine,
       roleSlug: fileArg ? null : (await ownRole().catch(() => null))?.line_workflow_slug,

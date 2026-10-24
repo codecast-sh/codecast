@@ -15,7 +15,7 @@ import { insertTaskComment, moveTaskStatus } from "./tasks";
 import { createRunCore, isLiveRunStatus, queueRunOnDaemon } from "./workflow_runs";
 import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
-import { isLineRunSlug, lineVersionFor } from "./workflows";
+import { isLineRunSlug, lineRouteFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
 import { holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
 import { allRolesInBoundary, projectLeadRole, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
@@ -371,8 +371,10 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
   const standing = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
   const place = seatPlace(role, standing);
   const hostId: Id<"users"> = place.runner_user_id;
-  // A line run on a problem takes the version that serves its scenario (workflows.lineVersionFor).
-  const workflow = (isLineRunSlug(slug) ? await lineVersionFor(ctx, hostId, task) : null) ?? await ctx.db
+  // A line run on a problem takes its live flow's family member, else the version that serves its scenario (workflows.lineRouteFor).
+  const route = isLineRunSlug(slug) ? await lineRouteFor(ctx, hostId, task) : null;
+  if (route?.waiting) throw new ConvexError(`${task?.short_id ?? "this problem"} waits: ${route.waiting} in its team's live flow`);
+  const workflow = route?.workflow ?? await ctx.db
     .query("workflows")
     .withIndex("by_user_slug", (q: any) => q.eq("user_id", hostId).eq("slug", slug))
     .first();

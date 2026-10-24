@@ -200,3 +200,81 @@ describe("liveFlows (one live flow per team)", () => {
     expect((await sweepCore(ctx, NOW)).started.map((st) => st.task_id)).toEqual(["tasks_d90"]);
   });
 });
+
+// Which graph a live flow's run takes (lib/flowRoute, workflows.lineRouteFor):
+// one of the flow's family, whoever runs the seat, never the runner's own line.
+describe("liveFlows: each problem runs a graph of the flow's family", () => {
+  const WS = `team:${TEAM}`;
+  const wf = (id: string, over: Record<string, any>) => ({ _id: `workflows_${id}`, user_id: HOST, workspace: WS, team_id: TEAM, name: id, label: id, nodes: [], edges: [], created_at: 1, updated_at: 1, ...over });
+  const spine = wf("spine", { slug: "agentwatch", source: 'digraph a { graph [kind="line"] }', serves: ["person"], runs_from: "library", origin: { file: "outreach/line/agentwatch.cast" } });
+  const system = wf("system", { slug: "agentwatch-system", source: 'digraph s { graph [extends="agentwatch.cast"] }', serves: ["union.eval"], runs_from: "library", origin: { file: "outreach/line/agentwatch-system.cast" } });
+  const judgeFlow = wf("judge", { slug: "agentwatch-trial-judge", source: 'digraph j { graph [kind="line", serves="judge-review"] }', serves: ["judge-review"], runs_from: "library", origin: { file: "outreach/line/agentwatch-trial-judge.cast" } });
+  // HOST's own plain line, and a graph of MATE's that serves person outside the flow: neither may run under the flow.
+  const ownLines = [wf("hostline", { slug: "line", workspace: `user:${HOST}` }), wf("mateline", { user_id: MATE, slug: "line", workspace: `user:${MATE}` }), wf("mateperson", { user_id: MATE, slug: "line-person", workspace: `user:${MATE}`, serves: ["person"] })];
+  const version = (w: any, n: number) => ({ _id: `workflow_versions_${w._id}`, workflow_id: w._id, graph_hash: `h${n}`, nodes: [], changed: [], by: HOST, at: n, snapshot: { name: w.name, source: w.source, nodes: [], edges: [], file: w.origin.file, files: [] } });
+  const judgeCause = { signal_count: 2, first_seen: 1, last_seen: 1, fingerprints: ["judge:codecast:agent-review:ex-3"] };
+  const tasks = [
+    problem("person", "deals", 90),
+    problem("eval", "deals", 80),
+    problem("lesson", "growth", 70),
+    problem("judge", "deals", 60, { cause: judgeCause }),
+  ];
+  const signals = [
+    { _id: "signals_person", task_id: "tasks_person", source: "person" },
+    { _id: "signals_eval", task_id: "tasks_eval", source: "union.eval" },
+    { _id: "signals_lesson", task_id: "tasks_lesson", source: "lesson" },
+    { _id: "signals_judge", task_id: "tasks_judge", source: "judge-review" },
+  ];
+  const setup = (flows: any[], flow?: Record<string, any> | null) => fixtures({
+    tasks: tasks.map((t) => ({ ...t })),
+    flow,
+    extra: { workflows: [...flows, ...ownLines], workflow_versions: flows.map(version), signals },
+  });
+  const graphOf = (tables: Record<string, any[]>, t: string) => tables.workflow_runs.find((r) => r.task_id === `tasks_${t}`)?.workflow_id;
+
+  test("the member serving the source, else the spine, on any runner; each run records its library versions", async () => {
+    const { ctx, tables } = setup([spine, system, judgeFlow]);
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_person", "tasks_eval", "tasks_lesson", "tasks_judge"]);
+    // Deals runs on MATE's machine, and MATE pushed no graph of the flow's: the runs still take the family's.
+    expect(tables.workflow_runs.find((r) => r.task_id === "tasks_person")).toMatchObject({ user_id: MATE, workflow_id: "workflows_spine" });
+    expect(graphOf(tables, "eval")).toBe("workflows_system");
+    expect(graphOf(tables, "lesson")).toBe("workflows_spine");
+    expect(graphOf(tables, "judge")).toBe("workflows_judge");
+    // A variant records itself and the spine it extends.
+    expect(tables.workflow_runs.find((r) => r.task_id === "tasks_eval")!.flow_versions).toEqual([
+      { workflow_id: "workflows_system", version_id: "workflow_versions_workflows_system" },
+      { workflow_id: "workflows_spine", version_id: "workflow_versions_workflows_spine" },
+    ]);
+    expect(tables.workflow_runs.find((r) => r.task_id === "tasks_judge")!.flow_versions).toEqual([{ workflow_id: "workflows_judge", version_id: "workflow_versions_workflows_judge" }]);
+  });
+
+  test("with no judge flow in the family a judge problem waits, saying so, and the rest start", async () => {
+    const { ctx, tables } = setup([spine, system]);
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_person", "tasks_eval", "tasks_lesson"]);
+    expect(graphOf(tables, "judge")).toBeUndefined();
+    const view = await liveFlowView(ctx, tables.live_flows[0], NOW);
+    expect(view.queue).toEqual([{ task_id: "tasks_judge", waiting: "no judge flow" }]);
+    // A start outside the sweep refuses it too, rather than run another line.
+    const { startLineRun } = await import("./orgLine");
+    await expect(startLineRun(ctx, tables.org_roles.find((r) => r.handle === "deals"), tables.tasks.find((t) => t._id === "tasks_judge"), NOW)).rejects.toThrow("ct-judge waits: no judge flow");
+  });
+
+  test("without a live flow a run keeps its runner's own versions", async () => {
+    const { ctx, tables } = setup([spine, system, judgeFlow], null);
+    const { startLineRun } = await import("./orgLine");
+    const deals = tables.org_roles.find((r) => r.handle === "deals")!;
+    deals.line_workflow_slug = "line";
+    for (const t of ["tasks_person", "tasks_eval"]) await startLineRun(ctx, deals, tables.tasks.find((x) => x._id === t), NOW);
+    expect(graphOf(tables, "person")).toBe("workflows_mateperson");
+    expect(graphOf(tables, "eval")).toBe("workflows_mateline");
+  });
+
+  test("with the flow off, a start by hand keeps the runner's own versions", async () => {
+    const { ctx, tables } = setup([spine, system, judgeFlow], { on: false });
+    const { startLineRun } = await import("./orgLine");
+    const deals = tables.org_roles.find((r) => r.handle === "deals")!;
+    deals.line_workflow_slug = "line";
+    await startLineRun(ctx, deals, tables.tasks.find((t) => t._id === "tasks_person"), NOW);
+    expect(graphOf(tables, "person")).toBe("workflows_mateperson");
+  });
+});
