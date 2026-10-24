@@ -3,14 +3,18 @@
 // One snapshot query (registry entry `secrets`) carries every secret the
 // viewer can read, metadata only, mounted once by HostFeeders. The page shows
 // a team's secrets beside the viewer's personal ones, so the reader spans both
-// workspace keys.
+// workspace keys. Under a sample Vault (components/secrets/sampleVault, an
+// agent's tab) every reader and writer here answers from the sample instead,
+// and no query or action runs.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { FunctionReturnType } from "convex/server";
 import { payloadFingerprint, type SecretMeta, type SecretPayload, type SecretVersionMeta } from "@codecast/shared/contracts/secrets";
 import { fillRequest, isStaged, stagedSwap, vaultFailure } from "../components/secrets/vaultModel";
+import { useSampleVault, type SampleVault } from "../components/secrets/sampleVault";
+import { usePresence } from "../lib/passkeyPresence";
 import { useSyncCollection } from "./useSyncCollection";
 import { useWorkspacesCollection } from "./useWorkspaceCollection";
 import { useInboxStore } from "../store/inboxStore";
@@ -28,9 +32,18 @@ export function useSyncSecrets(enabled = true) {
   }, [ready]);
 }
 
+const noSubscribe = () => () => {};
+
+/** What `read` answers from the sample Vault this tree shows, kept current; undefined under the real one. */
+function useSampleRead<T>(read: (sample: SampleVault) => T): T | undefined {
+  const sample = useSampleVault();
+  return useSyncExternalStore(sample?.subscribe ?? noSubscribe, () => (sample ? read(sample) : undefined), () => undefined);
+}
+
 /** The server has answered for the Vault on this device, so an empty store means an empty Vault. */
 export function useSecretsLoaded(): boolean {
-  return useInboxStore((s) => !!s.syncMeta?.[SECRETS_FED]?.backfilledAt);
+  const fed = useInboxStore((s) => !!s.syncMeta?.[SECRETS_FED]?.backfilledAt);
+  return !!useSampleVault() || fed;
 }
 
 /** Rows re-render on the fields the list and the detail panel show. */
@@ -46,13 +59,15 @@ export function useVaultScope(teamId?: string | null): VaultScope {
   const id = teamId === undefined ? activeTeamId : teamId;
   const name = useInboxStore((s) => (id ? (s.teams ?? []).find((t: any) => String(t._id) === id)?.name ?? "Team" : null));
   const personal = userId ? `user:${userId}` : null;
-  return useMemo(() => ({ team: id && name ? { key: `team:${id}`, id, name } : null, personal }), [id, name, personal]);
+  const scope = useMemo(() => ({ team: id && name ? { key: `team:${id}`, id, name } : null, personal }), [id, name, personal]);
+  return useSampleVault()?.scope ?? scope;
 }
 
 /** The Vault's rows: the team's in that scope (the active one unless another is named) beside the viewer's own. */
 export function useSecrets(teamId?: string | null): SecretMeta[] {
   const { team, personal } = useVaultScope(teamId);
-  return useWorkspacesCollection<SecretMeta>("secrets", secretSig, [team?.key ?? null, personal]);
+  const rows = useWorkspacesCollection<SecretMeta>("secrets", secretSig, [team?.key ?? null, personal]);
+  return useSampleRead((s) => s.rows()) ?? rows;
 }
 
 /** Every secret the viewer holds, in each of their teams and their own: what a short id in a transcript resolves against. */
@@ -78,16 +93,19 @@ export function useSecretHistory<L extends keyof SecretHistory>(list: L, id: str
   // A stable select: the feeder applies again whenever it changes, and a fresh
   // one each render would write the last answer back over a staged press.
   const select = useCallback((data: unknown) => (Array.isArray(data) ? [{ _id: key, rows: data }] : []), [key]);
-  const { error, retry } = useSyncCollection("secretHistory", query, enabled ? { ref: id } : "skip", { select });
-  const rows = useInboxStore((s) => (s as any).secretHistory?.[key]?.rows) as SecretHistory[L][] | undefined;
-  return { rows, error, retry };
+  const sample = useSampleVault();
+  const { error, retry } = useSyncCollection("secretHistory", query, enabled && !sample ? { ref: id } : "skip", { select });
+  const stored = useInboxStore((s) => (s as any).secretHistory?.[key]?.rows);
+  const sampled = useSampleRead((s) => s.history(key));
+  return { rows: (sample ? sampled : stored) as SecretHistory[L][] | undefined, error, retry };
 }
 
 /** Fills a requested secret: the row reads ready at once and goes back to requested on a refusal (fillRequest). */
 export function useFillRequest() {
   const fulfill = useAction(api.secrets.fulfill);
   const stage = useInboxStore((s) => s.stageSecret);
-  return (row: SecretMeta, payload: SecretPayload) => fillRequest(row, payload, { stage, fulfill });
+  const sample = useSampleVault();
+  return async (row: SecretMeta, payload: SecretPayload) => (sample ? sample.fill(row, payload) : fillRequest(row, payload, { stage, fulfill }));
 }
 
 /** The value a swap shows, held over the list's pushes until the server's row carries it (a refusal holds the old one, which the next push retires). */
@@ -107,7 +125,9 @@ export function useSwapValue() {
   const restore = useAction(api.secrets.restore);
   const stage = useInboxStore((s) => s.stageSecret);
   const stageHistory = useInboxStore((s) => s.stageSecretHistory);
+  const sample = useSampleVault();
   return async (row: SecretMeta, swap: { kind: "rotated"; payload: SecretPayload } | { kind: "restored"; version: SecretVersionMeta }): Promise<string | null> => {
+    if (sample) return sample.swap(row, swap);
     const keys = { events: `events:${row._id}`, versions: `versions:${row._id}` };
     const before = { events: historyOf(keys.events), versions: historyOf(keys.versions) as SecretVersionMeta[] | undefined };
     const me = useInboxStore.getState().currentUser?.name ?? "You";
@@ -132,4 +152,29 @@ export function useSwapPending(id: string): boolean {
 /** Ask first's field lock while the server has not echoed a press: its value is the one pressed. */
 export function useAskFirstLock(id: string): { value?: unknown; ts: number } | undefined {
   return useInboxStore((s) => s.pending[`secrets:${id}:ask_first`] as { value?: unknown; ts: number } | undefined);
+}
+
+/**
+ * A secret's one-press writes: edit its name, env vars, sites or note, remove
+ * it (`only: "requested"` is a decline), and switch Ask first, which takes
+ * Touch ID to turn off (lib/passkeyPresence). The store's local-first actions,
+ * or the sample's.
+ */
+export function useVaultActions() {
+  const sample = useSampleVault();
+  const updateSecretMeta = useInboxStore((s) => s.updateSecretMeta);
+  const removeSecret = useInboxStore((s) => s.removeSecret);
+  const setSecretAskFirst = useInboxStore((s) => s.setSecretAskFirst);
+  const confirm = usePresence();
+  return useMemo(
+    () =>
+      sample
+        ? { updateMeta: sample.updateMeta, remove: sample.remove, setAskFirst: sample.setAskFirst }
+        : {
+            updateMeta: updateSecretMeta,
+            remove: removeSecret,
+            setAskFirst: (id: string, on: boolean) => (on ? setSecretAskFirst(id, true) : void confirm("ask_first_off", id).then((grant) => grant && setSecretAskFirst(id, false, grant))),
+          },
+    [sample, updateSecretMeta, removeSecret, setSecretAskFirst, confirm],
+  );
 }

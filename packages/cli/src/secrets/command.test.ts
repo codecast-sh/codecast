@@ -50,7 +50,8 @@ describe("cast vault on the wire", () => {
     const { VAULT_SNIPPET, VAULT_REFERENCE } = await import("@codecast/shared/contracts");
     const { commandGroup } = await import("../commandGroups.js");
     await h.run("get", "--help").catch(() => {});
-    for (const text of [VAULT_SNIPPET, VAULT_REFERENCE, commandGroup("vault").description, stdout]) {
+    expect(VAULT_SNIPPET).toContain("Never print one or put it in argv");
+    for (const text of [VAULT_REFERENCE, commandGroup("vault").description, stdout]) {
       expect(text).toContain("< <(");
       for (const sentence of text.split(/(?<=\.)\s|\n/)) {
         if (/\$\((…|cast vault get)/.test(sentence)) expect(sentence.toLowerCase()).toContain("never");
@@ -58,9 +59,9 @@ describe("cast vault on the wire", () => {
     }
   });
 
-  test("the snippet says a 2FA code is fine to read, how to use it, and that run and [vault] never provide one", async () => {
-    const { VAULT_SNIPPET, VAULT_REFERENCE } = await import("@codecast/shared/contracts");
-    const otp = VAULT_SNIPPET.split(/(?<=\.)\s/).find((s) => s.includes("cast vault otp"))!;
+  test("the guide says a 2FA code is fine to read, how to use it, and that run and [vault] never provide one", async () => {
+    const { VAULT_REFERENCE } = await import("@codecast/shared/contracts");
+    const otp = VAULT_REFERENCE.split(/\n\n/).find((s) => s.includes("comes only from `cast vault otp"))!;
     for (const part of ["reading it is fine", "cast browser type", "< <(cast vault otp <name>)", "`run` and `[vault]` never provide"]) expect(otp).toContain(part);
     expect(VAULT_REFERENCE).toContain("never its 2FA code");
   });

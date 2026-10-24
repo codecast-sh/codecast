@@ -714,12 +714,14 @@ export const VAULT_SNIPPET_END = "<!-- /codecast-vault -->";
 export const VAULT_SNIPPET = `
 ## Vault
 
-Take credentials from the team's Vault; never ask a person to paste one. Hand a value to the command, never your context: \`cast vault run [names] -- <cmd>\`, \`vault://<name>\` in an \`--env-file\`, or stdin via \`< <(cast vault get <name>)\`. Never put one in an argument (\`$(…)\` included: argv is public), print it, or write it to a tracked file. Missing one: \`cast vault request <name> --why "…"\`; a read exiting 3 names the decision it waits on. Either way, end the turn dormant naming it. A login's 2FA code comes from \`cast vault otp <name>\` (\`run\` and \`[vault]\` never provide it); it is single use, so reading it is fine: type it with \`cast browser type\` or pipe \`< <(cast vault otp <name>)\`. After signing in by hand, save it: \`cast vault save-signin <site>\`. \`cast guide vault\` has the rest.
+Credentials: \`cast guide vault\`. Never print one or put it in argv.
 ${VAULT_SNIPPET_END}
 `;
 
 /** What `cast guide vault` prints after the body: the detail an install leaves out of CLAUDE.md. */
 export const VAULT_REFERENCE = `
+Take credentials from the team's Vault; never ask a person to paste one. Hand a value to the command, never your context: \`cast vault run [names] -- <cmd>\`, \`vault://<name>\` in an \`--env-file\`, or stdin via \`< <(cast vault get <name>)\`. Never put one in an argument (\`$(…)\` included: \`ps\` shows arguments to every local user), print it, or write it to a tracked file. Missing one: \`cast vault request <name> --why "…"\`; a read that exits 3 names the decision it waits on. Either way, end the turn dormant naming it.
+
 \`\`\`bash
 cast vault ls                                    # what you can use, open requests first
 cast vault ls --stale                            # only what needs a look: expired, expiring, never used, stale
@@ -742,6 +744,8 @@ cast vault rm <name> --yes
 A \`[vault]\` line in \`.codecast/workspace.toml\` is \`ENV_VAR = "secret-name"\`, or \`{ secret = "secret-name", required = true }\` when \`cast dev\` must not start without it; \`run\` with no names injects that map. A login maps its password and a file its temp path; for the username, use an env file line \`USER=vault://<name>/username\`. \`cast vault ls\` marks the secrets this repo maps and names the \`cast vault request\` for each one the Vault lacks. An env file of \`vault://\` lines names secrets without holding them, so it is safe to commit; \`vault://<name>\` is a key's value, a login's password or a file's temp path, and \`/<field>\` picks username, password, value or content. Only \`run --env-file\` fills them: a dev server that reads \`.env\` itself sees the literal string.
 
 A ready secret that needs a look carries one health word in \`ls\` and \`show\`: \`expired\` or \`expiring\` (a sign-in's cookies are past, or within 3 days of, running out: save it again), \`never used\` (no agent read it in the day since it was stored) or \`stale\` (last read over 90 days ago). \`ls --stale\` lists only those.
+
+A login's 2FA code comes only from \`cast vault otp <name>\` (\`run\` and \`[vault]\` never provide it). A code is single use and expires in seconds, so reading it is fine: type it with \`cast browser type\`, or pipe \`< <(cast vault otp <name>)\`. After signing in by hand in the agent browser, \`cast vault save-signin <site>\` keeps that sign-in for every agent.
 
 **Ask first.** A person can mark a secret Ask first. Your first read of it in a session reads nothing, prints the decision a person answers (\`sd-N\`) and exits 3; \`--why\` on \`get\`, \`run\`, \`env\` or \`otp\` words their question. End the turn dormant naming that decision and rerun once the answer wakes you; an approval holds for the rest of the session, and a denial means the next read asks again. Ask first is the person's guard: never turn it off (\`cast vault ask-first <name> off\`) to get past it.
 

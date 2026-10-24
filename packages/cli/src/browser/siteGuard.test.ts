@@ -106,17 +106,26 @@ describe("signInLandingNote", () => {
 });
 
 describe("the Vault page is a person's", () => {
-  test("an agent cannot open /vault on any codecast origin, and the attempt is on the trail", () => {
-    for (const url of ["https://codecast.sh/vault", "codecast.sh/vault?s=sec-4", "https://local.codecast.sh/vault/", "http://localhost:3200/vault", "http://127.0.0.1:3200/VAULT?s=x"]) {
+  test("an agent cannot open /vault on a codecast origin that serves the person's Vault, and the attempt is on the trail", () => {
+    for (const url of ["https://codecast.sh/vault", "codecast.sh/vault?s=sec-4", "https://www.codecast.sh/VAULT", "https://local.codecast.sh/vault/"]) {
       const deny = refuseNavigation(url, "s", "open", null);
       expect(deny?.message).toContain("only a person uses the Vault page");
+      expect(deny?.hint).toContain("localhost:3200/vault");
     }
     expect(readAudit().every((r) => r.blocked)).toBe(true);
   });
 
-  test("a web_url this machine is configured with counts as codecast", () => {
+  test("the dev server's /vault opens: an agent's tab sees a sample Vault there", () => {
+    for (const url of ["http://localhost:3200/vault", "http://127.0.0.1:3200/VAULT?s=sec-901", "localhost:3200/vault/"]) {
+      expect(refuseNavigation(url, "s", "open", null)).toBeNull();
+    }
+  });
+
+  test("a web_url this machine is configured with counts as codecast, unless it is the dev server", () => {
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ web_url: "https://cast.example.dev" }));
     expect(refuseNavigation("https://cast.example.dev/vault", "s", "open", null)).not.toBeNull();
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ web_url: "http://localhost:3200" }));
+    expect(refuseNavigation("http://localhost:3200/vault", "s", "open", null)).toBeNull();
   });
 
   test("the rest of the app, and /vault on any other site, stay open", () => {

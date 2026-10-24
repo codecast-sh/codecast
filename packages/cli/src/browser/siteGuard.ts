@@ -50,9 +50,12 @@ export function refuseNavigation(
   return deny;
 }
 
+/** The web dev server, where agents verify UI: in an agent's tab its Vault page shows a sample, never the person's secrets. */
+const DEV_WEB_HOSTS = new Set(["localhost:3200", "127.0.0.1:3200"]);
+
 /** Where codecast's own web app answers: the public app, the local proxy, the dev server, and the web_url this machine is configured with. */
 function codecastHosts(): Set<string> {
-  const hosts = new Set(["codecast.sh", "www.codecast.sh", "local.codecast.sh", "localhost:3200", "127.0.0.1:3200"]);
+  const hosts = new Set(["codecast.sh", "www.codecast.sh", "local.codecast.sh", ...DEV_WEB_HOSTS]);
   for (const base of [DEFAULT_WEB_URL, webBaseUrl()]) {
     try {
       hosts.add(new URL(base).host.toLowerCase());
@@ -65,7 +68,8 @@ function codecastHosts(): Set<string> {
  * codecast's Vault page is a person's: from it an agent driving their signed-in
  * browser could reveal an Ask first value, approve its own read or switch Ask
  * first off, and the backend cannot tell those clicks from theirs. The rest of
- * the app stays open for agents to verify.
+ * the app stays open for agents to verify, and so does the dev server's Vault
+ * page, which shows an agent's tab a sample Vault.
  */
 export function vaultPageRefusal(url: string): { message: string; hint: string } | null {
   let u: URL;
@@ -74,10 +78,11 @@ export function vaultPageRefusal(url: string): { message: string; hint: string }
   } catch {
     return null;
   }
-  if (!/^\/vault(\/|$)/i.test(u.pathname) || !codecastHosts().has(u.host.toLowerCase())) return null;
+  const host = u.host.toLowerCase();
+  if (!/^\/vault(\/|$)/i.test(u.pathname) || DEV_WEB_HOSTS.has(host) || !codecastHosts().has(host)) return null;
   return {
     message: `refusing to open ${u.origin}/vault: only a person uses the Vault page`,
-    hint: "Read a secret with cast vault get or run, and ask for a missing one with cast vault request; an old /vault?f= Files link opens as /files.",
+    hint: "Read a secret with cast vault get or run, and ask for a missing one with cast vault request. To check the Vault page itself, open http://localhost:3200/vault: the dev server shows an agent's tab a sample Vault. An old /vault?f= Files link opens as /files.",
   };
 }
 

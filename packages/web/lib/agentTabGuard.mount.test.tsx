@@ -166,7 +166,7 @@ describe("the Ask first switch", () => {
     stamp();
     const { container, unmount } = await mount(<AskFirst row={{ ...row, ask_first: true }} team={null} />);
     expect(sw(container).disabled).toBe(true);
-    expect(container.querySelector("[data-vault-held]")!.textContent).toBe(PERSON_ONLY.askFirstOff);
+    expect(container.querySelector("[data-vault-held]")!.getAttribute("aria-label")).toBe(PERSON_ONLY.askFirstOff);
     unmount();
   });
 

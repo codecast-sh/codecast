@@ -6,112 +6,26 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, Fingerprint, Loader2, Lock, X } from "lucide-react";
-import { envNameIssue, isExpiring, siteProblem, type EnvNameIssue, type FilePayload, type KeyPayload, type LoginPayload, type SecretMeta, type SecretVersionMeta, type SigninPayload } from "@codecast/shared/contracts/secrets";
+import { envNameIssue, isExpiring, siteProblem, type EnvNameIssue, type FilePayload, type KeyPayload, type LoginPayload, type SecretMeta, type SecretMetaEdit, type SecretVersionMeta, type SigninPayload } from "@codecast/shared/contracts/secrets";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { useInboxStore } from "../../store/inboxStore";
-import { useAskFirstLock, useSecretHistory, useSwapPending, useSwapValue, type SecretEvent } from "../../hooks/useSyncSecrets";
+import { useAskFirstLock, useSecretHistory, useSwapPending, useSwapValue, useVaultActions, type SecretEvent } from "../../hooks/useSyncSecrets";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { formatRelativeTime, formatFullTimestamp } from "../../lib/conversationFormat";
 import { EntityIdPill } from "../EntityIdPill";
-import { SwitchReview, type SwitchFigure, type SwitchLedger } from "../consequential/ConsequentialSwitch";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { KeyCap } from "../KeyCap";
 import { Switch } from "../ui/switch";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
-import { usePresence } from "../../lib/passkeyPresence";
-import { FieldProblem, KIND, KindGlyph, MaskedField, ReplaceButton, Row, ScopeMark, TotpCode, useCopy, useReveal, type Replace } from "./parts";
+import { FieldProblem, KindGlyph, MaskedField, ReplaceButton, Row, ScopeMark, TotpCode, type Replace } from "./parts";
+import { KIND } from "../../lib/secretLook";
+import { useCopy } from "../../hooks/useCopy";
+import { useReveal } from "../../hooks/useReveal";
 import { DeclineRequest, ValueEditor } from "./ValueForm";
+import { askFirstOffLedger, deleteLedger, restoreLedger, rotateLedger, type LedgerTeam } from "../../lib/secretLedgers";
 import { EVENT_TONE, EVENT_VERB, HEALTH, envVars, formatIn, isStub, nameIssue, namesIn, isStaged, secretHealth, splitList, withPendingAskFirst } from "./vaultModel";
 
-type LedgerTeam = { name: string; people: number } | null;
-
 const FOOTER_ACT = "h-7 rounded-md px-2.5 text-[12px] text-sol-text-dim hover:bg-sol-red/10 hover:text-sol-red";
-
-/** Where a ledger's secret lives, the same on every confirm. */
-const scopeSubject = (team: { name: string } | null) => (team ? `Team · ${team.name}` : "Only me");
-
-/** Whose agents the press reaches, named by audience (a count here would read as agents), and what it does to them ("lose it", "switch to it"). */
-const audienceFigure = (team: LedgerTeam, verb: string): SwitchFigure =>
-  team
-    ? { value: team.name, label: `${team.people} ${team.people === 1 ? "person's" : "people's"} agents ${verb}`, tone: "warn" }
-    : { value: "Only you", label: `your agents ${verb}`, tone: "warn" };
-
-const readsFigure = (row: SecretMeta): SwitchFigure => ({ value: String(row.use_count ?? 0), label: "agent reads so far" });
-
-/** Delete, as the confirm shows it: who loses the secret, and what goes with it. */
-export function deleteLedger(row: SecretMeta, team: LedgerTeam): SwitchLedger {
-  const injects = envVars(row);
-  return {
-    name: `Delete ${row.name}`,
-    subject: scopeSubject(team),
-    shift: null,
-    figures: [audienceFigure(team, "lose it"), readsFigure(row)],
-    rows: [
-      ...(injects.length ? [{ k: "Env vars", v: injects.join(" "), tone: "warn" as const }] : []),
-      ...(row.sites?.length ? [{ k: "Sites", v: row.sites.join(", ") }] : []),
-      { k: "Activity", v: "Kept, under its name" },
-      { k: "To undo", v: "Add it again, with the value", tone: "warn" },
-    ],
-    confirm: `Delete ${row.name}`,
-    keep: "Keep it",
-  };
-}
-
-/** Turning Ask first off, as the confirm shows it: which agents then read the secret without a person saying yes. */
-export function askFirstOffLedger(row: SecretMeta, team: LedgerTeam): SwitchLedger {
-  return {
-    name: "Turn off Ask first",
-    subject: `${row.name} · ${scopeSubject(team)}`,
-    shift: ["On", "Off"],
-    figures: [audienceFigure(team, "read it unasked"), readsFigure(row)],
-    rows: [
-      { k: "Approval", v: "None, from the next read", tone: "warn" },
-      { k: "Activity", v: "Every read still logged" },
-      { k: "To undo", v: "Turn Ask first on" },
-    ],
-    confirm: "Turn off Ask first",
-    keep: "Keep it on",
-  };
-}
-
-/** Restore, as the confirm shows it: the value coming back, and where the current one goes. */
-export function restoreLedger(row: SecretMeta, version: SecretVersionMeta, team: LedgerTeam): SwitchLedger {
-  return {
-    name: `Restore ${row.name}`,
-    subject: scopeSubject(team),
-    shift: null,
-    figures: [
-      { value: formatRelativeTime(version.rotated_at), label: "replaced" },
-      ...(version.fingerprint ? [{ value: version.fingerprint, label: "value coming back" }] : []),
-    ],
-    rows: [
-      ...(version.rotated_by_name ? [{ k: "Replaced by", v: version.rotated_by_name }] : []),
-      { k: "Agents", v: "Read it from their next use", tone: "warn" as const },
-      { k: "Current", v: "Kept 7 days" },
-      { k: "To undo", v: "Restore the current value" },
-    ],
-    confirm: "Restore",
-    keep: "Keep current",
-  };
-}
-
-/** Rotate, as the confirm shows it: who reads the new value, and that the current one stays restorable. */
-export function rotateLedger(row: SecretMeta, team: LedgerTeam): SwitchLedger {
-  const injects = envVars(row);
-  return {
-    name: `Replace ${row.name}`,
-    subject: scopeSubject(team),
-    shift: null,
-    figures: [audienceFigure(team, "switch to it"), readsFigure(row)],
-    rows: [
-      ...(injects.length ? [{ k: "Env vars", v: injects.join(" ") }] : []),
-      { k: "From", v: "Each agent's next use", tone: "warn" },
-      { k: "Current", v: "Kept 7 days under Previous" },
-      { k: "To undo", v: "Restore the current value" },
-    ],
-    confirm: "Replace",
-    keep: "Keep current",
-  };
-}
 
 /** A list of short strings edited in place: chips with ×, and a field that adds on Enter, space or comma. */
 function ChipEditor({ items, implied, onChange, problemOf, placeholder, mono = true }: { items: string[]; implied?: string[]; onChange: (next: string[]) => void; problemOf?: (s: string) => string | EnvNameIssue | null; placeholder: string; mono?: boolean }) {
@@ -266,7 +180,7 @@ function Activity({ row }: { row: SecretMeta }) {
       ) : (
         <ol className="flex flex-col">
           {events.map((e) => (
-            // The time stays whole. A pill takes only the width left over (basis 0), so it gives way before the words.
+            // The time stays whole. A pill takes only the width left over (basis 0), so it gives way before the words, down to a few letters of its title.
             <li key={e._id} className="flex min-w-0 items-center gap-2 py-1 text-[12px]" data-vault-event={e.kind} data-vault-event-pending={isStaged(e) || undefined}>
               <span className="size-1.5 shrink-0 rounded-full" style={{ background: EVENT_TONE[e.kind] ? `var(--sol-${EVENT_TONE[e.kind]})` : "var(--sol-text-dim)" }} />
               <span className="min-w-0 truncate text-sol-text">{e.actor_name ?? "Someone"}</span>
@@ -275,13 +189,13 @@ function Activity({ row }: { row: SecretMeta }) {
                 {e.purpose && e.kind === "read" ? ` · ${e.purpose}` : ""}
               </span>
               {e.conversation_id ? (
-                <span className="min-w-0 flex-1 truncate">
-                  <EntityIdPill id={e.conversation_id} type="session" label={e.session_title ?? e.session_short_id} compact />
+                <span className="min-w-[7ch] flex-1 truncate">
+                  <EntityIdPill id={e.conversation_id} type="session" label={e.session_title ?? e.session_short_id} wide />
                 </span>
               ) : null}
               {e.kind === "approval_requested" && e.decision_short_id ? (
-                <span className="min-w-0 flex-1 truncate">
-                  <EntityIdPill id={e.decision_short_id} type="decision" compact />
+                <span className="min-w-[7ch] flex-1 truncate">
+                  <EntityIdPill id={e.decision_short_id} type="decision" wide />
                 </span>
               ) : null}
               {isStaged(e) ? <Saving /> : <span className="ml-auto shrink-0 tabular-nums text-sol-text-dim" title={formatFullTimestamp(e.at)}>{formatRelativeTime(e.at)}</span>}
@@ -369,8 +283,7 @@ function Versions({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
 
 /** Ask first: on is one press; off removes a guard, so it goes through the confirm and then Touch ID. */
 export function AskFirst({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
-  const setSecretAskFirst = useInboxStore((s) => s.setSecretAskFirst);
-  const confirm = usePresence();
+  const { setAskFirst } = useVaultActions();
   const saving = !!useAskFirstLock(row._id);
   const [reviewing, setReviewing] = useState(false);
   const on = !!row.ask_first;
@@ -380,17 +293,12 @@ export function AskFirst({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
   return (
     <Row label="Ask first">
       <span className="flex items-center gap-2 pt-0.5" title={held ?? (on ? "Turn off with Touch ID" : undefined)}>
-        <Switch checked={on} onCheckedChange={(next) => (next ? setSecretAskFirst(row._id, true) : setReviewing(true))} disabled={isStub(row) || !!held} aria-label="Ask first" aria-busy={saving || undefined} />
-        <span className={`text-[12px] ${on ? "text-sol-cyan" : "text-sol-text-dim"}`} data-vault-ask-first={on ? "on" : "off"}>
-          {on ? "Agents ask you per session" : "Agents read it unasked"}
+        <Switch checked={on} onCheckedChange={(next) => (next ? setAskFirst(row._id, true) : setReviewing(true))} disabled={isStub(row) || !!held} aria-label="Ask first" aria-busy={saving || undefined} />
+        <span className={`whitespace-nowrap text-[12px] ${on ? "text-sol-cyan" : "text-sol-text-dim"}`} data-vault-ask-first={on ? "on" : "off"}>
+          {on ? "On · per session" : "Off"}
         </span>
         {on && !held && <Fingerprint size={12} className="shrink-0 text-sol-text-dim" aria-label="Turning it off asks for Touch ID" data-vault-ask-first-gated />}
-        {held && (
-          <span className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim" data-vault-held>
-            <Lock size={11} />
-            {held}
-          </span>
-        )}
+        {held && <Lock size={12} className="shrink-0 text-sol-text-dim" aria-label={held} data-vault-held />}
         {saving && <Loader2 size={12} className="shrink-0 animate-spin text-sol-text-dim motion-reduce:animate-none" aria-label="Saving" data-vault-ask-first-saving />}
       </span>
       {reviewing && (
@@ -399,7 +307,7 @@ export function AskFirst({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
           onClose={() => setReviewing(false)}
           onConfirm={() => {
             setReviewing(false);
-            void confirm("ask_first_off", row._id).then((grant) => grant && setSecretAskFirst(row._id, false, grant));
+            setAskFirst(row._id, false);
           }}
         />
       )}
@@ -440,14 +348,26 @@ function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
     const s = p as SigninPayload | null;
     const exp = row.signin_expires_at;
     const expired = exp !== undefined && exp < Date.now();
+    const expiring = exp !== undefined && !expired && isExpiring(exp, Date.now());
+    // Expired or about to be, capturing again is the one thing to do, so it sits on the line that says so, in its color.
+    const recapture = replace && !replace.editor && (expired || expiring);
     body = (
       <>
-        <Row label="Expires">
-          <span className="text-[12.5px]" style={{ color: exp === undefined ? "var(--sol-text-muted)" : expired ? "var(--sol-red)" : isExpiring(exp, Date.now()) ? "var(--sol-orange)" : "var(--sol-text)" }} title={exp ? formatFullTimestamp(exp) : undefined}>
-            {exp === undefined ? "When the browser closes" : expired ? `Expired ${formatRelativeTime(exp)}` : formatFullTimestamp(exp)}
+        <Row
+          label="Expires"
+          actions={
+            recapture ? (
+              <button type="button" onClick={replace.start} disabled={replace.saving} className={`h-7 whitespace-nowrap rounded-md border px-2.5 text-[12px] disabled:opacity-50 ${expired ? "border-sol-red/50 text-sol-red hover:bg-sol-red/10" : "border-sol-orange/50 text-sol-orange hover:bg-sol-orange/10"}`} data-vault-recapture>
+                Capture again
+              </button>
+            ) : undefined
+          }
+        >
+          <span className="text-[12.5px]" style={{ color: exp === undefined ? "var(--sol-text-muted)" : expired ? "var(--sol-red)" : expiring ? "var(--sol-orange)" : "var(--sol-text)" }} title={exp ? formatFullTimestamp(exp) : undefined}>
+            {exp === undefined ? "When the browser closes" : expired ? `Expired ${formatRelativeTime(exp)}` : expiring ? formatIn(exp, Date.now()) : formatFullTimestamp(exp)}
           </span>
         </Row>
-        <Row label="Captured" align={replace?.editor ? "input" : undefined} actions={replace && !replace.editor ? <ReplaceButton onClick={replace.start} saving={replace.saving} /> : undefined}>
+        <Row label="Captured" align={replace?.editor ? "input" : undefined} actions={replace && !replace.editor && !recapture ? <ReplaceButton onClick={replace.start} saving={replace.saving} /> : undefined}>
           {replace?.editor ? (
             replace.editor
           ) : s ? (
@@ -493,8 +413,7 @@ function ShortIdButton({ id }: { id: string | undefined }) {
 
 /** `over` when it covers the list (a narrow page): a back row on top takes the close button's place. */
 export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMeta; rows: SecretMeta[]; team: { id: string; name: string } | null; over?: boolean; onClose: () => void }) {
-  const updateSecretMeta = useInboxStore((s) => s.updateSecretMeta);
-  const removeSecret = useInboxStore((s) => s.removeSecret);
+  const { updateMeta, remove } = useVaultActions();
   const people = useInboxStore((s) => peopleOf(s.teamMembers).length);
   const now = useCoarseNow(60_000);
   const health = secretHealth(row, now);
@@ -503,7 +422,7 @@ export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMe
   const [deleting, setDeleting] = useState(false);
   const isTeam = row.workspace.startsWith("team:");
   const taken = useMemo(() => namesIn(rows, row.workspace, row._id), [rows, row.workspace, row._id]);
-  const edit = (fields: Parameters<typeof updateSecretMeta>[1]) => !isStub(row) && updateSecretMeta(row._id, fields);
+  const edit = (fields: SecretMetaEdit) => !isStub(row) && updateMeta(row._id, fields);
   const implied = envVars({ ...row, env: [] });
   const ledgerTeam = isTeam ? { name: team && row.team_id === team.id ? team.name : "another team", people } : null;
 
@@ -526,12 +445,12 @@ export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMe
             onSave={(name) => edit({ name: name.trim() })}
             className="-ml-1 px-1 font-mono text-[15px] font-semibold text-sol-text"
           />
-          {/* One line, whole at any width: the short kind label, the scope, the health. */}
+          {/* One line: the short kind label, the scope, the health. The team name gives way first. A sign-in's expiry is its own row below, so it is not said here too. */}
           <div className="mt-0.5 flex min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden whitespace-nowrap text-[11.5px] text-sol-text-muted" data-vault-detail-meta>
             <span className="shrink-0">{KIND[row.kind].short}</span>
             <span className="shrink-0 text-sol-text-dim">·</span>
-            <ScopeMark row={row} teamName={ledgerTeam?.name} className="shrink-0 text-[11.5px]" />
-            {health ? (
+            <ScopeMark row={row} teamName={ledgerTeam?.name} className="min-w-0 truncate text-[11.5px]" />
+            {health && !(row.kind === "signin" && (health === "expired" || health === "expiring")) ? (
               <>
                 <span className="shrink-0 text-sol-text-dim">·</span>
                 <span className="inline-flex shrink-0 items-center gap-1" style={{ color: `var(--sol-${HEALTH[health].tone})` }} data-vault-health={health}>
@@ -621,7 +540,7 @@ export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMe
               )}
               {row.last_used_by_conversation ? (
                 <span className="min-w-0 truncate">
-                  <EntityIdPill id={row.last_used_by_conversation} type="session" compact />
+                  <EntityIdPill id={row.last_used_by_conversation} type="session" wide />
                 </span>
               ) : null}
             </span>
@@ -646,7 +565,7 @@ export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMe
           onClose={() => setDeleting(false)}
           onConfirm={() => {
             setDeleting(false);
-            removeSecret(row._id);
+            remove(row._id);
             onClose();
           }}
         />

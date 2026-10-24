@@ -6,26 +6,16 @@
 // Anything showing a value carries data-private, which keeps it out of the
 // error replay's page outline (platform analytics replay.ts).
 
-import { useCallback, useRef, useState, type ReactNode } from "react";
-import { useAction } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { Check, ChevronRight, CircleHelp, Copy, Eye, EyeOff, FileText, Fingerprint, Globe, KeyRound, Loader2, Lock, RefreshCw, UserRound, Users, X, type LucideIcon } from "lucide-react";
-import { NOT_CONFIRMED, totp, type EnvNameIssue, type LoginPayload, type SecretKind, type SecretMeta, type SecretPayload } from "@codecast/shared/contracts/secrets";
-import { useEventListener } from "../../hooks/useEventListener";
-import { useMountEffect } from "../../hooks/useMountEffect";
+import { useState, type ReactNode } from "react";
+import { Check, ChevronRight, CircleHelp, Copy, Eye, EyeOff, Fingerprint, Loader2, Lock, RefreshCw, UserRound, Users, X } from "lucide-react";
+import { totp, type EnvNameIssue, type SecretKind, type SecretMeta } from "@codecast/shared/contracts/secrets";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { EntityIdPill } from "../EntityIdPill";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
-import { usePresence, withPresence } from "../../lib/passkeyPresence";
-import { KIND_LOOK, vaultFailure } from "./vaultModel";
-
-const KIND_ICON: Record<SecretKind, LucideIcon> = { key: KeyRound, login: UserRound, file: FileText, signin: Globe };
-
-/** Each kind's icon, CSS accent and words (vaultModel KIND_LOOK). */
-export const KIND = Object.fromEntries(
-  (Object.keys(KIND_LOOK) as SecretKind[]).map((k) => [k, { ...KIND_LOOK[k], icon: KIND_ICON[k], tone: `var(--sol-${KIND_LOOK[k].tone})` }]),
-) as Record<SecretKind, { icon: LucideIcon; tone: string; label: string; short: string }>;
+import { DROP_OVER, FIELD_MONO, KIND } from "../../lib/secretLook";
+import { useCopy } from "../../hooks/useCopy";
+import type { FileDrop } from "../../hooks/useFileDrop";
 
 export function KindGlyph({ kind, size = 14 }: { kind: SecretKind; size?: number }) {
   const k = KIND[kind];
@@ -39,121 +29,6 @@ export function KindGlyph({ kind, size = 14 }: { kind: SecretKind; size?: number
       <Icon size={size} />
     </span>
   );
-}
-
-/** How long revealed text stays in memory with no reveal or copy touching it. */
-export const REVEAL_IDLE_MS = 45_000;
-
-/**
- * A secret's value, held in this component's state only (never the store). The
- * value fields drop after REVEAL_IDLE_MS without a reveal or copy, when the
- * window loses focus, and when the component goes, moves to another secret or
- * the secret's value changes (`version`: its value_updated_at, which a replace
- * or restore moves).
- * A login's 2FA seed stays for the component's life, so its code keeps ticking
- * while the panel is open; `seed` is undefined until fetched, null when the
- * login has none. Each fetch records a reveal on the server before the value
- * leaves it. An Ask first secret (`askFirst`) confirms with Touch ID before
- * each fetch (lib/passkeyPresence); cancelled, the fetch answers null.
- */
-export function useReveal(id: string, version?: number, askFirst?: boolean) {
-  const reveal = useAction(api.secrets.reveal);
-  const confirm = usePresence();
-  const [payload, setPayload] = useState<SecretPayload | null>(null);
-  const [seed, setSeed] = useState<string | null | undefined>(undefined);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const inflight = useRef<Promise<SecretPayload | null> | null>(null);
-  // Bumped by every drop, so a fetch that lands after one is handed to its caller but not kept.
-  const generation = useRef(0);
-  const idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const shown = `${id}@${version ?? ""}`;
-  const shownRef = useRef(shown);
-  shownRef.current = shown;
-  const drop = useCallback(() => {
-    clearTimeout(idle.current);
-    generation.current++;
-    setPayload(null);
-    inflight.current = null;
-  }, []);
-  const touch = useCallback(() => {
-    clearTimeout(idle.current);
-    idle.current = setTimeout(drop, REVEAL_IDLE_MS);
-  }, [drop]);
-  useWatchEffect(() => {
-    setSeed(undefined);
-    setError(null);
-    return drop;
-  }, [shown]);
-  useEventListener("blur", drop);
-  const load = useCallback(async (): Promise<SecretPayload | null> => {
-    if (payload) {
-      touch();
-      return payload;
-    }
-    if (inflight.current) return inflight.current;
-    // Taken when the fetch starts, after any Touch ID prompt, whose sheet can blur the window.
-    let gen = generation.current;
-    const fetchValue = (grant?: string) => {
-      gen = generation.current;
-      return reveal({ ref: id, grant });
-    };
-    setLoading(true);
-    setError(null);
-    inflight.current = withPresence(() => confirm("reveal", id), fetchValue, !!askFirst)
-      .then((res: any) => {
-        if (res === NOT_CONFIRMED) return null;
-        if (res?.error) {
-          setError(res.error);
-          return null;
-        }
-        const p = res.payload as SecretPayload;
-        // A blur mid-fetch keeps the seed; moving to another secret or value does not.
-        if (shown === shownRef.current) setSeed((p as LoginPayload).totp_seed ?? null);
-        if (gen === generation.current) {
-          setPayload(p);
-          touch();
-        }
-        return p;
-      })
-      .catch((err: unknown) => {
-        setError(vaultFailure(err).error);
-        return null;
-      })
-      .finally(() => {
-        setLoading(false);
-        if (gen === generation.current) inflight.current = null;
-      });
-    return inflight.current;
-  }, [id, shown, payload, reveal, touch, confirm, askFirst]);
-  return { payload, seed, error, loading, load, drop };
-}
-
-/**
- * Copy text and say how it went for a moment: `state` is "copied" or "failed"
- * for 1.4s after a press, then "idle" again. `get` may fetch the text first;
- * none, or a clipboard that refuses, is a failure.
- */
-export function useCopy() {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
-  const reset = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useMountEffect(() => () => clearTimeout(reset.current));
-  const show = (next: "copied" | "failed") => {
-    setState(next);
-    clearTimeout(reset.current);
-    reset.current = setTimeout(() => setState("idle"), 1400);
-  };
-  const copy = async (get: () => Promise<string | undefined> | string | undefined) => {
-    try {
-      const text = await get();
-      if (!text) return show("failed");
-      await navigator.clipboard.writeText(text);
-      show("copied");
-    } catch {
-      show("failed");
-    }
-  };
-  return { state, copy };
 }
 
 /**
@@ -206,9 +81,6 @@ export function CommandDisclosure({ label, text, ...rest }: { label: string; tex
   );
 }
 
-/** A Vault form field's look; FIELD_MONO for what is typed as code (names, values, sites, env vars). */
-export const FIELD = "w-full min-w-0 rounded-md border border-sol-border bg-sol-bg px-2 py-1.5 text-[12.5px] text-sol-text outline-none placeholder:text-sol-text-dim focus:border-sol-yellow";
-export const FIELD_MONO = `${FIELD} font-mono`;
 
 const DOTS = "••••••••••••";
 
@@ -467,34 +339,6 @@ export function TotpCode({ seed, fetchSeed, fetching, held, gated }: { seed: str
   );
 }
 
-/** A field's border while a file is dragged over it. */
-export const DROP_OVER = "!border-sol-yellow/60";
-
-export type FileDrop = ReturnType<typeof useFileDrop>;
-
-/** A field that takes a dropped file: the handlers to spread on it, and whether a file is over it now. Anything else dropped behaves as usual. */
-export function useFileDrop(onFile: (file: File) => void) {
-  const [over, setOver] = useState(false);
-  return {
-    over,
-    props: {
-      onDragOver: (e: React.DragEvent) => {
-        if (!e.dataTransfer.types.includes("Files")) return;
-        e.preventDefault();
-        setOver(true);
-      },
-      onDragLeave: () => setOver(false),
-      onDrop: (e: React.DragEvent) => {
-        setOver(false);
-        const f = e.dataTransfer.files[0];
-        if (!f) return;
-        e.preventDefault();
-        onFile(f);
-      },
-    },
-  };
-}
-
 /**
  * A labeled row in the detail panel or the add form. `actions` adds a trailing
  * column of up to three buttons, fixed in width and right-aligned, so copy
@@ -513,7 +357,7 @@ export function Row({
     <div className={`grid min-h-7 items-start gap-x-3 py-1.5 ${actions ? "grid-cols-[6.5rem_minmax(0,1fr)_auto]" : "grid-cols-[6.5rem_minmax(0,1fr)]"} ${className}`} {...rest}>
       <span className={`${align === "input" ? "pt-[7px]" : "pt-[3px]"} text-[12px] text-sol-text-dim`}>{label}</span>
       <div className="min-w-0">{children}</div>
-      {actions ? <span className="flex w-[76px] items-center justify-end gap-0.5">{actions}</span> : null}
+      {actions ? <span className="flex min-w-[76px] items-center justify-end gap-0.5">{actions}</span> : null}
     </div>
   );
 }
@@ -581,7 +425,7 @@ export function RequestHead({ row, kind, name, fallback }: { row?: SecretMeta; k
               <span className="ml-auto flex min-w-0 shrink items-center gap-1.5 text-[11.5px] text-sol-text-muted">
                 {row.requested_from_conversation ? (
                   <span className="min-w-0 truncate">
-                    <EntityIdPill id={row.requested_from_conversation} type="session" />
+                    <EntityIdPill id={row.requested_from_conversation} type="session" wide />
                   </span>
                 ) : (
                   <span className="truncate">{row.requested_by_name ?? "Someone"}</span>

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { SECRET_VERSION_TTL_MS, type SecretMeta } from "@codecast/shared/contracts/secrets";
 import { findSecrets } from "@codecast/shared/contracts/secretShapes";
-import { classifyPaste, fillRequest, filterSecrets, formatIn, isStub, loginEnv, nameIssue, parseEnvText, readEnvText, payloadOf, isStaged, saveRemaining, secretHealth, stagedSwap, withPendingAskFirst, siteName, slugify, suggestName, whereUsed, withVaultReferences } from "./vaultModel";
+import { classifyPaste, fillRequest, filterSecrets, formatIn, isStub, loginEnv, nameIssue, parseEnvText, readEnvText, payloadOf, isStaged, saveRemaining, secretHealth, stagedSwap, withPendingAskFirst, siteName, slugify, suggestName, whereUsed, withVaultReferences, envPairLabel } from "./vaultModel";
 
 describe("parseEnvText", () => {
   test("reads assignments and skips everything else", () => {
@@ -206,6 +206,18 @@ describe("withVaultReferences", () => {
   test("an assignment keeps its variable, and a renamed secret is referenced by its new name", () => {
     const text = `PAYMENTS_TOKEN=${key}`;
     expect(withVaultReferences(text, findSecrets(text), ["payments"])).toBe("PAYMENTS_TOKEN=[vault secret payments: `cast vault run payments -- <command>` sets PAYMENTS_TOKEN]");
+  });
+});
+
+describe("envPairLabel", () => {
+  test("a pair sharing a prefix up to the last underscore is said once", () => {
+    expect(envPairLabel(["GITHUB_BOT_USERNAME", "GITHUB_BOT_PASSWORD"])).toBe("GITHUB_BOT_{USERNAME,PASSWORD}");
+  });
+
+  test("anything else keeps its own chips", () => {
+    expect(envPairLabel(["DB_USERNAME", "PG_PASSWORD"])).toBeNull();
+    expect(envPairLabel(["USER", "PASS"])).toBeNull();
+    expect(envPairLabel(["A_X", "A_Y", "A_Z"])).toBeNull();
   });
 });
 

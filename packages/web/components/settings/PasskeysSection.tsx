@@ -8,35 +8,14 @@ import { useState } from "react";
 import { useConvex, useMutation } from "convex/react";
 import { Fingerprint, Loader2, Plus, Trash2 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { NOT_CONFIRMED, inProbation, removableUnasked, type PasskeyMeta } from "@codecast/shared/contracts/secrets";
+import { inProbation, type PasskeyMeta } from "@codecast/shared/contracts/secrets";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
-import { addPasskey, usePresence, withPresence } from "../../lib/passkeyPresence";
+import { addPasskey } from "../../lib/passkeyPresence";
+import { probationHours, useRemovePasskey } from "../../hooks/useRemovePasskey";
 import { Button } from "../ui/button";
 import { SettingsSection } from "./ui";
-
-/** Hours left of a passkey's probation, rounded up. */
-export const probationHours = (p: PasskeyMeta) => Math.ceil(((p.probation_until ?? 0) - Date.now()) / 3_600_000);
-
-/** Remove a passkey: with Touch ID, or with one press when it went in with no grant (removableUnasked). `count` is how many the person has. */
-export function useRemovePasskey(passkey: PasskeyMeta, count: number) {
-  const remove = useMutation(api.passkeys.remove);
-  const confirm = usePresence();
-  const unasked = removableUnasked(passkey, count);
-  const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const drop = async () => {
-    setRemoving(true);
-    try {
-      const res: any = await withPresence(() => confirm("remove_passkey", passkey._id), (grant) => remove({ id: passkey._id, grant }), !unasked);
-      setError(res === NOT_CONFIRMED ? null : res?.error ?? null);
-    } finally {
-      setRemoving(false);
-    }
-  };
-  return { drop, removing, error, unasked };
-}
 
 function PasskeyRow({ passkey, count }: { passkey: PasskeyMeta; count: number }) {
   const rename = useMutation(api.passkeys.rename);
@@ -71,7 +50,7 @@ function PasskeyRow({ passkey, count }: { passkey: PasskeyMeta; count: number })
                 if (e.key === "Enter") void save();
                 if (e.key === "Escape") setName(null);
               }}
-              aria-label="Passkey name"
+              aria-label="Name"
               className="sol-input w-56 py-0.5 text-sm"
             />
           )}
@@ -88,11 +67,17 @@ function PasskeyRow({ passkey, count }: { passkey: PasskeyMeta; count: number })
           {error && <div className="mt-0.5 text-xs text-sol-red">{error}</div>}
         </div>
       </div>
-      <Button variant="outline" size="sm" onClick={() => void drop()} disabled={removing} title={unasked ? "Remove" : "Remove with Touch ID"} className="text-sol-red border-sol-red/30 hover:bg-sol-red/10" data-passkey-remove>
-        {removing ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <Trash2 className="h-3.5 w-3.5" />}
-        Remove
-        {!unasked && <Fingerprint className="h-3 w-3" aria-label="Asks for Touch ID" />}
-      </Button>
+      <button
+        type="button"
+        onClick={() => void drop()}
+        disabled={removing}
+        title={unasked ? "Remove" : "Remove with Touch ID"}
+        aria-label={unasked ? "Remove" : "Remove with Touch ID"}
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sol-text-dim transition-colors hover:bg-sol-red/10 hover:text-sol-red disabled:opacity-50"
+        data-passkey-remove
+      >
+        {removing ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> : <Trash2 size={14} />}
+      </button>
     </div>
   );
 }
@@ -118,14 +103,14 @@ export function PasskeysSection() {
       actions={
         <Button variant="outline" size="sm" onClick={() => void add()} disabled={adding || passkeys === undefined || agentTab} title={agentTab ? PERSON_ONLY.enroll : undefined} data-passkey-add>
           {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <Plus className="h-3.5 w-3.5" />}
-          Add passkey
+          Add Touch ID
         </Button>
       }
     >
       {passkeys === undefined ? (
-        <div className={`px-4 py-3 text-sm sm:px-5 ${error ? "text-sol-red" : "text-sol-text-dim"}`}>{error ? "Could not load passkeys" : "Loading"}</div>
+        <div className={`px-4 py-3 text-sm sm:px-5 ${error ? "text-sol-red" : "text-sol-text-dim"}`}>{error ? "Could not load Touch ID" : "Loading"}</div>
       ) : passkeys.length === 0 ? (
-        <div className="px-4 py-3 text-sm text-sol-text-muted sm:px-5" data-passkeys-empty>No passkeys</div>
+        <div className="px-4 py-3 text-sm text-sol-text-muted sm:px-5" data-passkeys-empty>No Touch ID set up</div>
       ) : (
         passkeys.map((p) => <PasskeyRow key={p._id} passkey={p} count={passkeys.length} />)
       )}

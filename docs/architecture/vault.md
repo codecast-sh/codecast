@@ -291,10 +291,14 @@ refuses `cookies`, `storage` and `state save` reads, `raw` included, that
 would reach such a sign-in for any other session (`vaultJarRefusal` in
 `browser/siteGuard.ts`). Page script (`eval`) still reads the non-httpOnly
 part. In either browser `refuseNavigation` refuses the Vault page itself
-(`/vault` on codecast.sh, local.codecast.sh, localhost:3200 and the configured
-web_url), for every command that loads a URL (`urlsLoadedBy`: `open`, `read`,
-`tab new`, `diff url`, `raw pushstate`), since its clicks pass for the
-person's.
+(`/vault` on codecast.sh, www.codecast.sh, local.codecast.sh and the
+configured web_url), for every command that loads a URL (`urlsLoadedBy`:
+`open`, `read`, `tab new`, `diff url`, `raw pushstate`), since its clicks
+pass for the person's. The dev server's `/vault` (localhost:3200) stays open
+so agents can check the page: in a tab the agent-tab stamp marks, `VaultSource`
+(`web/components/secrets/VaultSource.tsx`) swaps the person's Vault for a
+fixed sample (`sampleVault.ts`) that the Vault hooks read and write in that
+tab's memory, with no query, action, store or IndexedDB write.
 
 Staying alive: after an agent used a sign-in, the browser's newer cookies for
 those host keys are written back (`refreshed`), so a session a site rotates

@@ -137,6 +137,15 @@ export function whereUsed(row: Pick<SecretMeta, "name" | "kind" | "env" | "sites
   return { named, implied: row.kind === "signin" || named.length ? [] : envVars(row), sites: row.sites ?? [] };
 }
 
+/** A pair of env vars said once when they share everything up to their last underscore: GITHUB_BOT_{USERNAME,PASSWORD}. */
+export function envPairLabel(names: readonly string[]): string | null {
+  if (names.length !== 2) return null;
+  const prefix = (n: string) => n.slice(0, n.lastIndexOf("_") + 1);
+  const [a, b] = names as [string, string];
+  const p = prefix(a);
+  return p && p === prefix(b) ? `${p}{${a.slice(p.length)},${b.slice(p.length)}}` : null;
+}
+
 export type Scope = "all" | "team" | "personal";
 
 /**
