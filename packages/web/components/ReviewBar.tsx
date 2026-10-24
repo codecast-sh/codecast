@@ -16,6 +16,7 @@ import { batchSendWords, cancelReview } from "../lib/reviewActions";
 import { andList, ORG_REPLY_WORDS, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import { isProposalAnswer, sortPendingComments, type PendingComment, type PendingProposalAnswer } from "../lib/quoteFormat";
 import { PageFavicon } from "./PublishedPageEmbed";
+import { VerdictLabel } from "./ReviewVerdictLabel";
 import "./ReviewNavigation.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -133,6 +134,7 @@ export function PendingBatchRows({ batchKey, proposalId, onJump }: { batchKey: s
                   : <span className="cc-comment-quote-mark">❝</span>}
               {(c.quote || "").replace(/\s+/g, " ").trim().slice(0, 140)}
             </span>
+            {c.verdict ? <span className="block"><VerdictLabel verdict={c.verdict} /></span> : null}
             {c.body ? <span className="cc-review-tray-note block">{c.body}</span> : null}
           </button>
           <button

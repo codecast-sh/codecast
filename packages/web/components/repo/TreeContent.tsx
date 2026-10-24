@@ -30,6 +30,7 @@ import {
 } from "../../lib/repoView";
 import { serverErrorText } from "../../lib/errorCause";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
+import { hoverFocus } from "../../shortcuts/focusSource";
 
 /** The breadcrumb, which is also how you climb back out. */
 export function Breadcrumb({
@@ -188,7 +189,7 @@ export function TreeContent({
             return (
               <div
                 key={entry.sha + name}
-                onMouseEnter={() => setCursor(i)}
+                {...hoverFocus(() => setCursor(i))}
                 className={`flex items-center gap-2 px-4 py-1.5 text-[12px] transition-colors ${
                   i === cursor ? "bg-sol-bg-alt/60" : "hover:bg-sol-bg-alt/40"
                 }`}

@@ -1,4 +1,5 @@
 import { forwardRef, useImperativeHandle, useState, useCallback } from "react";
+import { hoverFocus } from "../../shortcuts/focusSource";
 import {
   Heading1,
   Heading2,
@@ -138,7 +139,7 @@ export const SlashCommandList = forwardRef<any, SlashCommandListProps>(
             <button
               key={item.title}
               onClick={() => selectItem(i)}
-              onMouseEnter={() => setSelectedIndex(i)}
+              {...hoverFocus(() => setSelectedIndex(i))}
               className={`w-full text-left px-3 py-2 flex items-center gap-3 transition-colors ${
                 i === selectedIndex
                   ? "bg-sol-bg-highlight text-sol-text"

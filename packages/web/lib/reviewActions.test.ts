@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
-import { takeReviewBatch, attachReviewToMessage, createReviewComment, addImagePin, quotedImages, answerProposalCard, pendingAnswerOf, proposalAnswersOf, replyItemsOf, takeProposalAnswers, submitReview, cancelReview, batchSendWords } from "./reviewActions";
+import { takeReviewBatch, attachReviewToMessage, createReviewComment, addImagePin, quotedImages, answerProposalCard, pendingAnswerOf, proposalAnswersOf, replyItemsOf, takeProposalAnswers, submitReview, cancelReview, batchSendWords, setBlockVerdict, undoLastVerdict } from "./reviewActions";
 import { formatPlanFeedback, formatDocFeedback, formatPendingComments, sortPendingComments, type PendingComment } from "./quoteFormat";
 
 const CONV = "conv-test";
@@ -50,6 +50,29 @@ describe("takeReviewBatch", () => {
     expect(takeReviewBatch(CONV, "m1#plan")).toBe("> plan line\n\nwrong");
     const s = useInboxStore.getState();
     expect(s.reviewComments[CONV]?.map((c) => c.id)).toEqual(["b1"]); // body comment untouched
+  });
+});
+
+describe("typed verdicts", () => {
+  test("a verdict joins the batch and is sent in words; on a quoted block it marks that quote", () => {
+    seed([mk("1", 0, "q1", "keep this but shorter")]);
+    setBlockVerdict(CONV, "m1", 0, "q1", "cut");
+    setBlockVerdict(CONV, "m1", 1, "q2", "approve");
+    const items = useInboxStore.getState().reviewComments[CONV]!;
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ id: "1", verdict: "cut", body: "keep this but shorter" });
+    expect(takeReviewBatch(CONV)).toBe("> q1\n\nVerdict: cut this\n\nkeep this but shorter\n\n> q2\n\nVerdict: looks good");
+  });
+
+  test("undo takes back the latest verdict: the item it made goes, a quote it marked stays", () => {
+    seed([mk("1", 0, "q1", "")]);
+    setBlockVerdict(CONV, "m1", 0, "q1", "approve");
+    setBlockVerdict(CONV, "m1", 3, "q4", "cut");
+    expect(undoLastVerdict(CONV)?.blockIndex).toBe(3);
+    expect(useInboxStore.getState().reviewComments[CONV]!.map((c) => c.id)).toEqual(["1"]);
+    expect(undoLastVerdict(CONV)?.id).toBe("1");
+    expect(useInboxStore.getState().reviewComments[CONV]![0].verdict).toBeUndefined();
+    expect(undoLastVerdict(CONV)).toBeNull();
   });
 });
 

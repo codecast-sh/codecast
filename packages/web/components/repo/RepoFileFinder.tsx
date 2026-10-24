@@ -15,6 +15,7 @@ import { useRepoBranches, useRepoFileIndex } from "../../hooks/useRepoBrowse";
 import { repoShortcutAllowed } from "../../lib/repoContent";
 import { rankPaths } from "../../lib/fuzzyPath";
 import { repoBlobHref, type RepoRouteFamily } from "../../lib/repoView";
+import { hoverFocus } from "../../shortcuts/focusSource";
 
 export function RepoFileFinder({ repository, refName, family, anchorRef }: {
   repository: string;
@@ -108,7 +109,7 @@ export function RepoFileFinder({ repository, refName, family, anchorRef }: {
 
           {hits.map((hit, at) => <button
             key={hit.path}
-            onMouseEnter={() => setCursor(at)}
+            {...hoverFocus(() => setCursor(at))}
             onClick={() => go(hit.path)}
             className={`w-full text-left px-3 py-2 flex gap-2 items-center text-xs font-mono ${at === cursor ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-muted"}`}
           >

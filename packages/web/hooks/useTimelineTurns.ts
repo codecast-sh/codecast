@@ -56,11 +56,13 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
   // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
-    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_handoff', 'session_message', 'chat_wake', 'agent_switch', 'machine_move', 'session_escalation']);
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'direct_user', 'command', 'plan', 'session_handoff', 'context_recovery', 'session_message', 'chat_wake', 'agent_switch', 'machine_move', 'session_escalation']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
-    const statsOf = new Map<string, { messages: number; tools: number; preview: string }>();
+    // startedAt/endedAt: the prompt that opened the turn (else its first reply)
+    // to its last reply, which is how long the agent worked.
+    const statsOf = new Map<string, { messages: number; tools: number; preview: string; startedAt: number; endedAt: number }>();
     const receiptOf = new Map<string, ReceiptEntry[]>(); // owner msgId -> folded hideable tools, per source message
     const absorbed = new Set<string>();                // msgId folded into an earlier receipt
     // Where a turn's message went (sentToRef above, scopes-and-feed.md F4.2), keyed
@@ -72,6 +74,7 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
     let curBoundary: string | null = null;
     let lastLoadedAt = 0;
     let curKey: string | null = null;
+    let promptAt: number | null = null;                // the open prompt's time, until a turn claims it
     let ownerId: string | null = null;                 // current segment's receipt owner
     let previousAssistant: Message | null = null;
     // Results arrive on later user rows; a setup marker in one keeps its tool out of the receipt.
@@ -95,6 +98,7 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
           ownerId = null;
           if (curBoundary) routingOf.get(curBoundary)!.until = msg.timestamp;
           curBoundary = msg._id;
+          promptAt = msg.timestamp;
           routingOf.set(msg._id, { until: null, sentTo: [] });
         }
         continue;
@@ -120,12 +124,14 @@ export function useTimelineTurns({ messages, conversation, hasMoreAbove, timelin
       if (curKey === null) {
         curKey = msg._id;
         firstAssistOf.set(curKey, msg._id);
-        statsOf.set(curKey, { messages: 0, tools: 0, preview: "" });
+        statsOf.set(curKey, { messages: 0, tools: 0, preview: "", startedAt: promptAt ?? msg.timestamp, endedAt: msg.timestamp });
+        promptAt = null;
       }
       turnKeyOf.set(msg._id, curKey);
       const stats = statsOf.get(curKey)!;
       if (hasText) { stats.messages += 1; lastTextOf.set(curKey, msg._id); }
       stats.tools += tools.length;
+      if (msg.timestamp > stats.endedAt) stats.endedAt = msg.timestamp;
       if (!stats.preview && hasText) {
         stats.preview = stripSystemTags(msg.content || "").trim().split("\n")[0].slice(0, 140);
       }

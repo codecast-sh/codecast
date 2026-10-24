@@ -1,4 +1,6 @@
 import { LogoIcon } from "../Logo";
+import { useSyncTeamMachines } from "../../hooks/useSyncTeamMachines";
+import { myMembership } from "../../lib/teamMachines";
 import { AssistantIntro } from "../AssistantIntro";
 import { LANE_COPY } from "../simple/lane";
 import { useReviewComposer } from "../reviewContext";
@@ -49,6 +51,7 @@ import { cloudHostOf, cloudParkNeeded, cloudToggleAvailable, defaultSessionMachi
 import { useSessionMachines } from "../../hooks/useSessionMachines";
 import { useLocalDeviceId } from "../../hooks/useLocalDeviceId";
 import type { ConversationData, NewSessionAgentControls, PickerHandle, RecentProject } from "./types";
+import { hoverFocus } from "../../shortcuts/focusSource";
 
 const api = _typedApi as any;
 
@@ -618,6 +621,16 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   }, [pickList, hi, filter, pickOption, descendInto, exitPicker]);
 
   const hostLoads = useHostLoads();
+  useSyncTeamMachines(machineChipsShown);
+  // Team machines you are not on: a string, so a machine's minute-by-minute
+  // load moving re-renders nothing here.
+  const joinableSig = useInboxStore((s) => s.teamMachines
+    .filter((m) => !myMembership(m, s.currentUser?._id))
+    .map((m) => `${m._id}\u0001${m.name}`).join("\u0002"));
+  const joinable = useMemo(
+    () => (joinableSig ? joinableSig.split("\u0002").map((x) => { const [id, name] = x.split("\u0001"); return { id, name }; }) : []),
+    [joinableSig],
+  );
 
   // Mouse-first, and hidden entirely for the single-machine case so that
   // experience is untouched. Rests collapsed as one pill (the machine the
@@ -631,6 +644,8 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
       onOpen={() => setMachinesOpen(true)}
       onPick={(d) => { handleMachinePick(d); setMachinesOpen(false); }}
       onShare={() => useInboxStore.getState().openSettingsModal("devices")}
+      joinable={joinable}
+      onJoin={() => useInboxStore.getState().openSettingsModal("devices")}
     />
   );
 
@@ -763,7 +778,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
                     // onMouseDown (not onClick) + preventDefault keeps the filter
                     // input focused so the click isn't lost to an onBlur teardown.
                     onMouseDown={(e) => { e.preventDefault(); pickOption(p); exitPicker(); }}
-                    onMouseEnter={() => setHi(i)}
+                    {...hoverFocus(() => setHi(i))}
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all max-w-[min(100%,22rem)] ${
                       isHi
                         ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"

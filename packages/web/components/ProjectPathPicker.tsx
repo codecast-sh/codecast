@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { useRecentProjectsFeed } from "../hooks/useRecentProjectsFeed";
 import { createProjectFolder, useDirListing } from "../lib/fsBrowse";
+import { hoverFocus } from "../shortcuts/focusSource";
 import {
   buildProjectPathOptions,
   displayPath,
@@ -244,7 +245,7 @@ export function ProjectPathPicker({
                 <button
                   type="button"
                   onClick={() => select(o)}
-                  onMouseEnter={() => setHi(i)}
+                  {...hoverFocus(() => setHi(i))}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm ${
                     i === clampedHi ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted"
                   }`}

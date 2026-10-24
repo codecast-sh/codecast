@@ -54,7 +54,18 @@ export type PendingComment = {
   // Set on an answer to an org proposal card. Quote-only readers skip it
   // (isProposalAnswer); the send applies it and writes it in words.
   proposal?: PendingProposalAnswer;
+  // A typed verdict on the quoted block (the review keys a / d): sent ahead of
+  // the note as "Verdict: ...". `verdictAt` orders verdicts for undo, and
+  // `verdictMade` marks an item the verdict itself created, so undoing it
+  // removes the item rather than leaving a bare quote behind.
+  verdict?: ReviewVerdict;
+  verdictAt?: number;
+  verdictMade?: boolean;
 };
+
+export type ReviewVerdict = "approve" | "cut";
+// What the agent reads for each verdict, and what the tray and rail show.
+export const REVIEW_VERDICT_WORDS: Record<ReviewVerdict, string> = { approve: "Looks good", cut: "Cut this" };
 
 /** A batch item that answers a proposal card rather than quoting a message. */
 export function isProposalAnswer(c: Pick<PendingComment, "proposal">): c is PendingComment & { proposal: PendingProposalAnswer } {
@@ -114,10 +125,11 @@ export function splitQuoteRuns(text: string): QuoteRun[] {
     .filter((r) => r.text.trim());
 }
 
-// One quote + optional reply body.
-export function formatQuotedReply(quote: string, body?: string): string {
+// One quote + optional verdict + optional reply body.
+export function formatQuotedReply(quote: string, body?: string, verdict?: ReviewVerdict): string {
   const bq = toBlockquote(quote);
-  const reply = (body || "").trim();
+  const note = (body || "").trim();
+  const reply = verdict ? `Verdict: ${REVIEW_VERDICT_WORDS[verdict].toLowerCase()}${note ? `\n\n${note}` : ""}` : note;
   if (bq && reply) return `${bq}\n\n${reply}`;
   return bq || reply;
 }
@@ -167,13 +179,13 @@ export function describePoint({ point, width, height }: QuotedImage): string {
 // A proposal answer is never a quote: its words come from proposalReplyText
 // (lib/reviewActions takeProposalAnswers), so it is skipped here.
 export function formatPendingComments(
-  comments: (Pick<PendingComment, "quote" | "body" | "image" | "proposal"> & { id?: string })[],
+  comments: (Pick<PendingComment, "quote" | "body" | "image" | "proposal" | "verdict"> & { id?: string })[],
   attachmentNumbers?: ReadonlyMap<string, number>,
   markers?: ReadonlyMap<string, number>,
 ): string {
   return comments
     .filter((c) => !isProposalAnswer(c))
-    .map((c) => formatQuotedReply(imageQuoteText(c, c.id ? attachmentNumbers?.get(c.id) : undefined, c.id ? markers?.get(c.id) : undefined), c.body))
+    .map((c) => formatQuotedReply(imageQuoteText(c, c.id ? attachmentNumbers?.get(c.id) : undefined, c.id ? markers?.get(c.id) : undefined), c.body, c.verdict))
     .filter(Boolean)
     .join("\n\n");
 }

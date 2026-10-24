@@ -20,6 +20,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { noteDisplayName } from "./VaultExplorer";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
+import { hoverFocus } from "../../shortcuts/focusSource";
 
 interface SwitchTarget {
   path: string;
@@ -241,7 +242,7 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
               type="button"
               data-row={i}
               onClick={(e) => activate(i, e.metaKey || e.ctrlKey)}
-              onMouseMove={() => setSelected(i)}
+              {...hoverFocus(() => setSelected(i))}
               className={`w-full flex items-center gap-2.5 px-4 py-1.5 text-left text-[13px] ${
                 i === selected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted"
               }`}
@@ -271,7 +272,7 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
               type="button"
               data-row={results.length}
               onClick={createAndOpen}
-              onMouseMove={() => setSelected(results.length)}
+              {...hoverFocus(() => setSelected(results.length))}
               className={`w-full flex items-center gap-2.5 px-4 py-1.5 text-left text-[13px] ${
                 selected === results.length ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted"
               }`}

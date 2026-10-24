@@ -4,7 +4,7 @@
 // inboxStore plus the composer-injection callback passed in by the caller.
 
 import { useInboxStore } from "../store/inboxStore";
-import { toBlockquote, formatPendingComments, sortPendingComments, pinNumbers, isProposalAnswer, type PendingComment, type PendingProposalAnswer, type QuotedImage, type QuotedPage } from "./quoteFormat";
+import { toBlockquote, formatPendingComments, sortPendingComments, pinNumbers, isProposalAnswer, type PendingComment, type PendingProposalAnswer, type QuotedImage, type QuotedPage, type ReviewVerdict } from "./quoteFormat";
 import type { ImageMarker } from "./markedImage";
 import { proposalRepliesText, type OrgProposalReply, type OrgReplyItem, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
 import { humanizeConvexError } from "@codecast/shared/contracts";
@@ -41,6 +41,31 @@ export function createReviewComment(
   s.setReviewTarget(messageId, blockIndex);
   s.setReviewEditingId(id);
   return id;
+}
+
+// A typed verdict on a block (the review keys a / d): it joins the batch like
+// a quote, or marks the block's existing quote, without opening a note editor,
+// so a reader can keep walking the blocks.
+export function setBlockVerdict(conversationId: string, messageId: string, blockIndex: number, quote: string, verdict: ReviewVerdict): void {
+  const now = Date.now();
+  useInboxStore.getState().applyReviewVerdict(conversationId, {
+    id: genCommentId(), messageId, blockIndex, quote, body: "", createdAt: now, verdict, verdictAt: now, verdictMade: true,
+  });
+}
+
+// Undo the most recent verdict in the batch: an item the verdict created goes,
+// a quote that only gained it keeps its quote and note. Returns the item it
+// undid (so the cursor can go back to its block), or null when none is left.
+export function undoLastVerdict(conversationId: string): PendingComment | null {
+  const s = useInboxStore.getState();
+  let last: PendingComment | undefined;
+  for (const c of s.reviewComments[conversationId] ?? []) {
+    if (c.verdict && (!last || (c.verdictAt ?? 0) >= (last.verdictAt ?? 0))) last = c;
+  }
+  if (!last) return null;
+  if (last.verdictMade && !last.body) s.removeReviewComment(conversationId, last.id);
+  else s.clearReviewVerdict(conversationId, last.id);
+  return last;
 }
 
 // Append a blockquote of `text` straight into the composer (no batch).

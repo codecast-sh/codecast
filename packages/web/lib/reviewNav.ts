@@ -18,12 +18,14 @@ import { focusComposer } from "./composerControl";
 
 export type ReviewRegion = { id: string; el: HTMLElement };
 
-// Every reviewable message currently in the DOM, in transcript order.
+// Every reviewable message currently in the DOM, in transcript order. The id is
+// the region's own review key, so a plan inside a message (`<id>#plan`) is a
+// region of its own rather than a second copy of the message's.
 export function reviewRegions(): ReviewRegion[] {
   if (typeof document === "undefined") return [];
   const out: ReviewRegion[] = [];
   document.querySelectorAll<HTMLElement>(".cc-msg-review").forEach((el) => {
-    const id = (el.closest('[id^="msg-"]') as HTMLElement | null)?.id?.slice(4);
+    const id = el.closest('[id^="msg-"]') ? el.dataset.reviewMessage : undefined;
     if (id) out.push({ id, el });
   });
   return out;

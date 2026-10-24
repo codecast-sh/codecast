@@ -9,6 +9,7 @@ import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { relativeTime } from "./BranchSelector";
 import { shareTokenArg } from "../lib/shareTokenScope";
+import { keyboardOwnsFocus } from "../shortcuts/focusSource";
 import {
   useForkTree,
   branchDisplayCount,
@@ -524,7 +525,7 @@ function ForkTreeContent({
               isCurrentBranch={drillId === currentBranchId}
               onClick={() => setMsgSel(idx)}
               onFork={forkAnyMessage || m === drillMsgs[drillMsgs.length - 1] ? () => drillId && forkFromMsg(drillId, m) : undefined}
-              onMouseEnter={() => setMsgSel(idx)}
+              onMouseEnter={() => { if (!keyboardOwnsFocus()) setMsgSel(idx); }}
               rowRef={idx === msgSel ? rowRef : undefined}
             />
           ))

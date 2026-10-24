@@ -1,14 +1,17 @@
 import { memo } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { LogoIcon } from "../../Logo";
+import { formatRunDuration } from "../../../lib/workflowRun";
 
 // Compact feed: a whole collapsed assistant turn shown as one line — Claude
-// glyph, the first sentence of the reply, and a count of what's inside. Click
+// glyph, the first sentence of the reply, how long the agent worked (prompt to
+// last reply) and a count of what's inside. Click
 // anywhere to expand the turn to full.
 // `steps`: the turn's reply is shown right below, so the card is only the
 // work before it: a slim toggle, no preview that would read as a second reply.
-export const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, toolCount, onExpand, variant = "card" }: { preview: string; messageCount: number; toolCount: number; onExpand: () => void; variant?: "card" | "steps" }) {
+export const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, toolCount, workedMs = 0, onExpand, variant = "card" }: { preview: string; messageCount: number; toolCount: number; workedMs?: number; onExpand: () => void; variant?: "card" | "steps" }) {
   const bits: string[] = [];
+  if (workedMs >= 1000) bits.push(`Worked ${formatRunDuration(0, workedMs)}`);
   if (variant === "steps") {
     if (messageCount > 1) bits.push(`${messageCount - 1} earlier ${messageCount - 1 === 1 ? "message" : "messages"}`);
   } else if (messageCount > 1) bits.push(`${messageCount} messages`);
