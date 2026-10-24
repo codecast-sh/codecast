@@ -264,7 +264,7 @@ import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { decideSourceRestart, type SourceRestartState } from "./sourceRestart.js";
 import { sweepHostDisk } from "./hostDiskSweep.js";
-import { diskFullHold, freeDiskShare } from "./diskFull.js";
+import { diskFullFailReason, diskFullHold, freeDiskShare } from "./diskFull.js";
 import { BUILD_ID_RE, BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
 import { markSynced, markExamined, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
@@ -6665,13 +6665,21 @@ async function executeRemoteCommand(
           })();
           if (gitRoot) {
             const wtName = worktreeName || `session-${shortId}`;
-            worktreeResult = await createWorktree(gitRoot, wtName);
-            if (worktreeResult) {
-              cwd = worktreeResult.worktreePath;
-              log(`[WORKTREE] Created isolated worktree: ${worktreeResult.worktreeName} at ${cwd}`);
-            } else {
-              log(`[WORKTREE] Failed to create worktree, falling back to repo root`);
+            const made = await createWorktree(gitRoot, wtName);
+            // An isolated session never works in the main checkout: a line hand
+            // there edits and commits on the checkout's own branch. A worktree
+            // that cannot be made fails the start, and the run's station fails
+            // with why. A full disk also stops the machine taking line runs
+            // (diskFull.ts).
+            if ("error" in made) {
+              error = diskFullFailReason(gitRoot, `could not make worktree ${wtName}: ${made.error}`) ?? `could not make worktree ${wtName}: ${made.error}`;
+              log(`[WORKTREE] start refused: ${error}`);
+              if (conversationId) syncServiceRef?.setSessionError(conversationId, error).catch(() => {});
+              break;
             }
+            worktreeResult = made;
+            cwd = worktreeResult.worktreePath;
+            log(`[WORKTREE] Created isolated worktree: ${worktreeResult.worktreeName} at ${cwd}`);
           }
         }
 
@@ -9461,8 +9469,9 @@ interface WorktreeResult {
 async function createWorktree(
   repoRoot: string,
   name: string,
-): Promise<WorktreeResult | null> {
+): Promise<WorktreeResult | { error: string }> {
   const manifestPath = path.join(repoRoot, ".codecast/workspace.toml");
+  let newPathError: string | undefined;
   if (fs.existsSync(manifestPath)) {
     try {
       // This repo creates worktrees, so it earns a warm pool. Registering here
@@ -9485,13 +9494,16 @@ async function createWorktree(
         .join("; ");
       log(`[WORKTREE] new-path ${name} broken, falling back. failures: ${failures}`);
     } catch (err) {
-      log(`[WORKTREE] new-path ${name} threw, falling back: ${(err as Error).message}`);
+      newPathError = (err as Error).message;
+      log(`[WORKTREE] new-path ${name} threw, falling back: ${newPathError}`);
     }
   }
-  return createWorktreeLegacy(repoRoot, name);
+  const legacy = createWorktreeLegacy(repoRoot, name);
+  // The workspace's own error says why far better than the legacy retry's.
+  return "error" in legacy && newPathError ? { error: newPathError } : legacy;
 }
 
-function createWorktreeLegacy(repoRoot: string, name: string): WorktreeResult | null {
+function createWorktreeLegacy(repoRoot: string, name: string): WorktreeResult | { error: string } {
   const worktreeDir = path.join(repoRoot, CODECAST_WORKTREE_DIR);
   const worktreePath = path.join(worktreeDir, name);
   const branchName = `codecast/${name}`;
@@ -9543,7 +9555,8 @@ function createWorktreeLegacy(repoRoot: string, name: string): WorktreeResult | 
 
   if (!created) {
     log(`[WORKTREE] Failed to create worktree: ${lastErr}`);
-    return null;
+    const e = lastErr as { stderr?: string | Buffer; message?: string } | undefined;
+    return { error: (e?.stderr?.toString().trim() || e?.message || String(lastErr)).split("\n").find((l) => /^(fatal|error):/.test(l.trim())) ?? (e?.message || String(lastErr)).split("\n")[0] };
   }
 
   // Remove large build artifact directories that bloat the worktree
