@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { create, listForFile, mirrorToGitHub, remove, resolve, unresolve, update } from "./codeComments";
+import { create, handedOffAndResolved, listForFile, mirrorToGitHub, remove, resolve, unresolve, update } from "./codeComments";
 
 const USER = "user_1" as any;
 const OTHER = "user_2" as any;
@@ -579,5 +579,22 @@ describe("mirroring a reply", () => {
     };
     await withStubbedFetch(sent, () => (mirrorToGitHub as any)._handler(ctx, { comment_id: "rc_2", pr_id: PR }));
     expect(sent[0].url).toContain("/issues/12/comments");
+  });
+});
+
+describe("handedOffAndResolved", () => {
+  const author = "u_author" as any;
+  const base = { resolved: true, resolved_at: 200, sent_at: 100, author_user_id: author };
+  test("the author resolving after the hand-off takes the note out of the review", () => {
+    expect(handedOffAndResolved({ ...base, resolved_by: author })).toBe(true);
+  });
+  test("a note a teammate's line resolve stamped stays in its author's review", () => {
+    expect(handedOffAndResolved({ ...base, resolved_by: "u_teammate" as any })).toBe(false);
+  });
+  test("a resolved note that was never sent stays in the review", () => {
+    expect(handedOffAndResolved({ ...base, sent_at: undefined, resolved_by: author })).toBe(false);
+  });
+  test("resolved before it was sent stays in the review", () => {
+    expect(handedOffAndResolved({ ...base, resolved_at: 50, resolved_by: author })).toBe(false);
   });
 });
