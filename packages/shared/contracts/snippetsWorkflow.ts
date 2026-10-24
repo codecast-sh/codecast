@@ -12,23 +12,17 @@ cast workflow run flow.cast --task ct-N     # or --plan pl-N
 cast workflow list | runs | push
 \`\`\`
 
-Flows are the team's library of these graphs: lines that take a change to done, and segments (check, review, eval, decide, ship) that do one part of the path. A finished change goes through a flow before it ships; the run draws live in the conversation, and a flow written there can be saved to the library from it.
+Flows are the team's library of these graphs: lines that take a change to done, and segments (check, review, eval, decide, ship) that do one part. A finished change goes through one before it ships, its run drawn live in the conversation.
 
-Choose by how well the library fits the work. A library flow that fits is run as it stands, since it carries what the team has learned. When one fits as a backbone but a step needs work particular to this change, extend it and fill its slots with steps you write, leaving the rest of it the team's. Write a whole flow only when nothing in the library has the shape of the work.
+Run a library flow that fits as it stands. When one fits as a backbone but a step needs this change's own work, extend it and fill its slots. Write a whole flow only when nothing in the library has the shape of the work.
 
 \`\`\`bash
-cast flow ls                        # the library, each flow with its steps
-cast flow run change                # this session's own edits through a library flow (or --task, --branch, --pr)
-cast flow run - <<'EOF'             # a flow written here, checked before it starts
-digraph <name> {
-  graph [extends="<flow>"]          # a library flow as the backbone
-  subgraph <slot> { a -> b -> c }   # the steps that fill one of its slots
-}
-EOF
-cast flow import <wf_id>            # a Workflow-tool run becomes a flow: your draft until you make it general, then cast flow publish
+cast flow ls                        # the library
+cast flow run change                # this session's own edits through a library flow
+cast flow run - <<'EOF' … EOF       # a flow written here (extends a backbone, or whole)
 \`\`\`
 
-\`cast guide workflows\` shows the graph syntax, segments, slots and the line commands.
+\`cast guide workflows\` shows the graph syntax, segments, slots and import.
 ${WORKFLOW_SNIPPET_END}
 `;
 
@@ -66,6 +60,8 @@ A node with \`flow="<slug>"\` runs that segment in place: its steps join the gra
 \`\`\`bash
 cast flow show <flow>               # its steps, who does each, where each sends the work, and its slots
 cast flow validate <flow|file|->    # read it with its segments and slots expanded and name what is missing
+cast flow run <flow> --task ct-N    # a task's change (or --branch, --pr); default: this session's own edits
+cast flow import <wf_id>            # a Workflow-tool run becomes a flow: your draft until you make it general, then cast flow publish
 cast flow publish <flow>            # a repo flow into the team's pool, on the Line page's Flows view
 \`\`\`
 
