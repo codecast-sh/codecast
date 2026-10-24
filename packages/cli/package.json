@@ -14,6 +14,7 @@
     "build:binary": "bash scripts/guard-no-src-shadow.sh && bun scripts/build-with-native.ts src/main.ts --compile --outfile codecast",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "bun test ./src/",
+    "test:learning": "bun test ./learning/",
     "test:computer": "bun test ./src/computer/ --isolate --path-ignore-patterns=''"
   },
   "dependencies": {
