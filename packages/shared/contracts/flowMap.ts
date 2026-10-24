@@ -87,16 +87,74 @@ export type FlowMap = {
   /** The workspace's live problem runs on flows outside the family (a person's plain line), by the station they stand at. */
   off: { running: number; stalled: number; steps: FlowMapStep[] };
   sources: FlowMapSource[];
+  /** The fixes in production over FLOW_MAP_DAYS (shippedFixes), regressed first: header.watching and header.regressed count it. */
+  shipped: FlowMapShipped[];
   header: {
     problemsOpen: number;
     problemsScored: number;
     /** Blocking decisions on the team's runs: the viewer's, and everyone else's. */
     decisionsForYou: number;
     decisionsForTeam: number;
+    /** Of `shipped`: under watch now, and come back. */
     watching: number;
     regressed: number;
   };
 };
+
+/** A fix in production: under watch, verified (its watch ended quiet), or regressed (its problem came back after the fix,
+ *  during its watch or after a dissolve's fix; the finding that reopened it is `reopenedBy`). */
+export type FlowMapShippedState = "regressed" | "watching" | "verified";
+export type FlowMapShipped = {
+  taskId: string;
+  ref: string | null;
+  title: string;
+  state: FlowMapShippedState;
+  /** When it closed as shipped, where the task still says. */
+  shippedAt: number | null;
+  /** When its watch ends or ended. */
+  until: number | null;
+  reopenedAt: number | null;
+  reopenedBy: { source: string; title: string; ref: string | null } | null;
+};
+
+type ShipTask = { _id: string; short_id?: string | null; title: string; status: string; closed_at?: number | null; watch_until?: number | null; cause?: { named?: { name: string } | null } | null };
+
+/**
+ * The shipped list from a workspace's tasks with a watch ending in the window (`watched`) and the problems a finding
+ * reopened in it (`reopened`, each with its task and the finding). A reopen clears the watch (convex signals
+ * endWatch), so a task holding a watch_until now was shipped after its last reopen: under watch, or verified when the
+ * watch is past (a quiet end). A reopened problem holding none is regressed.
+ */
+export function shippedFixes(o: {
+  watched: ReadonlyArray<ShipTask>;
+  reopened: ReadonlyArray<{ task: ShipTask; at: number; by: { source: string; title: string; ref: string | null } | null }>;
+  now: number;
+}): FlowMapShipped[] {
+  const name = (t: ShipTask) => t.cause?.named?.name ?? t.title;
+  const rows = new Map<string, FlowMapShipped>();
+  for (const t of o.watched) {
+    if (typeof t.watch_until !== "number") continue;
+    const watching = t.watch_until > o.now;
+    if (!watching && t.status !== "done") continue;
+    rows.set(t._id, { taskId: t._id, ref: t.short_id ?? null, title: name(t), state: watching ? "watching" : "verified", shippedAt: t.closed_at ?? null, until: t.watch_until, reopenedAt: null, reopenedBy: null });
+  }
+  for (const r of o.reopened) {
+    // Shipped again after it came back: its new watch is what stands now.
+    if (rows.has(r.task._id)) continue;
+    rows.set(r.task._id, { taskId: r.task._id, ref: r.task.short_id ?? null, title: name(r.task), state: "regressed", shippedAt: r.task.closed_at ?? null, until: null, reopenedAt: r.at, reopenedBy: r.by });
+  }
+  const rank: Record<FlowMapShippedState, number> = { regressed: 0, watching: 1, verified: 2 };
+  return [...rows.values()].sort((a, b) => rank[a.state] - rank[b.state]
+    || (a.state === "regressed" ? (b.reopenedAt ?? 0) - (a.reopenedAt ?? 0) : a.state === "watching" ? (a.until ?? 0) - (b.until ?? 0) : (b.until ?? 0) - (a.until ?? 0)));
+}
+
+/** A station as a person reads it when its graph names no label: "plan_gate" is "Plan gate", and a segment's station
+ *  ("decide__decide") is named by its own part. */
+export function stationWords(id: string): string {
+  const own = id.split("__").pop() || id;
+  const words = own.replace(/[_-]+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : id;
+}
 
 export const emptyOutcomes = (): FlowMapOutcomes => ({ queued: 0, notReady: 0, running: 0, waiting: 0, shipped: 0, closed: 0, failed: 0, parked: 0, total: 0 });
 

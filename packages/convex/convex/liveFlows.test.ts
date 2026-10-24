@@ -184,6 +184,16 @@ describe("liveFlows (one live flow per team)", () => {
     expect((await sweepCore(ctx, until + 1000)).started.map((st) => st.task_id)).toEqual(["tasks_g70"]);
   });
 
+  test("a hold set from a session names it by its short id, never by the agent's raw session id", async () => {
+    const token = "cx_live_flow_hold_uuid_token";
+    const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], extra: { api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(token), name: "cli", created_at: 1 }] } });
+    const uuid = "378a9c20-019f-485d-9837-9e99fc369bfe";
+    tables.conversations.push({ _id: "conversations_hold", session_id: uuid, short_id: "jx7hold", user_id: HOST, team_id: TEAM, status: "active", title: "hold", agent_type: "claude_code", message_count: 1, updated_at: NOW });
+    const hold = (from_session: string) => (holdFromCli as any)._handler(ctx, { api_token: token, team_id: TEAM, from_session, why: "disks full", until: Date.now() + 3_600_000 });
+    expect((await hold(uuid)).hold.by).toBe("jx7hold");
+    expect((await hold("0000aaaa-0000-0000-0000-000000000000")).hold.by).toBe(`user:${HOST}`);
+  });
+
   test("only a team admin clears a hold", async () => {
     const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], flow: { hold: { why: "spent", until: Date.now() + 3_600_000, by: "jx7hand", at: 1 } } });
     await expect(clearHoldCore(ctx, MATE as any, tables.live_flows[0])).rejects.toThrow("team admin required");

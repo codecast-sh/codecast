@@ -30,6 +30,8 @@ export type LiveFlow = {
   changed_at: number | null;
   queue: Array<{ task_id: string; waiting: string | null }>;
   running: string[];
+  /** The web's optimistic row this one superseded, for a flow started there. */
+  client_key?: string | null;
   /** A hold stops every start until it is cleared or `until` passes; `by` is the session that set it. */
   hold: { why: string; until: number | null; by: string | null; at: number } | null;
 };

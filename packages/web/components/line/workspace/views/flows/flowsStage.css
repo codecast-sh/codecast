@@ -1,0 +1,52 @@
+/* The Flows stage (FlowsStage): the live flow's head and lanes, its map, its queue. */
+.fs { padding: var(--lw-s4) var(--lw-s5) var(--lw-s6); display: flex; flex-direction: column; gap: var(--lw-s4); }
+.fs-lib { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+
+.fs-lanes { display: flex; flex-direction: column; border-top: 1px solid var(--lw-rule-2); }
+.fs-lane {
+  display: grid; grid-template-columns: minmax(170px, 15%) minmax(160px, 22%) minmax(0, 1fr); gap: 6px 18px; align-items: center;
+  padding: 10px 0; border-bottom: 1px solid var(--lw-rule-2);
+}
+.fs-lane:last-child { border-bottom: 0; }
+.fs-lane[aria-current] .fs-lane-name { color: var(--lw-ink); }
+.fs-lane[aria-current] { box-shadow: inset 3px 0 0 var(--lw-person); padding-left: 10px; }
+.fs-lane-id { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.fs-lane-name { font-weight: 650; color: var(--lw-ink-2); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+a.fs-lane-name:hover { color: var(--lw-ink); text-decoration: underline; text-underline-offset: 3px; }
+.fs-lane[data-kind="off"] .fs-lane-name { color: color-mix(in srgb, var(--lw-warn) 75%, var(--lw-ink)); }
+.fs-lane[data-kind="unfiled"] .fs-lane-name { color: var(--lw-bad); }
+.fs-lane-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
+.fs-lane-sub b { color: var(--lw-ink); }
+.fs-lane-sub [data-tone="bad"], .fs-lane-sub [data-tone="bad"] b { color: var(--lw-bad); }
+.fs-lane-edit { color: var(--lw-ink-3); text-decoration: none; }
+.fs-lane-edit:hover { color: var(--lw-ink); text-decoration: underline; }
+.fs-lane-src { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.fs-lane-src .flv-chip { font-size: var(--lw-fs-2xs); }
+/* With no steps (the sources that file nowhere), the chips take the steps' column too. */
+.fs-lane[data-kind="unfiled"] .fs-lane-src { grid-column: 2 / -1; }
+
+.fs-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 0; align-items: center; }
+.fs-steps li { display: inline-flex; align-items: center; }
+.fs-steps li + li::before { content: ""; width: 10px; height: 1px; background: var(--lw-edge-faint); margin: 0 2px; }
+.fs-step {
+  display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 8px; border-radius: 7px; border: 1px solid var(--lw-rule-2);
+  background: var(--lw-paper-2); font: inherit; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); white-space: nowrap;
+}
+button.fs-step { cursor: pointer; transition: border-color var(--lw-fast), color var(--lw-fast); }
+button.fs-step:hover { border-color: var(--lw-rule); color: var(--lw-ink); }
+.fs-step-n { font-weight: 700; color: var(--lw-ink); }
+.fs-step-n[data-zero] { font-weight: 400; color: var(--lw-ink-3); }
+.fs-steps li[data-stalled] .fs-step { border-color: color-mix(in srgb, var(--lw-bad) 45%, transparent); background: var(--lw-bad-soft); }
+.fs-step-stall { color: var(--lw-bad); font-weight: 650; }
+
+/* The map: a frame of its own height, the graph filling it. */
+.fs-map { position: relative; height: clamp(440px, 64vh, 820px); border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); overflow: hidden; background: var(--lw-paper); }
+.fs-map[data-mode="table"] { height: auto; overflow: visible; border: 0; }
+.fs-work { gap: 0; }
+
+@media (max-width: 1000px) {
+  .fs-lane { grid-template-columns: 1fr; }
+  .fs-lane[data-kind="unfiled"] .fs-lane-src { grid-column: auto; }
+}
+.fs-step-wait { color: var(--lw-person); font-weight: 600; }
+.fs-lane-sub [data-tone="you"], .fs-lane-sub [data-tone="you"] b { color: var(--lw-person); }

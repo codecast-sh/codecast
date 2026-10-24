@@ -92,26 +92,31 @@ beforeEach(() => { moves.length = 0; pushed.length = 0; seed(); });
 
 const key = (k: string) => act(async () => { document.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true })); });
 
-test("the app opens on the steps' map", async () => {
+test("with no live flow the Flows stage is the library, and a flow the address names opens on its map", async () => {
   search = "";
+  const lib = await mount(React.createElement(LineWorkspace));
+  expect(lib.host.querySelector("[data-pipeline-stage='flows']")?.getAttribute("aria-current")).toBe("page");
+  expect(lib.host.querySelector("[data-flows-home]")).not.toBeNull();
+  await act(async () => { lib.root.unmount(); });
+  search = "graph=line";
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  expect(host.querySelector("[data-line-view-tab='line']")?.getAttribute("aria-current")).toBe("page");
+  expect(host.querySelector("[data-pipeline-stage='flows']")?.getAttribute("aria-current")).toBe("page");
   expect(host.querySelector("[data-line-view='graph']")).not.toBeNull();
   expect(host.querySelector("[data-line-mode='map']")?.getAttribute("aria-selected")).toBe("true");
   await act(async () => { root.unmount(); });
 }, 30_000);
 
-test("the app: its pages, the flow list, Decisions the only count; G then a letter switches page, a digit never does", async () => {
+test("the header is the pipeline: five stages, the open one marked; G then a letter opens a stage, a digit never does", async () => {
   search = "view=flows";
   useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  expect([...host.querySelectorAll<HTMLElement>("[data-line-view-tab]")].map((b) => b.dataset.lineViewTab)).toEqual(["flows", "foryou", "timeline", "problems", "line", "deploys"]);
-  expect(host.querySelector("[data-line-view-tab='foryou'] .lw-nav-label")?.textContent).toBe("Decisions");
-  expect(host.querySelector("[data-line-view-tab='flows']")?.getAttribute("aria-current")).toBe("page");
+  expect([...host.querySelectorAll<HTMLElement>("[data-pipeline-stage]")].map((b) => b.dataset.pipelineStage)).toEqual(["signals", "problems", "flows", "decisions", "shipped"]);
+  // The library sits under Flows.
+  expect(host.querySelector("[data-pipeline-stage='flows']")?.getAttribute("aria-current")).toBe("page");
   expect(host.querySelector("[data-flows-home]")).not.toBeNull();
-  // One number, on the For you entry; no header chip, no auto-start switch, no picker or filter over every process.
-  expect([...host.querySelectorAll("[data-line-waits]")].map((e) => e.getAttribute("data-line-waits"))).toEqual(["1"]);
-  expect(host.querySelector("[data-line-start-chip]")).toBeNull();
+  // Decisions counts what the viewer can answer now; no left nav, no process picker, and the project filter only on Problems.
+  expect(host.querySelector("[data-pipeline-stage='decisions'] .pl-fig b")?.textContent).toBe("1");
+  expect(host.querySelector("[data-line-view-tab]")).toBeNull();
   expect(host.querySelector("[data-line-graph-pick]")).toBeNull();
   expect(host.querySelector("[data-line-project-filter]")).toBeNull();
   // Digits belong to an open decision's answers: the shell moves on none of them.
@@ -120,6 +125,8 @@ test("the app: its pages, the flow list, Decisions the only count; G then a lett
   await key("g"); await key("p");
   expect(pushed.at(-1)).toBe("/flows?view=problems");
   await key("g"); await key("s");
+  expect(pushed.at(-1)).toBe("/flows?view=signals");
+  await key("g"); await key("f");
   expect(pushed.at(-1)).toBe("/flows");
   await act(async () => { root.unmount(); });
 }, 30_000);
@@ -137,20 +144,16 @@ test("keys pressed inside an open decision are the decision's: G then P moves no
   await act(async () => { root.unmount(); });
 }, 30_000);
 
-test("Problems carries the process picker and the project filter, with no for-you numbers on them", async () => {
+test("Problems carries the project filter, and only Problems", async () => {
   search = "project=pr-1&view=problems";
   const { host, root } = await mount(React.createElement(LineWorkspace));
   expect(host.querySelector("[data-line-project-filter]")?.textContent).toBe("Codecast");
-  // Problems lists every process by default, as For you counts them: All is picked until process= names one.
-  const picked = (h: Element) => [...h.querySelectorAll<HTMLElement>("[data-line-graph-pick]")].filter((e) => e.getAttribute("aria-selected") === "true").map((e) => e.dataset.lineGraphPick);
-  expect(picked(host)).toEqual(["all"]);
-  expect(host.querySelector("[data-line-graph-pick='line']")).not.toBeNull();
-  expect(host.querySelector(".lw-pick-you")).toBeNull();
+  expect(host.querySelector("[data-pipeline-stage='problems']")?.getAttribute("aria-current")).toBe("page");
   await act(async () => { root.unmount(); });
-  search = "project=pr-1&view=problems&process=line";
-  const one = await mount(React.createElement(LineWorkspace));
-  expect(picked(one.host)).toEqual(["line"]);
-  await act(async () => { one.root.unmount(); });
+  search = "view=foryou";
+  const other = await mount(React.createElement(LineWorkspace));
+  expect(other.host.querySelector("[data-line-project-filter]")).toBeNull();
+  await act(async () => { other.root.unmount(); });
 }, 30_000);
 
 test("Decisions lists the fix decision by what it asks in a table, opens nothing by itself, and a row click is a history entry", async () => {
@@ -205,9 +208,8 @@ test("on the Map a station slides in as a drawer over the graph, Esc closes it; 
   search = "project=pr-1&view=line&mode=map&graph=line&step=prove";
   const { host, root } = await mount(React.createElement(LineWorkspace));
   expect(host.querySelector("[data-line-drawer]")).not.toBeNull();
-  // The graph and the flow band stay drawn behind it.
+  // The graph stays drawn behind it.
   expect(host.querySelector("[data-line-view='graph']")).not.toBeNull();
-  expect(host.querySelector("[data-line-flow]")).not.toBeNull();
   expect(host.querySelector(".lw-body")?.hasAttribute("data-drawer-open")).toBe(true);
   await key("Escape");
   expect(moves.at(-1)).toBe("/flows?project=pr-1&graph=line");
@@ -220,21 +222,22 @@ test("on the Map a station slides in as a drawer over the graph, Esc closes it; 
   await act(async () => { table.root.unmount(); });
 }, 30_000);
 
-test("a stage named in the address opens its drawer over the Map; nothing arriving is said plainly", async () => {
+test("a review stage opens its drawer over Signals; nothing arriving is said plainly", async () => {
   useInboxStore.setState({ lineStages: { p1: {
     _id: "p1", project: "Codecast", sources: ["union-moments"], window: { moments: 3, capped: false }, days: 14, at: now,
     kinds: [{ kind: "call", source: "union-moments", extractor: null, counts: { waiting: 0, extracting: 0, ready: 3, failed: 0 }, total: 3, day: 0, week: 3, newest_at: now - 5 * DAY, newest_event_at: now - 8 * DAY, days: [0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0], replayed: 3, gap_ms: null, versions: [], recent: [], failed: [] }],
     judges: [], retired: { week: 0, recent: [] }, grouping: { attach: 0.86, ask: 0.45, hits: 64, candidates: 5, cross_ask: 0.5, cross_candidates: 3, embedding_model: "e", attach_model: "m" },
   } } } as any);
-  search = "project=pr-1&view=line&mode=map&graph=line&stage=moments";
+  // An old link (view=line&mode=map&stage=…) reads as this address (lineWorkspaceUrl.test).
+  search = "project=pr-1&view=signals&graph=line&stage=moments";
   const { host, root } = await mount(React.createElement(LineWorkspace));
   expect(host.querySelector("[data-line-drawer='Moments']")).not.toBeNull();
   expect(host.querySelector("[data-line-moments-quiet]")?.textContent).toContain("Nothing arriving");
-  expect(host.querySelector("[data-line-flow-stage='moments']")?.getAttribute("aria-current")).toBe("true");
+  expect(host.querySelector("[data-pipeline-stage='signals']")?.getAttribute("aria-current")).toBe("page");
   // The drawer's head walks to another stage in place.
   await act(async () => { host.querySelector<HTMLElement>("[data-line-drawer-stage='grouping']")!.click(); });
-  expect(moves.at(-1)).toBe("/flows?project=pr-1&graph=line&stage=grouping");
+  expect(moves.at(-1)).toBe("/flows?project=pr-1&view=signals&graph=line&stage=grouping");
   await key("Escape");
-  expect(moves.at(-1)).toBe("/flows?project=pr-1&graph=line");
+  expect(moves.at(-1)).toBe("/flows?project=pr-1&view=signals&graph=line");
   await act(async () => { root.unmount(); });
 }, 30_000);

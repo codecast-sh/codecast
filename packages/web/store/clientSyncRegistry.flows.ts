@@ -14,7 +14,8 @@ export const FLOW_SYNC_COLLECTIONS = {
     localFirst: true,
     workspaceScoped: true,
     indexes: "_id, team_id",
-    sync: { isDelta: true, deepFields: ["queue", "running", "sources", "caps", "load", "flow", "watcher"] },
+    // altKey: a flow started on the web paints as a row keyed by its client key, which the server row carries.
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["queue", "running", "sources", "caps", "load", "flow", "watcher"] },
     feeds: ["liveFlows.forTeam"],
   },
   // The flows a team's sessions ran or defined (convex flowLibrary.sessionFlows):
@@ -30,5 +31,17 @@ export const FLOW_SYNC_COLLECTIONS = {
     // A complete snapshot of the workspace's session flows each push.
     sync: { deepFields: ["nodes", "edges", "runs", "sessions", "by", "saved"] },
     feeds: ["flowLibrary.sessionFlows"],
+  },
+  // A workspace's flow map (convex flowMap.forTeam, shared/contracts/flowMap.ts):
+  // every source of its problems with its pace and where its problems go, the
+  // live flow's lanes with the runs at each step, and the pipeline header's
+  // counts. One row per workspace, keyed by the workspace.
+  flowMaps: {
+    persistence: { kind: "collection", key: "flowMaps" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    indexes: "_id",
+    sync: { isDelta: true, deepFields: ["liveFlow", "lanes", "off", "sources", "header"] },
+    feeds: ["flowMap.forTeam"],
   },
 } as const satisfies Record<string, ClientSyncRegistryEntry>;

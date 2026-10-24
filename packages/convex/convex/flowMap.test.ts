@@ -158,7 +158,10 @@ describe("rollup then forTeam", () => {
       problem("ar4", { status: "dropped", cause: { merged_into: "tasks_ar3" } }),
       problem("p1", { status: "in_review", workflow_run_id: "workflow_runs_3" }),
       problem("p2", { status: "in_progress", workflow_run_id: "workflow_runs_4" }),
-      problem("e1", { status: "in_review", workflow_run_id: "workflow_runs_5", watch_until: NOW + 6 * DAY_MS }),
+      // Shipped, then a finding came back during its watch: the reopen cleared the watch (signals endWatch).
+      problem("e1", { status: "in_review", workflow_run_id: "workflow_runs_5" }),
+      // A fix under watch, quiet so far.
+      problem("w1", { status: "done", closed_at: NOW - DAY_MS, watch_until: NOW + 6 * DAY_MS, cause: null }),
       problem("jr", {}),
       problem("p3", { status: "in_progress", workflow_run_id: "workflow_runs_7", created_at: NOW - 40 * DAY_MS }),
       problem("ar5", { status: "in_progress", workflow_run_id: "workflow_runs_8", waiting_since: NOW - DAY_MS, created_at: NOW - 40 * DAY_MS }),
@@ -234,7 +237,7 @@ describe("rollup then forTeam", () => {
     const map = (await rolledMap())!;
     const by = Object.fromEntries(map.sources.map((s) => [s.key, s]));
     const ar = by["judge:agent-review"];
-    expect(ar).toMatchObject({ label: "agent-review judge", group: "conversations", route: "agentwatch", lastAt: NOW - 2 * H, opens: { judgeIds: ["judges_ar"] } });
+    expect(ar).toMatchObject({ label: "Agent-review judge", group: "conversations", route: "agentwatch", lastAt: NOW - 2 * H, opens: { judgeIds: ["judges_ar"] } });
     expect(ar.days.slice(-4)).toEqual([1, 1, 0, 2]);
     // ar4 merged into ar3: counted there, not here.
     expect(ar.outcomes).toMatchObject({ running: 2, queued: 1, total: 3 });
@@ -249,7 +252,7 @@ describe("rollup then forTeam", () => {
 
     const errors = by["sdk:union-errors"];
     expect(errors).toMatchObject({ route: "agentwatch-system", state: "flowing", today: 2, unfiled: 1, opens: { eventSourceId: "event_sources_errors" }, outcomes: { shipped: 1, total: 1 } });
-    expect(by["sdk:union-errors:job_failed"]).toMatchObject({ label: "union-errors failed jobs", route: "unfiled", unfiled: 2, today: 1, lastAt: NOW - 5 * H });
+    expect(by["sdk:union-errors:job_failed"]).toMatchObject({ label: "Union-errors failed jobs", route: "unfiled", unfiled: 2, today: 1, lastAt: NOW - 5 * H });
     expect(by["github:github-ci:check_failed"]).toMatchObject({ route: "unfiled", unfiled: 1, today: 1 });
     // Metric watches on a source that files no metric alerts: a row of their own, the alerts counted as unfiled.
     expect(by["posthog:union-posthog:metric_alert"]).toMatchObject({ route: "unfiled", unfiled: 1, state: "stopped", opens: { eventSourceId: "event_sources_posthog", metricWatchIds: ["metric_watches_1", "metric_watches_2"] } });
@@ -263,6 +266,9 @@ describe("rollup then forTeam", () => {
     const map = (await rolledMap())!;
     // Open: ar1, ar2, ar3, ar5, p1, p2, p3, e1, jr, old (ar4 merged); scored: ar1, ar3.
     expect(map.header).toEqual({ problemsOpen: 10, problemsScored: 2, decisionsForYou: 1, decisionsForTeam: 2, watching: 1, regressed: 1 });
+    // The header counts the shipped list: the one that came back, with the finding that reopened it, and the one under watch.
+    expect(map.shipped.map((r) => [r.ref, r.state])).toEqual([["ct-e1", "regressed"], ["ct-w1", "watching"]]);
+    expect(map.shipped[0].reopenedBy).toMatchObject({ source: "sdk:union-errors" });
     expect(map.liveFlow!.queued).toBe(3);
   });
 

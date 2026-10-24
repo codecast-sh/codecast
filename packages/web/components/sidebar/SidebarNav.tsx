@@ -10,7 +10,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Flag, FolderGit2, FolderKanban, Globe, Network, Radar, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper } from "lucide-react";
+import { Flag, FolderGit2, FolderKanban, Globe, Network, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
@@ -186,7 +186,6 @@ export type SidebarNavActive = {
   sessions: boolean;
   line: boolean;
   triggers: boolean;
-  ops: boolean;
   /** The Org screen (/org and an object opened on it). */
   org: boolean;
   /** The goals list and a goal (/goals…). */
@@ -410,15 +409,6 @@ export function SidebarNavView({
           icon={<Waypoints className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         {routines}
-        {showsPage("/ops") && <NavSection
-          label={page("/ops", "Ops")}
-          href="/ops"
-          isActive={active.ops}
-          isNarrow={isNarrow}
-          onMobileClose={onMobileClose}
-          title="Ops: your product's errors, checks, replays and metrics"
-          icon={<Radar className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        />}
         {orgOn && (
         <NavSection
           label={agent.label}

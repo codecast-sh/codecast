@@ -60,7 +60,6 @@ import { Surface, useHostedMode, useModeWords, useSurface, useSurfaceMode } from
 import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { isOpsPath } from "./ops/opsPaths";
 
 const CreateTaskModal = lazy(() =>
   import("./CreateTaskModal").then((module) => ({ default: module.CreateTaskModal })),
@@ -879,9 +878,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             sessions: !!isSessions,
             // A flow's steps are a workflow: every workflow page
             // (definitions, runs, dynamic) lives under Flows.
-            line: pathname === "/flows" || pathname?.startsWith("/flows/") || pathname === "/line" || pathname?.startsWith("/line/") || isWorkflows,
+            line: pathname === "/flows" || pathname?.startsWith("/flows/") || pathname === "/ops" || pathname?.startsWith("/ops/") || pathname === "/line" || pathname?.startsWith("/line/") || isWorkflows,
             triggers: isTriggers,
-            ops: isOpsPath(pathname),
             ...orgRows,
             changes: pathname === "/changes",
             rootAgent: isRootAgent,

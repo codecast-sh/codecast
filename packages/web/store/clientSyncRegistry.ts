@@ -1949,6 +1949,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   lineDeploys: "shared",
   liveFlows: "shared",
   sessionFlows: "shared",
+  flowMaps: "shared",
   lineTimeline: "shared",
   lineCards: "shared",
   lineChats: "shared",

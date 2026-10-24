@@ -1,73 +1,8 @@
-/* The flow band above the Map, and the drawer every stage and station opens in (stages/, LineDrawer). */
+/* The Map's column and the drawer every stage and station opens in (stages/, LineDrawer). */
 
-/* ── the Map's column: the band, then the lanes ────────────────────────── */
+/* ── the Map's column ──────────────────────────────────────────────────── */
 .lw-graph-col { position: absolute; inset: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: lwflow; }
 .lw-graph-col > .lwg-wrap { position: relative; flex: 1; min-height: 0; }
-
-/* ── the band: one continuous line, per moment then per problem ────────── */
-.lf {
-  display: flex; align-items: stretch; gap: 6px; padding: 10px var(--lw-s5) 10px;
-  border-bottom: 1px solid var(--lw-rule-2); background: var(--lw-paper); overflow-x: auto; scrollbar-width: none;
-}
-.lf::-webkit-scrollbar { display: none; }
-.lf-seg { display: flex; flex-direction: column; gap: 5px; min-width: max-content; }
-.lf-seg[data-seg="stream"] { flex: 4 1 0; }
-.lf-seg[data-seg="run"] { flex: 3 1 0; }
-.lf-seg-h {
-  font-size: var(--lw-fs-2xs); font-weight: 650; color: var(--lw-ink-3); padding-left: 2px;
-  display: flex; align-items: center; gap: 8px;
-}
-/* Each segment's rule runs under its heading, the stream's in the agent hue, the runs' in the person hue: the two kinds of station. */
-.lf-seg-h::after { content: ""; flex: 1; height: 2px; border-radius: 2px; background: color-mix(in srgb, var(--lw-agent) 40%, transparent); }
-.lf-seg[data-seg="run"] .lf-seg-h::after { background: color-mix(in srgb, var(--lw-person) 40%, transparent); }
-.lf-row { display: flex; align-items: stretch; gap: 4px; }
-.lf-arrow { flex: none; width: 14px; height: 14px; color: var(--lw-ink-3); align-self: center; opacity: .7; }
-.lf > .lf-arrow { margin-top: 18px; }
-
-.lf-tile {
-  /* A card is as wide as its words: it never cuts them, and the band scrolls when the cards outgrow it. */
-  position: relative; flex: 1 0 auto; min-width: 96px; display: flex; flex-direction: column; gap: 1px;
-  padding: 7px 10px 8px; border-radius: var(--lw-r); border: 1px solid var(--lw-rule); background: var(--lw-card);
-  color: var(--lw-ink); text-decoration: none; text-align: left; font: inherit; cursor: pointer;
-  transition: border-color var(--lw-fast), box-shadow var(--lw-fast), transform 100ms, background var(--lw-fast);
-}
-.lf-tile:hover { border-color: var(--lw-ink-3); box-shadow: var(--lw-shadow); }
-.lf-tile:active { transform: translateY(1px); }
-.lf-tile:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: 1px; }
-.lf-tile[aria-current="true"] { border-color: var(--lw-ink); box-shadow: inset 0 -2px 0 var(--lw-ink), var(--lw-shadow); background: var(--lw-card-2); }
-.lf-name { display: flex; align-items: center; gap: 6px; font-size: var(--lw-fs-xs); font-weight: 650; color: var(--lw-ink-2); white-space: nowrap; }
-.lf-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lw-ink-3); flex: none; }
-.lf-dot[data-tone="live"] { background: var(--lw-live); color: var(--lw-live); }
-.lf-dot[data-tone="quiet"], .lf-dot[data-tone="warn"] { background: var(--lw-warn); }
-.lf-dot[data-tone="bad"] { background: var(--lw-bad); }
-.lf-dot[data-tone="you"] { background: var(--lw-person); }
-.lf-dot[data-pulse] { animation: lw-pulse 2s var(--lw-ease) infinite; }
-.lf-n { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }
-.lf-n b { font-size: var(--lw-fs-xl); font-weight: 720; letter-spacing: -.02em; line-height: 1.1; }
-.lf-n b small { font-size: var(--lw-fs-sm); font-weight: 550; color: var(--lw-ink-3); }
-.lf-n > span { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
-.lf-line { font-size: var(--lw-fs-xs); color: var(--lw-ink-2); white-space: nowrap; }
-.lf-line[data-tone="warn"] { color: var(--lw-warn); font-weight: 600; }
-.lf-line[data-tone="bad"] { color: var(--lw-bad); font-weight: 600; }
-.lf-line[data-tone="you"] { color: var(--lw-person-deep); font-weight: 600; }
-
-/* With a drawer open the stage is narrower: tiles keep their name and number, the second line goes. */
-@container lwflow (max-width: 980px) {
-  .lf-line + .lf-line { display: none; }
-  .lf-tile { min-width: 92px; padding: 6px 8px 7px; }
-  .lf-n b { font-size: var(--lw-fs-lg); }
-}
-/* Narrow (a drawer open, a phone): one row that scrolls sideways, each tile its name and number. */
-@container lwflow (max-width: 760px) {
-  .lf { gap: 4px; padding: 8px var(--lw-s3); }
-  .lf-seg, .lf-row { flex: none; min-width: max-content; }
-  .lf-seg-h { display: none; }
-  .lf > .lf-arrow { margin-top: 0; }
-  .lf-line { display: none; }
-  .lf-tile { flex: none; min-width: 0; padding: 5px 9px 6px; }
-  .lf-n b { font-size: var(--lw-fs-md); }
-  .lf-n > span { display: none; }
-}
 
 /* ── the drawer: slides in from the right, the graph still in view ─────── */
 .lw-drawer {

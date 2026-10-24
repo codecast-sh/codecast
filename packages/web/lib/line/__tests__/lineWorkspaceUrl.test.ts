@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { caseRefs, flowHref, flowsAddressOf, lineFilterParam, lineSelectionPushes, lineSelectionSearch, lineViewForGoKey, lineWorkspaceHref, lineWorkspaceRedirect, readLineSelection, resolveLineProject, lineViewHome } from "../lineWorkspaceUrl";
+import { caseRefs, flowHref, flowsAddressOf, lineFilterParam, lineSelectionPushes, lineSelectionSearch, lineWorkspaceHref, lineWorkspaceRedirect, readLineSelection, resolveLineProject, lineViewHome } from "../lineWorkspaceUrl";
 
 const q = (s: string) => new URLSearchParams(s);
 
 describe("the line app's selection in the URL", () => {
   test("reads every key; no view is the flow list, an unknown one too, and a need with no view is For you; no project is every project", () => {
-    expect(readLineSelection(q("project=pr-1&view=problems&graph=agentwatch&step=prove&run=r1&case=t1&need=sd-6"))).toEqual({ view: "problems", mode: "table", project: "pr-1", graph: "agentwatch", step: "prove", tab: null, run: "r1", case: "t1", source: null, finding: null, row: null, ask: false, card: null, decision: null, need: "sd-6", flow: null, status: null, process: null, quiet: false, found: null, q: null, sort: null, win: null, show: null, stage: null, item: null, who: null, kind: null, area: null, order: null, group: null, deploy: null });
+    expect(readLineSelection(q("project=pr-1&view=problems&graph=agentwatch&step=prove&run=r1&case=t1&need=sd-6"))).toEqual({ view: "problems", mode: "table", project: "pr-1", graph: "agentwatch", step: "prove", tab: null, run: "r1", case: "t1", source: null, finding: null, row: null, ask: false, card: null, decision: null, need: "sd-6", flow: null, status: null, process: null, quiet: false, found: null, q: null, sort: null, win: null, show: null, stage: null, item: null, who: null, kind: null, area: null, order: null, group: null, deploy: null, sig: null, app: null, t: null });
     expect(readLineSelection(q("step=dissolve&steptab=try")).tab).toBe("try");
     expect(readLineSelection(q("step=dissolve&tab=try")).tab).toBe("try");
     expect(readLineSelection(q("tab=line&step=dissolve")).tab).toBeNull();
@@ -173,11 +173,6 @@ describe("history: which moves Back and Forward walk", () => {
 });
 
 describe("the line app's address", () => {
-  test("G then F, P or L opens the pages; no digit opens anything", () => {
-    expect(["f", "p", "s", "F"].map(lineViewForGoKey)).toEqual(["foryou", "problems", "line", "foryou"]);
-    expect(["1", "2", "3", "x", "l"].map(lineViewForGoKey)).toEqual([null, null, null, null, null]);
-  });
-
   test("one project is a filter on /flows", () => {
     expect(lineWorkspaceHref("pr-12")).toBe("/flows?project=pr-12");
     expect(lineWorkspaceHref(null)).toBe("/flows");
@@ -259,25 +254,35 @@ test("a problem is named by its ref in the address and by its row id in the view
   expect(refs.id("ct-1")).toBe("ct-1");
 });
 
-describe("a leading stage open over the Map", () => {
+describe("a review stage open over Signals", () => {
   test("reads and writes stage and item, dropping an unknown stage", () => {
-    const q = new URLSearchParams("view=line&mode=map&stage=judges&item=comms");
-    expect(readLineSelection(q).stage).toBe("judges");
-    expect(readLineSelection(q).item).toBe("comms");
-    expect(readLineSelection(new URLSearchParams("view=line&stage=nope")).stage).toBeNull();
+    const q = new URLSearchParams("view=signals&stage=judges&item=comms");
+    expect(readLineSelection(q)).toMatchObject({ view: "signals", stage: "judges", item: "comms" });
+    expect(readLineSelection(new URLSearchParams("view=signals&stage=nope")).stage).toBeNull();
   });
-  test("another stage drops the open item; a step closes the stage and a stage closes the step", () => {
-    const q = new URLSearchParams("view=line&mode=map&stage=judges&item=comms");
-    expect(lineSelectionSearch(q, { stage: "moments" })).toBe("?stage=moments");
+  test("a link from when the stages opened over the map lands on Signals", () => {
+    expect(readLineSelection(new URLSearchParams("view=line&mode=map&stage=judges")).view).toBe("signals");
+    expect(readLineSelection(new URLSearchParams("stage=moments")).view).toBe("signals");
+    expect(lineSelectionSearch(new URLSearchParams("view=line&mode=map"), { stage: "grouping" })).toBe("?view=signals&stage=grouping");
+  });
+  test("another stage drops the open item; a step leaves for the map and closes the stage", () => {
+    const q = new URLSearchParams("view=signals&stage=judges&item=comms");
+    expect(lineSelectionSearch(q, { stage: "moments" })).toBe("?view=signals&stage=moments");
     expect(lineSelectionSearch(q, { step: "prove" })).toBe("?step=prove");
-    expect(lineSelectionSearch(new URLSearchParams("view=line&mode=map&step=prove&show=failed"), { stage: "dispatch" })).toBe("?stage=dispatch");
+    expect(lineSelectionSearch(new URLSearchParams("view=line&mode=map&step=prove&show=failed"), { stage: "dispatch" })).toBe("?view=signals&stage=dispatch");
   });
   test("opening or closing a stage is a place Back walks", () => {
-    expect(lineSelectionPushes(new URLSearchParams("view=line&mode=map"), new URLSearchParams("view=line&mode=map&stage=grouping"))).toBe(true);
-    expect(lineSelectionPushes(new URLSearchParams("view=line&mode=map&stage=moments"), new URLSearchParams("view=line&mode=map&stage=moments&item=mo-4"))).toBe(true);
+    expect(lineSelectionPushes(new URLSearchParams("view=signals"), new URLSearchParams("view=signals&stage=grouping"))).toBe(true);
+    expect(lineSelectionPushes(new URLSearchParams("view=signals&stage=moments"), new URLSearchParams("view=signals&stage=moments&item=mo-4"))).toBe(true);
   });
-  test("a view's home closes the stage", () => {
-    expect(lineSelectionSearch(new URLSearchParams("view=line&mode=map&stage=judges&item=comms"), lineViewHome("line"))).toBe("");
+  test("Signals' home closes the stage and the source view", () => {
+    expect(lineSelectionSearch(new URLSearchParams("view=signals&stage=judges&item=comms"), lineViewHome("signals"))).toBe("?view=signals");
+    expect(lineSelectionSearch(new URLSearchParams("view=signals&sig=issues&source=web"), lineViewHome("signals"))).toBe("?view=signals");
+  });
+  test("a source view keeps its keys inside Signals and drops them on leaving", () => {
+    const q = new URLSearchParams("view=signals&sig=replays&item=rp-1&t=40");
+    expect(readLineSelection(q)).toMatchObject({ view: "signals", sig: "replays", item: "rp-1", t: "40" });
+    expect(lineSelectionSearch(q, { view: "problems" })).toBe("?view=problems");
   });
 });
 

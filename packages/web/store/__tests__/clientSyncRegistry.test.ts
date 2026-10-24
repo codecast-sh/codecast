@@ -245,7 +245,7 @@ describe("client sync registry", () => {
     });
 
     it("workspace-scoped tables are declared on the entry", () => {
-      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["agentChains", "agentDefinitions", "docs", "expectationsOverview", "initiatives", "issueSyncSources", "lineDeploys", "lineLabels", "lineTimeline", "liveFlows", "modObjects", "opsEvents", "opsGroups", "opsReplays", "opsSources", "opsWatches", "orgLog", "plans", "projects", "sessionFlows", "signals", "tasks", "trialCards", "trialProjects", "trialRuns", "workflows"].sort());
+      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["agentChains", "agentDefinitions", "docs", "expectationsOverview", "flowMaps", "initiatives", "issueSyncSources", "lineDeploys", "lineLabels", "lineTimeline", "liveFlows", "modObjects", "opsEvents", "opsGroups", "opsReplays", "opsSources", "opsWatches", "orgLog", "plans", "projects", "sessionFlows", "signals", "tasks", "trialCards", "trialProjects", "trialRuns", "workflows"].sort());
     });
   });
 

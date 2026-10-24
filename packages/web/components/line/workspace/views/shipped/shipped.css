@@ -1,0 +1,14 @@
+/* Shipped (ShippedView): fixes in production and their watch. Shares the Signals table's look (signals.css). */
+.sh { padding: var(--lw-s4) var(--lw-s5) var(--lw-s6); display: flex; flex-direction: column; gap: var(--lw-s3); }
+.sh-bar { display: flex; align-items: center; gap: var(--lw-s4); }
+.sh-deploys { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.sh-table col[data-c="d"] { width: 110px; }
+.sh-table col[data-c="w"] { width: 150px; }
+.sh-table col[data-c="s"] { width: 150px; }
+.sh-d small, .sh-state small { display: block; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
+.sh-dot { display: block; width: 8px; height: 8px; border-radius: 50%; margin-left: 4px; background: var(--lw-ok); }
+.sh-dot[data-state="watching"] { background: var(--lw-live); }
+.sh-dot[data-state="regressed"] { background: var(--lw-bad); }
+.sh-state[data-state="regressed"] { color: var(--lw-bad); font-weight: 650; }
+.sh-state[data-state="verified"] { color: color-mix(in srgb, var(--lw-ok) 75%, var(--lw-ink)); }
+.sg-count[data-tone="live"] > i { background: var(--lw-live); }

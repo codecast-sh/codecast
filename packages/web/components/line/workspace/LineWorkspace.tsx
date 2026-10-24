@@ -1,13 +1,14 @@
 "use client";
-// The flows app (docs/architecture/line-journeys.md LJ4, LJ5; flows.md FL0):
-// one app over every flow, a project only a filter on it. Its places, in the
-// left nav: Flows (the landing page: the team's flows, or on a flow's page that
-// flow), Decisions (what waits on the viewer, read and answered there),
-// Timeline, Problems, Steps and Deploys. Only Decisions carries a number, the
-// one count of what the viewer can answer now. The header holds the process picker and the project
-// filter where they scope the page (Problems, Line); For you covers every
-// process, so it has neither. Pages switch on G then F / P / L: the shell binds
-// no digit, because an open decision answers on bare digits.
+// The flows app (doc "Signals to shipped: one pipeline"; line-journeys.md LJ4,
+// LJ5; flows.md FL0): one app over every flow, its header the pipeline.
+// Signals (every source and where it goes), Problems, Flows (the live flow's
+// map), Decisions (what waits on the viewer, read and answered there) and
+// Shipped, each one number and one state, each the way into its view
+// (PipelineHeader). Every view sits under one stage (pipeline.ts), so the
+// header marks where a person is whatever address they came by. The workspace
+// switch heads the app; the project filter shows only on Problems, the one
+// view a project narrows. Pages switch on G then S / P / F / D / H: the shell
+// binds no digit, because an open decision answers on bare digits.
 // The selection lives in the URL (useLineSelection), so any state is a link.
 // `/flows` draws this over every project; `/flows/<owner>` draws it for one
 // flow, pinned to a project of its own; a project's Flow tab draws it pinned
@@ -16,7 +17,7 @@ import { Fragment, memo, useCallback, useMemo, useRef, useState, type ComponentT
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useStageScroll } from "./useStageScroll";
-import { Check, ChevronDown, Inbox, SlidersHorizontal, Workflow, AlertCircle, Rocket, Route, History, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, SlidersHorizontal } from "lucide-react";
 import { lineFilterParam, useLineProjectId, useLineSelection, useLineWorkspace, useSyncLineHistory } from "../../../hooks/useLineWorkspace";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -26,13 +27,16 @@ import { hasOpenModal, useShortcutAction, useShortcutContext, withShortcut } fro
 import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
 import { lineSettingsHref } from "../../../lib/lineSettings";
 import { lineProjectParam } from "../../../lib/line/lineStations";
-import { graphKeyOf, newestRunByTask, processKeyOf, processName, readLastProcess, rememberProcess, type GraphRun, type ProjectGraph } from "../../../lib/line/lineGraphs";
+import { graphKeyOf, newestRunByTask, processKeyOf, readLastProcess, rememberProcess, type GraphRun } from "../../../lib/line/lineGraphs";
 import { useDecisionTask } from "../../../hooks/useFixDecision";
 import { useSyncTrial, useTrialCards } from "../../../hooks/useSyncTrial";
 import { useSyncWorkflowRun } from "../../../hooks/useSyncWorkflows";
-import { LINE_VIEWS, LINE_VIEW_KEYS, LINE_VIEW_LABELS, lineSelectionSearch, lineViewForGoKey, lineViewHome, readLineSelection, type LineSelection, type LineSelectionPatch, type LineView } from "../../../lib/line/lineWorkspaceUrl";
+import { lineSelectionSearch, lineViewHome, readLineSelection, type LineSelection, type LineSelectionPatch } from "../../../lib/line/lineWorkspaceUrl";
+import { pipelineFigures, pipelineHome, pipelineStageForGoKey, pipelineStageOf, type PipelineStage } from "../../../lib/line/pipeline";
+import { useFlowMap } from "../../../hooks/useFlowMap";
+import { useLiveFlow } from "../../../hooks/useLiveFlow";
+import { PipelineHeader } from "./PipelineHeader";
 import { NO_PROJECT, type RollupRow } from "../../../lib/lineFlow";
-import { KeyCap } from "../../KeyCap";
 import { usePopover } from "./usePopover";
 import { useLineSpaceKeys, type LineSpaceState } from "../../../hooks/useLineSpace";
 import { TaskHrefProvider } from "../../../lib/taskHrefContext";
@@ -44,7 +48,9 @@ import { ForYouView } from "./views/ForYouView";
 import { FinderPage } from "./views/finder/FinderPage";
 import { ProblemsView } from "./views/ProblemsView";
 import { RunPage as RunPageView } from "./views/run/RunPage";
-import { ProcessView } from "./views/ProcessView";
+import { FlowsStage } from "./views/flows/FlowsStage";
+import { SignalsView } from "./views/signals/SignalsView";
+import { ShippedView } from "./views/shipped/ShippedView";
 import { DeploysView } from "./views/deploys/DeploysView";
 import { FlowsView } from "./views/flows/FlowsView";
 import { TimelineView } from "./views/events/TimelineView";
@@ -61,7 +67,9 @@ const ForYou = memo(ForYouView);
 const Problems = memo(ProblemsView);
 const RunPage = memo(RunPageView);
 const Finder = memo(FinderPage);
-const Line = memo(ProcessView);
+const Line = memo(FlowsStage);
+const Signals = memo(SignalsView);
+const Shipped = memo(ShippedView);
 const Deploys = memo(DeploysView);
 const Flows = memo(FlowsView);
 const Timeline = memo(TimelineView);
@@ -73,9 +81,10 @@ function pageFor(s: LineSelection): ComponentType<LineViewProps> {
   if (s.view === "deploys") return Deploys;
   if (s.view === "flows") return Flows;
   if (s.view === "timeline") return Timeline;
+  if (s.view === "signals") return Signals;
+  if (s.view === "shipped") return Shipped;
   return s.source ? Finder : Line;
 }
-const ICONS: Record<LineView, LucideIcon> = { foryou: Inbox, timeline: History, problems: AlertCircle, line: Workflow, flows: Route, deploys: Rocket };
 /** How long after G the second key of the go chord still counts. */
 const GO_MS = 1200;
 
@@ -116,9 +125,11 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   const runCase = useInboxStore((st) => (address.run ? ((st as unknown as { workflowRuns?: Record<string, { task_id?: string }> }).workflowRuns?.[address.run]?.task_id ?? null) : null));
   // With no process in the address, the one the person last picked on this device (lineGraphs pickGraph).
   const [lastProcess, setLastProcess] = useState(readLastProcess);
-  // A line the picked project has no runs in clears the project rather than refusing the pick: the line is what was asked for.
-  const pickProcess = useCallback((key: string, clearProject = false) => { rememberProcess(key); setLastProcess(key); go(clearProject ? { graph: key, project: null } : { graph: key }); }, [go]);
-  const ws = useLineWorkspace(projectId, address.graph ?? lastProcess, address.case ?? runCase, { pinned: !!pinned, everySpace: true });
+  // The map draws the flow the address names, else the team's live flow, else the one last drawn on this device.
+  const live = useLiveFlow(space?.key ?? null);
+  const liveKey = live ? processKeyOf(live.flow.slug) : null;
+  const ws = useLineWorkspace(projectId, address.graph ?? liveKey ?? lastProcess, address.case ?? runCase, { pinned: !!pinned, everySpace: true });
+  const flowMap = useFlowMap(space?.key ?? null);
   const trialSpaces = useLineSpaceKeys();
   const { refs } = ws;
   const selection = useMemo(() => (address.case ? { ...address, case: refs.id(address.case) } : address), [address, refs]);
@@ -136,6 +147,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   // A run's page keeps its own step (the selected visit); only the Line page opens a step as its page.
   const runDetail = selection.view === "problems" && !!selection.run;
   const drawerView = selection.view === "line" && !selection.source;
+  // The review stages (moments to dispatch) open as a drawer over Signals, the view whose sources feed them.
   const drawsStep = !drawerView;
   const drawerOpen = drawerView && !!(model && selection.step && model.steps[selection.step]);
   const drawerSelection = useMemo(() => (drawsStep ? { ...selection, step: null } : selection), [drawsStep, selection]);
@@ -143,7 +155,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   // the runs (stages/). The Table's step stays a page of its own (LJ8.6).
   const onMap = drawerView && selection.mode === "map";
   const stepSlides = onMap && drawerOpen;
-  const stageOpen = drawerView && !!selection.stage;
+  const stageOpen = selection.view === "signals" && !!selection.stage;
   const slideOpen = stepSlides || stageOpen;
 
   const router = useRouter();
@@ -160,13 +172,13 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   }), [select, href, ws.home?._id, router]);
 
   const search = useSearchParams();
-  // The nav opens a view's home: nothing that was open elsewhere rides along (lineViewHome). From settings it leaves
-  // for /flows, keeping the workspace's flow and project.
-  const setView = useCallback((v: LineView) => {
-    if (!settings) return select(lineViewHome(v));
+  // A stage opens its home: nothing that was open elsewhere rides along (pipelineHome). From settings it leaves for
+  // /flows, keeping the workspace's flow and project.
+  const openStage = useCallback((stage: PipelineStage) => {
+    if (!settings) return select(pipelineHome(stage));
     const keep = new URLSearchParams();
     for (const k of ["project", "graph"]) { const x = search?.get(k); if (x) keep.set(k, x); }
-    router.push(`/flows${lineSelectionSearch(keep, lineViewHome(v))}`);
+    router.push(`/flows${lineSelectionSearch(keep, pipelineHome(stage))}`);
   }, [select, settings, search, router]);
   // An address that names a view or a mode by an earlier name (view=inbox, view=runs, mode=notebook) settles on the
   // name that holds its job now, in place: a link already sent opens where its job went, and Back is not spent on it.
@@ -222,7 +234,8 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   // drawn line in place, and a line the address names becomes this device's pick. For you and Problems cover every
   // line (Problems narrows by its own `process`), so they name none.
   const drawnKey = model?.graphKey ?? null;
-  const namesLine = !embedded && selection.view === "line" && ws.ready && !!drawnKey && !ownGraph;
+  // With no live flow the Flows stage is the library, so an address that names no flow is left naming none.
+  const namesLine = !embedded && selection.view === "line" && ws.ready && !!drawnKey && !ownGraph && (!!liveKey || !!address.graph);
   const askedKey = address.graph ? processKeyOf(address.graph) : null;
   useWatchEffect(() => {
     if (!namesLine || !drawnKey) return;
@@ -247,8 +260,8 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
       const chord = performance.now() - goAt.current < GO_MS;
       goAt.current = 0;
       if (chord) {
-        const v = lineViewForGoKey(e.key);
-        if (v) { e.preventDefault(); setView(v); return; }
+        const stage = pipelineStageForGoKey(e.key);
+        if (stage) { e.preventDefault(); openStage(stage); return; }
       }
       if (e.key === "g" && !e.shiftKey) { goAt.current = performance.now(); return; }
       if (stageOpen) {
@@ -267,22 +280,19 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, setView, drawerOpen, stageOpen, select, model, selection.step, runDetail, selection.decision]);
+  }, [active, openStage, drawerOpen, stageOpen, select, model, selection.step, runDetail, selection.decision]);
 
   // The line app takes its tab's width on every page: the session rail folds to a strip, so nothing unrelated to the
   // line sits beside it. Inside a project's page it claims the width only on For you, where a decision is read.
   useStageWide(!embedded || selection.view === "foryou");
   const { forYou, processes: picks } = ws;
-  const here = useMemo(() => new Set(model?.graphs.map((g) => g.key) ?? []), [model]);
   const View = pageFor(selection);
-  // For you and the flow list cover every process and name each row's own, so the picker scopes only Problems and Line.
-  const scoped = settings || (selection.view !== "foryou" && selection.view !== "flows");
-  // Problems' list covers every process too, as For you does: there the picker narrows the list (`process`), with All
-  // first. An open problem or run is read in its own process (`graph`), which the picker then names.
-  const listing = !settings && selection.view === "problems" && !selection.case && !selection.run;
+  const stage = settings ? null : pipelineStageOf(selection);
+  const figures = useMemo(() => pipelineFigures(flowMap, forYou), [flowMap, forYou]);
+  // Signals reads the flow map and Shipped what the store holds: neither waits on the line's feeds to answer.
+  const ownFeeds = selection.view === "foryou" || selection.view === "signals" || selection.view === "shipped";
   // Every problem's ct-N link inside /line opens its problem page here, a shared component's included (taskHrefContext).
   const problemPlace = useCallback((ref: string) => (refs.id(ref) !== ref ? href({ view: "problems", case: ref, run: null, need: null, decision: null, card: null }) : null), [refs, href]);
-  const listed = useMemo(() => new Set(ws.problems.map((i) => i.process)), [ws.problems]);
 
   const app = (
     <LineNavProvider nav={nav}>
@@ -295,48 +305,33 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
           {!embedded && (flow
             ? <h1 className="lw-title lw-app-title" data-flow-title={flow.owner}><Link href="/flows" className="lw-title-up">Flows</Link><span aria-hidden className="lw-title-sep">/</span>{flow.name}</h1>
             : <h1 className="lw-title lw-app-title">Flows</h1>)}
-          {/* The workspace Problems and Line read, switched in place. For you lists decisions from every workspace, so
-              it names none (each row's product says where it is from). */}
-          {!embedded && !flow && space && scoped && <SpaceSwitcher space={space} onPick={(k) => { space.pick(k); select({ ...lineViewHome(selection.view), project: null, graph: null, status: null }); }} />}
-          {scoped && model && picks.length > 0 && selection.view !== "timeline" && (listing
-            ? <ProcessPicker all picks={picks} drawn={listed.has(selection.process ?? "") ? selection.process! : null} here={listed} projectTitle={project?.title ?? null} onPick={(k) => select({ process: k })} />
-            : <ProcessPicker picks={picks} drawn={model.graphKey} here={here} projectTitle={project?.title ?? null} onPick={(k) => k && pickProcess(k, !!projectId && !pinned && !here.has(k))} />)}
-          {flow && scoped && flow.projects.length > 1 && (
+          {/* The workspace every stage reads, switched in place. */}
+          {!embedded && !flow && space && <SpaceSwitcher space={space} onPick={(k) => { space.pick(k); select({ ...lineViewHome(selection.view), project: null, graph: null, status: null }); }} />}
+          {flow && flow.projects.length > 1 && (
             <div className="lw-seg" role="tablist" aria-label="Project" data-flow-projects>
               {flow.projects.map((p) => <button key={p.id} type="button" role="tab" aria-selected={p.id === projectId} onClick={() => select({ project: p.id })}>{p.title}</button>)}
             </div>
           )}
-          {!embedded && !flow && scoped && <ProjectFilter selected={projectId} rollups={ws.allRollups} projects={ws.projects} byProject={ws.byProject} open={ws.open} onPick={(p) => select({ project: p })} />}
+          {/* A project narrows Problems, and only Problems. */}
+          {!embedded && !flow && stage === "problems" && <ProjectFilter selected={projectId} rollups={ws.allRollups} projects={ws.projects} byProject={ws.byProject} open={ws.open} onPick={(p) => select({ project: p })} />}
           <div className="lw-head-right">
             <Link href={settingsHref} className="lw-iconbtn" aria-label="Flow settings" aria-current={settings ? "page" : undefined} title={withShortcut("Settings", "line.settings")} data-line-settings-link><SlidersHorizontal className="w-4 h-4" /></Link>
           </div>
         </header>
+        {/* Until the feeds have answered, the counts are the cache's: shown dim, so a number about to move never reads as settled. */}
+        <div className="lw-pipeline" data-settling={ws.ready && ws.complete ? undefined : ""}>
+          <PipelineHeader figures={figures} at={stage} open={openStage} />
+        </div>
 
         <div className="lw-app-body">
-          {/* Until the feeds have answered, the count is the cache's: shown dim, so a number that is about to move never reads as settled. */}
-          <nav className="lw-nav" aria-label="Flows" data-line-nav data-settling={ws.ready && ws.complete ? undefined : ""}>
-            {LINE_VIEWS.map((v) => {
-              const Icon = ICONS[v];
-              return (
-                <button key={v} type="button" className="lw-nav-item" aria-current={!settings && selection.view === v ? "page" : undefined} aria-keyshortcuts={`G ${LINE_VIEW_KEYS[v].toUpperCase()}`} onClick={() => setView(v)} data-line-view-tab={v}>
-                  <Icon className="lw-nav-icon" aria-hidden />
-                  <span className="lw-nav-label">{flow && v === "flows" ? "Overview" : LINE_VIEW_LABELS[v]}</span>
-                  {/* The one count: what the viewer can answer now, over every process. Each is a row of For you. */}
-                  {v === "foryou" && forYou > 0 && <span className="lw-nav-count" data-tone="ask" data-line-waits={forYou} aria-label={`${forYou} open decisions`}>{forYou}</span>}
-                  <span className="lw-nav-key" aria-hidden><KeyCap size="xs">G</KeyCap><KeyCap size="xs">{LINE_VIEW_KEYS[v].toUpperCase()}</KeyCap></span>
-                </button>
-              );
-            })}
-          </nav>
-
           <div className="lw-body" data-drawer-open={slideOpen && model && !settings ? "" : undefined}>
             <main className="lw-stage" ref={stageRef}>
               {settings && model && !unresolved ? (
                 <LineSettingsStage projectId={projectId} line={drawnLine} lines={picks} projects={ws.projects} rollups={ws.allRollups} processOf={ws.process.project} href={settingsAt} />
-              ) : !model || unresolved || (!ws.complete && selection.view !== "foryou") ? <Skeleton /> : (
+              ) : !model || unresolved || (!ws.complete && !ownFeeds) ? <Skeleton /> : (
                 // The page rises in only while the tab is on screen: a hidden tab runs no frames, so an entrance never
                 // finishes there, and Chrome keeps every page it replaced (and all that page read) until it would.
-                <div className="lw-stage-in" data-enter={documentShown() ? "" : undefined} key={scoped ? `${selection.view}:${selection.mode}:${model.graphKey}:${projectId ?? "all"}` : `foryou:${projectId ?? "all"}`}>
+                <div className="lw-stage-in" data-enter={documentShown() ? "" : undefined} key={`${selection.view}:${selection.mode}:${selection.view === "foryou" ? "" : model.graphKey}:${projectId ?? "all"}`}>
                   {/* An open step is a page of its own (LJ8.6), in place of the view it was opened from. */}
                   {drawerOpen && !stepSlides
                     ? <StepPage model={model} workspace={ws} selection={drawerSelection} select={select} href={href} pinned={!!pinned} />
@@ -373,71 +368,6 @@ function StationWalk({ order, at, labelOf, go }: { order: readonly string[]; at:
       <button type="button" className="lw-iconbtn" disabled={!next} onClick={() => next && go(next)} title={next ? `${labelOf(next)} (→)` : undefined} aria-label="Next station">›</button>
       {next && <span className="sd-dim sd-walk-next">next: {labelOf(next)}</span>}
     </nav>
-  );
-}
-
-/**
- * The process picker: one chip per process the owner works, each named by what it fixes (processName, in its
- * tooltip). Our own tooling for a product's process (AgentWatch's judges) is not a process the owner works: it folds
- * into its product's chip, behind a caret that lists the product and its tooling, and the chip names it when drawn.
- * It carries no count of what waits: that is one number, on the For you nav entry.
- */
-function ProcessPicker({ picks, drawn, here, projectTitle, onPick, all = false }: { picks: ProjectGraph[]; /** Problems' list: All first, and `drawn` null is every process. */ all?: boolean; drawn: string | null; here: ReadonlySet<string>; projectTitle: string | null; onPick: (key: string | null) => void }) {
-  const named = useMemo(() => picks.map((g) => ({ g, ...processName(g.key, g.title, g.label) })), [picks]);
-  const tops = named.filter((x) => !x.parent || !named.some((y) => y.g.key === x.parent));
-  const under = (key: string) => named.filter((x) => x.parent === key);
-  return (
-    <div className="lw-seg lw-graph-pick" role="tablist" aria-label="Process">
-      {all && <button type="button" role="tab" aria-selected={drawn === null} onClick={() => onPick(null)} title="Every process" data-line-graph-pick="all">All</button>}
-      {tops.map((top) => {
-        const subs = under(top.g.key);
-        const family = [top, ...subs];
-        const on = family.find((x) => x.g.key === drawn) ?? null;
-        const shown = on ?? top;
-        const live = family.reduce((n, x) => n + x.g.live, 0);
-        // A line with no runs in the picked project stays pickable (picking it shows every project), drawn quieter.
-        const none = !family.some((x) => here.has(x.g.key)) && !on;
-        const chip = (
-          <button type="button" role="tab" aria-selected={!!on} data-elsewhere={none ? "" : undefined} onClick={() => onPick(on?.g.key ?? top.g.key)}
-            title={none ? `No runs in ${projectTitle ?? "this project"}: opens it over every project` : shown.fixes ? `${shown.title}: fixes ${shown.fixes}` : shown.title} data-line-graph-pick={top.g.key}>
-            {top.title}
-            {on && on !== top && <span className="lw-pick-sub">{on.title}</span>}
-            {/* The selected process says what it fixes in place, unless its name already says it ("Standard"). */}
-            {on && fixesWords(on) && <span className="lw-pick-fixes" data-line-graph-fixes>{fixesWords(on)}</span>}
-            {live > 0 && <span className="lw-dot" data-pulse="" style={{ color: "var(--lw-live)" }} aria-label={`${live} running`} />}
-          </button>
-        );
-        if (!subs.length) return <Fragment key={top.g.key}>{chip}</Fragment>;
-        return <ProcessFamily key={top.g.key} chip={chip} family={family} drawn={drawn} here={here} onPick={onPick} />;
-      })}
-    </div>
-  );
-}
-
-/** What a process fixes, as its chip says it, or null when its name already says it ("Standard" fixes codecast). */
-const fixesWords = (x: { title: string; fixes: string | null }) => (x.fixes && !x.title.toLowerCase().includes(x.fixes.toLowerCase()) ? `fixes ${x.fixes}` : null);
-
-/** A product's chip with its tooling folded behind a caret: the menu lists the product and each tool, with what it fixes. */
-function ProcessFamily({ chip, family, drawn, here, onPick }: { chip: ReactNode; family: Array<{ g: ProjectGraph; title: string; fixes: string | null }>; drawn: string | null; here: ReadonlySet<string>; onPick: (key: string) => void }) {
-  const { open, setOpen, ref } = usePopover();
-  return (
-    <div className="lw-pop-host lw-pick-family" ref={ref}>
-      {chip}
-      <button type="button" className="lw-pick-caret" aria-haspopup="menu" aria-expanded={open} aria-label={`${family[0].title} and its tooling`} title="Also in this process" onClick={() => setOpen(!open)} data-line-graph-family={family[0].g.key}>
-        <ChevronDown className="w-3.5 h-3.5" aria-hidden />
-      </button>
-      {open && (
-        <div className="lw-pop lw-pick-pop" role="menu">
-          {family.map((x, i) => (
-            <button key={x.g.key} type="button" role="menuitemradio" aria-checked={x.g.key === drawn} data-elsewhere={!here.has(x.g.key) && x.g.key !== drawn ? "" : undefined} data-sub={i > 0 ? "" : undefined}
-              onClick={() => { onPick(x.g.key); setOpen(false); }} data-line-graph-option={x.g.key}>
-              <span className="lw-filter-check">{x.g.key === drawn && <Check className="w-3.5 h-3.5" />}</span>
-              <span className="lw-pick-name"><b>{x.title}</b>{fixesWords(x) && <small>{fixesWords(x)}</small>}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 

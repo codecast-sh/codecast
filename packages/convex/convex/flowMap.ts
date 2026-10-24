@@ -16,7 +16,7 @@ import { internalAction, internalMutation, internalQuery, query } from "./functi
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
-  DAY_MS, FLOW_MAP_DAYS, FLOW_MAP_ESCAPE_DAYS, FLOW_MAP_OUTCOME_DAYS, STALLED_MS, emptyOutcomes, normalDay, problemOutcome, sourceState, utcDayKey, windowDays,
+  DAY_MS, FLOW_MAP_DAYS, FLOW_MAP_ESCAPE_DAYS, FLOW_MAP_OUTCOME_DAYS, STALLED_MS, emptyOutcomes, normalDay, problemOutcome, shippedFixes, sourceState, stationWords, utcDayKey, windowDays,
   type FlowMap, type FlowMapLane, type FlowMapOutcomes, type FlowMapSource, type FlowMapStep,
 } from "@codecast/shared/contracts/flowMap";
 import { JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
@@ -319,9 +319,9 @@ function countRun(c: StepCount, r: any, now: number, waiting: boolean) {
 }
 
 function stepsOf(nodes: ReadonlyArray<{ id: string; label?: string; type?: string }>, live: Map<string, StepCount>): FlowMapStep[] {
-  const steps = nodes.filter((n) => isWorkStation(n) || live.has(n.id)).map((n) => ({ id: n.id, label: n.label || n.id, ...(live.get(n.id) ?? zeroStep()) }));
+  const steps = nodes.filter((n) => isWorkStation(n) || live.has(n.id)).map((n) => ({ id: n.id, label: n.label || stationWords(n.id), ...(live.get(n.id) ?? zeroStep()) }));
   // A run standing at a station its graph no longer has still shows.
-  for (const [id, c] of live) if (!steps.some((s) => s.id === id)) steps.push({ id, label: id, ...c });
+  for (const [id, c] of live) if (!steps.some((s) => s.id === id)) steps.push({ id, label: stationWords(id), ...c });
   return steps;
 }
 
@@ -353,7 +353,7 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
       countRun(c, r, now, waiting);
       countRun(flowTotal, r, now, waiting);
     } else if (r.task_id) {
-      const c = offLive.get(node) ?? offLive.set(node, { ...zeroStep(), label: (r.graph_nodes ?? []).find((n: any) => n.id === node)?.label ?? node }).get(node)!;
+      const c = offLive.get(node) ?? offLive.set(node, { ...zeroStep(), label: (r.graph_nodes ?? []).find((n: any) => n.id === node)?.label ?? stationWords(node) }).get(node)!;
       countRun(c, r, now, waiting);
       countRun(offTotal, r, now, waiting);
     }
@@ -456,8 +456,18 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
     if (uid === viewer) decisionsForYou += n;
     else decisionsForTeam += n;
   }
-  const watched: any[] = await ctx.db.query("tasks").withIndex("by_watch_until", (q: any) => q.gt("watch_until", now)).collect();
-  const watching = watched.filter((t) => t.workspace === workspace).length;
+  // Shipped: every fix whose watch ends in the window, and every problem a finding reopened in it (the rollup's), with
+  // the finding that did. The header counts this list.
+  const since = now - FLOW_MAP_DAYS * DAY_MS;
+  const watched: any[] = ((await ctx.db.query("tasks").withIndex("by_watch_until", (q: any) => q.gt("watch_until", since)).collect()) as any[]).filter((t) => t.workspace === workspace);
+  const reopened = [];
+  for (const x of rolled?.reopened ?? []) {
+    const task: any = await ctx.db.get(x.task_id as Id<"tasks">);
+    if (!task || task.workspace !== workspace) continue;
+    const by: any = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id).eq("created_at", x.at)).first();
+    reopened.push({ task, at: x.at, by: by ? { source: by.source, title: by.title, ref: by.short_id ?? null } : null });
+  }
+  const shipped = shippedFixes({ watched, reopened, now });
 
   const queued = rolled?.queued ?? 0;
   return {
@@ -472,7 +482,11 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
     lanes,
     off: { running: offTotal.running, stalled: offTotal.stalled, steps: [...offLive].map(([id, { label, ...c }]) => ({ id, label, ...c })) },
     sources,
-    header: { problemsOpen: rolled?.problems_open ?? 0, problemsScored: rolled?.problems_scored ?? 0, decisionsForYou, decisionsForTeam, watching, regressed: rolled?.reopened?.length ?? 0 },
+    shipped,
+    header: {
+      problemsOpen: rolled?.problems_open ?? 0, problemsScored: rolled?.problems_scored ?? 0, decisionsForYou, decisionsForTeam,
+      watching: shipped.filter((r) => r.state === "watching").length, regressed: shipped.filter((r) => r.state === "regressed").length,
+    },
   };
 }
 

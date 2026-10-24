@@ -27,7 +27,6 @@ import { useStepTable } from "../step/useStepFacts";
 import { FIT_MIN_K, usePanZoom, type Insets, type View } from "./graph/usePanZoom";
 import { EdgeArrows } from "../../EdgeArrows";
 import type { LineViewProps } from "./types";
-import { FlowBand } from "../stages/FlowBand";
 
 const MODE_KEY = "lw-graph-mode";
 const NO_PAST: { left: string[]; right: string[] } = { left: [], right: [] };
@@ -387,9 +386,7 @@ export function GraphView({ model, workspace, selection, select, href, lead }: L
     return <div className="lw-empty" data-line-view="graph"><b>No steps to draw yet</b>This graph names no steps codecast can read. Its first run fills it in.</div>;
   }
   return (
-    // The loop starts above the line (learning-loop.md LL1): the whole flow as one band, then the line's lanes.
     <div className="lw-graph-col">
-    <FlowBand model={model} workspace={workspace} selection={selection} select={select} href={href} projectId={workspace.project?._id ?? nav.projectId ?? null} />
     <div className="lwg-wrap">
     <div className="lwg" ref={rootRef} data-line-view="graph" data-mode={mode} data-hovering={peek ? "" : undefined} data-run-bar={run ? "" : undefined} data-more-left={past.left.length ? "" : undefined} data-more-right={past.right.length ? "" : undefined}>
       <svg ref={svgRef} className="lwg-svg" role="group" aria-label={`${model.title}: ${model.graph.nodes.length} steps`}>

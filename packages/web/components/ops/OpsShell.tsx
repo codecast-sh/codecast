@@ -1,10 +1,11 @@
-// The frame every Ops view renders in: the title, the workspace's sources as
-// chips (a click narrows the tabs to one source), and the tab bar. The number
-// keys switch tabs.
+// The frame every source view renders in, under Signals: the way back to
+// Signals and the source open (`lead`), the workspace's sources as chips (a
+// click narrows the tabs to one source), and the tab bar. The number keys
+// switch tabs.
 import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Radar, Settings2 } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { hasOpenModal, isEditableTarget } from "../../shortcuts";
 import { useOpsGroups, useOpsReplays, useOpsSources, useOpsWatches, useSyncOpsGroups, useSyncOpsReplays, useSyncOpsSources, useSyncOpsWatches } from "../../hooks/useSyncOps";
@@ -34,7 +35,7 @@ function useTabCounts(): Partial<Record<OpsTab, number>> {
   );
 }
 
-export function OpsShell({ view, children }: { view: OpsView; children: ReactNode }) {
+export function OpsShell({ view, lead, children }: { view: OpsView; lead: ReactNode; children: ReactNode }) {
   // The area's base lists: the chips and every tab's count read them, so they
   // are fed wherever in the area a person is. Their readiness goes down to the
   // tabs, which tell "nothing here" from "not answered yet" and "failed".
@@ -69,10 +70,7 @@ export function OpsShell({ view, children }: { view: OpsView; children: ReactNod
     <div className="ops-area" data-ops-view={view.view}>
       <header className="ops-head">
         <div className="ops-title-row">
-          <span className="ops-title">
-            <Radar className="w-4 h-4" strokeWidth={1.75} />
-            Ops
-          </span>
+          <span className="ops-title">{lead}</span>
           <div className="ops-sources">
             {sources.map((s) => (
               <SourceChip

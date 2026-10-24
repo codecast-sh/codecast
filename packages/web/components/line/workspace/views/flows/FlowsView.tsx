@@ -5,7 +5,7 @@
 // with what it changes), the segments flows are built from, and the flows the
 // team's sessions used. A flow opens its detail in place. On a role's page
 // (/flows/<owner>): that role's flow, drawn, with its facts and its counts.
-import { useContext, useMemo, useState } from "react";
+import { useContext, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePoolFlowRows, useSyncWorkflowRun, useWorkflowRuns } from "../../../../../hooks/useSyncWorkflows";
 import { useOwnedFlows } from "../../../../../hooks/useOwnedFlows";
@@ -13,7 +13,7 @@ import { useLiveFlow, useSessionFlows, type LiveFlow, type SessionFlow } from ".
 import { useInboxStore } from "../../../../../store/inboxStore";
 import { appPool, flowBySlug, flowOfRun, flowRowPath, pushedFlow, type AppFlow } from "../../../../../lib/line/flowPool";
 import { changesAnything, flowLibrary, libraryEntry, libraryFlows, type FlowLibrary, type LibraryEntry, type LibraryRow, type VariantChange } from "../../../../../lib/line/flowLibrary";
-import { liveFlowLedger, liveQueue, type LiveQueueRow } from "../../../../../lib/line/liveFlow";
+import { liveFlowLedger, liveQueue, startFlowLedger, type LiveQueueRow } from "../../../../../lib/line/liveFlow";
 import { scoreBand } from "../../../../../lib/line/problemScore";
 import { flowRunState } from "../../../../../lib/line/flowFence";
 import { flowNeeds, flowOf, type OwnedFlow } from "../../../../../lib/line/ownedFlows";
@@ -24,6 +24,8 @@ import { ageShort } from "../../../../../lib/lineFlow";
 import { FlowDiagram } from "../../../widgets/FlowDiagram";
 import { FlowRunCard } from "../../../widgets/FlowFence";
 import { ConsequentialSwitch } from "../../../../consequential/ConsequentialSwitch";
+import { EntityIdPill } from "../../../../EntityIdPill";
+import { SESSION_SHORT_ID_RE } from "@codecast/shared/chat";
 import type { LineViewProps } from "../types";
 import "./flows.css";
 
@@ -39,7 +41,7 @@ export function FlowsView(props: LineViewProps) {
 }
 
 /** The library a workspace reads, its live flow, and its runs by flow. */
-function useLibrary(space: string | null | undefined) {
+export function useLibrary(space: string | null | undefined) {
   const rows = usePoolFlowRows(space) as LibraryRow[];
   const live = useLiveFlow(space);
   const pool = useMemo(() => appPool(rows), [rows]);
@@ -66,7 +68,8 @@ function FlowsHome(props: LineViewProps) {
   const open = (slug: string) => select({ item: slug, run: null });
   return (
     <div className="flh" data-flows-home>
-      {live ? <LivePanel {...props} live={live} runs={runsOf.get(live.flow.slug) ?? []} onOpenFlow={open} /> : null}
+      {/* The live flow is the Flows stage's own page; here the library, and with no live flow, the way to start one. */}
+      {!live && lib.lines.length ? <NoLiveFlow lines={lib.lines} space={space ?? null} /> : null}
       <section data-flows-library>
         <h2 className="flv-h">Library<span className="lw-num">{libraryFlows({ lines: lib.lines, segments: [] }).length}</span></h2>
         <ul className="fll-tree">
@@ -86,29 +89,64 @@ function FlowsHome(props: LineViewProps) {
   );
 }
 
-/** The live flow: what it runs, its switch and load, where it takes problems from, its queue and what is running. */
-function LivePanel({ live, runs, onOpenFlow, workspace, href }: LineViewProps & { live: LiveFlow; runs: Run[]; onOpenFlow: (slug: string) => void }) {
+/** The live flow's queue, best score first, each row read from its task. */
+function useLiveQueue(live: LiveFlow): LiveQueueRow[] {
   const queueSig = useInboxStore((s) => {
     const tasks = s.tasks as Record<string, any>;
     return live.queue.map((q) => { const t = tasks[q.task_id]; const sc = t?.cause?.scored; return t ? `${q.task_id}|${t.short_id}|${t.title}|${t.project_id ?? ""}|${t.cause?.signal_count ?? 0}|${t.cause?.named?.name ?? ""}|${sc?.score ?? ""}|${sc?.cluster_key ?? ""}|${sc?.cluster_name ?? ""}` : q.task_id; }).join("\n");
   });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature carries every field the rows read
-  const queue = useMemo(() => liveQueue(live, useInboxStore.getState().tasks as Record<string, any>), [live, queueSig]);
-  // What the engine counts as running (its load), so the list and the figure agree.
-  const running = useMemo(() => {
-    const ids = new Set(live.running);
-    return runs.filter((r) => ids.has(r._id)).sort((a, b) => b.created_at - a.created_at);
-  }, [runs, live.running]);
-  const [all, setAll] = useState(false);
-  const projectTitle = useMemo(() => new Map(workspace.projects.map((p) => [p._id, p.title ?? ""])), [workspace.projects]);
-  const shown = all ? queue : queue.slice(0, QUEUE_SHOWN);
+  return useMemo(() => liveQueue(live, useInboxStore.getState().tasks as Record<string, any>), [live, queueSig]);
+}
+
+/** A team with no live flow: each library flow that can run as one, with the way to make it live (a team admin's). */
+function NoLiveFlow({ lines, space }: { lines: LibraryEntry[]; space: string | null }) {
+  const team = space?.startsWith("team:") ? space.slice(5) : null;
+  const admin = useInboxStore((s) => !!team && ((s.teams || []) as Array<{ _id: string; role?: string }>).some((t) => String(t._id) === team && (t.role === "admin" || t.role === "owner")));
+  const runnable = lines.filter((e) => e.flow.workflowId);
+  return (
+    <section className="fll-live" data-no-live-flow="">
+      <header className="fll-live-head">
+        <span className="fll-live-k">Live</span>
+        <span className="fll-live-name">No live flow</span>
+        {!team ? <span className="fll-live-figs">a team's workspace runs one</span> : null}
+      </header>
+      {team && runnable.length ? (
+        <ul className="fll-start">
+          {runnable.map((e) => (
+            <li key={e.flow.slug} data-live-flow-start={e.flow.slug}>
+              <b>{e.flow.label}</b>
+              <span className="flh-dim">{e.flow.stations.length} steps</span>
+              {admin ? (
+                <ConsequentialSwitch
+                  on={false}
+                  ledger={startFlowLedger(e.flow.label, e.flow.stations.length)}
+                  onTurnOn={() => useInboxStore.getState().startLiveFlow(team, { id: e.flow.workflowId!, slug: e.flow.slug, label: e.flow.label }, `lf_${crypto.randomUUID()}`)}
+                  onTurnOff={() => {}}
+                  label="Make live"
+                  className="flv-steps"
+                  triggerProps={{ "data-live-flow-make": e.flow.slug }}
+                />
+              ) : <span className="flh-dim">a team admin makes it live</span>}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+/** The live flow's head: its name, its switch (a team admin's), its load against its capacity, what it stalls on,
+ *  and its hold with the way to clear it. */
+export function LiveFlowHead({ live, workspace, onOpenFlow, stalled = 0, children }: Pick<LineViewProps, "workspace"> & { live: LiveFlow; onOpenFlow: (slug: string) => void; stalled?: number; children?: ReactNode }) {
+  const queue = useLiveQueue(live);
   const turnOn = () => useInboxStore.getState().setLiveFlowOn(live._id, true);
   const turnOff = () => useInboxStore.getState().setLiveFlowOn(live._id, false);
   const changedBy = live.changed_by ? workspace.names.get(live.changed_by) ?? null : null;
   // The switch starts and stops the team's runs: only a team admin flips it (convex liveFlows.setOn); anyone else reads its state.
   const admin = useInboxStore((s) => ((s.teams || []) as Array<{ _id: string; role?: string }>).some((t) => String(t._id) === live.team_id && (t.role === "admin" || t.role === "owner")));
   return (
-    <section className="fll-live" data-live-flow={live._id} data-on={live.on ? "" : undefined}>
+    <>
       <header className="fll-live-head">
         <span className="fll-live-k">Live</span>
         <button type="button" className="fll-live-name" onClick={() => onOpenFlow(live.flow.slug)} data-live-flow-open={live.flow.slug}>{live.flow.label}</button>
@@ -123,56 +161,79 @@ function LivePanel({ live, runs, onOpenFlow, workspace, href }: LineViewProps & 
         /> : <span className="flh-on" data-on={live.on ? "" : undefined} title="A team admin switches it" data-live-flow-switch="read">{live.on ? "On" : "Off"}</span>}
         <span className="fll-live-figs">
           <span><b className="lw-num">{live.load.working}</b>/{live.load.cap} running</span>
-          <span><b className="lw-num">{live.hands_today}</b>{live.caps.hands_per_day != null ? `/${live.caps.hands_per_day}` : ""} today</span>
+          {stalled > 0 ? <span data-tone="bad" data-live-flow-stalled={stalled}><b className="lw-num">{stalled}</b> stalled</span> : null}
+          <span><b className="lw-num">{queue.length.toLocaleString()}</b> queued</span>
+          <span><b className="lw-num">{live.hands_today}</b>{live.caps.hands_per_day != null ? `/${live.caps.hands_per_day}` : ""} started today</span>
           {live.watcher ? <span>watched by <b>@{live.watcher.handle}</b></span> : null}
           {changedBy && live.changed_at ? <span title={new Date(live.changed_at).toLocaleString()}>{live.on ? "on" : "off"} by {changedBy}, {ageShort(workspace.now - live.changed_at)} ago</span> : null}
         </span>
+        {children ? <span className="fll-live-r">{children}</span> : null}
       </header>
       {live.hold ? (
         <div className="fll-live-hold" data-live-flow-hold="">
           <b>Held</b>
           {live.hold.until ? <span>until {new Date(live.hold.until).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span> : null}
           <span className="fll-live-hold-why">{live.hold.why}</span>
-          {live.hold.by ? <Link className="flv-chip flv-chip-btn" href={`/conversation/${live.hold.by}`}>{live.hold.by}</Link> : null}
+          <HoldBy by={live.hold.by} names={workspace.names} />
           {admin ? <button type="button" className="flv-steps" onClick={() => useInboxStore.getState().clearLiveFlowHold(live._id)} data-live-flow-hold-clear="">Clear hold</button> : null}
         </div>
       ) : live.waiting && live.on ? <p className="fll-live-wait" data-live-flow-waiting>{live.waiting}</p> : null}
-      <div className="flv-facts">
-        <Fact label="Takes from">{live.sources ? live.sources.map((s) => <span key={s} className="flv-chip">{s}</span>) : <span className="flv-chip">Every source</span>}</Fact>
+    </>
+  );
+}
+
+/** Who set a hold: a session by its short id (a live reference), a person by name; anything else (an older row's raw
+ *  session id) is not shown. */
+function HoldBy({ by, names }: { by: string | null; names: ReadonlyMap<string, string> }) {
+  if (by && SESSION_SHORT_ID_RE.test(by)) return <EntityIdPill shortId={by} />;
+  const person = by?.startsWith("user:") ? names.get(by.slice(5)) : null;
+  return person ? <span className="flv-chip">{person}</span> : null;
+}
+
+/** The live flow's work: its queue best score first, and what is running now. */
+export function LiveFlowWork({ live, runs, workspace, href }: Pick<LineViewProps, "workspace" | "href"> & { live: LiveFlow; runs: Run[] }) {
+  const queue = useLiveQueue(live);
+  // What the engine counts as running (its load), so the list and the figure agree.
+  const running = useMemo(() => {
+    const ids = new Set(live.running);
+    return runs.filter((r) => ids.has(r._id)).sort((a, b) => b.created_at - a.created_at);
+  }, [runs, live.running]);
+  const [all, setAll] = useState(false);
+  const projectTitle = useMemo(() => new Map(workspace.projects.map((p) => [p._id, p.title ?? ""])), [workspace.projects]);
+  const shown = all ? queue : queue.slice(0, QUEUE_SHOWN);
+  return (
+    <div className="fll-live-cols">
+      <div>
+        <h3 className="flv-h">Queue<span className="lw-num">{queue.length}</span><span className="fll-h-note">best score first</span></h3>
+        {queue.length === 0 ? <p className="flv-none">Nothing waiting</p> : (
+          <table className="flh-table fll-queue" data-live-queue>
+            <thead><tr><th data-num="">#</th><th>Problem</th><th data-num="">Score</th><th>Family</th><th data-num="">Findings</th><th>Area</th><th>Waits on</th></tr></thead>
+            <tbody>
+              {/* A row's wait is named only where it differs from the flow's own, which the head says once above. */}
+              {shown.map((r, i) => <QueueRow key={r.taskId} row={r.waiting === live.waiting ? { ...r, waiting: null } : r} n={i + 1} area={r.projectId ? projectTitle.get(r.projectId) ?? "" : ""} href={href({ view: "problems", case: r.ref ?? r.taskId, run: null })} />)}
+            </tbody>
+          </table>
+        )}
+        {queue.length > QUEUE_SHOWN ? <button type="button" className="fll-more" onClick={() => setAll(!all)} data-live-queue-all>{all ? "Show the first 12" : `Show all ${queue.length}`}</button> : null}
       </div>
-      <div className="fll-live-cols">
-        <div>
-          <h3 className="flv-h">Queue<span className="lw-num">{queue.length}</span><span className="fll-h-note">best score first</span></h3>
-          {queue.length === 0 ? <p className="flv-none">Nothing waiting</p> : (
-            <table className="flh-table fll-queue" data-live-queue>
-              <thead><tr><th data-num="">#</th><th>Problem</th><th data-num="">Score</th><th>Family</th><th data-num="">Findings</th><th>Area</th><th>Waits on</th></tr></thead>
-              <tbody>
-                {/* A row's wait is named only where it differs from the flow's own, which the panel says once above. */}
-                {shown.map((r, i) => <QueueRow key={r.taskId} row={r.waiting === live.waiting ? { ...r, waiting: null } : r} n={i + 1} area={r.projectId ? projectTitle.get(r.projectId) ?? "" : ""} href={href({ view: "problems", case: r.ref ?? r.taskId, run: null })} />)}
-              </tbody>
-            </table>
-          )}
-          {queue.length > QUEUE_SHOWN ? <button type="button" className="fll-more" onClick={() => setAll(!all)} data-live-queue-all>{all ? "Show the first 12" : `Show all ${queue.length}`}</button> : null}
-        </div>
-        <div>
-          <h3 className="flv-h">Running<span className="lw-num">{live.running.length}</span></h3>
-          {live.running.filter((id) => !running.some((r) => r._id === id)).map((id) => <RunFeed key={id} id={id} />)}
-          {running.length === 0 ? <p className="flv-none">{live.running.length ? "Loading" : "Nothing running"}</p> : (
-            <ul className="fll-running" data-live-running>
-              {running.slice(0, QUEUE_SHOWN).map((r) => (
-                <li key={r._id}>
-                  <Link href={href({ view: "problems", run: r._id, case: r.task_short_id ?? r.task_id ?? null })} className="fll-run" data-live-run={r._id}>
-                    <span className="fll-run-ref">{r.task_short_id ?? "run"}</span>
-                    <span className="fll-run-step">{r.current_node_label ?? r.current_node_id ?? r.status}</span>
-                    <span className="fll-run-age">{ageShort(workspace.now - r.created_at)}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+      <div>
+        <h3 className="flv-h">Running<span className="lw-num">{live.running.length}</span></h3>
+        {live.running.filter((id) => !running.some((r) => r._id === id)).map((id) => <RunFeed key={id} id={id} />)}
+        {running.length === 0 ? <p className="flv-none">{live.running.length ? "Loading" : "Nothing running"}</p> : (
+          <ul className="fll-running" data-live-running>
+            {running.slice(0, QUEUE_SHOWN).map((r) => (
+              <li key={r._id}>
+                <Link href={href({ view: "problems", run: r._id, case: r.task_short_id ?? r.task_id ?? null })} className="fll-run" data-live-run={r._id}>
+                  <span className="fll-run-ref">{r.task_short_id ?? "run"}</span>
+                  <span className="fll-run-step">{r.current_node_label ?? r.current_node_id ?? r.status}</span>
+                  <span className="fll-run-age">{ageShort(workspace.now - r.created_at)}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-    </section>
+    </div>
   );
 }
 

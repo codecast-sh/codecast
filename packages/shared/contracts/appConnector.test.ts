@@ -259,7 +259,7 @@ describe("grants and the do gate", () => {
     const resolveGrant = [{ action: "issue.resolve", granted_by: "u1", granted_at: 1 }];
     expect(writeRefusal(VENDOR_ACTIONS.sentry, resolveGrant, sentryStatusAction("unresolved"), {}, NOW)).toBeNull();
     expect(writeRefusal(VENDOR_ACTIONS.sentry, resolveGrant, sentryStatusAction("ignored"), {}, NOW)).toMatch(/issue.ignore is not granted/);
-    expect(grantPagePath("src-4")).toBe("/ops/apps?app=src-4");
+    expect(grantPagePath("src-4")).toBe("/flows?view=signals&sig=apps&app=src-4");
   });
 });
 

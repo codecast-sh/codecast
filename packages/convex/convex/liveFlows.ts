@@ -11,7 +11,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, mutation, query } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
-import { requireTeamAdmin } from "./lib/access";
+import { requireTeamAdmin, resolveSessionConversation } from "./lib/access";
+import { SESSION_SHORT_ID_RE } from "@codecast/shared/chat";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
 import { utcDay } from "./lib/orgCaps";
@@ -151,6 +152,8 @@ export type LiveFlowRow = {
   watcher: { role_id: string; handle: string } | null;
   changed_by: string;
   changed_at: number;
+  /** The web's optimistic row this one supersedes, for a flow started there. */
+  client_key: string | null;
   running: string[];
   queue: Array<{ task_id: string; waiting: string | null }>;
 };
@@ -191,6 +194,7 @@ export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promi
     watcher: watcher ? { role_id: String(watcher._id), handle: watcher.handle } : null,
     changed_by: String(flow.changed_by),
     changed_at: flow.changed_at,
+    client_key: flow.client_key ?? null,
     running,
     queue: entries.map((e) => ({ task_id: String(e.task._id), waiting: e.waiting })),
     entries,
@@ -352,7 +356,11 @@ export const holdFromCli = mutation({
     const flows = await teamFlows(ctx, auth.userId, args.team_id);
     if (!flows) throw new ConvexError("Your personal workspace has no live flow: name a team");
     const flow = await pickFlow(ctx, flows, args.flow);
-    const hold = await holdCore(ctx, flow, { why: args.why, until: args.until, by: args.from_session ?? `user:${auth.userId}` });
+    // The hold names its session by short id, the way every surface shows one; a session the caller cannot read names its user.
+    const from = args.from_session;
+    const conv: any = from && !SESSION_SHORT_ID_RE.test(from) ? await resolveSessionConversation(ctx as any, auth.userId, from) : null;
+    const by = from && SESSION_SHORT_ID_RE.test(from) ? from : conv?.short_id ?? `user:${auth.userId}`;
+    const hold = await holdCore(ctx, flow, { why: args.why, until: args.until, by });
     return { _id: String(flow._id), hold, waiting: holdWords(hold) };
   },
 });
@@ -365,7 +373,7 @@ export const holdFromCli = mutation({
  * one commit moves admission over and nothing pauses between. Refused when
  * the team has one.
  */
-export async function createLiveFlowCore(ctx: Ctx, args: { team_id: Id<"teams">; workflow_id: Id<"workflows">; by: Id<"users">; sources?: string[]; watcher_role_id?: Id<"org_roles"> }, now = Date.now()) {
+export async function createLiveFlowCore(ctx: Ctx, args: { team_id: Id<"teams">; workflow_id: Id<"workflows">; by: Id<"users">; sources?: string[]; watcher_role_id?: Id<"org_roles">; client_key?: string }, now = Date.now()) {
   if (await liveFlowFor(ctx, args.team_id)) throw new ConvexError("the team already has a live flow");
   const roles: any[] = await ctx.db.query("org_roles").collect();
   const linesOn = flowRoles({ team_id: args.team_id }, roles).filter((r) => r.status === "active" && lineStartsOn(r)).map((r) => r.handle as string).sort();
@@ -375,6 +383,7 @@ export async function createLiveFlowCore(ctx: Ctx, args: { team_id: Id<"teams">;
     workflow_id: args.workflow_id,
     ...(args.sources?.length ? { sources: args.sources } : {}),
     ...(args.watcher_role_id ? { watcher_role_id: args.watcher_role_id } : {}),
+    ...(args.client_key ? { client_key: args.client_key } : {}),
     on: linesOn.length > 0,
     carried_lines_on: linesOn,
     changed_by: args.by,
@@ -383,6 +392,18 @@ export async function createLiveFlowCore(ctx: Ctx, args: { team_id: Id<"teams">;
   });
   console.log(`live flow ${id} for team ${args.team_id}: ${linesOn.length ? `on, carried from the lines of ${linesOn.map((h) => "@" + h).join(", ")}` : "off, no lead's line was on"}; its leads admit nothing on their own from now`);
   return { id: String(id), on: linesOn.length > 0, carried_lines_on: linesOn };
+}
+
+/** The web's start (the Flows stage of a team with none): a team admin makes one of the team's library flows its live
+ *  flow, on the same terms as createLiveFlowCore. Dispatch runs it as the signed-in person only. */
+export async function startLiveFlowCore(ctx: Ctx, userId: Id<"users">, args: { team_id: string; workflow_id: string; client_key?: string }) {
+  const team = ctx.db.normalizeId("teams", args.team_id);
+  const workflow = ctx.db.normalizeId("workflows", args.workflow_id);
+  if (!team || !(await isMember(ctx, userId, team))) throw new ConvexError("no such team");
+  await requireTeamAdmin(ctx as any, userId, team);
+  const wf: any = workflow ? await ctx.db.get(workflow) : null;
+  if (!wf || (wf.team_id && String(wf.team_id) !== String(team))) throw new ConvexError("that flow is not in the team's library");
+  return createLiveFlowCore(ctx, { team_id: team, workflow_id: wf._id, by: userId, ...(args.client_key ? { client_key: args.client_key } : {}) });
 }
 
 export const create = internalMutation({

@@ -314,7 +314,7 @@ describe("do", () => {
     const w = await world({ routes: { [`POST ${BASE}/codecast/jobs/j1/rerun`]: () => Response.json({ ok: true }) } });
     const out = await rerun(w);
     expect(out).toMatchObject({ ok: false, denied: true });
-    expect(out.error).toContain("/ops/apps?app=src-");
+    expect(out.error).toContain("sig=apps&app=src-");
     expect(out.error).toContain("An agent cannot grant it");
     expect(w.calls.some((c) => c.url.includes("/rerun"))).toBe(false);
     expect(w.db._tables.app_calls[0]).toMatchObject({ kind: "do", status: "denied" });

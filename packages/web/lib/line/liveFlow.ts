@@ -59,3 +59,24 @@ export function liveFlowLedger(flow: LiveFlow, queued: number): SwitchLedger {
     confirm: "Turn on",
   };
 }
+
+/** The review before a library flow becomes the team's live flow: what it runs and takes, and the state it starts in,
+ *  which is the leads' lines' (convex createLiveFlowCore): on when any lead's line is on. */
+export function startFlowLedger(label: string, steps: number): SwitchLedger {
+  return {
+    name: "Live flow",
+    subject: label,
+    shift: ["None", label],
+    figures: [{ value: String(steps), label: steps === 1 ? "step" : "steps" }],
+    rows: [
+      { k: "Runs", v: label },
+      { k: "Takes from", v: "Every source" },
+      { k: "Order", v: "Best score first" },
+      { k: "Starts", v: "On if a lead's line is on, else off", tone: "warn" },
+      { k: "Leads", v: "Stop starting problems on their own" },
+    ],
+    stop: "Its switch, one press",
+    confirm: "Make live",
+    keep: "Not now",
+  };
+}

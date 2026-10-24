@@ -27,6 +27,8 @@ export const liveFlowTables = {
     // `by` names who set it: a session's short id, or a user.
     hold: v.optional(v.object({ why: v.string(), until: v.number(), by: v.string(), at: v.number() })),
     watcher_role_id: v.optional(v.id("org_roles")),
+    // The web's optimistic row for a flow started there (startLiveFlowCore): its id, so the real row supersedes it.
+    client_key: v.optional(v.string()),
     changed_by: v.id("users"),
     changed_at: v.number(),
     created_at: v.number(),

@@ -1,7 +1,9 @@
-// Every Ops address, both ways: parseOpsPath reads a location into the view it
-// names, and opsHref builds every link. The area registers one route family
-// (/ops and /ops/*), so this file is the only place that knows the sub-paths.
-// Pure: no React, no store.
+// Every Ops address, both ways. The Ops views live under the flows app's
+// Signals stage (doc "Signals to shipped: one pipeline"): a source's issues,
+// replays, metrics and apps open there, at /flows?view=signals&sig=<tab>.
+// opsHref builds every link there, opsViewOf reads one back, and parseOpsPath
+// reads an old /ops address, which redirects to the same view. This file is
+// the only place that knows the addresses. Pure: no React, no store.
 
 export const OPS_TABS = ["timeline", "issues", "replays", "metrics", "apps"] as const;
 export type OpsTab = (typeof OPS_TABS)[number];
@@ -38,19 +40,39 @@ function withQuery(path: string, query: Record<string, string | number | null | 
   return s ? `${path}?${s}` : path;
 }
 
-/** Whether a path (with or without a query) is inside the Ops area. */
+/** Whether a path (with or without a query) is an Ops view: an old /ops address, or a source view under Signals. */
 export function isOpsPath(path: string | null | undefined): boolean {
-  return !!path && /^\/ops(?:[/?#]|$)/.test(path);
+  return !!path && (/^\/ops(?:[/?#]|$)/.test(path) || (/^\/flows\?/.test(path) && /[?&]sig=/.test(path)));
 }
 
-/** Every link into the area. Timeline is the area's front page, at /ops. */
+const SIGNALS = "/flows";
+const sig = (tab: OpsTab, query: Record<string, string | number | null | undefined> = {}) => withQuery(SIGNALS, { view: "signals", sig: tab, ...query });
+
+/** Every link into a source view. */
 export const opsHref = {
-  tab: (tab: OpsTab, opts: { source?: string | null; app?: string | null } = {}) =>
-    withQuery(tab === "timeline" ? "/ops" : `/ops/${tab}`, { source: opts.source, app: opts.app }),
-  issue: (id: string) => `/ops/issues/${enc(id)}`,
+  tab: (tab: OpsTab, opts: { source?: string | null; app?: string | null } = {}) => sig(tab, { source: opts.source, app: opts.app }),
+  issue: (id: string) => sig("issues", { item: id }),
   /** `t` is the scrubber position in ms from the start of the recording. */
-  replay: (id: string, t?: number | null) => withQuery(`/ops/replays/${enc(id)}`, { t: t ?? null }),
+  replay: (id: string, t?: number | null) => sig("replays", { item: id, t: t ?? null }),
 };
+
+/** Where a view lives now, for an old /ops address. */
+export function opsViewHref(view: OpsView): string {
+  if (view.view === "issue") return opsHref.issue(view.id);
+  if (view.view === "replay") return opsHref.replay(view.id, view.t);
+  if (view.view === "tab") return opsHref.tab(view.tab, { source: view.source, app: view.app });
+  return withQuery(SIGNALS, { view: "signals" });
+}
+
+/** The view a Signals address names (its `sig`, `source`, `app`, `item`, `t`), or null for Signals' own list. */
+export function opsViewOf(q: { sig: string | null; source: string | null; app: string | null; item: string | null; t: string | null }): OpsView | null {
+  const tab = (OPS_TABS as readonly string[]).includes(q.sig ?? "") ? (q.sig as OpsTab) : null;
+  if (!tab) return null;
+  if (q.item && tab === "issues") return { view: "issue", id: q.item };
+  const t = Number(q.t);
+  if (q.item && tab === "replays") return { view: "replay", id: q.item, t: q.t != null && Number.isFinite(t) && t >= 0 ? t : null };
+  return { view: "tab", tab, source: q.source, app: q.app };
+}
 
 export function parseOpsPath(pathname: string | null | undefined, query = ""): OpsView {
   const path = (pathname ?? "").split("?")[0].split("#")[0].replace(/\/+$/, "") || "/ops";
@@ -78,9 +100,10 @@ export function parseOpsPath(pathname: string | null | undefined, query = ""): O
 /** The label a browser tab or a recent visit wears for an Ops address. */
 export function opsTabLabel(path: string): string {
   const [pathname, query] = path.split("?");
-  const v = parseOpsPath(pathname, query ?? "");
+  const q = new URLSearchParams(query ?? "");
+  const v = pathname.startsWith("/ops") ? parseOpsPath(pathname, query ?? "") : opsViewOf({ sig: q.get("sig"), source: q.get("source"), app: q.get("app"), item: q.get("item"), t: q.get("t") }) ?? { view: "not-found" as const, path };
   if (v.view === "issue") return v.id;
   if (v.view === "replay") return v.id;
-  if (v.view === "tab") return v.tab === "timeline" ? "Ops" : `Ops · ${OPS_TAB_LABEL[v.tab]}`;
-  return "Ops";
+  if (v.view === "tab") return `Signals · ${OPS_TAB_LABEL[v.tab]}`;
+  return "Signals";
 }

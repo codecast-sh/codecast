@@ -11,7 +11,7 @@ import { guardClientResolution, hostedAnswerRefusal, passCore, type PassTarget, 
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { discussCore } from "./decisionDiscussion";
 import { sendLineChatCore } from "./lineChat";
-import { clearHoldCore, setOnCore } from "./liveFlows";
+import { clearHoldCore, setOnCore, startLiveFlowCore } from "./liveFlows";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
@@ -3086,6 +3086,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setLiveFlowOn: async (ctx, userId, [id, on]: [string, boolean]) => {
     const flowId = ctx.db.normalizeId("live_flows", id);
     await setOnCore(ctx, userId, flowId ? await ctx.db.get(flowId) : null, on);
+  },
+  startLiveFlow: async (ctx, userId, [team_id, workflow_id, client_key]: [string, string, string]) => {
+    await startLiveFlowCore(ctx, userId, { team_id, workflow_id, client_key });
   },
   clearLiveFlowHold: async (ctx, userId, [id]: [string]) => {
     const flowId = ctx.db.normalizeId("live_flows", id);

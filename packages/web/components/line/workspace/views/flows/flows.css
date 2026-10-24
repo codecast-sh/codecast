@@ -130,3 +130,9 @@ a.flo-count:hover { border-color: var(--lw-ink-3); }
 .fll-live-hold b { color: var(--sol-yellow); }
 .fll-live-hold-why { color: var(--lw-ink); }
 .fll-live-hold .flv-steps { margin-left: auto; }
+.fll-start { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.fll-start li { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--lw-rule-2); }
+.fll-start li > b { font-weight: 600; }
+.fll-start li > :last-child { margin-left: auto; }
+.fll-live-figs [data-tone="bad"], .fll-live-figs [data-tone="bad"] b { color: var(--lw-bad); }
+.fll-live-r { display: inline-flex; align-items: center; gap: 8px; }

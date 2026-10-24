@@ -471,33 +471,9 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .lw-num { font-variant-numeric: tabular-nums; }
 .lw-mono { font-family: var(--lw-mono); font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; }
 .lw-app-title { font-size: var(--lw-fs-md); margin-right: var(--lw-s1); }
-.lw-graph-pick button { white-space: nowrap; }
-.lw-graph-pick button[data-elsewhere]:not(:hover) { color: var(--lw-ink-3); }
-.lw-graph-pick .lw-pick-fixes { margin-left: 8px; font-size: var(--lw-fs-xs); font-weight: 400; color: var(--lw-ink-3); }
 .lw-head .lw-chip .lw-num { color: inherit; }
 
 .lw-app-body { flex: 1; min-height: 0; display: flex; }
-.lw-nav {
-  flex: none; width: 184px; display: flex; flex-direction: column; gap: 1px; padding: var(--lw-s3) var(--lw-s2);
-  border-right: 1px solid var(--lw-rule-2); overflow-y: auto;
-}
-.lw-nav-item {
-  display: flex; align-items: center; gap: 9px; width: 100%; height: 30px; padding: 0 8px; border-radius: 7px; border: 0;
-  background: none; color: var(--lw-ink-2); font: inherit; font-size: var(--lw-fs-sm); text-align: left; cursor: pointer;
-  transition: background var(--lw-fast), color var(--lw-fast);
-}
-.lw-nav-item:hover { background: var(--lw-paper-2); color: var(--lw-ink); }
-.lw-nav-item[aria-current="page"] { background: var(--lw-card); color: var(--lw-ink); box-shadow: 0 1px 2px color-mix(in srgb, var(--sol-text) 12%, transparent); font-weight: 600; }
-.lw-nav-item:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: -2px; }
-.lw-nav-icon { width: 15px; height: 15px; flex: none; opacity: .8; }
-.lw-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lw-nav-count { font-variant-numeric: tabular-nums; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
-.lw-nav-count[data-tone="ask"] { color: var(--lw-person); font-weight: 650; }
-/* The go chord shows over the count on hover, so the label keeps the row's width. */
-.lw-nav-item { position: relative; }
-.lw-nav-key { position: absolute; right: 8px; opacity: 0; transition: opacity var(--lw-fast); }
-.lw-nav-item:hover .lw-nav-key, .lw-nav-item:focus-visible .lw-nav-key { opacity: .7; }
-.lw-nav-item:hover .lw-nav-count, .lw-nav-item:focus-visible .lw-nav-count { opacity: 0; }
 .lw-app .lw-body { flex: 1; min-width: 0; }
 
 .lw-filter { max-width: 240px; }
@@ -522,29 +498,9 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 /* A row that asks: the problem leads, the ask sits in a fixed second column. */
 .lw-srcchip[data-by] { color: var(--lw-ink-3); background: none; border: 1px dashed var(--lw-rule); }
 /* A failure cause: the station as its kind chip, what happened in a fixed column, how many runs; its problems open under it. */
-@media (max-width: 900px) {
-  .lw-nav { width: 52px; padding: var(--lw-s2) 6px; }
-  .lw-nav-label, .lw-nav-count, .lw-nav-key { display: none; }
-}
 
-/* The process picker: a product's chip carries its tooling behind a caret (ProcessFamily). */
-.lw-graph-pick .lw-pick-family { gap: 0; }
-.lw-graph-pick .lw-pick-sub { margin-left: 6px; padding-left: 6px; border-left: 1px solid var(--lw-rule); color: var(--lw-ink-2); }
-.lw-graph-pick .lw-pick-caret { padding-inline: 4px; margin-left: -2px; color: var(--lw-ink-3); }
-.lw-graph-pick .lw-pick-caret:hover, .lw-graph-pick .lw-pick-caret[aria-expanded="true"] { color: var(--lw-ink); }
-.lw-graph-pick .lw-pick-caret { display: inline-flex; align-items: center; gap: 2px; }
-.lw-pick-pop { left: 0; right: auto; transform-origin: top left; width: min(300px, 86vw); padding: 6px; }
-.lw-pick-pop button { display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 6px; padding: 6px 8px; border: 0; border-radius: 7px; background: none; font: inherit; text-align: left; color: var(--lw-ink); cursor: pointer; }
-.lw-pick-pop button:hover { background: var(--lw-paper-2); }
-.lw-pick-pop button:disabled { opacity: 0.45; cursor: default; }
-.lw-pick-pop button[data-sub] .lw-pick-name { padding-left: 12px; }
-.lw-pick-pop .lw-pick-name { display: flex; flex-direction: column; min-width: 0; }
-.lw-pick-pop .lw-pick-name b { font-size: var(--lw-fs-sm); font-weight: 600; }
-.lw-pick-pop .lw-pick-name small { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
-.lw-pick-pop .lw-num { font-size: var(--lw-fs-xs); }
 
 /* The decision a run waits on, opened in the Runs view over the run it came from: the pane is the decision's own page. */
-.lw-nav[data-settling] .lw-nav-count { opacity: .4; }
 
 /* A flow of the pool, or a run of one (flows.md FL6): FlowFence, the Flows view. */
 .lw-flow { border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg); background: var(--lw-card); overflow: hidden; }
