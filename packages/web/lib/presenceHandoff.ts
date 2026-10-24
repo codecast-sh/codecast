@@ -1,20 +1,22 @@
 // Touch ID for a Vault action on a client that cannot run a passkey ceremony
 // itself: the phone, and the desktop app (Electron has no platform passkeys).
-// It opens a presence challenge (convex/passkeys.ts), hands the ceremony to
-// the web origin's /confirm page in a browser, and settles on what the
-// challenge reached: granted, or not. A person with no passkey yet enrolls on
-// the same page first, then confirms. The caller runs the gated action only
-// when this answers true; the server's gate is what holds either way.
+// It opens a presence challenge (convex/passkeys.ts), keeps the grant string
+// the begin handed it in memory, hands the ceremony to the web origin's
+// /confirm page in a browser, and settles on what the challenge reached:
+// granted, or not. A person with no passkey yet enrolls on the same page
+// first, then confirms. The caller runs the gated action with the grant
+// string only when this answers one; the server's gate is what holds either
+// way, and the string is the only thing that spends the grant.
 //
 // Pure on purpose (the phone and the desktop each pass their browser and
 // their Convex client), so it is reachable from the mobile bundle and testable.
 
-import type { PresenceAction, PresenceChallengeState } from "@codecast/shared/contracts/secrets";
+import type { PresenceAction, PresenceChallengeState, PresenceGrant } from "@codecast/shared/contracts/secrets";
 
 type Status = PresenceChallengeState["status"];
 
-/** What presenceBegin and registrationBegin answer. */
-export type OpenedChallenge = { challenge_id: string } | { error: string; needs_passkey?: boolean };
+/** What presenceBegin and registrationBegin answer; presenceBegin's carries the grant string. */
+export type OpenedChallenge = { challenge_id: string; grant?: PresenceGrant } | { error: string; needs_passkey?: boolean };
 
 export interface PresenceHandoffDeps {
   /** The web origin the /confirm page is served from. */
@@ -37,18 +39,18 @@ export function confirmPageUrl(webBase: string, challengeId: string): string {
   return `${webBase.replace(/\/+$/, "")}/confirm?c=${encodeURIComponent(challengeId)}`;
 }
 
-/** Whether the person confirmed `action` on `target`. Throws with the server's words when the challenge cannot open. */
-export async function confirmPresenceViaWeb(action: PresenceAction, target: string, deps: PresenceHandoffDeps): Promise<boolean> {
+/** The grant string once the person confirmed `action` on `target`, else null. Throws with the server's words when the challenge cannot open. */
+export async function confirmPresenceViaWeb(action: PresenceAction, target: string, deps: PresenceHandoffDeps): Promise<PresenceGrant | null> {
   let opened = await deps.begin(action, target);
   if ("needs_passkey" in opened && opened.needs_passkey) {
     const enrolled = await deps.enroll();
     if ("error" in enrolled) throw new Error(enrolled.error);
     // A finished enrollment uses its challenge up.
-    if ((await onConfirmPage(enrolled.challenge_id, deps)) !== "used") return false;
+    if ((await onConfirmPage(enrolled.challenge_id, deps)) !== "used") return null;
     opened = await deps.begin(action, target);
   }
   if ("error" in opened) throw new Error(opened.error);
-  return (await onConfirmPage(opened.challenge_id, deps)) === "granted";
+  return (await onConfirmPage(opened.challenge_id, deps)) === "granted" ? opened.grant ?? null : null;
 }
 
 /**

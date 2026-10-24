@@ -28,7 +28,10 @@ export const ENTITY_TYPE = v.union(
   v.literal("team"),
   // A machine by its daemon device id, for the overload alert: it opens that
   // machine's offload review on Resources. Direct recipients only.
-  v.literal("machine")
+  v.literal("machine"),
+  // One of the person's passkeys, added or removed (passkeys.ts). Direct
+  // recipients only: it goes to the passkey's owner.
+  v.literal("passkey")
 );
 
 export const NOTIFICATION_TYPE = v.union(
@@ -82,5 +85,9 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("decision_answered_for_you"),
   // Finding a team by work email: a request to its admins, then the approval.
   v.literal("team_join_request"),
-  v.literal("team_join_approved")
+  v.literal("team_join_approved"),
+  // A passkey was added to or removed from the recipient's account. Mapped to
+  // no preference, so no switch mutes it: it is how a passkey an agent set up
+  // with the person's sign-in reaches their phone.
+  v.literal("passkey_changed")
 );

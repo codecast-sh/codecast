@@ -37,7 +37,7 @@ type Notification = {
   read: boolean;
   created_at: number;
   conversation_id?: Id<"conversations">;
-  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel" | "device" | "machine";
+  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel" | "device" | "machine" | "passkey";
   entity_id?: string;
   chat_message_id?: string;
   link?: string;
@@ -106,6 +106,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "change_shipped": return { name: "rocket", color: Theme.green };
     case "cause_reopened": return { name: "undo", color: Theme.red };
     case "decision_answered_for_you": return { name: "question-circle", color: Theme.yellow };
+    case "passkey_changed": return { name: "key", color: Theme.red };
     default: return { name: "bell", color: Theme.textMuted };
   }
 }

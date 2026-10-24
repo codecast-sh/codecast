@@ -133,6 +133,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   decision_answered_for_you: ["decision answered for you", "decisions answered for you"],
   team_join_request: ["request to join", "requests to join"],
   team_join_approved: ["team you joined", "teams you joined"],
+  passkey_changed: ["passkey change", "passkey changes"],
 };
 
 export function summarizePushBatch(

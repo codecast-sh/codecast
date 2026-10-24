@@ -1,11 +1,14 @@
 // Passkeys in tests. softAuthenticator is an ES256 key pair in memory that
 // answers registration and assertion options with real, verifiable responses
 // (fmt "none", user present and verified); seedPresence writes the grant a
-// verified assertion leaves, for suites about what a gate guards rather than
+// verified assertion leaves and answers the grant string that spends it, for
+// suites about what a gate guards rather than
 // the ceremony (passkeys.test.ts covers that). The file name carries two dots
 // so the Convex bundler skips it.
 import { isoBase64URL, isoCBOR } from "@simplewebauthn/server/helpers";
 import { PRESENCE_TTL_MS, type PresenceAction } from "@codecast/shared/contracts/secrets";
+import { sha256Hex } from "./lib/hash";
+import { grantString } from "./lib/presence";
 
 const b64u = (bytes: Uint8Array | ArrayBuffer) => isoBase64URL.fromBuffer(new Uint8Array(bytes));
 const sha256 = async (bytes: Uint8Array) => new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)));
@@ -104,9 +107,11 @@ export async function softAuthenticator(): Promise<SoftAuthenticator> {
   return auth;
 }
 
-export async function seedPresence(t: any, userId: string, action: PresenceAction, target: string): Promise<void> {
+export async function seedPresence(t: any, userId: string, action: PresenceAction, target: string): Promise<string> {
   const now = Date.now();
-  await t.run((ctx: any) =>
+  const secret = `seeded-${crypto.randomUUID()}`;
+  const grantHash = await sha256Hex(secret);
+  const id = await t.run((ctx: any) =>
     ctx.db.insert("passkey_challenges", {
       user_id: userId,
       purpose: "presence",
@@ -115,8 +120,10 @@ export async function seedPresence(t: any, userId: string, action: PresenceActio
       challenge: "seeded",
       rp_id: "codecast.sh",
       status: "granted",
+      grant_hash: grantHash,
       created_at: now,
       expires_at: now + PRESENCE_TTL_MS,
     }),
   );
+  return grantString(String(id), secret);
 }

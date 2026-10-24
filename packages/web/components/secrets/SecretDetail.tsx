@@ -399,7 +399,7 @@ export function AskFirst({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
           onClose={() => setReviewing(false)}
           onConfirm={() => {
             setReviewing(false);
-            void confirm("ask_first_off", row._id).then((ok) => ok && setSecretAskFirst(row._id, false));
+            void confirm("ask_first_off", row._id).then((grant) => grant && setSecretAskFirst(row._id, false, grant));
           }}
         />
       )}

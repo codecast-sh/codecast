@@ -31,6 +31,7 @@ import { NEW_SESSION_EVENT } from "../lib/utils";
 import { SquarePen, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TeamDomainBanner } from "./TeamDomainBanner";
+import { PasskeyProbationBanner } from "./PasskeyProbationBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
 import { TourLayer, ToursPanel } from "../tours";
@@ -1447,6 +1448,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <StatusNoticeStack />
         <ConnectionBanner />
         <StorageHealthBanner />
+        <PasskeyProbationBanner />
         <Surface name="banner.nativeApp"><NativeAppBanner /></Surface>
         <Surface name="banner.setup"><SetupPromptBanner /></Surface>
         <TeamDomainBanner />

@@ -874,11 +874,12 @@ export const remove = mutation({
  * reveal on the web takes Touch ID instead (reveal). Anyone may turn it on, a
  * token included; turning it off takes a person signed in to the app, since an
  * api token is what the gated agent itself holds, and an ask_first_off grant
- * (passkeys.ts), since an agent may be driving that app. The web's dispatch
- * side effect calls this.
+ * (passkeys.ts), since an agent may be driving that app, spent with the
+ * `grant` string the person's confirmation handed their client. The web's
+ * dispatch side effect calls this.
  */
 export const setAskFirst = mutation({
-  args: { api_token: v.optional(v.string()), ref: v.string(), ask_first: v.boolean() },
+  args: { api_token: v.optional(v.string()), ref: v.string(), ask_first: v.boolean(), grant: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = args.ask_first ? await requireCaller(ctx, args.api_token) : await getAuthUserId(ctx);
     if (!userId) return { error: "Only a person turns Ask first off: switch it off in the secret's panel on the Vault page" };
@@ -886,7 +887,7 @@ export const setAskFirst = mutation({
     if ("error" in row) return row;
     if (!!row.ask_first !== args.ask_first) {
       // The person's own browser may be driven by an agent, so off takes a passkey too.
-      const refusal = args.ask_first ? null : await consumePresence(ctx, userId, "ask_first_off", String(row._id));
+      const refusal = args.ask_first ? null : await consumePresence(ctx, userId, "ask_first_off", String(row._id), args.grant);
       if (refusal) return { error: refusal };
       await ctx.db.patch(row._id, { ask_first: args.ask_first, ...metaStamp(row, userId) });
       await recordSecretEvent(ctx, row, args.ask_first ? "ask_first_on" : "ask_first_off", { actor: userId });
@@ -1234,6 +1235,8 @@ export const recordReads = internalMutation({
     conversation_id: v.optional(v.id("conversations")),
     purpose: v.optional(purposeValidator),
     why: v.optional(v.string()),
+    // revealed: the Touch ID grant string an Ask first secret's reveal spends.
+    grant: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<SecretNeedsApproval | { error: string } | null> => {
     if (args.kind === "read") {
@@ -1244,7 +1247,7 @@ export const recordReads = internalMutation({
       // A reveal of an Ask first secret takes a passkey: the click may be an agent driving the person's own browser.
       for (const id of args.ids) {
         const row = await ctx.db.get(id);
-        const refusal = row?.ask_first ? await consumePresence(ctx, args.user_id, "reveal", String(row._id)) : null;
+        const refusal = row?.ask_first ? await consumePresence(ctx, args.user_id, "reveal", String(row._id), args.grant) : null;
         if (refusal) return { error: refusal };
       }
     }
@@ -1254,8 +1257,8 @@ export const recordReads = internalMutation({
       if (!row) continue;
       // A browser's read of a saved sign-in is the moment an agent was signed in with it.
       const kind = args.kind === "read" && args.purpose === "signin" ? "signed_in" : args.kind;
-      // An Ask first value reaching this user the first time joins their daemon's feed (redactionRows).
-      if (row.ask_first && !(await reachedUser(ctx, row, args.user_id))) await bumpRedaction(ctx, row.workspace);
+      // An Ask first value reaching this user's agents the first time joins their daemon's feed (redactionRows); a reveal reached only their screen.
+      if (kind !== "revealed" && row.ask_first && !(await reachedUser(ctx, row, args.user_id))) await bumpRedaction(ctx, row.workspace);
       await recordSecretEvent(ctx, row, kind, { actor: args.user_id, conversation_id: args.conversation_id, purpose: args.purpose });
       if (args.kind === "read") {
         await ctx.db.patch(row._id, { last_used_at: now, last_used_by_conversation: args.conversation_id, use_count: (row.use_count ?? 0) + 1 });
@@ -1279,17 +1282,18 @@ async function openRows(ctx: any, rows: ({ name: string; workspace: string } & V
 
 /**
  * One secret's value for a signed-in person on the web. The reveal is
- * recorded before the value leaves. An Ask first secret's reveal uses up a
- * reveal grant for it (passkeys.ts), so the press needs Touch ID.
+ * recorded before the value leaves. An Ask first secret's reveal spends a
+ * reveal grant for it (passkeys.ts) with the `grant` string its Touch ID
+ * confirmation handed this caller, so the press needs Touch ID.
  */
 export const reveal = action({
-  args: { ref: v.string() },
+  args: { ref: v.string(), grant: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ payload: SecretPayload } | { error: string }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { error: "Sign in to codecast to reveal a secret" };
     const got = await ctx.runQuery(internal.secrets.readTargets, { user_id: userId, refs: [args.ref] });
     if ("error" in got) return got;
-    const held = await ctx.runMutation(internal.secrets.recordReads, { user_id: userId, ids: got.rows.map((r) => r.id), kind: "revealed" });
+    const held = await ctx.runMutation(internal.secrets.recordReads, { user_id: userId, ids: got.rows.map((r) => r.id), kind: "revealed", grant: args.grant });
     if (held) return held as { error: string };
     const opened = await openRows(ctx, got.rows);
     if ("error" in opened) return opened;
@@ -1367,15 +1371,21 @@ async function approvedForUser(ctx: any, row: SecretRow, userId: Id<"users">, no
   return false;
 }
 
-/** Event kinds that mean a value reached a user: an agent of theirs read it or signed in with it, they revealed it, or their daemon loaded it to redact. */
-const REACHED_KINDS = ["read", "signed_in", "revealed", "redaction_sync"] as const;
+/**
+ * Event kinds that mean a value reached a user's terminal or agents, which
+ * puts an Ask first value in their daemon's feed: an agent of theirs read it
+ * or signed in with it, or their daemon loaded it to redact. A reveal reached
+ * the person's screen only and stays in the trail alone: the feed's token is
+ * the gated agent's too, so counting it would hand a Touch ID reveal to the agent.
+ */
+const FEED_KINDS = ["read", "signed_in", "redaction_sync"] as const;
 
 /** Whether a value of the row reached `userId` by one of `kinds`: by default its current value (since it was written); with `before`, one it held until then. */
 async function reachedUser(
   ctx: any,
   row: SecretRow,
   userId: Id<"users">,
-  { kinds = REACHED_KINDS, before }: { kinds?: readonly (typeof REACHED_KINDS)[number][]; before?: number } = {},
+  { kinds = FEED_KINDS, before }: { kinds?: readonly (typeof FEED_KINDS)[number][]; before?: number } = {},
 ): Promise<boolean> {
   for (const kind of kinds) {
     const hit = await ctx.db
@@ -1394,8 +1404,9 @@ async function reachedUser(
  * The rows whose values go to the user's daemon, each with its current value
  * and the previous ones still restorable: a value rotated away after a leak
  * still sits in logs and files an agent may print. An Ask first secret goes
- * once its current value has reached the user (an approval for one of their
- * sessions, a read, a reveal, a copy already in their daemon) and stays until
+ * once its current value has reached the user's agents (an approval for one
+ * of their sessions, a read, a copy already in their daemon; not their own
+ * reveal on screen, FEED_KINDS) and stays until
  * a new value: an approval that lapsed, a session that ended or a switch to
  * Ask first after a leak leaves the value in agents' hands and terminals, so
  * it must stay redacted. A value it held before (kept) stays too, so a rotate

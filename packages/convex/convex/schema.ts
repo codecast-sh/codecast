@@ -3772,7 +3772,24 @@ export default defineSchema({
     due_at: v.optional(v.number()),
     promise_task_id: v.optional(v.id("tasks")),
     promise_signaled_at: v.optional(v.number()),
+    // ── Conversation comment twins (commentTwins.ts) ──
+    // A copy of one `comments` row, written in the same mutation as the row
+    // (dual write) while `comments` stays the source of truth. The source's
+    // pull request and GitHub id sit in their own fields, so no pull request
+    // or GitHub reader of this table can reach a twin; every other reader
+    // skips it (isCommentTwin).
+    source_comment_id: v.optional(v.id("comments")),
+    source_pr_id: v.optional(v.id("pull_requests")),
+    source_github_comment_id: v.optional(v.number()),
+    agent_status: v.optional(v.union(
+      v.literal("thinking"),
+      v.literal("streaming"),
+      v.literal("done"),
+      v.literal("error"),
+    )),
+    fork_conversation_id: v.optional(v.id("conversations")),
   })
+    .index("by_source_comment", ["source_comment_id"])
     .index("by_disposition_due", ["disposition", "due_at"])
     .index("by_owner_role", ["owner_role_id", "resolved"])
     .index("by_review", ["review_id"])
@@ -4494,7 +4511,9 @@ export default defineSchema({
       // Finding a team by work email (teamDiscovery.ts): someone asked to
       // join (to its admins), and an admin let them in (to them).
       v.literal("team_join_request"),
-      v.literal("team_join_approved")
+      v.literal("team_join_approved"),
+      // A passkey added to or removed from the recipient's account (passkeys.ts).
+      v.literal("passkey_changed")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
@@ -4520,7 +4539,9 @@ export default defineSchema({
       // A team: a join request or approval opens its settings.
       v.literal("team"),
       // A machine by daemon device id: the overload alert opens its offload review.
-      v.literal("machine")
+      v.literal("machine"),
+      // A passkey added or removed: opens Settings > Accounts.
+      v.literal("passkey")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -8489,7 +8510,9 @@ export default defineSchema({
       // A team, for join requests. Direct recipients only. Same reason.
       v.literal("team"),
       // A machine, for the overload alert. Direct recipients only. Same reason.
-      v.literal("machine")
+      v.literal("machine"),
+      // A passkey, for its owner's add and remove notices. Same reason.
+      v.literal("passkey")
     ),
     entity_id: v.string(),
     reason: v.union(

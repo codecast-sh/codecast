@@ -104,7 +104,7 @@ describe("an Ask first decision card", () => {
       action: async (ref: any) => {
         const name = getFunctionName(ref);
         calls.push(name);
-        return name === "passkeys:presenceBegin" ? { challenge_id: "ch-zz", options: { challenge: "Y2g", allowCredentials: [] }, expires_at: Date.now() + 60_000 } : { granted: true };
+        return name === "passkeys:presenceBegin" ? { challenge_id: "ch-zz", options: { challenge: "Y2g", allowCredentials: [] }, expires_at: Date.now() + 60_000, grant: "ch-zz.g" } : { granted: true };
       },
     };
     const restore = replaceGlobals({ PublicKeyCredential: function PublicKeyCredential() {} });
@@ -124,7 +124,7 @@ describe("an Ask first decision card", () => {
     expect([!!approve.querySelector("[data-gated]"), !!deny.querySelector("[data-gated]")]).toEqual([true, false]);
     await act(async () => { approve.click(); await new Promise((r) => setTimeout(r, 0)); });
     expect(calls).toEqual(["passkeys:presenceBegin", "passkeys:presenceFinish"]);
-    expect(answers).toEqual([{ index: 0 }]);
+    expect(answers).toEqual([{ index: 0, presence: "ch-zz.g" }]);
     unmount();
     restore();
   });

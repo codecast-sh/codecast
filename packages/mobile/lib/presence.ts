@@ -3,7 +3,7 @@
 // over this app's Convex client (web/lib/presenceHandoff).
 import * as WebBrowser from 'expo-web-browser';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { PRESENCE_TTL_MS, type PresenceAction } from '@codecast/shared/contracts/secrets';
+import { PRESENCE_TTL_MS, type PresenceAction, type PresenceGrant } from '@codecast/shared/contracts/secrets';
 import { confirmPresenceViaWeb, type OpenedChallenge, type PresenceHandoffDeps } from '@codecast/web/lib/presenceHandoff';
 import { convex } from '@/lib/convex';
 import { openInAppBrowser } from '@/lib/links';
@@ -32,7 +32,7 @@ const phone: PresenceHandoffDeps = {
   ttlMs: PRESENCE_TTL_MS,
 };
 
-/** Whether the person confirmed `action` on `target` with Touch ID. Throws with the server's words when it cannot start. */
-export function confirmPresence(action: PresenceAction, target: string): Promise<boolean> {
+/** The grant string the gated call spends once the person confirmed `action` on `target` with Touch ID, else null. Throws with the server's words when it cannot start. */
+export function confirmPresence(action: PresenceAction, target: string): Promise<PresenceGrant | null> {
   return confirmPresenceViaWeb(action, target, phone);
 }

@@ -196,7 +196,7 @@ export const dispatch = mutation({
       typeof patches === "object" &&
       !(hasReceiptCommandId(result) && RECEIPT_OWNS_SERVER_WRITE.has(action))
     ) {
-      await applyPatches(ctx, userId, patches, { forceKill: EXPLICIT_KILL_ACTIONS.has(action), cause: `web:${action}` });
+      await applyPatches(ctx, userId, patches, { forceKill: EXPLICIT_KILL_ACTIONS.has(action), cause: `web:${action}`, presence: answerPresence(action, actionArgs) });
     }
 
     const out = sideEffect ? await sideEffect(ctx, userId, actionArgs, result) : undefined;
@@ -208,6 +208,14 @@ export const dispatch = mutation({
     return out;
   },
 });
+
+// The Touch ID grant string an Ask first Approve carries beside its answer
+// (the store's answerDecision input), handed to the decision patch's gate. It
+// rides the action's arguments, never a row field, so it is stored nowhere.
+function answerPresence(action: string, args: any): string | undefined {
+  const presence = action === "answerDecision" ? args?.[1]?.presence : undefined;
+  return typeof presence === "string" ? presence : undefined;
+}
 
 // A Convex document id is 32 base32 characters. The store's optimistic rows are
 // keyed by shorter local stub ids until their server row supersedes them, and a
@@ -436,7 +444,7 @@ export async function applyPatches(
   ctx: HandlerCtx,
   userId: Id<"users">,
   patches: Record<string, Record<string, Record<string, any>>>,
-  opts?: { forceKill?: boolean; cause?: string }
+  opts?: { forceKill?: boolean; cause?: string; presence?: string }
 ) {
   let bucketViewChanged = false;
   // A gesture on a lead patches every row of its group, and each conversation
@@ -493,7 +501,7 @@ export async function applyPatches(
         // throws, so the outbox treats it as permanent and the client takes
         // its painted answer back instead of showing it as answered.
         if (table === "session_decisions") {
-          const refusal = await answerRefusal(ctx as any, doc as any, { kind: "user", id: String(userId), user_id: userId, signed_in: true }, { status: safe.status, answer_index: safe.answer_index });
+          const refusal = await answerRefusal(ctx as any, doc as any, { kind: "user", id: String(userId), user_id: userId, signed_in: true, presence: opts?.presence }, { status: safe.status, answer_index: safe.answer_index });
           if (refusal) throw new Error(refusal);
         }
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
@@ -558,7 +566,7 @@ export async function applyPatches(
         // A decision resolved from the web: the same side effects a server
         // answer carries (inbox rows done, stack close, override scoring).
         if (table === "session_decisions" && "status" in finalSafe) {
-          await settleClientResolution(ctx, doc as any, finalSafe as any, userId, Date.now());
+          await settleClientResolution(ctx, doc as any, finalSafe as any, userId, Date.now(), opts?.presence);
         }
         // Lifecycle hooks on the DATA transition (a conversation patch setting
         // inbox_dismissed_at / inbox_stashed_at), not any one action, so every
@@ -2003,8 +2011,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // A decline names "requested": a request filled since then is kept (secrets.remove).
   removeSecret: async (ctx, userId, [id, only]: [string, "requested" | undefined]) =>
     liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.remove, { ref: id, ...(only ? { only } : {}) })),
-  setSecretAskFirst: async (ctx, userId, [id, askFirst]: [string, boolean]) =>
-    liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setAskFirst, { ref: id, ask_first: askFirst })),
+  // `grant`: the Touch ID grant string turning it off spends.
+  setSecretAskFirst: async (ctx, userId, [id, askFirst, grant]: [string, boolean, string?]) =>
+    liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setAskFirst, { ref: id, ask_first: askFirst, grant })),
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,

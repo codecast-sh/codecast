@@ -39,7 +39,7 @@ import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
-import { secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
+import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded } from "./lib/superseded";
@@ -716,9 +716,10 @@ export function normalizeVerdict(row: DecisionRow, raw: Verdict): Verdict | { er
 
 // signed_in: a person answering from the app with their own sign-in (the
 // web's resolve and dispatch rail), never through an api token, which the
-// session that asked holds too. Only Vault's Ask first reads it
-// (secretApprovalRefusal).
-export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants">; via?: Id<"conversations">; signed_in?: boolean };
+// session that asked holds too. presence: the grant string a Touch ID
+// confirmation handed that person's client (passkeys.ts presenceBegin). Only
+// Vault's Ask first reads them (secretApprovalRefusal).
+export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants">; via?: Id<"conversations">; signed_in?: boolean; presence?: string };
 
 export const HOSTED_ANSWER_REFUSED = "Only the owner can answer a hosted assistant's question";
 
@@ -909,6 +910,7 @@ export async function settleClientResolution(
   patch: { status?: string; answer_index?: number; answer_text?: string; answer_json?: any },
   userId: Id<"users">,
   now: number,
+  presence?: string,
 ) {
   if (patch.status !== "answered" && patch.status !== "dismissed") return;
   // A person changing an advisory answer (advisoryAnswerOpen): the client sent
@@ -928,7 +930,7 @@ export async function settleClientResolution(
     answer_text: patch.answer_text,
     answer_json: patch.answer_json,
   };
-  const by: AnsweredBy = { kind: "user", id: String(userId), user_id: userId, signed_in: true };
+  const by: AnsweredBy = { kind: "user", id: String(userId), user_id: userId, signed_in: true, presence };
   await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
   const consumed = await settleResolution(ctx, row, verdict, by, now);
   if (row.workflow_run_id && !consumed) await deliverAnswer(ctx, row, verdict, by);
@@ -1392,6 +1394,8 @@ export const edit = mutation({
     if (row.status !== "pending") {
       return { error: `Decision is already ${row.status}`, ...resolvedSummary(row) };
     }
+    // The person confirms an Ask first read with Touch ID on the words of this decision, so its asker may not rewrite them.
+    if (await pendingApproval(ctx, row._id)) return { error: "An Ask first decision is filed by the Vault and cannot be edited" };
     const now = Date.now();
 
     const question = args.question ?? row.question;
@@ -1841,7 +1845,8 @@ export const showForCli = mutation({
 // ── Web: resolve, reopen, grants ──────────────────────────────────────────────
 
 // The web's resolve: a person in asked_user_ids (or the legacy owner) answers
-// or dismisses. Delivery stays on the client (store answerDecision).
+// or dismisses. Delivery stays on the client (store answerDecision). `grant`:
+// the Touch ID grant string an Ask first Approve spends.
 export const resolve = mutation({
   args: {
     decision_id: v.id("session_decisions"),
@@ -1849,6 +1854,7 @@ export const resolve = mutation({
     answer_index: v.optional(v.number()),
     answer_text: v.optional(v.string()),
     answer_json: v.optional(v.any()),
+    grant: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1862,7 +1868,7 @@ export const resolve = mutation({
     if (row.status !== "pending") return { already_resolved: true };
     const verdict = normalizeVerdict(row, args);
     if ("error" in verdict) throw new Error(verdict.error);
-    return finalizeAnswer(ctx, row, verdict, { kind: "user", id: String(userId), user_id: userId, signed_in: true }, { deliver: false });
+    return finalizeAnswer(ctx, row, verdict, { kind: "user", id: String(userId), user_id: userId, signed_in: true, presence: args.grant }, { deliver: false });
   },
 });
 

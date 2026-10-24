@@ -82,7 +82,7 @@ function GenericAnswerControls({
   const held = useHeldOption(decision);
   const gate = useApproveGate(decision);
   const answerSingle = useCallback((index: number) => {
-    if (!held(index)) gate.answer(index, () => onAnswer({ index }));
+    if (!held(index)) gate.answer(index, (presence) => onAnswer({ index, presence }));
   }, [onAnswer, held, gate]);
   const answerText = useCallback(() => {
     const t = otherText.trim();

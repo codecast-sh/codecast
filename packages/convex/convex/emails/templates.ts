@@ -196,7 +196,7 @@ export function passkeyAdded(args: { email: string; passkeyName: string; addedAt
     eyebrow: "security",
     heading: "Touch ID added",
     blocks: [
-      { kind: "text", value: "A passkey was added to your Codecast account. It now confirms revealing an Ask first secret, approving its use and switching Ask first off." },
+      { kind: "text", value: "A passkey was added to your Codecast account. It confirms revealing an Ask first secret, approving its use and switching Ask first off. An account's first passkey starts a day after it was added." },
       {
         kind: "meta",
         rows: [
@@ -206,7 +206,7 @@ export function passkeyAdded(args: { email: string; passkeyName: string; addedAt
         ],
       },
       { kind: "text", value: "If this was you, no action is needed." },
-      { kind: "text", value: "If this **wasn't** you, remove the passkey in Settings now: whoever added it can confirm those actions as you." },
+      { kind: "text", value: "If this **wasn't** you, remove the passkey in Settings now: whoever added it could confirm those actions as you." },
       { kind: "button", label: "Review passkeys", url: args.settingsUrl },
     ],
     reason: `You received this security notice because a passkey was added to ${args.email} at codecast.sh.`,

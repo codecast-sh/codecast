@@ -56,7 +56,8 @@ async function mayApprove(ctx: Ctx, approval: Doc<"secret_approvals">, userId: I
   return !approval.workspace.startsWith("user:") || approval.workspace === `user:${userId}`;
 }
 
-const pendingApproval = async (ctx: Ctx, decisionId: Id<"session_decisions">): Promise<Doc<"secret_approvals"> | null> => {
+/** The pending Ask first approval a decision was filed for, or null: the decision is the Vault's, not its asker's to reshape. */
+export const pendingApproval = async (ctx: Ctx, decisionId: Id<"session_decisions">): Promise<Doc<"secret_approvals"> | null> => {
   const approval = await ctx.db.query("secret_approvals").withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId)).first();
   return approval?.status === "pending" ? approval : null;
 };
@@ -73,22 +74,23 @@ const approves = (row: { options?: Array<{ label: string }> }, verdict: Verdict)
  * answering its own question, from its own shell with no session named, and
  * a teammate viewing the session is not the person whose secret it opens.
  * Approving it also takes an approve grant for the decision (passkeys.ts),
- * since an agent may be driving the person's signed-in browser; a Deny or a
- * dismissal stays one press. With no verdict the answer is taken to approve.
+ * since an agent may be driving the person's signed-in browser, spent with
+ * the grant string the answer carries (`by.presence`); a Deny or a dismissal
+ * stays one press. With no verdict the answer is taken to approve.
  * finalizeAnswer, answerCore and the dispatch rail check it the way they
  * check hostedAnswerRefusal; settleSecretApproval uses the grant up.
  */
 export async function secretApprovalRefusal(
   ctx: Ctx,
   row: { _id: Id<"session_decisions">; options?: Array<{ label: string }> },
-  by: { user_id?: Id<"users">; signed_in?: boolean },
+  by: { user_id?: Id<"users">; signed_in?: boolean; presence?: string },
   verdict?: Verdict,
 ): Promise<string | null> {
   const approval = await pendingApproval(ctx, row._id);
   if (!approval) return null;
   if (!by.signed_in) return "An Ask first decision is a person's: answer it on the web or the phone, where you are signed in";
   if (!(await mayApprove(ctx, approval, by.user_id))) return "Only the person whose session asked can answer an Ask first decision";
-  if (!verdict || approves(row, verdict)) return await presenceRefusal(ctx, by.user_id!, "approve", String(row._id));
+  if (!verdict || approves(row, verdict)) return await presenceRefusal(ctx, by.user_id!, "approve", String(row._id), by.presence);
   return null;
 }
 
@@ -109,14 +111,14 @@ export async function settleSecretApproval(
   ctx: Ctx,
   row: { _id: Id<"session_decisions">; options?: Array<{ label: string }> },
   verdict: Verdict,
-  by: { kind: string; user_id?: Id<"users">; signed_in?: boolean },
+  by: { kind: string; user_id?: Id<"users">; signed_in?: boolean; presence?: string },
   now: number,
 ): Promise<void> {
   const approval = await pendingApproval(ctx, row._id);
   if (!approval) return;
   const approved = approves(row, verdict);
   if (approved && (by.kind !== "user" || !by.signed_in || !(await mayApprove(ctx, approval, by.user_id)))) return;
-  if (approved && (await consumePresence(ctx, by.user_id!, "approve", String(row._id)))) return;
+  if (approved && (await consumePresence(ctx, by.user_id!, "approve", String(row._id), by.presence))) return;
   const withdrawn = verdict.status === "withdrawn";
   if (withdrawn) await ctx.db.delete(approval._id);
   else await ctx.db.patch(approval._id, { status: approved ? "approved" : "denied", approved_by: approved ? by.user_id : undefined, at: now });

@@ -4,7 +4,9 @@
 // a passkey assertion no script can produce (convex/passkeys.ts). A gated
 // press runs `confirmPresence` first: begin a challenge for that action on
 // that target, let the platform prompt for Touch ID, finish it, and the
-// press goes on to the gated call, which the server lets through once.
+// press goes on to the gated call with the grant string the begin handed
+// this tab, which the server lets through once. Nobody else holding the
+// person's sign-in can spend that grant: the string lives only here.
 //
 // With no passkey yet, the same flow offers to set one up and continues. The
 // desktop app has no platform passkeys, so it opens the web origin's
@@ -17,7 +19,7 @@ import type { ConvexReactClient } from "convex/react";
 import { toast } from "sonner";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { NOT_CONFIRMED, approvesSecretRead, isPresenceRequired, type PresenceAction } from "@codecast/shared/contracts/secrets";
+import { NOT_CONFIRMED, approvesSecretRead, isPresenceRequired, type PresenceAction, type PresenceGrant } from "@codecast/shared/contracts/secrets";
 import { isAgentDrivenTab } from "./desktopHandoff";
 import { isDesktopShell, openExternalUrl } from "./desktop";
 import { PERSON_ONLY } from "./agentTabGuard";
@@ -135,29 +137,32 @@ export async function finishPresence(client: Pick<Client, "action">, challengeId
   return "error" in done ? fail(done.error) : true;
 }
 
-/** Set up a passkey, inline or through the browser; `prompt` first asks with one button, which is the gesture the ceremony needs. */
-async function enroll(client: Client, handoff: boolean, prompt?: [title: string, label: string]): Promise<boolean> {
+/** Set up a passkey, inline or through the browser; `prompt` first asks with one button, which is the gesture the ceremony needs. A second passkey spends `grant`, an add_passkey grant. */
+async function enroll(client: Client, handoff: boolean, prompt?: [title: string, label: string], grant?: PresenceGrant): Promise<boolean> {
   if (isAgentDrivenTab()) return fail(PERSON_ONLY.enroll);
   if (prompt && !(await ask(...prompt))) return false;
-  const begun: any = await client.action(api.passkeys.registrationBegin, { origin: window.location.origin });
+  const begun: any = await client.action(api.passkeys.registrationBegin, { origin: window.location.origin, grant });
   if (begun?.error) return fail(begun.error);
   if (handoff) return await handOff(client, begun.challenge_id, "used", begun.expires_at);
   return await finishRegistration(client, begun.challenge_id, begun.options);
 }
 
-async function confirmOnce(client: Client, action: PresenceAction, target: string): Promise<boolean> {
+async function confirmOnce(client: Client, action: PresenceAction, target: string): Promise<PresenceGrant | null> {
   const handoff = isDesktopShell();
   const begin = () => client.action(api.passkeys.presenceBegin, { action, target, origin: window.location.origin });
   let begun: any = await begin();
   if (begun?.needs_passkey) {
-    if (!(await enroll(client, handoff, ["Set up Touch ID to confirm this", "Set up Touch ID"]))) return false;
+    if (!(await enroll(client, handoff, ["Set up Touch ID to confirm this", "Set up Touch ID"]))) return null;
     begun = await begin();
     // Setting up spent the press's gesture; the assertion takes a press of its own.
-    if (!begun?.error && !handoff && !(await ask("Touch ID is set up", "Confirm"))) return false;
+    if (!begun?.error && !handoff && !(await ask("Touch ID is set up", "Confirm"))) return null;
   }
-  if (begun?.error) return fail(begun.error);
-  if (handoff) return await handOff(client, begun.challenge_id, "granted", begun.expires_at);
-  return await finishPresence(client, begun.challenge_id, begun.options);
+  if (begun?.error) {
+    fail(begun.error);
+    return null;
+  }
+  const granted = handoff ? await handOff(client, begun.challenge_id, "granted", begun.expires_at) : await finishPresence(client, begun.challenge_id, begun.options);
+  return granted ? begun.grant : null;
 }
 
 /**
@@ -167,21 +172,25 @@ async function confirmOnce(client: Client, action: PresenceAction, target: strin
 export async function addPasskey(client: Client, hasPasskeys: boolean): Promise<boolean> {
   const handoff = isDesktopShell();
   if (!hasPasskeys) return await enroll(client, handoff);
-  if (!(await confirmPresence(client, "add_passkey", "self"))) return false;
-  return await enroll(client, handoff, handoff ? undefined : ["Confirmed: now create the new passkey", "Create passkey"]);
+  const grant = await confirmPresence(client, "add_passkey", "self");
+  if (!grant) return false;
+  return await enroll(client, handoff, handoff ? undefined : ["Confirmed: now create the new passkey", "Create passkey"], grant);
 }
 
 // One ceremony per action and target at a time: a second press while the
 // prompt is up joins it rather than starting a second, which WebAuthn refuses.
-const inflight = new Map<string, Promise<boolean>>();
+const inflight = new Map<string, Promise<PresenceGrant | null>>();
 
-/** Earn a presence grant for `action` on `target`: true once the server holds it, false when cancelled or refused (said in a toast). */
-export function confirmPresence(client: Client, action: PresenceAction, target: string): Promise<boolean> {
+/** Earn a presence grant for `action` on `target`: the grant string that spends it once the server holds it, null when cancelled or refused (said in a toast). */
+export function confirmPresence(client: Client, action: PresenceAction, target: string): Promise<PresenceGrant | null> {
   const key = `${action}:${target}`;
   const running = inflight.get(key);
   if (running) return running;
   const run = confirmOnce(client, action, target)
-    .catch((e: unknown) => fail((e as Error)?.message || "Touch ID did not finish"))
+    .catch((e: unknown) => {
+      fail((e as Error)?.message || "Touch ID did not finish");
+      return null;
+    })
     .finally(() => inflight.delete(key));
   inflight.set(key, run);
   return run;
@@ -189,25 +198,28 @@ export function confirmPresence(client: Client, action: PresenceAction, target: 
 
 /**
  * Run a gated call: confirm first when the press is known to need it
- * (`upfront`), and if the server still refuses with the presence code,
- * answered or thrown (a grant that expired on its way, an Ask first switched
- * on meanwhile), confirm once more and call again.
+ * (`upfront`) and call with the grant string, and if the server still
+ * refuses with the presence code, answered or thrown (a grant that expired on
+ * its way, an Ask first switched on meanwhile), confirm once more and call
+ * again.
  */
-export async function withPresence<T>(confirm: () => Promise<boolean>, call: () => T | Promise<T>, upfront: boolean): Promise<T | typeof NOT_CONFIRMED> {
-  if (upfront && !(await confirm())) return NOT_CONFIRMED;
-  const again = async () => ((await confirm()) ? await call() : NOT_CONFIRMED);
-  let first: T;
+export async function withPresence<T>(confirm: () => Promise<PresenceGrant | null>, call: (grant?: PresenceGrant) => T | Promise<T>, upfront: boolean): Promise<T | typeof NOT_CONFIRMED> {
+  const confirmed = async () => {
+    const grant = await confirm();
+    return grant ? await call(grant) : NOT_CONFIRMED;
+  };
+  let first: T | typeof NOT_CONFIRMED;
   try {
-    first = await call();
+    first = upfront ? await confirmed() : await call();
   } catch (e) {
-    if (isPresenceRequired(e)) return await again();
+    if (isPresenceRequired(e)) return await confirmed();
     throw e;
   }
-  return isPresenceRequired(first) ? await again() : first;
+  return first !== NOT_CONFIRMED && isPresenceRequired(first) ? await confirmed() : first;
 }
 
 /** confirmPresence bound to this tree's Convex client. */
-export function usePresence(): (action: PresenceAction, target: string) => Promise<boolean> {
+export function usePresence(): (action: PresenceAction, target: string) => Promise<PresenceGrant | null> {
   const client = useConvex();
   return useCallback((action: PresenceAction, target: string) => confirmPresence(client, action, target), [client]);
 }
@@ -216,15 +228,15 @@ type Answerable = { _id: string; category?: string; options: readonly { label: s
 
 /**
  * Answering a decision where its Approve opens an Ask first secret: that
- * option confirms with Touch ID before `send` dispatches it; every other
- * option, Deny included, answers at once. `gated(i)` marks the option that
- * asks. The answer is `send`'s own, or NOT_CONFIRMED.
+ * option confirms with Touch ID before `send` dispatches it with the grant
+ * string; every other option, Deny included, answers at once. `gated(i)`
+ * marks the option that asks. The answer is `send`'s own, or NOT_CONFIRMED.
  */
 export function useApproveGate(decision: Answerable | undefined) {
   const confirm = usePresence();
   const gated = useCallback((index: number) => !!decision && approvesSecretRead(decision, index), [decision]);
   const answer = useCallback(
-    <T,>(index: number, send: () => T): T | Promise<T | typeof NOT_CONFIRMED> =>
+    <T,>(index: number, send: (presence?: PresenceGrant) => T): T | Promise<T | typeof NOT_CONFIRMED> =>
       decision && gated(index) ? withPresence(() => confirm("approve", decision._id), send, true) : send(),
     [decision, gated, confirm],
   );

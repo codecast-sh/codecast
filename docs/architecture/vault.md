@@ -175,8 +175,9 @@ Three more tables hang off a secret, and a delete removes all three:
   its session there. The values
   a rotate kept go in too while they are restorable, since a key rotated away
   after a leak still sits in logs and files; their expiry moves the version.
-  An Ask first value goes in once it has reached the user (an approval for
-  one of their sessions, a read, a reveal, a copy already in their daemon)
+  An Ask first value goes in once it has reached the user's agents (an
+  approval for one of their sessions, a read, a copy already in their daemon;
+  never their own reveal on screen, since the feed's token is the agent's too)
   and stays until a new value, kept values included: a lapsed approval, an
   ended session or a switch to Ask first after a leak leaves the value in
   their agents' output, which must stay redacted. A user it never reached is
@@ -420,39 +421,69 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
 
 - `passkeys` (`convex/passkeysSchema.ts`): one WebAuthn credential per row,
   the person's own with no workspace: public key, signature counter,
-  transports, the relying party it was made for, a name, added and last used.
-  The relying party is the web host, which its subdomains share (codecast.sh
-  for local.codecast.sh, localhost in dev; `rpIdFor` in `passkeys.ts`), and
-  the accepted origins are `webOrigins()` (`lib/siteUrl.ts`, also Slack's
-  return list). User verification is required, attestation is none, ES256 or
+  transports, the relying party it was made for, a name, added, last used,
+  and `probation_until` for one set up with no grant. The relying party is
+  the web host (`rpIdFor` in `passkeys.ts`). Ceremonies run only on
+  `passkeyOrigins()` (`lib/siteUrl.ts`): the web's own origin, since the
+  local dev origins serve code an agent can edit and could show any words
+  over a real codecast.sh prompt. A dev deployment opts them in with
+  `PASSKEY_DEV_ORIGINS=1`; elsewhere a begin naming another origin is
+  refused, and a passkey made for a relying party outside that set confirms
+  nothing. User verification is required, attestation is none, ES256 or
   RS256 (`@simplewebauthn/server`).
 - `passkey_challenges`: one single-use WebAuthn challenge per row, either an
   enrollment or a presence check for one action on one target
   (`PRESENCE_ACTIONS` in `shared/contracts/secrets.ts`: `reveal` and
   `ask_first_off` name the secret, `approve` the decision, `remove_passkey`
   the passkey, `add_passkey` the person). `presenceBegin` files it for two
-  minutes (`PRESENCE_TTL_MS`); `presenceFinish` verifies an assertion of one
-  of that person's passkeys, refuses a signature count that did not rise (a
-  copied key), and turns the row into a grant usable once in the next two
-  minutes. A cron purges past rows hourly.
+  minutes (`PRESENCE_TTL_MS`) and answers its caller a grant string, the
+  challenge id and a random secret whose SHA-256 the row keeps
+  (`grant_hash`); `presenceFinish` verifies an assertion of one of that
+  person's passkeys, refuses a signature count that did not rise (a copied
+  key) or a passkey in probation, and turns the row into a grant usable once
+  in the next two minutes. A cron purges past rows hourly.
+- A grant is spent by whoever began it. Every gated call takes the grant
+  string (`grant` on `secrets.reveal`, `setAskFirst`, `sessionDecisions.resolve`,
+  `passkeys.remove` and `registrationBegin`; `presence` beside the answer in
+  the store's `answerDecision`, which the dispatch rail hands to the decision
+  patch's gate and writes to no row). The string is in no query, no
+  challenge and no `/confirm` URL, so an agent holding the person's session
+  token can watch the challenge turn granted but cannot spend it.
 - The gates (`lib/presence.ts`): `secrets.reveal` of an Ask first secret
   (`recordReads`, before the reveal is recorded), `setAskFirst` off (so the
   web's dispatch side effect too), an Approve through `resolve` or the
   dispatch rail (`secretApprovalRefusal` checks, `settleSecretApproval` uses
-  it up), `passkeys.remove`, and an enrollment when a passkey exists. Each
-  takes the grant for exactly that action and target and refuses without one
-  with `presenceRequiredMessage`, whose `presence_required` code the clients
+  it up), `passkeys.remove`, and an enrollment when a passkey exists, which
+  spends its add_passkey grant when it begins (`openChallenge`, recorded as
+  the register row's `authorized_by`; a register row without one cannot
+  store a second passkey). Each takes the grant for exactly that action and
+  target with its string and refuses without one with
+  `presenceRequiredMessage`, whose `presence_required` code the clients
   recognise (`isPresenceRequired`) to run the ceremony and retry.
-- Finishing needs no codecast session: the challenge id is the capability and
-  only that person's passkey verifies. That lets the desktop app (Electron has
-  no platform passkeys) and the phone open the web origin's `/confirm?c=<id>`
-  page in a browser and watch `passkeys.challenge` until it is granted, then
-  press again. The web runs the ceremony inline.
-- The first passkey needs no grant, since there is nothing to assert with.
-  The web refuses to start it in an agent-driven tab (`agentTabGuard`), it
-  shows in the person's passkey list, and they are emailed ("Touch ID was
-  added", `emails/templates.ts passkeyAdded`), so one they did not add is an
-  alarm they can act on by removing it.
+- An approve challenge opens only for a decision with a pending Ask first
+  approval, and its label is the Vault's words (`<secret> for <session short
+  id>`), never the decision's question. `cast decide edit` refuses such a
+  decision, so the asking agent cannot rewrite what the person confirms.
+- Finishing needs no codecast session: the challenge id opens the ceremony
+  and only that person's passkey verifies. That lets the desktop app
+  (Electron has no platform passkeys) and the phone open the web origin's
+  `/confirm?c=<id>` page in a browser and watch `passkeys.challenge` until it
+  is granted, then make the gated call with the grant string they kept. The
+  query carries the label and options only while pending (the label stays
+  for the owner signed in), and enrollment options name the account by id,
+  never its email. The web runs the ceremony inline.
+- The first passkey needs no grant, since there is nothing to assert with,
+  so it may be an agent's, set up with the person's session token and a
+  software key. It waits a day before it confirms anything
+  (`PASSKEY_PROBATION_MS`), and until it has confirmed something, or while it
+  is the only one, it is removed with one press (`removableUnasked`), so a
+  rogue first key is never the only thing that can assert its own removal.
+  Every add and remove is emailed ("Touch ID was added",
+  `emails/templates.ts passkeyAdded`) and noticed (`passkey_changed`, on the
+  bell and pushed to the phone, under no mute switch), and a passkey in
+  probation shows on every web screen (`PasskeyProbationBanner`, not
+  dismissable) with Remove. The web refuses to start enrollment in an
+  agent-driven tab (`agentTabGuard`).
 - Web (`lib/passkeyPresence.ts`): a gated press confirms first (`usePresence`,
   single flight per action and target), then calls; a `presence_required`
   refusal, returned or thrown by the dispatch, confirms once more and calls
@@ -464,7 +495,8 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
   Set up Touch ID, then a second press for the assertion. In the desktop app
   the same calls open `/confirm` in the system browser and wait on the
   challenge. Settings > Accounts lists passkeys (rename, Remove with Touch ID,
-  Add). A cancelled confirm answers `NOT_CONFIRMED` and sends nothing.
+  or one press for a grant-less one, Add, and how long a new one waits). A
+  cancelled confirm answers `NOT_CONFIRMED` and sends nothing.
 
 ## Previous values
 

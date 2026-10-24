@@ -123,7 +123,8 @@ function fakeClient(answers: Record<string, (args: any) => any>) {
 }
 
 const granted = { granted: true, action: "reveal", expires_at: Date.now() + 120_000 };
-const begun = { challenge_id: "ch-1", options: AUTH_OPTIONS, expires_at: Date.now() + 120_000 };
+const GRANT = "ch-1.only-this-tab-knows";
+const begun = { challenge_id: "ch-1", options: AUTH_OPTIONS, expires_at: Date.now() + 120_000, grant: GRANT };
 
 beforeEach(() => {
   toasts.length = 0;
@@ -136,34 +137,36 @@ beforeEach(() => {
 });
 
 describe("confirmPresence", () => {
-  test("asks the platform for an assertion of the challenge and finishes it", async () => {
+  test("asks the platform for an assertion of the challenge, finishes it, and answers the grant string", async () => {
     const client = fakeClient({ "passkeys:presenceBegin": () => begun, "passkeys:presenceFinish": () => granted });
-    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBe(true);
+    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBe(GRANT);
     expect(client.calls.map((c) => c.name)).toEqual(["passkeys:presenceBegin", "passkeys:presenceFinish"]);
     expect(client.calls[0].args).toEqual({ action: "reveal", target: "sec-1", origin: "https://codecast.sh" });
     expect(client.calls[1].args.challenge_id).toBe("ch-1");
+    // The finish, which the /confirm page also makes, never carries the grant string.
+    expect(JSON.stringify(client.calls[1].args)).not.toContain(GRANT);
     expect(client.calls[1].args.response).toMatchObject({ id: "AQIDBA", type: "public-key", response: { signature: expect.any(String) } });
     expect(ceremonies).toEqual(["get"]);
   });
 
-  test("a cancelled prompt answers false quietly and finishes nothing", async () => {
+  test("a cancelled prompt answers null quietly and finishes nothing", async () => {
     setCredentials({ get: async () => Promise.reject(Object.assign(new Error("The operation either timed out or was not allowed."), { name: "NotAllowedError" })) });
     const client = fakeClient({ "passkeys:presenceBegin": () => begun, "passkeys:presenceFinish": () => granted });
-    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBe(false);
+    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBeNull();
     expect(client.calls.map((c) => c.name)).toEqual(["passkeys:presenceBegin"]);
     expect(toasts.filter((t) => t.title.startsWith("error:"))).toEqual([]);
   });
 
-  test("a refusal from the server is said and answers false", async () => {
+  test("a refusal from the server is said and answers null", async () => {
     const client = fakeClient({ "passkeys:presenceBegin": () => begun, "passkeys:presenceFinish": () => ({ error: "The passkey could not be verified" }) });
-    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBe(false);
+    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBeNull();
     expect(toasts.map((t) => t.title)).toContain("error:The passkey could not be verified");
   });
 
   test("a second press while the prompt is up joins the first", async () => {
     const client = fakeClient({ "passkeys:presenceBegin": () => begun, "passkeys:presenceFinish": () => granted });
     const [a, b] = await Promise.all([confirmPresence(client as any, "approve", "d-1"), confirmPresence(client as any, "approve", "d-1")]);
-    expect([a, b]).toEqual([true, true]);
+    expect([a, b]).toEqual([GRANT, GRANT]);
     expect(ceremonies).toEqual(["get"]);
   });
 
@@ -175,9 +178,9 @@ describe("confirmPresence", () => {
       "passkeys:registrationFinish": () => ((enrolled = true), { id: "pk-1", name: "Chrome on Mac", first: true }),
       "passkeys:presenceFinish": () => granted,
     });
-    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBe(true);
+    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBe(GRANT);
     expect(client.calls.map((c) => c.name)).toEqual(["passkeys:presenceBegin", "passkeys:registrationBegin", "passkeys:registrationFinish", "passkeys:presenceBegin", "passkeys:presenceFinish"]);
-    expect(client.calls[1].args).toEqual({ origin: "https://codecast.sh" });
+    expect(client.calls[1].args).toEqual({ origin: "https://codecast.sh", grant: undefined });
     expect(client.calls[2].args.name).toBe("Chrome on Mac");
     expect(ceremonies).toEqual(["create", "get"]);
     expect(toasts.map((t) => t.opts.action?.label)).toEqual(["Set up Touch ID", "Confirm"]);
@@ -186,7 +189,7 @@ describe("confirmPresence", () => {
   test("declining the set-up prompt sends nothing", async () => {
     promptAnswer = "cancel";
     const client = fakeClient({ "passkeys:presenceBegin": () => ({ error: "Set up Touch ID first", needs_passkey: true }) });
-    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBe(false);
+    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBeNull();
     expect(client.calls.map((c) => c.name)).toEqual(["passkeys:presenceBegin"]);
     expect(ceremonies).toEqual([]);
   });
@@ -194,7 +197,7 @@ describe("confirmPresence", () => {
   test("an agent's tab is refused a first passkey before anything is asked", async () => {
     sessionStorage.setItem(AGENT_TAB_KEY, "1");
     const client = fakeClient({ "passkeys:presenceBegin": () => ({ error: "Set up Touch ID first", needs_passkey: true }) });
-    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBe(false);
+    expect(await confirmPresence(client as any, "reveal", "sec-1")).toBeNull();
     expect(client.calls.map((c) => c.name)).toEqual(["passkeys:presenceBegin"]);
     expect(ceremonies).toEqual([]);
     expect(toasts.map((t) => t.title)).toEqual(["error:A person sets up Touch ID"]);
@@ -209,7 +212,8 @@ describe("confirmPresence", () => {
     expect(toasts.at(-1)?.title).toBe("Confirm in your browser");
     client.push({ purpose: "presence", status: "pending", action: "approve", expires_at: begun.expires_at });
     client.push({ purpose: "presence", status: "granted", action: "approve", expires_at: begun.expires_at });
-    expect(await done).toBe(true);
+    // The grant string came from the begin, kept in memory while the browser confirmed.
+    expect(await done).toBe(GRANT);
     expect(ceremonies).toEqual([]);
   });
 
@@ -221,7 +225,7 @@ describe("confirmPresence", () => {
     toasts.at(-1)!.opts.action.onClick({ preventDefault() {} });
     expect(opened).toHaveLength(2);
     toasts.at(-1)!.opts.cancel.onClick();
-    expect(await done).toBe(false);
+    expect(await done).toBeNull();
   });
 });
 
@@ -230,15 +234,17 @@ describe("withPresence", () => {
 
   test("not confirmed up front, it never calls", async () => {
     let calls = 0;
-    expect(await withPresence(async () => false, async () => ++calls, true)).toBe(NOT_CONFIRMED);
+    expect(await withPresence(async () => null, async () => ++calls, true)).toBe(NOT_CONFIRMED);
     expect(calls).toBe(0);
   });
 
-  test("a presence refusal, answered or thrown, confirms once more and calls again", async () => {
+  test("a presence refusal, answered or thrown, confirms once more and calls again with the new grant", async () => {
     let confirms = 0;
     const answers = [refusal, { payload: "v" }];
-    expect(await withPresence(async () => (++confirms, true), async () => answers.shift(), true)).toEqual({ payload: "v" });
+    const grants: (string | undefined)[] = [];
+    expect(await withPresence(async () => `g${++confirms}`, async (grant) => (grants.push(grant), answers.shift()), true)).toEqual({ payload: "v" });
     expect(confirms).toBe(2);
+    expect(grants).toEqual(["g1", "g2"]);
     let thrown = true;
     const call = async () => {
       if (thrown) {
@@ -247,12 +253,12 @@ describe("withPresence", () => {
       }
       return "ok";
     };
-    expect(await withPresence(async () => true, call, false)).toBe("ok");
+    expect(await withPresence(async () => "g", call, false)).toBe("ok");
   });
 
   test("it retries once: a second refusal is the answer", async () => {
     let calls = 0;
-    expect(await withPresence(async () => true, async () => (++calls, refusal), true)).toEqual(refusal);
+    expect(await withPresence(async () => "g", async () => (++calls, refusal), true)).toEqual(refusal);
     expect(calls).toBe(2);
   });
 });
@@ -272,12 +278,15 @@ describe("useApproveGate", () => {
     expect([gate.gated(0), gate.gated(1)]).toEqual([true, false]);
 
     const sent: number[] = [];
-    gate.answer(1, () => sent.push(1));
+    const presences: (string | undefined)[] = [];
+    gate.answer(1, (presence: string | undefined) => (presences.push(presence), sent.push(1)));
     expect(sent).toEqual([1]);
     expect(client.calls).toEqual([]);
 
-    await gate.answer(0, () => sent.push(0));
+    await gate.answer(0, (presence: string | undefined) => (presences.push(presence), sent.push(0)));
     expect(sent).toEqual([1, 0]);
+    // Deny went with no grant; Approve with the one its confirmation earned.
+    expect(presences).toEqual([undefined, GRANT]);
     expect(client.calls.map((c) => c.name)).toEqual(["passkeys:presenceBegin", "passkeys:presenceFinish"]);
     expect(client.calls[0].args.target).toBe("d-9");
 
@@ -307,12 +316,13 @@ describe("useReveal of an Ask first secret", () => {
       got = await hook.load();
     });
     await act(() => root.unmount());
-    return { got, names: client.calls.map((c) => c.name) };
+    return { got, names: client.calls.map((c) => c.name), args: client.calls.map((c) => c.args) };
   }
 
-  test("confirms with Touch ID before the value is fetched", async () => {
+  test("confirms with Touch ID before the value is fetched, and fetches with the grant string", async () => {
     const r = await reveal(true, [{ payload: { value: "zz-value" } }]);
     expect(r.names).toEqual(["passkeys:presenceBegin", "passkeys:presenceFinish", "secrets:reveal"]);
+    expect(r.args.at(-1)).toEqual({ ref: "sec-1", grant: GRANT });
     expect(r.got).toEqual({ value: "zz-value" });
   });
 

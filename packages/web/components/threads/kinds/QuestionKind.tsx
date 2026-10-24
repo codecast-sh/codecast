@@ -42,7 +42,7 @@ export function QuestionExpanded({ card, focusComposer }: { card: ThreadCardMode
   const held = useHeldOption(d);
   const gate = useApproveGate(d);
   const answer = useCallback(
-    (index: number) => gate.answer(index, () => void useInboxStore.getState().answerDecision(d._id, { index })),
+    (index: number) => gate.answer(index, (presence) => void useInboxStore.getState().answerDecision(d._id, { index, presence })),
     [d._id, gate],
   );
   const answerText = useCallback(() => {

@@ -60,7 +60,7 @@ export function useDecisionAnswer(item: QueueItem | null) {
     if (!item) return;
     if (item.source === "decide" && item.decisionId) {
       const id = item.decisionId;
-      return gatedAnswer(index, () => answerDecision(id, { index }));
+      return gatedAnswer(index, (presence) => answerDecision(id, { index, presence }));
     } else if (poll) {
       sendToSession(item.conversationId, buildSingleAnswerPayload(poll.question, index));
     }

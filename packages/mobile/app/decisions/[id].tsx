@@ -78,7 +78,9 @@ export default function DecisionScreen() {
       if (confirming.current) return;
       confirming.current = true;
       try {
-        if (!(await confirmPresence('approve', decisionId))) return;
+        const presence = await confirmPresence('approve', decisionId);
+        if (!presence) return;
+        input = { ...input, presence };
       } catch (e) {
         Alert.alert('Touch ID', (e as Error).message);
         return;

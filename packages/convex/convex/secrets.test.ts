@@ -252,14 +252,14 @@ test("the redaction version moves on every value write and delete, and the event
 const SEED = "JBSWY3DPEHPK3PXP";
 const read = (t: any, refs: string[], extra: Record<string, unknown> = {}) =>
   t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs, conversation: "jx7ana1", purpose: "run", ...extra });
-/** The Touch ID grant a person's press on the web carries, for one secret. */
+/** The Touch ID grant string a person's press on the web carries, for one secret. */
 const touch = async (t: any, as: (u: string) => any, user: string, action: "reveal" | "ask_first_off", ref: string) =>
   seedPresence(t, user, action, (await as(user).query(api.secrets.show, { ref }))._id);
 /** A person answers on the web, signed in: the only way an Ask first decision settles. An Approve comes with its Touch ID grant. */
 const answer = async (t: any, as: (u: string) => any, user: string, decision: string, index: number) => {
   const row = await t.run(async (ctx: any) => (await ctx.db.query("session_decisions").collect()).find((d: any) => d.short_id === decision));
-  if (row.options[index]?.label === APPROVE_FOR_SESSION) await seedPresence(t, user, "approve", String(row._id));
-  return as(user).mutation(api.sessionDecisions.resolve, { decision_id: row._id, status: "answered", answer_index: index });
+  const grant = row.options[index]?.label === APPROVE_FOR_SESSION ? await seedPresence(t, user, "approve", String(row._id)) : undefined;
+  return as(user).mutation(api.sessionDecisions.resolve, { decision_id: row._id, status: "answered", answer_index: index, grant });
 };
 
 test("Ask first: an agent's read files one decision for the session, Approve lets that session read, Deny asks again", async () => {
@@ -296,8 +296,8 @@ test("Ask first: an agent's read files one decision for the session, Approve let
   expect(await t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs: ["stripe-live"], purpose: "get" })).toMatchObject({ error: expect.stringMatching(/Ask first/) });
   // A person's reveal on the web takes Touch ID, one grant per reveal.
   expect(isPresenceRequired(await as(ana).action(api.secrets.reveal, { ref: "stripe-live" }))).toBe(true);
-  await touch(t, as, ana, "reveal", "stripe-live");
-  expect(await as(ana).action(api.secrets.reveal, { ref: "stripe-live" })).toEqual({ payload: { value: STRIPE } });
+  const grant = await touch(t, as, ana, "reveal", "stripe-live");
+  expect(await as(ana).action(api.secrets.reveal, { ref: "stripe-live", grant })).toEqual({ payload: { value: STRIPE } });
   expect(isPresenceRequired(await as(ana).action(api.secrets.reveal, { ref: "stripe-live" }))).toBe(true);
 
   await answer(t, as, ana, held.needs_approval.decision, 0);
@@ -507,8 +507,8 @@ test("Ask first is a person's control: a token cannot turn it off or answer its 
   expect((await read(t, ["stripe-live"])).secrets[0].payload).toEqual({ value: STRIPE });
   // Off takes Touch ID too: the signed-in browser may be an agent's.
   expect(isPresenceRequired(await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false }))).toBe(true);
-  await touch(t, as, ana, "ask_first_off", "stripe-live");
-  expect(await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false })).toMatchObject({ ask_first: false });
+  const touched = await touch(t, as, ana, "ask_first_off", "stripe-live");
+  expect(await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false, grant: touched })).toMatchObject({ ask_first: false });
 });
 
 test("the redaction feed holds an Ask first value only once a person approved one of the user's sessions, and names each copy", async () => {
@@ -563,8 +563,8 @@ test("a metadata edit does not make a sign-in's write-back stale; a new value do
   expect(seen).toBe(made.value_updated_at);
   await as(ben).mutation(api.secrets.updateMeta, { ref: "app", note: "the staging dashboard" });
   await as(ben).mutation(api.secrets.setAskFirst, { ref: "app", ask_first: true });
-  await touch(t, as, ben, "ask_first_off", "app");
-  await as(ben).mutation(api.secrets.setAskFirst, { ref: "app", ask_first: false });
+  const off = await touch(t, as, ben, "ask_first_off", "app");
+  await as(ben).mutation(api.secrets.setAskFirst, { ref: "app", ask_first: false, grant: off });
   const ok = await t.action(api.secrets.refresh, { api_token: ANA_TOKEN, ref: "app", payload: { cookies: [{ ...cookie, value: "cookie-2" }], captured_from: "agent-browser" }, expected_updated_at: seen });
   expect(ok.stale).toBeUndefined();
   expect(ok.value_updated_at).toBeGreaterThanOrEqual(seen);
@@ -648,8 +648,8 @@ test("Ask first guards writes too: a token cannot rotate, restore, delete, renam
   const kinds = (await as(ana).query(api.secrets.events, { ref: "stripe-live" })).map((e: any) => e.kind);
   expect(kinds).not.toContain("deleted");
   expect(kinds.filter((k: string) => k === "rotated")).toHaveLength(1);
-  await touch(t, as, ana, "reveal", "stripe-live");
-  expect((await as(ana).action(api.secrets.reveal, { ref: "stripe-live" })).payload).toEqual({ value: "sk_" + "live_earlierVALUE1234567890" });
+  const grant = await touch(t, as, ana, "reveal", "stripe-live");
+  expect((await as(ana).action(api.secrets.reveal, { ref: "stripe-live", grant })).payload).toEqual({ value: "sk_" + "live_earlierVALUE1234567890" });
 
   // The person, signed in, does each.
   expect((await as(ana).action(api.secrets.rotate, { ref: "stripe-live", payload: { value: attacker } })).error).toBeUndefined();
@@ -738,8 +738,8 @@ test("switching Ask first clears its approvals, withdraws an open decision and m
   const open = (await read(t, ["stripe-live"])).needs_approval.decision;
 
   const v0 = await version(t);
-  await touch(t, as, ana, "ask_first_off", "stripe-live");
-  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false });
+  const off = await touch(t, as, ana, "ask_first_off", "stripe-live");
+  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false, grant: off });
   // The daemon refetches at once, and the value is redacted from now on.
   expect(await version(t)).not.toBe(v0);
   expect((await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN })).values).toContainEqual({ name: "stripe-live", value: STRIPE });
@@ -752,8 +752,8 @@ test("switching Ask first clears its approvals, withdraws an open decision and m
   const v1 = await version(t);
   expect(v1).not.toBe(v0);
   await answer(t, as, ana, (await read(t, ["stripe-live"])).needs_approval.decision, 0);
-  await touch(t, as, ana, "ask_first_off", "stripe-live");
-  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false });
+  const offAgain = await touch(t, as, ana, "ask_first_off", "stripe-live");
+  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false, grant: offAgain });
   await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: true });
   const again = await read(t, ["stripe-live"]);
   expect(again.needs_approval).toBeDefined();
@@ -989,10 +989,14 @@ test("an Ask first value its user already holds stays in their feed until a new 
   await as(ana).action(api.secrets.rotate, { ref: "stripe-live", payload: { value: "sk_" + "test_rotatedVALUE000111222333" } });
   const after = (await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN })).values.map((x: any) => x.value);
   expect(after).toEqual([STRIPE]);
-  // A person's reveal puts it in their hands, so it joins their feed and the version moves.
+  // A person's Touch ID reveal reaches their screen, not their agents: the feed, which the agent's token reads, still lacks it.
   const v0 = await version(t);
-  await touch(t, as, ana, "reveal", "stripe-live");
-  await as(ana).action(api.secrets.reveal, { ref: "stripe-live" });
-  expect(await version(t)).not.toBe(v0);
+  const grant = await touch(t, as, ana, "reveal", "stripe-live");
+  expect((await as(ana).action(api.secrets.reveal, { ref: "stripe-live", grant })).payload).toEqual({ value: "sk_" + "test_rotatedVALUE000111222333" });
+  expect(await version(t)).toBe(v0);
+  expect(JSON.stringify(await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN }))).not.toContain("sk_" + "test_rotatedVALUE000111222333");
+  // An agent's read of it does put it there.
+  await answer(t, as, ana, (await read(t, ["stripe-live"])).needs_approval.decision, 0);
+  expect((await read(t, ["stripe-live"])).secrets[0].payload).toEqual({ value: "sk_" + "test_rotatedVALUE000111222333" });
   expect((await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN })).values).toContainEqual({ name: "stripe-live", value: "sk_" + "test_rotatedVALUE000111222333" });
 });

@@ -1370,7 +1370,9 @@ export type DecisionOption = {
 export type DecisionKind = "single" | "multi" | "rank" | "form";
 // What the web hands answerDecision: one index (single), a typed answer, a
 // list of indexes (multi / rank) or a key→value map (form), or a dismissal.
-export type DecisionAnswerInput = { index?: number; text?: string; json?: any } | { dismiss: true };
+// `presence`: the Touch ID grant string an Ask first Approve spends; it rides
+// the dispatch's arguments to the server's gate and is written to no row.
+export type DecisionAnswerInput = { index?: number; text?: string; json?: any; presence?: string } | { dismiss: true };
 export type DecisionFormField = { key: string; label: string; type: "text" | "number" | "select" | "bool"; options?: string[] };
 export type DecisionHop = { role_id: string; recommendation?: number; note?: string; at: number; passed_at?: number };
 // `via`: the session that carried a person's answer at their word (cast decide answer --for-human).
@@ -1894,6 +1896,9 @@ export type ClientUI = {
   // Keep a server record of the composer's quotes (lib/quoteDraftWire), so a
   // quote shows sent, then answered, after its message goes. Off by default.
   quote_drafts?: boolean;
+  // Read conversation comments from their review_comments twins
+  // (lib/commentSource) instead of the comments table. Off by default.
+  comments_from_review?: boolean;
   // Opt in to the teammate-comment tools (the gutter "comment" handle + the
   // header toggle when a conversation has none yet). Off by default — you still
   // SEE and can reply to comments others leave regardless of this.
@@ -6681,7 +6686,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   updateSecretMeta: (id: string, fields: { name?: string; note?: string; env?: string[]; sites?: string[] }) => void;
   /** `only: "requested"` is a decline: the server keeps a row filled since (secrets.remove). */
   removeSecret: (id: string, only?: "requested") => void;
-  setSecretAskFirst: (id: string, askFirst: boolean) => void;
+  setSecretAskFirst: (id: string, askFirst: boolean, grant?: string) => void;
   stageSecret: (row: SecretMeta, hold?: readonly (keyof SecretMeta)[]) => void;
   /** A secret's Activity or Previous (`events:<id>`, `versions:<id>`) as a press shows it; undefined drops it. */
   stageSecretHistory: (key: string, rows: unknown[] | undefined) => void;
@@ -13270,7 +13275,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   removeSecret: action(function (this: Draft, id: string, _only?: "requested") {
     delete (this.secrets as any)[id];
   }),
-  setSecretAskFirst: action(function (this: Draft, id: string, askFirst: boolean) {
+  // Off rides the dispatch with the Touch ID `grant` string the server's gate spends.
+  setSecretAskFirst: action(function (this: Draft, id: string, askFirst: boolean, _grant?: string) {
     const row = (this.secrets as any)[id];
     if (!row) return;
     row.ask_first = askFirst;

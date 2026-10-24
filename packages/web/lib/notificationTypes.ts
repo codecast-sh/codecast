@@ -43,6 +43,7 @@ export const socialTypes = new Set([
   "decision_answered_for_you",
   "team_join_request",
   "team_join_approved",
+  "passkey_changed",
   "artifact_commented",
   "chat_mention",
   "chat_reply",
@@ -106,6 +107,7 @@ export const typeLabels: Record<string, string> = {
   decision_answered_for_you: "answered for you",
   team_join_request: "asked to join your team",
   team_join_approved: "let you into a team",
+  passkey_changed: "changed your passkeys",
 };
 
 export const typeColors: Record<string, string> = {
@@ -145,6 +147,7 @@ export const typeColors: Record<string, string> = {
   decision_answered_for_you: "text-sol-yellow",
   team_join_request: "text-sol-violet",
   team_join_approved: "text-sol-violet",
+  passkey_changed: "text-red-400",
 };
 
 /** Who a notification is FROM. A snapshot on the row (Slack person, anonymous
@@ -239,6 +242,8 @@ export function notificationRoute(
   if (entityType === "machine") return `/resources?offload=${encodeURIComponent(entityId)}`;
   // A team: its settings, where join requests wait for an admin.
   if (entityType === "team") return "/settings/team";
+  // A passkey: the person's passkey list, where one they did not add is removed.
+  if (entityType === "passkey") return "/settings/accounts";
   // A role's page opens on its Scope tab, where a person who reports to it
   // reads their goals with what moved and what stalled.
   if (entityType === "org_role") return `/org/${entityId}`;

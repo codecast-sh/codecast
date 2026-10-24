@@ -94,9 +94,9 @@ export function useReveal(id: string, version?: number, askFirst?: boolean) {
     if (inflight.current) return inflight.current;
     // Taken when the fetch starts, after any Touch ID prompt, whose sheet can blur the window.
     let gen = generation.current;
-    const fetchValue = () => {
+    const fetchValue = (grant?: string) => {
       gen = generation.current;
-      return reveal({ ref: id });
+      return reveal({ ref: id, grant });
     };
     setLoading(true);
     setError(null);
