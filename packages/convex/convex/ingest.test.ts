@@ -23,12 +23,12 @@ import {
   linkSignal,
   promoteDue,
   promotionInputs,
-  queuePromotions,
   rotateKey,
   setGroupStatus,
   sourceForKey,
   updateSource,
 } from "./ingest";
+import { queuePromotions } from "./ingestPromotions";
 import { promotionSignal } from "./lib/ingestPayloads";
 import { listForTask, listForTeam } from "./externalEvents";
 import { bumpWindow } from "./ipRateLimit";
