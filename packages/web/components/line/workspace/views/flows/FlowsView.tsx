@@ -7,12 +7,13 @@
 // (/flows/<owner>): that role's flow, drawn, with its facts and its counts.
 import { useContext, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { usePoolFlowRows, useSyncWorkflowRun, useWorkflowRuns } from "../../../../../hooks/useSyncWorkflows";
+import { useSyncWorkflowRun } from "../../../../../hooks/useSyncWorkflows";
+import { useFlowLibrary, type FlowRun as Run } from "../../../../../hooks/useFlowLibrary";
 import { useOwnedFlows } from "../../../../../hooks/useOwnedFlows";
-import { useLiveFlow, useSessionFlows, type LiveFlow, type SessionFlow } from "../../../../../hooks/useLiveFlow";
+import { useSessionFlows, type LiveFlow, type SessionFlow } from "../../../../../hooks/useLiveFlow";
 import { useInboxStore } from "../../../../../store/inboxStore";
-import { appPool, flowBySlug, flowOfRun, flowRowPath, pushedFlow, type AppFlow } from "../../../../../lib/line/flowPool";
-import { changesAnything, flowLibrary, libraryEntry, libraryFlows, type FlowLibrary, type LibraryEntry, type LibraryRow, type VariantChange } from "../../../../../lib/line/flowLibrary";
+import { appPool, flowBySlug, flowRowPath, pushedFlow, type AppFlow } from "../../../../../lib/line/flowPool";
+import { changesAnything, libraryEntry, libraryFlows, type FlowLibrary, type LibraryEntry, type VariantChange } from "../../../../../lib/line/flowLibrary";
 import { liveFlowLedger, liveQueue, startFlowLedger, type LiveQueueRow } from "../../../../../lib/line/liveFlow";
 import { scoreBand } from "../../../../../lib/line/problemScore";
 import { flowRunState } from "../../../../../lib/line/flowFence";
@@ -29,7 +30,6 @@ import { SESSION_SHORT_ID_RE } from "@codecast/shared/chat";
 import type { LineViewProps } from "../types";
 import "./flows.css";
 
-type Run = { _id: string; status: string; run_kind?: string; current_node_id?: string | null; current_node_label?: string | null; fail_reason?: string | null; task_id?: string | null; task_short_id?: string | null; workflow_slug?: string; workflow_name?: string; user_id?: string; primary_conversation_id?: string | null; created_at: number; updated_at: number };
 
 /** The queue rows the panel lists before "Show all". */
 const QUEUE_SHOWN = 12;
@@ -40,30 +40,9 @@ export function FlowsView(props: LineViewProps) {
   return props.selection.item ? <PoolFlow {...props} /> : <FlowsHome {...props} />;
 }
 
-/** The library a workspace reads, its live flow, and its runs by flow. */
-export function useLibrary(space: string | null | undefined) {
-  const rows = usePoolFlowRows(space) as LibraryRow[];
-  const live = useLiveFlow(space);
-  const pool = useMemo(() => appPool(rows), [rows]);
-  const spine = live ? live.flow : null;
-  const lib = useMemo(() => flowLibrary(pool, rows, spine), [pool, rows, spine]);
-  const flows = useMemo(() => libraryFlows(lib), [lib]);
-  const where = useMemo(() => (r: Run) => !!flowOfRun(flows, r), [flows]);
-  const runs = useWorkflowRuns(where) as Run[];
-  const runsOf = useMemo(() => {
-    const m = new Map<string, Run[]>();
-    for (const r of runs) {
-      const f = flowOfRun(flows, r);
-      if (f) m.set(f.slug, [...(m.get(f.slug) ?? []), r]);
-    }
-    return m;
-  }, [runs, flows]);
-  return { lib, flows, live, runsOf };
-}
-
 function FlowsHome(props: LineViewProps) {
   const { select, space } = props;
-  const { lib, live, runsOf } = useLibrary(space);
+  const { lib, live, runsOf } = useFlowLibrary(space);
   const sessions = useSessionFlows(space);
   const open = (slug: string) => select({ item: slug, run: null });
   return (
@@ -333,7 +312,7 @@ function SessionShelf({ flows, library, names }: { flows: SessionFlow[]; library
 /** One flow of the library: drawn, what it changes against its base, the segments it is made of, the flows it is part
  *  of, and the changes that ran through it. */
 function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
-  const { lib, flows, runsOf } = useLibrary(space);
+  const { lib, flows, runsOf } = useFlowLibrary(space);
   const picked = flowBySlug(flows, selection.item) ?? flowBySlug(flows, "change") ?? flows[0];
   const entry = libraryEntry(lib, picked.slug);
   const usedBy = flows.filter((f) => f.uses.includes(picked.slug));
@@ -423,7 +402,7 @@ function FlowOverview({ owner, workspace, select, href, space }: LineViewProps &
   const flow = flowOf(flows, owner);
   const counts = useFlowCounts(workspace, flow ? [flow] : []).get(owner);
   const pool = useMemo(() => appPool([]), []);
-  const { flows: library } = useLibrary(space);
+  const { flows: library } = useFlowLibrary(space);
   if (!flow) return <p className="flv-none" data-flow-missing={owner}>{flows.length ? `No flow is owned by @${owner}` : "Loading the flow"}</p>;
   const steps = flowBySlug(library, flow.steps) ?? flowBySlug(pool, flow.steps);
   return (

@@ -6,8 +6,8 @@
 // at each step, the problems running off the flow, and the sources that file
 // nowhere; then the drawn lane's map (or its steps table), and the queue. A
 // lane's name draws its map; a step of the drawn lane opens that step. The
-// library is one press in. A team with no live flow sees the library, and a
-// flow's map only where the address names it.
+// library is one press in. A team with no live flow lands on the library; an
+// address that names the steps (their view, a flow, a step or a run) draws them.
 import { memo, useMemo, type MouseEvent } from "react";
 import { BookOpen } from "lucide-react";
 import type { FlowMap, FlowMapLane, FlowMapStep } from "@codecast/shared/contracts/flowMap";
@@ -15,16 +15,19 @@ import { useFlowMapRow } from "../../../../../hooks/useFlowMap";
 import { processKeyOf } from "../../../../../lib/line/lineGraphs";
 import type { LineSelectionPatch } from "../../../../../lib/line/lineWorkspaceUrl";
 import { ProcessView } from "../ProcessView";
-import { FlowsView, LiveFlowHead, LiveFlowWork, useLibrary } from "./FlowsView";
+import { FlowsView, LiveFlowHead, LiveFlowWork } from "./FlowsView";
+import { useFlowLibrary } from "../../../../../hooks/useFlowLibrary";
 import type { LineViewProps } from "../types";
 import "./flowsStage.css";
 
 export const FlowsStage = memo(function FlowsStage(props: LineViewProps) {
   const { space, select, href, workspace, model } = props;
-  const { live, runsOf } = useLibrary(space);
+  const { live, runsOf } = useFlowLibrary(space);
   const map = useFlowMapRow(space);
-  // With no live flow the stage is the library, unless the address names a flow to draw (a step's or a run's link).
-  if (!live) return props.selection.graph ? <div className="fs"><div className="fs-map" data-mode={props.selection.mode}><ProcessView {...props} /></div></div> : <FlowsView {...props} />;
+  // With no live flow the landing is the library; an address that names the steps (their view, a flow, a step or a
+  // run) draws them.
+  const { landing, graph, step, run } = props.selection;
+  if (!live) return landing && !graph && !step && !run ? <FlowsView {...props} /> : <div className="fs"><div className="fs-map" data-mode={props.selection.mode}><ProcessView {...props} /></div></div>;
   const library: LineSelectionPatch = { view: "flows", item: null, run: null };
   const stalled = (map?.liveFlow?.stalled ?? 0) + (map?.off.stalled ?? 0);
   return (

@@ -5,11 +5,12 @@ const q = (s: string) => new URLSearchParams(s);
 
 describe("the line app's selection in the URL", () => {
   test("reads every key; no view is the flow list, an unknown one too, and a need with no view is For you; no project is every project", () => {
-    expect(readLineSelection(q("project=pr-1&view=problems&graph=agentwatch&step=prove&run=r1&case=t1&need=sd-6"))).toEqual({ view: "problems", mode: "table", project: "pr-1", graph: "agentwatch", step: "prove", tab: null, run: "r1", case: "t1", source: null, finding: null, row: null, ask: false, card: null, decision: null, need: "sd-6", flow: null, status: null, process: null, quiet: false, found: null, q: null, sort: null, win: null, show: null, stage: null, item: null, who: null, kind: null, area: null, order: null, group: null, deploy: null, sig: null, app: null, t: null });
+    expect(readLineSelection(q("project=pr-1&view=problems&graph=agentwatch&step=prove&run=r1&case=t1&need=sd-6"))).toEqual({ view: "problems", mode: "table", landing: false, project: "pr-1", graph: "agentwatch", step: "prove", tab: null, run: "r1", case: "t1", source: null, finding: null, row: null, ask: false, card: null, decision: null, need: "sd-6", flow: null, status: null, process: null, quiet: false, found: null, q: null, sort: null, win: null, show: null, stage: null, item: null, who: null, kind: null, area: null, order: null, group: null, deploy: null, sig: null, app: null, t: null });
     expect(readLineSelection(q("step=dissolve&steptab=try")).tab).toBe("try");
     expect(readLineSelection(q("step=dissolve&tab=try")).tab).toBe("try");
     expect(readLineSelection(q("tab=line&step=dissolve")).tab).toBeNull();
-    expect(readLineSelection(q(""))).toMatchObject({ view: "line", mode: "map" });
+    expect(readLineSelection(q(""))).toMatchObject({ view: "line", mode: "map", landing: true });
+    expect(readLineSelection(q("view=process")).landing).toBe(false);
     expect(readLineSelection(q("view=line")).mode).toBe("table");
     expect(readLineSelection(q("need=sd-6")).view).toBe("foryou");
     expect(readLineSelection(q("view=nope")).view).toBe("line");

@@ -263,6 +263,8 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   mods: "Written only by setModEnabled and setModLocalDevice, settings; never undoable.",
   lineLabels: "Written only by labelDecision, the viewer's own label, taken back in the same control; never undoable.",
   lineTries: "Written only by tryLineStep, which has the graph's machine run each case at once; never undoable.",
+  liveFlows: "Written only by setLiveFlowOn and clearLiveFlowHold, which start or stop runs, and startLiveFlow, a create; never undoable.",
+  sessionFlows: "Written only by saveSessionFlow, which writes a new library version; never undoable.",
   modObjects:
     "Written by createModObject, a create and never undoable, and updateModObject, whose spec carries an inverse naming the prior fields.",
   agentTasks:

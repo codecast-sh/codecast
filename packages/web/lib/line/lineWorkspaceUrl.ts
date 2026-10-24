@@ -81,7 +81,7 @@ type LegacyView = keyof typeof LEGACY_VIEWS;
 /** A view as a link may name it: its own name, or an earlier one. */
 export type LineViewName = LineView | LegacyView;
 
-export type LineSelection = { view: LineView; mode: LineMode; project: string | null; flow: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: boolean; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: boolean; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null; who: string | null; kind: string | null; area: string | null; order: string | null; group: string | null; deploy: string | null; sig: string | null; app: string | null; t: string | null };
+export type LineSelection = { view: LineView; mode: LineMode; /** The address names no view: the landing page. */ landing: boolean; project: string | null; flow: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: boolean; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: boolean; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null; who: string | null; kind: string | null; area: string | null; order: string | null; group: string | null; deploy: string | null; sig: string | null; app: string | null; t: string | null };
 export type LineSelectionPatch = Partial<{ view: LineViewName | null; mode: LineMode | "graph" | "notebook" | null; project: string | null; flow: string | null; graph: string | null; step: string | null; tab: string | null; run: string | null; case: string | null; source: string | null; finding: string | null; row: string | null; ask: string | null; card: string | null; decision: string | null; need: string | null; status: string | null; process: string | null; quiet: string | null; found: string | null; q: string | null; sort: string | null; win: string | null; show: string | null; stage: LineStage | null; item: string | null; who: string | null; kind: string | null; area: string | null; order: string | null; group: string | null; deploy: string | null; sig: string | null; app: string | null; t: string | null }>;
 
 type Search = { get(key: string): string | null } | null | undefined;
@@ -138,6 +138,7 @@ export function readLineSelection(search: Search): LineSelection {
     view,
     // A mode the address names wins over the one an earlier view name implies (view=process&mode=notebook is the table).
     mode: modeOf(mode) ?? asked?.[1] ?? (asked ? DEFAULT_LINE_MODE : LANDING_MODE),
+    landing: !asked && view === DEFAULT_LINE_VIEW,
     project: ALL.has(project) ? null : project,
     flow: search?.get("flow") || null,
     graph: search?.get("graph") || null,
