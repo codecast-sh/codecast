@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import React from 'react';
 import { AVATAR_KEYS } from '@codecast/shared/contracts/orgAvatars';
+import { roleIdentity } from '@codecast/shared/contracts/orgIdentity';
 
 // Host components only: a face is a View, an Image and nothing native.
 mock.module('react-native', () => ({
@@ -64,7 +65,8 @@ test('every avatar key draws its own file', () => {
 
 test("a role's standing session wears the role's face, with no ring", () => {
   const tree = render(<identity.MobileSessionFace row={{ _id: ID, standing_role_id: 'r1', role: ROLE }} size={22} />);
-  expect(tree.root.findByProps({ testID: 'session-face-role-owl' }).props.accessibilityLabel).toBe('Growth');
+  // The role's given name (org-staffing.md S30), never its title.
+  expect(tree.root.findByProps({ testID: 'session-face-role-owl' }).props.accessibilityLabel).toBe(roleIdentity(ROLE).name);
   expect(tree.root.findAllByType('View' as never).some((v) => v.props.style?.borderColor)).toBe(false);
 });
 
@@ -99,6 +101,46 @@ test('the title line leads with the name once personified, and is the bare title
   const outer = named.root.findAllByType('Text' as never)[0];
   expect([outer.props.children].flat()[0]).toBe('Juniper');
   expect(text(named)).toContain(': Fix the sync');
+});
+
+// A teammate's role session reached from outside the inbox has only a thin
+// session row; the role pointer rides the conversation row and the role's
+// name and face live in the org tree. The speaker is the role, not the agent.
+test("an agent speaks as its role's given name, found through the conversation row and the org tree", () => {
+  const HAZEL = {
+    _id: 'r9', short_id: 'ro-9', name: 'Engineering Co-worker', handle: 'eng', avatar: 'hare', status: 'active', given_name: 'Hazel',
+    scope: { project_ids: [] }, reports_to: { kind: 'user', user_id: 'u1' },
+  };
+  TestRenderer.act(() => {
+    useInboxStore.setState((s: any) => ({
+      ...s,
+      sessions: { ...s.sessions, [ID]: { _id: ID, title: 'Fix the sync', agent_type: 'claude_code' } },
+      conversations: { ...s.conversations, [ID]: { _id: ID, standing_role_id: 'r9' } },
+      orgTree: { workspace: { kind: 'team', id: 't1', name: 'Team' }, roles: [HAZEL], anchors: [] },
+    }));
+  });
+  function Speaker() {
+    const row = identity.useSessionIdentityRow(ID);
+    return <identity.MobileAgentSpeaker row={row} agentType="claude_code" size={16} mark={React.createElement('Text', null, 'dot')} />;
+  }
+  const tree = render(<Speaker />);
+  expect(tree.root.findByProps({ testID: 'session-face-role-hare' })).toBeTruthy();
+  const names = tree.root.findAllByType('Text' as never).map((t) => t.props.children);
+  expect(names).toContain('Hazel');
+  expect(names).not.toContain('dot');
+
+  // A plain session keeps the agent's mark and product name.
+  const plain = render(<identity.MobileAgentSpeaker row={{ _id: 'other' }} agentType="claude_code" mark={React.createElement('Text', null, 'dot')} />);
+  expect(plain.root.findAllByType('Image' as never).length).toBe(0);
+  expect(plain.root.findAllByType('Text' as never).map((t) => t.props.children)).toEqual(['dot', 'Claude']);
+  TestRenderer.act(() => { tree.unmount(); plain.unmount(); });
+  TestRenderer.act(() => {
+    useInboxStore.setState((s: any) => {
+      const { [ID]: _s, ...sessions } = s.sessions;
+      const { [ID]: _c, ...conversations } = s.conversations;
+      return { ...s, sessions, conversations, orgTree: null };
+    });
+  });
 });
 
 // The Sep 14 crash came from two copies of a native library in one bundle. A

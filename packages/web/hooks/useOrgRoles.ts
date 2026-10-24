@@ -31,7 +31,7 @@ export function orgRolesSig(tree: OrgTree | null | undefined): string {
   // on a person's edit, never on a heartbeat. The parent is there for a person
   // too: the task board's Chain axis nests a role under whoever it reports to
   // (lib/taskChain), so a role moved from one person to another must repaint.
-  for (const r of tree.roles) sig += `\n${r._id}|${r.handle}|${r.short_id}|${r.name}|${r.status}|${r.avatar ?? ""}|${r.scope.project_ids.join(",")}|${r.reports_to.kind}:${r.reports_to.kind === "role" ? r.reports_to.role_id : r.reports_to.user_id}`;
+  for (const r of tree.roles) sig += `\n${r._id}|${r.handle}|${r.short_id}|${r.name}|${r.status}|${r.avatar ?? ""}|${r.given_name ?? ""}|${r.scope.project_ids.join(",")}|${r.reports_to.kind}:${r.reports_to.kind === "role" ? r.reports_to.role_id : r.reports_to.user_id}`;
   // A role's seat is a bot user on the roster. Surfaces that list people
   // (the assignee picker, the assignee filter) leave those out, because the
   // role is the thing to name; so the pairing is part of what they draw.

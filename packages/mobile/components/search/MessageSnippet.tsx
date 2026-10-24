@@ -11,7 +11,8 @@ import { FadeGradient } from '@/components/CollapsibleBody';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 import { formatRelativeTime } from '@/components/SessionItem';
-import { assistantLabel } from '@codecast/web/lib/conversationBlockStyles';
+import { MobileAgentSpeaker } from '@/components/identity';
+import type { IdentityRow } from '@codecast/web/lib/sessionIdentity';
 import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { SearchHighlightContext } from './highlight';
 
@@ -20,17 +21,29 @@ const CLIP = 80;
 const WHO = 16;
 
 /** Who said a session message: the person's face and name ("You" for the
- *  viewer), or the agent's mark and name. */
-export function SpeakerLine({ role, agentType, authorName, authorAvatar, isOwn }: {
-  role: string; agentType?: string | null; authorName?: string | null; authorAvatar?: string | null; isOwn?: boolean;
+ *  viewer), or who the agent speaks as (its role, its character, or its mark
+ *  and product name). */
+export function SpeakerLine({ role, agentType, identity, authorName, authorAvatar, isOwn }: {
+  role: string; agentType?: string | null; identity: IdentityRow | null; authorName?: string | null; authorAvatar?: string | null; isOwn?: boolean;
 }) {
-  const name = role === 'user' ? (isOwn !== false ? 'You' : authorName || 'User') : assistantLabel(agentType ?? undefined);
+  if (role !== 'user') {
+    return (
+      <MobileAgentSpeaker
+        row={identity}
+        agentType={agentType}
+        size={WHO}
+        mark={<AgentLogoSvg agentType={agentType ?? undefined} size={WHO} />}
+        badge={agentType ? <AgentLogoSvg agentType={agentType} size={7} /> : undefined}
+        nameStyle={styles.name}
+        maxFontSizeMultiplier={CHROME_FONT_CAP}
+      />
+    );
+  }
+  const name = isOwn !== false ? 'You' : authorName || 'User';
   return (
     <>
-      {role === 'user'
-        ? <ChatAvatar author={{ id: name, name: authorName || name, avatarUrl: authorAvatar ?? undefined }} size={WHO} />
-        : <AgentLogoSvg agentType={agentType ?? undefined} size={WHO} />}
-      <RNText style={[styles.name, role === 'user' && styles.nameUser]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{name}</RNText>
+      <ChatAvatar author={{ id: name, name: authorName || name, avatarUrl: authorAvatar ?? undefined }} size={WHO} />
+      <RNText style={[styles.name, styles.nameUser]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{name}</RNText>
     </>
   );
 }

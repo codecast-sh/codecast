@@ -3,4 +3,5 @@
 export { MobileSessionFace } from './MobileSessionFace';
 export { MobileIdentityFace } from './MobileIdentityFace';
 export { MobileSessionIdentityLine } from './MobileSessionIdentityLine';
+export { MobileAgentSpeaker } from './MobileAgentSpeaker';
 export { useSessionIdentityRow, useSessionIdentityLookup } from './useSessionIdentity';
