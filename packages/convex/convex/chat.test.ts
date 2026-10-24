@@ -65,6 +65,7 @@ import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
 import { dayBucket, hourBucket } from "./lib/chatQuota";
 import { follow as followChannel, unfollow as unfollowChannel } from "./orgChannels";
 import { addChannelAgents, removeChannelAgent } from "./chatAgents";
+import { checkSessionReply, closeSessionRepliesAfterTurn, SESSION_REPLY_CHECK_MS } from "./chatSessionReplies";
 
 const ALICE = "user-alice" as any;
 const BOB = "user-bob" as any;
@@ -4037,5 +4038,227 @@ describe("roles and sessions inside a room (C5)", () => {
     // The room still does not appear in Carol's rail.
     const rail = await call(listChannels, as(ctx, CAROL), { team_id: TEAM });
     expect(rail.channels.map((c: any) => c._id)).not.toContain(PRIVATE);
+  });
+});
+
+// A chat line handed to a session shows at once as a "thinking" row written as
+// that session, where its answer will land, and the row goes when the session
+// answers there, ends the turn that read the line, or stops running.
+describe("session thinking rows", () => {
+  const ROLE = "org_roles_growth" as any;
+  const SEAT = "anchor-growth" as any;
+  const PRIVATE = "chat_channels_private" as any;
+  function seed(extra: Record<string, any[]> = {}) {
+    return {
+      anchors: [{
+        _id: SEAT, team_id: TEAM, bot_user_id: "user-growth-bot", host_user_id: BOB,
+        status: "active", name: "Head of Growth", conversation_id: "conv-growth", org_role_id: ROLE,
+      }],
+      org_roles: [{
+        _id: ROLE, short_id: "or-7", scope_type: "team", team_id: TEAM, host_user_id: BOB,
+        name: "Head of Growth", handle: "growth", scope: { project_ids: [], plan_ids: [] },
+        reports_to: { kind: "user", user_id: BOB }, status: "active", anchor_id: SEAT,
+        created_by: BOB, created_at: 1, updated_at: 1,
+      }],
+      conversations: [
+        { _id: "conv-growth", user_id: BOB, title: "Head of Growth", status: "active", updated_at: 1, standing_role_id: ROLE },
+        { _id: "conv-alice", short_id: "jx7alic", user_id: ALICE, session_id: "sess-alice", title: "Alice's build", agent_type: "claude_code", status: "active", updated_at: 1, is_private: true },
+        { _id: "conv-bob", short_id: "jx7bobb", user_id: BOB, session_id: "sess-bob", title: "Bob's session", agent_type: "codex", status: "active", updated_at: 1, team_id: TEAM, is_private: false },
+      ],
+      session_owners: [
+        { _id: "so-1", conversation_id: "conv-alice", user_id: ALICE, added_at: 1 },
+        { _id: "so-2", conversation_id: "conv-bob", user_id: BOB, added_at: 1 },
+      ],
+      users: [...users(), { _id: "user-growth-bot", name: "Head of Growth", is_bot: true, bot_kind: "anchor" }],
+      chat_channel_agents: [],
+      chat_agent_quota: [],
+      managed_sessions: [],
+      ...extra,
+    };
+  }
+  const thinking = (ctx: any) => messagesIn(ctx).filter((m: any) => m.agent_status === "thinking" && !m.deleted_at);
+  const pending = (ctx: any) => ctx.db._tables.pending_messages;
+  const deliver = (ctx: any, conversationId: string) => {
+    for (const p of pending(ctx)) if (p.conversation_id === conversationId) p.status = "delivered";
+  };
+
+  test("a reply on a session's thread shows the session thinking in that thread until it answers", async () => {
+    const ctx = context(ALICE, seed());
+    const root = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "does the deploy look green?", origin: "agent", origin_session_id: "sess-alice",
+    });
+    expect(thinking(ctx).length).toBe(0);
+
+    const reply = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "check staging too", thread_root_id: root.message_id });
+    expect(reply.session_relay.delivered).toBe(true);
+    const [row] = thinking(ctx);
+    expect(row).toMatchObject({
+      thread_root_id: root.message_id,
+      user_id: ALICE,
+      author_kind: "user",
+      origin: "agent",
+      origin_session_id: "conv-alice",
+      origin_agent_type: "claude_code",
+      content: "",
+      client_id: `chat-wait:chat-relay:${reply.message_id}`,
+    });
+    // A private session's title stays off a row the whole room reads.
+    expect(row.origin_session_title).toBeUndefined();
+    expect(ctx._scheduled.some((s: any) => s.delay === SESSION_REPLY_CHECK_MS && s.args.message_id === row._id)).toBe(true);
+    // The thread says it is being worked on, and the row is no reply to count as unread.
+    const thread = await call(getThread, ctx, { root_id: root.message_id });
+    expect(thread.replies.map((r: any) => r._id)).toContain(row._id);
+    const rail = (await call(listChannels, as(ctx, BOB), { team_id: TEAM })).rail.find((r: any) => r.channel_id === CHANNEL);
+    expect(rail.last_message?._id).not.toBe(row._id);
+
+    // The session answers in the thread: the row becomes a tombstone that
+    // still reaches readers, so a client holding it drops it.
+    const answer = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "staging is green", thread_root_id: root.message_id, origin: "agent", origin_session_id: "sess-alice",
+    });
+    expect(answer.created).toBe(true);
+    // A later wake names another session's line as that session, not as its human.
+    await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, content: "bob's session here", thread_root_id: root.message_id, origin: "agent", origin_session_id: "sess-bob",
+    });
+    expect(thinking(ctx).length).toBe(0);
+    const closed = messagesIn(ctx).find((m: any) => m._id === row._id);
+    expect(closed).toMatchObject({ agent_status: "passed" });
+    expect(closed.deleted_at).toBeTruthy();
+    const after = await call(getThread, ctx, { root_id: root.message_id });
+    expect(after.replies.slice(0, 3).map((r: any) => r._id)).toEqual([reply.message_id, row._id, answer.message_id]);
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "thanks both", thread_root_id: root.message_id });
+    const wake = ctx.db._tables.pending_messages.at(-1).content;
+    expect(wake).toContain("You (earlier): staging is green");
+    expect(wake).toContain("Bob's session, session conv-bo via Bob: bob's session here");
+  });
+
+  test("an @session mention shows it thinking in a thread on the mentioning line", async () => {
+    const ctx = context(ALICE, seed());
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@jx7bobb can you rerun the suite?" });
+    expect(sent.mention_wakes.sessions).toBe(1);
+    const [row] = thinking(ctx);
+    expect(row).toMatchObject({
+      thread_root_id: sent.message_id,
+      user_id: BOB,
+      origin_session_id: "conv-bob",
+      origin_session_title: "Bob's session",
+      client_id: `chat-wait:chat-mention:${sent.message_id}:conv-bob`,
+    });
+    // The channel row says the thread is being worked on.
+    const page = await call(listMessages, ctx, { channel_id: CHANNEL });
+    expect(page.threads.find((t: any) => t.root_id === sent.message_id)?.agent_status).toBe("thinking");
+  });
+
+  test("an @role mention shows the role thinking, written as the role", async () => {
+    const ctx = context(ALICE, seed());
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@growth what moved signups?" });
+    expect(sent.mention_wakes.roles).toBe(1);
+    const [row] = thinking(ctx);
+    expect(row).toMatchObject({
+      thread_root_id: sent.message_id,
+      user_id: "user-growth-bot",
+      author_kind: "agent",
+      origin_session_id: "conv-growth",
+    });
+    // The anchor's one-question-one-turn check does not take this row for its own.
+    expect(row.agent_anchor_id).toBeUndefined();
+  });
+
+  test("a role's standing session DMs as the role: its host is in the room only when named", async () => {
+    const ctx = context(BOB, seed());
+    const asRole = { origin: "agent" as const, origin_session_id: "conv-growth" };
+    const members = (id: any) => ctx.db._tables.chat_channel_members
+      .filter((r: any) => String(r.channel_id) === String(id)).map((r: any) => String(r.user_id)).sort();
+
+    const dm = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"], ...asRole });
+    expect(members(dm.channel_id)).toEqual(["user-growth-bot", String(ALICE)].sort());
+    // The host's token still posts there, and the line is the role's.
+    const sent = await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "numbers are in", ...asRole });
+    expect(messagesIn(ctx).find((m: any) => m._id === sent.message_id)).toMatchObject({ user_id: "user-growth-bot", author_kind: "agent" });
+
+    // Bringing the host in is the role's choice: name them.
+    const group = await call(openDm, ctx, { team_id: TEAM, handles: ["alice", "bob"], ...asRole });
+    expect(members(group.channel_id)).toEqual(["user-growth-bot", String(ALICE), String(BOB)].sort());
+
+    // The host's own DM with Alice, and a plain session of theirs, stay separate.
+    const own = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"] });
+    const plain = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"], origin: "agent", origin_session_id: "sess-bob" });
+    expect(members(own.channel_id)).toEqual([String(ALICE), String(BOB)].sort());
+    expect(String(plain.channel_id)).toBe(String(own.channel_id));
+    expect(String(own.channel_id)).not.toBe(String(dm.channel_id));
+  });
+
+  test("a room member thinks at channel level; its turn ending closes the row only once it read the line", async () => {
+    const ctx = context(ALICE, seed());
+    await call(addChannelAgents, ctx, { channel_id: CHANNEL, refs: ["jx7bobb"] });
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "standup in five" });
+    expect(sent.mention_wakes.sessions).toBe(1);
+    const [row] = thinking(ctx);
+    expect(row.thread_root_id).toBeUndefined();
+    expect(row.origin_session_id).toBe("conv-bob");
+    const page = await call(listMessages, ctx, { channel_id: CHANNEL });
+    expect(page.messages.map((m: any) => m._id)).toContain(row._id);
+
+    // A turn that ends while the line still waits behind it: the session has
+    // not read it, so it is still coming.
+    await closeSessionRepliesAfterTurn(ctx, "conv-bob" as any);
+    expect(thinking(ctx).length).toBe(1);
+
+    // A second line before it answered: still one row, now waiting on the newer line.
+    const second = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "and bring numbers" });
+    expect(thinking(ctx).length).toBe(1);
+    expect(thinking(ctx)[0].client_id).toBe(`chat-wait:chat-mention:${second.message_id}:conv-bob`);
+
+    // The turn that read both lines ends without a word in the room.
+    deliver(ctx, "conv-bob");
+    await closeSessionRepliesAfterTurn(ctx, "conv-bob" as any);
+    expect(thinking(ctx).length).toBe(0);
+    const closed = messagesIn(ctx).find((m: any) => m._id === row._id);
+    expect(closed.agent_status).toBe("passed");
+    expect((await call(listMessages, ctx, { channel_id: CHANNEL })).messages.map((m: any) => m._id)).toContain(row._id);
+  });
+
+  test("a merged wake counts as read when the row it merged into was delivered", async () => {
+    const ctx = context(ALICE, seed());
+    const sent = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@jx7bobb ping" });
+    const wake = pending(ctx).find((p: any) => p.client_id === `chat-mention:${sent.message_id}:conv-bob`);
+    ctx.db._tables.pending_messages.push({ ...wake, _id: "pm-merged-into", client_id: "other", status: "delivered" });
+    wake.status = "cancelled";
+    wake.merged_into = "pm-merged-into";
+    await closeSessionRepliesAfterTurn(ctx, "conv-bob" as any);
+    expect(thinking(ctx).length).toBe(0);
+  });
+
+  test("the periodic check keeps the row while the agent works and closes it once the agent is gone", async () => {
+    const ctx = context(ALICE, seed({
+      managed_sessions: [{ _id: "ms-bob", conversation_id: "conv-bob", session_id: "sess-bob", user_id: BOB, pid: 1, started_at: 1, last_heartbeat: 1, agent_status: "working" }],
+    }));
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "@jx7bobb long job please" });
+    const [row] = thinking(ctx);
+    row.agent_deadline_at = Date.now() - 1;
+    await call(checkSessionReply, ctx, { message_id: row._id });
+    expect(thinking(ctx).length).toBe(1);
+    expect(thinking(ctx)[0].agent_deadline_at).toBeGreaterThan(Date.now());
+
+    ctx.db._tables.managed_sessions[0].agent_status = "stopped";
+    thinking(ctx)[0].agent_deadline_at = Date.now() - 1;
+    await call(checkSessionReply, ctx, { message_id: row._id });
+    expect(thinking(ctx).length).toBe(0);
+  });
+
+  test("a folded or refused delivery shows nothing", async () => {
+    const ctx = context(BOB, seed({
+      conversations: [
+        { _id: "conv-alice", short_id: "jx7alic", user_id: ALICE, session_id: "sess-alice", title: "Alice's build", status: "active", updated_at: 1, is_private: true },
+      ],
+    }));
+    const root = await call(sendMessage, as(ctx, ALICE), {
+      channel_id: CHANNEL, content: "question", origin: "agent", origin_session_id: "sess-alice",
+    });
+    // Bob may not send into Alice's private session: no relay, no row.
+    const reply = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "answer", thread_root_id: root.message_id });
+    expect(reply.session_relay.skipped).toBe("no_access");
+    expect(thinking(ctx).length).toBe(0);
   });
 });

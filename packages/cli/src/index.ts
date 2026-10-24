@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { LOGIN_PATH_FILENAME, recordLoginShellPath } from "./loginShellPath.js";
 import { DEFAULT_WEB_URL } from "./config/readLocalConfig.js";
 import { pickFields } from "./jsonFields.js";
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
@@ -139,15 +140,15 @@ import type { PlanStep } from "@codecast/shared/tasks";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion} from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextFastPathArgv, isTaskContextFastPath, runFastPath } from "./fastPath.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
-import { ownDaemonPids, snapshotProcessTable } from "./processTable.js";
-import { autostartDisabledByEnv, findSystemDaemonUnit, isTemplateInstance } from "./systemdDaemonUnit.js";
+import { findAgentAncestor, ownDaemonPids, snapshotProcessTable } from "./processTable.js";
+import { autostartDisabledByEnv, findSystemDaemonUnit, isTemplateInstance, setDaemonWanted, unitUsesWantedFlag } from "./systemdDaemonUnit.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
 import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
@@ -170,7 +171,6 @@ import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathReso
 import type { DoctorDeps } from "./doctor.js";
 import { CHECK_CONFIG_REL_PATH } from "./checkConfigPath.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
-import { agentBinaryFromPsRow } from "./sessionProcessMatcher.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
@@ -327,54 +327,16 @@ function getRecentSessionFiles(sessionsDir: string, limit: number): Array<{ name
 function findCurrentSessionFromProcess(projectRoot: string): string | null {
   const debug = !!process.env.DEBUG;
   try {
-    // Walk up process tree to find Claude parent
-    let pid = process.ppid;
-    let claudePid: number | null = null;
-    let claudeArgs: string | null = null;
-
-    if (debug) console.error(`[DEBUG] Starting process walk from ppid: ${pid}`);
-
-    while (pid > 1) {
-      try {
-        const result = execSync(`ps -o ppid=,comm=,args= -p ${pid}`, {
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "ignore"],
-        }).trim();
-
-        const match = result.match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
-        if (!match) {
-          if (debug) console.error(`[DEBUG] No match for pid ${pid}, breaking`);
-          break;
-        }
-
-        const ppid = parseInt(match[1]);
-        const comm = match[2];
-        const args = match[3];
-
-        if (debug) console.error(`[DEBUG] PID ${pid}: comm=${comm} args=${args.slice(0, 60)}...`);
-
-        // Named from argv, not comm: macOS clips comm to 16 chars on this
-        // multi-column row, so a long install path never matched (see
-        // agentBinaryFromPsRow). Every registry client's binary counts.
-        const bin = agentBinaryFromPsRow(comm, args);
-        if (bin) {
-          claudePid = pid;
-          claudeArgs = args;
-          if (debug) console.error(`[DEBUG] Found ${bin} at PID ${pid}`);
-          break;
-        }
-
-        pid = ppid;
-      } catch (e) {
-        if (debug) console.error(`[DEBUG] Error walking process tree: ${e}`);
-        break;
-      }
-    }
-
-    if (!claudePid || !claudeArgs) {
-      if (debug) console.error(`[DEBUG] Could not find Claude process`);
+    // The agent this command runs under (findAgentAncestor names it from
+    // argv, since macOS clips comm); its argv or start time names the session.
+    const agent = findAgentAncestor();
+    if (!agent) {
+      if (debug) console.error(`[DEBUG] No agent process above ppid ${process.ppid}`);
       return null;
     }
+    const claudePid = agent.pid;
+    const claudeArgs = agent.args;
+    if (debug) console.error(`[DEBUG] Found ${agent.bin} at PID ${claudePid}`);
 
     // Check for session ID in args: --resume, --session, --session-id, -s.
     // --session-id is how the daemon starts every session (claude --session-id
@@ -1040,6 +1002,13 @@ function getLaunchdDaemonPid(): number | null {
 function systemdDaemon(action: "start" | "stop"): boolean {
   const unit = findSystemDaemonUnit();
   if (!unit) return false;
+  // A shared box's own-file switch: no sudo. On stop the daemon still has to
+  // exit (stopDaemon kills it next); Restart= then finds the file gone and
+  // leaves the unit down instead of reviving it.
+  if (unitUsesWantedFlag(unit)) {
+    setDaemonWanted(action === "start");
+    return true;
+  }
   const verb = action === "stop" ? ["stop"] : isTemplateInstance(unit) ? ["enable", "--now"] : ["start"];
   return spawnSync("sudo", ["-n", "systemctl", ...verb, unit], { stdio: "ignore", timeout: 60_000 }).status === 0;
 }
@@ -2248,6 +2217,7 @@ const SNIPPET_SECTIONS = {
   limits: snippetSection("limits"),
   computer: snippetSection("computer"),
   sim: snippetSection("sim"),
+  vault: snippetSection("vault"),
   check: snippetSection("check"),
   pr: snippetSection("pr"),
   mods: snippetSection("mods"),
@@ -2413,13 +2383,14 @@ function uninstallSkillsSnippet(): void {
  * refresh and the `cast install` table all derive from this one list, so a new
  * section snippet is its catalog entry, its version and one line here.
  */
-type SectionSnippetSlug = "calls" | "limits" | "pr" | "computer" | "sim" | "check" | "mods";
+type SectionSnippetSlug = "calls" | "limits" | "pr" | "computer" | "sim" | "vault" | "check" | "mods";
 const SECTION_SNIPPET_VERSIONS: Record<SectionSnippetSlug, () => string> = {
   calls: getCallsVersion,
   limits: getLimitsVersion,
   pr: getPrVersion,
   computer: getComputerVersion,
   sim: getSimVersion,
+  vault: getVaultVersion,
   check: getCheckVersion,
   mods: getModsVersion,
 };
@@ -2936,9 +2907,9 @@ program
     "Link this device using a setup token (alternative to browser OAuth)\n\n" +
     "Get your token from: codecast.sh/cli"
   )
-  .argument("<token>", "Setup token from the web dashboard")
+  .argument("<token>", "Setup token from the web dashboard, or - to read it from stdin (keeps it out of the process list)")
   .action(async (token: string) => {
-    await runLogin(token);
+    await runLogin(token === "-" ? fs.readFileSync(0, "utf-8").trim() : token);
   });
 
 registerSessionSendCommand(program, {
@@ -3184,13 +3155,13 @@ const vaultCmd = program
   .command("files")
   .alias("file")
   .description(
-    "Read and write local markdown vaults, the folders the Files page shows\n\n" +
-    "A vault is a directory of markdown you registered. The daemon serves it\n" +
+    "Read and write the local markdown folders the Files page shows\n\n" +
+    "A folder is a directory of markdown you registered. The daemon serves it\n" +
     "to the web app's Files page over its local 127.0.0.1 bridge; these\n" +
     "commands read and write the same files directly, so a note you change\n" +
     "here shows up in an open browser tab within a second. Registration is\n" +
     "per-device and the files never leave this machine.\n\n" +
-    "Managing the list of vaults:\n" +
+    "Managing the list of folders:\n" +
     "  cast files add ~/notes\n" +
     "  cast files add ~/work/wiki --name Wiki\n" +
     "  cast files ls\n" +
@@ -3203,22 +3174,22 @@ const vaultCmd = program
     "  cast files edit Sleep --old 'bed at 11' --new 'bed at 10'\n" +
     "  cast files links Sleep                    # what points here\n" +
     "  cast files open Sleep                     # a link for the human\n\n" +
-    "Paths: every command takes a vault-relative path OR the bare name a\n" +
+    "Paths: every command takes a folder-relative path OR the bare name a\n" +
     "[[wiki link]] would use, resolved by the same rules the app uses. A name\n" +
     "matching several notes errors and lists them.\n\n" +
-    "Vaults: --vault <id|name|dir> picks one. Without it, commands use the\n" +
-    "vault the current directory is inside — so inside a project you can just\n" +
-    "say `cast files cat <note>`. With a single registered vault anywhere,\n" +
+    "Folders: --vault <id|name|dir> picks one. Without it, commands use the\n" +
+    "folder the current directory is inside — so inside a project you can just\n" +
+    "say `cast files cat <note>`. With a single registered folder anywhere,\n" +
     "that one is used.\n\n" +
     "Machine-readable: every read command takes --json.\n\n" +
-    "Exit codes: 0 ok · 1 not found · 2 ambiguous (name or vault matched\n" +
-    "several) · 3 the vault's directory is unreachable"
+    "Exit codes: 0 ok · 1 not found · 2 ambiguous (name or folder matched\n" +
+    "several) · 3 the folder's directory is unreachable"
   )
   .showHelpAfterError(true);
 
 vaultCmd
   .command("add")
-  .description("Register a directory as a vault")
+  .description("Register a directory of markdown as a folder")
   .argument("<dir>", "Directory of markdown files")
   .option("--name <name>", "Display name (defaults to the directory name)")
   .action((dir: string, options: any) => {
@@ -3236,13 +3207,13 @@ vaultCmd
   .command("ls")
   .alias("list")
   .description(
-    "List the vaults this machine can open\n\n" +
-    "Two kinds appear here. VAULTS are directories you registered with\n" +
+    "List the folders this machine can open\n\n" +
+    "Two kinds appear here. FOLDERS are directories you registered with\n" +
     "`cast files add` — they are listed in full. PROJECTS are your own code\n" +
     "repositories, found automatically because they contain markdown; there\n" +
     "are usually hundreds, so only a few are shown unless you ask for --all.\n" +
     "Both open, scan and edit identically once you name one.\n\n" +
-    "The row marked `← you are here` is the vault every other command uses\n" +
+    "The row marked `← you are here` is the folder every other command uses\n" +
     "when you leave --vault off.\n\n" +
     "Examples:\n" +
     "  cast files ls\n" +
@@ -3260,7 +3231,7 @@ vaultCmd
       return;
     }
     if (vaults.length === 0) {
-      console.log(`${c.dim}No vaults. Add one with: cast files add ~/notes${c.reset}`);
+      console.log(`${c.dim}No folders. Add one with: cast files add ~/notes${c.reset}`);
       return;
     }
 
@@ -3281,7 +3252,7 @@ vaultCmd
     };
 
     if (registered.length) {
-      console.log(`${c.bold}Vaults${c.reset} ${c.dim}— registered with cast files add${c.reset}`);
+      console.log(`${c.bold}Folders${c.reset} ${c.dim}— registered with cast files add${c.reset}`);
       registered.forEach(row);
     }
 
@@ -3314,18 +3285,18 @@ vaultCmd
 vaultCmd
   .command("mirror")
   .description(
-    "Mirror a vault so other devices can read it\n\n" +
+    "Mirror a folder so other devices can read it\n\n" +
     "Off by default. Turning it on lets this machine's daemon push note\n" +
     "metadata (title, tags, links, headings) and the bodies of notes under\n" +
-    "64KB to codecast, so the vault is readable — never writable — from\n" +
+    "64KB to codecast, so the folder is readable — never writable — from\n" +
     "another device. The files stay here and stay canonical; the mirror is a\n" +
     "copy that follows them. Turning it off deletes the copy.\n\n" +
     "Examples:\n" +
     "  cast files mirror ~/notes --on\n" +
     "  cast files mirror ~/notes --off"
   )
-  .argument("<dirOrId>", "Vault directory or id")
-  .option("--on", "Start mirroring this vault")
+  .argument("<dirOrId>", "Folder path or id")
+  .option("--on", "Start mirroring this folder")
   .option("--off", "Stop mirroring and delete the remote copy")
   .action((dirOrId: string, options: any) => {
     if (options.on === options.off) {
@@ -3334,7 +3305,7 @@ vaultCmd
     }
     const vault = setVaultMirroring(CONFIG_DIR, dirOrId, !!options.on);
     if (!vault) {
-      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast files ls`);
+      console.error(`${c.red}No folder matching "${dirOrId}".${c.reset} List them with: cast files ls`);
       process.exit(1);
     }
     if (options.on) {
@@ -3354,12 +3325,12 @@ vaultCmd
 vaultCmd
   .command("forget")
   .alias("unregister")
-  .description("Unregister a vault (the directory and its notes are untouched)")
-  .argument("<dirOrId>", "Vault directory or id")
+  .description("Unregister a folder (the directory and its notes are untouched)")
+  .argument("<dirOrId>", "Folder path or id")
   .action((dirOrId: string) => {
     const removed = removeVault(CONFIG_DIR, dirOrId);
     if (!removed) {
-      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast files ls`);
+      console.error(`${c.red}No folder matching "${dirOrId}".${c.reset} List them with: cast files ls`);
       process.exit(1);
     }
     console.log(`${c.green}ok${c.reset} unregistered ${c.cyan}${removed.name}${c.reset} ${c.dim}${removed.root}${c.reset}`);
@@ -3404,7 +3375,7 @@ async function runVault(fn: () => Promise<void>): Promise<void> {
 }
 
 const withVaultOption = (cmd: Command): Command =>
-  cmd.option("--vault <idOrNameOrDir>", "Which vault (defaults to the only registered one)");
+  cmd.option("--vault <idOrNameOrDir>", "Which folder (defaults to the only registered one)");
 
 /** Body from --content, --content-file, or stdin. An agent piping a heredoc is
  *  the common case, so stdin is the default rather than an opt-in. */
@@ -3437,7 +3408,7 @@ withVaultOption(
     .alias("show")
     .description(
       "Print a note (paginated for long ones)\n\n" +
-      "The path may be vault-relative or the bare name a [[wiki link]] would\n" +
+      "The path may be folder-relative or the bare name a [[wiki link]] would\n" +
       "use — `Sleep`, `Health/Sleep`, `Areas/Health/Sleep.md` all find the same\n" +
       "note. A name matching several notes lists them and exits 2.\n\n" +
       "Examples:\n" +
@@ -3503,7 +3474,7 @@ withVaultOption(
   vaultCmd
     .command("grep")
     .description(
-      "Search note bodies across the whole vault\n\n" +
+      "Search note bodies across the whole folder\n\n" +
       "Prints every matching line under the note it came from, so a hit reads\n" +
       "as `path` then `line  text`. The pattern is a regex; one that doesn't\n" +
       "compile is searched for literally.\n\n" +
@@ -3587,10 +3558,10 @@ withVaultOption(
     .command("search")
     .description(
       "Find notes by title, tag, path and prose\n\n" +
-      "Takes the same operators the vault's search pane does, so a query that\n" +
+      "Takes the same operators the folder's search pane does, so a query that\n" +
       "works in the app works here:\n" +
       "  tag:health      note carries this tag, or one nested under it\n" +
-      "  path:areas      vault-relative path contains this\n" +
+      "  path:areas      folder-relative path contains this\n" +
       "  file:sleep      filename (without extension) contains this\n" +
       "  \"exact words\"   this phrase, contiguous\n" +
       "  -draft          drop notes mentioning this\n\n" +
@@ -3737,9 +3708,9 @@ withVaultOption(
     .alias("delete")
     .description(
       "Move a note to the trash\n\n" +
-      "The note goes to the OS trash (or the vault's own .trash when that is on\n" +
+      "The note goes to the OS trash (or the folder's own .trash when that is on\n" +
       "another volume), never an unlink — exactly what deleting from the app\n" +
-      "does. To unregister a whole vault instead, use: cast files forget\n\n" +
+      "does. To unregister a whole folder instead, use: cast files forget\n\n" +
       "Examples:\n" +
       "  cast files rm 'Inbox/Old Idea'"
     )
@@ -3750,7 +3721,7 @@ withVaultOption(
     // The old spelling of `cast files forget`. Refuse rather than reinterpret:
     // someone typing a vault root here meant to unregister, not to delete.
     if (findVault(CONFIG_DIR, notePath)) {
-      throw new VaultCliError(`"${notePath}" is a registered vault. To unregister it: cast files forget ${notePath}`);
+      throw new VaultCliError(`"${notePath}" is a registered folder. To unregister it: cast files forget ${notePath}`);
     }
     const ctx = await openVault(CONFIG_DIR, options.vault);
     const ref = await resolveNote(ctx, notePath);
@@ -3807,7 +3778,7 @@ withVaultOption(
     .command("links")
     .description(
       "Show what a note links to, what links back, and what resolves to nothing\n\n" +
-      "Backlinks are found by reading every note in the vault — a link INTO\n" +
+      "Backlinks are found by reading every note in the folder — a link INTO\n" +
       "this note lives in some other file, and nothing short of reading them\n" +
       "all can know which. A few thousand notes takes tens of milliseconds.\n\n" +
       "Examples:\n" +
@@ -3873,8 +3844,8 @@ withVaultOption(
     .command("open")
     .description(
       "Print the codecast link to a note, to hand a human something clickable\n\n" +
-      "The link carries the note's path, not which vault it is in — the app\n" +
-      "opens it in whichever vault the reader has open. With several vaults\n" +
+      "The link carries the note's path, not which folder it is in — the app\n" +
+      "opens it in whichever folder the reader has open. With several folders\n" +
       "registered, say which one alongside the link.\n\n" +
       "Examples:\n" +
       "  cast files open Sleep\n" +
@@ -4641,13 +4612,8 @@ codexAccountsCmd
     console.log(`${c.dim}  windows now: session ${pct(windows.session)} · weekly ${pct(windows.weekly)} — a redeem clears both${c.reset}`);
 
     if (!options.yes) {
-      const rl = await import("readline");
-      const iface = rl.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        iface.question(`Spend one credit on ${label}? [y/N] `, resolve);
-      });
-      iface.close();
-      if (!/^y(es)?$/i.test(answer.trim())) {
+      const { askYesNo } = await import("./terminalAsk.js");
+      if (!(await askYesNo(`Spend one credit on ${label}? [y/N] `))) {
         console.log("Aborted");
         return;
       }
@@ -5572,7 +5538,20 @@ program
   .option("--keep", "Keep the test tmux session, transcript, and server conversation for debugging")
   .option("--project-dir <path>", "Scratch project dir for the test transcript (must be syncable)")
   .option("--reap-tmux", "Kill stale tmux server generations (old servers that lost the default socket, with their whole process tree)")
+  .option("--agents", "Check Claude Code and Codex instead: found on the login shell PATH, new enough, and signed in (one short real prompt each)")
+  .option("--timeout <seconds>", "With --agents: how long each prompt may take", "90")
   .action(async (options: any) => {
+    if (options.agents) {
+      const { preflightAgents } = await import("./agentPreflight.js");
+      const results = await preflightAgents({ timeoutMs: Number(options.timeout) * 1000 || undefined });
+      if (options.json) console.log(JSON.stringify({ ok: results.every((r) => r.status === "ok"), agents: results }, null, 2));
+      else for (const r of results) {
+        const mark = r.status === "ok" ? fmt.success(icons.check) : fmt.warning(icons.cross);
+        const where = r.path ? `${r.version ? `v${r.version} ` : ""}${fmt.path(r.path)}` : fmt.muted("not on the login shell PATH or the usual folders");
+        console.log(`  ${mark} ${r.agent.padEnd(7)} ${r.status.padEnd(13)} ${where}${r.status === "too_old" ? fmt.muted(` (needs v${r.min_version}+)`) : ""}${r.detail ? `\n      ${fmt.muted(r.detail)}` : ""}`);
+      }
+      process.exit(results.every((r) => r.status === "ok") ? 0 : 1);
+    }
     const { runDoctor } = await import("./doctor.js");
     const report = await runDoctor(doctorDeps(requireAuthedConfig()), {
       e2e: options.e2e !== false,
@@ -9018,7 +8997,9 @@ function installDaemonLauncherScript(): void {
   }
   const { executablePath, args } = getExecutableInfo();
   const daemonCommand = [executablePath, ...args].map(shellEscapeForSh).join(" ");
-  fs.writeFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, buildDaemonLauncherScript({ daemonCommand }), { mode: 0o755 });
+  recordLoginShellPath(CONFIG_DIR);
+  const loginPathFile = path.join(CONFIG_DIR, LOGIN_PATH_FILENAME);
+  fs.writeFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, buildDaemonLauncherScript({ daemonCommand, loginPathFile }), { mode: 0o755 });
 }
 
 // Bootstrap the watchdog LaunchAgent AND force its resident loop to start now. The
@@ -12031,6 +12012,19 @@ program
     }
   });
 
+// `unattended` is enrichment the backend learned after the CLI: a backend
+// deployed before it rejects the whole spawn (closed validator), so the
+// spawn goes again without it.
+async function spawnFetch(url: string, init: { method: string; headers: Record<string, string>; body: string }) {
+  const resp = await cliFetch(url, init);
+  const body = JSON.parse(init.body);
+  if (resp.ok || body.unattended === undefined) return resp;
+  const text = await resp.clone().text().catch(() => "");
+  if (!/unattended/.test(text)) return resp;
+  delete body.unattended;
+  return cliFetch(url, { ...init, body: JSON.stringify(body) });
+}
+
 program
   .command("spawn")
   .description(
@@ -12073,6 +12067,7 @@ program
   .option("--shared", "With --cloud: run in the host's main checkout instead of a fresh worktree (one task only; refused when that checkout is dirty or already used by a live session)")
   .option("--from <source>", "With --cloud: what each worktree starts from — checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
   .option("--label <name>", "File each spawned session under a label (created if new)")
+  .option("--local", "Start on this machine even when the load governor would send unattended work to the cloud host")
   .option("--unattended", "Run as an unattended principal: reversible actions proceed, protected decisions go through cast decide, no inline questions (the briefing every line hand gets)")
   .option("--json", "Machine-readable output")
   .action(async (rawPrompts: string[], options: any) => {
@@ -12163,6 +12158,30 @@ program
     // THIS checkout (branch, HEAD, uncommitted changes), snapshotted once for
     // the whole fan-out; `--from origin-main` is the clean-room opt-out.
     const say = (m: string) => { if (!options.json) console.log(`  ${c.dim}${m}${c.reset}`); };
+    // Cloud first: a run nobody watches starts on the cloud host unless this
+    // machine is calm (loadGovernor.ts cloudFirstReason). `--device` or
+    // `--cloud` decides by hand; a host that cannot be readied falls back here.
+    let autoCloud: string | null = null;
+    if (!options.cloud && !options.local) {
+      const { cloudFirstReason, readGovernorState } = await import("./loadGovernor.js");
+      const { isRemoteDevice } = await import("./remote/device.js");
+      autoCloud = isRemoteDevice() ? null : cloudFirstReason({
+        unattendedFlag: !!options.unattended,
+        spawnerSession,
+        sharesSpawnerCheckout: !!options.subagent && !options.isolated && !options.worktree,
+        mergesBack: options.mergeBack === true || !!options.as,
+        machineChosen: !!options.device,
+        state: readGovernorState(),
+      });
+      if (autoCloud) {
+        const { readHosts } = await import("./browser/cloudHost.js");
+        if (readHosts().length === 0) autoCloud = null;
+      }
+      if (autoCloud) {
+        say(`starting on the cloud host: ${autoCloud} (--local keeps it here)`);
+        options.cloud = true;
+      }
+    }
     let cloud: { prepared: import("./cloud/prepare.js").PreparedHost; seed: import("./cloud/prepare.js").CloudSeed | null } | null = null;
     if (options.cloud) {
       const { parseStartFrom, prepareCloudHost, resolveSeedRoots, seedForHost, wakeCloudHost, waitForDeviceOnline } = await import("./cloud/prepare.js");
@@ -12190,8 +12209,12 @@ program
         else if (seed) say(seed.source === "checkout" ? `seeding every worktree from ${seed.branch ?? "detached HEAD"} @ ${seed.base.slice(0, 8)}${seed.dirty ? " with uncommitted changes" : ""}` : `starting every worktree from origin/main @ ${seed.base.slice(0, 8)}`);
         cloud = { prepared, seed };
       } catch (err) {
-        console.error(`Cloud host not ready: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        if (!autoCloud) {
+          console.error(`Cloud host not ready: ${err instanceof Error ? err.message : String(err)}`);
+          process.exit(1);
+        }
+        say(`cloud host not ready (${err instanceof Error ? err.message : String(err)}); starting here instead`);
+        options.cloud = false;
       }
     }
 
@@ -12212,7 +12235,7 @@ program
       const { acquireRemoteRootCheckout, armInterruptGuard, freshWorktreeName, refreshCloudCheckout, seedForHost } = await import("./cloud/prepare.js");
       const { seedPlacementArg } = await import("./cloud/cli.js");
       const { convexClient } = await import("./remote/cli.js");
-      const resp = await cliFetch(`${siteUrl}/cli/spawn`, {
+      const resp = await spawnFetch(`${siteUrl}/cli/spawn`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -12226,6 +12249,7 @@ program
           cc_account: options.account,
           parent_session: parentSession,
           spawner_session: spawnerSession,
+          unattended: options.unattended || undefined,
           cloud_device_id: cloud.prepared.deviceId,
           cloud_workspace: "shared",
           cloud_checkout_path: cloud.prepared.repoPath,
@@ -12327,7 +12351,7 @@ program
       } else if (options.worktree) {
         placement = { isolated: true, worktree_name: options.worktree };
       }
-      const resp = await cliFetch(`${siteUrl}/cli/spawn`, {
+      const resp = await spawnFetch(`${siteUrl}/cli/spawn`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -12344,6 +12368,7 @@ program
           device: options.device,
           parent_session: parentSession,
           spawner_session: spawnerSession,
+          unattended: options.unattended || undefined,
           ...(parentSession ? { subagent_caps: fleetCaps, spawn_device_id: fleetDevice } : {}),
           ...(options.mergeBack !== undefined ? { merge_back: options.mergeBack === true } : {}),
           ...placement,
@@ -14227,10 +14252,8 @@ org
       if (!preview.roles.length && !preview.proposals) { console.log(`Nothing to reset in ${workspaceLabel(ws)}: no roles and no proposals.`); return; }
       console.log(`Resetting the org of ${c.bold}${workspaceLabel(ws)}${c.reset} retires ${plural(preview.roles.length, "role")}, each with its standing session and its triggers, and archives ${plural(preview.proposals, "proposal")}:`);
       for (const r of preview.roles) console.log(`  ${r.name} ${c.dim}@${r.handle} · ${plural(r.sessions, "session")} under it return${r.sessions === 1 ? "s" : ""} to ${r.sessions === 1 ? "its owner" : "their owners"}${c.reset}`);
-      const iface = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => iface.question(`Reset the org of ${workspaceLabel(ws)}? This cannot be undone. [y/N] `, resolve));
-      iface.close();
-      if (!/^y(es)?$/i.test(answer.trim())) { console.log("Aborted"); return; }
+      const { askYesNo } = await import("./terminalAsk.js");
+      if (!(await askYesNo(`Reset the org of ${workspaceLabel(ws)}? This cannot be undone. [y/N] `))) { console.log("Aborted"); return; }
     }
     const result = await cliPost("/cli/org/reset", body);
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
@@ -16114,7 +16137,7 @@ async function listChatChannels(teamId?: string): Promise<any[]> {
 // opened. Returns the room id and the names of the others in it.
 async function openChatDm(people: string, teamId?: string): Promise<{ channel_id: string; with: string[] }> {
   const handles = people.split(",").map((h) => h.trim().replace(/^@/, "")).filter(Boolean);
-  return await cliPost("/cli/chat/open-dm", { team_id: teamId, handles });
+  return await cliPost("/cli/chat/open-dm", { team_id: teamId, handles, ...chatSendOrigin() });
 }
 
 // A channel by id, by #name, or a direct message by @person[,@person] (found
@@ -17571,7 +17594,7 @@ projectCmd
     if (p.labels?.length) console.log(`  ${c.dim}Labels: ${p.labels.join(", ")}${c.reset}`);
     if (p.project_path) console.log(`  ${c.dim}Path: ${p.project_path}${c.reset}`);
     if (p.tasks?.length) {
-      console.log(`\n  ${c.bold}Tasks (${p.tasks.length})${c.reset}`);
+      console.log(`\n  ${c.bold}Tasks (${p.tasks.length}${p.tasks_truncated ? "+, open work first" : ""})${c.reset}`);
       for (const t of p.tasks) {
         const ticon = STATUS_ICONS[t.status] || "?";
         console.log(`  ${ticon} ${c.cyan}${t.short_id}${c.reset} ${t.title}${externalTag(t)} ${c.dim}${t.status}${c.reset}`);
@@ -21588,9 +21611,9 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
     }
 
     if (bounceDaemonIfBuildChanged(daemonWasRunning)) {
-      console.log(`Updated to v${available} and restarted daemon.\n`);
+      console.error(`Updated to v${available} and restarted daemon.\n`);
     } else {
-      console.log(`Updated to v${available}.\n`);
+      console.error(`Updated to v${available}.\n`);
     }
   } else {
     recordUpdateFailure(available);

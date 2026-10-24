@@ -32,6 +32,7 @@ import { canAccessChannel, canReadChannelAnonymously, channelAgentRows, channelM
 import {
   dmKeyFor,
   isAgentTurnInFlight,
+  isClosedAgentPlaceholder,
   isHistoryLine,
   isLiveVoiceRow,
   isSilentAgentRow,
@@ -82,6 +83,8 @@ import {
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { parseQueryTerms } from "@codecast/shared/search";
 import { chatMentionClientId, chatRelayClientId } from "./lib/chatWakeIds";
+import { nextChatStamp, patchChat } from "./lib/chatRows";
+import { closeSessionReplyOnAnswer, openSessionReply } from "./chatSessionReplies";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 
@@ -386,17 +389,8 @@ async function requireTeamForWrite(
   return { teamId: await resolveTeamMembership(ctx, userId, fallback), guessed: true };
 }
 
-// EVERY chat patch goes through here. The store keeps the previous row identity
-// when no scalar changed, so a patch that only touched an array would never
-// reach the UI; bumping `updated_at` unconditionally is what makes array-only
-// changes visible. Exported so a test can assert the invariant.
-export async function patchChat(
-  ctx: MutationCtx,
-  id: Id<"chat_messages"> | Id<"chat_channels"> | Id<"chat_reads">,
-  patch: Record<string, unknown>,
-): Promise<void> {
-  await ctx.db.patch(id as any, { ...patch, updated_at: Date.now() } as any);
-}
+// patchChat lives in lib/chatRows; re-exported for the modules that import it from here.
+export { patchChat };
 
 // ── Identity ────────────────────────────────────────────────────────────────
 
@@ -737,9 +731,10 @@ async function railFor(
       .take(channel.kind === "dm" ? DM_INBOUND_SCAN : 4);
     // A burst still being spoken is not yet a line in this room: it has not
     // notified, so it neither becomes the rail's last message nor bumps the
-    // room's sort. Finalize does both, once.
+    // room's sort. Finalize does both, once. A thinking row has said nothing
+    // yet either: the answer it becomes is the line.
     const visible = (m: Doc<"chat_messages">) =>
-      !m.deleted_at && !isSilentAgentRow(m) && !isLiveVoiceRow(m);
+      !m.deleted_at && !isSilentAgentRow(m) && !isLiveVoiceRow(m) && !isVisibleAgentPending(m.agent_status);
     const lastMessage = newest.find(visible) ?? null;
     // The newest line from the other side, or null when the viewer has only
     // ever spoken (or the other side's last word is beyond the scan).
@@ -772,7 +767,7 @@ async function railFor(
     // every line it brought, which is the one thing that makes a new mirror
     // feel like a mess rather than a room you already know.
     const counted = unreadRows.filter(
-      (row) => !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row)
+      (row) => visible(row) && !mine(row)
         && !isHistoryLine(row)
         && (row.thread_root_id === undefined || row.broadcast === true),
     );
@@ -781,7 +776,7 @@ async function railFor(
     // said your name — is invisible inside the noise. In a DM every line is
     // addressed to you, so every unread row counts as a mention.
     const unreadMentions = unreadRows.filter((row) =>
-      !row.deleted_at && !isSilentAgentRow(row) && !isLiveVoiceRow(row) && !mine(row) && !isHistoryLine(row) && (
+      visible(row) && !mine(row) && !isHistoryLine(row) && (
         channel.kind === "dm"
         || row.mention_scope === "here"
         || (!!userId && mentionUserIds(row.mentions as any).includes(userId.toString()))
@@ -905,7 +900,7 @@ export const listMessages = query({
 
     // A silent placeholder at room level (an inline DM turn the anchor passed
     // on) never reaches a reader.
-    const messages = [...page.page].reverse().filter((r) => !isSilentAgentRow(r));
+    const messages = [...page.page].reverse().filter((r) => !isSilentAgentRow(r) || isClosedAgentPlaceholder(r));
     const reactions = await reactionsFor(ctx, messages);
     const threads = await threadSummariesFor(ctx, messages);
     const authors = await authorsFor(ctx, messages);
@@ -962,7 +957,12 @@ export type ThreadSummary = {
   // written by the workspace's one bridge user, so the ids alone drew every
   // Slack replier as the bridge. Distinct by the rendered identity (shared
   // threadFaceKey), and a Slack person's snapshot rides along.
-  reply_faces: Array<{ user_id: Id<"users">; slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean } }>;
+  reply_faces: Array<{
+    user_id: Id<"users">;
+    slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean };
+    // A session typed the reply (stored under its human): the face is the session.
+    session?: { id: string; title?: string; agent_type?: string };
+  }>;
   // Set when the newest reply is an agent's and still unfinished, so the
   // channel can say "Anchor is thinking" without opening the thread. Without
   // this, an in-flight answer is invisible from the room it was asked in.
@@ -999,12 +999,14 @@ export async function threadSummariesFor(
       const ext = r.external_author;
       replyFaces.push(ext
         ? { user_id: r.user_id, slack: { user: r.external?.user, name: ext.name, avatar_url: ext.avatar_url, is_bot: ext.is_bot } }
-        : { user_id: r.user_id });
+        : r.origin === "agent" && r.origin_session_id && r.author_kind !== "agent"
+          ? { user_id: r.user_id, session: { id: r.origin_session_id, title: r.origin_session_title, agent_type: r.origin_agent_type } }
+          : { user_id: r.user_id });
       if (faces.length >= 4) break;
     }
     const newest = live[0];
-    const pendingAgent = newest.author_kind === "agent"
-      && (isVisibleAgentPending(newest.agent_status) || newest.agent_status === "error");
+    // Only agent rows carry a status: the anchor's, or a session's thinking row.
+    const pendingAgent = isVisibleAgentPending(newest.agent_status) || newest.agent_status === "error";
     out.push({
       root_id: root._id,
       reply_count: Math.min(live.length, THREAD_SUMMARY_SCAN - 1),
@@ -1079,7 +1081,7 @@ export const getThread = query({
       .paginate({ numItems: limit, cursor: args.cursor ?? null });
     // Silent placeholders never leave the server: a reader must not see the
     // anchor listening, nor the rows where it decided to stay quiet.
-    const replies = [...page.page].reverse().filter((r) => !isSilentAgentRow(r));
+    const replies = [...page.page].reverse().filter((r) => !isSilentAgentRow(r) || isClosedAgentPlaceholder(r));
     const reactions = await reactionsFor(ctx, [root, ...replies]);
     const authors = await authorsFor(ctx, [root, ...replies]);
 
@@ -1386,31 +1388,66 @@ export const createChannel = mutation({
 // joined into `dm_key` make the same conversation resolve to the same room no
 // matter who opens it or how many times. A 1:1 and a group message are the same
 // shape with different counts.
+//
+// The room's own member is whoever will speak in it. A role's standing session
+// speaks as the role's bot (insertChatMessage), so its DM is the bot and the
+// people it named: the human whose token it runs on joins only when named,
+// never because the session happens to run on their machine.
 export const openDm = mutation({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
     // The OTHER parties, by id or by handle (`cast chat dm alice`). The
-    // caller is always included.
+    // speaker is always included.
     member_ids: v.optional(v.array(v.id("users"))),
     handles: v.optional(v.array(v.string())),
     client_id: v.optional(v.string()),
+    // The session asking (chatSendOrigin), the same stamp sendMessage takes.
+    origin: v.optional(v.literal("agent")),
+    origin_session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const { teamId } = await requireTeamForWrite(ctx, userId, args.team_id);
-    const others = await dmOthers(ctx, teamId, userId, args.member_ids ?? [], args.handles ?? []);
-
-    await chatRateLimit(ctx, userId, "chat.channel_create", CHANNEL_CREATE_LIMIT);
-    const room = await ensureDmRoom(ctx, teamId, [userId, ...others], userId, { client_id: args.client_id });
+    const speaker = args.origin === "agent" ? await sessionSpeaker(ctx, userId, args.origin_session_id) : userId;
+    const { room, others } = await openPeopleRoom(ctx, {
+      teamId, speaker, ids: args.member_ids ?? [], handles: args.handles ?? [], limitedUser: userId, clientId: args.client_id,
+    });
     // Re-opening is joining: the caller may have left the read row behind. No
     // chat_added here: an empty DM room is not an event. The first MESSAGE
     // notifies (chat_dm), which is the moment something was actually said.
-    await upsertRead(ctx, userId, teamId, room.channel._id, Date.now(), undefined, undefined);
+    if (speaker === userId) await upsertRead(ctx, userId, teamId, room.channel._id, Date.now(), undefined, undefined);
     const names = await Promise.all(others.map(async (id) => displayName(await ctx.db.get(id))));
     return { channel_id: room.channel._id, created: room.created, team_id: teamId, with: names };
   },
 });
+
+/** Who a session's chat lines speak as: a role's standing session is the
+ *  role's bot, anything else is the caller. Same rule as insertChatMessage,
+ *  including the ownership check on the caller-supplied session id. */
+async function sessionSpeaker(
+  ctx: MutationCtx,
+  callerId: Id<"users">,
+  sessionRef: string | undefined,
+): Promise<Id<"users">> {
+  if (!sessionRef) return callerId;
+  const conv = await findConversationByAnyRefWhere(ctx, sessionRef, (c) => isConversationOwner(ctx, callerId, c));
+  if (!conv) return callerId;
+  const actor = await resolveActor(ctx, callerId, conv);
+  return actor.kind === "role" && actor.anchor ? actor.user_id : callerId;
+}
+
+/** The DM room of `speaker` and the people named by id or handle, found or
+ *  made. Rate limited on `limitedUser`, the human whose token asked. */
+async function openPeopleRoom(
+  ctx: MutationCtx,
+  opts: { teamId: Id<"teams">; speaker: Id<"users">; ids: Id<"users">[]; handles: string[]; limitedUser: Id<"users">; clientId?: string },
+): Promise<{ room: { channel: Doc<"chat_channels">; created: boolean }; others: Id<"users">[] }> {
+  const others = await dmOthers(ctx, opts.teamId, opts.speaker, opts.ids, opts.handles);
+  await chatRateLimit(ctx, opts.limitedUser, "chat.channel_create", CHANNEL_CREATE_LIMIT);
+  const room = await ensureDmRoom(ctx, opts.teamId, [opts.speaker, ...others], opts.speaker, { client_id: opts.clientId });
+  return { room, others };
+}
 
 /** The people a direct message reaches besides `selfId`, from ids and handles
  *  (a GitHub login or email local part, matched against the team's roster the
@@ -2396,6 +2433,8 @@ export const sendMessage = mutation({
     // line lands either way; only the billed agent turn is dropped, and the
     // result says so.
     const message = await ctx.db.get(messageId);
+    // A session answering where it was asked: its thinking row there is done.
+    if (message) await closeSessionReplyOnAnswer(ctx, message);
     let anchor: Id<"chat_messages"> | null = null;
     let wakeSkipped: string | null = null;
     let listening = false;
@@ -2503,23 +2542,6 @@ export const sendMessage = mutation({
   },
 });
 
-
-// Strictly monotonic per channel. created_at is load-bearing three ways —
-// pagination order, the unread scan's `gt(lastReadAt)`, and the read mark
-// itself — and two rows in the same millisecond break all three at once:
-// a message landing in the read mark's millisecond is unread yet invisible
-// to the badge forever. One indexed read per insert buys the invariant.
-async function nextChatStamp(
-  ctx: MutationCtx,
-  channelId: Id<"chat_channels">,
-): Promise<number> {
-  const newestRow = await ctx.db
-    .query("chat_messages")
-    .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channelId))
-    .order("desc")
-    .first();
-  return Math.max(Date.now(), (newestRow?.created_at ?? 0) + 1);
-}
 
 // The one insert-and-notify path for a chat line, whether a person or the
 // anchor wrote it. Everything that makes a message a message lives here — the
@@ -3412,9 +3434,9 @@ export const sendAsAnchor = mutation({
         ? { teamId: anchor.team_id }
         : await requireTeamForWrite(ctx, userId, args.team_id);
       if (!(await isTeamMember(ctx as any, userId, teamId))) chatFail("FORBIDDEN", "Not a member of that team");
-      const others = await dmOthers(ctx, teamId, anchor.bot_user_id, args.dm_user_ids ?? [], args.dm_handles ?? []);
-      await chatRateLimit(ctx, userId, "chat.channel_create", CHANNEL_CREATE_LIMIT);
-      const room = await ensureDmRoom(ctx, teamId, [anchor.bot_user_id, ...others], anchor.bot_user_id);
+      const { room, others } = await openPeopleRoom(ctx, {
+        teamId, speaker: anchor.bot_user_id, ids: args.dm_user_ids ?? [], handles: args.dm_handles ?? [], limitedUser: userId,
+      });
       channel = room.channel;
       if (room.created) {
         const now = Date.now();
@@ -3728,8 +3750,11 @@ async function anchorTurnInFlight(
       .order("desc")
       .filter((q) => q.eq(q.field("thread_root_id"), undefined))
       .take(12);
+  // A role's standing session writes its own thinking rows under the same bot
+  // (chatSessionReplies); those carry the session and are not the anchor's.
   return recent.find((row) =>
     !row.deleted_at
+    && !row.origin_session_id
     && row.user_id.toString() === anchor.bot_user_id.toString()
     && isAgentTurnInFlight(row.agent_status)) ?? null;
 }
@@ -3919,13 +3944,22 @@ async function collectChatExcerpt(
   // "You (earlier)" is decided PER ROW, never cached by author: a session and
   // its human host share a user_id, so caching the self label under the user
   // would dress the human's own lines (and other sessions') as the reader's.
+  const humanName = async (userId: Id<"users">): Promise<string> => {
+    const key = userId.toString();
+    if (!names.has(key)) names.set(key, displayName(await ctx.db.get(userId)));
+    return names.get(key)!;
+  };
+  // A line a session typed names the session, crediting its human, the way
+  // the chat renders it: under the human's name alone, the reader cannot
+  // tell a session's answer from the person's own words.
   const nameFor = async (row: Doc<"chat_messages">): Promise<string> => {
     if (opts.isSelf(row)) return "You (earlier)";
-    const key = row.user_id.toString();
-    if (!names.has(key)) {
-      names.set(key, displayName(await ctx.db.get(row.user_id)));
+    const human = await humanName(row.user_id);
+    if (row.origin === "agent" && row.origin_session_id && row.author_kind !== "agent") {
+      const title = row.origin_session_title ? `${oneLine(row.origin_session_title, 60)}, ` : "";
+      return `${title}session ${row.origin_session_id.slice(0, 7)} via ${human}`;
     }
-    return names.get(key)!;
+    return human;
   };
   const entries: Array<{ name: string; content: string }> = [];
   if (opts.root && opts.threadRootId) {
@@ -4073,7 +4107,7 @@ async function maybeRelayToOriginSession(
     isSelf: (row) => !!row.origin_session_id && row.origin_session_id === String(conversation._id),
   });
   const team = await ctx.db.get(opts.channel.team_id);
-  await enqueuePendingMessage(ctx, conversation, opts.senderId, {
+  const wakeId = await enqueuePendingMessage(ctx, conversation, opts.senderId, {
     content: buildSessionRelay({
       channelName: opts.channel.name,
       channelKind: opts.channel.kind,
@@ -4089,6 +4123,7 @@ async function maybeRelayToOriginSession(
     }),
     client_id: key,
   });
+  await openSessionReply(ctx, { channel: opts.channel, threadRootId: root._id, wakeId });
   return {
     delivered: true,
     skipped: null,
@@ -4495,7 +4530,10 @@ export async function wakeMentionedParties(
       from_conversation_id: selfConversation?._id ?? undefined,
     });
     if (!rowId) out.skipped.push(`delivery_failed:${role.handle}`);
-    else out.roles++;
+    else {
+      out.roles++;
+      await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId: rowId });
+    }
   }
 
   for (const conversation of opts.sessions) {
@@ -4506,11 +4544,12 @@ export async function wakeMentionedParties(
     if (!(await underCaps(String(conversation._id)))) { out.folded++; continue; }
     const body = quoted(`${opts.senderName} mentioned @${shortId} in #${opts.channel.name}.`, replyTail);
     const where = opts.channel.kind === "dm" ? "dm" : `#${opts.channel.name}`;
-    await enqueuePendingMessage(ctx, conversation, opts.senderId, {
+    const wakeId = await enqueuePendingMessage(ctx, conversation, opts.senderId, {
       content: `<chat-mention channel="${where.replace(/"/g, "'")}" thread="${threadRootId}" from="${opts.senderName.replace(/"/g, "'")}">\n${body}\n</chat-mention>`,
       client_id: chatMentionClientId(opts.message._id, conversation._id),
     });
     out.sessions++;
+    await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId });
   }
 
   if (out.folded > 0 && !opts.message.mention_folded) {
@@ -4573,19 +4612,22 @@ async function deliverToChannelAgents(
           from_user_id: opts.senderId,
           human: true,
         });
-        if (rowId) out.roles++;
-        else out.skipped.push(`role_has_no_session:${row.short_id}`);
+        if (rowId) {
+          out.roles++;
+          await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId: rowId });
+        } else out.skipped.push(`role_has_no_session:${row.short_id}`);
         continue;
       }
       const conversation = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
       if (!conversation) continue;
       if (opts.alreadyDelivered && String(conversation._id) === opts.alreadyDelivered) continue;
-      await enqueuePendingMessage(ctx, conversation, opts.senderId, {
+      const wakeId = await enqueuePendingMessage(ctx, conversation, opts.senderId, {
         content,
         client_id: chatMentionClientId(opts.message._id, conversation._id),
         human: true,
       });
       out.sessions++;
+      await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId });
     } catch {
       out.skipped.push(`delivery_failed:${row.short_id}`);
     }
