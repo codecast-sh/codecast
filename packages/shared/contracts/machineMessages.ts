@@ -87,15 +87,27 @@ export function isMidWorkReviveNotice(rawContent: string | null | undefined): bo
   return !!rawContent && stripInjectionNoise(rawContent).startsWith(MID_WORK_REVIVE_MESSAGE.slice(0, 60));
 }
 
-// A notice that the previous turn was cut off (a deliberate interrupt, or a
-// process exit codecast revived). Never the person's ask: the navigator and
+// The message the server queues when a move to another machine stopped a turn
+// partway (convex devices.ts queueMoveContinue). Codecast wrote it, not the person.
+export const MOVE_INTERRUPT_MESSAGE =
+  "This session moved to another machine while a turn was still in progress, and the move stopped that turn partway. " +
+  "Anything that was running in the background stopped with it. Pick up where you left off: answer what is still " +
+  "unanswered, relaunch what was interrupted, then carry on with the task.";
+
+export function isMoveInterruptNotice(rawContent: string | null | undefined): boolean {
+  return !!rawContent && stripInjectionNoise(rawContent).startsWith(MOVE_INTERRUPT_MESSAGE.slice(0, 60));
+}
+
+// A notice that the previous turn was cut off (a deliberate interrupt, a
+// process exit codecast revived, or a move to another machine). Never the person's ask: the navigator and
 // the sticky prompt skip it.
 export function isTurnInterruptionNotice(rawContent: string | null | undefined): boolean {
   if (!rawContent) return false;
   const text = stripInjectionNoise(rawContent);
   return text.startsWith("<turn_aborted>")
     || text.startsWith("The user interrupted the previous turn on purpose.")
-    || isMidWorkReviveNotice(text);
+    || isMidWorkReviveNotice(text)
+    || isMoveInterruptNotice(text);
 }
 
 export function isAgentContextMessage(rawContent: string | null | undefined): boolean {

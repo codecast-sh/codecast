@@ -492,6 +492,13 @@ export function reviveClientId(conversationId: string, at: number): string {
   return `revive-${conversationId}-${Math.floor(at / 60_000)}`;
 }
 
+// The client_id of the continue queued when a move to another machine stopped
+// a turn partway (convex devices.ts queueMoveContinue). Minute-bucketed: a
+// retried move cannot double-queue.
+export function moveContinueClientId(conversationId: string, at: number): string {
+  return `move-continue-${conversationId}-${Math.floor(at / 60_000)}`;
+}
+
 export function isReviveClientId(clientId: string | null | undefined): boolean {
   return !!clientId && clientId.startsWith("revive-");
 }
@@ -500,9 +507,10 @@ export function isReviveClientId(clientId: string | null | undefined): boolean {
 // client_id: the auto-switch loop's (auto-switch-continue-*), the daemon's
 // post-switch revive when no caller painted one (acct-switch-*), the
 // shared un-park id above, and the watchdog's revive of a session whose
-// process died mid-work (revive-*, cli midWorkRevive.ts). A revive the person
-// clicked in the web (acct-revive-*) is theirs and reads as their own message.
-const RECOVERY_CONTINUE_ID_RE = /^(?:auto-switch-continue-|acct-switch-|continue-blocked-|revive-)/;
+// process died mid-work (revive-*, cli midWorkRevive.ts), and the continue
+// after a move stopped a turn (move-continue-*). A revive the person clicked in
+// the web (acct-revive-*) is theirs and reads as their own message.
+const RECOVERY_CONTINUE_ID_RE = /^(?:auto-switch-continue-|acct-switch-|continue-blocked-|revive-|move-continue-)/;
 
 export function isRecoveryContinueClientId(clientId: string | null | undefined): boolean {
   return !!clientId && RECOVERY_CONTINUE_ID_RE.test(clientId);

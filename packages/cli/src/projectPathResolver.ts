@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { isHomeDirectoryPath } from "@codecast/shared/contracts";
 
 /**
  * Reproduce Claude Code's cwd → ~/.claude/projects/<dir> slug EXACTLY.
@@ -232,6 +233,9 @@ export interface ResumeCwdInput {
   resolveLocalRepo: (p: string) => string | null;
   /** Remap via the conversation's git remote (resolveLocalProjectPath wrapper). Optional. */
   remapViaRemote?: () => Promise<string | null>;
+  /** This machine's home directory: where a session recorded in another
+   *  machine's bare home directory runs here. */
+  home?: string | null;
   /** File-existence check (overridable for tests). */
   exists?: (p: string) => boolean;
 }
@@ -244,6 +248,9 @@ export interface ResumeCwdInput {
 //   3. the convention/learned/user-mapping resolver (forks, renamed checkouts),
 //      seeded with the recorded repo root when the caller knows it
 //   4. a git-remote remap to a sibling checkout
+//   5. a recorded bare home directory (/Users/<name>, /home/<name>, /root) is
+//      this machine's home: the session ran in its person's home with no repo
+//      (a role's standing session, say), so home is its equivalent here
 //
 // Returns null when none resolve. Callers MUST NOT fall back to $HOME: doing so
 // runs the agent in the wrong directory AND mislabels the project as the home
@@ -288,6 +295,9 @@ export async function resolveResumeCwd(input: ResumeCwdInput): Promise<string | 
     const viaRemote = await input.remapViaRemote();
     if (viaRemote && exists(viaRemote)) return viaRemote;
   }
+
+  const home = input.home?.trim();
+  if (recorded && home && isHomeDirectoryPath(recorded) && exists(home)) return home;
 
   return null;
 }

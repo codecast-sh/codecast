@@ -48,6 +48,18 @@ describe("reorientationNotice", () => {
     expect(n).not.toContain("Only work that was pushed");
   });
 
+  test("a session that ran in a home folder is told it runs in this machine's home, not a checkout", () => {
+    const n = reorientationNotice({
+      ...base,
+      newCwd: "/home/cam",
+      oldCwd: "/Users/ashot on MacBook-Pro-182",
+      checkout: { cwd: "/home/cam", cloned: false, homeFolder: true },
+    })!;
+    expect(n).toContain("this machine's home folder");
+    expect(n).not.toContain("checkout");
+    expect(n).not.toContain("fresh clone");
+  });
+
   test("crossing accounts names whose config applies and what did not travel", () => {
     const n = reorientationNotice({
       ...base,

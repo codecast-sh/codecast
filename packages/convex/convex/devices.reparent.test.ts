@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performReassignToDevice, performReparentSessionToDevice, reassignToDevice } from "./devices";
-import { MACHINE_SWITCH_NOTICE_PREFIX } from "@codecast/shared/contracts";
+import { MACHINE_SWITCH_NOTICE_PREFIX, MOVE_INTERRUPT_MESSAGE } from "@codecast/shared/contracts";
 
 // Cross-user device reparent: an OWNER pulls a session run by a TEAMMATE onto
 // their OWN machine. Account follows device (user_id -> caller), the immutable
@@ -464,5 +464,51 @@ describe("moving a parked row off the cloud host un-parks it", () => {
     const db = withHost(fixtures(parked));
     await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: "host" });
     expect(conv(db).cloud_placement).toBe("pending");
+  });
+});
+
+// A move kills the agent on the machine it leaves. A turn in progress there
+// ended partway and the resume asked nothing of the model, so the session sat
+// with the person's messages unanswered (jx74yqy, 2026-10-23). The move now
+// queues the continue itself, and only when a turn was running.
+describe("a move that stops a turn queues the continue", () => {
+  const moveContinues = (db: any) =>
+    (db._tables.pending_messages ?? []).filter((m: any) => m.content === MOVE_INTERRUPT_MESSAGE);
+  const managed = (agent_status: string) => [
+    { _id: "ms1", session_id: "sess1", conversation_id: "conv1", user_id: JASON, agent_status, last_heartbeat: Date.now() },
+  ];
+
+  test("reparent of a session mid-turn queues one continue on the moved conversation", async () => {
+    const db = fixtures();
+    db._tables.managed_sessions = managed("working");
+    await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+    const queued = moveContinues(db);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].conversation_id).toBe("conv1");
+    expect(queued[0].status).toBe("pending");
+    expect(queued[0].client_id).toStartWith("move-continue-conv1-");
+  });
+
+  test("same-user run-on-device of a session mid-turn queues one continue", async () => {
+    const db = fixtures({ user_id: ME });
+    db._tables.managed_sessions = managed("thinking");
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev" });
+    expect(moveContinues(db)).toHaveLength(1);
+  });
+
+  test("a session that had finished its turn gets no continue", async () => {
+    for (const status of ["idle", "stopped"]) {
+      const db = fixtures();
+      db._tables.managed_sessions = managed(status);
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      expect(moveContinues(db)).toHaveLength(0);
+    }
+  });
+
+  test("a resume on the machine already running it is not a move and queues nothing", async () => {
+    const db = fixtures({ user_id: ME, owner_device_id: "mydev" });
+    db._tables.managed_sessions = managed("working");
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev" });
+    expect(moveContinues(db)).toHaveLength(0);
   });
 });

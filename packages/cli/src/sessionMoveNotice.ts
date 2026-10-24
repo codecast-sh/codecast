@@ -37,6 +37,9 @@ export interface CheckoutFacts {
   cloned: boolean;
   remote?: string;
   branch?: string;
+  /** The session ran in a home folder with no repository, and runs in this
+   * machine's home folder now. */
+  homeFolder?: boolean;
   /** Set when the source's published working-tree snapshot was replayed into this
    * checkout (wipSnapshot.ts). Changes what is TRUE of the tree, so it changes
    * what the notice may claim: with a snapshot the agent's uncommitted work is
@@ -121,6 +124,10 @@ export function reorientationNotice(f: ReorientationFacts): string | null {
     const ofRemote = f.checkout.remote ? ` of ${f.checkout.remote}` : "";
     lines.push(
       `The working tree here is a fresh clone${ofRemote}${onBranch}. Only work that was pushed to that remote is present: anything uncommitted, or committed but not pushed, stayed behind on the previous machine and is NOT here. If you were on a different branch, you are not on it now.`,
+    );
+  } else if (f.checkout?.homeFolder) {
+    lines.push(
+      `You ran in a home folder with no repository, so here you run in this machine's home folder. It holds this machine's files, not the previous machine's.`,
     );
   } else if (f.checkout) {
     lines.push(

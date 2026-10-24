@@ -1,6 +1,8 @@
 // Pure helpers for turning a raw cwd/git_root into the canonical "project root"
-// shown by the recent-projects picker. Kept dependency-free so it can be unit
+// shown by the recent-projects picker. Pure (shared contracts only) so it can be unit
 // tested with `bun test` (see projectPaths.test.ts).
+
+import { isHomeDirectoryPath } from "@codecast/shared/contracts";
 
 /**
  * Collapse a raw cwd/git_root into a canonical project root, or return null if
@@ -24,8 +26,8 @@ export function normalizeProjectPath(raw: string): string | null {
   // only runs when the daemon heartbeat is fresh and so lets phantoms flicker in.
   const segs = p.split('/').filter(Boolean);
   if (segs.length === 0) return null; // "/" or ""
-  if (segs[0] === 'root' && segs.length === 1) return null; // /root
-  if ((segs[0] === 'Users' || segs[0] === 'home') && segs.length <= 2) return null; // /Users, /Users/<name>
+  if (isHomeDirectoryPath(p)) return null; // /root, /Users/<name>, /home/<name>
+  if ((segs[0] === 'Users' || segs[0] === 'home') && segs.length === 1) return null; // /Users, /home
 
   const parts = p.split('/');
   const srcIdx = parts.findIndex(s => s === 'src' || s === 'projects' || s === 'repos' || s === 'code');

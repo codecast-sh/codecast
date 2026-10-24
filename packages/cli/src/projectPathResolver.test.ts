@@ -240,6 +240,34 @@ describe("resolveLocalRepoPath", () => {
 describe("resolveResumeCwd", () => {
   const noRepo = () => null;
 
+  // jx74yqy (2026-10-23): a role's standing session recorded in /Users/ashot
+  // was moved to a Linux box whose home is /home/cam. No repo, no remote, so
+  // every rule refused and the resume died in silence. A bare home directory
+  // has an equivalent everywhere: this machine's home.
+  test("a foreign bare home directory resolves to this machine's home", async () => {
+    for (const recorded of ["/Users/ashot", "/home/ubuntu", "/root"]) {
+      const cwd = await resolveResumeCwd({
+        recordedCwd: recorded,
+        home: "/home/cam",
+        resolveLocalRepo: noRepo,
+        remapViaRemote: async () => null,
+        exists: (p) => p === "/home/cam",
+      });
+      expect(cwd).toBe("/home/cam");
+    }
+  });
+
+  test("a foreign folder inside a home is still refused, never placed in $HOME", async () => {
+    const cwd = await resolveResumeCwd({
+      recordedCwd: "/Users/ashot/notes",
+      home: "/home/cam",
+      resolveLocalRepo: noRepo,
+      remapViaRemote: async () => null,
+      exists: (p) => p === "/home/cam",
+    });
+    expect(cwd).toBeNull();
+  });
+
   test("an existing override wins (remote-move worktree path)", async () => {
     const cwd = await resolveResumeCwd({
       cwdOverride: "/Users/m1/work/outreach",

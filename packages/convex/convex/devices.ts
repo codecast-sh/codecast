@@ -33,7 +33,8 @@ import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unpa
 import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 import { lineSlotsValidator } from "./lib/lineSlotsValidator";
-import { normalizeGitOrigin } from "@codecast/shared/contracts";
+import { normalizeGitOrigin, MID_TURN_AGENT_STATUSES, MOVE_INTERRUPT_MESSAGE, moveContinueClientId } from "@codecast/shared/contracts";
+import { enqueuePendingMessage } from "./pendingMessages";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -501,6 +502,29 @@ async function insertMachineSwitchDivider(
 }
 
 /**
+ * A move stops the agent's process on the machine it leaves, so a turn in
+ * progress there ends partway, and the resume on the new machine writes no
+ * prompt the model answers: the session sat stopped with the person's messages
+ * unanswered until someone typed "continue" (jx74yqy and jx7d538, 2026-10-23).
+ * So the move queues the continue itself. Call it after the conversation is
+ * re-homed (delivery follows the new owner) and before the managed rows that
+ * say a turn was running are released or dropped.
+ */
+async function queueMoveContinueIfMidTurn(ctx: any, conversationId: Id<"conversations">, fromUserId: Id<"users">): Promise<void> {
+  const managed = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+  if (!managed.some((row: any) => MID_TURN_AGENT_STATUSES.has(row.agent_status ?? ""))) return;
+  const conv = await ctx.db.get(conversationId);
+  if (!conv) return;
+  await enqueuePendingMessage(ctx, conv, fromUserId, {
+    content: MOVE_INTERRUPT_MESSAGE,
+    client_id: moveContinueClientId(String(conversationId), Date.now()),
+  });
+}
+
+/**
  * The CLI transfer flip (`cast remote move` / `back`): the files are already
  * on the destination, so this only re-homes ownership, resumes there, and
  * releases the source. Exported for tests; the mutation below is the wrapper.
@@ -549,7 +573,10 @@ export async function performMoveSessionToDevice(
   }
 
   let commandId: string | undefined;
-  if (args.resume !== false) commandId = await enqueueTargetedResume(ctx, userId, conv, args.owner_device_id, args.project_path);
+  if (args.resume !== false) {
+    commandId = await enqueueTargetedResume(ctx, userId, conv, args.owner_device_id, args.project_path);
+    if (priorDeviceId !== args.owner_device_id) await queueMoveContinueIfMidTurn(ctx, args.conversation_id, userId);
+  }
   await releasePreviousOwner(ctx, {
     queueUserId: userId,
     conversationId: args.conversation_id,
@@ -803,6 +830,7 @@ export async function performReassignToDevice(
     created_at: Date.now(),
     target_device_id: args.device_id,
   });
+  if (prevOwner && prevOwner !== args.device_id) await queueMoveContinueIfMidTurn(ctx, args.conversation_id, userId);
 
   await releasePreviousOwner(ctx, {
     queueUserId: userId,
@@ -987,6 +1015,7 @@ export async function performReparentSessionToDevice(
 
   if (deviceChanged) {
     await insertMachineSwitchDivider(ctx, conv, { to: device, from: priorDevice });
+    await queueMoveContinueIfMidTurn(ctx, conv._id, userId);
   }
 
   // Hand over the managed-session row with the conversation. The source

@@ -6,7 +6,7 @@ import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeli
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
-import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, pairDeliveryAcks } from "@codecast/shared/contracts";
+import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, pairDeliveryAcks } from "@codecast/shared/contracts";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
@@ -622,6 +622,7 @@ async function resolveResumeCwdOrRefuse(opts: {
     cwdOverride: opts.cwdOverride,
     recordedCwd: opts.recordedCwd,
     recordedRoot: opts.projectInfo?.git_root ?? null,
+    home: process.env.HOME,
     resolveLocalRepo,
     remapViaRemote: (svc && (opts.projectInfo || conversationId))
       ? async () => {
@@ -716,6 +717,11 @@ export function missingFolderError(recordedPath: string): string {
   return `${recordedPath} isn't on this machine. Start the session in a folder this machine has.`;
 }
 
+// The same refusal for a session that already ran somewhere else.
+export function missingResumeFolderError(recordedPath: string): string {
+  return `${recordedPath} isn't on this machine and no repository is recorded to clone. Move the session to a machine that has it.`;
+}
+
 // A new session started in a folder that isn't here yet (the new-session
 // picker's "create" choice) gets that folder. Only a plain folder inside this
 // machine's home: a recorded remote, or a repo root other than the folder
@@ -754,9 +760,17 @@ async function refuseResumeNoLocalCheckout(
     }
     const info = await syncServiceRef.getProjectInfo(conversationId).catch(() => null);
     const remote = info?.git_remote_url ?? null;
-    // Nothing to clone, nothing to point at → clear any stale banner and stay
-    // silent rather than scaring the user with a dead-end "clone it first".
+    // Nothing to clone: a session no machine owns stays silent rather than
+    // flashing a dead-end "clone it first". One THIS machine owns has no other
+    // runner (a move just handed it here), so silence would leave it stopped
+    // with nothing on screen: name the folder this machine lacks instead.
     if (!noLocalCheckoutBannerActionable({ remote, recordedPath: recordedCwd })) {
+      if (owner === deviceId() && recordedCwd) {
+        const err = missingResumeFolderError(recordedCwd);
+        syncServiceRef.setSessionError(conversationId, err).catch(() => {});
+        log(`[REMOTE] resume refused for ${short}: ${err}`);
+        return err;
+      }
       syncServiceRef.setSessionError(conversationId).catch(() => {});
       log(`[REMOTE] resume ${short}: no local checkout and no remote/path to act on — staying silent (cleared any stale banner)`);
       return refused;
@@ -786,6 +800,8 @@ interface ReparentedCheckout {
   path: string;
   /** True when this machine cloned the repo just now; false when a checkout was already here. */
   cloned: boolean;
+  /** The session ran in a bare home folder and resumes in this machine's home. */
+  homeFolder?: boolean;
   remote?: string;
   branch?: string;
   /** Set when the source's working-tree snapshot was found and replayed. */
@@ -826,6 +842,9 @@ async function ensureReparentedCheckout(
   }).catch(() => null);
   if (existing) {
     log(`[REPARENT] checkout already resolvable locally: ${existing}`);
+    if (isHomeDirectoryPath(recordedPath) && existing === process.env.HOME) {
+      return { path: existing, cloned: false, homeFolder: true };
+    }
     return { path: existing, cloned: false, branch: readBranch(existing) };
   }
   if (!conversationId || !syncServiceRef) return undefined;
@@ -935,6 +954,7 @@ async function sendReparentNotice(opts: {
       ? {
           cwd: opts.checkout.path,
           cloned: opts.checkout.cloned,
+          homeFolder: opts.checkout.homeFolder,
           remote: opts.checkout.remote,
           // With a restored snapshot the branch IS the session's own, so prefer
           // the snapshot's over whatever the clone happened to check out.
