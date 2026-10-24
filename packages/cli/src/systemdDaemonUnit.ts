@@ -50,3 +50,33 @@ export function autostartDisabledByEnv(env: NodeJS.ProcessEnv = process.env): bo
 export function supervisedBySystemdUnit(env: NodeJS.ProcessEnv = process.env, unit: () => string | null = findSystemDaemonUnit): boolean {
   return !!env.INVOCATION_ID && unit() !== null;
 }
+
+/**
+ * A shared box's per-user unit runs while this file exists
+ * (`ConditionPathExists=` on the service, `PathExists=` on its path unit):
+ * the person starts and stops their own daemon by creating and removing a
+ * file they own, with no sudo. A unit written before the flag existed ignores
+ * it, so the flag is used only when the installed unit names it.
+ */
+export const DAEMON_WANTED_FILE = "daemon.wanted";
+
+export function daemonWantedPath(home = os.homedir()): string {
+  return path.join(home, ".codecast", DAEMON_WANTED_FILE);
+}
+
+/** Does the installed unit that runs `unit` start and stop on the wanted file? */
+export function unitUsesWantedFlag(unit: string, dir = "/etc/systemd/system"): boolean {
+  const file = isTemplateInstance(unit) ? unit.replace(/@[^@/]+\.service$/, "@.service") : unit;
+  try { return fs.readFileSync(path.join(dir, file), "utf-8").includes(DAEMON_WANTED_FILE); } catch { return false; }
+}
+
+/** Create or remove the wanted file. Its path unit notices within a second. */
+export function setDaemonWanted(wanted: boolean, home = os.homedir()): void {
+  const p = daemonWantedPath(home);
+  if (wanted) {
+    fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(p, "", { mode: 0o600 });
+  } else {
+    fs.rmSync(p, { force: true });
+  }
+}

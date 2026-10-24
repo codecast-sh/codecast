@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { LOGIN_PATH_FILENAME } from "./loginShellPath.js";
 import { restoreSuspendedAgent } from "./tmuxSuspendedAgent.js";
 import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
@@ -53,6 +54,7 @@ import {
 import { openTaskStart } from "./backgroundTaskStart.js";
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
 import { HibernationWorkScan } from "./hibernationWork.js";
+import { governor, sampleLoad, describeLoad, readGovernorState, writeGovernorState, SAMPLE_INTERVAL_MS as GOVERNOR_SAMPLE_INTERVAL_MS } from "./loadGovernor.js";
 import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, isStationHandOpening, stationHandsFirst, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistroName } from "./windowsSupport.js";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
@@ -65,7 +67,7 @@ import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilit
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, recordRemoteLaunch, stableHostnameAsync } from "./remote/device.js";
 import { UNSAFE_PATH_RE, creatableStartFolder, missingFolderError, missingResumeFolderError, noLocalCheckoutBannerActionable, noLocalCheckoutError, placeFreshDeliverySession, type ConversationProjectInfo } from "./resumePlacement.js";
-import { liveRunnerPid, paneReplaceable, runnerPidFile, runPaneName } from "./workflow/runResume.js";
+import { liveRunnerPid, paneReplaceable, runnerPidFile, runPaneLaunchLine, runPaneName } from "./workflow/runResume.js";
 import {
   accountSwitchRestartReason,
   previousAccountToClaim,
@@ -90,7 +92,7 @@ import { hasActiveCloudWork } from "./cloud/activity.js";
 import { startMirrorProcess } from "./cloud/mirror/process.js";
 import { releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
-import { defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
+import { defaultRemote, knownValuesInPush, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { createTurnSnapshot, type TurnSnapshot } from "./treeSnapshot.js";
 import { hashPath } from "./hash.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
@@ -256,7 +258,8 @@ import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { TokenDecryptError } from "./tokenEncryption.js";
 import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerToken.js";
-import { startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
+import { knownValueNames, refreshKnownVault, startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
+import { VAULT_REFRESH_PATH, vaultRedactionSource } from "./secrets/redactionSource.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { launchTokenLedger } from "./launchToken.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
@@ -274,12 +277,20 @@ import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateC
 import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { declaredSpawnParent } from "./spawnParents.js";
 import { redactSecrets, maskToken } from "./redact.js";
+import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
 import { RetryQueue, flushRetryQueueForShutdown, type RetryOperation } from "./retryQueue.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
 import { detectPermissionPrompt } from "./permissionDetector.js";
-import { handlePermissionRequest } from "./permissionHandler.js";
-import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode } from "./update.js";
+import { handlePermissionRequest, type PermissionDecision } from "./permissionHandler.js";
+import {
+  PermissionHookWaiters,
+  parsePermissionHookInput,
+  PERMISSION_HOOK_PATH,
+  PERMISSION_HOOK_MAX_BODY,
+  type PermissionHookInput,
+} from "./permissionHookWait.js";
+import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel } from "./update.js";
 import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import {
@@ -356,7 +367,7 @@ import { atomicWriteFile } from "./atomicWrite.js";
 import { configDirTarget, fenceAdmits, fenceTargetOf, type FenceKind } from "./configFence.js";
 import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import { collectMachineResources, processesStartedOutside, readHostPressure } from "./systemResources.js";
-import { setBackgroundSessions } from "./backgroundPriority.js";
+import { setBackgroundSessions, setGovernorBackground } from "./backgroundPriority.js";
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import {
@@ -406,6 +417,7 @@ import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneR
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
 import { supervisedBySystemdUnit } from "./systemdDaemonUnit.js";
+import { teamHostHeartbeat } from "./hosts/teamMarker.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
@@ -1577,7 +1589,7 @@ async function launchWorkflowRun(siteUrl: string, apiToken: string, runId: strin
   } catch {}
   if (pane) try { tmuxExecSync(["kill-session", "-t", `=${tmuxSession}`], { timeout: 5000 }); } catch { /* none left */ }
   const { cmd: castCmd, prefixArgs: castPrefix } = resolveCastInvocation();
-  const cmdText = `${[castCmd, ...castPrefix].join(" ")} workflow run-daemon ${runId}`;
+  const cmdText = runPaneLaunchLine([castCmd, ...castPrefix], runId);
   try {
     await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
     await typeIntoPane(tmuxSession, cmdText);
@@ -1640,6 +1652,10 @@ async function resumeOrphanedWorkflowRuns(): Promise<void> {
   const now = Date.now();
   for (const run of data?.runs ?? []) {
     if (liveRunnerPid(run.run_id)) continue;
+    if (!governor.admit("workflow_resume")) {
+      log(`[WORKFLOW] resume of ${run.run_id} held: machine ${describeLoad()}`);
+      continue;
+    }
     // A runner launched a moment ago has not claimed the run yet.
     if (now - run.updated_at < WORKFLOW_RESUME_TICK_MS) continue;
     const recent = (workflowResumes.get(run.run_id) ?? []).filter((t) => now - t < 6 * 60 * 60_000);
@@ -2620,14 +2636,15 @@ const STATUSLINE_MAX_BODY = 64 * 1024;
 const STATUSLINE_LOG_EVERY_MS = 10 * 60 * 1000;
 const statusLineLogged = new Map<string, number>();
 
-export function handleStatusLinePost(req: http.IncomingMessage, res: http.ServerResponse): void {
+/** A hook post's body, or a 413 and nothing when it runs past `max`. */
+function readHookBody(req: http.IncomingMessage, res: http.ServerResponse, max: number, onBody: (body: string) => void): void {
   const chunks: Buffer[] = [];
   let size = 0;
   let aborted = false;
   req.on("data", (chunk: Buffer) => {
     if (aborted) return;
     size += chunk.length;
-    if (size > STATUSLINE_MAX_BODY) {
+    if (size > max) {
       aborted = true;
       res.writeHead(413);
       res.end();
@@ -2637,7 +2654,12 @@ export function handleStatusLinePost(req: http.IncomingMessage, res: http.Server
     chunks.push(chunk);
   });
   req.on("end", () => {
-    if (aborted) return;
+    if (!aborted) onBody(Buffer.concat(chunks).toString("utf-8"));
+  });
+}
+
+export function handleStatusLinePost(req: http.IncomingMessage, res: http.ServerResponse): void {
+  readHookBody(req, res, STATUSLINE_MAX_BODY, (body) => {
     // The hook fires and forgets, so nothing here retries and nothing may
     // throw out of the request: a bad payload is dropped, not reported.
     res.writeHead(200, { "Content-Type": "text/plain" });
@@ -2645,7 +2667,7 @@ export function handleStatusLinePost(req: http.IncomingMessage, res: http.Server
     void (async () => {
       try {
         const account = new URL(req.url ?? "/", "http://localhost").searchParams.get("account") || undefined;
-        const result = await ingestStatusLineUsage(JSON.parse(Buffer.concat(chunks).toString("utf-8")), { account });
+        const result = await ingestStatusLineUsage(JSON.parse(body), { account });
         if (!result?.wrote) return;
         const last = statusLineLogged.get(result.key) ?? 0;
         const now = Date.now();
@@ -2676,6 +2698,10 @@ export interface HookIngressDeps {
   refuse: (route: string, reason: string, res: http.ServerResponse) => void;
   deliver: (sessionId: string, data: HookStatusData) => "delivered" | "deferred";
   statusLine: (req: http.IncomingMessage, res: http.ServerResponse) => void;
+  /** Hold a PermissionRequest hook for a web answer (permissionHookWait.ts).
+   *  Absent until boot registers it: the route answers 503 and the hook falls
+   *  back to reporting status. */
+  permission?: (input: PermissionHookInput, res: http.ServerResponse) => void;
 }
 
 export function handleHookIngressHttp(
@@ -2696,6 +2722,29 @@ export function handleHookIngressHttp(
       return true;
     }
     deps.statusLine(req, res);
+    return true;
+  }
+
+  if (req.method === "POST" && req.url?.startsWith(PERMISSION_HOOK_PATH)) {
+    const admitted = deps.admit(req);
+    if (!admitted.ok) {
+      req.resume();
+      deps.refuse(PERMISSION_HOOK_PATH, admitted.reason, res);
+      return true;
+    }
+    readHookBody(req, res, PERMISSION_HOOK_MAX_BODY, (body) => {
+      const input = parsePermissionHookInput(body);
+      // The id names files and records downstream, as on /hook/status.
+      if (!input || !isSafeStatusSessionId(input.sessionId)) {
+        res.writeHead(400);
+        res.end("bad payload");
+      } else if (!deps.permission) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end('{"status":"warming"}');
+      } else {
+        deps.permission(input, res);
+      }
+    });
     return true;
   }
 
@@ -2767,6 +2816,7 @@ export function daemonHookIngressDeps(): HookIngressDeps {
     refuse: refuseHookIngress,
     deliver: (sessionId, data) => hookStatusGate.deliver(sessionId, data),
     statusLine: handleStatusLinePost,
+    ...(permissionHookHandler && { permission: permissionHookHandler }),
   };
 }
 
@@ -2786,6 +2836,19 @@ function startHookServer(): http.Server {
     if (req.method === "GET" && req.url === "/health") {
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("ok");
+      return;
+    }
+
+    // A `cast vault` read about to hand out a value: take the Vault's current
+    // values into redaction first, and answer once they are in.
+    if (req.method === "POST" && req.url === VAULT_REFRESH_PATH) {
+      req.resume();
+      const admitted = admitHookIngress(req);
+      if (!admitted.ok) return refuseHookIngress(VAULT_REFRESH_PATH, admitted.reason, res);
+      void refreshKnownVault().finally(() => {
+        res.writeHead(204);
+        res.end();
+      });
       return;
     }
 
@@ -2939,7 +3002,18 @@ export async function extractPendingToolUseFromTranscriptAsync(transcriptPath: s
   }
 }
 
+// Prompts answered by their own card (a question, a plan, a task move), never
+// by an Approve/Deny row. Matches PERMISSION_SKIP_TOOLS on the web.
+const PERMISSION_CARD_SKIP_TOOLS: ReadonlySet<string> = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
 const permissionRecordPending = new Set<string>();
+// The id of the web card a session's open prompt got, once it exists. A
+// PermissionRequest hook that arrives after a Notification already opened the
+// card binds to it rather than opening a second one.
+const permissionRecordIds = new Map<string, Promise<string | null>>();
+// PermissionRequest hooks holding for a web answer, and the boot-registered
+// handler that holds them (it closes over the conversation caches).
+const permissionHookWaiters = new PermissionHookWaiters();
+let permissionHookHandler: ((input: PermissionHookInput, res: http.ServerResponse) => void) | null = null;
 const permissionJustResolved = new VersionedObservationSet<string>();
 // One-shot cleanup tracking: when a session is first observed in
 // bypassPermissions mode (post-daemon-restart or post-upgrade), sweep any
@@ -3735,7 +3809,7 @@ async function syncHealthFields(): Promise<{
   boot_pacing_reason: string;
 }> {
   const { readStuckSyncs } = await import("./syncHealth.js");
-  const health = retryQueueRef?.getHealth(await readStuckSyncs());
+  const health = retryQueueRef?.getHealth(readStuckSyncs());
   return {
     pending_sync_count: health?.pending ?? 0,
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
@@ -5161,6 +5235,35 @@ async function refreshUpdateAvailable(): Promise<void> {
   }
 }
 
+// One update at a time, from either the force_update command or the device
+// row's request (users.daemonHeartbeat `update_request`). `at` names the
+// request this run answers, so the server takes this run's outcome for that
+// request only and an old failure never overwrites a newer press.
+let updateRun: { state: "installing" | "failed"; error?: string; at?: number } | null = null;
+async function runSelfUpdate(why: string, at?: number): Promise<void> {
+  if (updateRun?.state === "installing") return;
+  const currentVersion = daemonVersion || "unknown";
+  updateRun = { state: "installing", at };
+  logLifecycle("update_start", `${why} from v${currentVersion}`);
+  void sendHeartbeat().catch(() => {});
+  await flushRemoteLogs();
+  const result = await performUpdate();
+  if (result.success) {
+    // The refresh this daemon's successor runs on boot rewrites the
+    // harness; someone asked for this update, so its changes are
+    // recorded as requested, not automatic.
+    try { fs.writeFileSync(updateRequestedFile(), String(Date.now()), { mode: 0o600 }); } catch { /* recorded as automatic */ }
+    logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
+    await flushRemoteLogs();
+    restartDaemonProcess(why);
+    return;
+  }
+  updateRun = { state: "failed", error: String(result.error ?? "unknown error").slice(-500), at };
+  logLifecycle("update_failed", `Update failed from v${currentVersion} error=${result.error}`);
+  await flushRemoteLogs();
+  void sendHeartbeat().catch(() => {});
+}
+
 // Auto-enroll the machine's active CC login as a saved profile: after a fresh
 // /login the account just appears in the web switcher, no save step. One
 // attempt per account per daemon lifetime — a failure (e.g. API-key login,
@@ -5292,6 +5395,12 @@ async function sendHeartbeat(): Promise<void> {
     log(`[AUTH] ${switchReason} — restarting so this machine syncs as the logged-in account`);
     process.exit(0);
   }
+  // Signed in again as the same account: the disk holds a new token while this
+  // process keeps presenting the rejected one. Restart onto the new sign-in.
+  if (ownTokenRejected && activeConfig?.auth_token && config.auth_token !== activeConfig.auth_token) {
+    log("[AUTH] sign-in changed on disk after this daemon's token was rejected — restarting");
+    process.exit(0);
+  }
 
   // Before publishing the account inventories, make sure the active logins are
   // in them — this is what makes a new `/login` (or `codex login`) show up in
@@ -5348,6 +5457,9 @@ async function sendHeartbeat(): Promise<void> {
         // an attach command that works from PowerShell (wsl.exe -d <distro>).
         wsl_distro: wslDistroName(),
         is_remote_device: isRemoteDevice(),
+        // On a team machine: its key and the Linux user this daemon runs as,
+        // which is how the server knows whose user this is (hosts/team.ts).
+        team_host: teamHostHeartbeat(),
         // A cloud host's own readiness (mirror, tools, [host] setup, logins on
         // disk) for the Machines page, sent only when it changes (cloud/hostReadiness.ts).
         host_readiness: isRemoteDevice() ? await hostReadinessNext() : undefined,
@@ -5385,6 +5497,11 @@ async function sendHeartbeat(): Promise<void> {
         // page: "" once checked and none is newer, absent until the first check.
         // From the updater's cached manifest check, refreshed off the beat.
         update_available: updateChecked ? (updateAvailable ?? "") : undefined,
+        // Whether this install can replace its own binary, and how it got here,
+        // so the device page disables Update with the reason (update.ts).
+        ...installChannel(),
+        // The run answering the device row's update request, until restart.
+        update_status: updateRun?.at !== undefined ? updateRun : undefined,
         // Changes codecast made to this machine's agent harness since the last
         // accepted beat (harness.ts), for the device's change history.
         harness_changes: harnessChanges.length > 0 ? harnessChanges : undefined,
@@ -5406,9 +5523,17 @@ async function sendHeartbeat(): Promise<void> {
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
+      // A rejected token is the daemon's own sign-in, not an outage: count it
+      // toward authExpired, which an idle machine (nothing to sync) would
+      // otherwise never reach while it looked healthy and synced nothing.
+      if (response.status === 401) {
+        if (!readDaemonState().authExpired) handleAuthFailure();
+        return;
+      }
       log(`Heartbeat failed: ${response.status} ${text}`);
       return;
     }
+    resetAuthFailureCount();
     // Same endpoint as the command poll: a beat that lands is proof the
     // backend is reachable, so the outage clock the poll feeds resets here
     // too. Self-heal then needs BOTH paths down for the whole threshold.
@@ -5420,6 +5545,13 @@ async function sendHeartbeat(): Promise<void> {
     markHarnessChangesSent(harnessChanges);
 
     const data = await response.json();
+    // The device row asks for an update (Settings > Daemon). Taken only when
+    // this daemon's own check says a newer release exists, so a daemon that
+    // just restarted on the new version never reinstalls it before the row clears.
+    const ask = data.update_request as { at?: number } | undefined;
+    if (typeof ask?.at === "number" && updateAvailable && updateRun?.at !== ask.at) {
+      void runSelfUpdate("update requested on the device page", ask.at);
+    }
     if (data.commands && data.commands.length > 0) {
       log(`Received ${data.commands.length} remote command(s)`);
       await executeCommandBatch(data.commands, config, "HEARTBEAT");
@@ -6322,6 +6454,9 @@ async function executeRemoteCommand(
           break;
         }
         const alreadyRunning = isPaneStreaming(target);
+        // Frames go out through redactSecrets: take the Vault's current values
+        // first, as a `cast vault` read does, so one stored a moment ago is in.
+        if (!alreadyRunning) await refreshKnownVault();
         startPaneStream(target, {
           log,
           write: (pane, bytes) => {
@@ -6368,8 +6503,6 @@ async function executeRemoteCommand(
         return;
       }
       case "force_update": {
-        const currentVersion = daemonVersion || "unknown";
-        logLifecycle("update_start", `Remote update requested from v${currentVersion}`);
         result = "updating";
         // Report result first, then update
         await fetch(`${siteUrl}/cli/command-result`, {
@@ -6381,23 +6514,7 @@ async function executeRemoteCommand(
             result,
           }),
         });
-        // Flush logs before update
-        await flushRemoteLogs();
-        setTimeout(async () => {
-          const result = await performUpdate();
-          if (result.success) {
-            // The refresh this daemon's successor runs on boot rewrites the
-            // harness; someone asked for this update, so its changes are
-            // recorded as requested, not automatic.
-            try { fs.writeFileSync(updateRequestedFile(), String(Date.now()), { mode: 0o600 }); } catch { /* recorded as automatic */ }
-            logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
-            await flushRemoteLogs();
-            restartDaemonProcess("remote update command");
-          } else {
-            logLifecycle("update_failed", `Update failed from v${currentVersion} error=${result.error}`);
-            await flushRemoteLogs();
-          }
-        }, 1000);
+        setTimeout(() => void runSelfUpdate("remote update command"), 1000);
         return;
       }
       case "reinstall": {
@@ -6975,7 +7092,15 @@ async function executeRemoteCommand(
         // this handler holds the facts (see escapeInterrupt.ts) and decides.
         const pressedAt = typeof parsed.pressed_at === "number" ? parsed.pressed_at : null;
         const lastInjectedAt = latestInjectionTsFor(conversationId);
+        // A "stop and send" (release_queued) left its message queued for the
+        // end of the turn the Escape stops. When there is no turn to stop, no
+        // settle will come to release it, so it goes now. A turn a newer
+        // message started keeps the row queued behind it.
+        const releaseStopAndSend = (): void => {
+          if (parsed.release_queued) void syncServiceRef?.releaseQueued(conversationId).catch(logConvexFailure);
+        };
         const skipEscape = (verdict: { action: "skip"; reason: string }, where: string): void => {
+          if (verdict.reason !== "message_injected_after_press") releaseStopAndSend();
           result = `escape_${verdict.reason}`;
           log(`[REMOTE] Escape skipped for ${conversationId.slice(0, 12)} (${where}): ${verdict.reason}${pressedAt ? ` pressed ${Date.now() - pressedAt}ms ago` : ""}${lastInjectedAt ? `, last injection ${Date.now() - lastInjectedAt}ms ago` : ""}`);
         };
@@ -6985,6 +7110,7 @@ async function executeRemoteCommand(
           const cloudEscape = await cloudAgents.interrupt(conversationId);
           if (cloudEscape) {
             result = cloudEscape === "sent" ? "escape_sent" : "escape_no_active_turn";
+            if (cloudEscape !== "sent") releaseStopAndSend();
             break;
           }
         } catch (err) {
@@ -7020,12 +7146,14 @@ async function executeRemoteCommand(
 
         const sessionId = await resolveCommandSessionId(conversationId);
         if (!sessionId) {
+          releaseStopAndSend();
           error = `No session found for conversation ${conversationId}`;
           break;
         }
         const agentType = detectSessionAgentType(sessionId);
         const { tmuxTarget, proc } = await resolveSessionCommandPane(conversationId, sessionId, agentType);
         if (!tmuxTarget && !proc) {
+          releaseStopAndSend();
           error = `No running process for session ${sessionId.slice(0, 8)}`;
           break;
         }
@@ -8754,6 +8882,18 @@ async function executeRemoteCommand(
         error = out.error;
         break;
       }
+      case "vault_capture_signin":
+      case "vault_check_signin": {
+        // The web's Save sign-in from this laptop's Chrome. The child reads
+        // the cookies and stores them in the Vault (or, for a check, only
+        // counts them); its line holds counts and a name, never a cookie
+        // (secrets/signinCommand.ts).
+        const { handleCaptureSigninCommand } = await import("./secrets/signinCommand.js");
+        const out = await handleCaptureSigninCommand(commandArgs, { isRemoteDevice, runCastCommand, log, childErrorDetail }, command === "vault_check_signin");
+        result = out.result;
+        error = out.error;
+        break;
+      }
       case "migrate_sessions": {
         // A bulk migration batch names THIS machine as an executor. The work
         // is a chain of SSH transfers that can run for an hour, so it lives in
@@ -8771,6 +8911,22 @@ async function executeRemoteCommand(
         const started = startMigrationRunner(batchId);
         result = JSON.stringify(started);
         log(`[MIGRATE] ${started.started ? `started runner for ${batchId} (pid ${started.pid})` : `runner for ${batchId} not started: ${started.reason}`}`);
+        break;
+      }
+      case "team_host_member": {
+        // This daemon is a team machine's admin (the box's sudoer): a member
+        // joins or leaves. Installing a person's tools takes minutes, so the
+        // work runs in a detached `cast hosts team apply` child that claims
+        // the row and reports each step itself (hosts/team.ts).
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const memberId: string | undefined = typeof parsed.member_id === "string" && /^[a-z0-9]{16,40}$/.test(parsed.member_id) ? parsed.member_id : undefined;
+        if (!memberId) {
+          error = "team_host_member: missing or invalid member_id";
+          break;
+        }
+        const started = startMigrateChild(`team-host-${memberId}`, ["hosts", "team", "apply", memberId]);
+        result = JSON.stringify(started);
+        log(`[TEAM-HOST] ${parsed.action ?? "change"} ${memberId}: ${started.started ? `started (pid ${started.pid})` : started.reason}`);
         break;
       }
       case "rehearse_moves": {
@@ -9273,7 +9429,11 @@ function saveDaemonState(updates: Partial<DaemonState>): void {
   }
 }
 
+// This process's token has been refused at least once (sendHeartbeat restarts
+// onto a new sign-in on disk).
+let ownTokenRejected = false;
 function handleAuthFailure(): boolean {
+  ownTokenRejected = true;
   const state = readDaemonState();
   const currentCount = (state.authFailureCount || 0) + 1;
 
@@ -9336,7 +9496,20 @@ function repoCheckoutRoot(commonDir: string | undefined, toplevel: string | unde
   return root && checkoutOfMoveClone(root);
 }
 
-async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
+const GIT_DIFF_CAP = 100_000;
+
+/**
+ * Working-tree text bound for the server, where team viewers read it: a Vault
+ * value written into a tracked file shows up in the diff, so it goes through
+ * redactSecrets like a transcript. The cut comes after redaction, and the text
+ * redacted runs a secret's maximum size past the cap, so a value straddling
+ * the cut is still replaced whole instead of leaving its first half.
+ */
+function uploadableGitText(text: string | undefined, cap = Infinity): string | undefined {
+  return text ? redactSecrets(text.slice(0, cap + SECRET_PAYLOAD_MAX)).slice(0, cap) : undefined;
+}
+
+export async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
   const execGit = (args: string): Promise<string | undefined> =>
     new Promise((resolve) => {
       execFile("git", args.split(" "), {
@@ -9367,9 +9540,9 @@ async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {
     commitHash,
     branch,
     remoteUrl,
-    status,
-    diff: diff ? diff.slice(0, 100000) : undefined,
-    diffStaged: diffStaged ? diffStaged.slice(0, 100000) : undefined,
+    status: uploadableGitText(status),
+    diff: uploadableGitText(diff, GIT_DIFF_CAP),
+    diffStaged: uploadableGitText(diffStaged, GIT_DIFF_CAP),
     root,
     repoRoot,
     worktreeName,
@@ -17063,10 +17236,11 @@ class InputBlockedError extends Error {
   }
 }
 
-// The bottom of a pane, where a dialog and the composer under it sit.
+// The bottom of a pane, where a dialog and the composer under it sit,
+// redacted: it syncs beside the held message and goes to daemon.log.
 const HOLD_SCREEN_ROWS = 40;
 export function holdScreen(pane: string): string {
-  return pane.replace(/\s+$/, "").split("\n").slice(-HOLD_SCREEN_ROWS).join("\n");
+  return redactSecrets(pane.replace(/\s+$/, "").split("\n").slice(-HOLD_SCREEN_ROWS).join("\n"));
 }
 
 // An error the delivery layer must see as is: a pane holding for a human, a
@@ -20273,6 +20447,11 @@ async function rehydratePersistedAppServerThreads(requestedConversations: Readon
         sandbox: record.sandbox,
       });
       log(`[codex-app-server] resumed thread ${record.threadId.slice(0, 8)} policy=${response.sandbox?.type ?? "server-default"} approvalPolicy=${policy}`);
+      // The server row that names this thread may be gone (reaped while the
+      // daemon was down). Heartbeats only refresh a row that exists, and the
+      // thread id is how the server tells which conversation a status write,
+      // or a line its agent posts, belongs to: register it as the start path does.
+      syncServiceRef?.registerManagedSession(record.threadId, process.pid, undefined, conversationId).catch(logConvexFailure);
       ensureManagedSessionHeartbeat(record.threadId);
       resumed++;
       if (hasPendingMessages) continue;
@@ -20958,11 +21137,14 @@ const WIP_SNAPSHOT_CONCURRENCY = 3;
 // then 9/10, 10/19, 10/29 as the hash cache fills — i.e. it converges to ~0
 // pushes and stays silent until real work happens.
 const WIP_SNAPSHOT_MAX_PUSHES_PER_PASS = 8;
-/** checkout path -> last tree hash we pushed. Skips the network when nothing
- * changed. Keyed by CHECKOUT, not session: the tree belongs to the repo, and
- * keying it per session meant one agent's edit invalidated every sibling's entry
- * at once, so the throttle never engaged. */
-const lastPushedWipTree = new Map<string, string>();
+/** checkout path -> the last snapshot we pushed (its tree and commit). Skips the
+ * network when nothing changed. Keyed by CHECKOUT, not session: the tree belongs
+ * to the repo, and keying it per session meant one agent's edit invalidated
+ * every sibling's entry at once, so the throttle never engaged. The commit
+ * bounds the known-value scan to what the next push adds. */
+const lastPushedWip = new Map<string, { tree: string; sha: string }>();
+/** checkout path -> the files and secret names holding its push back, so the log says it once per change. */
+const wipHeldBack = new Map<string, string>();
 /** checkout path -> why we stopped trying. A repo the user can read but not push
  * (a cloned public repo, revoked access) never becomes pushable by waiting, so one
  * permanent failure retires it rather than failing every pass forever. */
@@ -21158,7 +21340,8 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
       noteSnapshotCost(t.cwd, snap);
       if (!snap.unchanged) await recordTreeSnapshot(t.cwd, snap, t.sessions.map((s) => ({ conversationId: s.conversationId })), "sweep");
       // Keyed by checkout: the tree belongs to the repo, not the session.
-      if (lastPushedWipTree.get(t.cwd) === snap.tree) {
+      const last = lastPushedWip.get(t.cwd);
+      if (last?.tree === snap.tree) {
         skipped++;
         return; // tree unchanged since the last push — no network
       }
@@ -21168,6 +21351,18 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
         deferred++;
         return;
       }
+      // A known secret value (a Vault value written to a file git does not
+      // ignore) in anything this push uploads keeps the whole push here: the
+      // hidden ref is readable by everyone who can fetch the repo and outlives
+      // the file. Paths and secret names only, never a value.
+      const leaks = await knownValuesInPush(t.cwd, snap.sha, last ? [snap.base, last.sha] : [snap.base], knownValueNames);
+      if (leaks.length) {
+        const where = leaks.map((l) => `${l.path} (${l.names.map((n) => n || "unnamed").join(", ")})`).join(", ");
+        if (wipHeldBack.get(t.cwd) !== where) log(`[WIP] not pushing ${label}: known secret values in ${where}. Move them to a gitignored file or the Vault; the snapshot chain keeps them until it restarts`);
+        wipHeldBack.set(t.cwd, where);
+        return;
+      }
+      wipHeldBack.delete(t.cwd);
       const res = await pushWipSnapshot(t.cwd, {
         remote,
         conversationIds: t.sessions.map((s) => s.conversationId),
@@ -21177,7 +21372,7 @@ async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
         env: gitEnvFor((await repoRootFor(t.cwd)) ?? t.cwd),
       });
       if (res.ok) {
-        lastPushedWipTree.set(t.cwd, snap.tree);
+        lastPushedWip.set(t.cwd, { tree: snap.tree, sha: snap.sha });
         pushed++;
       } else if (res.permanent) {
         // Not pushable, and waiting won't change that — retire it (logged once)
@@ -21248,7 +21443,7 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
           if (wipSnapshotGivenUp.delete(cwd)) {
             log(`[GITPLANE] un-retired wip snapshots for ${cwd}`);
           }
-          lastPushedWipTree.delete(cwd);
+          lastPushedWip.delete(cwd);
         }
       },
       mintDeviceKey: () => ensureDeviceGitKey(deviceLabel()),
@@ -23851,6 +24046,30 @@ async function validateProcessCache(): Promise<void> {
 const latestSessionResources = new Map<string, SessionResources>();
 const RESOURCE_MONITOR_INTERVAL_MS = 30_000;
 
+// The load governor (loadGovernor.ts). The server names this machine's
+// unattended sessions with each accepted resource report; while the machine
+// is "over", those run at background priority.
+// Seeded from the last daemon's state file, so a restart under load throttles
+// at once instead of waiting a report cycle for the server's answer.
+let unattendedHere: string[] = (() => {
+  const last = readGovernorState();
+  return last && Date.now() - last.at < 10 * 60_000 ? last.unattended : [];
+})();
+
+async function applyGovernorBackground(): Promise<void> {
+  await setGovernorBackground(governor.level === "over" ? unattendedHere : []);
+}
+
+async function governorTick(): Promise<void> {
+  const { before, after } = sampleLoad();
+  writeGovernorState(unattendedHere);
+  if (before === after) return;
+  log(`[GOVERNOR] ${before} -> ${describeLoad()}${after === "over" ? `; ${unattendedHere.length} unattended sessions to background priority, starts held` : ""}`);
+  await applyGovernorBackground();
+  // A fresh process list, so the change reaches agents started since the last tick.
+  if (after === "over" || before === "over") await collectResourceSnapshot();
+}
+
 // Sleep-aware idle accounting. We accumulate idle time per session only across
 // ticks where the machine was awake, so a closed-lid gap never makes a frozen
 // session look "idle for hours" the moment it wakes. A session's counter resets
@@ -23927,9 +24146,16 @@ async function collectResourceSnapshotNow(): Promise<void> {
     });
     const machine = await collectMachineResources(deviceId(), processSnapshot, sessionPids);
     machine.collectionDurationMs = Date.now() - collectionStartedAt;
+    machine.sample.governor = governor.level;
     const machineReport = syncServiceRef
       ? syncServiceRef.reportMachineResources(machine)
-          .then(r => r?.background_sessions && setBackgroundSessions(r.background_sessions))
+          .then(async r => {
+            if (r?.unattended_sessions) {
+              unattendedHere = r.unattended_sessions;
+              await applyGovernorBackground();
+            }
+            if (r?.background_sessions) await setBackgroundSessions(r.background_sessions);
+          })
           .catch(err => log(`[RESOURCES] Machine report failed: ${String(err)}`, "debug"))
       : Promise.resolve();
     if (!processSnapshot) { await machineReport; return; }
@@ -27181,7 +27407,7 @@ function migrateDaemonPlist(): void {
         log(`Daemon plist migration skipped: unrecognized ProgramArguments (${JSON.stringify(args)})`);
         return;
       }
-      fs.writeFileSync(launcherPath, buildDaemonLauncherScript({ daemonCommand: args.map(shellEscapeForSh).join(" ") }), { mode: 0o755 });
+      fs.writeFileSync(launcherPath, buildDaemonLauncherScript({ daemonCommand: args.map(shellEscapeForSh).join(" "), loginPathFile: path.join(CONFIG_DIR, LOGIN_PATH_FILENAME) }), { mode: 0o755 });
     } else if (!fs.existsSync(launcherPath)) {
       log(`Daemon plist migration skipped: launcher ${launcherPath} is missing`);
       return;
@@ -28730,6 +28956,7 @@ export async function readAgentStatusFiles(dir = AGENT_STATUS_DIR): Promise<Arra
 async function prewarmRecentlyActiveSessions(deps: WatchdogDependencies): Promise<void> {
   const cap = deps.config.warm_pool_size ?? 0;
   if (cap <= 0) return;
+  if (!governor.admit("warm_pool")) return;
   if (!hasTmux()) return;
 
   const now = Date.now();
@@ -28922,6 +29149,10 @@ async function reviveMidWorkSession(
   }
   if (revivesThisPass >= REVIVE_MAX_PER_PASS) {
     log(`Watchdog: revive of ${tag} deferred to the next pass (${REVIVE_MAX_PER_PASS} this pass)`);
+    return "deferred";
+  }
+  if (!governor.admit("revive")) {
+    log(`Watchdog: revive of ${tag} held: machine ${describeLoad()}`);
     return "deferred";
   }
   try {
@@ -29478,6 +29709,14 @@ async function main(): Promise<void> {
       if (!token) return [];
       try { return [token, secretFromStored(token)]; } catch { return [token]; }
     },
+    vault: vaultRedactionSource({
+      endpoint: () => {
+        const siteUrl = getSiteUrl();
+        const apiToken = getAuthToken();
+        return siteUrl && apiToken ? { siteUrl, apiToken } : null;
+      },
+      log,
+    }),
     log,
   });
   resumeStartedSessionDiscovery();
@@ -29744,6 +29983,10 @@ async function main(): Promise<void> {
   setInterval(() => {
     collectResourceSnapshot().catch(() => {});
   }, RESOURCE_MONITOR_INTERVAL_MS);
+
+  setInterval(() => {
+    governorTick().catch((err) => log(`[GOVERNOR] tick failed: ${String(err)}`, "debug"));
+  }, GOVERNOR_SAMPLE_INTERVAL_MS);
 
   // Re-establish session→pid liveness mapping (esp. for idle sessions that don't
   // write JSONL) so the Sessions page can tell live-idle from dead. Run once
@@ -30345,6 +30588,32 @@ async function main(): Promise<void> {
   // Returns true when the status was handed to the async idle hop; the hop's
   // re-entry persists it, so a caller must not persist meanwhile (that wrote
   // the previous record under the new hook, one stale write per settle).
+  /** Open the web card for a session's prompt: the push notification, the
+   *  pending row, and the wait on its answer. `id` resolves once the row
+   *  exists (null if it never did); the pending mark clears with the answer. */
+  function openPermissionRecord(
+    convId: string,
+    sessionId: string,
+    prompt: { tool_name: string; arguments_preview: string; suggestions?: unknown[] },
+  ): { id: Promise<string | null>; decision: Promise<PermissionDecision | null> } {
+    permissionRecordPending.add(sessionId);
+    syncService.createSessionNotification({
+      conversation_id: convId,
+      type: "permission_request",
+      title: "codecast - Permission needed",
+      message: truncateForNotification(`${prompt.tool_name}: ${prompt.arguments_preview}`, 150),
+    }).catch(() => {});
+    let setId!: (id: string | null) => void;
+    const id = new Promise<string | null>((r) => { setId = r; });
+    permissionRecordIds.set(sessionId, id);
+    const decision = handlePermissionRequest(syncService, convId, sessionId, prompt, log, setId).finally(() => {
+      setId(null);
+      permissionRecordPending.delete(sessionId);
+      if (permissionRecordIds.get(sessionId) === id) permissionRecordIds.delete(sessionId);
+    });
+    return { id, decision };
+  }
+
   function handleStatusData(sessionId: string, data: HookStatusData, filePath?: string, opts?: { primed?: boolean; tail?: string | null }): boolean | undefined {
     try {
       if (!data.status || !data.ts) return;
@@ -30565,21 +30834,15 @@ async function main(): Promise<void> {
             const toolName = hookToolName || toolInfo?.tool_name || extractToolFromMessage(data.message || "");
             const preview = toolInfo?.arguments_preview || data.message || "";
 
-            const SKIP_TOOLS = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]);
-            if (toolName && !SKIP_TOOLS.has(toolName)) {
+            if (toolName && !PERMISSION_CARD_SKIP_TOOLS.has(toolName)) {
               log(`Creating permission record: ${toolName} for session ${sessionId.slice(0, 8)}`);
-              const permPrompt = { tool_name: toolName, arguments_preview: preview };
-
-              syncService.createSessionNotification({
-                conversation_id: convId,
-                type: "permission_request",
-                title: "codecast - Permission needed",
-                message: truncateForNotification(`${toolName}: ${preview}`, 150),
-              }).catch(() => {});
-
-              handlePermissionRequest(syncService, convId, sessionId, permPrompt, log)
-                .then((decision) => {
-                  permissionRecordPending.delete(sessionId);
+              const record = openPermissionRecord(convId, sessionId, { tool_name: toolName, arguments_preview: preview });
+              record.decision
+                .then(async (decision) => {
+                  // A PermissionRequest hook bound to this card answered the
+                  // agent itself; a key now would land in the next prompt.
+                  const permissionId = decision ? await record.id : null;
+                  if (decision && permissionId && permissionHookWaiters.answer(permissionId, decision)) return;
                   if (decision) {
                     const key = decision.approved ? "Enter" : "Escape";
                     log(`Permission ${decision.approved ? "approved" : "denied"} for session ${sessionId.slice(0, 8)}, sending '${key}'`);
@@ -30604,7 +30867,6 @@ async function main(): Promise<void> {
                   }
                 })
                 .catch((err) => {
-                  permissionRecordPending.delete(sessionId);
                   log(`Permission handling error: ${err instanceof Error ? err.message : String(err)}`);
                 });
             } else {
@@ -30628,6 +30890,10 @@ async function main(): Promise<void> {
 
       if (data.status !== "permission_blocked" && prev?.status === "permission_blocked") {
         permissionRecordPending.delete(sessionId);
+        permissionRecordIds.delete(sessionId);
+        // The prompt closed without a web answer: a hook still holding it
+        // returns empty, and the terminal's answer stands.
+        permissionHookWaiters.releaseSession(sessionId);
         // The agent moved past the permission point without the web UI's
         // approval — bypass auto-approved, the user answered in the TUI, or
         // Claude Code emitted a stale permission_prompt for a tool that never
@@ -30689,6 +30955,55 @@ async function main(): Promise<void> {
     }
     return claudeTranscriptFor(sessionId);
   }
+
+  // A PermissionRequest hook waiting for the web (permissionHookWait.ts). Its
+  // status goes through the same sink a status post would, so the session
+  // reads as blocked at once; the card it opens is the one the hook answers.
+  permissionHookHandler = (input, res) => {
+    const { sessionId, toolName, preview } = input;
+    const reply = (output: string | null) => {
+      if (res.writableEnded) return;
+      if (output) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(output);
+      } else {
+        res.writeHead(204);
+        res.end();
+      }
+    };
+    const convId = conversationCache[sessionId];
+    const answerable = !!convId && !PERMISSION_CARD_SKIP_TOOLS.has(toolName);
+    // Bind to a card a Notification already opened for this prompt, unless a
+    // hook holds that one (a second prompt in parallel gets its own card).
+    const opened = answerable && permissionRecordPending.has(sessionId) ? permissionRecordIds.get(sessionId) : undefined;
+    const record = answerable && !permissionRecordPending.has(sessionId)
+      ? openPermissionRecord(convId, sessionId, { tool_name: toolName, arguments_preview: preview, suggestions: input.suggestions })
+      : null;
+    if (record) permissionJustResolved.add(sessionId);
+    hookStatusGate.deliver(sessionId, normalizeHookStatus({
+      status: "permission_blocked",
+      ts: Math.floor(Date.now() / 1000),
+      ...(input.permissionMode && { permission_mode: input.permissionMode as PermissionMode }),
+      message: preview ? `${toolName}: ${preview}` : toolName,
+    }));
+    const idPromise = record?.id ?? opened;
+    if (!idPromise) { reply(null); return; }
+
+    const wait = permissionHookWaiters.wait(sessionId, input.suggestions);
+    res.on("close", wait.cancel);
+    void idPromise.then((id) => {
+      if (!id || (!record && permissionHookWaiters.holds(id))) { wait.cancel(); return; }
+      wait.bind(id);
+      // The row's own poll backs up the subscription.
+      record?.decision.then((decision) => { if (decision) permissionHookWaiters.answer(id, decision); });
+    });
+    void wait.done.then((output) => {
+      reply(output);
+      if (!output) return;
+      log(`[PERMISSION] answered ${toolName} for ${shortId(sessionId)} through its hook`);
+      sendAgentStatus(syncService, convId, sessionId, "working");
+    });
+  };
 
   setHookStatusSink((sessionId, data) => {
     // One gate for every effect below. handleStatusData applies the same launch
@@ -32137,6 +32452,12 @@ async function main(): Promise<void> {
 
             try {
               const approved = permission.status === "approved";
+              // A PermissionRequest hook holding this prompt answers the agent
+              // with a real decision; the keys are for prompts nothing holds.
+              if (permissionHookWaiters.answer(permission._id, { approved, message: permission.deny_message, remember: permission.remember })) {
+                processedPermissionIds.add(permission._id);
+                continue;
+              }
               const key = approved ? "Enter" : "Escape";
               const sessionId = permission.session_id;
               let injected = false;

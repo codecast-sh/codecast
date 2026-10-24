@@ -9,7 +9,7 @@ import { describeInstance, readHosts, upsertHost, type CloudHost } from "../brow
 import { readRepoNeed } from "../repoNeed.js";
 import { sizeFor } from "../cloud/hostHeadroom.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
-import { aws, BASE_IMAGE_LOGIN, cloneResetUserData, IMAGE_TAG, latestBaseImage, listImages, ubuntuImage } from "./image.js";
+import { aws, BASE_IMAGE_LOGIN, cloneResetUserData, IMAGE_TAG, instanceTypeArch, latestBaseImage, listImages, ubuntuImage } from "./image.js";
 
 export interface CreateHostOptions {
   /** A registered host whose region, network, key and profile the new one copies. */
@@ -109,7 +109,7 @@ export function registerHostCreateCommand(hosts: Command): void {
     .description("Launch an AWS Linux or Mac instance, register it, and set it up for sessions")
     .option("--like <host>", "Copy region, network, key and profile from this registered host (cast hosts ls)")
     .option("--name <name>", "Unique machine name; rerunning reuses its existing instance (default with --like: codecast-<platform>-<random>)")
-    .option("--image <ami>", "Ubuntu 24.04 x86_64 AMI, or macOS AMI matching the dedicated host (default: the newest image from cast hosts image, else codecast's public base image)")
+    .option("--image <ami>", "Ubuntu 24.04 AMI of the instance type's architecture, or macOS AMI matching the dedicated host (default: the newest image from cast hosts image, else codecast's public base image; Canonical's arm64 Ubuntu for a Graviton type)")
     .option("--key <path>", "Local SSH private key")
     .option("--key-name <name>", "Matching AWS key pair name")
     .option("--subnet <id>", "Subnet with public internet access")
@@ -137,10 +137,12 @@ export function registerHostCreateCommand(hosts: Command): void {
       if (missing.length) throw new Error(`Missing ${missing.map((k) => `--${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`).join(", ")} (or pass --like <host> to copy them)`);
       if (options.idle !== undefined) checkIdleMinutes(options.idle);
       let fromBase = false;
+      // Graviton (r8g, t4g…) runs arm64: codecast's own images are x86_64, so it starts from Canonical's arm64 Ubuntu.
+      const arm = platform === "linux" && !!options.type && instanceTypeArch(options, options.type) === "arm64";
       if (!options.image) {
         const imagePlatform = platform === "mac" ? "darwin" : "linux";
-        const latest = listImages(options, imagePlatform)[0];
-        const base = latest ? null : latestBaseImage(options, imagePlatform) ?? (imagePlatform === "linux" ? ubuntuImage(options) : null);
+        const latest = arm ? undefined : listImages(options, imagePlatform)[0];
+        const base = latest ? null : arm ? ubuntuImage(options, "arm64") : latestBaseImage(options, imagePlatform) ?? (imagePlatform === "linux" ? ubuntuImage(options) : null);
         if (!latest && !base) throw new Error("No codecast image yet: pass --image <ami>, or capture a prepared host with cast hosts image <id>");
         if (latest) {
           options.image = latest.id;
@@ -178,7 +180,8 @@ export function registerHostCreateCommand(hosts: Command): void {
         if (!image?.RootDeviceName) throw new Error("The AMI has no root device");
         const minimumDisk = image.BlockDeviceMappings?.find((mapping: { DeviceName: string }) => mapping.DeviceName === image.RootDeviceName)?.Ebs?.VolumeSize;
         if (typeof minimumDisk === "number" && plan.disk < minimumDisk) throw new Error(`This AMI needs at least ${minimumDisk} GiB; increase --disk before launching`);
-        if (platform === "linux" && image.Architecture !== "x86_64") throw new Error("Linux display provisioning currently needs an x86_64 Ubuntu image");
+        if (platform === "linux" && (image.Architecture === "arm64") !== arm) throw new Error(`${options.image} is a ${image.Architecture} image and ${options.type ?? "the instance type"} runs ${arm ? "arm64" : "x86_64"}: pick an image of the same architecture`);
+        if (arm) console.log("arm64 host: everything but a browser of its own (Google ships Chrome for x86_64 Linux only), so cast browser is unavailable there");
         console.log(plan.billing);
         // A codecast image is another host's disk: the clone makes itself its own machine before its daemon starts.
         const clone = image.Tags?.some((t: { Key: string; Value: string }) => t.Key === IMAGE_TAG.Key && t.Value === IMAGE_TAG.Value);

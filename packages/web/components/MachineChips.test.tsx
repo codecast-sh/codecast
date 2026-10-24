@@ -20,7 +20,7 @@ afterAll(() => {
 });
 
 const laptop: SessionMachine = { device_id: "laptop", label: "macOS - MacBook", platform: "darwin", online: true, is_remote: false, last_seen: 1, local_project_roots: [] };
-const cloud: SessionMachine = { device_id: "cloud", label: "Linux - ip-172-31-40-243", platform: "linux", online: false, is_remote: true, last_seen: 0, local_project_roots: [] };
+const cloud: SessionMachine = { device_id: "cloud", label: "Linux - ip-172-31-40-243", platform: "linux", online: false, is_remote: true, last_seen: 0, local_project_roots: [], cloud_host: { managed_by: "laptop", instance_id: "i-1", provider: "aws", state: "stopped", images: [], logins_held: [], at: Date.now() } } as SessionMachine;
 
 function mount(el: React.ReactElement) {
   const host = document.createElement("div");

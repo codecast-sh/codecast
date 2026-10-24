@@ -24,30 +24,33 @@ Peer mode gives up two things:
 
 None of this changes the server. `is_remote` follows each daemon's heartbeat. When a shared provision removes the owner's remote-device marker and its `CODECAST_REMOTE_DEVICE`, the next heartbeat clears the flag.
 
-## No laptop logins reach the host
+## Laptop logins reach only the admin's home
 
-`/etc/codecast/shared-host` marks a host as shared. Every remote command that receives a credential checks for it first: the Claude credential, the agent-logins bundle, and the provider-key store. When the marker is there, the command discards its stdin and exits 4 with the reason.
+`/etc/codecast/shared-host` marks a host as shared and names its admin
+(`admin=<linux user>`, the provisioning user and the box's only sudoer). A
+registered team machine's marker also carries `key=` and `team=`
+(team-machines.md). Every remote command that receives a credential checks it
+first: the Claude credential, the agent-logins bundle, and the provider-key
+store. When the marker is there and the receiving user is not its admin, the
+command discards its stdin and exits 4 with the reason.
 
-The refusal lives on the host, so it holds no matter which laptop or which path pushes:
+The admin's home is private to them (only they have sudo), so their own
+laptop's logins go there exactly as on a private host: provisioning, a wake,
+`cast hosts sync-auth`, a session move and the daemon's periodic refresh all
+push to it. Every other user's home is readable by the admin, so nothing of
+any laptop's is pushed into it; those members sign in on the box with their
+own accounts (team-machines.md: Claude through the browser flow).
 
-- provisioning
-- a wake or prepare
-- `cast hosts sync-auth`
-- `cast remote move`
-- the daemon's periodic refresh
-
-On a shared host, a pushed laptop login would be readable by anyone with sudo. A pushed refresh token could also be rotated by a daemon on the box, which logs the laptop out.
-
-The laptop also skips these pushes itself (`provisionLinuxHost`, and `readyHostHome` for a registry entry with `shared: true`), so its logs show a skip rather than a refusal.
-
-The marker is written right after the base stack, before any credential step. From then on the host also refuses to link a tool into `/usr/local/bin`, so a later update or wake cannot re-create the links. Converting an already provisioned host deletes the Claude credential an earlier provision pushed to the owner, because a refresh on the box would rotate it and log that laptop out. Other logins pushed earlier stay in the owner's home, readable only by the owner and root.
+The refusal lives on the host, so it holds no matter which laptop or which
+path pushes. The marker is written right after the base stack, naming the
+admin, before any credential step. From then on the host also refuses to link
+a tool into `/usr/local/bin`, so a later update or wake cannot re-create the
+links.
 
 Two more rules:
 
 - A later provision keeps the host shared, even when it runs from a laptop whose registry never recorded it: the provision reads the marker.
 - `shared` also sets `browserSync: false`. The host's Chrome runs as the owner, and any user on the box can reach its debugging port, so no cookies are carried into it.
-
-What still goes to the host: the owner's own codecast identity, a device-bound token minted for the host. The owner's home is 750, and the owner is the only sudoer.
 
 ## Binaries live in each user's home
 
@@ -68,13 +71,17 @@ Two system template units do the work:
   - `User=<user>`
   - `ExecStart=/home/<user>/.local/bin/cast _daemon`
   - `EnvironmentFile=-/home/<user>/.codecast/claude.env`
-  - `ConditionPathExists` on their codecast config
+  - `ConditionPathExists` on their codecast config, and `ExecCondition` on `~/.codecast/daemon.wanted` (checked before every start, automatic restarts included; a `Condition=` is not)
   - `KillMode=process`, so a restart leaves their tmux sessions running
-- **`codecast-daemon-user@<user>.path`** starts that service as soon as the person's `cast login` writes `~/.codecast/config.json`.
+- **`codecast-daemon-user@<user>.path`** starts that service as soon as `~/.codecast/daemon.wanted` exists.
 
-`--add-user` enables the path unit, so teammates need no sudo. The owner keeps `codecast-daemon.service`, which the update and restart paths already manage, with the same peer settings. A shared provision disables a hand-built `codecast-daemon-user@ubuntu` so the owner never runs two daemons.
+The person starts and stops their own daemon with that file, which they own:
+`cast login` and `cast start` create it, `cast stop` removes it and stops the
+daemon, and the service's condition then keeps Restart= from reviving it. No
+sudo. Setup gives everyone already signed in the file, so converting a box
+keeps their daemons running.
 
-`cast login` must not start a daemon of its own when a system unit supervises the user. That is fixed separately: login autostart vs a system unit.
+`--add-user` enables the path unit. The owner keeps `codecast-daemon.service`, which the update and restart paths already manage, with the same peer settings. A shared provision disables a hand-built `codecast-daemon-user@ubuntu` so the owner never runs two daemons.
 
 ## Claude's first-run screens
 
@@ -86,7 +93,7 @@ These are answered in configuration, with no login and no interactive accept (ve
 
 ## What a person runs
 
-`--add-user` prints these steps. `--shared` prints the same for the owner, ending with a restart of `codecast-daemon.service`.
+`--add-user` prints these steps for a box nobody registered as a team machine; on a team machine, members join from the app instead (team-machines.md).
 
 ```bash
 ssh cam@<host>

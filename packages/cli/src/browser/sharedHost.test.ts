@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   addUserRootScript, addUserSelfScript, BASHRC_PATH_MARK, claudeFirstRunScript, enableUserDaemonScript,
-  sharedHostMarkScript, sharedHostSetupScript, sharedOwnerSteps, teammateSteps, userDaemonUnits,
+  removeUserRootScript, sharedHostMarkScript, sharedHostSetupScript, teammateSteps, userDaemonUnits,
 } from "./sharedHost.js";
 import { daemonUnitScript } from "./provisionLinux.js";
 import { SHARED_HOST_MARKER, SHARED_HOST_PUSH_GUARD, SHARED_HOST_REFUSAL, SHARED_HOST_REFUSED_STATUS } from "../remote/sharedHostGuard.js";
@@ -75,14 +75,21 @@ describe("per-user daemon units", () => {
     expect(dirs.indexOf("/home/%i/.bun/bin")).toBeLessThan(dirs.indexOf("/usr/local/bin"));
   });
 
-  test("the path unit starts it once that person's cast login writes their config", () => {
-    expect(pathUnit).toContain("PathExists=/home/%i/.codecast/config.json");
+  test("the person starts and stops their own daemon with a file they own: the path unit starts on it, the service will not run without it", () => {
+    expect(pathUnit).toContain("PathExists=/home/%i/.codecast/daemon.wanted");
     expect(pathUnit).toContain("Unit=codecast-daemon-user@%i.service");
+    // ExecCondition, not Condition=: systemd skips a Condition= on a Restart= start, and the daemon came back after `cast stop` (e2e 2026-10-23).
+    expect(userDaemonUnits().service).toContain("ExecCondition=/usr/bin/test -e /home/%i/.codecast/daemon.wanted");
   });
 
-  test("setup installs both units and the marker", () => {
+  test("setup gives everyone already signed in the wanted file, so the new units keep their daemons", () => {
+    expect(sharedHostSetupScript()).toContain('for cfg in /home/*/.codecast/config.json');
+  });
+
+  test("setup installs both units and the marker, naming its user the admin", () => {
     const s = sharedHostSetupScript();
     expect(s).toContain(`sudo touch ${SHARED_HOST_MARKER}`);
+    expect(s).toContain('echo "admin=$(id -un)"');
     expect(s).toContain("/etc/systemd/system/codecast-daemon-user@.service");
     expect(s).toContain("/etc/systemd/system/codecast-daemon-user@.path");
   });
@@ -133,8 +140,14 @@ describe("binaries outside private homes", () => {
     }
   });
 
-  test("converting a host removes the Claude login an earlier provision pushed", () => {
-    expect(sharedHostSetupScript()).toContain('rm -f "$HOME/.claude/.credentials.json"');
+  test("converting a host keeps the admin's own Claude login: their home is theirs alone", () => {
+    expect(sharedHostSetupScript()).not.toContain(".credentials.json");
+  });
+
+  test("a member runs the box's own cast bundle when it has one, on their own bun", () => {
+    const s = addUserSelfScript({});
+    expect(s).toContain("if [ -f /usr/local/lib/codecast/index.js ]");
+    expect(s).toContain('exec "$HOME/.bun/bin/bun" /usr/local/lib/codecast/index.js "$@"');
   });
 
   test("a new user's installs run with their own PATH, so a tool linked for the owner is never taken as theirs", () => {
@@ -221,6 +234,19 @@ describe("no laptop logins reach a shared host", () => {
     expect(r.status).toBe(SHARED_HOST_REFUSED_STATUS);
     expect(r.stderr).toContain(SHARED_HOST_REFUSAL);
     expect(fs.existsSync(target)).toBe(false);
+    // Another user is the admin: still refused.
+    fs.writeFileSync(marker, "key=abc\nadmin=someone-else\n");
+    expect(bash(cmd, {}, "secret").status).toBe(SHARED_HOST_REFUSED_STATUS);
+  });
+
+  test("the admin's own logins go through: the box's only sudoer is the one home nobody else reads", () => {
+    const dir = tempHome();
+    const marker = path.join(dir, "shared-host");
+    fs.writeFileSync(marker, `key=abc\nadmin=${os.userInfo().username}\nteam=t1\n`);
+    const target = path.join(dir, "credentials.json");
+    const r = bash(`${SHARED_HOST_PUSH_GUARD.replaceAll(SHARED_HOST_MARKER, marker)}cat > ${target}`, {}, "secret");
+    expect(r.status).toBe(0);
+    expect(fs.readFileSync(target, "utf-8")).toBe("secret");
   });
 
   test("the agent auth receiver's refusal reads as the shared-host reason", () => {
@@ -246,8 +272,34 @@ describe("the steps a person runs", () => {
     expect(fs.readFileSync(file, "utf-8")).toBe("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-abc\n");
     expect((fs.statSync(file).mode & 0o777).toString(8)).toBe("600");
   });
+});
 
-  test("the owner restarts the daemon that already runs", () => {
-    expect(sharedOwnerSteps("ubuntu", "h").at(-1)).toBe("sudo systemctl restart codecast-daemon.service");
+describe("joining and leaving", () => {
+  test("a join from the web tolerates a GitHub account with no keys, and adds the joining laptop's key", () => {
+    const s = addUserRootScript("ashot", "ashot", { pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc ashot@laptop", lenientKeys: true });
+    expect(s).not.toContain("has no public ssh keys");
+    expect(s).toContain("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc ashot@laptop");
+    expect(parses(s)).toBe("");
+    expect(() => addUserRootScript("ashot", undefined, { pubkey: "x'; rm -rf /" })).toThrow("not an ssh public key");
+  });
+
+  test("a removal stops and disables their daemon and locks the login, and keeps their home", () => {
+    const s = removeUserRootScript("ashot");
+    expect(s).toContain("rm -f /home/ashot/.codecast/daemon.wanted");
+    expect(s).toContain("systemctl disable --now codecast-daemon-user@ashot.path");
+    expect(s).toContain("usermod -L -e 1 ashot");
+    expect(s).not.toMatch(/userdel|rm -rf \/home/);
+    expect(parses(s)).toBe("");
+  });
+
+  test("the marker step writes admin= once and keeps a registered machine's other lines", () => {
+    const dir = tempHome();
+    const marker = path.join(dir, "shared-host");
+    fs.writeFileSync(marker, "key=k1\nteam=t1\n");
+    const script = sharedHostMarkScript().replaceAll(SHARED_HOST_MARKER, marker).replace("sudo install -d -m 755 /etc/codecast", ":")
+      .replaceAll("sudo ", "").replace(/^if ! grep -qF[\s\S]*?^fi$/m, ":");
+    expect(bash(script, { HOME: dir }).status).toBe(0);
+    expect(bash(script, { HOME: dir }).status).toBe(0);
+    expect(fs.readFileSync(marker, "utf-8").split("\n").filter(Boolean).sort()).toEqual([`admin=${os.userInfo().username}`, "key=k1", "team=t1"]);
   });
 });

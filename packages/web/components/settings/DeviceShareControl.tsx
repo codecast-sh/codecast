@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Check, Lock, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
+import { teamMachineOfDevice } from "../../lib/teamMachines";
 import { listTeamNames, sharedTeamsOf, useMyTeams, type ShareTeam } from "../../hooks/useDeviceSharing";
 import { deviceDisplayName, type Device } from "../DeviceBadge";
 import { TeamIcon } from "../TeamIcon";
@@ -28,6 +29,12 @@ export function DeviceShareControl({ d, teamId }: { d: Device; teamId?: string }
   const teams = teamId ? allTeams.filter((t) => String(t._id) === teamId) : allTeams;
   const setDeviceShares = useInboxStore((s) => s.setDeviceShares);
   const [asking, setAsking] = useState<ShareTeam | null>(null);
+  // A device on a team machine already belongs to its team: teammates join the
+  // machine as themselves instead of borrowing this login.
+  const onMachine = useInboxStore((s) => teamMachineOfDevice(s.teamMachines, d.device_id, s.currentUser?._id));
+  if (onMachine) {
+    return <span className="text-[11px] text-sol-text-muted" data-device-team-machine>{onMachine.team_name} team machine</span>;
+  }
   if (teams.length === 0) return null;
 
   const shared = new Set(d.shared_team_ids ?? []);

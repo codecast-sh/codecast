@@ -3,12 +3,14 @@
 // report attributes only the processes its daemon tracks, so a count from it
 // reads low on a busy host.
 // What a placement strip and a machine chip show beside a host's name.
-import type { MachineResourceSnapshot } from "@codecast/shared/contracts";
+import { cpuBusy, type MachineResourceSnapshot } from "@codecast/shared/contracts";
 
 /** A report older than this says nothing about the machine now. */
 export const HOST_LOAD_STALE_MS = 5 * 60_000;
 
-export type HostLoad = { freeGb: number; totalGb: number; tight: boolean; at: number };
+// tight: too little memory for another session (the placement bar). busy: the
+// CPU is saturated, which on a shared box is the limit people hit first.
+export type HostLoad = { freeGb: number; totalGb: number; tight: boolean; cpuPct?: number; busy: boolean; at: number };
 
 const GB = 1024 ** 3;
 
@@ -18,9 +20,10 @@ export function hostLoadOf(row: { received_at: number; snapshot: MachineResource
   const freeGb = s.memoryAvailable / GB;
   // The same bar a placement uses (cli cloud/hostHeadroom): pressure, or under 4 GB free.
   const tight = s.pressure === "elevated" || s.pressure === "critical" || freeGb < 4;
-  return { freeGb, totalGb: s.memoryTotal / GB, tight, at: row.received_at };
+  return { freeGb, totalGb: s.memoryTotal / GB, tight, cpuPct: s.cpuPercent, busy: cpuBusy(s), at: row.received_at };
 }
 
 export function formatHostLoad(l: HostLoad): string {
-  return `${l.freeGb < 10 ? l.freeGb.toFixed(1) : Math.round(l.freeGb)} of ${Math.round(l.totalGb)} GB free`;
+  const mem = `${l.freeGb < 10 ? l.freeGb.toFixed(1) : Math.round(l.freeGb)} of ${Math.round(l.totalGb)} GB free`;
+  return l.cpuPct === undefined ? mem : `CPU ${l.cpuPct}% · ${mem}`;
 }

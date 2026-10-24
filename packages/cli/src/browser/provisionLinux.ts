@@ -34,7 +34,7 @@ import { copyCredentialToRemote, ensureRemoteClaudeReady, shq } from "../remote/
 import { readInstalledClientVersions } from "../remote/agentAuth.js";
 import { cwdGitRoot } from "../cloud/hostGit.js";
 import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
-import { SHARED_HOST_REFUSAL } from "../remote/sharedHostGuard.js";
+import { REMOTE_BUNDLE_DIR } from "./castBundle.js";
 import { addUserRootScript, addUserSelfScript, enableUserDaemonScript, isLinuxUserName, sharedHostMarkScript, sharedHostSetupScript, teammateSteps, USER_DAEMON_UNIT, userToolPath } from "./sharedHost.js";
 import { summarizeHostTools } from "../cloud/hostTools.js";
 import { agentCliInstallScript, parseAgentCliReport } from "./provisionAgents.js";
@@ -86,9 +86,14 @@ NEED=""
 for p in xvfb ffmpeg tmux git rsync curl jq fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
   at-spi2-core libatk-adaptor python3-gi gir1.2-atspi-2.0 python3-xlib xdotool xclip sshfs; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
 if [ -n "$NEED" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq $NEED; fi
-if ! command -v google-chrome >/dev/null 2>&1; then
+# Google ships Chrome for x86_64 Linux only: an arm64 host (Graviton) runs
+# everything else, with no browser of its own.
+ARCH=$(dpkg --print-architecture)
+if [ "$ARCH" = amd64 ] && ! command -v google-chrome >/dev/null 2>&1; then
   wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
   sudo apt-get install -y -qq /tmp/chrome.deb && rm /tmp/chrome.deb
+elif [ "$ARCH" != amd64 ]; then
+  echo "no Chrome on $ARCH: this host has no browser of its own"
 fi
 
 ${SSHD_KEEPALIVE_SCRIPT}
@@ -114,7 +119,7 @@ UNIT
 
 echo "[4/6] stream (mediamtx ${MEDIAMTX_VERSION}, loopback only)"
 if [ ! -x /usr/local/bin/mediamtx ] || ! /usr/local/bin/mediamtx --version 2>/dev/null | grep -q "${MEDIAMTX_VERSION}"; then
-  wget -qO /tmp/mediamtx.tar.gz "https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/mediamtx_${MEDIAMTX_VERSION}_linux_amd64.tar.gz"
+  wget -qO /tmp/mediamtx.tar.gz "https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/mediamtx_${MEDIAMTX_VERSION}_linux_$(dpkg --print-architecture).tar.gz"
   tar -xzf /tmp/mediamtx.tar.gz -C /tmp mediamtx
   sudo install -m 755 /tmp/mediamtx /usr/local/bin/mediamtx
   rm -f /tmp/mediamtx.tar.gz /tmp/mediamtx
@@ -474,7 +479,7 @@ export function uploadLinuxCast(host: RemoteHost, distDir: string): void {
   }
 }
 
-export const REMOTE_BUNDLE_DIR = "/usr/local/lib/codecast";
+export { REMOTE_BUNDLE_DIR };
 const REMOTE_BUNDLE_PREVIOUS = `${REMOTE_BUNDLE_DIR}.previous`;
 
 /**
@@ -724,10 +729,12 @@ export async function provisionLinuxHost(
   const agents = parseAgentCliReport(agentsOut);
   onProgress(`  ${agents}`);
 
-  onProgress(opts.shared ? "pushing codecast identity (shared host: no claude credential)…" : "pushing codecast identity + claude credential…");
+  // On a shared host this user is its admin (the marker says so), whose home
+  // only they can read: their logins go there as on a private host.
+  onProgress("pushing codecast identity + claude credential…");
   await pushCodecastConfig(host);
-  const cred = opts.shared ? { pushed: false, reason: SHARED_HOST_REFUSAL } : copyCredentialToRemote(host);
-  if (!cred.pushed && !opts.shared) onProgress(`  (claude credential not pushed: ${cred.reason} — sessions there will need a healthy local login)`);
+  const cred = copyCredentialToRemote(host);
+  if (!cred.pushed) onProgress(`  (claude credential not pushed: ${cred.reason} — sessions there will need a healthy local login)`);
 
   onProgress("agent logins + host tools + host git setup + mirroring instruction files and agent config…");
   const { readyHostHome, remoteRepoPath } = await import("../cloud/prepare.js");
@@ -738,7 +745,7 @@ export async function provisionLinuxHost(
     localGitRoot,
     repoPath: localGitRoot ? remoteRepoPath(host, localGitRoot) : undefined,
     gitIdentity: opts.gitIdentity,
-    pushLogins: !opts.shared,
+    pushLogins: true,
   });
   const mirror = homeReport.mirror;
   const git = homeReport.git?.pubkey ?? "no key (host git setup did not run)";
@@ -798,7 +805,7 @@ export async function provisionLinuxHost(
   if (!/\bcast-novnc=active\b/.test(services)) onProgress(`  (cast-novnc is not active: ${services.trim()} — the machine-level VNC view will not work until it is)`);
 
   return {
-    chrome: remoteExec(host, "google-chrome --version", 20_000),
+    chrome: remoteExec(host, "google-chrome --version 2>/dev/null || echo \"none ($(dpkg --print-architecture): no host browser)\"", 20_000),
     cast: remoteExec(host, "cast --version 2>/dev/null || /usr/local/bin/cast --version", 60_000),
     claude: remoteExec(host, "claude --version", 60_000),
     services,

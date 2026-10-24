@@ -49,3 +49,29 @@ describe("supervisedBySystemdUnit", () => {
     expect(supervisedBySystemdUnit({ INVOCATION_ID: "abc" }, () => null)).toBe(false);
   });
 });
+
+describe("the wanted file a shared box's user starts and stops their daemon with", () => {
+  const { unitUsesWantedFlag, setDaemonWanted, daemonWantedPath } = require("./systemdDaemonUnit") as typeof import("./systemdDaemonUnit");
+  const fsm = require("node:fs") as typeof import("node:fs");
+  const osm = require("node:os") as typeof import("node:os");
+  const pathm = require("node:path") as typeof import("node:path");
+  const { userDaemonUnits } = require("./browser/sharedHost") as typeof import("./browser/sharedHost");
+
+  test("only a unit that names the file is driven by it; an older hand-built unit keeps the sudo path", () => {
+    const dir = fsm.mkdtempSync(pathm.join(osm.tmpdir(), "units-"));
+    fsm.writeFileSync(pathm.join(dir, "codecast-daemon-user@.service"), userDaemonUnits().service);
+    fsm.writeFileSync(pathm.join(dir, "old-daemon@.service"), "[Service]\nUser=%i\nExecStart=/home/%i/.local/bin/cast _daemon\n");
+    expect(unitUsesWantedFlag("codecast-daemon-user@cam.service", dir)).toBe(true);
+    expect(unitUsesWantedFlag("old-daemon@cam.service", dir)).toBe(false);
+    fsm.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("start creates it 0600 in the person's own ~/.codecast; stop removes it", () => {
+    const home = fsm.mkdtempSync(pathm.join(osm.tmpdir(), "home-"));
+    setDaemonWanted(true, home);
+    expect((fsm.statSync(daemonWantedPath(home)).mode & 0o777).toString(8)).toBe("600");
+    setDaemonWanted(false, home);
+    expect(fsm.existsSync(daemonWantedPath(home))).toBe(false);
+    fsm.rmSync(home, { recursive: true, force: true });
+  });
+});

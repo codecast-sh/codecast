@@ -14,9 +14,11 @@ import {
 
 const laptop = { device_id: "laptop", label: "My Mac", platform: "darwin", online: true, is_remote: false, last_seen: 1, local_project_roots: ["/Users/me/src/app"] };
 const mini = { ...laptop, device_id: "agent-box", label: "Mac-mini", bot_name: "Mr Bot", local_project_roots: ["/Users/bot/src/app"] };
-const cloud = { device_id: "cloud", label: "Linux - ip-172-31-40-243", platform: "linux", online: false, is_remote: true, last_seen: 0, local_project_roots: ["/home/ubuntu/work/app"] };
+// A host this laptop manages carries its report (cloud_host); a remote without one is a plain machine.
+const hostReport = { managed_by: "laptop", instance_id: "i-1", provider: "aws" as const, state: "stopped" as const, images: [], logins_held: [], at: Date.now() };
+const cloud = { device_id: "cloud", label: "Linux - ip-172-31-40-243", platform: "linux", online: false, is_remote: true, last_seen: 0, local_project_roots: ["/home/ubuntu/work/app"], cloud_host: hostReport };
 const cloudAwake = { ...cloud, online: true };
-const remoteMac = { device_id: "remote-mac", label: "Remote", platform: "darwin", online: true, is_remote: true, last_seen: 1, local_project_roots: [] };
+const remoteMac = { device_id: "remote-mac", label: "Remote", platform: "darwin", online: true, is_remote: true, last_seen: 1, local_project_roots: [], cloud_host: hostReport };
 const linuxLaptop = { device_id: "linux-laptop", label: "thinkpad", platform: "linux", online: true, is_remote: false, last_seen: 1, local_project_roots: [] };
 const linuxBox = { ...cloud, device_id: "linux-box", bot_name: "Boxy" };
 
@@ -29,7 +31,7 @@ describe("a cloud host whose instance is gone", () => {
   const report = (at: number, extra = {}) => ({ managed_by: "laptop", instance_id: "i", provider: "aws" as const, state: "stopped" as const, images: [], logins_held: [], at, ...extra });
   const live = { ...cloud, device_id: "live", cloud_host: report(now) };
   const deadA = { ...cloud, device_id: "dead-a", last_seen: now - 14 * 86_400_000, cloud_host: report(now - 14 * 86_400_000) };
-  const deadB = { ...cloud, device_id: "dead-b", last_seen: now - 20 * 86_400_000 };
+  const deadB = { ...cloud, device_id: "dead-b", last_seen: now - 20 * 86_400_000, cloud_host: undefined };
   const roster = [laptop, deadA, deadB, live];
 
   test("a standing pick of a dead host falls through; a sleeping one holds", () => {
@@ -43,9 +45,11 @@ describe("a cloud host whose instance is gone", () => {
     expect(cloudHostOf([laptop, deadA, deadB, { ...live, cloud_host: report(now, { state: "missing" }) }])).toBeNull();
   });
 
-  test("an online host is never gone, and a lone host without reports stays asleep", () => {
+  test("an online host is never gone, and a remote no laptop reports on is a plain machine, never a host to park on", () => {
     expect(machineChipNote({ ...deadA, online: true }, roster)).not.toBe("gone");
-    expect(cloudHostOf([laptop, deadB])).toBe(deadB);
+    // The server's start chokepoint parks only on a reported host (cloudHostManaged); the composer agrees.
+    expect(cloudHostOf([laptop, deadB])).toBeNull();
+    expect(isCloudHost(deadB)).toBe(false);
     expect(machineChipNote(deadA, roster)).toBe("gone");
     expect(machineChipNote(laptop, roster)).toBeNull();
   });

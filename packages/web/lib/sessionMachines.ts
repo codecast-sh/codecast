@@ -1,6 +1,6 @@
 import type { Device } from "../components/DeviceBadge";
-import { cloudHostRetired, cloudPlacementFor, deviceDisplayName, platformCanOpenPath, type CloudHostReport, type CloudStartFrom } from "@codecast/shared/contracts";
-import { defaultMachineId, deviceSeesPath, wakesOnUse, type MachineCandidate } from "./machinePicker";
+import { cloudHostManaged, cloudHostRetired, cloudPlacementFor, deviceDisplayName, platformCanOpenPath, type CloudHostReport, type CloudStartFrom } from "@codecast/shared/contracts";
+import { defaultMachineId, deviceSeesPath, type MachineCandidate } from "./machinePicker";
 import { compactAge } from "./threadState";
 
 export type SessionMachine = Device & { bot_name?: string | null; runner_name?: string | null };
@@ -20,12 +20,15 @@ export function sessionMachineChoices(
 
 /**
  * The composer's cloud host: one of YOUR machines (not a team agent box) that
- * boots itself when work arrives. An offline agent box cannot be woken by the
- * laptop — the mover needs a registry entry for it — so bot boxes never
- * qualify even when their platform matches.
+ * a laptop manages, so it boots itself and is prepared when work arrives
+ * (cloudHostManaged, the same test the server's start chokepoint asks). An
+ * offline agent box cannot be woken by the laptop — the mover needs a
+ * registry entry for it — so bot boxes never qualify even when their
+ * platform matches. Any other remote (your user on a team machine) is a
+ * plain machine: the session starts there directly.
  */
-export function isCloudHost(d: { bot_name?: string | null; is_remote?: boolean; platform?: string }): boolean {
-  return d.bot_name === undefined && wakesOnUse(d);
+export function isCloudHost(d: { bot_name?: string | null; is_remote?: boolean; platform?: string; cloud_host?: unknown }): boolean {
+  return d.bot_name === undefined && cloudHostManaged(d);
 }
 
 /**

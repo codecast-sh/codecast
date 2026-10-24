@@ -12,15 +12,15 @@
  */
 
 import { hostReleaseScript } from "../hosts/installRelease.js";
+import { REMOTE_BUNDLE_DIR } from "./castBundle.js";
 import { agentCliInstallScript } from "./provisionAgents.js";
 import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
+import { DAEMON_WANTED_FILE } from "../systemdDaemonUnit.js";
+import { isLinuxUserName } from "@codecast/shared/contracts";
+
+export { isLinuxUserName };
 
 export const USER_DAEMON_UNIT = "codecast-daemon-user@";
-
-/** Whether `name` is safe as a Linux login and a systemd instance name. */
-export function isLinuxUserName(name: string): boolean {
-  return /^[a-z][a-z0-9_-]{0,31}$/.test(name);
-}
 
 export function isGitHubLogin(login: string): boolean {
   return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login);
@@ -87,9 +87,12 @@ PY`;
 
 /**
  * The template unit that runs one person's daemon, and the path unit that
- * starts it the moment that person's `cast login` writes their config, so
- * nobody but the admin needs sudo. Peer mode: no CODECAST_REMOTE_DEVICE, and
- * the person's own Claude token comes from ~/.codecast/claude.env.
+ * starts it, so nobody but the admin needs sudo. Both key on a file the person
+ * owns, ~/.codecast/daemon.wanted: `cast login` and `cast start` create it and
+ * the path unit starts the daemon; `cast stop` removes it, and the service's
+ * ExecCondition then keeps Restart= from reviving the daemon. Peer mode: no
+ * CODECAST_REMOTE_DEVICE, and a Claude token the person puts in
+ * ~/.codecast/claude.env reaches their sessions.
  */
 export function userDaemonUnits(): { service: string; path: string } {
   return {
@@ -99,6 +102,9 @@ After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/home/%i/.codecast/config.json
 [Service]
+# Checked before every start, Restart= ones included (a Condition= is not):
+# without the wanted file the daemon stays down after \`cast stop\`.
+ExecCondition=/usr/bin/test -e /home/%i/.codecast/${DAEMON_WANTED_FILE}
 User=%i
 Environment=CODECAST_CLOUD=1
 Environment=HOME=/home/%i
@@ -113,9 +119,9 @@ KillMode=process
 WantedBy=multi-user.target
 `,
     path: `[Unit]
-Description=start the codecast daemon for %i once they sign in
+Description=start the codecast daemon for %i while they want it running
 [Path]
-PathExists=/home/%i/.codecast/config.json
+PathExists=/home/%i/.codecast/${DAEMON_WANTED_FILE}
 Unit=${USER_DAEMON_UNIT}%i.service
 [Install]
 WantedBy=paths.target
@@ -130,10 +136,23 @@ WantedBy=paths.target
  */
 export function sharedHostMarkScript(): string {
   return `set -euo pipefail
-sudo install -d -m 755 /etc/codecast
-sudo touch ${SHARED_HOST_MARKER}
+${markerAdminScript()}
 ${bashrcPathScript()}
 echo SHARED-MARK-OK`;
+}
+
+/**
+ * The marker, naming the provisioning user as the box's admin: its only
+ * sudoer, so the one home on the box no one else can read, and the one the
+ * push guard lets laptop logins into. Keeps a registered machine's other lines.
+ */
+function markerAdminScript(): string {
+  return `sudo install -d -m 755 /etc/codecast
+sudo touch ${SHARED_HOST_MARKER}
+if ! grep -qx "admin=$(id -un)" ${SHARED_HOST_MARKER}; then
+  { grep -v '^admin=' ${SHARED_HOST_MARKER} || true; echo "admin=$(id -un)"; } | sudo tee ${SHARED_HOST_MARKER}.new >/dev/null
+  sudo chmod 644 ${SHARED_HOST_MARKER}.new && sudo mv -f ${SHARED_HOST_MARKER}.new ${SHARED_HOST_MARKER}
+fi`;
 }
 
 /**
@@ -143,14 +162,18 @@ echo SHARED-MARK-OK`;
  * /usr/local/bin link into a home directory: homes are 750 on Ubuntu, so such
  * a link is "permission denied" (systemd 203/EXEC) for everyone but its
  * owner. Each user runs their own copies from their own PATH instead.
+ * Everyone already signed in gets the wanted file, so the new units keep
+ * running their daemons.
  */
 export function sharedHostSetupScript(): string {
   const units = userDaemonUnits();
   return `set -euo pipefail
-sudo install -d -m 755 /etc/codecast
-sudo touch ${SHARED_HOST_MARKER}
-# A Claude login an earlier, unshared provision pushed: a refresh here would rotate it and log that laptop out.
-rm -f "$HOME/.claude/.credentials.json"
+${markerAdminScript()}
+for cfg in /home/*/.codecast/config.json; do
+  [ -e "$cfg" ] || continue
+  u=$(stat -c %U "$cfg"); w="$(dirname "$cfg")/${DAEMON_WANTED_FILE}"
+  [ -e "$w" ] || { sudo install -m 600 -o "$u" -g "$(id -gn "$u")" /dev/null "$w" && echo "wanted $u"; }
+done
 sudo tee /etc/systemd/system/${USER_DAEMON_UNIT}.service >/dev/null <<'UNIT'
 ${units.service}UNIT
 sudo tee /etc/systemd/system/${USER_DAEMON_UNIT}.path >/dev/null <<'UNIT'
@@ -168,29 +191,55 @@ echo SHARED-HOST-OK`;
 /**
  * Create a person's Linux user, as root (through the provisioning user's
  * sudo). Idempotent: an existing user is kept, and their ssh keys are
- * re-read from GitHub on every run, so re-running is how keys refresh.
+ * re-read on every run, so re-running is how keys refresh. Keys come from
+ * github.com/<login>.keys, the `pubkey` given (a laptop joining from the CLI),
+ * and their own ~/.ssh/authorized_keys.local. `lenientKeys`: a GitHub account
+ * with no keys is not an error (a join from the web, where ssh is optional).
  * No sudo for them: their daemon starts through the path unit.
  */
-export function addUserRootScript(user: string, github?: string): string {
+export function addUserRootScript(user: string, github?: string, opts: { pubkey?: string; lenientKeys?: boolean } = {}): string {
   if (!isLinuxUserName(user)) throw new Error(`not a Linux user name: ${user}`);
   if (github !== undefined && !isGitHubLogin(github)) throw new Error(`not a GitHub login: ${github}`);
-  const keys = github
-    ? `keys=$(curl -fsS --max-time 15 https://github.com/${github}.keys)
-[ -n "$keys" ] || { echo "github.com/${github} has no public ssh keys" >&2; exit 1; }
-sudo install -d -m 700 -o ${user} -g ${user} /home/${user}/.ssh
-{ printf '%s\\n' "# from github.com/${github}.keys, refreshed by cast hosts provision --add-user; your own additions go in authorized_keys.local" "$keys"
+  if (opts.pubkey !== undefined && !/^[A-Za-z0-9@.+/= _-]{20,800}$/.test(opts.pubkey)) throw new Error("not an ssh public key");
+  const fetchKeys = github
+    ? `keys=$(curl -fsS --max-time 15 https://github.com/${github}.keys || true)
+${opts.lenientKeys ? "" : `[ -n "$keys" ] || { echo "github.com/${github} has no public ssh keys" >&2; exit 1; }\n`}`
+    : "keys=\n";
+  const pubkey = opts.pubkey ? `keys=$(printf '%s\\n%s' "$keys" '${opts.pubkey}')\n` : "";
+  const keys = github || opts.pubkey
+    ? `${fetchKeys}${pubkey}sudo install -d -m 700 -o ${user} -g ${user} /home/${user}/.ssh
+{ printf '%s\\n' "# from ${github ? `github.com/${github}.keys` : "codecast"}${opts.pubkey ? " and the joining laptop" : ""}, refreshed on every join or --add-user; your own additions go in authorized_keys.local" "$keys"
   sudo cat /home/${user}/.ssh/authorized_keys.local 2>/dev/null || true; } | sudo tee /home/${user}/.ssh/authorized_keys.codecast >/dev/null
 sudo chown ${user}:${user} /home/${user}/.ssh/authorized_keys.codecast && sudo chmod 600 /home/${user}/.ssh/authorized_keys.codecast
 sudo mv -f /home/${user}/.ssh/authorized_keys.codecast /home/${user}/.ssh/authorized_keys
-echo "keys=$(printf '%s\\n' "$keys" | grep -c .)"`
+echo "keys=$(printf '%s\\n' "$keys" | grep -c . || true)"`
     : `echo keys=unchanged`;
   return `set -euo pipefail
 [ -e ${SHARED_HOST_MARKER} ] || { echo "not a shared host: provision it with --shared first" >&2; exit 1; }
 if ! id -u ${user} >/dev/null 2>&1; then sudo adduser --disabled-password --gecos '' --shell /bin/bash ${user} >/dev/null; fi
 [ "$(getent passwd ${user} | cut -d: -f6)" = /home/${user} ] || { echo "${user}'s home is not /home/${user}" >&2; exit 1; }
+sudo usermod -U -e '' ${user} 2>/dev/null || true
 sudo install -d -m 700 -o ${user} -g ${user} /home/${user}/.codecast
 ${keys}
 echo ADD-USER-ROOT-OK`;
+}
+
+/**
+ * Take a person off the box, as root: their daemon and every process of
+ * theirs stop and stay off, their login is locked, and their home is kept (their worktrees are theirs to
+ * reclaim; only the admin deletes files, by hand).
+ */
+export function removeUserRootScript(user: string): string {
+  if (!isLinuxUserName(user)) throw new Error(`not a Linux user name: ${user}`);
+  return `set -euo pipefail
+sudo rm -f /home/${user}/.codecast/${DAEMON_WANTED_FILE}
+sudo systemctl disable --now ${USER_DAEMON_UNIT}${user}.path 2>/dev/null || true
+sudo systemctl stop ${USER_DAEMON_UNIT}${user}.service 2>/dev/null || true
+# Their sessions too: a removed member's tmux and agents would keep spending the box.
+sudo pkill -KILL -u ${user} 2>/dev/null || true
+sudo usermod -L -e 1 ${user} 2>/dev/null || true
+sudo rm -f /home/${user}/.codecast/config.json /home/${user}/.ssh/authorized_keys
+echo REMOVE-USER-OK`;
 }
 
 /**
@@ -208,9 +257,18 @@ cd "$HOME"
 ${ownPath}
 [ -x "$HOME/.bun/bin/bun" ] || (curl -fsSL https://bun.sh/install | bash) >/dev/null 2>&1
 "$HOME/.bun/bin/bun" --version >/dev/null
+# One cast on the box: the admin's bundle when the box runs one (provisioned
+# from source), on this person's own bun, so they follow its updates;
+# otherwise the published release.
+if [ -f ${REMOTE_BUNDLE_DIR}/index.js ]; then
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/usr/bin/env bash\\nexec "$HOME/.bun/bin/bun" ${REMOTE_BUNDLE_DIR}/index.js "$@"\\n' > "$HOME/.local/bin/cast.next"
+  chmod 755 "$HOME/.local/bin/cast.next" && mv -f "$HOME/.local/bin/cast.next" "$HOME/.local/bin/cast"
+else
 (
 ${hostReleaseScript("linux", false)}
 )
+fi
 ${agents}
 ${bashrcPathScript()}
 ${claudeFirstRunScript()}
@@ -233,9 +291,4 @@ export function teammateSteps(user: string, address: string): string[] {
     `read -rsp 'Claude token: ' t && (umask 077; printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\\n' "$t" > ~/.codecast/claude.env); echo`,
     "cast login <token>         # codecast → Settings → CLI → Generate token; the daemon starts on its own",
   ];
-}
-
-/** The same, for the host's own login: its daemon already runs, so it restarts onto the token. */
-export function sharedOwnerSteps(user: string, address: string): string[] {
-  return [...teammateSteps(user, address).slice(0, 3), "sudo systemctl restart codecast-daemon.service"];
 }

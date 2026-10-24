@@ -31,6 +31,17 @@ export function deviceWakesOnUse(d: { is_remote?: boolean; platform?: string }):
 }
 
 /**
+ * A cloud host some laptop manages: a remote that laptop reports on
+ * (cloud_host), so it can prepare it, wake it and place sessions there. The
+ * one test for "this launch parks for placement": the composer and the
+ * server's start chokepoint both ask it. Every other remote machine (a team
+ * machine member's daemon, a peer server) gets a plain start.
+ */
+export function cloudHostManaged(d: { is_remote?: boolean; platform?: string; cloud_host?: unknown }): boolean {
+  return deviceWakesOnUse(d) && !!d.cloud_host;
+}
+
+/**
  * How far a host's last report may trail the newest report from the same
  * laptop before the laptop is taken to have dropped it. The laptop reports
  * every host in its registry each pass (every 15 minutes, cloud/hostReports).

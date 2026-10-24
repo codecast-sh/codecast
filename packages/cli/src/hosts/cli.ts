@@ -38,14 +38,14 @@ import { deviceId } from "../remote/device.js";
 import { ssh, type RemoteHost } from "../remote/session-move.js";
 import { ROOT_WORKSPACE_NAME, type AgentLoginsReport } from "../cloud/prepare.js";
 import { DANGLING_SEED_REFS_SCRIPT } from "../cloud/transfer.js";
-import { CLOUD_HOST_SIZES, cloudSeedLabel } from "@codecast/shared/contracts";
+import { CLOUD_AUTOSCALE_DEFAULT_SIZE, CLOUD_AUTOSCALE_MAX_EXTRA_CHOICES, CLOUD_HOST_SIZES, cliErrorMessage, cloudSeedLabel } from "@codecast/shared/contracts";
 import { commandGroup } from "../commandGroups.js";
 import { registerHostKeepaliveCommand } from "../cloud/keepalive.js";
 import { checkIdleMinutes, provisionArgv, registerHostCreateCommand } from "./create.js";
 import { registerHostResizeCommand } from "./resize.js";
+import { registerHostTeamCommand } from "./team.js";
 import type { MacDesktop } from "./macLogin.js";
 import { remoteExec } from "../browser/remote.js";
-import { sharedOwnerSteps } from "../browser/sharedHost.js";
 import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 
 const OK = fmt.success(icons.check);
@@ -933,6 +933,7 @@ export function buildHostsCommand(parent: Command): Command {
   registerHostKeepaliveCommand(hosts);
   registerHostCreateCommand(hosts);
   registerHostResizeCommand(hosts, EC2_HOURLY_USD);
+  registerHostTeamCommand(hosts);
 
   hosts
     .command("ls", { isDefault: true })
@@ -1003,12 +1004,16 @@ export function buildHostsCommand(parent: Command): Command {
     .option("--shared", "A host several people share, each with their own Linux user and logins: no laptop logins go there, every daemon is a peer, it never auto-stops")
     .option("--add-user <linux-user>", "Add a person to a shared host: their user, tools and daemon; prints the sign-ins they run there")
     .option("--github <login>", "With --add-user, let them ssh in with their GitHub account's public keys")
+    .option("--team <team>", "With --shared, register it as a team machine of this team: teammates join it from the app")
+    .option("--name <name>", "With --team, the name everyone sees (default: the host id)")
     .option("--git-identity <identity>", 'The identity commits on the host carry ("Name <email>"); default: this laptop\'s git config')
     .option("--service-user <name>", "Create a separate Mac login with SSH and passwordless sudo; preserves the current login")
     .option("--base", "Build codecast's base Mac image on this fresh AWS Mac instead (codecast maintainers): nothing personal goes on it")
-    .action(async (id: string | undefined, o: { idle?: string; daemon: boolean; gitIdentity?: string; serviceUser?: string; base?: boolean; shared?: boolean; addUser?: string; github?: string }) => {
+    .action(async (id: string | undefined, o: { idle?: string; daemon: boolean; gitIdentity?: string; serviceUser?: string; base?: boolean; shared?: boolean; addUser?: string; github?: string; team?: string; name?: string }) => {
       const h = pick(id, "no cloud host registered");
       if (o.github && !o.addUser) die("--github requires --add-user");
+      if (o.team && !o.shared) die("--team registers a shared host: pass --shared with it");
+      if (o.name && !o.team) die("--name names a team machine: pass --team with it");
       if (o.addUser && o.shared) die("--add-user adds a person to a host that is already shared: provision with --shared first, then --add-user");
       if (o.addUser) {
         const { addUserToHost } = await import("../browser/provisionLinux.js");
@@ -1088,10 +1093,14 @@ export function buildHostsCommand(parent: Command): Command {
         console.log(`  tools:    ${report.tools.trim()}`);
         console.log(fmt.muted(`  ${idleStopLine(idle)}`));
         console.log(fmt.muted(`  watch it: cast hosts view`));
-        if (shared) {
-          console.log(`\n  shared host: no laptop's Claude login goes there, so its own login signs in with yours:`);
-          for (const step of sharedOwnerSteps(up.user, up.address ?? h.id)) console.log(`    ${step}`);
-          console.log(fmt.muted(`  add a person: cast hosts provision ${h.id} --add-user <linux-user> --github <login>`));
+        if (shared && o.team) {
+          console.log(fmt.muted("  registering it as a team machine…"));
+          const args = ["hosts", "team", "register", "--team", o.team, "--name", o.name ?? h.id, ...(up.address ? ["--address", up.address] : [])];
+          const reg = remoteExec(toRemoteHost(up), `PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH" cast ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ")} 2>&1`, 180_000);
+          console.log(reg.trim().split("\n").map((l) => `  ${l}`).join("\n"));
+        } else if (shared) {
+          console.log(fmt.muted(`\n  shared host: your logins are on your user (${up.user}), its only sudoer; nobody else's go there`));
+          console.log(fmt.muted(`  let teammates join it from the app: cast hosts provision ${h.id} --shared --team <team>`));
         }
       } catch (err) {
         die((err as Error).message);
@@ -1622,6 +1631,37 @@ export function buildHostsCommand(parent: Command): Command {
       } catch (err) {
         die((err as Error).message);
       }
+    });
+
+  hosts
+    .command("autoscale [id] [state]")
+    .description("Show or set a Linux host's autoscale: when no awake host has room, wake a sleeping one, then launch more like it")
+    .option("--max <n>", `Hosts it may add (${CLOUD_AUTOSCALE_MAX_EXTRA_CHOICES.join(", ")})`)
+    .option("--size <type>", `Instance type of added hosts (${CLOUD_HOST_SIZES.map((s) => s.type).join(", ")})`)
+    .action(async (id: string | undefined, state: string | undefined, o: { max?: string; size?: string }) => {
+      const h = pick(id, "no host registered");
+      if (!h.deviceId) die(`${h.id} has no codecast device yet`, "`cast hosts provision` it first");
+      const { client, api, token } = await (await import("../remote/cli.js")).convexClient();
+      const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
+      const current = devices.find((d) => d.device_id === h.deviceId)?.cloud_autoscale;
+      if (!state) {
+        console.log(current?.enabled
+          ? `${h.id}: autoscale on, adds up to ${current.max_extra} ${current.size} host${current.max_extra === 1 ? "" : "s"}`
+          : `${h.id}: autoscale off`);
+        return;
+      }
+      if (state !== "on" && state !== "off") die("state is on or off");
+      const policy = {
+        enabled: state === "on",
+        max_extra: o.max ? Number(o.max) : current?.max_extra ?? CLOUD_AUTOSCALE_MAX_EXTRA_CHOICES[0],
+        size: o.size ?? current?.size ?? CLOUD_AUTOSCALE_DEFAULT_SIZE,
+      };
+      try {
+        await client.mutation(api.cloud.setCloudAutoscale, { api_token: token, host_device_id: h.deviceId, ...policy });
+      } catch (err) {
+        die(cliErrorMessage(err));
+      }
+      console.log(`${OK} ${h.id}: autoscale ${policy.enabled ? `on, adds up to ${policy.max_extra} ${policy.size} host${policy.max_extra === 1 ? "" : "s"}` : "off"}`);
     });
 
   hosts

@@ -421,7 +421,7 @@ export interface ReadyHostHomeOptions {
   gitIdentity?: string;
   /** The caller already ran ensureHostGitReady for this host (pushSession). */
   skipGit?: boolean;
-  /** False on a shared host: no laptop logins go there (browser/sharedHost.ts). The host refuses them anyway. */
+  /** False to leave this laptop's agent logins off the host. On a shared host the host itself refuses them for anyone but its admin (remote/sharedHostGuard.ts). */
   pushLogins?: boolean;
   /** Leave the agent logins and tools out (tests of the other steps). */
   skipLogins?: boolean;
@@ -561,7 +561,7 @@ export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions
       log(`host setup step failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  if (!opts.skipLogins && opts.pushLogins !== false && !entry?.shared) {
+  if (!opts.skipLogins && opts.pushLogins !== false) {
     try {
       logins = pushAgentLoginsNow(host, { localGitRoot: opts.localGitRoot, onProgress: log, deps: opts.loginsDeps });
     } catch (err) {

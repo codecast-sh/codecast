@@ -137,15 +137,17 @@ export function latestBaseImage(opts: { region: string; profile?: string }, plat
 }
 
 /**
- * Canonical's current Ubuntu 24.04 x86_64 image in the region: what a Linux
- * host starts from when there is no codecast image yet. Provisioning installs
- * everything on top, so a plain image only makes the first boot longer.
+ * Canonical's current Ubuntu 24.04 image in the region, for the instance
+ * type's architecture: what a Linux host starts from when there is no
+ * codecast image yet (or none of its architecture: codecast's are x86_64).
+ * Provisioning installs everything on top, so a plain image only makes the
+ * first boot longer.
  */
-export function ubuntuImage(opts: { region: string; profile?: string }): ImageRef | null {
+export function ubuntuImage(opts: { region: string; profile?: string }, arch: "amd64" | "arm64" = "amd64"): ImageRef | null {
   try {
-    const out = aws(opts, ["ssm", "get-parameter", "--name", "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"]);
+    const out = aws(opts, ["ssm", "get-parameter", "--name", `/aws/service/canonical/ubuntu/server/24.04/stable/current/${arch}/hvm/ebs-gp3/ami-id`]);
     const id = out?.Parameter?.Value;
-    return typeof id === "string" && /^ami-[a-f0-9]+$/.test(id) ? { id, name: "Ubuntu 24.04 (Canonical)", created: out.Parameter.LastModifiedDate ?? "", platform: "linux" } : null;
+    return typeof id === "string" && /^ami-[a-f0-9]+$/.test(id) ? { id, name: `Ubuntu 24.04 ${arch} (Canonical)`, created: out.Parameter.LastModifiedDate ?? "", platform: "linux" } : null;
   } catch {
     return null;
   }
@@ -155,6 +157,12 @@ export function ubuntuImage(opts: { region: string; profile?: string }): ImageRe
  * cloud-init user data for a host launched from a codecast image: once per
  * instance, early in boot, before the codecast daemon starts.
  */
+/** The CPU architecture an EC2 instance type runs: arm64 for Graviton (r8g, t4g, x2gd…), else amd64. */
+export function instanceTypeArch(opts: { region: string; profile?: string }, type: string): "amd64" | "arm64" {
+  const archs: string[] = aws(opts, ["ec2", "describe-instance-types", "--instance-types", type]).InstanceTypes?.[0]?.ProcessorInfo?.SupportedArchitectures ?? [];
+  return archs.includes("arm64") && !archs.includes("x86_64") ? "arm64" : "amd64";
+}
+
 export function cloneResetUserData(user = "ubuntu"): string {
   const home = `/home/${user}`;
   const script = [

@@ -21,6 +21,8 @@ import { Bot, Users } from "lucide-react";
 import { DeviceShareControl } from "../../../components/settings/DeviceShareControl";
 import { useSharedWithLabel } from "../../../hooks/useDeviceSharing";
 import { CloudHostPanel } from "../../../components/settings/CloudHostPanel";
+import { TeamMachineCard } from "../../../components/settings/TeamMachineCard";
+import { useSyncTeamMachines } from "../../../hooks/useSyncTeamMachines";
 
 type RepoPlane = NonNullable<Device["git_plane"]>[number];
 
@@ -442,19 +444,16 @@ function TeamMachineRow({ box }: { box: TeamMachine }) {
 
 function TeamMachinesSection() {
   const boxes = (useSettingsData("agentBoxes").data ?? []) as TeamMachine[];
-  if (boxes.length === 0) return null;
+  useSyncTeamMachines();
+  const machines = useInboxStore((s) => s.teamMachines);
+  if (boxes.length === 0 && machines.length === 0) return null;
   return (
     <SettingsSection
       title="Team machines"
       icon={Users}
-      description={
-        <>
-          Machines your team opened to you: teammates&apos; computers they shared, and agent boxes whose daemon
-          runs as a bot. Start a session on one and you own it: watch its terminal and copy an attach command
-          from the header pill.
-        </>
-      }
+      description="Machines your teams run sessions on: shared boxes you join as yourself, teammates' computers they lent, and agent boxes."
     >
+      {machines.map((m) => <TeamMachineCard key={m._id} m={m} showTeam />)}
       {boxes.map((b) => (
         <TeamMachineRow key={`${b.owner_user_id}:${b.device_id}`} box={b} />
       ))}

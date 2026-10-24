@@ -25,6 +25,9 @@ export type MachineChipsProps = {
   onShare?: () => void;
   /** Each cloud host's current load, by device id: free memory beside its name, yellow when tight. */
   loads?: ReadonlyMap<string, HostLoad>;
+  /** Team machines you are not on yet, by name; a chip opens where you join one. */
+  joinable?: ReadonlyArray<{ id: string; name: string }>;
+  onJoin?: (id: string) => void;
 };
 
 /** A machine someone on your team opened to you, or an agent box. */
@@ -37,17 +40,18 @@ function chipLabel(d: SessionMachine, roster: SessionMachine[], load?: HostLoad)
       {deviceDisplayName(d)}
       {d.bot_name !== undefined && ` · ${d.runner_name || d.bot_name || "agent box"}`}
       {note && <span className={note === "gone" ? "text-sol-red/80" : "opacity-70"}>{` · ${note}`}</span>}
-      {load && <span className={load.tight ? "text-sol-yellow" : "opacity-70"} title={formatHostLoad(load)}>{` · ${load.freeGb < 10 ? load.freeGb.toFixed(1) : Math.round(load.freeGb)} GB free`}</span>}
+      {load && <span className={load.tight || load.busy ? "text-sol-yellow" : "opacity-70"} title={formatHostLoad(load)}>{load.busy ? ` · CPU ${load.cpuPct}%` : ` · ${load.freeGb < 10 ? load.freeGb.toFixed(1) : Math.round(load.freeGb)} GB free`}</span>}
     </>
   );
 }
 
-export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen, onPick, onShare, loads }: MachineChipsProps) {
+export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen, onPick, onShare, loads, joinable = [], onJoin }: MachineChipsProps) {
   // Notes and titles judge each chip against the whole roster (a host is
   // "gone" relative to its siblings); only the row leaves dead machines out.
   const machines = listedMachines(roster, selectedDeviceId);
   const routedMachine = machines.find((d) => d.device_id === selectedDeviceId) ?? machines[0];
-  if (machines.length <= 1 || !routedMachine) return null;
+  const joins = onJoin ? joinable : [];
+  if ((machines.length <= 1 && joins.length === 0) || !routedMachine) return null;
   if (open) {
     const chip = (d: SessionMachine) => {
       const selected = d.device_id === selectedDeviceId;
@@ -70,6 +74,18 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
     };
     const own = machines.filter((d) => !isTeamMachine(d));
     const team = machines.filter(isTeamMachine);
+    const joinChips = joins.map((j) => (
+      <button
+        key={`join:${j.id}`}
+        type="button"
+        onClick={() => onJoin?.(j.id)}
+        title={`Join ${j.name}: a user of your own on your team's machine`}
+        className="inline-flex items-center gap-1 rounded-md border border-dashed border-sol-cyan/50 px-2 py-0.5 text-[11px] text-sol-cyan/90 hover:border-sol-cyan hover:text-sol-cyan"
+        data-machine-join={j.name}
+      >
+        + {j.name}
+      </button>
+    ));
     const shareLink = onShare && (
       <button
         type="button"
@@ -82,17 +98,18 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
     return (
       <div className="flex flex-wrap items-center justify-end gap-1.5 max-w-[26rem]">
         {own.map(chip)}
-        {team.length > 0 && (
+        {(team.length > 0 || joinChips.length > 0) && (
           <div className="flex basis-full flex-wrap items-center justify-end gap-1.5">
-            <span className="inline-flex items-center gap-1 text-[10px] text-sol-cyan/80" title="Machines your team shared with you">
+            <span className="inline-flex items-center gap-1 text-[10px] text-sol-cyan/80" title="Machines your team runs sessions on">
               <Users className="w-3 h-3" />
               team
             </span>
             {team.map(chip)}
+            {joinChips}
             {shareLink}
           </div>
         )}
-        {team.length === 0 && shareLink}
+        {team.length === 0 && joinChips.length === 0 && shareLink}
       </div>
     );
   }

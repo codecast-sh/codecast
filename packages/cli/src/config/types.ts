@@ -189,6 +189,8 @@ export interface Config extends CloudSessionSyncSettings {
   line?: { checkouts?: Array<{ root: string; runs: number }> };
   sim_enabled?: boolean;
   sim_version?: string;
+  vault_enabled?: boolean;
+  vault_version?: string;
   // Last heartbeat-reported availability of team-gated snippets (chat, calls),
   // keyed by slug: whether any of this user's teams has the feature on. The
   // daemon installs/disables the snippet when this CHANGES (never on every
