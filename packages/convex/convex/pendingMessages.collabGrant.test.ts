@@ -42,12 +42,15 @@ function createDb(seed: Record<string, Rec[]>) {
             c.op === "eq" ? String(r[c.field]) === String(c.val) : (r[c.field] ?? -Infinity) > c.val
           )
         );
+      let descending = false;
+      const ordered = () => (descending ? [...run()].reverse() : run());
       const chain = {
         withIndex(_name: string, builder: (q: any) => unknown) { builder(q); return chain; },
         filter() { return chain; }, // no client_id in these tests → dedup branch never taken
-        async collect() { return run(); },
-        async first() { return run()[0] ?? null; },
-        async take(n: number) { return run().slice(0, n); },
+        order(dir: "asc" | "desc") { descending = dir === "desc"; return chain; },
+        async collect() { return ordered(); },
+        async first() { return ordered()[0] ?? null; },
+        async take(n: number) { return ordered().slice(0, n); },
       };
       return chain;
     },

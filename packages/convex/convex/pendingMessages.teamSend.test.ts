@@ -66,19 +66,25 @@ function createDb(seed: Record<string, Rec[]>) {
               : (r[c.field] ?? -Infinity) > c.val
           )
         );
+      let descending = false;
+      const ordered = () => (descending ? [...run()].reverse() : run());
       const chain = {
         withIndex(_name: string, builder: (q: any) => unknown) {
           builder(q);
           return chain;
         },
+        order(dir: "asc" | "desc") {
+          descending = dir === "desc";
+          return chain;
+        },
         async collect() {
-          return run();
+          return ordered();
         },
         async first() {
-          return run()[0] ?? null;
+          return ordered()[0] ?? null;
         },
         async take(n: number) {
-          return run().slice(0, n);
+          return ordered().slice(0, n);
         },
       };
       return chain;
@@ -174,6 +180,40 @@ describe("send with a sender that resolves to nothing", () => {
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", body: "b" });
     expect(tables.pending_messages[0].content).toContain('<session-message from="jxghost"');
     expect(tables.pending_messages[1].content).toContain('<session-message from="unknown"');
+  });
+});
+
+// jx74yqy (moved under Cam's account) could not answer jx75sbx, the private session that
+// had just written to it. A session may always answer the one that wrote to it, only that one.
+describe("reply to the session that wrote to you", () => {
+  test("Bob answers Alice's private session from the session she wrote to", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    await expect(
+      performSessionSend(ctx as any, "uBob" as any, { to: "jxalice", from: "jxbob01", body: "before" }),
+    ).rejects.toThrow(/No session found/);
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "please take this" });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxalice", from: "jxbob01", body: "done" });
+    const reply = tables.pending_messages.at(-1)!;
+    expect(reply.conversation_id).toBe("convAlice");
+    expect(reply.from_conversation_id).toBe("convBob");
+    expect(reply.content).toContain('<session-message from="jxbob01"');
+  });
+
+  test("another session of the same person, or a stranger, still may not", async () => {
+    const { ctx } = world({ now: Date.now() });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "please take this" });
+    await expect(
+      performSessionSend(ctx as any, "uBob" as any, { to: "jxalice", from: "jxbobpv", body: "x" }),
+    ).rejects.toThrow(/No session found/);
+    await expect(
+      performSessionSend(ctx as any, "uCarol" as any, { to: "jxalice", from: "jxcarol", body: "x" }),
+    ).rejects.toThrow(/No session found/);
+  });
+
+  test("a sender cannot borrow a session it does not run", async () => {
+    const { ctx } = world({ now: Date.now() });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "please take this" });
+    await expect(performSessionSend(ctx as any, "uCarol" as any, { to: "jxalice", from: "jxbob01", body: "x" })).rejects.toThrow();
   });
 });
 

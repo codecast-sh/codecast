@@ -779,6 +779,22 @@ export const sendMessageV2 = mutation({
 // here for the callers that write it.
 export { formatSessionMessage };
 
+// A session may always answer one that wrote to it, whatever the writer's
+// sharing says: the writer opened the channel, and an answer grants nothing
+// beyond it. Without this, a session moved onto a teammate's machine (now run
+// by their account) could not reply to the private session that briefed it
+// (jx74yqy to jx75sbx, 2026-10-24). The recent rows suffice: a reply follows
+// the message it answers.
+const REPLY_WINDOW = 200;
+async function wroteTo(ctx: { db: any }, writer: any, recipient: any): Promise<boolean> {
+  const recent = await ctx.db
+    .query("pending_messages")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", recipient._id))
+    .order("desc")
+    .take(REPLY_WINDOW);
+  return recent.some((row: any) => String(row.from_conversation_id ?? "") === String(writer._id));
+}
+
 // True if the conversation has at least one managed session that has beaten its heartbeat
 // recently — i.e. a daemon is alive and could deliver right now. Used to give the sender an
 // immediate "looks offline" hint and to decide whether a stuck cross-user send has truly failed.
@@ -842,16 +858,21 @@ export async function performSessionSend(
   // `cast send @handle` addresses a role's standing session (org-roles-standing.md
   // T3): the handle resolves in the caller's boundaries, then the row below
   // is the session; the same access rule applies to it.
+  // The sender resolves among the caller's own sessions only, so a session
+  // can speak only as one its caller runs.
+  const fromRef = args.from?.trim();
+  const ownSender = fromRef ? await findConversationByAnyRef(ctx, fromRef, authUserId) : null;
   const roleTarget = args.target ?? await standingSessionForHandle(ctx, authUserId, args.to);
   const target = args.target
     ? args.target
     : roleTarget
     ? ((await canSendProductMessage(ctx, authUserId, roleTarget)) ? roleTarget : null)
     : await findConversationByAnyRefWhere(ctx, args.to, async (conversation) => {
-      return await canSendProductMessage(ctx, authUserId, conversation);
+      return await canSendProductMessage(ctx, authUserId, conversation)
+        || (!!ownSender && await wroteTo(ctx, conversation, ownSender));
     });
   if (!target) {
-    throw new Error(`No session found for "${args.to}" (you can only message your own sessions, sessions shared with your team, or sessions whose owner granted you send access)`);
+    throw new Error(`No session found for "${args.to}" (you can only message your own sessions, sessions shared with your team, sessions whose owner granted you send access, or a session that messaged yours)`);
   }
 
   const isCrossUser = target.user_id.toString() !== authUserId.toString();
@@ -901,9 +922,8 @@ export async function performSessionSend(
   let fromShortId = "unknown";
   let fromConversationId: Id<"conversations"> | undefined;
   let senderConversation: any = null;
-  const fromRef = args.from?.trim();
   if (fromRef) {
-    const sender = await findConversationByAnyRef(ctx, fromRef, authUserId);
+    const sender = ownSender;
     senderConversation = sender;
     if (sender) {
       fromShortId = sender.short_id ?? sender._id.toString().slice(0, 7);
