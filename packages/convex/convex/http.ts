@@ -4919,6 +4919,7 @@ cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation
 cliRoute("/cli/workflow-runs/reask", async (ctx, body) => ctx.runMutation(api.workflow_runs.reaskFromCli, body));
 cliRoute("/cli/workflow-runs/resume", async (ctx, body) => ctx.runMutation(api.workflow_runs.resumeFromCli, body));
 cliRoute("/cli/workflow-runs/ingest", async (ctx, body) => ctx.runMutation(api.workflow_runs.ingestSnapshot, body));
+cliRoute("/cli/workflow-runs/graph", async (ctx, body) => ctx.runMutation(api.flowLibrary.attachRunGraph, body));
 cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api.workflow_runs.getByExternalRun, body));
 // the-line.md L8: `cast workflow runs [--task|--plan]`, one list across workflows.
 cliRoute("/cli/workflow-runs/list", async (ctx, body) => ctx.runQuery(api.workflow_runs.listRunsFromCli, body));

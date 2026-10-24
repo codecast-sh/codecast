@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fitRunGraph, RUN_GRAPH_MAX_BYTES, workflowRunGraphs, workflowScriptFor } from "./workflowRunGraph";
+import { fitRunGraph, RUN_GRAPH_MAX_BYTES, TRACE_RETRY_AFTER_MS, workflowRunGraphs, workflowScriptFor } from "./workflowRunGraph";
 
 let dir = "";
 afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
@@ -56,3 +56,31 @@ test("an ingest carries the graph once; a backend that refuses the arg still get
     server.stop(true);
   }
 }, 60_000);
+
+test("a failed trace is tried again on a later snapshot, with backoff, then given up", async () => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "wfgraph-"));
+  fs.mkdirSync(path.join(dir, "workflows", "scripts"), { recursive: true });
+  const script = path.join(dir, "workflows", "scripts", "slow-wf_slow.js");
+  fs.writeFileSync(script, "export const meta = { name: 'slow' }");
+  let t = 0;
+  let traces = 0;
+  let works = false;
+  const graphs = workflowRunGraphs(async () => { traces++; if (!works) throw new Error("timed out"); return { hash: "h" }; }, () => t);
+  expect(await graphs.pending(dir, "wf_slow")).toBeUndefined();
+  expect(traces).toBe(1);
+  // Inside the first backoff the next snapshot does not trace again.
+  t += TRACE_RETRY_AFTER_MS[0] - 1;
+  expect(await graphs.pending(dir, "wf_slow")).toBeUndefined();
+  expect(traces).toBe(1);
+  // Past it, it does, and a trace that works is the graph.
+  t += 2;
+  works = true;
+  expect(await graphs.pending(dir, "wf_slow")).toEqual({ hash: "h" });
+  expect(traces).toBe(2);
+  // A run whose traces keep failing goes without once every retry is spent.
+  works = false;
+  const g2 = workflowRunGraphs(async () => { traces++; return null; }, () => t);
+  const before = traces;
+  for (const wait of [0, ...TRACE_RETRY_AFTER_MS, 60 * 60_000]) { t += wait; await g2.pending(dir, "wf_slow"); }
+  expect(traces - before).toBe(TRACE_RETRY_AFTER_MS.length + 1);
+});

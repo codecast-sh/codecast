@@ -106,6 +106,19 @@ describe("used in sessions", () => {
     expect(stored!.script).toContain("ship-widget");
   });
 
+  test("a finished run its daemon never traced takes its graph from a backfill; one that holds a graph keeps it", async () => {
+    const { t, shelf } = await setup();
+    const graph = { hash: "dddddddddddddddd", name: "ship_widget", label: "Ship widget", source: SOURCE.replace(`draft="jx7abcd"`, `kind="line", draft="imported"`), nodes, edges, file: ".codecast/flows/ship-widget.cast", files: [], graph_nodes: [] };
+    const snap = { api_token: TOKEN, external_run_id: "wf_2", session_id: "sess-team", workflow_name: "ship-widget", status: "completed", phases: [], agents: [] };
+    await t.mutation(api.workflow_runs.ingestSnapshot, snap);
+    expect(await shelf()).toHaveLength(0);
+    expect(await t.mutation(api.flowLibrary.attachRunGraph, { api_token: TOKEN, external_run_id: "wf_2", graph })).toEqual({ ok: true, had: false });
+    expect((await shelf()).map((r: any) => r.label)).toEqual(["Ship widget"]);
+    expect(await t.mutation(api.flowLibrary.attachRunGraph, { api_token: TOKEN, external_run_id: "wf_2", graph: { ...graph, hash: "eeeeeeeeeeeeeeee" } })).toEqual({ ok: true, had: true });
+    expect(await t.mutation(api.flowLibrary.attachRunGraph, { api_token: "not-a-token", external_run_id: "wf_2", graph })).toEqual({ error: "Unauthorized" });
+    expect(await t.mutation(api.flowLibrary.attachRunGraph, { api_token: TOKEN, external_run_id: "wf_none", graph })).toEqual({ error: "No such run" });
+  });
+
   test("a graph that extends a library flow by slug saves as its variant; one that extends a file is refused", async () => {
     const { t, ids, shelf } = await setup();
     const runId = await t.run((ctx) => ctx.db.insert("workflow_runs", { user_id: ids.owner, workspace: ids.workspace, team_id: ids.team, workflow_name: "x", status: "running", node_statuses: [], created_at: T0, updated_at: T0 } as any));

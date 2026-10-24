@@ -357,6 +357,19 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       console.log(JSON.stringify(await traceScriptGraph(text, launchArgs(script, text))));
     });
 
+  // Graphs for this machine's workflow runs that finished before the daemon could trace them (workflowRunBackfill.ts).
+  flow
+    .command("backfill")
+    .description("Send the graphs of this machine's Claude Code workflow runs the server has none for (the library's From sessions)")
+    .option("--days <n>", "How far back to look", "14")
+    .action(async (opts: { days: string }) => {
+      const { backfillRunGraphs } = await import("./workflowRunBackfill.js");
+      const since = Date.now() - Math.max(1, Number(opts.days) || 14) * 86_400_000;
+      const c = await backfillRunGraphs((body) => deps.cliPost("/cli/workflow-runs/graph", body), { since, log: (l) => console.log(dim(l)) });
+      console.log(`${c.sent} sent, ${c.had} already held, ${c.noScript} without a script, ${c.failed} failed, of ${c.runs} runs`);
+      if (c.failed) process.exitCode = 1;
+    });
+
   flow
     .command("import <script>")
     .description("Turn a Claude Code workflow script (a path, or a wf_ run id) into a flow under .codecast/flows/")

@@ -23,6 +23,8 @@ import { isTeamMember, parseWorkspaceKey, workspaceGrantsAccess } from "./lib/ac
 
 import { isLineRunSlug, upsertWorkflowFor } from "./workflows";
 import { recordWorkflowVersion } from "./flowVersions";
+import { verifyApiToken } from "./apiTokens";
+import { runGraphValidator } from "./lib/workflowGraphValidators";
 import { isExtendsPath } from "./lib/flowRoute";
 
 export type RunGraph = {
@@ -94,6 +96,26 @@ export async function recordScriptRunGraph(ctx: any, runId: Id<"workflow_runs">,
   const run = await ctx.db.get(runId);
   return run ? await recordRunGraph(ctx, run, graph, "script", now) : null;
 }
+
+/**
+ * A finished Workflow run's graph, sent on its own (`cast flow backfill`): a
+ * run its daemon never traced while it ran takes the graph as ingestSnapshot
+ * would have given it. Only the run's own user's token; a run that already
+ * holds a graph keeps it.
+ */
+export const attachRunGraph = mutation({
+  args: { api_token: v.string(), external_run_id: v.string(), graph: runGraphValidator },
+  handler: async (ctx, { api_token, external_run_id, graph }) => {
+    const auth = await verifyApiToken(ctx, api_token, false);
+    if (!auth) return { error: "Unauthorized" };
+    const run = await ctx.db.query("workflow_runs").withIndex("by_external_run", (q) => q.eq("external_run_id", external_run_id)).first();
+    if (!run) return { error: "No such run" };
+    if (run.user_id !== auth.userId) return { error: "Forbidden" };
+    if (run.graph_hash) return { ok: true, had: true };
+    await recordScriptRunGraph(ctx, run._id, run, graph);
+    return { ok: true, had: false };
+  },
+});
 
 /** How many runs a shelf row reads: past it, the count reads as "at least". */
 export const SESSION_FLOW_RUNS_CAP = 20;
