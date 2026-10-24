@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatTry, momentForTry, renderJudgingSetup } from "./judgingCommand";
+import { formatAgentTry, formatTry, momentForTry, renderJudgingSetup } from "./judgingCommand";
 
 describe("the setup pass (learning-loop.md LL4)", () => {
   test("is written out for the project, with no placeholder left", () => {
@@ -59,5 +59,23 @@ describe("a tried moment", () => {
     });
     expect(line).toContain("1 finding, 1 citing no listed expectation");
     expect(line).toContain("ex-aq-3 severity 7");
+  });
+});
+
+describe("an agent judge tried on a stored moment", () => {
+  const finding = (what: string, severity: number) => ({ what, evidence: [], hurt: "", severity, layer: "conversation" as const, cause: "", cause_checked: false });
+  test("sets what it found beside what the published judge found there", () => {
+    const text = formatAgentTry({
+      moment: "mo-6476", ok: true, account: "claude7", took_ms: 14 * 60_000, notional_usd: 2.4, dir: "/tmp/t/try-1-mo-6476",
+      findings: [finding("A booked call was not dialed on time.", 6)],
+      before: [{ judge_version: "9aea8734fbfd7429", findings: [{ what: "A booked call was not dialed on time.", severity: 6 }, { what: "The stored email was never reconciled.", severity: 2 }] }],
+    });
+    expect(text).toContain("mo-6476: 1 finding, 14m on claude7, $2.40 at list price");
+    expect(text).toContain("published 9aea8734fb found 2:");
+    expect(text).toContain("    severity 2: The stored email was never reconciled.");
+    expect(text).toContain("session: /tmp/t/try-1-mo-6476");
+  });
+  test("a failed session says why", () => {
+    expect(formatAgentTry({ moment: "a.json", ok: false, error: "the findings turn ended without an answer", findings: [], account: "claude3", took_ms: 0, notional_usd: 0, dir: "/tmp/x" })).toContain("a.json: failed, the findings turn ended without an answer");
   });
 });

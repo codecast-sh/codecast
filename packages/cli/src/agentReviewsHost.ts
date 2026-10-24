@@ -223,6 +223,14 @@ export async function gatewayFor(root: string, rel: string, log: (l: string) => 
   return env;
 }
 
+/** Stop every gateway this process started: a one-shot command's, once its sessions are done. */
+export function stopGateways(): void {
+  for (const [file, g] of gateways) {
+    try { g.child.kill("SIGTERM"); } catch { /* gone */ }
+    gateways.delete(file);
+  }
+}
+
 // ── One run ──
 
 /** The directory of the real `cast` this machine runs, searched past a launchd PATH; null when there is none. */
@@ -260,9 +268,9 @@ function readJson(file: string): any {
   try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
 }
 
-/** Start one review's session in its run directory; resolves once the harness is running. */
-export function startRun(claim: ReviewClaim, account: string, o: { checkout: string; gatewayEnv: Record<string, string>; harness: string; castDir: string }): RunFiles {
-  const dir = path.join(runsDir(), claim.review);
+/** Start one review's session in its run directory (`dir`, else the runner's own for the review); resolves once the harness is running. */
+export function startRun(claim: ReviewClaim, account: string, o: { checkout: string; gatewayEnv: Record<string, string>; harness: string; castDir: string; dir?: string }): RunFiles {
+  const dir = o.dir ?? path.join(runsDir(), claim.review);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const started = Date.now();
@@ -349,6 +357,55 @@ function stopRun(dir: string) {
   const pid = Number(fs.existsSync(path.join(dir, "pid")) ? fs.readFileSync(path.join(dir, "pid"), "utf8").trim() : 0);
   // The harness's process group: it takes its agent down with it.
   if (pid) try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch { /* gone */ } }
+}
+
+// ── A try ──
+
+/**
+ * Agent judge sessions run to their end on this machine, outside the runner:
+ * `cast line judges try` on an agent judge. Each claim runs in its own
+ * directory under `under` (never the runner's, so no pass hands it back),
+ * on a saved profile with room, its gateway started from `root`. Nothing is
+ * handed back or filed; each result is what handBack would have sent.
+ */
+export async function tryAgentReviews(claims: ReviewClaim[], o: { root: string; under: string; log: (line: string) => void; now?: () => number }): Promise<Array<{ claim: ReviewClaim; dir: string; result: ReturnType<typeof handBack> }>> {
+  const now = o.now ?? Date.now;
+  const harness = harnessScript();
+  if (!harness) throw new Error("this cast has no dry-run harness beside it (packages/cli/scripts/prompt-dry-run.ts), so it cannot run an agent judge");
+  const castDir = realCastDir();
+  if (!castDir) throw new Error("no cast on this machine for the harness's guard to hand reads to");
+  const cfg = readReviewsConfig();
+  const busy = new Map<string, number>();
+  for (const r of heldRuns().filter((h) => h.alive)) busy.set(r.account, (busy.get(r.account) ?? 0) + 1);
+  const profiles = tokenProfiles(await readActiveCredentialAsync());
+  const gatewayEnvs = new Map<string, Record<string, string>>();
+  const runs: RunFiles[] = [];
+  try {
+    for (const claim of claims) {
+      const account = rankAccounts(profiles, cfg, busy, cooling, now())[0];
+      if (!account) throw new Error("no saved profile with a setup token has room for an agent judge session now (cast usage)");
+      const gw = claim.judge.agent.gateway;
+      if (gw && !gatewayEnvs.has(gw)) gatewayEnvs.set(gw, await gatewayFor(o.root, gw, o.log));
+      runs.push(startRun(claim, account, { checkout: o.root, gatewayEnv: gw ? gatewayEnvs.get(gw)! : {}, harness, castDir, dir: path.join(o.under, claim.review) }));
+      busy.set(account, (busy.get(account) ?? 0) + 1);
+      o.log(`${claim.moment}: ${claim.judge.name} started on ${account}`);
+    }
+    // Running until its harness writes its exit, or its process is gone.
+    const running = (dir: string) => !fs.existsSync(path.join(dir, "run", "exit.txt")) && pidAlive(Number(fs.existsSync(path.join(dir, "pid")) ? fs.readFileSync(path.join(dir, "pid"), "utf8").trim() : 0));
+    while (runs.some((r) => running(r.dir) && now() < r.claim.deadline)) await new Promise((res) => setTimeout(res, 5_000));
+    return runs.map((r) => {
+      const late = running(r.dir);
+      if (late) stopRun(r.dir);
+      const result = handBack(r, now());
+      if (late && !result.ok) result.error = `the session ran past its ${Math.round(r.claim.judge.agent.timeout_ms / 60_000)} minutes and was stopped`;
+      return { claim: r.claim, dir: r.dir, result };
+    });
+  } catch (err) {
+    for (const r of runs) stopRun(r.dir);
+    throw err;
+  } finally {
+    stopGateways();
+  }
 }
 
 // ── The pass ──

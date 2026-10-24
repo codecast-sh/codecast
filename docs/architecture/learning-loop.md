@@ -113,9 +113,16 @@ line judging [--judge <name>]` prints for the project, so the session reads
 the same words wherever it was started. The pass decides which way the
 product plugs in from the record, proposes missing expectations through the
 expectations path, drafts or reviews, and tries its drafts on real recent
-data. `cast line judges try <judge> <moment.json>...` runs a draft judge
+data. `cast line judges try <judge> <moment.json|mo-N>...` runs a draft judge
 exactly as LL8 builds the call, on the team's budget, and, when the budget is
-off, names the most one call can cost. The pass ends with one card that says
+off, names the most one call can cost. A stored moment (`mo-N`) is read from
+its kept body, or extracted afresh by the checkout's extractor with
+`--extract`. An agent judge is tried as the reviewing machines run it
+(agentReviewsHost.ts `tryAgentReviews`): one session per moment on a saved
+profile with room, with the checkout's prompt, CLAUDE.md and gateway, in run
+directories of its own so no reviews pass hands them back; nothing is filed,
+and beside what each session found it prints what the published judge found
+on that moment. The pass ends with one card that says
 what turning on does. It never copies a customer's words into the report or
 the card.
 
@@ -380,33 +387,32 @@ LL4's "improve a judge", as built (`convex/judgeReview.ts`,
   prompt, the extractor of its moment, or the expectation it grades against;
   nothing in the product changes, no repro test enters the product's suite,
   and it is never closed as "the judge was wrong", which is what it is about
-  (`cast line dissolve --kind judge_defect` refuses it). The route
-  (the trial's `outreach/line/agentwatch-trial-judge.cast` in Union):
-  `cast line judges arm` lays out the cases and an edited copy of
-  `.codecast` (judges and moments copied, the rest of the checkout linked so
-  an extractor's relative reads resolve); a session decides where the fix
-  belongs and edits the copy, or names the expectation proposal it waits on,
-  the open judge problem it merges into, or the records that show the
-  findings hold. Before any of that, `cast line judges base` judges each
-  ruled case with what is published, five times: a case filed again at most
-  once in five is a draw the judge does not repeat, and no fix can separate
-  from it, so it leaves the cases; when every case is one, the problem
-  closes dropped (`cast line dissolve --kind draw`, the counts as its note)
-  with no fix and no card. `cast line judges ab` judges every ruled case and ten
-  moments with live findings of the same judge on both sides, five times
-  each, on the team's budget (a changed extractor re-extracts both sides
-  from the product's data). A ruled case is one message under one line,
-  however many moments show it (the others ride on it as twins), and a run
-  counts as still finding it only when it files that line on that message.
-  It passes only when the ruled cases separate
-  (one-sided Fisher, p <= 0.05) and the kept findings do not drop. Its card
-  (`judge_fix`, shared/contracts/judgeFix.ts: the change, the two before and
-  after rates, the edited lines, the cases the edit moves and those it does
-  not) goes to the project's reviewer,
-  in the trial page's tooling lane, never the executive queue. Publish puts
-  the copy's files into `.codecast`, runs `cast line moments publish`,
-  judges the ruled moments again and closes the problem with when the fix
-  went live, so a later finding reopens it.
+  (`cast line dissolve --kind judge_defect` refuses it). A live flow
+  sends it to the member of its family that serves `judge-review`
+  (flowRoute.ts `flowRouteFor`), and while the family has none it waits as
+  "no judge flow". Union's is `outreach/line/judge-fixes.cast`, a library
+  flow of its own (decision sd-1423): `cases` lays out each ruled finding
+  with its moment and diagnosis, and picks the moments a proof re-judges
+  (the newest ruled ones, at most three, and one control the cases do not
+  touch); a session diagnoses what the judge got wrong in one paragraph, or
+  closes the problem (the findings held, another judge problem holds the
+  same fix, the published judge already changed); a session changes what
+  the judge reads on the run's branch, its prompt, its CLAUDE.md or its
+  extractor (an agent judge reads no expectations, so no proposal to them
+  can change it); `cast line judges try` runs the edited judge once on those
+  moments; a session reads whether the ruled findings went and the published
+  judge's other findings on the same moments stayed, a finding missing once
+  counted a draw unless the transcript shows the change led the judge away
+  from it; and a presenting session posts the decision. Apply merges the
+  branch into main, publishes the source's judges and extractors from the
+  machine that runs them (only from a checkout with no edits of its own),
+  judges the ruled moments again, and watches the problem. It runs no
+  repeated trials: each version of a change is judged once, a few sessions
+  in all. The trial's route before it (`agentwatch-trial-judge.cast`, now
+  retired) armed an edited copy of `.codecast`, measured draws with `cast
+  line judges base` and separated the edit with `cast line judges ab`, five
+  runs a side on a budget; those commands remain for a judge whose calls are
+  cheap enough to measure that way.
 
 ## LL12. Trial projects
 

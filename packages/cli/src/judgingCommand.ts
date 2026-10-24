@@ -4,12 +4,13 @@
 // on a moment exactly as codecast will run it (LL8).
 //
 //   cast line judging [--project <ref>] [--judge <name>]   the pass, written out for the project
-//   cast line judges try <judge> <moment.json|->... [--prompt] [--json]
+//   cast line judges try <judge> <moment.json|-|mo-N>... [--extract] [--prompt] [--json]
 //
 // The pass is judgingSetup.md, principle level, its one home. The web's
 // "Set up judging" and "Improve this judge" start a session in the project's
 // checkout that runs `cast line judging` and follows it (web lib/line/setupJudging.ts).
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { InvalidArgumentError, type Command } from "commander";
 import { fmt } from "./colors.js";
@@ -22,7 +23,9 @@ import { JUDGE_BACKENDS, parseExtractorOutput, type JudgeBackend, type MomentRec
 import { subscriptionModelCall } from "./subscriptionCall.js";
 import type { ModelCallResult, ModelCallSpec } from "@codecast/shared/contracts/modelCall";
 import setupPass from "./judgingSetup.md" with { type: "text" };
-import { registerJudgeFixCommands } from "./judgeFixCommand.js";
+import { momentOn, registerJudgeFixCommands, showMoment, type MomentShown } from "./judgeFixCommand.js";
+import { tryAgentReviews, type ReviewClaim } from "./agentReviewsHost.js";
+import { AGENT_FINDINGS_TURN, agentJudgePrompt, parseAgentFindings, type AgentFinding } from "@codecast/shared/contracts/agentJudges";
 
 function fail(message: string, code = 2): never {
   console.error(fmt.error(message));
@@ -147,8 +150,80 @@ function readJudge(root: string, ref: string): { spec: JudgeSpec; file: string }
 
 function readMoment(arg: string): string {
   if (arg === "-") return fs.readFileSync(0, "utf8");
-  if (!fs.existsSync(arg)) fail(`No moment file at ${arg}: give the JSON an extractor printed, or - for stdin`);
+  if (!fs.existsSync(arg)) fail(`No moment file at ${arg}: give the JSON an extractor printed, - for stdin, or a stored moment's mo-N`);
   return fs.readFileSync(arg, "utf8");
+}
+
+/** A moment handed to `try`: its record as the judge reads it, and for a stored one (mo-N) what codecast holds of it. */
+type TriedMoment = { name: string; record: MomentRecord; shown?: MomentShown };
+
+/** One agent judge session tried on a moment: what it found, beside what the published judge found there. */
+export type AgentTryOutcome = {
+  moment: string;
+  ok: boolean;
+  error?: string;
+  findings: AgentFinding[];
+  /** What the published judge of this name found on this moment, newest run first; absent for a moment given as a file. */
+  before?: Array<{ judge_version: string; findings: Array<{ what: string; severity: number }> }>;
+  account: string;
+  took_ms: number;
+  notional_usd: number;
+  /** The session's run directory: its prompt, stream and both answers. */
+  dir: string;
+};
+
+/** An agent judge's try in words: each moment's findings, then the published judge's beside them. */
+export function formatAgentTry(o: AgentTryOutcome): string {
+  const head = `${o.moment}: ${o.ok ? `${o.findings.length} finding${o.findings.length === 1 ? "" : "s"}` : `failed, ${o.error}`}, ${Math.round(o.took_ms / 60_000)}m on ${o.account}, $${o.notional_usd.toFixed(2)} at list price`;
+  const lines = [head, ...o.findings.map((f) => `  severity ${f.severity}: ${f.what}`)];
+  const last = o.before?.[0];
+  if (last) lines.push(`  published ${last.judge_version.slice(0, 10)} found ${last.findings.length}:`, ...last.findings.map((f) => `    severity ${f.severity}: ${f.what}`));
+  lines.push(`  session: ${o.dir}`);
+  return lines.join("\n");
+}
+
+async function tryAgentJudge(root: string, spec: JudgeSpec, version: string, moments: TriedMoment[], options: { proposal?: string; prompt?: boolean; json?: boolean; dir?: string }): Promise<void> {
+  const agent = spec.agent!;
+  if (options.proposal) fail(`${spec.name} is an agent judge: its session reads no expectations, so a proposal changes nothing it sees. Change its prompt${agent.claude_md ? ` or ${agent.claude_md}` : ""} in this checkout and try that.`);
+  const claudeMd = agent.claude_md ? fs.readFileSync(path.join(root, JUDGES_DIR, agent.claude_md), "utf8") : undefined;
+  const claims: ReviewClaim[] = moments.map(({ name, record, shown }, i) => ({
+    review: `try-${i + 1}-${name.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+    moment: name,
+    subject: record.subject,
+    source: String(shown?.moment.source ?? ""),
+    judge: { name: spec.name, version, model: spec.model, root, agent: { ...agent, ...(claudeMd ? { claude_md: claudeMd } : {}) } },
+    turns: [agentJudgePrompt(spec.prompt, record, record.who ?? null), AGENT_FINDINGS_TURN],
+    deadline: Date.now() + agent.timeout_ms,
+  }));
+  if (options.prompt) {
+    console.log(options.json ? JSON.stringify({ turns: claims[0]!.turns, claude_md: claudeMd ?? null }, null, 2) : `# ${spec.name} ${version}, an agent session on ${spec.model}\n\n## First turn\n${claims[0]!.turns[0]}\n\n## Second turn\n${claims[0]!.turns[1]}`);
+    return;
+  }
+  const under = options.dir ? path.resolve(options.dir) : fs.mkdtempSync(path.join(os.tmpdir(), "judge-try-"));
+  fs.mkdirSync(under, { recursive: true });
+  const runs = await tryAgentReviews(claims, { root, under, log: (l) => console.error(fmt.muted(l)) });
+  const outcomes: AgentTryOutcome[] = runs.map(({ claim, dir, result }, i) => {
+    const text = typeof result.findings_text === "string" ? result.findings_text : "";
+    const findings = result.ok ? parseAgentFindings(text) : null;
+    const shown = moments[i]!.shown;
+    return {
+      moment: claim.moment,
+      ok: !!findings,
+      ...(findings ? {} : { error: String(result.error ?? "the findings turn held no findings list") }),
+      findings: findings ?? [],
+      ...(shown ? { before: (shown.runs ?? []).filter((r: any) => r.judge === spec.name).map((r: any) => ({ judge_version: String(r.judge_version), findings: (r.findings ?? []).map((f: any) => ({ what: String(f.what ?? f.what_happened ?? ""), severity: Number(f.severity) || 0 })) })) } : {}),
+      account: String(result.account),
+      took_ms: Number(result.took_ms) || 0,
+      notional_usd: Number(result.notional_usd) || 0,
+      dir,
+    };
+  });
+  if (options.json) console.log(JSON.stringify({ judge: spec.name, version, model: spec.model, outcomes }, null, 2));
+  else {
+    for (const o of outcomes) console.log(formatAgentTry(o));
+    if (outcomes.length > 1) console.log(`\n${outcomes.length} moments, $${outcomes.reduce((s, o) => s + o.notional_usd, 0).toFixed(2)} at list price in all.`);
+  }
+  if (outcomes.some((o) => !o.ok)) process.exitCode = 1;
 }
 
 export function registerJudgingCommands(line: Command, deps: PublishDeps): void {
@@ -171,11 +246,13 @@ export function registerJudgingCommands(line: Command, deps: PublishDeps): void 
     .command("try")
     .description("Run a judge on moments exactly as codecast will, on the team's model budget; nothing is filed or kept")
     .argument("<judge>", `A judge name (${JUDGES_DIR}/<name>.md) or its file`)
-    .argument("<moments...>", "Moment files: the JSON an extractor printed (blocks, refs, at), or - for stdin")
+    .argument("<moments...>", "Moments: the JSON an extractor printed, - for stdin, or a stored moment's mo-N")
     .option("--team <name|id|personal>", "Workspace whose budget pays and whose projects' expectations it reads")
+    .option("--extract", "Extract each mo-N afresh with this checkout's extractor instead of reading its kept body")
     .option("--prompt", "Print the exact request for the first moment and send nothing")
     .option("--proposal <xp-N>", "Judge under the expectations as they would read with this open proposal applied")
     .option("--on <backend>", "Where the calls run: api (the team's budget) or subscription (this machine's Claude Code login); default the judge's source's judge_on", judgeBackendOption)
+    .option("--dir <dir>", "An agent judge's sessions: where their run directories go (default a new one under the system's temp)")
     .option("--json", "Machine-readable output")
     .addHelpText("after", `
 A judge file is a header between two --- lines, then its prompt:
@@ -198,10 +275,41 @@ An extractor (.codecast/moments/<kind>.ts) reads the event on stdin and prints o
               {"type": "facts", "title": "...", "facts": [{"label": "...", "value": "..."}]},
               {"type": "text", "title": "...", "text": "..."}],
    "refs": [{"label": "thread", "id": "t_81", "table": "threads"}], "at": "<iso>"}
-Its opening comment lines may set "// quiet: 10m" and "// timeout: 90s".`)
-    .action(async (judgeRef: string, momentArgs: string[], options: { team?: string; prompt?: boolean; json?: boolean; proposal?: string; on?: JudgeBackend }) => {
+Its opening comment lines may set "// quiet: 10m" and "// timeout: 90s".
+
+An agent judge (runner: agent) runs as the reviewing machines run it: a Claude Code
+session in this checkout, on a saved profile with room, with this checkout's prompt,
+CLAUDE.md and gateway. Each session runs to its end; nothing is filed. With a mo-N,
+the output sets what the published judge found on that moment beside what this one finds.`)
+    .action(async (judgeRef: string, momentArgs: string[], options: { team?: string; extract?: boolean; prompt?: boolean; json?: boolean; proposal?: string; on?: JudgeBackend; dir?: string }) => {
       const root = await repoRoot(process.cwd());
       const { spec, file } = readJudge(root, judgeRef);
+      const version = (await fileVersion(file)).slice(0, 10);
+      // Charged to (and moments read from) the judge's first project's workspace.
+      const callScope = await scopeFor(deps, options.team, false, spec.projects[0]);
+      // Moments are the workspace's, read without a project.
+      const { project: _project, ...momentScope } = callScope;
+      const moments: TriedMoment[] = [];
+      for (const arg of momentArgs) {
+        if (/^mo-\d+$/.test(arg)) {
+          const shown = await showMoment(deps, momentScope, arg);
+          const record = await momentOn({ root, fresh: !!options.extract }, shown, spec);
+          if ("error" in record) fail(`${arg}: ${record.error}`);
+          moments.push({ name: arg, record, shown });
+          continue;
+        }
+        const name = arg === "-" ? "stdin" : path.basename(arg);
+        let raw: unknown;
+        try {
+          raw = JSON.parse(readMoment(arg));
+        } catch {
+          fail(`${name} is not JSON: give the output an extractor printed`);
+        }
+        const record = momentForTry(raw, spec, name, Date.now());
+        if ("error" in record) fail(`${name}: ${record.error}`);
+        moments.push({ name, record });
+      }
+      if (spec.agent) return tryAgentJudge(root, spec, version, moments, options);
       const briefs: ExpectationsBrief[] = [];
       // A proposal belongs to one project: the judge's other projects read their lines as they stand.
       let proposed = false;
@@ -223,26 +331,14 @@ Its opening comment lines may set "// quiet: 10m" and "// timeout: 90s".`)
       if (options.proposal && !proposed) fail(`${options.proposal} is not a proposal of ${spec.projects.join(", ")}, the projects ${spec.name} grades against`);
       if (!briefs.some((b) => b.ids.length)) console.error(fmt.warning(`None of ${spec.projects.join(", ")} has active expectations, so every finding will be set aside: propose them first (cast expectations propose).`));
       const ids = briefs.flatMap((b) => b.ids);
-      const version = (await fileVersion(file)).slice(0, 10);
       const outcomes: TryOutcome[] = [];
-      for (const arg of momentArgs) {
-        const name = arg === "-" ? "stdin" : path.basename(arg);
-        let raw: unknown;
-        try {
-          raw = JSON.parse(readMoment(arg));
-        } catch {
-          fail(`${name} is not JSON: give the output an extractor printed`);
-        }
-        const moment = momentForTry(raw, spec, name, Date.now());
-        if ("error" in moment) fail(`${name}: ${moment.error}`);
+      for (const { name, record: moment } of moments) {
         const request: ModelCallSpec = judgeRequest(spec, briefs, moment, Date.now());
         if (options.prompt) {
           if (options.json) console.log(JSON.stringify(request, null, 2));
           else console.log(`# ${spec.name} ${version} on ${spec.model}, up to ${spec.max_tokens} tokens out\n\n## System\n${request.system}\n\n## Prompt\n${request.prompt}`);
           return;
         }
-        // Charged to the judge's first project, the one whose expectations it grades.
-        const callScope = await scopeFor(deps, options.team, false, spec.projects[0]);
         options.on ??= await judgeBackendOf(deps, callScope, [spec.name]);
         const result = await judgeCall(options.on, deps, callScope, request, `Judge try ${spec.name}`);
         const outcome: TryOutcome = { moment: name, result };

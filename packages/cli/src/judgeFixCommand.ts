@@ -200,14 +200,14 @@ export function layOutArm(root: string, arm: string): void {
   }
 }
 
-export type MomentShown = { moment: any; body: any };
+export type MomentShown = { moment: any; body: any; runs?: any[] };
 
 export async function showMoment(deps: PublishDeps, scope: Record<string, unknown>, ref: string): Promise<MomentShown> {
   const shown = await apiPost(deps, "/cli/moments/show", { ...scope, moment: ref }, { read: true });
   let body: any = shown.moment.kept ? await apiPost(deps, "/cli/moments/body", { ...scope, moment: ref }, { read: true }) : null;
   const local = path.join(shadowDir(), String(shown.moment.source ?? "").replace(/[^A-Za-z0-9_-]/g, "_"), `${shown.moment.short_id}.json`);
   if (!body && fs.existsSync(local)) body = JSON.parse(fs.readFileSync(local, "utf8")).output;
-  return { moment: shown.moment, body };
+  return { moment: shown.moment, body, runs: shown.runs };
 }
 
 /** The moment as one side's extractor sees it now: the kept body, or a fresh extraction from that side's root. */
