@@ -13,10 +13,11 @@ import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import { memberAvatarUrl, memberDisplayName } from "./liveEntities";
 import { compareMembersByPresence } from "../components/presence/memberPresence";
 import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
+import type { IdentityRow } from "./sessionIdentity";
 import { attachmentKind, type ChatAuthor, type ChatChannelView, type ChatMessageView, type ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey } from "@codecast/shared/contracts";
-import { dmOtherIds, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
+import { dmOtherIds, isClosedAgentPlaceholder, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
 import { isPerson } from "@codecast/shared/team/memberKind";
 
 export type ChatMember = {
@@ -267,14 +268,17 @@ export function sessionAuthorFor(row: LineAuthorFields, ctx: Pick<ViewContext, "
   const live = ctx.sessionFor?.(row.origin_session_id);
   const human = ctx.members.get(row.user_id);
   const title = live?.title || row.origin_session_title;
+  const speaker = live?.speaker;
   return {
     id: row.user_id,
-    name: title || "Agent session",
+    name: speaker?.name || title || "Agent session",
     isAgent: true,
+    role: speaker?.role,
     session: {
       id: row.origin_session_id,
       agentType: live?.agentType || row.origin_agent_type || "claude_code",
       via: human ? memberName(human) : undefined,
+      identity: speaker?.identity,
     },
   };
 }
@@ -324,7 +328,12 @@ export function mentionsViewer(row: ChatMessageRow, viewerId: string): boolean {
 /** One replier on the thread link. A Slack person's face rides on the row
  *  (`external_author`); everyone else is looked up in the roster by id. The
  *  same shape the server's summary sends (chat.ts ThreadSummary.reply_faces). */
-export type ThreadFace = { user_id: string; slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean } };
+export type ThreadFace = {
+  user_id: string;
+  slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean };
+  /** A session typed the reply: the face is the session, not the human it ran as. */
+  session?: { id: string; title?: string; agent_type?: string };
+};
 
 export type ThreadRollup = {
   replyCount: number;
@@ -336,16 +345,26 @@ export type ThreadRollup = {
   faces: ThreadFace[];
 };
 
-export function threadFaceFor(row: Pick<ChatMessageRow, "user_id" | "external" | "external_author">): ThreadFace {
+export function threadFaceFor(
+  row: Pick<ChatMessageRow, "user_id" | "external" | "external_author" | "origin" | "origin_session_id" | "origin_session_title" | "origin_agent_type" | "author_kind">,
+): ThreadFace {
   const ext = row.external_author;
-  return ext
-    ? { user_id: row.user_id, slack: { user: row.external?.user, name: ext.name, avatar_url: ext.avatar_url, is_bot: ext.is_bot } }
-    : { user_id: row.user_id };
+  if (ext) return { user_id: row.user_id, slack: { user: row.external?.user, name: ext.name, avatar_url: ext.avatar_url, is_bot: ext.is_bot } };
+  if (row.origin === "agent" && row.origin_session_id && row.author_kind !== "agent") {
+    return { user_id: row.user_id, session: { id: row.origin_session_id, title: row.origin_session_title, agent_type: row.origin_agent_type } };
+  }
+  return { user_id: row.user_id };
 }
 
 /** The identity of one face — the same key the rollups dedupe on. */
 export function threadFaceId(f: ThreadFace): string {
-  return threadFaceKey({ user_id: f.user_id, external: f.slack ? { user: f.slack.user } : undefined, external_author: f.slack });
+  return threadFaceKey({
+    user_id: f.user_id,
+    external: f.slack ? { user: f.slack.user } : undefined,
+    external_author: f.slack,
+    origin: f.session ? "agent" : undefined,
+    origin_session_id: f.session?.id,
+  });
 }
 
 export function threadRollups(messages: Iterable<ChatMessageRow>): Map<string, ThreadRollup> {
@@ -395,9 +414,19 @@ export type ViewContext = {
   sendState?: (row: ChatMessageRow) => "sent" | "pending" | "failed";
   /** Live lookup for a session that typed a line (sessionAuthorFor). Absent
    *  where the caller has no session store — the row's snapshot still renders. */
-  sessionFor?: (sessionId: string) => { title?: string; agentType?: string } | undefined;
+  sessionFor?: (sessionId: string) => SessionPersona | undefined;
   /** Live lookup for a role's standing agent by its bot user id (seatAuthorFor). */
   seatFor?: (botUserId: string) => RoleSeat | undefined;
+};
+
+/** A session as its chat lines show it. `speaker` is set when the session
+ *  wears an identity (session-characters.md S1): a role's standing session
+ *  speaks as the role, a character as its character; a plain one is named by
+ *  its title. */
+export type SessionPersona = {
+  title?: string;
+  agentType?: string;
+  speaker?: { name: string; role?: ChatAuthor["role"]; identity?: IdentityRow };
 };
 
 /** A role's standing agent as chat names it: the role's person like name, its
@@ -476,6 +505,17 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
     lastReplyAt: lastReplyAt || undefined,
     replyFaces: faces?.slice(0, 4).map((f) => {
       if (f.slack) return { id: threadFaceId(f), name: f.slack.name, avatarUrl: f.slack.avatar_url || undefined };
+      if (f.session) {
+        const live = ctx.sessionFor?.(f.session.id);
+        return {
+          id: threadFaceId(f),
+          name: live?.speaker?.name || live?.title || f.session.title || "Agent session",
+          isAgent: true,
+          agentType: live?.agentType || f.session.agent_type || "claude_code",
+          role: live?.speaker?.role,
+          identity: live?.speaker?.identity,
+        };
+      }
       const a = seatAuthorFor(f.user_id, ctx);
       return { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent, role: a.role };
     }),
@@ -499,7 +539,9 @@ export function toMessageViews(rows: ChatMessageRow[], ctx: ViewContext): ChatMe
     // Unless something already points at it. A reply needs its root to have
     // somewhere to hang, and there the tombstone is doing the ordinary job any
     // deleted message's does.
-    .filter((view) => view.voice?.status !== "canceled" || !!view.replyCount);
+    .filter((view) => view.voice?.status !== "canceled" || !!view.replyCount)
+    // A thinking row that closed unanswered is the same kind of tombstone.
+    .filter((view) => !isClosedAgentPlaceholder({ agent_status: view.agentStatus, deleted_at: view.deletedAt }) || !!view.replyCount);
 }
 
 /** Fold one message's reaction rows into pills. Same distinct-user counting as

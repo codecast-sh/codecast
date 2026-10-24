@@ -74,6 +74,22 @@ describe("buildChatTimeline — grouping", () => {
     expect(threadFaceKey({ user_id: "u1" })).toBe("u1");
   });
 
+  it("keeps a session's answer apart from its human's own line", () => {
+    // Both rows are stored under the human's user id; the session is who spoke.
+    expect(authorGroupKey({ id: "u1", name: "Build", session: { id: "conv-1" } })).toBe("session:conv-1");
+    expect(threadFaceKey({ user_id: "u1", origin: "agent", origin_session_id: "conv-1" })).toBe("session:conv-1");
+    // An anchor reply has its own identity already, keyed by its bot user.
+    expect(threadFaceKey({ user_id: "bot", origin: "agent", origin_session_id: "conv-2", author_kind: "agent" })).toBe("bot");
+    const rows = buildChatTimeline(
+      [
+        { ...msg("q", "u1", NOW - 1000), groupKey: authorGroupKey({ id: "u1", name: "Ashot" }) },
+        { ...msg("a", "u1", NOW), groupKey: authorGroupKey({ id: "u1", name: "Build", session: { id: "conv-1" } }) },
+      ],
+      { now: NOW },
+    );
+    expect(groupedFlags(rows)).toEqual([false, false]);
+  });
+
   it("breaks the group once the gap exceeds the window", () => {
     const justInside = buildChatTimeline(
       [msg("a", "u1", NOW - GROUP_WINDOW_MS), msg("b", "u1", NOW)],

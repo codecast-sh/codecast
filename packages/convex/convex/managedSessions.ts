@@ -18,6 +18,7 @@ import { isDaemonManagedRow, listLiveManagedSessions } from "./lib/liveSessions"
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { scheduleFedSessionSettle } from "./callChat";
 import { scheduleWorkerSettle } from "./workerSettle";
+import { closeSessionRepliesAfterTurn } from "./chatSessionReplies";
 
 // A status CHANGE is the entry point to the needs-input push (see
 // notifications.checkNeedsInput). "idle" only settles into needs_input after
@@ -931,6 +932,12 @@ async function applyAgentStatus(ctx: MutationCtx, session: Doc<"managed_sessions
   if (turnStampAdvanced || activeSettled) {
     await scheduleFedSessionSettle(ctx, args.conversation_id);
     // What people queued for the end of this turn goes in now.
+    await releaseQueuedRows(ctx, args.conversation_id);
+    // Chat lines this turn read and did not answer stop saying "thinking".
+    await closeSessionRepliesAfterTurn(ctx, args.conversation_id);
+  } else if (session.agent_status === "permission_blocked" && args.agent_status !== "permission_blocked" && !ACTIVE_AGENT_STATUSES.has(args.agent_status)) {
+    // A turn stopped at a permission prompt (denied, or interrupted by a
+    // "stop and send") ended too: its queue goes in.
     await releaseQueuedRows(ctx, args.conversation_id);
   }
   // The activity line names what the agent does NOW; a settled turn does

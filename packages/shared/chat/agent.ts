@@ -1,6 +1,7 @@
-// The lifecycle of an agent's (the anchor's) reply row in chat, shared by the
-// server, web and mobile so the three cannot disagree about which rows a
-// person should see.
+// The lifecycle of an agent's reply row in chat (the anchor's, or a session's
+// "thinking" row while it works on a line handed to it), shared by the server,
+// web and mobile so the three cannot disagree about which rows a person
+// should see.
 //
 //   thinking / streaming  a visible placeholder: someone addressed the anchor
 //                         and an answer is being written.
@@ -13,7 +14,9 @@
 //                         sees this row.
 //   passed                the anchor read the thread and chose to stay quiet.
 //                         The row is kept (it is the idempotency record for the
-//                         wake) but never rendered.
+//                         wake) but never rendered. A session's thinking row
+//                         closes the same way, as a tombstone (see
+//                         isClosedAgentPlaceholder).
 export type ChatAgentStatus =
   | "thinking"
   | "streaming"
@@ -29,6 +32,17 @@ export function isSilentAgentRow(row: {
 }): boolean {
   return row.author_kind === "agent"
     && (row.agent_status === "listening" || row.agent_status === "passed");
+}
+
+/** A thinking row that closed without becoming the answer. It is a tombstone
+ *  that still travels to clients, because chat syncs as a delta overlay and a
+ *  client holding the live row would otherwise show "thinking" forever; every
+ *  client drops it instead of rendering it. */
+export function isClosedAgentPlaceholder(row: {
+  agent_status?: string;
+  deleted_at?: number;
+}): boolean {
+  return !!row.deleted_at && row.agent_status === "passed";
 }
 
 /** A turn the anchor is still working on, visible or not. */

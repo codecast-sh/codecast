@@ -37,25 +37,39 @@ export type TimelineRow<M extends TimelineMessage> =
   | { kind: "message"; key: string; message: M; grouped: boolean };
 
 /** The grouping identity of a rendered author: the real Slack person (or app)
- *  behind a bridge-authored line, the user id otherwise. Web and mobile both
- *  feed this to `TimelineMessage.groupKey`, so the rule lives once. A Slack
- *  app has no user id on its lines; its name is the next best key. */
-export function authorGroupKey(author: { id: string; name: string; slack?: { userId?: string } | null }): string {
-  if (!author.slack) return author.id;
-  return `slack:${author.slack.userId ?? author.name}`;
+ *  behind a bridge-authored line, the session behind a line a session typed
+ *  (stored under its human's user id, so the human's own line and the
+ *  session's answer would otherwise fold into one), the user id otherwise.
+ *  Web and mobile both feed this to `TimelineMessage.groupKey`, so the rule
+ *  lives once. A Slack app has no user id on its lines; its name is the next
+ *  best key. */
+export function authorGroupKey(author: {
+  id: string;
+  name: string;
+  slack?: { userId?: string } | null;
+  session?: { id: string } | null;
+}): string {
+  if (author.slack) return `slack:${author.slack.userId ?? author.name}`;
+  if (author.session) return `session:${author.session.id}`;
+  return author.id;
 }
 
 /** The same identity read off a stored row, for rollups computed before the
  *  row is a rendered author (the server's thread summary, the web's local
- *  reply rollup): the Slack person behind a bridge-authored line, else the
- *  user id. Agrees with `authorGroupKey` by construction. */
+ *  reply rollup): the Slack person behind a bridge-authored line, the session
+ *  behind a session-typed one, else the user id. Agrees with `authorGroupKey`
+ *  by construction. */
 export function threadFaceKey(row: {
   user_id: unknown;
   external?: { user?: string } | null;
   external_author?: { name: string } | null;
+  origin?: string;
+  origin_session_id?: string;
+  author_kind?: string;
 }): string {
-  if (!row.external_author) return String(row.user_id);
-  return `slack:${row.external?.user ?? row.external_author.name}`;
+  if (row.external_author) return `slack:${row.external?.user ?? row.external_author.name}`;
+  if (row.origin === "agent" && row.origin_session_id && row.author_kind !== "agent") return `session:${row.origin_session_id}`;
+  return String(row.user_id);
 }
 
 /** How close together two messages by one author must be to render as one group.

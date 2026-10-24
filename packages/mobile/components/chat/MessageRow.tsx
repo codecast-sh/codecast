@@ -75,6 +75,8 @@ export type ChatAuthorLite = {
    *  personifies the session (name is the session title, agent identity for the
    *  face) and credits the human in a dim "via". Mirrors web's ChatAuthor. */
   session?: {
+    /** The session's conversation id: its lines group under it (shared authorGroupKey). */
+    id: string;
     agentType?: string;
     via?: string;
     /** Who the session is, when the viewer's store holds it: the row then
@@ -134,7 +136,7 @@ export function fromChatView(
           id: a.id,
           name: a.name,
           isAgent: true,
-          session: { agentType: a.session.agentType, via: a.session.via, identity: identityFor(a.session.id) ?? null },
+          session: { id: a.session.id, agentType: a.session.agentType, via: a.session.via, identity: identityFor(a.session.id) ?? null },
         }
       : { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent, slack: a.slack as ChatAuthorLite['slack'] },
     content: view.content,

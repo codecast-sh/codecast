@@ -280,7 +280,7 @@ export type ChatThreadSummaryRow = {
   last_reply_at: number;
   reply_user_ids: string[];
   /** The repliers with the face to draw (lib/chatViews ThreadFace). */
-  reply_faces?: Array<{ user_id: string; slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean } }>;
+  reply_faces?: Array<{ user_id: string; slack?: { user?: string; name: string; avatar_url?: string; is_bot?: boolean }; session?: { id: string; title?: string; agent_type?: string } }>;
   agent_status?: "thinking" | "streaming" | "error";
 };
 
