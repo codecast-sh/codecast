@@ -28,7 +28,7 @@ import {
   sourceForKey,
   updateSource,
 } from "./ingest";
-import { queuePromotions } from "./ingestPromotions";
+import { PROMOTE_RETRY_MS, PROMOTE_SPACING_MS, PROMOTE_TRIES, queuePromotions, settlePromotion } from "./ingestPromotions";
 import { promotionSignal } from "./lib/ingestPayloads";
 import { listForTask, listForTeam } from "./externalEvents";
 import { bumpWindow } from "./ipRateLimit";
@@ -440,19 +440,52 @@ describe("what one source can cost (review fixes)", () => {
     for (let i = 0; i < SOURCE_CAPS.promotions_per_hour + 3; i++) await batch(w, source._id, [err(`E${i}`, { fingerprint: `p${i}` })]);
     expect(names(w).filter((n) => n === "ingest:promote")).toHaveLength(SOURCE_CAPS.promotions_per_hour);
     expect(names(w).filter((n) => n === "agentTasks:matchTaskTriggers")).toHaveLength(SOURCE_CAPS.promotions_per_hour + 3);
-    const due = () => w.db._tables.event_groups.filter((g: any) => g.promotion_due);
-    expect(due()).toHaveLength(3);
-    // Still the same hour: the window has no room, so nothing more files.
-    expect(await h(promoteDue)(w.internalCtx, {})).toEqual({ due: 3, filed: 0 });
-    // An hour on, the held-back three file and leave nothing due.
+    // The ones scheduled stay on their group until their run settles; the held-back three wait for the window.
+    const held = () => w.db._tables.event_groups.filter((g: any) => g.promotion_due && g.promotion_due.scheduled_at === undefined);
+    expect(held()).toHaveLength(3);
+    // Still the same hour: the window has no room, and the scheduled runs are in flight, so nothing more files.
+    expect((await h(promoteDue)(w.internalCtx, {})).filed).toBe(0);
+    // An hour on, the held-back three file, spaced apart, and every run settles.
     setSystemTime(new Date(Date.now() + 3_600_000 + 1_000));
     try {
+      for (const g of w.db._tables.event_groups) if (g.promotion_due?.scheduled_at !== undefined) await h(settlePromotion)(w.internalCtx, { group_id: g._id });
+      const delays: number[] = [];
+      const runAfter = w.internalCtx.scheduler.runAfter;
+      w.internalCtx.scheduler.runAfter = async (ms: number, fn: any, args: any) => { delays.push(ms); return runAfter(ms, fn, args); };
       expect(await h(promoteDue)(w.internalCtx, {})).toEqual({ due: 3, filed: 3 });
+      expect(delays).toEqual([0, PROMOTE_SPACING_MS, 2 * PROMOTE_SPACING_MS]);
     } finally {
       setSystemTime();
     }
     expect(names(w).filter((n) => n === "ingest:promote")).toHaveLength(SOURCE_CAPS.promotions_per_hour + 3);
-    expect(due()).toHaveLength(0);
+    expect(held()).toHaveLength(0);
+  });
+
+  test("a promotion whose run never settles is scheduled again, and let go after its tries", async () => {
+    const w = await armedWorld();
+    const { source } = await teamSource(w);
+    await batch(w, source._id, [err("Lost", { fingerprint: "lost" })]);
+    const group = () => w.db._tables.event_groups[0];
+    const runs = () => names(w).filter((n) => n === "ingest:promote").length;
+    expect(group().promotion_due).toMatchObject({ transition: "new", tries: 1 });
+    // A run in flight is left alone.
+    expect((await h(promoteDue)(w.internalCtx, {})).filed).toBe(0);
+    let at = Date.now();
+    try {
+      for (let tries = 2; tries <= PROMOTE_TRIES; tries++) {
+        at += PROMOTE_RETRY_MS + 1_000;
+        setSystemTime(new Date(at));
+        expect((await h(promoteDue)(w.internalCtx, {})).filed).toBe(1);
+        expect(group().promotion_due.tries).toBe(tries);
+      }
+      at += PROMOTE_RETRY_MS + 1_000;
+      setSystemTime(new Date(at));
+      expect((await h(promoteDue)(w.internalCtx, {})).filed).toBe(0);
+    } finally {
+      setSystemTime();
+    }
+    expect(runs()).toBe(PROMOTE_TRIES);
+    expect(group().promotion_due).toBeUndefined();
   });
 
   test("groups opened before their kind promoted queue behind the cap and file through promoteDue", async () => {

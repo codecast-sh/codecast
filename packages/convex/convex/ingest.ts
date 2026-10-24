@@ -37,6 +37,7 @@ import { readableRowByRef, rowByRef } from "./lib/rowByRef";
 import { scopeArgs } from "./lib/ingestScopeArgs";
 import { scopeOf, sourceByRef } from "./lib/ingestScope";
 import { deployMarkerOf, promotionSignal } from "./lib/ingestPayloads";
+import { PROMOTE_SPACING_MS, promotionStep, schedulePromotion } from "./ingestPromotions";
 import { commitBySha } from "./commits";
 import { addableSourceProviderValidator, groupStatusValidator, groupKindValidator, sourceConfigValidator, transitionValidator } from "./ingestSchema";
 import {
@@ -1232,21 +1233,11 @@ async function announceTransition(ctx: any, source: Doc<"event_sources">, a: Ann
   }
 }
 
-async function schedulePromotion(ctx: any, groupId: Id<"event_groups">, due: { transition: Transition; fingerprint: string; external_event_id?: Id<"external_events"> }) {
-  const group = await ctx.db.get(groupId);
-  if (group?.promotion_due) await ctx.db.patch(groupId, { promotion_due: undefined });
-  await ctx.scheduler.runAfter(0, internal.ingest.promote, {
-    group_id: groupId,
-    transition: due.transition,
-    fingerprint: due.fingerprint,
-    ...(due.external_event_id ? { external_event_id: due.external_event_id } : {}),
-  });
-}
-
 /**
- * Promotions the hourly cap held back, oldest first, each as its source's
- * window has room; one whose source no longer promotes that transition, or is
- * gone, is let go. Runs every ten minutes (crons.ts).
+ * Promotions the hourly cap held back, and runs that never settled
+ * (ingestPromotions.ts), oldest first, each as its source's window has room
+ * and spaced apart; one whose source no longer promotes that transition, is
+ * gone, or is out of tries, is let go. Runs every ten minutes (crons.ts).
  */
 export const promoteDue = internalMutation({
   args: {},
@@ -1255,15 +1246,17 @@ export const promoteDue = internalMutation({
     let filed = 0;
     for (const group of due) {
       const d = group.promotion_due!;
+      const step = promotionStep(d, Date.now());
+      if (step === "in_flight") continue;
       const source = await ctx.db.get(group.source_id);
-      if (!source || !source.promote.includes(d.transition)) {
+      if (!source || !source.promote.includes(d.transition) || step === "give_up") {
         await ctx.db.patch(group._id, { promotion_due: undefined });
         continue;
       }
       if (source.status !== "active") continue;
       const { granted } = await takeFromWindow(ctx.db, `ingest-promote:${source._id}`, SOURCE_CAPS.promotions_per_hour, HOUR_MS, 1);
       if (!granted) continue;
-      await schedulePromotion(ctx, group._id, d);
+      await schedulePromotion(ctx, group._id, d, filed * PROMOTE_SPACING_MS);
       filed++;
     }
     return { due: due.length, filed };
@@ -1385,8 +1378,10 @@ export const promote = internalAction({
       return { skipped: "filer left" };
     }
     const signal = promotionSignal(source, group, args.transition, args.fingerprint);
-    if (!signal) return { skipped: "transition does not promote" };
-    const result = await ctx.runAction(internal.signals.ingestAs, { user_id: source.owner_user_id, ...signal });
+    const result = signal ? await ctx.runAction(internal.signals.ingestAs, { user_id: source.owner_user_id, ...signal }) : null;
+    // Filed, held or not promotable: done either way. A throw leaves promotion_due for promoteDue to run again.
+    await ctx.runMutation(internal.ingestPromotions.settlePromotion, { group_id: group._id });
+    if (!result) return { skipped: "transition does not promote" };
     // A held signal (no finder converts this source, LE4) reached no cause yet.
     if (!result.task_id) return { skipped: "held as a finding" };
     await ctx.runMutation(internal.ingest.linkSignal, { group_id: group._id, task_id: result.task_id, external_event_id: args.external_event_id });

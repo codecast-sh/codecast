@@ -164,6 +164,7 @@ import type * as inboxHides from "../inboxHides.js";
 import type * as inboxProjection from "../inboxProjection.js";
 import type * as ingest from "../ingest.js";
 import type * as ingestHttp from "../ingestHttp.js";
+import type * as ingestPromotions from "../ingestPromotions.js";
 import type * as ingestSchema from "../ingestSchema.js";
 import type * as initiatives from "../initiatives.js";
 import type * as integrations from "../integrations.js";
@@ -684,6 +685,7 @@ declare const fullApi: ApiFromModules<{
   inboxProjection: typeof inboxProjection;
   ingest: typeof ingest;
   ingestHttp: typeof ingestHttp;
+  ingestPromotions: typeof ingestPromotions;
   ingestSchema: typeof ingestSchema;
   initiatives: typeof initiatives;
   integrations: typeof integrations;

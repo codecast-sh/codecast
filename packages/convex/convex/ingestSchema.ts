@@ -243,15 +243,19 @@ export const ingestTables = {
     external: v.optional(v.object({ provider: v.string(), id: v.string(), url: v.optional(v.string()) })),
     signal_task_id: v.optional(v.id("tasks")),
     /**
-     * A promotion the source's hourly cap refused (SOURCE_CAPS.promotions_per_hour):
-     * kept, not lost, and filed by ingest.promoteDue once the window has room.
-     * One per group; a newer refusal replaces it.
+     * A promotion not yet filed: one the source's hourly cap refused
+     * (SOURCE_CAPS.promotions_per_hour), filed by ingest.promoteDue once the
+     * window has room, or one whose run is scheduled and has not settled
+     * (ingestPromotions.ts), run again if it never does. One per group.
      */
     promotion_due: v.optional(v.object({
       transition: transitionValidator,
       fingerprint: v.string(),
       external_event_id: v.optional(v.id("external_events")),
       at: v.number(),
+      /** When its latest run was scheduled to start, and how many runs it has had (ingestPromotions.ts). */
+      scheduled_at: v.optional(v.number()),
+      tries: v.optional(v.number()),
     })),
     /** How many event_samples rows the group holds, so the trim deletes only the overflow. Absent on older rows. */
     sample_count: v.optional(v.number()),
