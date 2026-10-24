@@ -42,6 +42,9 @@ export type JoinPrefs = {
    *  muted inside a prewarmed room. Off means a press, an unmute or a record is
    *  the only thing that opens it. On until turned off once. */
   micAutoOpen: boolean;
+  /** Whether a start or an answer shows the camera and the microphone first
+   *  (components/calls/HuddleStartDialog). On until turned off once. */
+  deviceCheck: boolean;
 };
 
 function ui(): any {
@@ -57,6 +60,7 @@ export function readJoinPrefs(): JoinPrefs {
     cameraOn: u.call_camera_on !== false,
     micOn: u.call_mic_on !== false,
     micAutoOpen: u.call_mic_auto_open !== false,
+    deviceCheck: u.call_device_check !== false,
   };
 }
 
@@ -110,6 +114,13 @@ export function rememberMic(on: boolean): void {
 export function rememberMicAutoOpen(on: boolean): void {
   if (readJoinPrefs().micAutoOpen === on) return;
   useInboxStore.getState().updateClientUI({ call_mic_auto_open: on });
+}
+
+/** The person decided whether a call starts with a look at their camera and
+ *  microphone, or goes straight in. */
+export function rememberDeviceCheck(on: boolean): void {
+  if (readJoinPrefs().deviceCheck === on) return;
+  useInboxStore.getState().updateClientUI({ call_device_check: on });
 }
 
 // The capture constraints live with the rest of the media options

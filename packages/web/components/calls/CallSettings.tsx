@@ -14,7 +14,7 @@ import { useRef } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { Mic, Radio, Video, Volume2, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
-import { rememberCamera, rememberMic, rememberMicAutoOpen } from "../../lib/calls/joinPrefs";
+import { rememberCamera, rememberMic, rememberDeviceCheck, rememberMicAutoOpen } from "../../lib/calls/joinPrefs";
 import { useWalkieDoor } from "../../hooks/useWalkie";
 import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "../settings/ui";
@@ -29,6 +29,7 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
   const cameraOn = useInboxStore((s) => s.clientState?.ui?.call_camera_on !== false);
   const micOn = useInboxStore((s) => s.clientState?.ui?.call_mic_on !== false);
   const micAutoOpen = useInboxStore((s) => s.clientState?.ui?.call_mic_auto_open !== false);
+  const deviceCheck = useInboxStore((s) => s.clientState?.ui?.call_device_check !== false);
   const soundsOn = useInboxStore((s) => s.clientState?.ui?.sounds_enabled !== false);
   const updateUI = useInboxStore((s) => s.updateClientUI);
   const door = useWalkieDoor();
@@ -45,6 +46,9 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
         </SettingsRow>
         <SettingsRow label="Microphone on" description="You are heard from the first word." className={pad}>
           <Switch checked={micOn} onCheckedChange={rememberMic} aria-label="Microphone on when I join" />
+        </SettingsRow>
+        <SettingsRow label="Check camera and mic first" description="Starting or answering a call shows your camera and mic before you go in." className={pad}>
+          <Switch checked={deviceCheck} onCheckedChange={rememberDeviceCheck} aria-label="Check camera and mic before a call" />
         </SettingsRow>
       </SettingsSection>
 

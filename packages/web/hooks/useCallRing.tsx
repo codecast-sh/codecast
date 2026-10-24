@@ -9,6 +9,7 @@ import {
   openCallRingWindow,
 } from "../lib/desktop";
 import { acceptInvite, declineInvite } from "../lib/calls/callManager";
+import { requestAnswer } from "../lib/calls/huddleStart";
 import { personInOwnCall, voiceHostShowsRing } from "../lib/calls/walkie";
 import { CALL_INVITE_TTL_MS, CALL_KNOCK_TTL_MS, CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 
@@ -77,7 +78,7 @@ export function useCallRing(): void {
       }
       const answer = () => {
         toast.dismiss(`ring:${invite._id}`);
-        void acceptInvite(String(invite._id), invite.room_key);
+        requestAnswer(invite);
       };
       const decline = () => {
         toast.dismiss(`ring:${invite._id}`);

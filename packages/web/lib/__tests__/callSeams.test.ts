@@ -375,6 +375,18 @@ describe("answering a ring stops it before the server answers", () => {
     });
   }
 
+  test("the check before answering holds the ring, and closing it lets the ring back", () => {
+    S().syncTable("myCalls", { incoming: [RING], outgoing: [], membership: null });
+    callManager.holdRing("in1");
+    expect(S().myCalls.incoming).toEqual([]);
+    S().syncTable("myCalls", { incoming: [RING], outgoing: [], membership: null });
+    expect(S().myCalls.incoming).toEqual([]);
+    callManager.releaseRing(RING);
+    expect(S().myCalls.incoming.map((r: any) => r._id)).toEqual(["in1"]);
+    S().syncTable("myCalls", { incoming: [RING], outgoing: [], membership: null });
+    expect(S().myCalls.incoming.map((r: any) => r._id)).toEqual(["in1"]);
+  });
+
   test("another ring still rings", () => {
     S().syncTable("myCalls", { incoming: [{ ...RING, _id: "in2" }], outgoing: [], membership: null });
     expect(S().myCalls.incoming.map((r: any) => r._id)).toEqual(["in2"]);

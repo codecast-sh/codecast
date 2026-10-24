@@ -1,7 +1,13 @@
-// Every huddle START passes through one confirm step: the person sees their
-// camera, hears their microphone move a meter, picks devices, and only then
-// rings anyone. A join into a room that is already live stays one press; the
-// people in it are waiting.
+// Every huddle START, and every ANSWER to a ring, passes through one confirm
+// step: the person sees their camera, hears their microphone move a meter,
+// picks devices, and only then rings anyone or picks up. A join into a room
+// that is already live stays one press; the people in it are waiting. The
+// person can turn the step off (call_device_check, lib/calls/joinPrefs), and
+// then a start or an answer goes straight in.
+//
+// An answer holds the ring while the check is up: the sound stops and the
+// ring card goes, the invite still open. Closing the check without an answer
+// lets the ring back; Decline declines it.
 //
 // The request is a plain subscribe/snapshot value, not store state: it is a
 // window's open dialog, nothing any other window or the server should know.
@@ -9,7 +15,8 @@ import { useSyncExternalStore } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useInboxStore } from "../../store/inboxStore";
 import { parseRoomKey } from "@codecast/shared/contracts";
-import { joinCall, startHuddle } from "./actions";
+import { acceptInvite, declineInvite, holdRing, joinCall, releaseRing, startHuddle } from "./actions";
+import { readJoinPrefs } from "./joinPrefs";
 
 export type HuddleStartRequest = {
   roomKey: string;
@@ -23,6 +30,9 @@ export type HuddleStartRequest = {
   channelMemberCount?: number;
   /** What this room's huddle is for, when it is more than "talk here". */
   hint?: string;
+  /** Set when the request answers a ring rather than starts a huddle: the
+   *  invite row, as myCalls.incoming listed it. */
+  answer?: { _id: unknown; room_key: string; from_user?: unknown; from_name?: string };
 };
 
 let pending: HuddleStartRequest | null = null;
@@ -39,12 +49,35 @@ export function requestHuddleStart(req: HuddleStartRequest): void {
     void joinCall(req.roomKey, { intent: "deliberate" });
     return;
   }
-  if (hosts === 0) return runHuddleStart(req);
+  if (hosts === 0 || !readJoinPrefs().deviceCheck) return runHuddleStart(req);
   pending = req;
   emit();
 }
 
+/** Join on a ring: the check first, unless the person turned it off or this
+ *  window cannot draw it. */
+export function requestAnswer(invite: NonNullable<HuddleStartRequest["answer"]>): void {
+  const req: HuddleStartRequest = { roomKey: invite.room_key, answer: invite };
+  if (hosts === 0 || !readJoinPrefs().deviceCheck) return runHuddleStart(req);
+  if (pending?.answer) void releaseRing(pending.answer);
+  void holdRing(String(invite._id));
+  pending = req;
+  emit();
+}
+
+/** The check closed with nothing chosen: a held ring rings again. */
 export function closeHuddleStart(): void {
+  if (pending?.answer) void releaseRing(pending.answer);
+  clear();
+}
+
+/** Decline from the check: the ring is answered no, and stays gone. */
+export function declineAnswer(req: HuddleStartRequest): void {
+  clear();
+  if (req.answer) void declineInvite(String(req.answer._id));
+}
+
+function clear(): void {
   pending = null;
   emit();
 }
@@ -52,8 +85,10 @@ export function closeHuddleStart(): void {
 /** The confirm was pressed: start what was asked for, private when the
  *  dialog said so (a window with no dialog starts team shared). */
 export function runHuddleStart(req: HuddleStartRequest, opts: { private?: boolean } = {}): void {
-  closeHuddleStart();
-  if (req.toUserIds?.length || req.ringChannel) {
+  clear();
+  if (req.answer) {
+    void acceptInvite(String(req.answer._id), req.answer.room_key);
+  } else if (req.toUserIds?.length || req.ringChannel) {
     void startHuddle({ roomKey: req.roomKey, toUserIds: req.toUserIds ?? [], anchorTitle: req.anchorTitle, ringChannel: req.ringChannel, private: opts.private });
   } else {
     void joinCall(req.roomKey, { intent: "deliberate", private: opts.private });

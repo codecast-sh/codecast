@@ -1,7 +1,8 @@
 import type { FaceCard } from "./faceRow";
-import { acceptInvite, cancelOutgoing, declineInvite, leaveCall, setCamera, setMuted } from "../calls/callManager";
+import { cancelOutgoing, declineInvite, leaveCall, setCamera, setMuted } from "../calls/callManager";
 import { endWalkie, getWalkieStatus, joinWalkieLive, shutWalkieDoor } from "../calls/walkie";
 import { useInboxStore } from "../../store/inboxStore";
+import { requestAnswer } from "../calls/huddleStart";
 export type Incoming = Extract<FaceCard, { kind: "incoming" }>;
 export type Live = Extract<FaceCard, { kind: "live" | "joined-notice" }>;
 export type RingIn = Extract<FaceCard, { kind: "ring-in" }>;
@@ -41,7 +42,7 @@ export const ENGINE_CARD_ACTIONS: CardActions = {
   camera: (c) => void setCamera(!c.cameraOn),
   answer: (c) => {
     const inv = inviteIn(c);
-    if (inv) void acceptInvite(String(inv._id), c.roomKey);
+    if (inv) requestAnswer(inv);
   },
   decline: (c) => {
     const inv = inviteIn(c);
@@ -64,7 +65,7 @@ function hangUp(roomKey: string): void {
   else void leaveCall(roomKey);
 }
 
-function inviteIn(c: RingIn): { _id: unknown } | undefined {
+function inviteIn(c: RingIn): { _id: unknown; room_key: string } | undefined {
   const rows: any[] = useInboxStore.getState().myCalls?.incoming ?? [];
   return rows.find((r) => r.room_key === c.roomKey && String(r.from_user) === c.from);
 }

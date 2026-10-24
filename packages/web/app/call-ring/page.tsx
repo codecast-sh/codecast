@@ -23,10 +23,18 @@
 // Decline is the one verb this window owns outright: it ends the ring and
 // nothing has to move.
 //
+// Join first grows the card into the camera and microphone check (unless the
+// person turned it off, lib/calls/joinPrefs): the ring goes quiet, the card
+// shows their camera, a mic meter and the devices, and the check's own Join is
+// the hand-off. Device picks write the person's prefs, which is what the call
+// window opens. The preview closes before the hand-off, so the call window
+// opens the devices fresh. The moment the hand-off goes, this window stops
+// showing the ring (settleRing) rather than waiting for the server.
+//
 // The root carries the `dark` class: this floats over the desktop, and theme
 // tokens on dark glass invert to navy-on-navy in light mode (the call stage
 // learned this the loud way).
-import { useRef } from "react";
+import { forwardRef, useRef, useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -34,13 +42,15 @@ import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
 import { useCallSync } from "../../hooks/useCallSync";
 import { useSyncTeams } from "../../hooks/useSyncTeams";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { declineInvite } from "../../lib/calls/callManager";
+import { declineInvite, settleRing } from "../../lib/calls/callManager";
+import { readJoinPrefs, rememberDeviceCheck } from "../../lib/calls/joinPrefs";
+import { PreviewBody, usePreview } from "../../components/calls/HuddleStartDialog";
 import { voiceHostShowsRing } from "../../lib/calls/walkie";
 import { useWalkieStatus } from "../../hooks/useWalkie";
 import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
 import { callRingAnswer, callRingHide, callRingSize } from "../../lib/desktop";
 import { soundCallRing } from "../../lib/sounds";
-import { RingCard } from "../../components/calls/RingCard";
+import { RingCard, type RingInvite } from "../../components/calls/RingCard";
 import { CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 
 export default function CallRingPage() {
@@ -121,7 +131,9 @@ function CallRingRoot() {
   // window is it. One cycle per period, stopped by the invite going away —
   // answered anywhere, cancelled by the caller, or expired server-side — so
   // there is no teardown protocol to get wrong.
-  const quiet = useInboxStore((st) => st.currentUser?.status === "busy");
+  const [checkingId, setCheckingId] = useState<string | null>(null);
+  const checking = !!invite && checkingId === String(invite._id);
+  const quiet = useInboxStore((st) => st.currentUser?.status === "busy") || checking;
   useWatchEffect(() => {
     if (!invite || quiet) return;
     let cycle = 0;
@@ -131,12 +143,46 @@ function CallRingRoot() {
   }, [invite?._id, quiet]);
 
   if (!invite) return null;
+  const answer = () => {
+    callRingAnswer(String(invite._id), String(invite.room_key));
+    settleRing(String(invite._id));
+  };
+  const decline = () => void declineInvite(String(invite._id));
+  if (checking) return <RingCheck ref={cardRef} invite={invite} onAnswer={answer} onDecline={decline} />;
   return (
     <RingCard
       ref={cardRef}
       invite={invite}
-      onAnswer={() => callRingAnswer(String(invite._id), String(invite.room_key))}
-      onDecline={() => void declineInvite(String(invite._id))}
+      onAnswer={() => (readJoinPrefs().deviceCheck ? setCheckingId(String(invite._id)) : answer())}
+      onDecline={decline}
     />
   );
 }
+
+// The check, inside the ring card. One preview for as long as it is up: the
+// caller hanging up takes the card down, and the preview with it.
+const RingCheck = forwardRef<HTMLDivElement, { invite: RingInvite; onAnswer: () => void; onDecline: () => void }>(
+  function RingCheck({ invite, onAnswer, onDecline }, ref) {
+    const preview = usePreview();
+    const [skipNext, setSkipNext] = useState(false);
+    const join = () => {
+      preview?.dispose();
+      if (skipNext) rememberDeviceCheck(false);
+      onAnswer();
+    };
+    return (
+      <RingCard ref={ref} invite={invite} onAnswer={join} onDecline={onDecline}>
+        {preview && <PreviewBody preview={preview} flush />}
+        <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-sol-text-muted hover:text-sol-text">
+          <input
+            type="checkbox"
+            checked={skipNext}
+            onChange={(e) => setSkipNext(e.target.checked)}
+            className="h-3.5 w-3.5 cursor-pointer rounded border-sol-border bg-sol-bg accent-sol-violet"
+          />
+          Skip this check next time
+        </label>
+      </RingCard>
+    );
+  },
+);

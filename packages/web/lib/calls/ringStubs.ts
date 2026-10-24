@@ -45,8 +45,14 @@ export function carryRingStubs(local: any[] | undefined, incoming: any[] | undef
 export const RING_SETTLED_MS = 30_000;
 const settledRings = new Map<string, number>();
 
-export function settleRingIn(inviteId: string, now = Date.now()): void {
-  settledRings.set(inviteId, now + RING_SETTLED_MS);
+export function settleRingIn(inviteId: string, ms = RING_SETTLED_MS, now = Date.now()): void {
+  settledRings.set(inviteId, now + ms);
+}
+
+/** The ring is not settled after all (the check before answering closed with
+ *  no answer): the next push that lists it rings again. */
+export function unsettleRingIn(inviteId: string): void {
+  settledRings.delete(inviteId);
 }
 
 /** The merge for myCalls.incoming: the server's list, less every ring this

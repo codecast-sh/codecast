@@ -26,7 +26,7 @@ import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
 import { mutateOnUnload } from "../keepaliveMutation";
 import { memberDisplayName } from "../liveEntities";
-import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, settleRingIn, type RingStub } from "./ringStubs";
+import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, settleRingIn, unsettleRingIn, type RingStub } from "./ringStubs";
 import { getScribeStatus, startScribe, stopScribe } from "./transcription";
 import type { ScribeRoute } from "./scribeEngine";
 import { chosenDevice, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
@@ -1348,11 +1348,35 @@ export async function acceptInvite(inviteId: string, roomKey: string): Promise<v
 
 /** The press answers the ring: the card, the toast and the sound all read
  *  myCalls.incoming, so the invite leaves it now, not after the round trip. */
-function stopRinging(inviteId: string): void {
-  settleRingIn(inviteId);
+function stopRinging(inviteId: string, ms?: number): void {
+  settleRingIn(inviteId, ms);
   const st = useInboxStore.getState();
   const cur = st.myCalls ?? { incoming: [], outgoing: [], membership: null };
   if (cur.incoming?.some((r: any) => String(r._id) === inviteId)) st.syncTable("myCalls", { ...cur });
+}
+
+/** The ring was answered in another window (the desktop ring window hands
+ *  Join to the call window): this one stops ringing too, without waiting on
+ *  the server to stop listing the invite. */
+export function settleRing(inviteId: string): void {
+  stopRinging(inviteId);
+}
+
+/** The person is checking their camera and microphone before answering: the
+ *  ring goes quiet for as long as that takes, the invite still open. */
+export function holdRing(inviteId: string): void {
+  stopRinging(inviteId, Number.MAX_SAFE_INTEGER / 2);
+}
+
+/** The check closed with no answer: the ring comes back, unless the server
+ *  stopped listing it meanwhile (its next push drops it again). */
+export function releaseRing(invite: { _id: unknown }): void {
+  const id = String(invite._id);
+  unsettleRingIn(id);
+  const st = useInboxStore.getState();
+  const cur = st.myCalls ?? { incoming: [], outgoing: [], membership: null };
+  if (cur.incoming?.some((r: any) => String(r._id) === id)) return;
+  st.syncTable("myCalls", { ...cur, incoming: [...(cur.incoming ?? []), invite] });
 }
 
 async function acceptInviteHere(inviteId: string, roomKey: string): Promise<void> {

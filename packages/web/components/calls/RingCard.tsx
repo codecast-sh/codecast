@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { forwardRef, type ReactNode } from "react";
 import "./ringCard.css";
 
 export type RingInvite = {
@@ -20,6 +20,9 @@ export type RingInvite = {
  * drawn in — the host joins right here, the ring window hands the room to the
  * host — so the two gestures are the caller's.
  *
+ * `children` sit between the caller and the two answers: the ring window puts
+ * the camera and microphone check there once Join is pressed.
+ *
  * The ref lands on the GUTTER around the card, not the card: the shadow
  * (ringCard.css) falls outside the card's box, and both windows size
  * themselves to what they measure. Measuring the card cut the shadow off at
@@ -27,8 +30,8 @@ export type RingInvite = {
  */
 export const RingCard = forwardRef<
   HTMLDivElement,
-  { invite: RingInvite; onAnswer: () => void; onDecline: () => void }
->(function RingCard({ invite, onAnswer, onDecline }, ref) {
+  { invite: RingInvite; onAnswer: () => void; onDecline: () => void; children?: ReactNode }
+>(function RingCard({ invite, onAnswer, onDecline, children }, ref) {
   const name = invite.from_name || "Someone";
   return (
     <div ref={ref} className="ring-card-glow">
@@ -50,6 +53,7 @@ export const RingCard = forwardRef<
             </div>
           </div>
         </div>
+        {children}
         <div className="ring-card-actions">
           <button type="button" className="ring-card-decline" onClick={onDecline}>
             Decline

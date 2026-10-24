@@ -1,4 +1,5 @@
-// The confirm step in front of every huddle start (lib/calls/huddleStart):
+// The confirm step in front of every huddle start and every answer to a ring
+// (lib/calls/huddleStart):
 // the person's own camera, a meter that moves when they speak, the devices
 // the call will open, and the guest link for somebody outside the team. What
 // is chosen here is what the join opens: device picks go through
@@ -8,9 +9,9 @@ import { useRef, useState, useSyncExternalStore } from "react";
 import { Headphones, Link2, Loader2, Lock, Mic, MicOff, Users, Video, VideoOff, Volume2 } from "lucide-react";
 import { CHANNEL_HUDDLE_WARNING_SIZE } from "@codecast/shared/contracts";
 import { GuestPreview, canPickSpeaker } from "../../lib/calls/guestRoom";
-import { readJoinPrefs, rememberCamera, rememberMic } from "../../lib/calls/joinPrefs";
+import { readJoinPrefs, rememberCamera, rememberDeviceCheck, rememberMic } from "../../lib/calls/joinPrefs";
 import { switchDevice } from "../../lib/calls/callManager";
-import { canStartPrivate, closeHuddleStart, runHuddleStart, type HuddleStartRequest } from "../../lib/calls/huddleStart";
+import { canStartPrivate, closeHuddleStart, declineAnswer, runHuddleStart, type HuddleStartRequest } from "../../lib/calls/huddleStart";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -38,37 +39,53 @@ const SHARING = [
 export default function HuddleStartDialog({ req }: { req: HuddleStartRequest }) {
   const preview = usePreview();
   const [isPrivate, setPrivate] = useState(false);
+  const [skipNext, setSkipNext] = useState(false);
+  const answering = !!req.answer;
+  const go = () => {
+    preview?.dispose();
+    if (skipNext) rememberDeviceCheck(false);
+    runHuddleStart(req, { private: isPrivate });
+  };
   return (
     <Dialog open onOpenChange={(open) => !open && closeHuddleStart()}>
       <DialogContent className="flex w-[calc(100%-2rem)] max-w-[420px] flex-col gap-0 overflow-hidden rounded-xl border-sol-border bg-sol-bg p-0 text-sol-text">
         <Heading req={req} isPrivate={isPrivate} setPrivate={setPrivate} />
         {preview && <PreviewBody preview={preview} />}
+        <label className="mx-4 mb-3 flex cursor-pointer select-none items-center gap-2 text-xs text-sol-text-muted hover:text-sol-text">
+          <input
+            type="checkbox"
+            checked={skipNext}
+            onChange={(e) => setSkipNext(e.target.checked)}
+            className="h-3.5 w-3.5 cursor-pointer rounded border-sol-border bg-sol-bg accent-sol-violet"
+          />
+          Skip this check next time
+        </label>
         <div className="flex items-center gap-2 border-t border-sol-border/60 px-4 py-3">
-          <GuestInvite
-            roomKey={req.roomKey}
-            align="start"
-            trigger={({ open, toggle }) => (
-              <Button variant="ghost" size="xs" onClick={toggle} aria-expanded={open} className={`-ml-2 ${open ? "text-sol-yellow" : "text-sol-text-muted"} hover:text-sol-yellow`}>
-                <Link2 />
-                Guest link
+          {!answering && (
+            <GuestInvite
+              roomKey={req.roomKey}
+              align="start"
+              trigger={({ open, toggle }) => (
+                <Button variant="ghost" size="xs" onClick={toggle} aria-expanded={open} className={`-ml-2 ${open ? "text-sol-yellow" : "text-sol-text-muted"} hover:text-sol-yellow`}>
+                  <Link2 />
+                  Guest link
+                </Button>
+              )}
+            />
+          )}
+          <div className="ml-auto flex gap-2">
+            {answering ? (
+              <Button variant="ghost" size="sm" onClick={() => declineAnswer(req)}>
+                Decline
+              </Button>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={closeHuddleStart}>
+                Cancel
               </Button>
             )}
-          />
-          <div className="ml-auto flex gap-2">
-            <Button variant="ghost" size="sm" onClick={closeHuddleStart}>
-              Cancel
-            </Button>
-            <Button
-              variant="violet"
-              size="sm"
-              autoFocus
-              onClick={() => {
-                preview?.dispose();
-                runHuddleStart(req, { private: isPrivate });
-              }}
-            >
+            <Button variant="violet" size="sm" autoFocus onClick={go}>
               <Headphones />
-              Start
+              {answering ? "Join" : "Start"}
             </Button>
           </div>
         </div>
@@ -80,7 +97,7 @@ export default function HuddleStartDialog({ req }: { req: HuddleStartRequest }) 
 // One preview per open dialog, opened with the remembered devices and the
 // remembered on/off, and closed with the dialog (a Start disposes it first, so
 // the join opens the devices fresh rather than beside a lit preview).
-function usePreview(): GuestPreview | null {
+export function usePreview(): GuestPreview | null {
   const [preview, setPreview] = useState<GuestPreview | null>(null);
   useMountEffect(() => {
     const prefs = readJoinPrefs();
@@ -101,6 +118,14 @@ function Heading({ req, isPrivate, setPrivate }: { req: HuddleStartRequest; isPr
       .map((m) => firstName(memberDisplayName(m)))
       .join(", "),
   );
+  if (req.answer) {
+    return (
+      <div className="px-4 pb-3 pt-4 pr-10">
+        <DialogTitle className="text-[15px] font-medium">{firstName(req.answer.from_name ?? "") || "A teammate"} is calling</DialogTitle>
+        <DialogDescription className="sr-only">Check your camera and microphone, then join</DialogDescription>
+      </div>
+    );
+  }
   const big = req.ringChannel && (req.channelMemberCount ?? 0) > CHANNEL_HUDDLE_WARNING_SIZE;
   const reach = req.ringChannel
     ? `Buzzes ${req.channelMemberCount ? `all ${Math.max(0, req.channelMemberCount - 1)} members` : "everyone"}`
@@ -126,7 +151,9 @@ function Heading({ req, isPrivate, setPrivate }: { req: HuddleStartRequest; isPr
   );
 }
 
-function PreviewBody({ preview }: { preview: GuestPreview }) {
+// `flush` drops the margins, for a card that pads and spaces its own content.
+export function PreviewBody({ preview, flush }: { preview: GuestPreview; flush?: boolean }) {
+  const mx = flush ? "" : "mx-4";
   const p = useSyncExternalStore(preview.subscribe, preview.getSnapshot, preview.getSnapshot);
   const videoRef = useRef<HTMLVideoElement>(null);
   const meterRef = useRef<HTMLDivElement>(null);
@@ -162,12 +189,12 @@ function PreviewBody({ preview }: { preview: GuestPreview }) {
   };
   const ctl = (on: boolean) =>
     p.asking ? "bg-white/10 text-white/50" : on ? "bg-white/15 text-white hover:bg-white/25" : "bg-sol-red/85 text-white hover:bg-sol-red";
-  const trouble = [p.micError, p.cameraError].filter(Boolean).join(". ");
+  const trouble = [p.micError, p.cameraError].filter(Boolean).map((e) => (/[.!?]$/.test(e!) ? e : `${e}.`)).join(" ");
   const kinds: PreviewKind[] = canPickSpeaker() ? ["mic", "camera", "speaker"] : ["mic", "camera"];
 
   return (
     <>
-      <div className="relative mx-4 aspect-video overflow-hidden rounded-lg bg-black/60">
+      <div className={`relative ${mx} aspect-video overflow-hidden rounded-lg bg-black/60`}>
         {p.video ? (
           <video ref={videoRef} autoPlay playsInline muted className="h-full w-full -scale-x-100 object-cover" />
         ) : (
@@ -199,11 +226,11 @@ function PreviewBody({ preview }: { preview: GuestPreview }) {
           </button>
         </div>
       </div>
-      {trouble && !p.asking && <p className="mx-4 mt-2 text-xs leading-snug text-sol-orange">{trouble}.</p>}
+      {trouble && !p.asking && <p className={`${flush ? "" : "mx-4 mt-2"} text-xs leading-snug text-sol-orange`}>{trouble}</p>}
       {/* One row per device, full width so a device's name is never cut.
           The microphone's row carries its level, which says the mic really
           hears the room. */}
-      <div className="mx-4 my-3 divide-y divide-sol-border/50 rounded-lg ring-1 ring-sol-border/60">
+      <div className={`${flush ? "" : "mx-4 my-3"} divide-y divide-sol-border/50 rounded-lg ring-1 ring-sol-border/60`}>
         {kinds.map((k) => {
           const devices = p.devices[k];
           const chosen = p.choice[`${k}Id` as const];
