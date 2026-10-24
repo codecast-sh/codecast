@@ -496,6 +496,17 @@ describe("a move that stops a turn queues the continue", () => {
     expect(moveContinues(db)).toHaveLength(1);
   });
 
+  test("a second move before the first resumed queues no second continue", async () => {
+    const db = fixtures({ user_id: ME });
+    db._tables.devices.push({ _id: "d4", user_id: ME, device_id: "mydev2", label: "My-Mini" });
+    db._tables.managed_sessions = managed("working");
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev" });
+    // The first continue was queued minutes ago, outside the client_id's minute bucket.
+    moveContinues(db)[0].client_id = "move-continue-conv1-1";
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev2" });
+    expect(moveContinues(db)).toHaveLength(1);
+  });
+
   test("a session that had finished its turn gets no continue", async () => {
     for (const status of ["idle", "stopped"]) {
       const db = fixtures();
