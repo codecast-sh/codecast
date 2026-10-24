@@ -9,6 +9,7 @@ import {
   type RevisionMode,
   type ViewWriter,
 } from "./lib/viewWriters";
+import { mirrorCommentTwins } from "./commentTwinWrites";
 
 export const COMMENTS_VIEW_CONTRACT_ID = "comments.byConversation/v2";
 /** The stamped-log-ts client contract; same envelope, deeper coverage. */
@@ -102,7 +103,10 @@ export async function runCommentViewTransition<Result>(
   if (!authoritative) {
     throw new Error("Cannot write comments for a missing conversation");
   }
-  return await runViewTransition(ctx, {
+  // Every row the transition wrote gets its review_comments twin brought in
+  // line once the transition is done (commentTwinWrites, the dual write).
+  const touched = new Map<string, Id<"comments">>();
+  const outcome = await runViewTransition(ctx, {
     table: "comments",
     label: "comment",
     guardInsert(value) {
@@ -116,7 +120,23 @@ export async function runCommentViewTransition<Result>(
       }
     },
     coverageTarget: commentsCoverageTarget(authoritative),
-  }, revisionMode, transition);
+  }, revisionMode, (writer) => transition({
+    async insert(value) {
+      const id = await writer.insert(value);
+      touched.set(String(id), id);
+      return id;
+    },
+    async patch(id, value) {
+      await writer.patch(id, value);
+      touched.set(String(id), id);
+    },
+    async delete(id) {
+      await writer.delete(id);
+      touched.set(String(id), id);
+    },
+  }));
+  await mirrorCommentTwins(ctx, touched.values());
+  return outcome;
 }
 
 export function commentPatchChanges(

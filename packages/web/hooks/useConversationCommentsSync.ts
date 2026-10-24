@@ -7,22 +7,30 @@ import { useConvexSync } from "./useConvexSync";
 import { isConvexId } from "../lib/entityLinks";
 import { useInboxStore } from "../store/inboxStore";
 import type { Comment } from "../lib/commentThread";
+import { commentsFromReviewOn } from "../lib/commentSource";
 
 // The comment feeder and the raw reader, in a leaf (no sonner, no DOM) so the
 // phone's session screen mounts the same feed and reads the same rows as the
 // web conversation view.
 
-// Mount once per open conversation: pipe the live thread into the store.
-export function useConversationCommentsSync(conversationId: string | undefined): void {
+/** One conversation's comments, live from the server: from `comments`, or
+ *  from their review_comments twins when the person turned
+ *  `comments_from_review` on (lib/commentSource). Same rows either way. */
+export function useConversationCommentSummary(conversationId: string | undefined) {
   const canQuery = !!conversationId && isConvexId(conversationId);
-  const syncTable = useInboxStore((s) => s.syncTable);
-
-  const raw = useQueryNoThrow(
-    api.comments.getConversationCommentSummary,
+  const fromReview = useInboxStore(commentsFromReviewOn);
+  return useQueryNoThrow(
+    fromReview ? api.commentTwins.conversationComments : api.comments.getConversationCommentSummary,
     canQuery
       ? { conversation_id: conversationId as Id<"conversations"> }
       : "skip",
-  ).data;
+  );
+}
+
+// Mount once per open conversation: pipe the live thread into the store.
+export function useConversationCommentsSync(conversationId: string | undefined): void {
+  const syncTable = useInboxStore((s) => s.syncTable);
+  const raw = useConversationCommentSummary(conversationId).data;
   useConvexSync(raw, useCallback((data: any) => {
     syncTable("comments", data ?? []);
   }, [syncTable]));

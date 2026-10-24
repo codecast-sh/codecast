@@ -32,6 +32,7 @@ import {
   type ThreadSummary,
 } from "./chat";
 import { commentsForAnchor, isInCommentThread } from "./comments";
+import { conversationCommentRowsFromTwins } from "./commentTwins";
 import { canAccessComment, codeThreadRows } from "./codeComments";
 import { canAccessConversation, canAccessTask } from "./lib/access";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
@@ -143,10 +144,14 @@ type PageCache = {
   artifactComments: Map<string, Doc<"artifact_comments">[]>;
   codeThreads: Map<string, Doc<"review_comments">[]>;
   users: Map<string, Doc<"users"> | null>;
+  /** Read conversation comments from their review_comments twins (the
+   *  person's `comments_from_review` flag) rather than from `comments`. */
+  commentsFromTwins: boolean;
 };
 
-function newPageCache(): PageCache {
+function newPageCache(opts: { commentsFromTwins?: boolean } = {}): PageCache {
   return {
+    commentsFromTwins: opts.commentsFromTwins === true,
     channels: new Map(),
     roots: new Map(),
     conversations: new Map(),
@@ -279,12 +284,15 @@ async function commentThread(ctx: ReadCtx, row: ThreadRead, cache: PageCache): P
     // A message anchor has its own index. A file or global anchor needs the
     // conversation's whole comment set — read it ONCE per conversation and
     // filter per anchor, so N anchored threads cost one collect, not N.
-    if (anchor.message_id) return await commentsForAnchor(ctx, conversationId, anchor);
+    // Twins have no message index, so every anchor reads the set.
+    if (anchor.message_id && !cache.commentsFromTwins) return await commentsForAnchor(ctx, conversationId, anchor);
     const all = await memo(cache.conversationComments, String(conversationId), () =>
-      ctx.db
-        .query("comments")
-        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
-        .collect());
+      cache.commentsFromTwins
+        ? conversationCommentRowsFromTwins(ctx, conversationId)
+        : ctx.db
+          .query("comments")
+          .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+          .collect());
     return all
       .filter((c) => isInCommentThread(c, anchor))
       .sort((a, b) => a.created_at - b.created_at || String(a._id).localeCompare(String(b._id)));
@@ -641,6 +649,7 @@ export const listMine = query({
     team_id: v.optional(v.id("teams")),
     cursor: v.optional(v.string()),
     limit: v.optional(v.number()),
+    comments_from_review: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const payload: ListMinePayload = {
@@ -662,7 +671,7 @@ export const listMine = query({
     // cursor of their own), newest first like everything else.
     const carried = args.cursor ? [] : await personalPageRows(ctx, userId, args.team_id);
 
-    const cache = newPageCache();
+    const cache = newPageCache({ commentsFromTwins: args.comments_from_review });
     const entries: ThreadInboxEntry[] = [];
     for (const row of [...carried, ...page.page]) {
       const kind = THREAD_KINDS[row.kind];
@@ -711,6 +720,7 @@ export const unreadCount = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
+    comments_from_review: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
@@ -719,7 +729,7 @@ export const unreadCount = query({
       ...(await personalPageRows(ctx, userId, args.team_id)),
       ...(await scopeQuery(ctx, userId, args.team_id).take(THREAD_BADGE_SCAN)),
     ];
-    const cache = newPageCache();
+    const cache = newPageCache({ commentsFromTwins: args.comments_from_review });
     let count = 0;
     for (const row of rows) {
       // A kind this deployment does not know yet (mid-rollout) is skipped,

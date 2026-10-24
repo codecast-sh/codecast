@@ -1030,24 +1030,32 @@ export const getConversationCommentSummary = query({
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
       .collect();
 
-    const commentsWithUsers = await Promise.all(
-      comments.map(async (comment) => {
-        const user = await ctx.db.get(comment.user_id);
-        return {
-          ...comment,
-          user: {
-            _id: user?._id,
-            name: user?.name,
-            github_username: user?.github_username,
-            github_avatar_url: user?.github_avatar_url,
-          },
-        };
-      })
-    );
-
-    return commentsWithUsers.sort((a, b) => a.created_at - b.created_at);
+    return await commentSummaryRows(ctx, comments);
   },
 });
+
+/** One conversation's comments as the conversation surfaces receive them:
+ *  each with its author's name and avatar, oldest first. Shared by
+ *  getConversationCommentSummary and the review_comments read of the same
+ *  rows (commentTwins.conversationComments), so both answer alike. */
+export async function commentSummaryRows(ctx: CommentReadCtx, comments: Doc<"comments">[]) {
+  const commentsWithUsers = await Promise.all(
+    comments.map(async (comment) => {
+      const user = await ctx.db.get(comment.user_id);
+      return {
+        ...comment,
+        user: {
+          _id: user?._id,
+          name: user?.name,
+          github_username: user?.github_username,
+          github_avatar_url: user?.github_avatar_url,
+        },
+      };
+    })
+  );
+
+  return commentsWithUsers.sort((a, b) => a.created_at - b.created_at);
+}
 
 // internal: only githubApi (a server action) calls this, to record the GitHub
 // comment id after mirroring. Was a public mutation that let anyone stamp an

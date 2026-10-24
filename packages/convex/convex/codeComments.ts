@@ -31,7 +31,8 @@ import { touchThread } from "./threadReads";
 import type { MutationCtx } from "./_generated/server";
 import { codeThreadRootKey } from "@codecast/shared/comments";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
-import { isQuoteRow, withoutQuoteRows } from "./lib/quoteRows";
+import { isQuoteRow } from "./lib/quoteRows";
+import { isCommentTwin, withoutBorrowedRows } from "./lib/commentTwins";
 
 const GITHUB_API_BASE = "https://api.github.com";
 // The feed row clips a long summary and expands it on click, so keep the whole
@@ -53,6 +54,10 @@ export async function canAccessComment(
   userId: Id<"users">,
   comment: Doc<"review_comments">,
 ): Promise<boolean> {
+  // A conversation comment's twin is read and written through `comments`
+  // until reads switch (lib/commentTwins), never through this table's paths,
+  // its author included.
+  if (isCommentTwin(comment)) return false;
   if (comment.author_user_id && String(comment.author_user_id) === String(userId)) return true;
   // A note in an unsubmitted review is the author's alone, as it is on GitHub.
   if (comment.pending_review) return false;
@@ -909,7 +914,7 @@ export const listForFile = query({
         q.eq("repository", normalizeRepository(args.repository)).eq("file_path", args.file_path))
       .collect();
     const matching = args.ref ? rows.filter((c) => c.ref === args.ref) : rows;
-    return await filterAccessible(ctx, userId, withoutQuoteRows(matching));
+    return await filterAccessible(ctx, userId, withoutBorrowedRows(matching));
   },
 });
 
@@ -925,7 +930,7 @@ export const listForRef = query({
       .query("review_comments")
       .withIndex("by_repository_file", (q) => q.eq("repository", normalizeRepository(args.repository)))
       .collect();
-    return await filterAccessible(ctx, userId, withoutQuoteRows(rows.filter((c) => c.ref === args.ref)));
+    return await filterAccessible(ctx, userId, withoutBorrowedRows(rows.filter((c) => c.ref === args.ref)));
   },
 });
 
@@ -942,7 +947,7 @@ export const listForPR = query({
       .query("review_comments")
       .withIndex("by_pull_request", (q) => q.eq("pull_request_id", args.pull_request_id))
       .collect();
-    return withoutOthersPending(withoutQuoteRows(rows), userId).sort((a, b) => a.created_at - b.created_at);
+    return withoutOthersPending(withoutBorrowedRows(rows), userId).sort((a, b) => a.created_at - b.created_at);
   },
 });
 
@@ -959,7 +964,7 @@ export const listForConversation = query({
       .query("review_comments")
       .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
       .collect();
-    return withoutOthersPending(withoutQuoteRows(rows), userId).sort((a, b) => a.created_at - b.created_at);
+    return withoutOthersPending(withoutBorrowedRows(rows), userId).sort((a, b) => a.created_at - b.created_at);
   },
 });
 

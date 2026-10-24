@@ -3,6 +3,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isConvexId } from "../store/inboxStore";
+import { useConversationCommentSummary } from "./useConversationCommentsSync";
 
 export type MessageMetadata = {
   commentCount: number | undefined;
@@ -50,10 +51,7 @@ export function useConversationMessageMetadata(conversationId: string | undefine
   const canQuery = !!conversationId && isConvexId(conversationId);
   const convexConversationId = conversationId as Id<"conversations">;
 
-  const commentSummary = useQueryNoThrow(
-    api.comments.getConversationCommentSummary,
-    canQuery ? { conversation_id: convexConversationId } : "skip"
-  ).data;
+  const commentSummary = useConversationCommentSummary(conversationId).data;
   const bookmarkedMessageIds = useQueryNoThrow(
     api.bookmarks.getConversationBookmarks,
     canQuery ? { conversation_id: convexConversationId } : "skip"

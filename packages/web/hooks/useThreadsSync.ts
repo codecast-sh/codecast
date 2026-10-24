@@ -24,6 +24,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { isConvexId } from "../lib/entityLinks";
+import { commentsFromReviewOn } from "../lib/commentSource";
 import { ingestTaskDetail } from "./useSyncTasks";
 import { questionCards } from "../lib/threadCards";
 import { GLOBAL_THREAD_KEY, fileThreadKey, parseCommentThreadRootKey, webThreadKeyFromAnchor, type Comment } from "../lib/commentThread";
@@ -46,12 +47,21 @@ export const threadInboxSig = makeCollectionSig<ThreadInboxRow>(
 /** The active workspace, as the server args want it: an explicit team id, or
  *  nothing at all for the personal workspace. Never a guessed team — the
  *  server must not pick one (personal is a value, not a missing pointer). */
-function useThreadScope(): { teamId: string | undefined; args: { team_id?: string } } {
+function useThreadScope(): { teamId: string | undefined; args: { team_id?: string; comments_from_review?: true } } {
   const teamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
   const scoped = !!teamId && isConvexId(teamId);
+  // Comment threads read from their review_comments twins when the person
+  // turned that on (lib/commentSource); off, the args are what they were.
+  const fromReview = useInboxStore(commentsFromReviewOn);
   return useMemo(
-    () => ({ teamId: scoped ? teamId : undefined, args: scoped ? { team_id: teamId } : {} }),
-    [teamId, scoped],
+    () => ({
+      teamId: scoped ? teamId : undefined,
+      args: {
+        ...(scoped ? { team_id: teamId } : {}),
+        ...(fromReview ? { comments_from_review: true as const } : {}),
+      },
+    }),
+    [teamId, scoped, fromReview],
   );
 }
 

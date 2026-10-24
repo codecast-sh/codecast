@@ -27,6 +27,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useConversationCommentSummary } from "../hooks/useConversationCommentsSync";
 import { useSurface } from "../lib/surfaces";
 
 const SHORT_ID_RE = /^[a-z0-9]{7}$/;
@@ -625,12 +626,7 @@ export function MessageNavButton({
     return (meta as { message_count?: number } | undefined)?.message_count ?? 0;
   });
 
-  const commentSummary = useQueryNoThrow(
-    api.comments.getConversationCommentSummary,
-    isConvexId(conversationId)
-      ? { conversation_id: conversationId as Id<"conversations"> }
-      : "skip"
-  ).data;
+  const commentSummary = useConversationCommentSummary(conversationId).data;
 
   const commentsByMessage = countCommentsByMessage(commentSummary);
   const topLevelComments: CommentEntry[] = [];
