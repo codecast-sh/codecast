@@ -14,7 +14,7 @@ import { AvatarImg } from "../../../lib/avatarCache";
 import { BrowserTabPill } from "../../browser/BrowserTabPill";
 import { formatModel } from "../../../lib/conversationProcessor";
 import type { DecisionAnswerMessage } from "@codecast/shared/contracts";
-import { DecisionAnswerFooter } from "../../DecisionAnswerFooter";
+import { DecisionAnswerQuote } from "../../DecisionAnswerQuote";
 import { countToolGroup, extractNestedActions, isAgentTool, isAskTool, isPlanModeTool, isPlanWriteToolCall, isTodoTool, summarizeToolGroup } from "@codecast/shared/render";
 import { hostedReceipt } from "../../../lib/hostedReceipt";
 import { HostedMadeLine, HostedNoteCard, madeLineParts } from "../HostedMadeLine";
@@ -62,15 +62,12 @@ import { requestSessionRestart } from "../../../lib/sessionCommands";
 import { CastCommandBlock } from "./castBlocks";
 import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock } from "./interactiveBlocks";
 import { useImageSrc } from "../../../hooks/useImageSrc";
-import { AssistantIcon, FooterIconButton, FullscreenIcon, UserIcon } from "./shared";
+import { FooterIconButton, FullscreenIcon, UserIcon } from "./shared";
 import { CastBrowserRowContext, HostedAskingContext, HostedCardShownContext } from "../../../lib/conversationBlockContexts";
-import { assistantLabel } from "../../../lib/conversationBlockStyles";
-import { IdentityFace, IdentityHover } from "../../identity";
-import { AgentTypeIcon } from "../../AgentTypeIcon";
-import { identityRowOf, identitySig, sessionIdentity } from "../../../lib/sessionIdentity";
-import { usePersonifyAll } from "../../../hooks/usePersonifyAll";
+import { useConversationIdentityRow } from "../../../hooks/useLiveIdentityRow";
+import { AgentSpeaker } from "../../identity/AgentSpeaker";
 import { ScheduleWakeupBlock, TeammateMessageCard } from "./systemBlocks";
-import { BrowserWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
+import { BrowserWatchButton, SendMessageBlock, SkillBlock, TaskCreateUpdateBlock, TaskListBlock, TaskToolBlock, TeamCreateBlock, TodoWriteBlock, StructuredResultBlock, ToolBlock, WorkflowToolBlock } from "./toolBlocks";
 import { isAlwaysVisibleToolCall, parseApiErrorContent, parseCastCommand, parseContextBlocks, parseSkillBlocks, parseTeammateMessages, stripSystemTags } from "../classify";
 import { copyMessageLink, formatFullTimestamp, formatMessagePartsForCopy, formatRelativeTime, forwardMessageToChat, safeString, useRelativeTime } from "../../../lib/conversationFormat";
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
@@ -591,6 +588,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           </svg>
         )}
       </div>
+      {decision && !effectivelyCollapsed && <DecisionAnswerQuote decision={decision} conversationId={conversationId} timestamp={timestamp} />}
       {contextBlocks.length > 0 && (
         <div className="flex flex-wrap gap-1.5 pl-8 mb-1.5">
           {contextBlocks.map((ctx, i) => (
@@ -646,7 +644,6 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           {images.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
         </div>
       )}
-      {decision && !effectivelyCollapsed && <DecisionAnswerFooter decision={decision} conversationId={conversationId} timestamp={timestamp} />}
       {isTruncated && (
         <button
           onClick={handleToggleExpand}
@@ -1164,40 +1161,10 @@ export const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content
   );
 });
 
-// Who is speaking on an assistant turn (session-characters.md S3): a session
-// that wears a role or a character speaks as it, with the agent brand riding
-// the face as a corner badge, the same glyph its inbox card shows. A plain
-// session keeps the agent's icon and name. Subscribes to the identity
-// signature alone, so a heartbeat on the row re-renders no message.
+// Who is speaking on an assistant turn: the same row the conversation header
+// reads, so the two cannot disagree on who is talking.
 function AssistantWho({ conversationId, agentType }: { conversationId?: string; agentType?: string }) {
-  const sig = useInboxStore((s) => identitySig(conversationId ? (s.sessions[conversationId] as any) : null));
-  const personifyAll = usePersonifyAll();
-  const row = useMemo(() => {
-    const sess = sig && conversationId ? (useInboxStore.getState().sessions[conversationId] as any) : null;
-    return sess ? identityRowOf(sess) : null;
-  }, [sig, conversationId]);
-  const id = row ? sessionIdentity(row, personifyAll) : null;
-  if (!row || !id || id.kind === "plain") {
-    return (
-      <>
-        <AssistantIcon agentType={agentType} />
-        <span className="text-sol-text-secondary text-xs font-medium">{assistantLabel(agentType)}</span>
-      </>
-    );
-  }
-  // Face and name are one hover target: a role opens its card from either.
-  return (
-    <IdentityHover row={row} personifyAll={personifyAll} triggerClassName="inline-flex items-center gap-2 cursor-default">
-      <IdentityFace
-        row={row}
-        size={24}
-        hover={false}
-        personifyAll={personifyAll}
-        badge={<AgentTypeIcon agentType={agentType || "claude_code"} className="w-full h-full p-[1px]" />}
-      />
-      <span className="text-sol-text-secondary text-xs font-medium">{id.name}</span>
-    </IdentityHover>
-  );
+  return <AgentSpeaker row={useConversationIdentityRow(conversationId)} agentType={agentType} />;
 }
 
 function AssistantBlockImpl({
@@ -1374,6 +1341,8 @@ function AssistantBlockImpl({
       <TeamCreateBlock key={tc.id} tool={tc} />
     ) : tc.name === "Workflow" || tc.name === "workflow" ? (
       <WorkflowToolBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} />
+    ) : tc.name === "StructuredOutput" ? (
+      <StructuredResultBlock key={tc.id} tool={tc} result={result} />
     ) : tc.name === "Skill" ? (
       <SkillBlock key={tc.id} tool={tc} />
     ) : tc.name === "Monitor" || tc.name === "monitor" || isBackgroundBashToolCall(tc) ? (

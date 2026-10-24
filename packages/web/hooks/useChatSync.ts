@@ -41,6 +41,10 @@ import {
 } from "../store/inboxStore";
 import { channelsSig, messagesSig, railMessagesSig, railSig, reactionsSig, readsSig, seatSig, sessionOriginSig, slackLinksSig } from "../store/chatWakeSigs";
 import { memberListSig } from "./useTeamRoster";
+import { orgRolesSig } from "./useOrgRoles";
+import { identityRowOf, roleOfUser, sessionIdentity, withLiveRole, type RoleRows } from "../lib/sessionIdentity";
+import { personifyAllNow, usePersonifyAll } from "./usePersonifyAll";
+import type { SessionPersona } from "../lib/chatViews";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useTeamFeature } from "../lib/teamFeatures";
@@ -50,6 +54,7 @@ import { activeTeamIdOf } from "../lib/activeTeam";
 import {
   buildHandleSets,
   foldReactions,
+  memberHandles,
   memberName,
   type RoleSeat,
   threadRollups,
@@ -395,7 +400,10 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     (s: any) => s.currentUser?.image,
     (s: any) => anchorBotsSig(s.anchors),
     (s: any) => s.chatAuthors,
+    (s: any) => orgRolesSig(s.orgTree),
   ]);
+  const orgTree = (s as any).orgTree as RoleRows | null;
+  const rolesSig = orgRolesSig((s as any).orgTree);
   const viewerId = String(s.currentUser?._id ?? "");
   const roster: any[] = s.teamMembers ?? [];
   const sig = memberListSig(roster);
@@ -412,6 +420,13 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     // a personal one is not (it belongs to one person, not the team).
     const members = [...byId.values()];
     const handles = buildHandleSets(members, viewerId);
+    // A role's bot keeps its own handle (the server resolves mentions off the
+    // bot user's name), but a mention of it reads as the role's given name.
+    for (const m of members) {
+      const role = m.is_bot ? roleOfUser(m._id, orgTree) : null;
+      if (!role) continue;
+      for (const h of memberHandles(m)) handles.names.set(h, role.name);
+    }
     // Names and faces come from the roster PLUS every anchor bot the viewer can
     // see (lib/chatViews' known-agent registry, kept by the anchors feeder),
     // so a DM from a personal anchor is titled with its name rather than
@@ -428,7 +443,7 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     return { members, byId, viewerId, handles };
     // The signatures are the deps, not the arrays: both collections re-push.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, botsSig, viewerId, me, authors]);
+  }, [sig, botsSig, viewerId, me, authors, rolesSig]);
 }
 
 function anchorBots(anchors: Record<string, any> | undefined): ChatMember[] {
@@ -470,6 +485,66 @@ export function useChatRail(scope: ChatRailScope = "team"): ChatRailChannel[] {
   return selectChatRail(s as any, String(s.currentUser?._id ?? ""), teamId ? String(teamId) : undefined, scope, railLive);
 }
 
+/** The session that typed a chat line, as its lines show it: its title and
+ *  agent, and the role or character it speaks as (the way its transcript
+ *  names it). Keyed by the agent's session id, which a chat row carries. */
+export function sessionPersonasFrom(sessions: Record<string, any> | undefined, tree: RoleRows | null | undefined, personifyAll: boolean): (sessionId: string) => SessionPersona | undefined {
+  const map = new Map<string, SessionPersona>();
+  for (const row of Object.values(sessions ?? {}) as any[]) {
+    if (!row?.session_id) continue;
+    const identity = withLiveRole(identityRowOf(row), tree);
+    const id = sessionIdentity(identity, personifyAll);
+    map.set(String(row.session_id), {
+      title: row.display_title || row.title || undefined,
+      agentType: row.agent_type,
+      speaker: id.kind === "role"
+        ? { name: id.name, role: { shortId: id.role.short_id, handle: id.handle, avatar: id.avatar, title: id.role.name } }
+        : id.kind === "character" ? { name: id.name, identity } : undefined,
+    });
+  }
+  return (id) => map.get(id);
+}
+
+/** A role's bot user as chat names it. Read from the role rows
+ *  (lib/sessionIdentity roleOfUser); the anchors rows answer only for a bot
+ *  the active workspace's roles don't hold (a personal seat seen from a team). */
+export function roleSeatsFrom(anchors: Record<string, any> | undefined, tree: RoleRows | null | undefined): (botUserId: string) => RoleSeat | undefined {
+  const map = new Map<string, RoleSeat>();
+  for (const a of Object.values(anchors ?? {}) as AnchorRow[]) {
+    if (!a?.bot_user_id || !a.role?.short_id || a.status === "decommissioned") continue;
+    map.set(String(a.bot_user_id), { name: agentName(a), title: agentTitle(a) ?? a.role.name, shortId: a.role.short_id, handle: a.role.handle, avatar: a.role.avatar });
+  }
+  return (id) => {
+    const role = roleOfUser(id, tree);
+    return role ? { name: role.name, title: role.title, shortId: role.shortId, handle: role.handle, avatar: role.face } : map.get(id);
+  };
+}
+
+/** Both lookups from the store as it is now, for code that runs outside a
+ *  render (a palette callback, a toast). */
+export function chatAuthorLookupsNow(): { sessionFor: (sessionId: string) => SessionPersona | undefined; seatFor: (botUserId: string) => RoleSeat | undefined } {
+  const s = useInboxStore.getState() as any;
+  return { sessionFor: sessionPersonasFrom(s.sessions, s.orgTree, personifyAllNow()), seatFor: roleSeatsFrom(s.anchors, s.orgTree) };
+}
+
+/** The live lookups every surface that names a chat line's author passes to
+ *  lineAuthorFor. A surface that skips them names a role's agent by its bot
+ *  user's title and a session's line by the session's title. Signature-gated:
+ *  sessions heartbeat, and only a title, agent or identity change matters. */
+export function useChatAuthorLookups(): { sessionFor: (sessionId: string) => SessionPersona | undefined; seatFor: (botUserId: string) => RoleSeat | undefined } {
+  const st = useTrackedStore([(s: any) => sessionOriginSig(s.sessions), (s: any) => seatSig(s.anchors), (s: any) => orgRolesSig(s.orgTree)]);
+  const sessionsSig = sessionOriginSig(st.sessions);
+  const seatsSig = seatSig((st as any).anchors);
+  const rolesSig = orgRolesSig((st as any).orgTree);
+  const personifyAll = usePersonifyAll();
+  // The signatures are the real deps: the raw collection refs flip on every push.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const sessionFor = useMemo(() => sessionPersonasFrom(st.sessions, (st as any).orgTree, personifyAll), [sessionsSig, rolesSig, personifyAll]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const seatFor = useMemo(() => roleSeatsFrom((st as any).anchors, (st as any).orgTree), [seatsSig, rolesSig]);
+  return useMemo(() => ({ sessionFor, seatFor }), [sessionFor, seatFor]);
+}
+
 export function useMessageViews(
   rows: ChatMessageRow[],
   reactionRows: Record<string, ChatReactionRow>,
@@ -478,35 +553,7 @@ export function useMessageViews(
   rollupSource: Record<string, ChatMessageRow>,
   summaries?: Record<string, any>,
 ): ChatMessageView[] {
-  // Live session identities for lines a session typed. Signature-gated: the
-  // sessions collection churns on heartbeats, and a transcript only cares when
-  // a title or agent changes.
-  const st = useTrackedStore([(s: any) => sessionOriginSig(s.sessions)]);
-  const sessionsSig = sessionOriginSig(st.sessions);
-  const sessionFor = useMemo(() => {
-    const map = new Map<string, { title?: string; agentType?: string }>();
-    for (const row of Object.values(st.sessions ?? {}) as any[]) {
-      if (!row?.session_id) continue;
-      map.set(String(row.session_id), {
-        title: row.display_title || row.title || undefined,
-        agentType: row.agent_type,
-      });
-    }
-    return (id: string) => map.get(id);
-    // The signature is the real dep: the raw map ref flips on every push.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionsSig]);
-  const sa = useTrackedStore([(s: any) => seatSig(s.anchors)]);
-  const seatsSig = seatSig(sa.anchors);
-  const seatFor = useMemo(() => {
-    const map = new Map<string, RoleSeat>();
-    for (const a of Object.values(sa.anchors ?? {}) as AnchorRow[]) {
-      if (!a?.bot_user_id || !a.role?.short_id || a.status === "decommissioned") continue;
-      map.set(String(a.bot_user_id), { name: agentName(a), title: agentTitle(a) ?? a.role.name, shortId: a.role.short_id, handle: a.role.handle, avatar: a.role.avatar });
-    }
-    return (id: string) => map.get(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seatsSig]);
+  const { sessionFor, seatFor } = useChatAuthorLookups();
   return useMemo(() => {
     const rollups = threadRollups(Object.values(rollupSource));
     const byMessage = new Map<string, ChatReactionRow[]>();
@@ -516,7 +563,7 @@ export function useMessageViews(
       if (list) list.push(r);
       else byMessage.set(r.message_id, [r]);
     }
-    const nameOf = (userId: string) => memberName(byId.get(userId));
+    const nameOf = (userId: string) => seatFor(userId)?.name ?? memberName(byId.get(userId));
     return toMessageViews(rows, {
       members: byId,
       viewerId,

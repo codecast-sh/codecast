@@ -30,6 +30,7 @@ test("a quoted message renders as a card that opens the original in place", asyn
     useEnsureChatMessage: (id?: string) => ensured.push(id),
     useChatMessageRow: (id?: string) => (id === MSG ? row : undefined),
     useChatMembers: () => ({ byId: new Map() }),
+    useChatAuthorLookups: () => ({ sessionFor: () => undefined, seatFor: () => undefined }),
   }));
   mock.module("../../store/inboxStore", () => ({
     ...realInboxStore,

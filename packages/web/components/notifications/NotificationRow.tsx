@@ -8,7 +8,9 @@ import type { MouseEvent } from "react";
 import { AvatarImg } from "../../lib/avatarCache";
 import { ClaudeIcon, OpenAIIcon, CursorIcon, GeminiIcon, GrokIcon } from "../BrandIcons";
 import { AgentTypeIcon } from "../AgentTypeIcon";
-import { SessionGlyph } from "../identity";
+import { SessionFace, SessionGlyph } from "../identity";
+import { useAgentSpeaker } from "../../hooks/useLiveIdentityRow";
+import { identityRowOf } from "../../lib/sessionIdentity";
 import { ChevronRight } from "lucide-react";
 import {
   notificationActor,
@@ -92,6 +94,9 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
   const { name: actorName, avatar: actorAvatar, session: actorSession } = notificationActor(notification);
   const agentType = notification.conversation?.agent_type || "claude_code";
   const agentIcon = showsAgentIcon(notification);
+  // A session's own notification is from the session as it speaks: a role's
+  // given name and face, a character's, else the agent.
+  const speaker = useAgentSpeaker(agentIcon ? identityRowOf(notification.conversation) : null, agentType);
   const typeLabel = notificationTypeLabel(notification.type, notification.conversation?.agent_type);
   // Hosted mode sets the event word in the muted ink; only the unread dot
   // carries the accent.
@@ -128,7 +133,9 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
           />
         ) : agentIcon ? (
           <div className="flex-shrink-0 mt-0.5">
-            <AgentIcon agentType={agentType} className={av} />
+            {speaker.row
+              ? <SessionFace row={speaker.row} size={size === "page" ? 40 : 36} badge={<AgentTypeIcon agentType={agentType} className="w-full h-full p-[1px]" />} />
+              : <AgentIcon agentType={agentType} className={av} />}
           </div>
         ) : (
           <div className={`${av} rounded-full flex-shrink-0 mt-0.5 bg-sol-bg-alt border border-sol-border flex items-center justify-center`}>
@@ -146,7 +153,7 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
             {actorName ? (
               <span className="text-sm font-medium text-sol-text">{actorName}</span>
             ) : agentIcon ? (
-              <span className="text-sm font-medium text-sol-text">{notificationAgentName(agentType)}</span>
+              <span className="text-sm font-medium text-sol-text">{speaker.row ? speaker.name : notificationAgentName(agentType)}</span>
             ) : null}
             <span className={`text-xs ${typeColor}`}>{typeLabel}</span>
             <span className="text-xs text-sol-text-muted ml-auto flex-shrink-0">{timeAgo(notification.created_at)}</span>

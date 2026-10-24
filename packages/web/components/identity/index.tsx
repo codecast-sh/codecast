@@ -7,3 +7,4 @@ export { SessionHoverCard, SessionHoverCardContent, SessionIdentityHeader } from
 export { RoleHoverCard, RoleHoverContent, type RoleRef } from "./RoleHoverCard";
 export { IdentityFace, IdentityHover } from "./IdentityFace";
 export { SessionMark, SessionTag, type SessionTagSize } from "./SessionTag";
+export { AgentSpeaker } from "./AgentSpeaker";

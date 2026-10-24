@@ -22,6 +22,7 @@ import { useWatchEffect } from "./useWatchEffect";
 import { notificationActor } from "../lib/notificationTypes";
 import { memberKind } from "@codecast/shared/team/memberKind";
 import { deliverChatToFace } from "../lib/chat/faceChat";
+import { chatAuthorLookupsNow } from "./useChatSync";
 // Arriving chat messages → in-app toasts.
 //
 // Mounted once, app-wide, beside the other background sync effects — the point
@@ -262,7 +263,7 @@ export function useChatToasts(): void {
       const author = byId.get(String(last.user_id)) ?? knownAgentMember(String(last.user_id));
       const slackAuthor = slackAuthorFor(full?.external_author ? full : last);
       // A line a session typed is stored under its human: name the session.
-      const sessionAuthor = slackAuthor ? null : sessionAuthorFor(full?.origin_session_id ? full : last, { members: byId });
+      const sessionAuthor = slackAuthor ? null : sessionAuthorFor(full?.origin_session_id ? full : last, { members: byId, ...chatAuthorLookupsNow() });
       const isAgent = !slackAuthor && (!!sessionAuthor || last.author_kind === "agent" || !!author?.is_bot);
       const data: ChatToastData = {
         messageId,

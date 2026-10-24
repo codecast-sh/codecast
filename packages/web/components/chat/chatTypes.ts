@@ -7,6 +7,7 @@ import type { SlackMirrorState } from "@codecast/convex/convex/lib/slackMirror";
 // whole surface can be designed and screenshot-verified before the store exists.
 
 import type { ChatMentionRef, ChatVoiceStatus } from "@codecast/shared/chat";
+import type { IdentityRow } from "../../lib/sessionIdentity";
 
 export type ChatAuthor = {
   id: string;
@@ -21,7 +22,7 @@ export type ChatAuthor = {
    *  (row origin "agent"): the message personifies the session — its agent's
    *  logo as the face, its title as the name — with the human as a dim "via"
    *  credit. `id` is the session id, for opening it where the client can. */
-  session?: { id: string; agentType: string; via?: string };
+  session?: { id: string; agentType: string; via?: string; /** The session wears a character: its face replaces the agent logo. */ identity?: IdentityRow };
   /** A Slack person (or Slack app) with no codecast account: the row's author
    *  is the workspace's bridge identity and this is the snapshot of who really
    *  wrote it. Renders their face, never the bridge's, plus the Slack mark. */
@@ -98,7 +99,7 @@ export type ChatMessageView = {
   /** Thread rollup, present only on a root message that has replies. */
   replyCount?: number;
   lastReplyAt?: number;
-  replyFaces?: { id: string; name: string; avatarUrl?: string; isAgent?: boolean; role?: ChatAuthor["role"] }[];
+  replyFaces?: { id: string; name: string; avatarUrl?: string; isAgent?: boolean; agentType?: string; role?: ChatAuthor["role"]; identity?: IdentityRow }[];
   /** An agent turn in flight (or failed) inside this root's thread, so the
    *  affordance can say "thinking…" without the panel open. */
   threadAgentStatus?: "thinking" | "streaming" | "error";

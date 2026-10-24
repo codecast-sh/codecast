@@ -1,4 +1,5 @@
 import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
+import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { claimShareToken } from "./publicShare";
 import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
 import { addRoleTokens } from "./lib/orgCaps";
@@ -44,7 +45,7 @@ import { stripContextTags } from "./userMessagesFilter";
 import { dropMirroredMessage } from "./searchMirror";
 import { countMatches, parseSearchTerms } from "@codecast/shared/search";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
-import { nextAgentStatusOnAddMessages, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, newestSignificantMessage, isBannerTurn, isRealTurn, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
+import { nextAgentStatusOnAddMessages, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, parkWalk, liftsPark, isBannerTurn, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { markAnsweredReviewNotes } from "./lib/reviewAnswered";
 import { extractFileChanges, extractCommitHashFromContent, extractCommitBranchFromContent, hasFileChangeToolCall, type FileChange, type FileChangeBody, type FileChangeRef } from "./fileChanges/extractor";
 import { activityLine } from "@codecast/shared/render";
@@ -1323,14 +1324,14 @@ export const addMessage = mutation({
     // retry path so a banner inserted here is cleared once a real turn lands.
     const msgBannerKind = args.role === "assistant" ? classifyApiErrorBanner(contentToStore) : null;
     const msgIsBanner = msgBannerKind !== null;
-    const msgIsRealTurn = isRealTurn({
+    const wasPendingApiError = conversation.pending_api_error === true;
+    const msgIsRealTurn = liftsPark({
       role: args.role,
       content: contentToStore,
       tool_calls: safeToolCalls,
       tool_results: safeToolResults,
       images,
-    });
-    const wasPendingApiError = conversation.pending_api_error === true;
+    }, wasPendingApiError ? conversation.pending_api_error_kind : undefined);
     let supersededBanners = 0;
     if (
       apiErrorBatchAction({
@@ -1389,7 +1390,7 @@ export const addMessage = mutation({
       (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind) &&
       isCurrentBlock({ pending_api_error_at: nextBannerAt }, now)
     ) {
-      await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind);
+      await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind, args.conversation_id);
     }
     if (safetyPatch) Object.assign(convPatch, safetyPatch);
     if (args.role === "user" && contentToStore?.trim()) {
@@ -2027,13 +2028,14 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     // The deletion scan only runs on the rare recovery batch — ordinary
     // traffic skips it entirely.
     const batchHasBanner = args.messages.some(isBannerTurn);
-    const batchHasRealTurn = args.messages.some(isRealTurn);
-    const maxRealTurnTs = args.messages.reduce(
-      (max, m) => (isRealTurn(m) ? Math.max(max, m.timestamp || 0) : max),
-      0,
-    );
-    const newestSignificant = newestSignificantMessage(args.messages);
     const wasPendingApiError = conversation.pending_api_error === true;
+    // Lifting is judged against the park in force at each row (parkWalk): a
+    // user row queued into a full context lifts nothing.
+    const { newest: newestSignificant, liftedAt: maxRealTurnTs } = parkWalk(
+      args.messages,
+      wasPendingApiError ? conversation.pending_api_error_kind : undefined,
+    );
+    const batchHasRealTurn = maxRealTurnTs > 0;
 
     let supersededBanners = 0;
     if (
@@ -2097,7 +2099,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
       (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind) &&
       isCurrentBlock({ pending_api_error_at: nextBannerAt }, Date.now())
     ) {
-      await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind);
+      await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind, args.conversation_id);
     }
     if (safetyPatch) Object.assign(convPatch, safetyPatch);
     const userMsgs = args.messages.filter((m) => m.role === "user");
@@ -2603,6 +2605,8 @@ export const getSharedMessage = query({
         title: conversation.title,
         project_path: conversation.project_path,
         agent_type: conversation.agent_type,
+        // Who spoke: a role's standing session is the role (session-characters.md S1).
+        ...(await identityFieldsOf(conversation, (id: any) => ctx.db.get(id))),
       },
       // Read live from the conversation (not copied onto the share row) so the
       // link keeps working if the token is minted later, and only when the
@@ -2646,6 +2650,8 @@ export const webGet = query({
         title: conversation.title,
         project_path: conversation.project_path,
         agent_type: conversation.agent_type,
+        // Who spoke: a role's standing session is the role (session-characters.md S1).
+        ...(await identityFieldsOf(conversation, (id: any) => ctx.db.get(id))),
       },
       conversationShareToken: null,
       user: user ? { name: user.name, image: user.image } : null,

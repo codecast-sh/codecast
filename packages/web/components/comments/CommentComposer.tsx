@@ -4,6 +4,7 @@ import { useDocPresence } from "../../hooks/useDocPresence";
 import { MessageInput } from "../MessageInput";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { PingAgentButton } from "./PingAgentButton";
+import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
 import { presenceDocId, commentAuthorName, type Comment } from "../../lib/commentThread";
 
 // Composer for one thread. Reuses the conversation's own MessageInput (mentions,
@@ -55,6 +56,7 @@ export function CommentComposer({
   /** Insert a person as `@handle`, the form the server resolves. */
   chatMentionMode?: boolean;
 }) {
+  const agentName = useConversationSpeaker(conversationId, agentType).name;
   const draftKey = `comment:${conversationId}:${messageId ?? "global"}`;
   const draft = useInboxStore((s) => (s.drafts[draftKey]?.draft_message as string | undefined) ?? "");
 
@@ -95,7 +97,7 @@ export function CommentComposer({
       {replyTo && (
         <div className="cc-cmt-replyto">
           <span className="truncate">
-            Replying to <b>{commentAuthorName(replyTo, currentUserId)}</b>
+            Replying to <b>{commentAuthorName(replyTo, currentUserId, agentName)}</b>
           </span>
           <button type="button" className="cc-cmt-replyto-x" onClick={onCancelReply} title="Cancel reply">
             <X className="w-3 h-3" />
@@ -117,7 +119,7 @@ export function CommentComposer({
 
       {(onPingAgent || onClose) && (
         <div className="cc-cmt-composer-foot">
-          {onPingAgent ? <PingAgentButton agentType={agentType} onClick={onPingAgent} /> : <span />}
+          {onPingAgent ? <PingAgentButton conversationId={conversationId} agentType={agentType} onClick={onPingAgent} /> : <span />}
           {onClose && (
             <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={onClose}>
               Cancel <KeyCap size="xs">Esc</KeyCap>

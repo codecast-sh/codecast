@@ -100,16 +100,17 @@ test("a role's standing session wears the role and is personified without opting
   const row = {
     _id: ID,
     standing_role_id: "org_roles_infra",
-    role: { _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active", tenure_kind: "standing" },
+    role: { _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", given_name: "Hazel", handle: "infra", avatar: "stag", status: "active", tenure_kind: "standing" },
   };
   const face = await render(<IdentityFace row={row as never} hover={false} />);
   assert.ok(face.querySelector("img"), "a role always has a face");
 
   const line = await render(<SessionIdentityLine row={row as never} title="Rolling the canary" />);
-  assert.equal(line.textContent, "Infra lead@infra·Rolling the canary");
-  // A standing session's title IS the role's name, so it is not repeated.
-  const same = await render(<SessionIdentityLine row={row as never} title="Infra lead" />);
-  assert.equal(same.textContent, "Infra lead@infra");
+  // The role speaks by its given name, never its title (org-staffing.md S30).
+  assert.equal(line.textContent, "Hazel@infra·Rolling the canary");
+  // A title that only repeats the name is not shown twice.
+  const same = await render(<SessionIdentityLine row={row as never} title="Hazel" />);
+  assert.equal(same.textContent, "Hazel@infra");
 });
 
 test("a list's glyph: the face when personified, the surface's own mark when not", async () => {

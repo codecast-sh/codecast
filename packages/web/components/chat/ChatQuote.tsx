@@ -1,8 +1,8 @@
 import { Children, isValidElement, type ReactNode } from "react";
 import Link from "next/link";
 import { SlackLogo } from "../SlackLogo";
-import { CommentAvatar } from "../comments/CommentAvatar";
-import { useChatMembers, useChatMessageRow, useEnsureChatMessage } from "../../hooks/useChatSync";
+import { ChatAuthorFace } from "./ChatAuthorFace";
+import { useChatAuthorLookups, useChatMembers, useChatMessageRow, useEnsureChatMessage } from "../../hooks/useChatSync";
 import { lineAuthorFor } from "../../lib/chatViews";
 import { useInboxStore } from "../../store/inboxStore";
 
@@ -50,12 +50,13 @@ function ChatQuoteCard({ head, children }: { head: QuoteHead; children: ReactNod
   const row = useChatMessageRow(head.messageId);
   const { byId } = useChatMembers();
   const channel = useInboxStore((s) => (head.channelId ? s.chatChannels[head.channelId]?.name : undefined));
-  const author = row ? lineAuthorFor(row, { members: byId }) : null;
+  const lookups = useChatAuthorLookups();
+  const author = row ? lineAuthorFor(row, { members: byId, ...lookups }) : null;
   const name = author?.name ?? head.name;
   const meta = (
     <>
       {author ? (
-        <CommentAvatar name={name} image={author.avatarUrl} isAgent={author.isAgent} agentType={author.session?.agentType} size={18} letters={2} />
+        <ChatAuthorFace author={author} size={18} />
       ) : (
         <span className="ch-quote-slack"><SlackLogo className="w-3 h-3" /></span>
       )}

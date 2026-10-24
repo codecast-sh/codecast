@@ -5,6 +5,7 @@
 // raw collection in its body (hooks/useChatSync.ts).
 
 import { makeCollectionSig } from "./wakeSig";
+import { identitySig } from "../lib/sessionIdentity";
 import { mentionKey, mentionUserIds } from "@codecast/shared/chat";
 import type { ChatChannelRow, ChatMessageRow, ChatRailRow, ChatReactionRow, ChatReadRow, ChatSlackLinkRow } from "./inboxStore";
 
@@ -80,7 +81,7 @@ export const railMessagesSig = makeCollectionSig<ChatMessageRow>(
  *  raw collection — this wakes it only when a session is renamed, retyped, or
  *  appears. */
 export const sessionOriginSig = makeCollectionSig<any>(
-  (s) => `${s.session_id ?? ""}|${s.display_title || s.title || ""}|${s.agent_type ?? ""}`,
+  (s) => `${s.session_id ?? ""}|${s.display_title || s.title || ""}|${s.agent_type ?? ""}|${identitySig(s)}`,
 );
 
 /** Role seats: what a role's standing agent's chat lines show (seatAuthorFor). */

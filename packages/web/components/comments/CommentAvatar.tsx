@@ -1,4 +1,7 @@
 import { AgentIcon } from "../ConversationList";
+import { AgentTypeIcon } from "../AgentTypeIcon";
+import { SessionFace } from "../identity/SessionFace";
+import type { IdentityRow } from "../../lib/sessionIdentity";
 import { AvatarImg } from "../../lib/avatarCache";
 import { hueFor, initials } from "../../lib/avatarInitials";
 
@@ -6,13 +9,16 @@ import { hueFor, initials } from "../../lib/avatarInitials";
 // that draws one face: a teammate must not be a circle in one surface and a
 // square in another on the same screen. The agent renders with the SAME
 // Claude/Codex/etc. icon the conversation uses for assistant messages, so a
-// reply reads as that agent. Users render their image, else a colored initial.
+// reply reads as that agent; an agent whose session wears a role or a
+// character (`identity`) shows that face, with the agent brand as its badge.
+// Users render their image, else a colored initial.
 
 export function CommentAvatar({
   name,
   image,
   isAgent,
   agentType,
+  identity,
   size = 22,
   letters = 1,
   className = "",
@@ -21,11 +27,25 @@ export function CommentAvatar({
   image?: string;
   isAgent?: boolean;
   agentType?: string;
+  /** The speaking session's identity row, when it wears a role or a character
+   *  (useAgentSpeaker's `row`). */
+  identity?: IdentityRow | null;
   size?: number;
   /** How many letters the initials fallback shows. */
   letters?: 1 | 2;
   className?: string;
 }) {
+  if (isAgent && identity) {
+    return (
+      <SessionFace
+        row={identity}
+        size={size}
+        className={`cc-cmt-avatar ${className}`}
+        title={name}
+        badge={<AgentTypeIcon agentType={agentType || "claude_code"} className="w-full h-full p-[1px]" />}
+      />
+    );
+  }
   if (isAgent) {
     return (
       <span

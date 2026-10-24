@@ -107,7 +107,7 @@ export const SessionHit = memo(function SessionHit({
               key={m.messageId ?? m.content}
               content={m.content}
               timestamp={m.timestamp}
-              who={<SpeakerLine role={m.role} agentType={row.agentType} authorName={row.authorName} authorAvatar={row.authorAvatar} isOwn={row.isOwn} />}
+              who={<SpeakerLine role={m.role} agentType={row.agentType} identity={identity} authorName={row.authorName} authorAvatar={row.authorAvatar} isOwn={row.isOwn} />}
               userText={m.role === "user"}
               highlight={highlight}
               href={hrefFor(row, m.messageId)}

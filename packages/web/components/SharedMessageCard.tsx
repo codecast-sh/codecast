@@ -6,13 +6,13 @@ import { formatToolName } from "@codecast/shared/render";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { parseMessageRefPayload, truncateEntityLabel, type MessageRef } from "../lib/entityLinks";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { agentDisplayName } from "@codecast/shared/contracts";
 import { stripMarkdown } from "../lib/notificationText";
 import { MessageBlock, type SharedMessageData } from "../app/share/message/[token]/SharedMessageView";
 import { CardMarkdown, ObjectCardFrame } from "./EntityObjectCard";
 import { ACCENT } from "../lib/entityCardAccent";
 import { AuthorAvatar } from "./entityDisplay";
 import { relativeTime } from "../lib/entityDisplay";
+import { identityRowOf, speakerOf } from "../lib/sessionIdentity";
 import { clipFade } from "./CollapsibleBody";
 
 // A conversation message shared into chat — by its public share link
@@ -56,9 +56,10 @@ function useMessageRef(payload: string): Resolution {
   return { ref, data, href };
 }
 
-/** Who wrote the message: the human, or the agent by its product name. */
-function roleLabel(message: any, agentType?: string | null): string {
-  return message?.role === "user" ? "User" : agentDisplayName(agentType ?? undefined);
+/** Who wrote the message: the human, or the agent as it speaks there (its
+ *  role's or character's name, else its product name). */
+function roleLabel(message: any, conversation: SharedMessageData["conversation"]): string {
+  return message?.role === "user" ? "User" : speakerOf(identityRowOf(conversation), conversation.agent_type).name;
 }
 
 /** The message's first meaningful line, for the pill and the aria name. */
@@ -100,7 +101,7 @@ function MessageDetail({ data, now }: { data: SharedMessageData; now: number }) 
       )}
       <div className="max-h-[70vh] overflow-y-auto pr-1 text-[12px]">
         {data.contextMessages.map((msg: any) => (
-          <MessageBlock key={msg._id} message={msg} isTarget={msg._id === data.message._id} now={now} />
+          <MessageBlock key={msg._id} message={msg} isTarget={msg._id === data.message._id} now={now} conversation={data.conversation} />
         ))}
       </div>
     </div>
@@ -117,7 +118,7 @@ export function SharedMessageCard({ refId, count }: { refId: string; count: numb
 
   const message = data?.message;
   const title = data ? cleanTitle(data.conversation.title || "Conversation") : null;
-  const author = roleLabel(message, data?.conversation?.agent_type);
+  const author = data ? roleLabel(message, data.conversation) : "";
   const count_ = data?.contextMessages?.length ?? 0;
   const sharer = data?.user;
 
@@ -167,7 +168,7 @@ export function SharedMessagePill({ refId }: { refId: string }) {
   const label = data
     ? truncateEntityLabel(lead || cleanTitle(data.conversation.title || "message"))
     : "message";
-  const tooltip = data ? `${roleLabel(message, data.conversation.agent_type)} in ${cleanTitle(data.conversation.title || "Conversation")}` : undefined;
+  const tooltip = data ? `${roleLabel(message, data.conversation)} in ${cleanTitle(data.conversation.title || "Conversation")}` : undefined;
   return (
     <Link
       href={href}

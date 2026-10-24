@@ -53,6 +53,7 @@ import { sessionSearchHaystack, mergeSearchRows, rankSessions, sessionStanding, 
 import { agentAccent } from "../lib/agentColors";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
 import { channelDisplayName, dmCounterpart, lineAuthorFor, memberName, type LineAuthorFields } from "../lib/chatViews";
+import { chatAuthorLookupsNow } from "../hooks/useChatSync";
 import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
 import { useOrgRoles } from "../hooks/useOrgRoles";
 import { useRolesAndPeopleOptions } from "../hooks/useRolesAndPeopleOptions";
@@ -219,6 +220,7 @@ import { Button } from "./ui/button";
 const api = _api as any;
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
 import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
+import { hoverFocus } from "../shortcuts/focusSource";
 
 /** A relation pick's leading glyph, as every other palette mode has one: the
  *  task's status, or the hourglass of a wait parsed from the query. */
@@ -1382,7 +1384,7 @@ export function ActionSubmenu({
             <button
               key={item.key}
               onClick={() => selectItem(i)}
-              onMouseEnter={() => setHighlightIndex(i)}
+              {...hoverFocus(() => setHighlightIndex(i))}
               className={itemClass(i)}
             >
               {item.type === "agent" ? (
@@ -1939,7 +1941,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   const chatAuthorName = useCallback((hit: LineAuthorFields) => {
     const members = ((useInboxStore.getState() as any).teamMembers ?? []) as any[];
-    return lineAuthorFor(hit, { members: new Map(members.map((m) => [String(m._id), m])) }).name;
+    return lineAuthorFor(hit, { members: new Map(members.map((m) => [String(m._id), m])), ...chatAuthorLookupsNow() }).name;
   }, []);
 
   const projectRows = useWorkspaceCollection<any>("projects");

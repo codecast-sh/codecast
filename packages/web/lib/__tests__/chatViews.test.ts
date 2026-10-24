@@ -286,6 +286,23 @@ describe("toMessageView", () => {
     expect(toMessageView(slackRow, ctx).author.slack).toEqual({ isBot: false, userId: "U1" });
   });
 
+  it("draws a session's face on the thread link, apart from the human it ran as", () => {
+    const human = row({ _id: "r0", thread_root_id: "m1", user_id: "u2", created_at: 40 });
+    const session = row({ _id: "r1", thread_root_id: "m1", user_id: "u2", created_at: 50, origin: "agent", origin_session_id: "conv-1", origin_session_title: "Build", origin_agent_type: "codex" } as any);
+    const view = toMessageView(row({ _id: "m1" }), { ...ctx, rollups: threadRollups([human, session]) });
+    expect(view.replyFaces).toEqual([
+      expect.objectContaining({ id: "u2", name: "Maya" }),
+      { id: "session:conv-1", name: "Build", isAgent: true, agentType: "codex" },
+    ]);
+    // The server's summary carries the session the same way.
+    const fromSummary = toMessageView(row({ _id: "m1" }), {
+      ...ctx,
+      rollups: undefined,
+      summaries: { m1: { reply_count: 1, last_reply_at: 60, reply_user_ids: ["u2"], reply_faces: [{ user_id: "u2", session: { id: "conv-1", title: "Build", agent_type: "codex" } }] } },
+    });
+    expect(fromSummary.replyFaces).toEqual([{ id: "session:conv-1", name: "Build", isAgent: true, agentType: "codex" }]);
+  });
+
   it("marks an optimistic row pending and a given-up row failed", () => {
     expect(toMessageView(row({ _id: "stub" }), ctx).pending).toBe(true);
     expect(toMessageView(row({ _id: "m2", _failedAt: 1 }), ctx).failed).toBe(true);

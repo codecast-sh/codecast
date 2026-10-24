@@ -6,6 +6,8 @@ import { CodeBlock } from "@/components/CodeBlock";
 import { MarkdownRenderer } from "@/components/tools/MarkdownRenderer";
 import { isMarkdownFile, isPlanFile } from "@/lib/markdownFiles";
 import { tryRenderHtmlMessage } from "@/components/HtmlSnippet";
+import { RoleAvatar } from "@/components/org/avatars";
+import { identityRowOf, speakerOf, type IdentityRow } from "@/lib/sessionIdentity";
 import {
   extractNestedActions,
   formatToolName,
@@ -27,7 +29,7 @@ import {
 export type SharedMessageData = {
   message: any;
   contextMessages: any[];
-  conversation: { _id: string; title?: string | null; agent_type?: string | null };
+  conversation: { _id: string; title?: string | null; agent_type?: string | null } & Omit<IdentityRow, "_id" | "title">;
   conversationShareToken: string | null;
   user: { name?: string | null; image?: string | null } | null;
   note?: string | null;
@@ -218,7 +220,11 @@ function ToolCallBlock({ tool }: { tool: any }) {
   );
 }
 
-export function MessageBlock({ message, isTarget, now }: { message: any; isTarget?: boolean; now: number }) {
+export function MessageBlock({ message, isTarget, now, conversation }: { message: any; isTarget?: boolean; now: number; conversation: SharedMessageData["conversation"] }) {
+  // Who speaks the agent's turns, from the payload's identity fields so the
+  // server render and the browser agree: a role or character with its face,
+  // else the agent's product name.
+  const speaker = speakerOf(identityRowOf(conversation), conversation.agent_type);
   const mounted = useMounted();
   const isUser = message.role === "user";
   const hasToolResults = message.tool_results && message.tool_results.length > 0;
@@ -256,8 +262,8 @@ export function MessageBlock({ message, isTarget, now }: { message: any; isTarge
       ) : (
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
-            <ClaudeIcon />
-            <span className="text-sol-orange text-xs font-medium">Claude</span>
+            {speaker.identity ? <RoleAvatar avatar={speaker.identity.avatar} size={20} title={speaker.name} /> : <ClaudeIcon />}
+            <span className="text-sol-orange text-xs font-medium">{speaker.name}</span>
             <span
               className="text-sol-text-dim text-xs"
               title={mounted ? formatFullTimestamp(message.timestamp) : undefined}
@@ -374,6 +380,7 @@ export function SharedMessageView({ data, now }: { data: SharedMessageData; now:
               message={msg}
               isTarget={msg._id === message._id}
               now={now}
+              conversation={conversation}
             />
           ))}
         </div>

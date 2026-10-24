@@ -24,7 +24,6 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import { useShortcutContext, useShortcuts, usePaneShortcutAction, isMac, hasOpenModal, withShortcut } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { useShallow } from "zustand/react/shallow";
 import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
 import { useStorageImageUrls } from "../hooks/useStorageImageUrl";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
@@ -71,7 +70,8 @@ import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
 import { SessionCallPill } from "./calls/SessionCallPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
-import { AgentStatusPill, ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
+import { ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
+import { SessionStatusSlot } from "./conversation/SessionStatusSlot";
 import { sessionDisconnected } from "./conversation/agentStatusPill";
 import { useMutation, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
@@ -140,7 +140,8 @@ import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { CursorPopover, useContextMenu } from "./ui/context-menu";
 import { IdentityFace } from "./identity";
 import { CharacterPicker } from "./identity/CharacterPicker";
-import { identityRowOf, type IdentityRow } from "../lib/sessionIdentity";
+import { type IdentityRow } from "../lib/sessionIdentity";
+import { useConversationIdentityRow } from "../hooks/useLiveIdentityRow";
 import { SessionIdentityLine } from "./identity/SessionIdentityLine";
 import { buildMentionItems } from "../hooks/useMentionQuery";
 import { ECHO_SKEW_MS, isActiveAgentStatus, serverPendingBubbles, type LiveAgentStatus } from "../lib/pendingBanner";
@@ -154,7 +155,8 @@ import { PlanBlock } from "./conversation/blocks/planBlock";
 import { CastBrowserRowContext, ChatWakeContext, HostedAskingContext, HostedCardShownContext } from "../lib/conversationBlockContexts";
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
-import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, SlashCommandChip, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ReviveDivider, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
+import { VaultReadyLine } from "./conversation/blocks/VaultRequestCard";
+import { AgentSwitchDivider, BashCommandBlock, ContextRecoveryDivider, ChatWakeBlock, CommandMessageBlock, SlashCommandChip, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ReviveDivider, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock, WorkflowTaskBlock } from "./conversation/blocks/systemBlocks";
 import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
 import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
@@ -659,17 +661,13 @@ const ConversationViewInner = (
   // session_id, is_connected, tmux_session and team_id from the session row — but
   // the row's identity churns every ~1s heartbeat (updated_at / last_heartbeat /
   // is_idle overlay). Subscribing to the whole row re-rendered the entire
-  // ConversationView (~120ms) on every heartbeat for a LIVE session. useShallow
+  // ConversationView (~120ms) on every heartbeat for a LIVE session. A shallow compare
   // re-renders only when one of these six fields actually changes.
   const managedSession = useManagedSessionFields(effectiveConversationId);
   // Who this session is (docs/architecture/session-characters.md S3): the
   // header wears the same face as its inbox card, at 22 px, and clicking it
-  // opens the character picker. Narrow like managedSession above — the
-  // identity fields alone, so the heartbeat's churn re-renders nothing.
-  const identityRow = useInboxStore(useShallow((s) => {
-    const sess = effectiveConversationId ? (s.sessions[effectiveConversationId] as any) : null;
-    return sess ? identityRowOf(sess) : null;
-  }));
+  // opens the character picker. The assistant turns read the same row.
+  const identityRow = useConversationIdentityRow(effectiveConversationId);
   const headerCharacterPicker = useContextMenu<IdentityRow[]>();
   const isSessionLive = !!managedSession?.is_connected;
   // The command palette's "Copy tmux attach command" — the same gesture as the
@@ -1558,6 +1556,7 @@ const ConversationViewInner = (
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
         case 'role_brief': return 44;
+        case 'workflow_frame': return kind.frame === 'user request' ? 44 : 100;
         case 'teammate_events': return 80;
         case 'task_prompt': return 0;
         case 'compaction_prompt': return 0;
@@ -3539,6 +3538,8 @@ const ConversationViewInner = (
       switch (kind.kind) {
         case 'session_handoff':
           return <SessionHandoffCard key={msg._id} handoff={kind.handoff} source={handedOffFrom} timestamp={msg.timestamp} convLink={convLink} navigateToSession={navigateToSession} />;
+        case 'context_recovery':
+          return <ContextRecoveryDivider key={msg._id} recovery={kind.recovery} timestamp={msg.timestamp} />;
         case 'tool_results_only':
         case 'compaction_prompt':
         case 'noise':
@@ -3586,6 +3587,11 @@ const ConversationViewInner = (
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} hosted={isHostedAgentType(conversation?.agent_type)} />;
         case 'role_brief':
           return <FoldedPromptBlock key={msg._id} label="Role brief" preview={stripSystemTags(msg.content!).trim().split("\n")[0].replace(/\*\*/g, "")} content={stripSystemTags(msg.content!).trim()} timestamp={msg.timestamp} />;
+        case 'workflow_frame':
+          // The launching session's ask is context, folded; the computed task
+          // is this agent's brief from the workflow script, not the person's words.
+          if (kind.frame === 'user request') return <FoldedPromptBlock key={msg._id} label="Request" preview={kind.body.split("\n")[0]} content={kind.body} timestamp={msg.timestamp} />;
+          return <WorkflowTaskBlock key={msg._id} body={kind.body} timestamp={msg.timestamp} />;
         case 'session_message':
           // A hosted conversation reads a message sent into it as words in
           // the thread: no sender header, no jump to the sending turn, which
@@ -3598,6 +3604,8 @@ const ConversationViewInner = (
           return <HuddleSummaryBlock key={msg._id} huddle={kind.huddle} timestamp={msg.timestamp} />;
         case 'chat_wake':
           return <ChatWakeBlock key={msg._id} wake={kind.wake} timestamp={msg.timestamp} />;
+        case 'vault_ready':
+          return <VaultReadyLine key={msg._id} vault={kind.vault} timestamp={msg.timestamp} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
@@ -3703,7 +3711,7 @@ const ConversationViewInner = (
       if (foldTurns && turnKey && !turnExpanded) {
         const lastText = turnAggregates.lastTextOf.get(turnKey);
         const stats = turnAggregates.statsOf.get(turnKey);
-        const cardAs = (variant: "card" | "steps") => <CompactTurnCard key={foldWorkingTurns ? `${msg._id}:folded` : msg._id} preview={stats?.preview || ""} messageCount={stats?.messages || 0} toolCount={stats?.tools || 0} onExpand={() => toggleGroup(turnKey)} variant={variant} />;
+        const cardAs = (variant: "card" | "steps") => <CompactTurnCard key={foldWorkingTurns ? `${msg._id}:folded` : msg._id} preview={stats?.preview || ""} messageCount={stats?.messages || 0} toolCount={stats?.tools || 0} workedMs={stats ? stats.endedAt - stats.startedAt : 0} onExpand={() => toggleGroup(turnKey)} variant={variant} />;
         const card = cardAs("card");
         if (!foldWorkingTurns) {
           if (lastText) {
@@ -4007,7 +4015,7 @@ const ConversationViewInner = (
 
         // A hosted conversation says its state once, in the composer's status
         // line (HostedStatusLine) or its approval card, never as a header pill.
-        status={isHostedAgentType(conversation?.agent_type) ? null : <AgentStatusPill agentStatus={managedSession?.agent_status} disconnected={isSessionDisconnected} live={isConversationLive} />}
+        status={isHostedAgentType(conversation?.agent_type) ? null : <SessionStatusSlot conversationId={conversation?._id} agentStatus={managedSession?.agent_status} disconnected={isSessionDisconnected} live={isConversationLive} onRestart={handleRestartSession} />}
 
         // The facts strip: what this session is (agent and model), where
         // its code sits, and what it is for (task, plan, workflow run),
@@ -4673,6 +4681,10 @@ const ConversationViewInner = (
                       return <><Bot className="w-4 h-4 text-sol-violet" /><span className="text-sol-violet text-xs">Report from</span><span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap.purple}`}>{kind.from}</span></>;
                     }
                     return <><CornerDownRight className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">Message from</span><EntityIdPill shortId={kind.from} /></>;
+                  }
+                  // A workflow agent's brief came from the script, not the person.
+                  if (kind?.kind === "workflow_frame") {
+                    return <><Workflow className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">{kind.frame === "user request" ? "Request" : "Workflow task"}</span></>;
                   }
                   const stickySender = activeStickyMsg.fromUserId ? senderById.get(String(activeStickyMsg.fromUserId)) : undefined;
                   const stickyDirectFrom = kind?.kind === "direct_user" ? kind.from : undefined;

@@ -8,8 +8,9 @@ import { memo, useMemo, useRef } from "react";
 import Link from "next/link";
 import { HighlightContext } from "../HighlightContext";
 import { MessageMarkdown } from "../conversation/markdown";
-import { AssistantIcon, UserIcon } from "../conversation/blocks/shared";
-import { assistantLabel } from "../../lib/conversationBlockStyles";
+import { UserIcon } from "../conversation/blocks/shared";
+import { AgentSpeaker } from "../identity/AgentSpeaker";
+import type { IdentityRow } from "../../lib/sessionIdentity";
 import { clipFade } from "../CollapsibleBody";
 import { useOverflows } from "../../hooks/useOverflows";
 import { formatSearchTimestamp } from "../../lib/searchTimestamp";
@@ -19,10 +20,11 @@ import { stripWrapperTags } from "@codecast/shared/search";
 const CLIP_PX = 76;
 
 /** Who said a message, as its transcript's header line names them: the
- *  person's avatar and name ("You" for the viewer), or the agent's mark and
- *  name. */
-export function SpeakerLine({ role, agentType, authorName, authorAvatar, isOwn }: {
-  role: string; agentType?: string | null; authorName?: string | null; authorAvatar?: string | null; isOwn?: boolean;
+ *  person's avatar and name ("You" for the viewer), or the agent as it speaks
+ *  in that conversation (a role's or character's face and name, else the
+ *  agent's mark and name). */
+export function SpeakerLine({ role, agentType, identity, authorName, authorAvatar, isOwn }: {
+  role: string; agentType?: string | null; identity?: IdentityRow | null; authorName?: string | null; authorAvatar?: string | null; isOwn?: boolean;
 }) {
   if (role === "user") {
     return (
@@ -32,12 +34,7 @@ export function SpeakerLine({ role, agentType, authorName, authorAvatar, isOwn }
       </>
     );
   }
-  return (
-    <>
-      <span className="flex h-4 w-4 shrink-0 items-center justify-center"><span className="scale-[0.667]"><AssistantIcon agentType={agentType ?? undefined} /></span></span>
-      <span className="font-medium text-sol-text-secondary">{assistantLabel(agentType ?? undefined)}</span>
-    </>
-  );
+  return <AgentSpeaker row={identity ?? null} agentType={agentType} size={16} nameClassName="font-medium text-sol-text-secondary" />;
 }
 
 export const MatchSnippet = memo(function MatchSnippet({ content, timestamp, who, userText, highlight, href, external, onClick, onContextMenu, clipPx = CLIP_PX }: {

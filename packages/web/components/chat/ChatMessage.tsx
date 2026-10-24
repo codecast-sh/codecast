@@ -9,8 +9,7 @@ import { remarkSanitizeInvisibleUnicode } from "../../lib/markdownPlugins";
 import { remarkEmojiShortcodes } from "../../lib/remarkEmojiShortcodes";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { RevealHost } from "../ObjectReveal";
-import { CommentAvatar } from "../comments/CommentAvatar";
-import { RoleFace } from "../org/RoleFace";
+import { ChatAuthorFace } from "./ChatAuthorFace";
 import Link from "next/link";
 import { remarkChatMentions, channelNameMap } from "../../lib/remarkChatMentions";
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
@@ -389,16 +388,10 @@ export const ChatMessage = memo(function ChatMessage({
           </span>
         ) : author.role ? (
           <Link href={`/org/${author.role.shortId}`} className="flex" title={`${author.name} · ${author.role.title}`}>
-            <RoleFace role={author.role} size={22} title={author.name} />
+            <ChatAuthorFace author={author} />
           </Link>
         ) : (
-          <CommentAvatar
-            name={author.name}
-            image={author.avatarUrl}
-            isAgent={author.isAgent}
-            agentType={author.session?.agentType}
-            letters={2}
-          />
+          <ChatAuthorFace author={author} />
         )}
       </div>
 
@@ -629,18 +622,8 @@ export const ChatMessage = memo(function ChatMessage({
         {!inThread && !!message.replyCount && message.replyCount > 0 && (
           <button type="button" className="ch-thread-link" onClick={() => onOpenThread?.(message.id)}>
             <span className="ch-thread-faces">
-              {(message.replyFaces ?? []).slice(0, 4).map((f) => f.role ? (
-                <RoleFace key={f.id} role={f.role} size={16} title={f.name} className="ch-thread-face" />
-              ) : (
-                <CommentAvatar
-                  key={f.id}
-                  name={f.name}
-                  image={f.avatarUrl}
-                  isAgent={f.isAgent}
-                  size={16}
-                  letters={2}
-                  className="ch-thread-face"
-                />
+              {(message.replyFaces ?? []).slice(0, 4).map((f) => (
+                <ChatAuthorFace key={f.id} author={f} size={16} className="ch-thread-face" />
               ))}
             </span>
             <span className="ch-thread-count">

@@ -28,7 +28,8 @@ import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { FilterDropdown } from "../../components/FilterDropdown";
 import { AuthorAvatar } from "../../components/entityDisplay";
 import { lineAuthorFor } from "../../lib/chatViews";
-import { CommentAvatar } from "../../components/comments/CommentAvatar";
+import { ChatAuthorFace } from "../../components/chat/ChatAuthorFace";
+import { useChatAuthorLookups } from "../../hooks/useChatSync";
 
 // Right-click payloads: a session header row or one message match inside it.
 type SearchCtxPayload =
@@ -247,6 +248,7 @@ export default function SearchPage() {
 
   const sessionFilters = showSessions;
   const anyResults = nav.length > 0;
+  const chatAuthorLookups = useChatAuthorLookups();
   const memberById = useMemo(() => {
     const members = ((useInboxStore.getState() as any).teamMembers ?? []) as any[];
     return new Map(members.map((m) => [String(m._id), m]));
@@ -392,7 +394,7 @@ export default function SearchPage() {
               <div className="space-y-0.5">
                 {chatHits.slice(0, chatCap).map((h) => {
                   const key = `chat:${h._id}`;
-                  const author = lineAuthorFor(h, { members: memberById });
+                  const author = lineAuthorFor(h, { members: memberById, ...chatAuthorLookups });
                   const name = author.name;
                   return (
                     <div
@@ -410,7 +412,7 @@ export default function SearchPage() {
                         who={(
                           <>
                             {author.isAgent
-                              ? <CommentAvatar name={name} isAgent agentType={author.session?.agentType} size={16} />
+                              ? <ChatAuthorFace author={author} size={16} />
                               : <AuthorAvatar name={name} avatar={author.avatarUrl} size={16} />}
                             <span className="truncate font-medium text-sol-text">{name}</span>
                             <span className="flex flex-shrink-0 items-center gap-0.5 text-sol-text-dim">

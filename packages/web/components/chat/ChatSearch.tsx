@@ -6,7 +6,8 @@ import { useQueryNoThrow, queryCircuitOpenError } from "../../hooks/useQueryNoTh
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useDebounce } from "../../hooks/useDebounce";
-import { CommentAvatar } from "../comments/CommentAvatar";
+import { ChatAuthorFace } from "./ChatAuthorFace";
+import { useChatAuthorLookups } from "../../hooks/useChatSync";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { ChatModalLegend } from "./ChatModalLegend";
 import { highlightMatch } from "../GlobalSearch";
@@ -18,6 +19,7 @@ import type { ChatMessageRow } from "../../store/chatSlice";
 import "./chat.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { hoverFocus } from "../../shortcuts/focusSource";
 const api = _api as any;
 
 // Chat search.
@@ -131,6 +133,7 @@ export function ChatSearch({
 }) {
   const router = useRouter();
   const now = useCoarseNow(30_000);
+  const authorLookups = useChatAuthorLookups();
   const teamMembers = useInboxStore((s) => s.teamMembers) as ChatMember[];
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
   const teamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
@@ -350,7 +353,7 @@ export function ChatSearch({
                 {g.hits.map((h) => {
                   flatIdx++;
                   const idx = flatIdx;
-                  const author = lineAuthorFor(h, { members: byId as any });
+                  const author = lineAuthorFor(h, { members: byId as any, ...authorLookups });
                   return (
                     <button
                       key={h._id}
@@ -359,17 +362,10 @@ export function ChatSearch({
                       role="option"
                       aria-selected={idx === highlight}
                       className={`ch-search-hit ${idx === highlight ? "ch-row-hot" : ""}`}
-                      onMouseMove={() => setHighlight(idx)}
+                      {...hoverFocus(() => setHighlight(idx))}
                       onClick={() => open(h)}
                     >
-                      <CommentAvatar
-                        name={author.name}
-                        image={author.avatarUrl}
-                        isAgent={author.isAgent}
-                        agentType={author.session?.agentType}
-                        size={22}
-                        letters={1}
-                      />
+                      <ChatAuthorFace author={author} size={22} letters={1} />
                       <span className="ch-search-hit-body">
                         <span className="ch-search-hit-head">
                           <span className="ch-search-hit-author">{author.name}</span>

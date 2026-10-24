@@ -139,8 +139,11 @@ export function isAgentComment(c: Comment): boolean {
   return c.author_kind === "agent";
 }
 
-export function commentAuthorName(c: Comment, currentUserId?: string, agentType?: string): string {
-  if (isAgentComment(c)) return agentDisplayName(agentType);
+/** `agentName` is the name the conversation's agent speaks under
+ *  (useConversationSpeaker): a role's given name, a character's, or the
+ *  agent's product name. */
+export function commentAuthorName(c: Comment, currentUserId?: string, agentName?: string): string {
+  if (isAgentComment(c)) return agentName ?? agentDisplayName(undefined);
   const u = c.user;
   const name = u?.name || u?.github_username || "";
   if (name) return name;
