@@ -4,10 +4,13 @@
 // sessions behind it, and the line that says where its "why" came from.
 import { useRef, useState, type ReactNode } from "react";
 import { ChevronUp, CircleDashed, CornerUpLeft, Zap } from "lucide-react";
-import type { StoryRow } from "../../hooks/useSyncChanges";
+import { waitingStories } from "@codecast/shared/changes";
+import type { LiveRow, StoryRow } from "../../hooks/useSyncChanges";
+import { changesDayLabel, localDay } from "../../lib/changesDay";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
 import { memberAvatarUrl } from "../../lib/liveEntities";
 import { AuthorAvatar } from "../entityDisplay";
+import { RoleAvatar } from "../org/avatars";
 import { EntityIdPill, TextWithMentions } from "../EntityIdPill";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { areaColor, areaLabel, KIND_COLOR, RISK_HATCH } from "./areaColor";
@@ -184,12 +187,56 @@ export function NoMatch({ what, onClear }: { what: string; onClear: () => void }
 }
 
 /** "shipped in cli 1.1.163" when a release of the story's surface followed it. */
-export function ReleaseTag({ story }: { story: Pick<StoryRow, "release"> }) {
-  if (!story.release) return null;
+/** "14:32" when `t` falls on `day`, else "Thu 22 Oct 14:32": a time names its day whenever it is not the story's. */
+export const stampOf = (t: number, day: string) => {
+  const on = localDay(0, t);
+  return on === day ? clockOf(t) : `${changesDayLabel(on)} ${clockOf(t)}`;
+};
+
+/** "45m", "3h 10m", "2d 4h": how long after landing a story went live. */
+export function gapOf(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60_000));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+  return h % 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${Math.floor(h / 24)}d`;
+}
+
+type TimingFacts = Pick<StoryRow, "date" | "area" | "last_at" | "on_default_branch" | "release">;
+
+/** The live surfaces whose newest ship came before the story landed: the ones it still waits on. */
+export const waitingOn = (story: Omit<TimingFacts, "date" | "release">, live: readonly LiveRow[]) =>
+  live.filter((l) => waitingStories([story], l).length > 0);
+
+/**
+ * When the story landed and when it went live: the deploy or release that
+ * carried it, with how long after, opening its deploy object when one was
+ * recorded; or the surfaces it has not reached yet.
+ */
+export function Timing({ story, live = [] }: { story: TimingFacts; live?: readonly LiveRow[] }) {
   const r = story.release;
+  const waiting = r ? [] : waitingOn(story, live);
   return (
-    <span className="font-mono text-[11px] text-sol-text/55">
-      shipped in {r.surface} {r.version ?? r.sha.slice(0, 7)}
+    <span className="inline-flex flex-wrap items-center gap-x-1.5 font-mono text-[11px] tabular-nums text-sol-text/55">
+      <span>landed {stampOf(story.last_at, story.date)}</span>
+      {r ? (
+        <>
+          <span className="text-sol-text/30">→</span>
+          <span className="text-[var(--sol-green)]">
+            {(r.kind ?? (r.version ? "release" : "deploy")) === "deploy" ? "deployed" : "released"} {r.surface}
+            {r.version ? ` ${r.version}` : ""} {stampOf(r.at, story.date)}
+          </span>
+          <span className="text-sol-text/40">+{gapOf(r.at - story.last_at)}</span>
+          {r.deploy && <EntityIdPill type="deploy" id={r.deploy} compact />}
+        </>
+      ) : waiting.length > 0 ? (
+        <>
+          <span className="text-sol-text/30">→</span>
+          <Tip text={waiting.map((l) => `${l.surface} last ${l.kind === "deploy" ? "deployed" : "released"} ${stampOf(l.at, story.date)}`).join(", ")}>
+            <span className="text-[var(--sol-yellow)]">not deployed to {waiting.map((l) => l.surface).join(", ")} yet</span>
+          </Tip>
+        </>
+      ) : null}
     </span>
   );
 }
@@ -244,14 +291,14 @@ export function Provenance({ story, className = "" }: { story: WhyFacts; classNa
 }
 
 type StoryPeople = Pick<StoryRow, "actor_user_ids" | "author_names">;
-type Face = { key: string; name: string; image?: string };
+type Face = { key: string; name: string; image?: string; face?: string };
 
 /** The people behind a story, one per person (editionModel.peopleOf), each with a face from the live roster. */
 function useStoryPeople(story: StoryPeople): Face[] {
   const roster = useTeamRosterIdentity();
   return peopleOf([story], roster).map((p) => {
     const m = p.userIds.map((id) => roster.find((r) => String(r._id) === id)).find(Boolean);
-    return { key: p.key, name: p.name, image: m ? memberAvatarUrl(m) : undefined };
+    return { key: p.key, name: p.name, image: m ? memberAvatarUrl(m) : undefined, face: m?.role?.face };
   });
 }
 
@@ -260,7 +307,7 @@ function Faces({ people, size, max }: { people: Face[]; size: number; max: numbe
     <span className="inline-flex shrink-0 items-center">
       {people.slice(0, max).map((p, i) => (
         <span key={p.key} className="inline-flex rounded-full bg-sol-bg" style={{ marginLeft: i ? -Math.round(size / 4) : 0 }}>
-          <AuthorAvatar name={p.name} avatar={p.image} size={size} />
+          {p.face ? <RoleAvatar avatar={p.face} size={size} title={p.name} /> : <AuthorAvatar name={p.name} avatar={p.image} size={size} />}
         </span>
       ))}
       {people.length > max && <span className="ml-1 font-mono text-[10px] text-sol-text/45">+{people.length - max}</span>}
