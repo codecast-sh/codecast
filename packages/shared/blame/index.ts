@@ -65,6 +65,103 @@ export function contentLinesToMatch(lines: Iterable<BlamedLine>, nowMs: number):
   return [...byText.values()];
 }
 
+// ── Commit attribution by line overlap ──
+//
+// A commit nobody stamped (a person committed what an agent wrote, or the
+// agent committed through a command the trailer rewrite missed) can still be
+// traced to its session by content: the commit's added lines against the
+// lines sessions wrote. Lines are normalized (trimmed, whitespace runs
+// collapsed, blank lines dropped) and deduped, so a reformat between edit and
+// commit keeps the match. The normalized text is the set key itself; hashing
+// it would only matter if the sets were stored.
+//
+// The gate is the one HumanLayer measured on 784 real commits. Any overlap at
+// all was 61% false positives: `}`, `return {` and common imports appear in
+// every session's edits. A claim needs either 10 matched lines, or 3 matched
+// lines that make up at least a quarter of the commit's lines.
+
+export const OVERLAP_FLOOR_LINES = 10;
+export const OVERLAP_MIN_LINES = 3;
+export const OVERLAP_MIN_FRACTION = 0.25;
+
+// Bump when the attribution chain changes: its order, the normalization, or
+// the overlap gate. v2 added the overlap tier behind trailer, commit, hash
+// and subject.
+export const BLAME_ALGORITHM_VERSION = 2;
+
+// Lines one commit sends for the overlap match.
+export const MAX_OVERLAP_LINES_PER_COMMIT = 400;
+
+/** One line as the overlap match compares it, or null for a blank line. */
+export function normalizeOverlapLine(line: string): string | null {
+  const collapsed = line.trim().replace(/\s+/g, " ");
+  return collapsed.length > 0 ? collapsed : null;
+}
+
+/** The distinct normalized lines across texts (each split on newlines). */
+export function overlapLineSet(texts: Iterable<string>): Set<string> {
+  const set = new Set<string>();
+  for (const text of texts) {
+    for (const raw of text.split("\n")) {
+      const line = normalizeOverlapLine(raw);
+      if (line !== null) set.add(line);
+    }
+  }
+  return set;
+}
+
+export function passesOverlapGate(matched: number, total: number): boolean {
+  return matched >= OVERLAP_FLOOR_LINES || (matched >= OVERLAP_MIN_LINES && total > 0 && matched / total >= OVERLAP_MIN_FRACTION);
+}
+
+export interface OverlapClaim {
+  id: string;
+  matched: number;
+  total: number;
+}
+
+/**
+ * The candidate whose written lines overlap the commit's lines most, when the
+ * overlap clears the gate. An exact tie resolves by id so the answer is stable
+ * across runs.
+ */
+export function claimByOverlap(
+  commitLines: Iterable<string>,
+  candidates: Iterable<{ id: string; lines: ReadonlySet<string> }>,
+): OverlapClaim | null {
+  const commit = overlapLineSet(commitLines);
+  let best: OverlapClaim | null = null;
+  for (const candidate of candidates) {
+    let matched = 0;
+    for (const line of commit) if (candidate.lines.has(line)) matched++;
+    if (!best || matched > best.matched || (matched === best.matched && candidate.id < best.id)) {
+      best = { id: candidate.id, matched, total: commit.size };
+    }
+  }
+  return best && passesOverlapGate(best.matched, best.total) ? best : null;
+}
+
+/**
+ * Each recent commit's lines in a blamed file, normalized and deduped: the
+ * lines git blame gives a commit are the lines it added that still stand. Old
+ * commits are skipped for the same reason contentLinesToMatch skips them.
+ */
+export function overlapLinesBySha(
+  lines: Iterable<{ sha: string; text: string; authorMs?: number }>,
+  nowMs: number,
+): Map<string, string[]> {
+  const sets = new Map<string, Set<string>>();
+  for (const line of lines) {
+    if (!line.authorMs || nowMs - line.authorMs > CONTENT_MATCH_MAX_AGE_MS) continue;
+    const text = normalizeOverlapLine(line.text);
+    if (text === null) continue;
+    let set = sets.get(line.sha);
+    if (!set) sets.set(line.sha, (set = new Set()));
+    if (set.size < MAX_OVERLAP_LINES_PER_COMMIT) set.add(text);
+  }
+  return new Map([...sets].map(([sha, set]) => [sha, [...set]]));
+}
+
 // ── The Codecast-Session trailer ──
 //
 // A commit an agent makes carries the session that made it as a git trailer:

@@ -9,7 +9,7 @@ import { roleOfRun } from "./orgLineMerge";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
-import { contentLinesToMatch, MAX_CONTENT_LINES } from "@codecast/shared/blame";
+import { BLAME_ALGORITHM_VERSION, contentLinesToMatch, MAX_CONTENT_LINES } from "@codecast/shared/blame";
 import { checkConversationAccess } from "./privacy";
 import { bodyBytes, readFileChangeBody, writeFileChange } from "./fileChangeBodies";
 import {
@@ -24,6 +24,7 @@ import {
   MIN_SHA_PREFIX,
   SUMMARY_MATCH_WINDOW_MS,
   isValidBlameSha,
+  matchCommitByOverlap,
   matchLinesToEdits,
   pickRowForSha,
   rankRowsBySummary,
@@ -54,25 +55,38 @@ export type SessionRef = {
 // Codecast-Session trailer names it. `commit`: the commits table names the
 // session (daemon publish or webhook). `hash`: a file_changes commit row whose
 // stored short hash prefixes the sha. `subject`: a commit row matched by
-// subject line and time. `edit`: the line's text found in an edit the session
-// made, which is the authoring session even when a different one committed.
-export type BlameVia = "trailer" | "commit" | "hash" | "subject" | "edit";
+// subject line and time. `overlap`: nothing named the commit, but enough of
+// its lines match what the session's edits wrote (shared/blame's gate).
+// `edit`: the line's text found in an edit the session made, which is the
+// authoring session even when a different one committed.
+export type BlameVia = "trailer" | "commit" | "hash" | "subject" | "overlap" | "edit";
 
-export type ResolvedSession = SessionRef & { message_id?: Id<"messages">; via: BlameVia };
+export type ResolvedSession = SessionRef & {
+  message_id?: Id<"messages">;
+  via: BlameVia;
+  // For `overlap`: matched lines out of the commit's lines in the file.
+  overlap?: { matched: number; total: number };
+};
 
 // `session` is the conversation id the commit's Codecast-Session trailer
 // names, read from the message by the caller that has it (the CLI, from git).
 // Callers without the message still reach the trailer: ingest writes the
 // session it names onto the commits row.
-export type CommitDescriptor = { sha: string; summary?: string; author_time?: number; session?: string };
+// `lines` are the commit's normalized lines in the blamed file, for the
+// overlap match.
+export type CommitDescriptor = { sha: string; summary?: string; author_time?: number; session?: string; lines?: string[] };
+
+type FileEditRow = EditRowLite & { message_id: Id<"messages"> };
 
 type ResolveCaches = {
   conversations: Map<string, Doc<"conversations"> | null>;
   users: Map<string, { name?: string; image?: string }>;
+  // Edit rows per file path list, read once for the line and commit matches.
+  edits: Map<string, FileEditRow[]>;
 };
 
 export function newResolveCaches(): ResolveCaches {
-  return { conversations: new Map(), users: new Map() };
+  return { conversations: new Map(), users: new Map(), edits: new Map() };
 }
 
 /**
@@ -260,7 +274,61 @@ export async function matchFileLines(
   const wanted = lines.slice(0, MAX_UNCOMMITTED_LINES);
   if (wanted.length === 0 || filePaths.length === 0) return matches;
 
-  const editRows: (EditRowLite & { message_id: Id<"messages"> })[] = [];
+  const editRows = await fileEditRows(ctx, viewer, filePaths, caches);
+  for (const [line, row] of matchLinesToEdits(wanted, editRows)) {
+    const conv = caches.conversations.get(row.conversation_id.toString())!;
+    matches.push({
+      line,
+      ...(await sessionRefFor(ctx, conv, caches.users)),
+      message_id: row.message_id,
+      via: "edit",
+    });
+  }
+  return matches;
+}
+
+/**
+ * The session behind each commit nothing else named, by line overlap: the
+ * commit's lines in the file against the lines each session's edits to it
+ * wrote. Fills `resolved` in place, never overriding an existing answer.
+ */
+export async function inferCommitsByOverlap(
+  ctx: { db: any },
+  viewer: BlameViewer,
+  filePaths: string[],
+  descriptors: CommitDescriptor[],
+  resolved: Record<string, ResolvedSession>,
+  caches: ResolveCaches = newResolveCaches(),
+): Promise<void> {
+  const open = descriptors.filter((d) => d.lines?.length && !resolved[d.sha.toLowerCase()] && isValidBlameSha(d.sha.toLowerCase()));
+  if (open.length === 0 || filePaths.length === 0) return;
+  const editRows = await fileEditRows(ctx, viewer, filePaths, caches);
+  if (editRows.length === 0) return;
+  for (const d of open.slice(0, MAX_SHAS)) {
+    const match = matchCommitByOverlap(d.lines!, d.author_time, editRows);
+    if (!match) continue;
+    const conv = caches.conversations.get(match.row.conversation_id.toString())!;
+    resolved[d.sha.toLowerCase()] = {
+      ...(await sessionRefFor(ctx, conv, caches.users)),
+      message_id: match.row.message_id,
+      via: "overlap",
+      overlap: { matched: match.matched, total: match.total },
+    };
+  }
+}
+
+// The newest edit and write rows for the file, from sessions the viewer may
+// see, with their text, under the row and byte budgets.
+async function fileEditRows(
+  ctx: { db: any },
+  viewer: BlameViewer,
+  filePaths: string[],
+  caches: ResolveCaches,
+): Promise<FileEditRow[]> {
+  const key = filePaths.join("\n");
+  const cached = caches.edits.get(key);
+  if (cached) return cached;
+  const editRows: FileEditRow[] = [];
   let bytes = 0;
   for (const filePath of filePaths) {
     const recentEdits = await ctx.db
@@ -278,17 +346,8 @@ export async function matchFileLines(
       editRows.push({ ...row, new_content: body.newContent });
     }
   }
-
-  for (const [line, row] of matchLinesToEdits(wanted, editRows)) {
-    const conv = caches.conversations.get(row.conversation_id.toString())!;
-    matches.push({
-      line,
-      ...(await sessionRefFor(ctx, conv, caches.users)),
-      message_id: (row as EditRowLite & { message_id: Id<"messages"> }).message_id,
-      via: "edit",
-    });
-  }
-  return matches;
+  caches.edits.set(key, editRows);
+  return editRows;
 }
 
 /**
@@ -317,6 +376,7 @@ export const resolveBlame = query({
           summary: v.optional(v.string()),
           author_time: v.optional(v.number()),
           session: v.optional(v.string()),
+          lines: v.optional(v.array(v.string())),
         }),
       ),
     ),
@@ -338,12 +398,9 @@ export const resolveBlame = query({
     const userId = auth.userId;
     const caches = newResolveCaches();
 
-    const resolved = await resolveCommitSessions(
-      ctx,
-      userId,
-      [...(args.shas ?? []).map((sha) => ({ sha })), ...(args.commits ?? [])],
-      caches,
-    );
+    const descriptors = [...(args.shas ?? []).map((sha) => ({ sha })), ...(args.commits ?? [])];
+    const resolved = await resolveCommitSessions(ctx, userId, descriptors, caches);
+    if (args.file_path) await inferCommitsByOverlap(ctx, userId, [args.file_path], descriptors, resolved, caches);
 
     const lines: MatchLine[] = [
       ...(args.uncommitted_lines ?? []).map((text) => ({ text })),
@@ -353,7 +410,7 @@ export const resolveBlame = query({
       ? await matchFileLines(ctx, userId, [args.file_path], lines, caches)
       : [];
 
-    return { resolved, line_matches: lineMatches };
+    return { resolved, line_matches: lineMatches, algorithm_version: BLAME_ALGORITHM_VERSION };
   },
 });
 

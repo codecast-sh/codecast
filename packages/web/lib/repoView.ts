@@ -92,7 +92,7 @@ export function startsBlameRange(range: RepoBlameRange | undefined, line: number
 // per sha and per line text; folding that back onto the file's lines is pure
 // and happens here.
 
-export type BlameVia = "trailer" | "commit" | "hash" | "subject" | "edit" | "nearby";
+export type BlameVia = "trailer" | "commit" | "hash" | "subject" | "overlap" | "edit" | "nearby";
 
 /**
  * A session as the reader may see it. Signed in, every session named here is
@@ -312,6 +312,7 @@ export function blameViaLabel(via: BlameVia): string {
     case "commit": return "made this commit";
     case "hash": return "ran this commit";
     case "subject": return "matched by commit message and time";
+    case "overlap": return "wrote enough of this commit's lines to claim it";
   }
 }
 

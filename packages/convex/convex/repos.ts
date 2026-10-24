@@ -31,8 +31,8 @@ import { installationCoversRepo, installationOwner, routingTeamForInstallation }
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { resolveCreationPrivacy } from "./privacy";
 import { applyCommitFilesTo } from "./commits";
-import { matchFileLines, newResolveCaches, resolveCommitSessions, type BlameViewer } from "./blame";
-import { contentLinesToMatch } from "@codecast/shared/blame";
+import { inferCommitsByOverlap, matchFileLines, newResolveCaches, resolveCommitSessions, type BlameViewer } from "./blame";
+import { BLAME_ALGORITHM_VERSION, contentLinesToMatch, overlapLinesBySha } from "@codecast/shared/blame";
 import { WORKTREES_KIND, mergeWorktreesPayload, type WorktreesPayload } from "@codecast/shared/contracts";
 import { localCommitFiles } from "./lib/localCommitFiles";
 import { markCommitDirty } from "./lib/changesDirty";
@@ -334,11 +334,26 @@ function isLocalMeta(row: { kind: string; content: string } | null): boolean {
   }
 }
 
+// Convex refuses a document over 1 MiB. Blobs are admitted up to 1 MiB of raw
+// bytes, then stored JSON-encoded (escapes, and an image's base64 beside its
+// text), so a file near the cap became a 1.3 MiB row that failed to write on
+// every view. A payload over this budget is stored as a truncated answer,
+// which every reader already shows as "too large to display".
+const CACHE_CONTENT_MAX_BYTES = 900 * 1024;
+
+export function fitCacheContent(content: string, size?: number): { content: string; truncated?: boolean } {
+  if (new TextEncoder().encode(content).length <= CACHE_CONTENT_MAX_BYTES) return { content };
+  let sha: string | undefined;
+  try { sha = JSON.parse(content)?.sha; } catch {}
+  return { content: JSON.stringify({ content: "", size, truncated: true, ...(sha ? { sha } : {}) }), truncated: true };
+}
+
 /** The one cache write: a row is replaced whole under its key, stamped now. */
 async function writeCacheRow(
   ctx: { db: any },
   args: { team_id: Id<"teams">; repository: string; kind: string; ref: string; path: string; sha?: string; content: string; size?: number; truncated?: boolean },
 ) {
+  args = { ...args, ...fitCacheContent(args.content, args.size) };
   const existing = await cacheRowByKey(ctx, args.repository, args.kind, args.ref, args.path);
 
   const row = {
@@ -1429,9 +1444,14 @@ export async function blameSessionsFor(
 
   const roots = (await localSourcesFor(ctx, repository)).map((s: any) => String(s.root).replace(/\/+$/, ""));
   const filePaths = [...new Set(roots)].map((root) => `${root}/${path}`);
+  const linesBySha = overlapLinesBySha(
+    ranges.flatMap((r) => lines.slice(r.start_line - 1, r.end_line).map((text) => ({ sha: r.sha, text, authorMs: r.committed_at || undefined }))),
+    Date.now(),
+  );
+  await inferCommitsByOverlap(ctx, viewer, filePaths, [...bySha.values()].map((d) => ({ ...d, lines: linesBySha.get(d.sha) })), resolved, caches);
   const lineMatches = wanted.length > 0 ? await matchFileLines(ctx, viewer, filePaths, wanted, caches) : [];
 
-  return { by_sha: resolved, line_matches: lineMatches, conversations: caches.conversations };
+  return { by_sha: resolved, line_matches: lineMatches, algorithm_version: BLAME_ALGORITHM_VERSION, conversations: caches.conversations };
 }
 /**
  * Every checkout of a repository the viewer's teams publish, each with its

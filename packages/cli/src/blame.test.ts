@@ -10,6 +10,7 @@ import {
   groupBlameBySession,
   parseBlamePorcelain,
   readSessionTrailers,
+  resolveFromParsed,
   rewriteFugitiveBlame,
   sessionLabel,
   type BlameResolution,
@@ -388,6 +389,51 @@ describe("readSessionTrailers", () => {
       const many = [...Array.from({ length: 30_000 }, (_, i) => i.toString(16).padStart(40, "0")), trailed];
       expect([...(await readSessionTrailers(many, dir))]).toEqual([[trailed, id]]);
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe("resolveFromParsed and the overlap lines", () => {
+  test("sends each untrailered commit's lines, and drops them for a backend that refuses the field", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-overlap-"));
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", ...args], { cwd: dir, encoding: "utf-8" }).trim();
+    const realFetch = globalThis.fetch;
+    const bodies: any[] = [];
+    try {
+      git("init", "-q");
+      const file = path.join(dir, "a.ts");
+      fs.writeFileSync(file, "const a  =  1;\n\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "plain");
+      const plain = git("rev-parse", "HEAD");
+      fs.appendFileSync(file, "const b = 2;\n");
+      git("commit", "-q", "-am", "trailed", "--trailer", "Codecast-Session: https://codecast.sh/conversation/jx7bq5kz13a2eypp4a6vdqznas7zvrw2");
+      const parsed = parseBlamePorcelain(git("blame", "--porcelain", "--", file) + "\n");
+
+      let calls = 0;
+      globalThis.fetch = (async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)));
+        calls++;
+        // An older backend's closed validator: every try with `lines` fails.
+        const refused = bodies[bodies.length - 1].commits.some((c: any) => c.lines);
+        return new Response(JSON.stringify(refused ? { error: "Internal error" } : { resolved: { [plain]: { conversation_id: "c", title: "Writer", via: "overlap" } } }), { status: refused ? 500 : 200 });
+      }) as any;
+
+      const resolution = await resolveFromParsed(parsed, file, { auth_token: "t", convex_url: "https://x.convex.cloud" });
+      const first = bodies[0].commits;
+      expect(first.find((c: any) => c.sha === plain).lines).toEqual(["const a = 1;"]);
+      expect(first.find((c: any) => c.sha !== plain).lines).toBeUndefined();
+      expect(bodies[bodies.length - 1].commits.every((c: any) => c.lines === undefined)).toBe(true);
+      expect(calls).toBeGreaterThan(1);
+      expect(resolution.bySha.get(plain)?.via).toBe("overlap");
+      expect(augmentPorcelain(git("blame", "--porcelain", "--", file), resolution)).toContain("codecast-via overlap");
+    } finally {
+      globalThis.fetch = realFetch;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000);
