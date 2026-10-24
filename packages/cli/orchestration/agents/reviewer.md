@@ -75,3 +75,4 @@ Suggestion: <what approach would work instead>" -t blocker
 - Be specific. "This might have a bug" is useless. "Line 42: `users.find()` returns null when no match but line 45 calls `.id` on the result" is useful.
 - Don't nitpick. Only flag issues that affect correctness, security, or completeness.
 - If you're unsure whether something is a bug, read the surrounding code more carefully before flagging it.
+- When the implementer or conductor disputes a finding on a re-review, check their claim against the code before you drop the finding or hold it.

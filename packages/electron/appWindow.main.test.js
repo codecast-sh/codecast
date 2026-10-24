@@ -262,3 +262,11 @@ test("closing the main window hides it and the dock brings the same window back;
   main.close();
   assert.equal(main.destroyed, true);
 });
+
+test("a quit writes the web origin's storage to disk before the app exits", () => {
+  const rig = harness.loadShell();
+  const storage = rig.electron.session.defaultSession;
+  assert.equal(storage.flushes ?? 0, 0);
+  rig.listeners.get("before-quit")();
+  assert.equal(storage.flushes, 1);
+});

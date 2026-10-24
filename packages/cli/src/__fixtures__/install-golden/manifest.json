@@ -132,6 +132,15 @@
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
+  "vault": {
+    "config": {
+      "vault_enabled": true,
+      "vault_version": "1"
+    },
+    "stdout": "* Vault — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
   "computer": {
     "config": {
       "computer_enabled": true,
@@ -187,9 +196,9 @@
     "otherFiles": {
       ".claude/agents/critic.md": "bd99e7786ce5b525",
       ".claude/agents/implementer.md": "952adc7a9e5ec50d",
-      ".claude/agents/reviewer.md": "bdd5a03c6aac7951",
+      ".claude/agents/reviewer.md": "ed6462a9e2f2f8d9",
       ".claude/settings.json": "d3b7568f317c3f0f",
-      ".claude/skills/codecast-orchestrate/SKILL.md": "3fabcbdf91a432dc",
+      ".claude/skills/codecast-orchestrate/SKILL.md": "33ac1f8703ef8d69",
       ".codecast/orchestration/scripts/agent-complete.sh": "02834fb294e9cb68",
       ".codecast/orchestration/scripts/reground.sh": "0032a90b8d285b09"
     }
@@ -218,11 +227,12 @@
       ".claude/skills/cast-org/SKILL.md": "7b61ebffcc66bf51",
       ".claude/skills/cast-pass/SKILL.md": "a6ec982a7448d340",
       ".claude/skills/cast-pickup/SKILL.md": "2d52de61a84e9eda",
-      ".claude/skills/cast-plan/SKILL.md": "9b6dbbc508bb655e",
+      ".claude/skills/cast-plan/SKILL.md": "19ef6efafd48ba1a",
+      ".claude/skills/cast-research/SKILL.md": "d2e0b79a7994edb4",
       ".claude/skills/cast-rethink/SKILL.md": "4a911ffb2d682a85",
       ".claude/skills/cast-review/SKILL.md": "cd57a6e1b6ccde85",
       ".claude/skills/cast-second-opinion/SKILL.md": "6712e76233059c8f",
-      ".claude/skills/cast-ship/SKILL.md": "c4fe5b42d60128b2",
+      ".claude/skills/cast-ship/SKILL.md": "1df39756ff64b542",
       ".claude/skills/cast-standup/SKILL.md": "63b9d144fe22eb8f",
       ".claude/skills/cast-triage/SKILL.md": "26cf440cf55b47d1",
       ".claude/skills/cast-verify/SKILL.md": "e03ca536c88c7af9",

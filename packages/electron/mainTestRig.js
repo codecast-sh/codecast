@@ -245,7 +245,7 @@ function fakeElectron() {
         return false;
       }
     },
-    session: { defaultSession: { setPermissionRequestHandler: noop, webRequest: { onHeadersReceived: noop } } },
+    session: { defaultSession: { setPermissionRequestHandler: noop, webRequest: { onHeadersReceived: noop }, flushStorageData() { this.flushes = (this.flushes ?? 0) + 1; } } },
     powerMonitor: { on: noop },
     desktopCapturer: { getSources: async () => [] },
   };

@@ -34,6 +34,7 @@ import standupSkill from "../skills/cast-standup/SKILL.md" with { type: "text" }
 import pickupSkill from "../skills/cast-pickup/SKILL.md" with { type: "text" };
 import handoffSkill from "../skills/cast-handoff/SKILL.md" with { type: "text" };
 import planSkill from "../skills/cast-plan/SKILL.md" with { type: "text" };
+import researchSkill from "../skills/cast-research/SKILL.md" with { type: "text" };
 import shipSkill from "../skills/cast-ship/SKILL.md" with { type: "text" };
 import verifySkill from "../skills/cast-verify/SKILL.md" with { type: "text" };
 import reviewSkill from "../skills/cast-review/SKILL.md" with { type: "text" };
@@ -90,6 +91,7 @@ export const BUNDLED_SKILLS: readonly BundledSkill[] = [
   { name: "cast-pickup", body: pickupSkill },
   { name: "cast-handoff", body: handoffSkill },
   { name: "cast-plan", body: planSkill },
+  { name: "cast-research", body: researchSkill },
   { name: "cast-ship", body: shipSkill },
   { name: "cast-verify", body: verifySkill },
   { name: "cast-review", body: reviewSkill },

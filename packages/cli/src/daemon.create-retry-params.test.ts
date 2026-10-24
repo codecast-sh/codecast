@@ -20,6 +20,7 @@ import {
 import type { SyncService, CreateConversationParams } from "./syncService.js";
 import type { RetryQueue } from "./retryQueue.js";
 import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+import { strictStub } from "./test-helpers/strictStub.js";
 import { extractSidechain } from "./parser.js";
 
 const PARENT_SESSION = "a4c6f0c0-4251-42de-b3f3-732eb239908b";
@@ -75,21 +76,23 @@ describe("createConversation retry preserves subagent params", () => {
     const filePath = makeWorkflowAgentTranscript(base, agentSessionId, projDir);
 
     const directCalls: CreateConversationParams[] = [];
-    const syncService = {
+    // Strict: a sync or queue call this path did not make before fails the
+    // test by name instead of quietly returning undefined.
+    const syncService = strictStub<SyncService>("SyncService", {
       createConversation: async (params: CreateConversationParams) => {
         directCalls.push(params);
         throw new Error("Unable to connect. Is the computer able to access the url?");
       },
-    } as unknown as SyncService;
+    });
 
     const queued: Array<{ type: string; params: Record<string, unknown> }> = [];
-    const retryQueue = {
+    const retryQueue = strictStub<RetryQueue>("RetryQueue", {
       getPendingOperations: () => [],
-      add: (type: string, params: Record<string, unknown>) => {
+      add: ((type: string, params: Record<string, unknown>) => {
         queued.push({ type, params });
         return "op-id";
-      },
-    } as unknown as RetryQueue;
+      }) as RetryQueue["add"],
+    });
 
     await expect(processSessionFile(
       filePath,

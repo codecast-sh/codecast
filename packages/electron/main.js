@@ -230,8 +230,19 @@ if (gotLock) {
 // CODECAST_CLAIM_PROTOCOL=1 to opt a dev run in deliberately.
 if (app.isPackaged) {
   app.setAsDefaultProtocolClient("codecast");
+  reportProtocolOwner();
 } else if (process.env.CODECAST_CLAIM_PROTOCOL) {
   app.setAsDefaultProtocolClient("codecast", process.execPath, [app.getAppPath()]);
+  reportProtocolOwner();
+}
+
+// The claim can lose quietly: Launch Services may keep links on another copy
+// (a stale dev build, an old download). Say which app holds them when it is
+// not this one, so "links open the wrong app" shows up in the log.
+function reportProtocolOwner() {
+  if (app.isDefaultProtocolClient("codecast")) return;
+  const owner = app.getApplicationNameForProtocol?.("codecast://") || "unknown";
+  console.warn(`codecast:// links open in "${owner}", not this app (${process.execPath})`);
 }
 
 app.on("open-url", (e, url) => {
@@ -1108,6 +1119,9 @@ let lastVoiceMirror = null;
 let appIsQuitting = false;
 app.on("before-quit", () => {
   appIsQuitting = true;
+  // Sign-in lives in the web origin's storage, which Chromium writes lazily;
+  // a token refreshed just before a quit or an update restart would be lost.
+  session.defaultSession.flushStorageData();
   // A staged update installs on the way out. Quitting is the human's own
   // restart; a staged bundle left behind would wait for a click nobody makes.
   applyStagedUpdateOnQuit();

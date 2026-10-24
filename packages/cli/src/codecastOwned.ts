@@ -53,6 +53,7 @@ export const CODECAST_SKILL_NAMES = [
   "cast-pickup",
   "cast-handoff",
   "cast-plan",
+  "cast-research",
   "cast-ship",
   "cast-verify",
   "cast-review",
