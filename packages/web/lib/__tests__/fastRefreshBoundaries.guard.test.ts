@@ -40,7 +40,6 @@ const ALLOWED = new Set<string>([
   "components/ActivityCharts.tsx",
   "components/ActivityHeatmap.tsx",
   "components/AgentTypeIcon.tsx",
-  "components/BatchReviewContext.tsx",
   "components/BranchSelector.tsx",
   "components/BrowserHandoffToast.tsx",
   "components/CodeBlock.tsx",

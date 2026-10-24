@@ -224,7 +224,7 @@ export function startTheseAgainLedger(r: { name?: string; cause: string; count: 
 }
 
 /** A pull request merged into its base branch: one act, undone only by a revert. */
-export function prMergeLedger(r: { title: string; number: number; base: string; head?: string; method: string; deleteBranch: boolean; files?: number; additions?: number; deletions?: number; checks?: string; blockedBy?: string }): SwitchLedger {
+export function prMergeLedger(r: { title: string; number: number; base: string; head?: string; headSha?: string; method: string; deleteBranch: boolean; files?: number; additions?: number; deletions?: number; checks?: string; blockedBy?: string }): SwitchLedger {
   const alert = r.checks === "failure" ? "Checks failing" : r.blockedBy ? `GitHub: ${r.blockedBy}` : r.checks === "pending" ? "Checks still running" : undefined;
   return {
     name: `Merge #${r.number}`,
@@ -239,11 +239,57 @@ export function prMergeLedger(r: { title: string; number: number; base: string; 
     rows: [
       { k: "Method", v: r.method },
       ...(r.checks === "success" ? [{ k: "Checks", v: "Passing", tone: "ok" as const }] : []),
+      ...headRow(r.headSha),
       { k: "Branch", v: r.deleteBranch ? "Deleted after" : "Kept" },
       { k: "Then", v: `Deploys from ${r.base}` },
       { k: "To undo", v: "Revert PR" },
     ],
     confirm: alert ? "Merge anyway" : `Merge into ${r.base}`,
+    keep: "Not now",
+  };
+}
+
+/** The head the press is pinned to: GitHub refuses if the branch moves first. */
+function headRow(sha?: string): { k: string; v: string }[] {
+  return sha ? [{ k: "Head", v: `${sha.slice(0, 7)}, refused if it moves` }] : [];
+}
+
+/** GitHub merges the pull request on its own once required checks and reviews pass. */
+export function prAutoMergeLedger(r: { title: string; number: number; base: string; headSha?: string; method: string; checks?: string }): SwitchLedger {
+  return {
+    name: `Auto-merge #${r.number}`,
+    subject: r.title,
+    shift: ["Manual", "Auto-merge"],
+    figures: [{ value: r.base, label: "lands on", tone: "warn" }],
+    rows: [
+      { k: "Merges when", v: "Required checks and reviews pass" },
+      { k: "Method", v: r.method },
+      ...(r.checks ? [{ k: "Checks now", v: r.checks, tone: r.checks === "failure" ? ("warn" as const) : undefined }] : []),
+      ...headRow(r.headSha),
+    ],
+    stop: "Turn it off",
+    confirm: "Turn on auto-merge",
+    keep: "Not now",
+  };
+}
+
+/** The base branch merged into the pull request's branch, as a new commit on it. */
+export function prUpdateBranchLedger(r: { title: string; number: number; base: string; head?: string; headSha?: string; behindBy?: number }): SwitchLedger {
+  return {
+    name: `Update #${r.number}`,
+    subject: r.title,
+    shift: null,
+    figures: [
+      ...(r.behindBy != null ? [{ value: String(r.behindBy), label: r.behindBy === 1 ? "commit behind" : "commits behind" }] : []),
+      { value: r.head ?? "branch", label: "gets a merge commit", tone: "warn" as const },
+    ],
+    rows: [
+      { k: "From", v: r.base },
+      ...headRow(r.headSha),
+      { k: "Then", v: "Checks run again" },
+      { k: "Agents on it", v: "Must pull before pushing" },
+    ],
+    confirm: `Merge ${r.base} into it`,
     keep: "Not now",
   };
 }
@@ -348,5 +394,36 @@ export function flowRunLedger(r: { flow: string; session: string; stations: Read
     stop: "Stop on its card",
     confirm: `Run through ${r.flow}`,
     keep: "Not now",
+  };
+}
+
+/** Joining a team machine: a Linux user of your own on a box others share, which its admin can read. */
+export function teamMachineJoinLedger(r: {
+  machine: string; team: string; admin: string; linuxUser: string; members: number;
+  load: { cpu_pct?: number; mem_free_gb: number; mem_total_gb: number; busy: boolean } | null;
+  adminOnline: boolean;
+}): SwitchLedger {
+  return {
+    name: "Join team machine",
+    subject: `${r.machine} · ${r.team}`,
+    shift: null,
+    figures: [
+      { value: String(r.members), label: r.members === 1 ? "member" : "members" },
+      ...(r.load ? [
+        ...(r.load.cpu_pct !== undefined ? [{ value: `${r.load.cpu_pct}%`, label: "CPU in use", ...(r.load.busy ? { tone: "warn" as const } : {}) }] : []),
+        { value: `${Math.round(r.load.mem_free_gb)} GB`, label: `free of ${r.load.mem_total_gb}` },
+      ] : []),
+    ],
+    rows: [
+      { k: "Your user", v: r.linuxUser },
+      { k: "Runs as", v: "You · your Claude account" },
+      { k: "Root", v: `${r.admin} (admin)`, tone: "warn" },
+      { k: "Installs", v: "Your bun, cast, agent CLIs" },
+      { k: "Then", v: "Sign in to Claude" },
+      ...(r.adminOnline ? [] : [{ k: "Starts", v: `When ${r.admin}'s machine is back`, tone: "warn" as const }]),
+      { k: "To undo", v: "Leave · your files stay" },
+    ],
+    confirm: `Join as ${r.linuxUser}`,
+    keep: "Cancel",
   };
 }

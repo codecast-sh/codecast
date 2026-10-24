@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  formatFailingChecksPrompt,
   buildPrTimeline,
   checkOutcome,
   compareChecks,
@@ -220,5 +221,21 @@ describe("a review is said once", () => {
     expect(withRows.map((i) => i.key)).toEqual(["r:r1", "e:e2"]);
     const withoutRows = buildPrTimeline({ events, reviews: [], comments: [] });
     expect(withoutRows.map((i) => i.key)).toEqual(["e:e1", "e:e2"]);
+  });
+});
+
+describe("formatFailingChecksPrompt", () => {
+  it("names each failing check with the command that fetches its log", () => {
+    const text = formatFailingChecksPrompt(
+      { repository: "codecast-sh/codecast", number: 12, head_ref: "fix-ci", head_sha: "abcdef1234" },
+      [
+        { name: "test", status: "completed", conclusion: "failure", url: "https://github.com/codecast-sh/codecast/actions/runs/991/job/7", updated_at: 1 },
+        { name: "vercel", status: "failure", url: "https://vercel.com/x", updated_at: 1 },
+      ],
+    );
+    expect(text).toContain("2 checks are failing on codecast-sh/codecast#12 (fix-ci at abcdef1)");
+    expect(text).toContain("gh run view 991 --repo codecast-sh/codecast --log-failed");
+    expect(text).toContain("details: https://vercel.com/x");
+    expect(text).toContain("gh pr checks 12 --repo codecast-sh/codecast");
   });
 });

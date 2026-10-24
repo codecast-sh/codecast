@@ -4,9 +4,9 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser } from "./lib/auth";
-import { normalizeRepository } from "./lib/gitRefs";
+import { commitRecordedBy, isConversationLinkable, normalizeRepository } from "./lib/gitRefs";
 import { patchPullRequest } from "./prShepherd";
-import { pullRequestsLinkedToConversation, syncPullRequestSessions } from "./lib/prSessions";
+import { linkPullRequestSessions, pullRequestsLinkedToConversation, syncPullRequestSessions } from "./lib/prSessions";
 import {
   canAccessConversation,
   canAccessPullRequest,
@@ -197,37 +197,37 @@ export const syncPRFromGitHub = internalMutation({
   },
 });
 
+// A pull request carries at most this many commits' worth of session lookups.
+const COMMIT_LINK_CAP = 100;
+
+/**
+ * Link, at the committed tier, every session whose own commit is on the pull
+ * request: the session whose edit row names the sha, else the one the commit
+ * row was attributed to. Only sessions the pull request may show are linked,
+ * by the same rule a branch match uses (lib/gitRefs.isConversationLinkable).
+ */
+async function linkCommittingSessions(ctx: any, prId: Id<"pull_requests">, shas: string[]): Promise<Id<"conversations">[]> {
+  const pr = await ctx.db.get(prId);
+  if (!pr) throw new Error(`PR with id ${prId} not found`);
+  const authorId = await resolveActorUserIdForTeam(ctx, pr.team_id, pr.author_github_username);
+  const found = new Map<string, Id<"conversations">>();
+  for (const sha of shas.slice(0, COMMIT_LINK_CAP)) {
+    const commit = await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.eq("sha", sha)).first();
+    const id = (await commitRecordedBy(ctx, sha)) ?? commit?.conversation_id;
+    if (!id || found.has(String(id))) continue;
+    const conv = await ctx.db.get(id);
+    if (conv && (await isConversationLinkable(ctx, conv, { userId: authorId, teamId: pr.team_id }))) found.set(String(id), id);
+  }
+  const after = await linkPullRequestSessions(ctx, prId, [...found.values()], "committed");
+  return after?.linked_session_ids ?? pr.linked_session_ids;
+}
+
 export const linkPRToSession = internalMutation({
   args: {
     pr_id: v.id("pull_requests"),
     commit_shas: v.array(v.string()),
   },
-  handler: async (ctx, args) => {
-    const pr = await ctx.db.get(args.pr_id);
-    if (!pr) {
-      throw new Error(`PR with id ${args.pr_id} not found`);
-    }
-
-    const sessionIds = new Set(pr.linked_session_ids);
-
-    for (const sha of args.commit_shas) {
-      const commit = await ctx.db
-        .query("commits")
-        .withIndex("by_sha", (q) => q.eq("sha", sha))
-        .first();
-
-      if (commit?.conversation_id) {
-        sessionIds.add(commit.conversation_id);
-      }
-    }
-
-    await ctx.db.patch(args.pr_id, {
-      linked_session_ids: Array.from(sessionIds),
-    });
-    await syncPullRequestSessions(ctx, (await ctx.db.get(args.pr_id))!);
-
-    return Array.from(sessionIds);
-  },
+  handler: async (ctx, args) => linkCommittingSessions(ctx, args.pr_id, args.commit_shas),
 });
 
 export const listPRsForTeam = query({
@@ -345,6 +345,7 @@ export const updatePRCommits = internalMutation({
     const pr = await ctx.db.get(args.pr_id);
     if (!pr) return;
     await ctx.db.patch(args.pr_id, { commits: args.commits, commits_count: args.commits.length });
+    await linkCommittingSessions(ctx, args.pr_id, args.commits.map((c) => c.sha));
   },
 });
 

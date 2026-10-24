@@ -119,8 +119,6 @@ const RepoPulls = lazy(() => import("@/app/repo/[owner]/[name]/pulls/page"));
 const RepoSessions = lazy(() => import("@/app/repo/[owner]/[name]/sessions/page"));
 const RepoSearch = lazy(() => import("@/app/repo/[owner]/[name]/search/page"));
 const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
-const ReviewView = lazy(() => import("@/app/review/[id]/page"));
-const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
 const Docs = lazy(() => import("@/app/docs/page"));
 const Capabilities = lazy(() => import("@/app/capabilities/page"));
@@ -435,8 +433,6 @@ export function App() {
             <Route path="commit/:owner/:repo/:sha" element={<E name="CommitView"><CommitView /></E>} />
             <Route path="pr/:owner/:repo/:number" element={<E name="PrView"><PrView /></E>} />
             <Route path="pr/:owner/:repo/:number/:view" element={<E name="PrView"><PrView /></E>} />
-            <Route path="review/:id" element={<E name="ReviewView"><ReviewView /></E>} />
-            <Route path="review/batch" element={<E name="ReviewBatch"><ReviewBatch /></E>} />
 
             {/* The windows with no background: the palette card, and the voice
                 window, whose float is the row of people's faces over the work.

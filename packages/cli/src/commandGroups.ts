@@ -137,6 +137,25 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     load: () => import("./hosts/cli.js").then((m) => m.registerHostsCommand),
   },
   {
+    token: "devices",
+    aliases: ["machines"],
+    description: `Your machines and your team's: who can use them, their versions, settings and keys
+
+  cast devices                          every machine of yours and every team machine opened to you
+  cast devices show <device>            one machine: version, sharing, settings, keys, repos
+  cast devices share <device> [team]    let a team start sessions on it (they run as you); unshare closes it
+  cast devices update <device>|--all    update codecast there now
+  cast devices rm <device>|--stale      clear offline machines from the list
+  cast devices set <device> hooks off   a snippet or machine setting; stable solo|team|off
+  cast devices key <device> set <provider>        a provider key, sealed to that machine
+  cast devices login <device> <provider> [--start] a cloud agent sign-in there
+  cast devices setup <device> browser|computer    agent tool setup there
+  cast devices ssh-host <device> <host> how attach commands reach it
+
+A device is an id prefix or part of its name. Cloud instances themselves: cast hosts.`,
+    load: () => import("./devices/command.js").then((m) => m.registerDevicesCommand),
+  },
+  {
     token: "publish",
     args: ["[target]","[args...]"],
     hasOptions: true,
@@ -399,6 +418,8 @@ Subcommands:
   cast pr resolve <thread> [ref] Settle a thread (unresolve reopens it)
   cast pr review [ref] --approve Approve, request changes, or just comment
   cast pr merge [ref]            Merge it (--squash by default)
+  cast pr auto-merge [ref]       Merge once checks pass (--off to cancel)
+  cast pr update-branch [ref]    Merge the base branch into it
   cast pr close [ref]            Close it without merging`,
     load: () => import("./prCommand.js").then((m) => m.registerPrCommand),
   },
@@ -481,6 +502,31 @@ host and token: cast integrations connect <provider>`,
   cast connector do <source> <action> [--arg k=v] [--yes] [--idempotency-key k]
   cast connector grant|revoke <source> <action>   (a person grants in the browser; this prints where)`,
     load: () => import("./connectorCommand.js").then((m) => m.registerConnectorCommand),
+  },
+  {
+    token: "vault",
+    aliases: ["secrets"],
+    args: ["[args...]"],
+    description: `The team's keys, logins, files and saved sign-ins, for agents. Values never go in argv, chat or your own output
+
+  cast vault [ls --stale]                     every secret, open requests first (--json)
+  cast vault run stripe-test -- npm test      the command gets STRIPE_TEST (or the secret's --env names)
+  cast vault run -- npm test                  every var this repo's [vault] in .codecast/workspace.toml maps
+  cast vault run --env-file .env.vault -- …   an env file's vault://<name> values filled in
+  cast vault get stripe-test                  the raw value on stdout, for a pipe or < <(…), never $(…)
+  eval "$(cast vault env stripe-test)"        export lines
+  cast vault otp github-bot                   a login's current 2FA code
+  cast vault request stripe-test --why "…"    ask a person; a message arrives when it is filled
+  cast vault add|rotate|fill <name>           store a value from a hidden prompt, stdin, --file or --from-env
+  cast vault save-signin vercel.com           save the agent browser's sign-in; cast browser open loads it
+  cast vault show|rm <name>                   details and recent use; delete
+  cast vault restore <name> [number]          list, or put back, a value rotate replaced in the last 7 days
+  cast vault ask-first <name> on              each session's first read waits on a person's approval
+
+Exit 3 from get, run, env or otp: an Ask first secret waits on a person. Nothing was read; stderr names the decision.
+Missing a credential? Request it, never ask for it in chat. Prefer run over get.
+Local markdown folders moved to cast files.`,
+    load: () => import("./secrets/command.js").then((m) => m.registerVaultCommand),
   },
   {
     token: "switch",

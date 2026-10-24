@@ -519,3 +519,34 @@ export function parseDiffHash(hash: string | null | undefined): DiffTarget | nul
   if (first !== second) anchor.lineEnd = Math.max(first, second);
   return { file: match[1], anchor };
 }
+
+/** The Actions run a check belongs to, from its GitHub URL (…/actions/runs/<id>/job/<id>). */
+export function checkRunId(url: string | undefined): string | undefined {
+  return url?.match(/\/actions\/runs\/(\d+)/)?.[1];
+}
+
+/**
+ * The message that hands failing checks to an agent: which checks failed on
+ * which head, and the commands that fetch their logs, so the agent reads the
+ * failure instead of guessing at it.
+ */
+export function formatFailingChecksPrompt(
+  pr: { repository: string; number: number; head_ref?: string; head_sha?: string },
+  checks: PrCheck[],
+): string {
+  const repo = `--repo ${pr.repository}`;
+  const where = [pr.head_ref, pr.head_sha?.slice(0, 7)].filter(Boolean).join(" at ");
+  const lines = [
+    `${checks.length === 1 ? "A check is" : `${checks.length} checks are`} failing on ${pr.repository}#${pr.number}${where ? ` (${where})` : ""}. Read the logs, find the cause, fix it, and push to ${pr.head_ref ?? "the pull request's branch"}.`,
+    "",
+  ];
+  for (const check of checks) {
+    const run = checkRunId(check.url);
+    const status = (check.conclusion || check.status || "").replace(/_/g, " ");
+    lines.push(`- ${checkLabel(check)}${status ? ` (${status})` : ""}`);
+    if (run) lines.push(`  logs: gh run view ${run} ${repo} --log-failed`);
+    else if (check.url) lines.push(`  details: ${check.url}`);
+  }
+  lines.push("", `All checks on the pull request: gh pr checks ${pr.number} ${repo}`);
+  return lines.join("\n");
+}

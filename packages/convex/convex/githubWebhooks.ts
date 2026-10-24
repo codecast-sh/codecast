@@ -41,6 +41,7 @@ import {
 import {
   type CheckEntry,
   GITHUB_ACTIONS_APP,
+  commitRecordedBy,
   commitUrl,
   conversationFromSessionTrailer,
   linkableSessionsOnBranch,
@@ -53,6 +54,7 @@ import {
   resolveTaskLinksFromText,
   shortSha,
 } from "./lib/gitRefs";
+import { committedSessionIds } from "./lib/prSessions";
 import { anchorFromDiffHunk } from "@codecast/shared/comments";
 
 const MERGE_STATE_DELAY_MS = 15 * 1000;
@@ -729,6 +731,7 @@ export const processPRMetaEvent = internalMutation({
       base_ref: prPayload.base?.ref,
       requested_reviewers: requested,
       ...prMetadataFrom(prPayload),
+      auto_merge: autoMergeFrom(prPayload),
       task_ids: links.task_ids.length ? links.task_ids : existing.task_ids,
     };
     if (action === "reopened") {
@@ -761,6 +764,8 @@ export const processPRMetaEvent = internalMutation({
       : action === "review_request_removed" ? `Review request withdrawn on PR #${pr.number}`
       : action === "labeled" ? `PR #${pr.number} labeled ${labelName ?? ""}`.trim()
       : action === "unlabeled" ? `Label ${labelName ?? ""} removed from PR #${pr.number}`.replace("  ", " ")
+      : action === "auto_merge_enabled" ? `Auto-merge turned on for PR #${pr.number}`
+      : action === "auto_merge_disabled" ? `Auto-merge turned off for PR #${pr.number}`
       : action === "assigned" ? `PR #${pr.number} assigned to ${assigneeLogin ?? "someone"}`
       : action === "unassigned" ? `${assigneeLogin ?? "Someone"} unassigned from PR #${pr.number}`
       : `PR #${pr.number} edited`;
@@ -807,6 +812,13 @@ export function mapReviewState(state: string | undefined): "approved" | "changes
   if (normalized === "changes_requested") return "changes_requested";
   if (normalized === "dismissed") return "dismissed";
   return "commented";
+}
+
+/** GitHub's auto-merge request on a pull request payload, in the row's shape. */
+export function autoMergeFrom(prPayload: any): { merge_method?: string; enabled_by?: string } | null {
+  const auto = prPayload?.auto_merge;
+  if (!auto) return null;
+  return { merge_method: auto.merge_method ?? undefined, enabled_by: auto.enabled_by?.login ?? undefined };
 }
 
 /** GitHub's labels and assignees on a pull request payload, in the row's shape. */
@@ -1460,15 +1472,7 @@ export const processStatusEvent = internalMutation({
 
 // ── Pushes and commits ──
 
-/** The session whose own edit row names this sha: the strong evidence. */
-export async function commitRecordedBy(ctx: { db: any }, sha: string): Promise<Id<"conversations"> | undefined> {
-  const prefix = sha.slice(0, 7);
-  const candidates = await ctx.db
-    .query("file_changes")
-    .withIndex("by_commit_hash", (q: any) => q.gte("commit_hash", prefix).lte("commit_hash", sha))
-    .take(50);
-  return candidates.find((row: any) => row.commit_hash && sha.startsWith(row.commit_hash))?.conversation_id;
-}
+export { commitRecordedBy };
 
 /**
  * The session that wrote a commit.
@@ -1840,17 +1844,20 @@ const COMMON_BRANCHES = new Set(["main", "master", "develop", "trunk"]);
  * can appear. A session whose git remote names this repository is real
  * evidence and wins; without one, only an unusual branch name is trusted.
  */
-function chooseShepherdConversation(
+export function chooseShepherdConversation(
   conversations: Doc<"conversations">[],
   repository: string,
   headRef: string,
+  committed: Doc<"conversations">[] = [],
 ): Doc<"conversations"> | undefined {
+  const newest = (pool: Doc<"conversations">[]) => [...pool].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
+  // A session whose own commit is on the pull request outranks every branch match.
+  if (committed.length) return newest(committed);
   const repoName = repository.split("/")[1] ?? repository;
   const byRepo = conversations.filter(
     (c) => c.git_remote_url && (c.git_remote_url.includes(repository) || c.git_remote_url.includes(repoName)),
   );
-  const pool = byRepo.length ? byRepo : COMMON_BRANCHES.has(headRef) ? [] : conversations;
-  return [...pool].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))[0];
+  return newest(byRepo.length ? byRepo : COMMON_BRANCHES.has(headRef) ? [] : conversations);
 }
 
 export const matchPRToConversation = internalMutation({
@@ -1913,8 +1920,20 @@ export const matchPRToConversation = internalMutation({
       }
     }
 
+    // GitHub redelivers, and a reopened pull request arrives as `opened` again.
+    const existing = await ctx.db
+      .query("pull_requests")
+      .withIndex("by_github_pr_id", (q) => q.eq("github_pr_id", args.github_pr_id))
+      .first();
+
+    // The branch scan only observes; a committed link from an earlier sync
+    // stays (lib/prSessions), and it is the shepherd's first choice.
+    const committedIds = existing ? await committedSessionIds(ctx, existing._id) : [];
+    const committed = (await Promise.all(committedIds.map((id) => ctx.db.get(id)))).filter((c): c is Doc<"conversations"> => !!c);
+    const linkedIds = [...new Map([...conversations, ...committed].map((c) => [String(c._id), c._id])).values()];
+
     const links = await resolveTaskLinksFromText(ctx, args.title, args.body, args.head_ref);
-    const shepherd = chooseShepherdConversation(conversations, args.repository, args.head_ref);
+    const shepherd = chooseShepherdConversation(conversations, args.repository, args.head_ref, committed);
 
     const fields = {
       team_id: teamId,
@@ -1935,15 +1954,9 @@ export const matchPRToConversation = internalMutation({
       labels: args.labels,
       assignees: args.assignees,
       task_ids: links.task_ids.length ? links.task_ids : undefined,
-      linked_session_ids: conversations.map((c) => c._id),
+      linked_session_ids: linkedIds,
       updated_at: args.updated_at,
     };
-
-    // GitHub redelivers, and a reopened pull request arrives as `opened` again.
-    const existing = await ctx.db
-      .query("pull_requests")
-      .withIndex("by_github_pr_id", (q) => q.eq("github_pr_id", args.github_pr_id))
-      .first();
 
     let prId: Id<"pull_requests">;
     if (existing) {
@@ -2060,6 +2073,15 @@ export const postPRCommentIfNeeded = internalMutation({
   },
 });
 
+const COMMENT_HANDLERS: Record<string, (ctx: any, payload: any) => Promise<boolean>> = {
+  "pull_request_review_comment.created": ingestReviewComment,
+  "pull_request_review_comment.edited": handleReviewCommentEdited,
+  "pull_request_review_comment.deleted": handleReviewCommentDeleted,
+  "issue_comment.created": handleIssueCommentCreated,
+  "issue_comment.edited": handleIssueCommentEdited,
+  "issue_comment.deleted": handleIssueCommentDeleted,
+};
+
 /**
  * Catch-up sweep for stored deliveries the immediate processors missed (a
  * scheduler drop, a deploy mid-flight) and for the kinds that only ever ran
@@ -2090,28 +2112,21 @@ export const processCommentWebhooks = internalMutation({
         }
 
         const payload = JSON.parse(event.payload);
-        let processed = false;
-
-        if (event.event_type === "pull_request_review_comment" && event.action === "created") {
-          processed = await ingestReviewComment(ctx, payload);
-        } else if (event.event_type === "pull_request_review_comment" && event.action === "edited") {
-          processed = await handleReviewCommentEdited(ctx, payload);
-        } else if (event.event_type === "pull_request_review_comment" && event.action === "deleted") {
-          processed = await handleReviewCommentDeleted(ctx, payload);
-        } else if (event.event_type === "issue_comment" && event.action === "created") {
-          processed = await handleIssueCommentCreated(ctx, payload);
-        } else if (event.event_type === "issue_comment" && event.action === "edited") {
-          processed = await handleIssueCommentEdited(ctx, payload);
-        } else if (event.event_type === "issue_comment" && event.action === "deleted") {
-          processed = await handleIssueCommentDeleted(ctx, payload);
-        }
-
-        if (processed) {
-          await ctx.db.patch(event._id, { processed: true });
-          results.push({ event_id: event._id, status: "processed" });
-        } else {
+        const handler = COMMENT_HANDLERS[`${event.event_type}.${event.action}`];
+        // Other handled kinds are flipped by their own processors.
+        if (!handler) {
           results.push({ event_id: event._id, status: "skipped" });
+          continue;
         }
+
+        // A comment delivery is done once handled, whether or not it changed a
+        // row: an untracked pull request, our own echo, or an edit to a comment
+        // never stored stays that way on every retry. Left unprocessed, such
+        // rows filled the head of by_processed (a bot editing its PR comments,
+        // 2026-10-16) and this sweep never reached a comment behind them.
+        const applied = await handler(ctx, payload);
+        await ctx.db.patch(event._id, { processed: true });
+        results.push({ event_id: event._id, status: applied ? "processed" : "no-op" });
       } catch (error) {
         results.push({
           event_id: event._id,
@@ -2248,23 +2263,39 @@ async function handleIssueCommentDeleted(ctx: any, payload: any): Promise<boolea
 // unprocessed queues (by_processed, by_ci_pending), which drain within
 // minutes. Nothing pruned them, so every delivery stayed forever: 2.9M rows and
 // 63 GB of Postgres on 2026-10-22, about 160k more a day (ct-60898). A page
-// at a time, paced, so the backlog drains over about a day without crowding
-// live writes.
+// at a time, paced, so the backlog drains without crowding live writes.
+//
+// Each page starts after the last one it deleted (`after`). Restarting the
+// range from the beginning walks every row the earlier pages deleted, whose
+// index entries Convex keeps until its retention removes them: 1,900 pages in,
+// that walk read nothing and timed out ("too many system operations"),
+// stopping the chain on 2026-10-23. The hourly cron starts a chain only when
+// none is running (a drain marker, renewed by every page), so one that stopped
+// starts again within the hour and a live one is left alone.
 export const WEBHOOK_EVENT_RETENTION_MS = 7 * 24 * 3600_000;
 const WEBHOOK_EVENT_PRUNE_PAGE = 200;
 const WEBHOOK_EVENT_PRUNE_PACE_MS = 5_000;
+const WEBHOOK_EVENT_PRUNE_KEY = "github-webhook-events-prune";
+const WEBHOOK_EVENT_PRUNE_STALE_MS = 10 * 60_000;
 
 export const pruneWebhookEvents = internalMutation({
-  args: {},
-  handler: async (ctx) => {
+  args: { after: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    if (args.after === undefined && !(await claimDrain(ctx, WEBHOOK_EVENT_PRUNE_KEY, { staleMs: WEBHOOK_EVENT_PRUNE_STALE_MS }))) return 0;
     const cutoff = Date.now() - WEBHOOK_EVENT_RETENTION_MS;
     const old = await ctx.db
       .query("github_webhook_events")
-      .withIndex("by_creation_time", (q) => q.lt("_creationTime", cutoff))
+      .withIndex("by_creation_time", (q) =>
+        args.after === undefined ? q.lt("_creationTime", cutoff) : q.gt("_creationTime", args.after).lt("_creationTime", cutoff))
       .take(WEBHOOK_EVENT_PRUNE_PAGE);
     for (const row of old) await ctx.db.delete(row._id);
     if (old.length === WEBHOOK_EVENT_PRUNE_PAGE) {
-      await ctx.scheduler.runAfter(WEBHOOK_EVENT_PRUNE_PACE_MS, internal.githubWebhooks.pruneWebhookEvents, {});
+      await ctx.scheduler.runAfter(WEBHOOK_EVENT_PRUNE_PACE_MS, internal.githubWebhooks.pruneWebhookEvents, {
+        after: old[old.length - 1]._creationTime,
+      });
+      await renewDrain(ctx, WEBHOOK_EVENT_PRUNE_KEY);
+    } else {
+      await releaseDrain(ctx, WEBHOOK_EVENT_PRUNE_KEY);
     }
     return old.length;
   },

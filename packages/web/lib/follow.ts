@@ -46,7 +46,6 @@ export type FollowPlan =
 export const FOLLOW_SCROLL_REGIONS = {
   doc: "a doc's body (DocumentDetailLayout)",
   task: "a task page's body",
-  review: "a review's file list and diff (ReviewView)",
   pr: "a pull request page (app/pr)",
   commit: "a commit page (app/commit)",
   "diff-pane": "a conversation's diff pane, one file or all of them (FileDiffLayout)",

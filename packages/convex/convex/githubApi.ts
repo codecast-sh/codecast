@@ -293,13 +293,16 @@ export const mergePullRequest = internalAction({
     github_access_token: v.string(),
     delete_branch: v.optional(v.boolean()),
     head_ref: v.optional(v.string()),
+    // The head the person looked at. GitHub refuses the merge (409) when the
+    // branch has moved since, so a push that lands mid-review is never merged unseen.
+    expected_head_sha: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ merged: boolean; sha?: string; message?: string; branch_deleted: boolean }> => {
     const [owner, repo] = splitRepository(args.repository);
     const data = await githubFetch(
       `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/merge`,
       args.github_access_token,
-      { method: "PUT", body: { merge_method: args.method } },
+      { method: "PUT", body: { merge_method: args.method, ...(args.expected_head_sha ? { sha: args.expected_head_sha } : {}) } },
     );
 
     // Deleting the branch is a courtesy after the merge, never the point of it:
@@ -320,6 +323,72 @@ export const mergePullRequest = internalAction({
     }
 
     return { merged: !!data.merged, sha: data.sha, message: data.message, branch_deleted: branchDeleted };
+  },
+});
+
+/**
+ * Turn GitHub's auto-merge on or off. On, GitHub merges the pull request by
+ * `method` once its required checks and reviews pass; `expected_head_sha`
+ * makes GitHub refuse if the branch has moved. GraphQL only, keyed by node id.
+ */
+export const setAutoMerge = internalAction({
+  args: {
+    repository: v.string(),
+    pr_number: v.number(),
+    enabled: v.boolean(),
+    method: v.optional(v.union(v.literal("merge"), v.literal("squash"), v.literal("rebase"))),
+    expected_head_sha: v.optional(v.string()),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args): Promise<{ auto_merge: boolean }> => {
+    const [owner, name] = splitRepository(args.repository);
+    const { data } = await ghGraphQL(
+      `query($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) { pullRequest(number: $number) { id } }
+      }`,
+      { owner, name, number: args.pr_number },
+      args.github_access_token,
+    );
+    const id = data?.repository?.pullRequest?.id;
+    if (!id) throw new Error(`Pull request ${args.repository}#${args.pr_number} not found`);
+    if (args.enabled) {
+      await ghGraphQL(
+        `mutation($id: ID!, $method: PullRequestMergeMethod, $head: GitObjectID) {
+          enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method, expectedHeadOid: $head }) { pullRequest { id } }
+        }`,
+        { id, method: (args.method ?? "squash").toUpperCase(), head: args.expected_head_sha ?? null },
+        args.github_access_token,
+      );
+    } else {
+      await ghGraphQL(
+        `mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { pullRequest { id } } }`,
+        { id },
+        args.github_access_token,
+      );
+    }
+    return { auto_merge: args.enabled };
+  },
+});
+
+/**
+ * Bring the base branch into the pull request's branch with a merge commit.
+ * GitHub refuses (422) when the head is no longer `expected_head_sha`.
+ */
+export const updatePullRequestBranch = internalAction({
+  args: {
+    repository: v.string(),
+    pr_number: v.number(),
+    expected_head_sha: v.optional(v.string()),
+    github_access_token: v.string(),
+  },
+  handler: async (_ctx, args): Promise<{ message?: string }> => {
+    const [owner, repo] = splitRepository(args.repository);
+    const data = await githubFetch(
+      `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/update-branch`,
+      args.github_access_token,
+      { method: "PUT", body: args.expected_head_sha ? { expected_head_sha: args.expected_head_sha } : {} },
+    );
+    return { message: data?.message };
   },
 });
 

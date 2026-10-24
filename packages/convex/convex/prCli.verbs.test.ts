@@ -3,7 +3,7 @@
 // words when it refuses. The web page and `cast pr` both call these.
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { close, draft, edit, merge, reopen, reviewers, review } from "./prCli";
+import { autoMerge, close, draft, edit, merge, reopen, reviewers, review, updateBranch } from "./prCli";
 
 function harness(actor: any, answer: any = {}) {
   const calls: Array<{ name: string; args: any }> = [];
@@ -65,6 +65,27 @@ describe("pull request verbs", () => {
     const { ctx } = harness(withToken, () => { throw new Error("Uncaught Error: Pull Request is not mergeable\n    at handler"); });
     const out = await (merge as any)._handler(ctx, { number: 12 });
     expect(out).toEqual({ error: "Pull Request is not mergeable" });
+  });
+
+  test("merge, auto-merge and update branch carry the head the person looked at", async () => {
+    const { ctx, calls } = harness(withToken, { merged: true, auto_merge: true });
+    await (merge as any)._handler(ctx, { number: 12, method: "rebase", expected_head_sha: "abc" });
+    await (autoMerge as any)._handler(ctx, { number: 12, enabled: true, expected_head_sha: "abc" });
+    await (autoMerge as any)._handler(ctx, { number: 12, enabled: false, expected_head_sha: "abc" });
+    await (updateBranch as any)._handler(ctx, { number: 12, expected_head_sha: "abc" });
+    expect(calls.map((c) => c.name.split(":")[1])).toEqual(["mergePullRequest", "setAutoMerge", "setAutoMerge", "updatePullRequestBranch"]);
+    expect(calls[0].args).toMatchObject({ method: "rebase", expected_head_sha: "abc" });
+    expect(calls[1].args).toMatchObject({ enabled: true, expected_head_sha: "abc" });
+    // Turning auto-merge off needs no guard: it can only make the branch safer.
+    expect(calls[2].args.expected_head_sha).toBeUndefined();
+    expect(calls[3].args).toMatchObject({ expected_head_sha: "abc", github_access_token: "user_tok" });
+  });
+
+  test("merge refuses a pull request that is not open before touching GitHub", async () => {
+    const { ctx, calls } = harness({ ...withToken, pr: { ...openPr, state: "merged" } });
+    expect((await (merge as any)._handler(ctx, { number: 12 })).error).toMatch(/is merged, not open/);
+    expect((await (updateBranch as any)._handler(ctx, { number: 12 })).error).toMatch(/is merged, not open/);
+    expect(calls).toEqual([]);
   });
 
   test("a review must go out as the person, never as the app", async () => {

@@ -253,8 +253,6 @@ const RepoSearch = lazy(() => import("@/app/repo/[owner]/[name]/search/page"));
 // Code review
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
 const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
-const ReviewView = lazy(() => import("@/app/review/[id]/page"));
-const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
 // Palette
 const Palette = lazy(() => import("@/app/palette/page"));
@@ -504,8 +502,6 @@ export const ROUTES: RouteEntry[] = [
   { path: "commit/:owner/:repo/:sha", component: cast(CommitView), layout: "codeReview", tab: "/commit/:owner/:repo/:sha", fullWidth: true },
   { path: "pr/:owner/:repo/:number", component: cast(PrView), layout: "codeReview", tab: "/pr/:owner/:repo/:number", fullWidth: true },
   { path: "pr/:owner/:repo/:number/:view", component: cast(PrView), layout: "codeReview", tab: "/pr/:owner/:repo/:number/:view", fullWidth: true },
-  { path: "review/:id", component: cast(ReviewView), layout: "codeReview" },
-  { path: "review/batch", component: cast(ReviewBatch), layout: "codeReview" },
 
   // -- Palette (TransparentWindowLayout) --
   { path: "palette", component: cast(Palette), layout: "palette" },

@@ -121,6 +121,16 @@ export async function linkableSessionsOnBranch(ctx: Db, branch: string, scope: L
 
 // ── The session a commit names ──
 
+/** The session whose own edit row names this sha: the strong evidence. */
+export async function commitRecordedBy(ctx: Db, sha: string): Promise<Id<"conversations"> | undefined> {
+  const prefix = sha.slice(0, 7);
+  const candidates = await ctx.db
+    .query("file_changes")
+    .withIndex("by_commit_hash", (q: any) => q.gte("commit_hash", prefix).lte("commit_hash", sha))
+    .take(50);
+  return candidates.find((row: any) => row.commit_hash && sha.startsWith(row.commit_hash))?.conversation_id;
+}
+
 export { extractSessionTrailer };
 
 /**

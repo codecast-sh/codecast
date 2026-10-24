@@ -249,6 +249,7 @@ async function fullRow(ctx: any, pr: PR) {
     author_github_username: pr.author_github_username ?? null,
     behind_by: pr.behind_by ?? null,
     mergeable: pr.mergeable ?? null,
+    auto_merge: pr.auto_merge ?? null,
     checks: pr.checks ?? [],
     requested_reviewers: pr.requested_reviewers ?? [],
     additions: pr.additions ?? null,
@@ -718,31 +719,16 @@ async function operationToken(
 const NO_TOKEN =
   "No GitHub token to act with: this account has not connected GitHub and the repository has no codecast installation.";
 
+// What a merge-like verb may carry: the head the person looked at. GitHub
+// refuses when the branch has moved since, so a push that lands while they
+// read is never merged, queued or updated unseen.
+const headGuard = { expected_head_sha: v.optional(v.string()) };
+const mergeMethod = v.optional(v.union(v.literal("merge"), v.literal("squash"), v.literal("rebase")));
+
 export const merge = action({
-  args: {
-    api_token: v.optional(v.string()),
-    ...locatorArgs,
-    method: v.optional(v.union(v.literal("merge"), v.literal("squash"), v.literal("rebase"))),
-    delete_branch: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args): Promise<any> => {
-    const actor: any = await ctx.runQuery(internal.prCli.actorFor, {
-      api_token: args.api_token,
-      ref: args.ref,
-      repository: args.repository,
-      number: args.number,
-      session: args.session,
-      branch: args.branch,
-    });
-    if (!actor) return { error: NO_MATCH };
-    if (actor.pr.state !== "open") {
-      return { error: `${actor.pr.repository}#${actor.pr.number} is already ${actor.pr.state}.` };
-    }
-
-    const acting = await operationToken(ctx, actor);
-    if (!acting) return { error: NO_TOKEN };
-
-    try {
+  args: { api_token: v.optional(v.string()), ...locatorArgs, ...headGuard, method: mergeMethod, delete_branch: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<any> =>
+    pullRequestVerb(ctx, args, { requireState: "open" }, async (actor, acting) => {
       const result: any = await ctx.runAction(internal.githubApi.mergePullRequest, {
         repository: actor.pr.repository,
         pr_number: actor.pr.number,
@@ -750,20 +736,42 @@ export const merge = action({
         github_access_token: acting.token,
         delete_branch: args.delete_branch,
         head_ref: actor.pr.head_ref ?? undefined,
+        expected_head_sha: args.expected_head_sha,
       });
-      return {
+      return { merged: result.merged, sha: result.sha, branch_deleted: result.branch_deleted, head_ref: actor.pr.head_ref };
+    }),
+});
+
+/** GitHub's auto-merge: on (merge by `method` once checks and reviews pass) or off. */
+export const autoMerge = action({
+  args: { api_token: v.optional(v.string()), ...locatorArgs, ...headGuard, enabled: v.boolean(), method: mergeMethod },
+  handler: async (ctx, args): Promise<any> =>
+    pullRequestVerb(ctx, args, { requireState: "open" }, async (actor, acting) => {
+      const result: any = await ctx.runAction(internal.githubApi.setAutoMerge, {
         repository: actor.pr.repository,
-        number: actor.pr.number,
-        merged: result.merged,
-        sha: result.sha,
-        branch_deleted: result.branch_deleted,
-        head_ref: actor.pr.head_ref,
-        as: acting.as,
-      };
-    } catch (error) {
-      return { error: failureText(error) };
-    }
-  },
+        pr_number: actor.pr.number,
+        enabled: args.enabled,
+        method: args.method,
+        expected_head_sha: args.enabled ? args.expected_head_sha : undefined,
+        github_access_token: acting.token,
+      });
+      return { auto_merge: result.auto_merge, method: args.enabled ? args.method ?? "squash" : undefined };
+    }),
+});
+
+/** Merge the base branch into the pull request's branch. */
+export const updateBranch = action({
+  args: { api_token: v.optional(v.string()), ...locatorArgs, ...headGuard },
+  handler: async (ctx, args): Promise<any> =>
+    pullRequestVerb(ctx, args, { requireState: "open" }, async (actor, acting) => {
+      const result: any = await ctx.runAction(internal.githubApi.updatePullRequestBranch, {
+        repository: actor.pr.repository,
+        pr_number: actor.pr.number,
+        expected_head_sha: args.expected_head_sha,
+        github_access_token: acting.token,
+      });
+      return { updated: true, message: result.message };
+    }),
 });
 
 /**
