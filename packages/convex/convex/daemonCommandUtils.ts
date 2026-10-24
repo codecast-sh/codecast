@@ -1,6 +1,6 @@
 import type { Doc, Id } from "./_generated/dataModel";
-import { localAgentTypeOf } from "@codecast/shared/contracts";
-import { resetConversationPendingMessages } from "./pendingMessages";
+import { ACTIVE_AGENT_STATUSES, MID_TURN_AGENT_STATUSES, localAgentTypeOf } from "@codecast/shared/contracts";
+import { enqueuePendingMessage, releaseQueuedForUser, resetConversationPendingMessages } from "./pendingMessages";
 import { parkOnCloudHost } from "./cloudPlacement";
 
 /**
@@ -220,6 +220,57 @@ export async function requireSessionCommandTarget(
     throw new Error("Not authorized");
   }
   return conv;
+}
+
+// An Escape for the session's daemon (cli/src/escapeInterrupt.ts decides
+// whether there is a turn to stop), routed to the owning device and bound to
+// the web's sessionCommands row by `request_id`, like sendEscapeToSession.
+// `release_queued` marks a "stop and send", whose daemon releases the queued
+// row itself when it finds no turn to stop.
+export async function insertEscapeCommand(
+  ctx: DbCtx,
+  conv: Doc<"conversations">,
+  args: { pressed_at?: number; request_id?: string; release_queued?: boolean },
+): Promise<void> {
+  await ctx.db.insert("daemon_commands", {
+    user_id: conv.user_id,
+    command: "escape",
+    ...(args.request_id !== undefined ? { request_id: args.request_id } : {}),
+    target_device_id: conv.owner_device_id ?? undefined,
+    args: JSON.stringify({
+      conversation_id: conv._id,
+      ...(args.pressed_at !== undefined ? { pressed_at: args.pressed_at } : {}),
+      ...(args.release_queued ? { release_queued: true } : {}),
+    }),
+    created_at: Date.now(),
+  });
+}
+
+// "Stop and send": the message waits in the session's queue for the end of
+// the turn, and the turn is told to stop, in one transaction so the Escape can
+// never run ahead of the row. The interrupted turn's settle releases the row
+// (managedSessions.applyAgentStatus). A session the server already sees at
+// rest has nothing to stop: the row goes now, as a plain send would.
+export async function stopAndSendForUser(
+  ctx: DbCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  content: string,
+  clientId: string,
+  pressedAt: number,
+  requestId?: string,
+): Promise<{ interrupted: boolean }> {
+  const conv = await requireSessionCommandTarget(ctx, userId, conversationId);
+  await enqueuePendingMessage(ctx, conv, userId, { content, client_id: clientId, human: true, queue: true });
+  const sessions: Array<{ agent_status?: string }> = await ctx.db.query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId)).collect();
+  const turnRunning = sessions.some((s) => ACTIVE_AGENT_STATUSES.has(s.agent_status ?? "") || MID_TURN_AGENT_STATUSES.has(s.agent_status ?? ""));
+  if (!turnRunning) {
+    await releaseQueuedForUser(ctx, userId, conversationId);
+    return { interrupted: false };
+  }
+  await insertEscapeCommand(ctx, conv, { pressed_at: pressedAt, request_id: requestId, release_queued: true });
+  return { interrupted: true };
 }
 
 /** Whether a person may send the session's commands: its runner or its second-party owner. */

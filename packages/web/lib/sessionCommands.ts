@@ -9,7 +9,7 @@ import { useInboxStore, type AccountSwitchArgs } from "../store/inboxStore";
 import { isParkedDispatchError, isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { MACHINE_SWITCH_TIMEOUT_MS } from "./machineAccountSwitch";
 
-export type SessionCommandKind = "restart" | "repair" | "move" | "switch" | "line_edit";
+export type SessionCommandKind = "restart" | "repair" | "move" | "switch" | "line_edit" | "interrupt";
 
 export type SessionCommandRow = {
   _id: string;
@@ -150,6 +150,33 @@ export function requestSessionRestart(conversationId: string, ghost?: Record<str
 /** The conversation's newest restart/repair row. */
 export function latestRestartRow(rows: Record<string, SessionCommandRow> | undefined | null, conversationId: string | undefined) {
   return conversationId ? latestSessionCommand(rows, (r) => r.conversation_id === conversationId && isRestartRow(r)) : undefined;
+}
+
+// ── Stops (Escape) ───────────────────────────────────────────────────────────
+
+// A stop no daemon has taken by now did not reach the agent: its machine is
+// asleep or offline, and the daemon drops a press older than a minute anyway
+// (cli/src/escapeInterrupt.ts), so it will not land late.
+export const INTERRUPT_ACK_MS = 30_000;
+// How long a verdict stays up. Past it the session's own status speaks again.
+export const INTERRUPT_VERDICT_LINGER_MS = 5 * 60_000;
+
+export function latestInterruptRow(rows: Record<string, SessionCommandRow> | undefined | null, conversationId: string | undefined) {
+  return conversationId ? latestSessionCommand(rows, (r) => r.conversation_id === conversationId && r.kind === "interrupt") : undefined;
+}
+
+/**
+ * What became of a stop, when it went wrong. "undelivered": no daemon took it
+ * in time (or took it too late to act); pressing again is the fix once the
+ * machine is back. "failed": the owning daemon found no agent to stop, so the
+ * session needs a restart. Null while it is in flight, after it landed, or
+ * once the verdict has lingered long enough.
+ */
+export function interruptVerdict(row: SessionCommandRow | undefined, now: number): "undelivered" | "failed" | null {
+  if (!row || now - row.requested_at >= INTERRUPT_VERDICT_LINGER_MS) return null;
+  if (row.result === DISPATCH_REFUSED || row.result === "escape_stale_press") return "undelivered";
+  if (row.executed_at) return row.error ? "failed" : null;
+  return now - row.requested_at >= INTERRUPT_ACK_MS ? "undelivered" : null;
 }
 
 // ── Device moves ─────────────────────────────────────────────────────────────

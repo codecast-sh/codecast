@@ -21,6 +21,7 @@ function sameTarget(prev: Record<string, any>, row: Record<string, any>): boolea
     return prev.kind === "line_edit" && prev.project_id === row.project_id && !!prev.executed_at
       && (prev.keys ?? []).every((k: string) => (row.keys ?? []).includes(k));
   }
-  if (row.conversation_id) return prev.conversation_id === row.conversation_id;
+  // A stop and a restart of one conversation are separate gestures; neither replaces the other.
+  if (row.conversation_id) return prev.conversation_id === row.conversation_id && (prev.kind === "interrupt") === (row.kind === "interrupt");
   return prev.kind === row.kind && prev.device_id === row.device_id;
 }

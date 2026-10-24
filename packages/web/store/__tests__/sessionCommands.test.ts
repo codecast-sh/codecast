@@ -7,7 +7,11 @@ import { useInboxStore } from "../inboxStore";
 import { applyDispatchFailure } from "../../lib/dispatchBinding";
 import {
   DISPATCH_REFUSED,
+  INTERRUPT_ACK_MS,
+  INTERRUPT_VERDICT_LINGER_MS,
   RESTART_GIVE_UP_AFTER_MS,
+  interruptVerdict,
+  latestInterruptRow,
   deviceMoveStatusOf,
   latestRestartRow,
   requestAccountSwitchCommand,
@@ -155,4 +159,38 @@ test("a refused account switch ends failed through the dispatch-failure path", a
   expect(switchPending(row, Date.now())).toBe(false);
   expect(machineSwitchStatus(row, {}, Date.now()).phase).toBe("failed");
   expect(store().lastDispatchFailure).toMatchObject({ action: "requestAccountSwitch" });
+});
+
+test("a stop paints its row with the press, keeps a restart's row, and judges what became of it", async () => {
+  dispatchWith(async () => ({}));
+  await requestSessionRestart(CONV, { session_id: "s" });
+  await store().sendEscape(CONV);
+  const stop = latestInterruptRow(store().sessionCommands, CONV)!;
+  expect(stop).toMatchObject({ conversation_id: CONV, command: "escape", kind: "interrupt", executed_at: null });
+  expect(latestRestartRow(store().sessionCommands, CONV)).toBeDefined();
+  const sent = calls.find((c) => c.action === "convCommand")!;
+  expect(sent.args.slice(0, 2)).toEqual([CONV, "sendEscapeToSession"]);
+  expect(sent.args[2]).toMatchObject({ request_id: stop._id });
+
+  const t = stop.requested_at;
+  expect(interruptVerdict(stop, t + INTERRUPT_ACK_MS - 1)).toBeNull();
+  expect(interruptVerdict(stop, t + INTERRUPT_ACK_MS)).toBe("undelivered");
+  expect(interruptVerdict(stop, t + INTERRUPT_VERDICT_LINGER_MS)).toBeNull();
+
+  const echo = (fields: Record<string, unknown>) => {
+    store().syncTable("sessionCommands", [{ _id: stop._id, command_id: "k", conversation_id: CONV, command: "escape", requested_at: t, executed_at: t + 1, result: null, error: null, ...fields }]);
+    return store().sessionCommands[stop._id] as any;
+  };
+  expect(interruptVerdict(echo({ result: "escape_sent" }), t + INTERRUPT_ACK_MS)).toBeNull();
+  expect(interruptVerdict(echo({ result: "escape_no_active_turn" }), t + INTERRUPT_ACK_MS)).toBeNull();
+  expect(interruptVerdict(echo({ result: "escape_stale_press" }), t + INTERRUPT_ACK_MS)).toBe("undelivered");
+  const failed = echo({ error: "No running process for session abc" });
+  expect(failed.kind).toBe("interrupt");
+  expect(interruptVerdict(failed, t + 2)).toBe("failed");
+
+  // Pressing again replaces the judged stop, never the restart.
+  await store().sendEscape(CONV);
+  expect(latestInterruptRow(store().sessionCommands, CONV)!._id).not.toBe(stop._id);
+  expect(store().sessionCommands[stop._id]).toBeUndefined();
+  expect(latestRestartRow(store().sessionCommands, CONV)).toBeDefined();
 });

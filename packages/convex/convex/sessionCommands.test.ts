@@ -3,7 +3,7 @@ import { hibernate, results } from "./sessionCommands";
 import { enqueueHibernateSession, enqueueResumeSession } from "./daemonCommandUtils";
 import { makeFakeDb } from "./testDb";
 import { normalizeWorkStateFilter } from "./inboxFilters";
-import { tallyInboxRows, computeInboxSessions, computeSessionsLiveness } from "./conversations";
+import { tallyInboxRows, computeInboxSessions, computeSessionsLiveness, sendEscapeToSession } from "./conversations";
 
 function fixture() {
   const db = makeFakeDb({
@@ -47,6 +47,17 @@ test("result feed reports actual request, skipped outcome and missing identity w
   Object.assign(f.db._tables.daemon_commands[0], { executed_at: 100, result: "skipped_attached", error: "not parked: attached" });
   expect((await read())[0]).toMatchObject({ executed_at: 100, result: "skipped_attached", error: "not parked: attached" });
   expect(await read()).toHaveLength(1);
+});
+
+test("a stop is routed to the owning device and its outcome reaches the result feed by request id", async () => {
+  const f = fixture();
+  await (sendEscapeToSession as any)._handler(f.ctx, { conversation_id: "conv", pressed_at: 50, request_id: "stop-1" });
+  expect(f.db._tables.daemon_commands[0]).toMatchObject({ command: "escape", request_id: "stop-1", target_device_id: "device", user_id: "owner" });
+  const read = () => (results as any)._handler(f.ctx, { request_ids: ["stop-1"] });
+  expect((await read())[0]).toMatchObject({ _id: "stop-1", conversation_id: "conv", executed_at: null });
+  Object.assign(f.db._tables.daemon_commands[0], { executed_at: 100, error: "No running process for session" });
+  expect((await read())[0]).toMatchObject({ executed_at: 100, error: "No running process for session" });
+  await expect((sendEscapeToSession as any)._handler(f.ctx, { conversation_id: "conv", request_id: "bad id!" })).rejects.toThrow("Invalid request ID");
 });
 
 test("wake uses exact runner session and owner device; dedup returns completion ID", async () => {

@@ -4,7 +4,8 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { makeCollectionSig } from "../store/wakeSig";
 import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
-import { conversationCommandRows, type SessionCommandRow } from "../lib/sessionCommands";
+import { useCoarseNow } from "./useCoarseNow";
+import { conversationCommandRows, interruptVerdict, latestInterruptRow, INTERRUPT_VERDICT_LINGER_MS, type SessionCommandRow } from "../lib/sessionCommands";
 
 // A row still waiting on its daemon, keyed by a request id (a row keyed by its
 // command id came from forConversation and is already the server's). A line
@@ -55,4 +56,15 @@ export function useConversationCommands(conversationId: string | undefined, acti
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [conversationId, sig],
   );
+}
+
+/**
+ * The verdict on this window's latest stop of a conversation (lib/sessionCommands
+ * interruptVerdict), with the row it judges. Ticks only while a stop is recent.
+ */
+export function useInterruptVerdict(conversationId: string | undefined) {
+  const row = useInboxStore((s) => latestInterruptRow(s.sessionCommands, conversationId));
+  const recent = !!row && Date.now() - row.requested_at < INTERRUPT_VERDICT_LINGER_MS;
+  const now = useCoarseNow(recent ? 5_000 : 60_000);
+  return { row, verdict: interruptVerdict(row, now) };
 }

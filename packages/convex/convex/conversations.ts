@@ -68,7 +68,7 @@ import { latestImagePreviewUrl, listConversationFileChanges } from "./messages";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
-import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId, stopAndSendForUser, insertEscapeCommand } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, localAgentTypeOf, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, THREAD_STATE_RESULT_MAX_CHARS, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, isHostedAgentType, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isOrphanOrSubagent, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
@@ -12652,13 +12652,9 @@ export const reconfigureSession = mutation({
     const daemonAgentType = fromConvexAgentType(updated.agent_type);
     // Re-derive the launch payload from the (possibly just-patched) stamps so
     // an agent flip alone re-launches with the conversation's chosen model.
-    const stampedModelKey = (() => {
-      if (args.model !== undefined) return launchModelOpt?.cliAlias ? launchModelOpt.key : undefined;
-      const m = updated.model as string | undefined;
-      if (!m) return undefined;
-      const key = modelAgentKey(daemonAgentType === "codex" ? "codex" : "claude_code") === "claude" && m.startsWith("claude-") ? m.slice("claude-".length) : m;
-      return launchCfg?.models.some((o) => o.key === key && o.cliAlias) ? key : undefined;
-    })();
+    const stampedModelKey = args.model !== undefined
+      ? (launchModelOpt?.cliAlias ? launchModelOpt.key : undefined)
+      : launchModelKeyOf(reconfAgent, updated.model);
     const launch = {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
@@ -12709,6 +12705,16 @@ export const reconfigureSession = mutation({
     });
   },
 });
+
+/** The launch option key a conversation's stamped model names ("claude-opus"
+ *  → "opus"), or undefined when the stamp is no launchable option and the
+ *  launch should fall back to the user's default. */
+export function launchModelKeyOf(agentType: string | null | undefined, model: string | null | undefined): string | undefined {
+  if (!model) return undefined;
+  const agentKey = modelAgentKey(agentType || "claude_code");
+  const key = agentKey === "claude" && model.startsWith("claude-") ? model.slice("claude-".length) : model;
+  return AGENT_MODEL_CONFIG[agentKey]?.models.some((o) => o.key === key && o.cliAlias) ? key : undefined;
+}
 
 const switchAgentType = v.union(
   v.literal("claude_code"),
@@ -13478,26 +13484,44 @@ export { requireSessionCommandTarget };
 // clock at the press: the daemon skips a press that predates a message it
 // delivered afterwards, so an Escape aimed at the previous turn cannot cancel
 // the one a queued message just started.
+//
+// `request_id` binds the row to the web's sessionCommands row for the press, so
+// a stop no daemon picks up, or one it could not deliver, shows in the header
+// (lib/sessionCommands interruptVerdict). Routed to the owning device like a
+// resume: on a broadcast row the first daemon to answer settles it, and a
+// machine without the session answers "No session found" while the owner
+// never sends the keys.
 export const sendEscapeToSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
     pressed_at: v.optional(v.number()),
+    request_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
+    if (args.request_id !== undefined) validateSessionCommandRequestId(args.request_id);
 
     const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
+    await insertEscapeCommand(ctx, conv, { pressed_at: args.pressed_at, request_id: args.request_id });
+  },
+});
 
-    await ctx.db.insert("daemon_commands", {
-      user_id: conv.user_id,
-      command: "escape",
-      args: JSON.stringify({
-        conversation_id: args.conversation_id,
-        ...(args.pressed_at !== undefined ? { pressed_at: args.pressed_at } : {}),
-      }),
-      created_at: Date.now(),
-    });
+// "Stop and send" (the composer's Stop & send): stop the running turn, then
+// deliver this message once the agent is at rest (stopAndSendForUser).
+export const stopAndSendToSession = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    content: v.string(),
+    client_id: v.string(),
+    pressed_at: v.number(),
+    request_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    if (args.request_id !== undefined) validateSessionCommandRequestId(args.request_id);
+    return await stopAndSendForUser(ctx, userId, args.conversation_id, args.content, args.client_id, args.pressed_at, args.request_id);
   },
 });
 
