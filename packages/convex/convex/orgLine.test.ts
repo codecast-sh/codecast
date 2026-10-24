@@ -570,6 +570,12 @@ describe("orgLine admission (LE6)", () => {
       expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_c0"]);
     });
 
+    test("a pool whose hosts offer no runs right now makes the run wait, never the runner's own machine", async () => {
+      const { ctx, tables } = fixtures({ role: caps({ hands_per_day: 100 }), extra: { initiatives, tasks: causes(3), devices: [laptop, host("h1", 0), host("h2", 0)] } });
+      expect((await sweepCore(ctx, NOW)).started).toHaveLength(0);
+      expect(tables.workflow_runs).toHaveLength(0);
+    });
+
     test("with no online host offering the checkout, the run stays on the runner's own machine and cap", async () => {
       for (const devices of [[laptop], [laptop, host("h1", 4, { line_slots: [] })], [laptop, host("h1", 4, { last_seen: NOW - 3_600_000 })], [{ ...laptop, git_plane: [] }, host("h1", 4)]]) {
         const { ctx, tables } = fixtures({ role: caps({ hands_per_day: 100 }), extra: { initiatives, tasks: causes(3), devices } });

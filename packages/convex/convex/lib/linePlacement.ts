@@ -63,7 +63,9 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
   const slots: LineSlot[] = [];
   for (const d of devices) {
     if (!isDeviceOnline(d, now)) continue;
-    const slot = (d.line_slots ?? []).find((s: any) => s.origin === origin && s.runs > 0);
+    // A slot with no runs (a spent account, a full disk) keeps its machine in the pool with no room, so the run waits
+    // for a slot instead of falling back to the runner's own machine (Oct 24: 7 of 10 runs landed on the laptop).
+    const slot = (d.line_slots ?? []).find((s: any) => s.origin === origin);
     if (!slot) continue;
     let working = 0;
     for (const status of WORKING_RUN_STATUSES) {

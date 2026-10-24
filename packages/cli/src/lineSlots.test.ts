@@ -10,8 +10,10 @@ describe("line slots", () => {
       .toEqual([{ root: "/home/ubuntu/union-mobile", origin: "github.com/union-ai/union-mobile", runs: 10 }]);
   });
 
-  test("skips entries without a root or a positive run count", () => {
-    expect(readLineSlots({ line: { checkouts: [{ root: "", runs: 3 }, { root: "/x", runs: 0 }] } }, originOf)).toEqual([]);
+  test("skips entries without a root or a run count; 0 runs stays in the pool with no room", () => {
+    expect(readLineSlots({ line: { checkouts: [{ root: "", runs: 3 }, { root: "/x", runs: -1 }, { root: "/y", runs: Number.NaN }] } }, originOf)).toEqual([]);
+    expect(readLineSlots({ line: { checkouts: [{ root: "/home/ubuntu/union-mobile", runs: 0 }] } }, originOf))
+      .toEqual([{ root: "/home/ubuntu/union-mobile", origin: "github.com/union-ai/union-mobile", runs: 0 }]);
     expect(readLineSlots({}, originOf)).toEqual([]);
   });
 

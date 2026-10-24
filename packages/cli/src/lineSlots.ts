@@ -32,7 +32,8 @@ export function readLineSlots(config: Pick<Config, "line"> | null | undefined, o
   for (const c of checkouts) {
     const root = typeof c?.root === "string" ? c.root.replace(/\/+$/, "") : "";
     const runs = Number(c?.runs);
-    if (!root || !Number.isFinite(runs) || runs < 1) continue;
+    // 0 runs keeps the checkout in the pool with no room (the slot governor, a full disk): runs wait for it.
+    if (!root || !Number.isFinite(runs) || runs < 0) continue;
     const raw = originOf(root);
     const origin = raw ? normalizeGitOrigin(raw) ?? undefined : undefined;
     slots.push({ root, ...(origin ? { origin } : {}), runs: Math.floor(runs) });
