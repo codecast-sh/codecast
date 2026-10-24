@@ -115,3 +115,15 @@ describe("stand-down: a focused region that owns its keys", () => {
     }
   });
 });
+
+describe("stepping the queue", () => {
+  test("right arrow moves to the next decision, as s does", () => {
+    expect(routeQueueKey(key("ArrowRight"), ctx())).toEqual({ kind: "skip" });
+  });
+  test("left arrow moves back to the previous decision", () => {
+    expect(routeQueueKey(key("ArrowLeft"), ctx())).toEqual({ kind: "prev" });
+  });
+  test("arrows typed in another input are never claimed", () => {
+    expect(routeQueueKey(key("ArrowLeft"), ctx({ editing: true }))).toBeNull();
+  });
+});

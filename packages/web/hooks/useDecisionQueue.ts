@@ -186,6 +186,8 @@ export type DecisionStepper = {
   total: number;
   onDone: () => void;
   onSkip: () => void;
+  // Back to the decision before this one; absent where there is no queue to walk.
+  onPrev?: () => void;
   onExit?: () => void;
   // A Claude Code poll / permission prompt has no authored row in the store;
   // the queue hands the card its model this way.

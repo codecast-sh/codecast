@@ -56,14 +56,20 @@ export function DecisionQueue({ onExit, initialConversationId }: { onExit?: () =
     setAnchorKey(queue[(position + 1) % queue.length]?.key ?? null);
   }, [queue, position]);
 
+  const onPrev = useCallback(() => {
+    if (queue.length === 0) return;
+    setAnchorKey(queue[(position - 1 + queue.length) % queue.length]?.key ?? null);
+  }, [queue, position]);
+
   const stepper = useMemo<DecisionStepper | null>(() => current ? {
     position: position + 1,
     total: queue.length,
     onDone: () => advance(current.key),
     onSkip,
+    onPrev,
     onExit,
     item: current.source === "decide" ? undefined : current,
-  } : null, [current, position, queue.length, advance, onSkip, onExit]);
+  } : null, [current, position, queue.length, advance, onSkip, onPrev, onExit]);
 
   // Keep the rail's highlight on the question you are reading. Off the inbox
   // the rail highlights sidePanelSessionId (sessionFocusKind → "panel"), and

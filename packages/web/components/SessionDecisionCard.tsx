@@ -27,9 +27,10 @@ import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
-import { ChevronUp, ChevronDown, Link2 } from "lucide-react";
-import { toast } from "sonner";
-import { copyToClipboard, shareOrigin } from "../lib/utils";
+import { useHeldOption } from "../lib/agentTabGuard";
+import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, List } from "lucide-react";
+import Link from "next/link";
+import { ShareControl } from "./ShareControl";
 import "./decisions/decisions.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -215,7 +216,12 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
     if (size === "full") settledFromSheet = { conversationId: item.conversationId, at: Date.now() };
     stepperDone?.();
   }, [size, item.conversationId, stepperDone]);
-  const answer = useCallback((index: number) => { answerItem(index); onDone(); }, [answerItem, onDone]);
+  const held = useHeldOption(decisionRow);
+  const answer = useCallback((index: number) => {
+    if (held(index)) return;
+    answerItem(index);
+    onDone();
+  }, [answerItem, onDone, held]);
   const answerFreeText = useCallback((text: string) => {
     if (!text.trim()) return;
     answerItemFreeText(text);
@@ -296,6 +302,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
   }, [full, grow]);
 
   const onSkip = stepper?.onSkip;
+  const onPrev = stepper?.onPrev;
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // The pass menu owns the keys while it is open: its search and Escape.
@@ -318,6 +325,8 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
       // Only a blocking ask comes back on a key: an advisory one never
       // interrupts, and raising it on the thread's own j would put its
       // answers one digit away from a reader who never opened it.
+      // Stepping is the queue's: with nothing to step to, the arrows stay the page's.
+      if ((action.kind === "skip" || action.kind === "prev") && !((stepper?.total ?? 0) > 1)) return;
       if (!stepper && !full && action.kind !== "commit-free-text" && action.kind !== "close-free-text") {
         if (action.kind !== "full" || !item.blocking) return;
       }
@@ -333,6 +342,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
         case "answer": { const opt = options[action.option]; if (opt) answer(opt.index); break; }
         case "open-session": if (stepper) openSession(); break;
         case "skip": onSkip?.(); break;
+        case "prev": onPrev?.(); break;
         case "dismiss": if (!hosted) dismiss(); break;
         case "pass": if (canPass) setPassOpen(true); break;
         case "open-free-text": if (!isPermissionCard && !isInfraDialog && !richControls) { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); } break;
@@ -348,7 +358,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
     // list navigation and would eat them first.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [options, answer, answerFreeText, otherText, openSession, onSkip, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted, passOpen, canPass]);
+  }, [options, answer, answerFreeText, otherText, openSession, onSkip, onPrev, dismiss, onExit, full, stepper, item.blocking, isPermissionCard, isInfraDialog, richControls, shrink, grow, hosted, passOpen, canPass]);
 
   const answerRich = useCallback((input: Parameters<typeof answerDecision>[1]) => {
     if (!item.decisionId) return;
@@ -580,7 +590,8 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             keys
             onPick={(n) => { const opt = options[n]; if (opt) answer(opt.index); }}
             // A hosted conversation marks no option before the person picks one.
-            tone={(n) => (n === 0 && !hosted ? "primary" : "plain")}
+            tone={(n) => (n === 0 && !hosted && !held(options[n]?.index ?? -1) ? "primary" : "plain")}
+            held={(n) => held(options[n]?.index ?? -1)}
             tags={(n) => item.defaultOption === options[n]?.index && (
               <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">proceeding with this</span>
             )}
@@ -638,7 +649,26 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
         <div className="decision-sheet-head-cq shrink-0 border-b border-sol-border/70">
           <div className="decision-sheet-col mx-auto w-full px-6 min-h-10 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
             {whoIsAsking}
-            {place && (
+            {stepper ? (
+              // The queue's own controls: step either way, and the count opens the whole list.
+              <span className="shrink-0 flex items-center rounded-full border border-sol-border text-[11px] text-sol-text-muted tabular-nums" data-decision-place>
+                {stepper.onPrev && stepper.total > 1 && (
+                  <button onClick={stepper.onPrev} className="pl-1.5 pr-0.5 py-0.5 rounded-l-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Previous decision (←)" aria-label="Previous decision">
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <Link href="/questions" className="flex items-center gap-1 px-1.5 py-0.5 hover:text-sol-text hover:bg-sol-card transition-colors no-underline" title="All decisions waiting on you">
+                  <List className="w-3 h-3" />
+                  <span className="decision-head-wide">{stepper.position} of {stepper.total}</span>
+                  <span className="decision-head-short">{stepper.position}/{stepper.total}</span>
+                </Link>
+                {stepper.total > 1 && (
+                  <button onClick={stepper.onSkip} className="pl-0.5 pr-1.5 py-0.5 rounded-r-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Next decision (→)" aria-label="Next decision">
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </span>
+            ) : place && (
               <span className="shrink-0 text-[11px] text-sol-text-dim tabular-nums" data-decision-place>
                 <span className="decision-head-wide">decision {place.position} of {place.total}</span>
                 <span className="decision-head-short">{place.position}/{place.total}</span>
@@ -646,15 +676,8 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             )}
             {/* A hosted approval is the person's own: no link to share it, and
                 its conversation is one tap away in the escape hatch. */}
-            {shareHref && !hosted && (
-              <button
-                onClick={() => copyToClipboard(`${shareOrigin()}${shareHref}`).then(() => toast.success("Link copied"))}
-                className="shrink-0 flex items-center gap-1 px-2.5 py-0.5 rounded-full border border-sol-border text-[11px] text-sol-text-muted hover:text-sol-text hover:bg-sol-card transition-colors"
-                title="Copy a link to this decision"
-              >
-                <Link2 className="w-3.5 h-3.5" />
-                <span className="decision-head-wide">Copy link</span>
-              </button>
+            {shareHref && decideId && !hosted && (
+              <ShareControl label="decision" path={shareHref} publicShare={{ kind: "decision", id: decideId, token: ((decisionRow ?? detail?.decision) as any)?.share_token }} className="shrink-0" />
             )}
             {!hosted && <button
               onClick={shrink}
