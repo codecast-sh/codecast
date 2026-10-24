@@ -16,7 +16,11 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$root/packages/web"
-bun test --isolate \
+# A longer timeout passes no budget that should fail (each is a count, or a
+# window a slow machine can only miss); but a ship runs this on a laptop
+# carrying dozens of agents, where importing the composer alone outlasts bun's
+# 5s default and fails the setup, not the budget.
+bun test --isolate --timeout 30000 \
   components/__tests__/composerTypingBudget.mount.test.tsx \
   store/__tests__/storeWriteBudget.mount.test.tsx \
   components/__tests__/listRowsHoldStill.test.tsx \
