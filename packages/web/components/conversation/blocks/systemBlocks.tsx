@@ -42,6 +42,7 @@ import { formatFullTimestamp, formatRelativeTime, stripAnsiCodes, useRelativeTim
 import { CMD_MD_COMPONENTS, MD_COMPONENTS_NO_IMG, MD_COMPONENTS_NO_PRE, hasRichMarkdown } from "../../../lib/conversationMarkdown";
 import { ReactMarkdown } from "../markdown";
 import { TimelineRule } from "../sessionChrome";
+import type { ContextRecoveryPrompt } from "../../../lib/sessionHandoff";
 import type { ToolCall, ToolResult } from "../types";
 import { chatHref } from "../../../lib/chatHref";
 
@@ -324,6 +325,27 @@ export function FoldedPromptBlock({ label, preview, content, timestamp, collapse
   );
 }
 
+// A Workflow-tool agent's brief, computed by the workflow script: authored
+// markdown from a machine, so it reads as a brief card (the trigger run's
+// shape in the workflow's cyan) rather than a person's bubble. Long briefs
+// start clipped behind an Expand.
+export function WorkflowTaskBlock({ body, timestamp }: { body: string; timestamp: number }) {
+  return (
+    <div className="mb-3 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+        <Workflow className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">Workflow task</span>
+        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+        <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{body}</ReactMarkdown>
+        </div>
+      </CollapsibleBody>
+    </div>
+  );
+}
+
 // On theme tokens, so hosted mode's palette (html.hosted-mode.minimal-style)
 // recolours it like every other sol class: neutral is muted ink on a border
 // rule, amber the warning hue.
@@ -379,7 +401,7 @@ export function NudgeLine({ messageId, text, count, timestamp, userName, avatarU
 // a line the reader must see whole (the role's reason), rendered as markdown
 // under the rule without a click. `lead` draws before the caption (a face).
 function SwitchDivider({
-  caption, fromLabel, content, extra, timestamp, lead, body, testId,
+  caption, fromLabel, content, extra, timestamp, lead, body, testId, markdown,
 }: {
   caption: string;
   fromLabel?: string;
@@ -389,6 +411,8 @@ function SwitchDivider({
   lead?: React.ReactNode;
   body?: string;
   testId?: string;
+  /** The details are markdown (a brief), not a raw notice. */
+  markdown?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const details = [content.trim(), extra?.trim()].filter(Boolean).join("\n\n");
@@ -419,11 +443,15 @@ function SwitchDivider({
           <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>{body}</ReactMarkdown>
         </div>
       )}
-      {open && hasDetails && (
+      {open && hasDetails && (markdown ? (
+        <div className="mt-2 mx-auto max-w-2xl px-4 py-3 rounded-md border border-sol-border bg-sol-card text-[13px] text-sol-text leading-relaxed">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>{details}</ReactMarkdown>
+        </div>
+      ) : (
         <div className="mt-2 mx-auto max-w-2xl px-4 py-3 rounded-md border border-sol-border bg-sol-card text-xs text-sol-text-muted whitespace-pre-wrap leading-relaxed">
           {details}
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -465,6 +493,22 @@ export function ReviveDivider({ content, timestamp }: { content: string; timesta
       extra={content}
       timestamp={timestamp}
       lead={<RefreshCw className="w-3 h-3" strokeWidth={2.2} />}
+    />
+  );
+}
+
+// A session whose context filled and could not be compacted, restarted by
+// codecast in a fresh context (convex handoff.recoverContext). Same session:
+// one line in its thread, opening to the brief the fresh agent started from.
+export function ContextRecoveryDivider({ recovery, timestamp }: { recovery: ContextRecoveryPrompt; timestamp: number }) {
+  return (
+    <SwitchDivider
+      testId="context-recovery"
+      caption="context full · continued in a fresh context"
+      content={recovery.body}
+      timestamp={timestamp}
+      lead={<RefreshCw className="w-3 h-3" strokeWidth={2.2} />}
+      markdown
     />
   );
 }

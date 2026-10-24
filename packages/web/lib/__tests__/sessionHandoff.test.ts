@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { composeHandoffPrompt } from "@codecast/shared/contracts";
-import { isHandoffFrom, parseSessionHandoff } from "../sessionHandoff";
+import { composeContextRecoveryPrompt, composeHandoffPrompt } from "@codecast/shared/contracts";
+import { isHandoffFrom, parseContextRecovery, parseSessionHandoff } from "../sessionHandoff";
 
 const source = { short_id: "jx7fchg", title: "Landing page design", agent_type: "claude_code", model: "fable", message_count: 143 };
 const brief = "## Goal\n\nFinish the **landing page**.\n\n## Next steps\n\n1. Verify the logo.";
@@ -50,5 +50,25 @@ describe("isHandoffFrom", () => {
   test("a plain spawn, or a handoff child linked to some other parent, stays a spawn", () => {
     expect(isHandoffFrom({}, "lead")).toBe(false);
     expect(isHandoffFrom({ handed_off_from_conversation_id: "src" }, "lead")).toBe(false);
+  });
+});
+
+describe("context recovery presentation", () => {
+  test("reads the recovery wire format, headings inside quoted messages included", () => {
+    const prompt = composeContextRecoveryPrompt({
+      source,
+      brief,
+      latest: [{ role: "user", content: "Quoted:\n```md\n## Read more\n```", timestamp: 0 }],
+    });
+    const parsed = parseContextRecovery(prompt)!;
+    expect(parsed.sessionId).toBe(source.short_id);
+    expect(parsed.body.startsWith("You are session jx7fchg")).toBe(true);
+    expect(parsed.body).toContain("## Latest messages");
+    expect(parseSessionHandoff(prompt)).toBeNull();
+  });
+
+  test("a handoff or a bare heading is not a recovery", () => {
+    expect(parseContextRecovery(composeHandoffPrompt({ source, brief }))).toBeNull();
+    expect(parseContextRecovery("# Context recovered: jx7 · x\n\nno sections")).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import { isContextRecoveryPrompt } from "./handoffPrompt";
 import type { AreaChange } from "./orgAreas";
 import type { SecretKind } from "./secrets";
 // Detection of user-role messages that machinery delivered into a session
@@ -547,6 +548,17 @@ export function isTaskNotificationMessage(rawContent: string | null | undefined)
   return !!rawContent && stripInjectionNoise(rawContent).startsWith("<task-notification>");
 }
 
+/** The ids of the background work a turn reports back on: a harness
+ *  <task-notification>'s task id, or the spawned workers a <scheduled-task>
+ *  wake names. Empty for a turn that reports on no work. */
+export function reportedWorkIds(rawContent: string | null | undefined): string[] {
+  if (isTaskNotificationMessage(rawContent)) {
+    const id = stripInjectionNoise(rawContent!).match(/<task-id>([^<]+)<\/task-id>/)?.[1].trim();
+    return id ? [id] : [];
+  }
+  return (parseScheduledTask(rawContent)?.workers ?? []).map((w) => w.short_id).filter(Boolean);
+}
+
 // A `cast send --raw` report from another session: the body was injected as a
 // user-role turn WITHOUT the <session-message> wrapper (the flag exists for
 // slash commands like `/model opus`). The receiving transcript then paints it
@@ -609,9 +621,9 @@ export function isBootstrapPrompt(rawContent: string | null | undefined): boolea
 // inter-agent teammate broadcast, a scheduled-task injection, a harness task
 // notification, a team-chat mention waking the anchor, a `cast send --raw`
 // report that lost its session wrapper, or the prompt that seated a standing
-// agent.
+// agent, or the brief a context recovery restarted the session with.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent) || isRoleWakeFrame(rawContent) || isCodexApprovalReviewPrompt(rawContent) || isAgentDefinitionPrompt(rawContent);
+  return isAgentContextMessage(rawContent) || isSessionMessage(rawContent) || isAgentMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent) || isTaskNotificationMessage(rawContent) || isChatWakePrompt(rawContent) || isUnwrappedSessionReport(rawContent) || isBootstrapPrompt(rawContent) || isSessionEscalationMessage(rawContent) || isRoleWakeFrame(rawContent) || isCodexApprovalReviewPrompt(rawContent) || isAgentDefinitionPrompt(rawContent) || isContextRecoveryPrompt(rawContent);
 }
 
 // The prompt Codex writes into the thread it spawns to assess an approval
@@ -863,6 +875,11 @@ export function formatVaultReady(s: { short_id: string; name: string; kind: Secr
     : `${run} sets ${vars} for that command; \`cast vault get ${s.name}\` prints it for a pipe.`;
   const otp = s.has_otp ? ` \`cast vault otp ${s.name}\` prints the current 2FA code.` : "";
   return `Vault: ${s.name} is ready. ${how}${otp}\n<cast-vault-ready id="${escapeTagAttr(s.short_id)}" name="${escapeTagAttr(s.name)}"/>`;
+}
+
+/** A person declined a secret an agent asked for: plain words to the asking session, which goes on without it. */
+export function formatVaultDeclined(name: string): string {
+  return `Vault: your request for ${name} was declined, so no value is coming. Go on without it, or ask in this conversation why.`;
 }
 
 export function parseVaultReady(rawContent: string | null | undefined): VaultReadyMessage | null {

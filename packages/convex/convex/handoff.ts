@@ -14,7 +14,7 @@
 // the prompt still ships with a fallback brief built from the pinned state and
 // the last assistant message, and the response says so (brief_source).
 
-import { action, internalQuery } from "./functions";
+import { action, internalAction, internalMutation, internalQuery } from "./functions";
 import { claimTaskOwnership } from "./lib/taskOwner";
 import { v } from "convex/values";
 import { internal, api } from "./_generated/api";
@@ -24,9 +24,22 @@ import { verifyApiToken } from "./apiTokens";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { isSummarizableMessage } from "./idleSummary";
 import { addConversationToWorkItem } from "./conversationLinks";
-import { performSetThreadState } from "./conversations";
+import { launchModelKeyOf, performSetThreadState } from "./conversations";
+import { briefingFor } from "./anchors";
+import { enqueuePendingMessage } from "./pendingMessages";
+import { enqueueStartSession } from "./devices";
+import { isBannerTurn } from "./inboxFilters";
 import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
-import { composeHandoffPrompt, describeAgentRun, normalizeThreadState } from "@codecast/shared/contracts";
+import {
+  composeHandoffPrompt,
+  composeContextRecoveryPrompt,
+  isContextRecoveryPrompt,
+  CONTEXT_RECOVERY_COOLDOWN_MS,
+  describeAgentRun,
+  fromConvexAgentType,
+  normalizeThreadState,
+  type RecoveryMessage,
+} from "@codecast/shared/contracts";
 
 export const HANDOFF_MODEL = CHEAP_MODEL;
 // Transcript budget for the brief: the opening (goal) and the tail (latest
@@ -45,22 +58,34 @@ function clip(text: string, max: number): string {
   return t.length <= max ? t : `${t.slice(0, max)}\n[… ${t.length - max} more chars]`;
 }
 
+export interface TranscriptBudget { head: number; tail: number; messageChars: number; finalChars: number }
+const HANDOFF_BUDGET: TranscriptBudget = {
+  head: HANDOFF_HEAD_MESSAGES, tail: HANDOFF_TAIL_MESSAGES, messageChars: HANDOFF_MESSAGE_CHARS, finalChars: HANDOFF_FINAL_CHARS,
+};
+// A recovery's brief replaces the whole history of a session that keeps
+// going, so it reads about three times as much of it (~60k tokens at most).
+export const RECOVERY_BUDGET: TranscriptBudget = { head: 10, tail: 90, messageChars: 2400, finalChars: 8000 };
+
 /** Head + tail of the human-readable turns, oldest first. Pure. */
 export function shapeHandoffTranscript(
   rowsNewestFirst: Array<{ role?: string; content?: string | null; tool_results?: unknown[] | null }>,
+  budget: TranscriptBudget = HANDOFF_BUDGET,
 ): HandoffTranscriptMessage[] {
   const readable = rowsNewestFirst.filter(isSummarizableMessage).reverse() as Array<{ role: "user" | "assistant"; content: string }>;
   const picked: typeof readable =
-    readable.length <= HANDOFF_HEAD_MESSAGES + HANDOFF_TAIL_MESSAGES
+    readable.length <= budget.head + budget.tail
       ? readable
-      : [...readable.slice(0, HANDOFF_HEAD_MESSAGES), ...readable.slice(-HANDOFF_TAIL_MESSAGES)];
+      : [...readable.slice(0, budget.head), ...readable.slice(-budget.tail)];
   return picked.map((m, i) => ({
     role: m.role,
-    content: clip(m.content, i === picked.length - 1 && m.role === "assistant" ? HANDOFF_FINAL_CHARS : HANDOFF_MESSAGE_CHARS),
+    content: clip(m.content, i === picked.length - 1 && m.role === "assistant" ? budget.finalChars : budget.messageChars),
   }));
 }
 
 export interface HandoffBriefInput {
+  /** A context recovery: the same session continues in a fresh context, so the
+   *  brief is longer and keeps the current turn's exact state. */
+  recovery?: boolean;
   title: string;
   agent: string;
   thread_state: string | null;
@@ -78,7 +103,10 @@ export function buildHandoffBriefPrompt(input: HandoffBriefInput): string {
   const transcript = input.messages
     .map((m) => `${m.role === "assistant" ? "Assistant" : "User"}: ${m.content}`)
     .join("\n\n");
-  return `An agent session is being handed to a NEW session on another agent or model. The new session has none of this history. Write the brief it starts from.
+  const intro = input.recovery
+    ? `An agent session's context window filled up and could not be compacted. The same session now continues in a fresh context with none of this history: same role, same work, same people. Write the brief it starts from. It replaces the whole history, so be thorough: carry every decision, constraint, file, command, id and promise the work still depends on, and say exactly where the current turn stopped (what was being done, what was half done, what the person is waiting for).`
+    : `An agent session is being handed to a NEW session on another agent or model. The new session has none of this history. Write the brief it starts from.`;
+  return `${intro}
 
 Write markdown with exactly these sections, in this order, and leave a section out only when there is truly nothing for it:
 
@@ -97,7 +125,7 @@ Unresolved questions and what would resolve each.
 ## Next steps
 An ordered list. The FIRST step must be concrete enough to start cold: name the file, command or check.
 
-Rules: state facts from the transcript, never invent. Prefer exact names (files, commands, ids, flags) over descriptions. Your reply is the brief itself: its first line is "## Goal" and its last line is the last next step. No preamble, no quoting of the transcript, no closing line, no mention of this instruction. Do not address the reader. Keep it under 500 words.
+Rules: state facts from the transcript, never invent. Prefer exact names (files, commands, ids, flags) over descriptions. Your reply is the brief itself: its first line is "## Goal" and its last line is the last next step. No preamble, no quoting of the transcript, no closing line, no mention of this instruction. Do not address the reader. Keep it under ${input.recovery ? 1500 : 500} words.
 
 Session facts:
 ${facts.join("\n")}
@@ -124,7 +152,7 @@ export function handoffBriefInput(
 /** The brief request prod posts, and the evals replay. Haiku 5.5 writes the
  *  longest briefs in about 1,800 tokens (2026-10-07), so the cap leaves room. */
 export function handoffBriefRequest(input: HandoffBriefInput): SurfaceRequest {
-  return { model: HANDOFF_MODEL, max_tokens: 2400, prompt: buildHandoffBriefPrompt(input) };
+  return { model: HANDOFF_MODEL, max_tokens: input.recovery ? 6000 : 2400, prompt: buildHandoffBriefPrompt(input) };
 }
 
 /** The brief used when the model is unavailable: state plus the last word. */
@@ -364,3 +392,168 @@ export async function applyHandoffLink(
   // done so it leaves Needs Input. The source agent ends its turn after this.
   await performSetThreadState(ctx, source, handoffStateLine(child.short_id, child.agent_type, child.model), "done");
 }
+
+// ── Context recovery: the same session, a fresh context ─────────────────────
+//
+// A session whose context fills and cannot be compacted parks on kind
+// "context" and waits for someone to type /compact or /clear. Neither helps
+// once compaction itself fails, so codecast heals it: the brief a handoff
+// would write (read from more of the transcript), the role's own opening, and
+// the latest messages verbatim become the first prompt of a fresh agent in
+// the SAME conversation. The conversation keeps its id, role, task, plan and
+// inbox place; the transcript shows the prompt as one divider. Scheduled by
+// onFreshApiErrorPark; cooled down so a session that overflows again right
+// away stays parked for a person instead of looping.
+
+const RECOVERABLE_AGENTS = new Set(["claude_code", "codex"]);
+/** The newest turns quoted verbatim, and the cap on each one's length. */
+export const RECOVERY_LATEST_USER = 3;
+export const RECOVERY_QUOTE_CHARS = 12_000;
+
+/** Why this conversation is not recovered now, or null when it should be. Pure. */
+export function contextRecoveryBlocker(conv: any, now: number): string | null {
+  if (!conv) return "no conversation";
+  if (conv.pending_api_error !== true || conv.pending_api_error_kind !== "context") return "not parked on a full context";
+  if (conv.status === "completed") return "session is finished";
+  if (!RECOVERABLE_AGENTS.has(conv.agent_type ?? "claude_code")) return `codecast cannot restart a ${conv.agent_type} session`;
+  if (conv.execution_protocol_state) return "runtime is owned by the execution coordinator";
+  if (!(conv.project_path || conv.git_root)) return "no project folder to start in";
+  if (conv.context_recovered_at && now - conv.context_recovered_at < CONTEXT_RECOVERY_COOLDOWN_MS) return "recovered recently";
+  return null;
+}
+
+// Rows that say nothing about the work: the overflow banners themselves,
+// slash commands and their output, compaction summaries, and an earlier
+// recovery's own prompt.
+function isRecoveryNoise(m: { role?: string; content?: string | null; subtype?: string | null }): boolean {
+  const t = (m.content ?? "").trimStart();
+  if (m.subtype) return true;
+  if (m.role === "assistant") return isBannerTurn(m as any);
+  return t.startsWith("<command-name>") || t.startsWith("<local-command") || /^\/[a-z][\w-]*(\s|$)/i.test(t) ||
+    t.startsWith("This session is being continued from a previous conversation") || isContextRecoveryPrompt(t);
+}
+
+/** The newest exchange to quote exactly, oldest first: everything readable
+ *  from the RECOVERY_LATEST_USER-th newest user message on. Pure. */
+export function pickLatestMessages(
+  rowsNewestFirst: Array<{ role?: string; content?: string | null; tool_results?: unknown[] | null; subtype?: string | null; timestamp?: number }>,
+): RecoveryMessage[] {
+  const picked: RecoveryMessage[] = [];
+  let users = 0;
+  for (const m of rowsNewestFirst) {
+    if (!isSummarizableMessage(m) || isRecoveryNoise(m)) continue;
+    picked.push({ role: m.role as "user" | "assistant", content: clip(m.content!, RECOVERY_QUOTE_CHARS), timestamp: m.timestamp ?? 0 });
+    if (m.role === "user" && ++users >= RECOVERY_LATEST_USER) break;
+  }
+  return picked.reverse();
+}
+
+export interface ContextRecoveryInput extends HandoffBriefPayload {
+  latest: RecoveryMessage[];
+  role_brief: string | null;
+  parked_at: number | null;
+}
+
+export const recoveryInput = internalQuery({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<ContextRecoveryInput | null> => {
+    const conv: any = await ctx.db.get(args.conversation_id);
+    const blocked = contextRecoveryBlocker(conv, Date.now());
+    if (blocked) {
+      console.log(`[context recovery] ${args.conversation_id}: skipped, ${blocked}`);
+      return null;
+    }
+    const rows = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+      .order("desc")
+      .take(HANDOFF_SCAN_LIMIT);
+    const task: any = conv.active_task_id ? await ctx.db.get(conv.active_task_id) : null;
+    const plan: any = conv.active_plan_id ? await ctx.db.get(conv.active_plan_id) : null;
+    const anchor: any = conv.anchor_id ? await ctx.db.get(conv.anchor_id) : null;
+    const readable = (rows as any[]).filter((m) => !isRecoveryNoise(m));
+    return {
+      source: {
+        conversation_id: conv._id,
+        short_id: conv.short_id ?? conv._id.toString().slice(0, 7),
+        title: conv.title ?? null,
+        agent_type: conv.agent_type ?? null,
+        model: conv.model ?? null,
+        message_count: conv.message_count ?? 0,
+        project_path: conv.project_path ?? null,
+        git_root: conv.git_root ?? null,
+        task_short_id: task?.short_id ?? null,
+        plan_short_id: plan?.short_id ?? null,
+        thread_state: conv.thread_state ?? null,
+        handed_off_to_conversation_id: null,
+      },
+      messages: shapeHandoffTranscript(readable, RECOVERY_BUDGET),
+      latest: pickLatestMessages(rows as any[]),
+      role_brief: anchor && anchor.status !== "decommissioned" ? await briefingFor(ctx, anchor) : null,
+      parked_at: conv.pending_api_error_at ?? null,
+    };
+  },
+});
+
+export const recoverContext = internalAction({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<void> => {
+    const input: ContextRecoveryInput | null = await ctx.runQuery(internal.handoff.recoveryInput, args);
+    if (!input) return;
+    const briefInputs: HandoffBriefInput = { ...handoffBriefInput(input.source, input.messages), recovery: true };
+    const modelBrief = input.messages.length ? await askForBrief(briefInputs) : null;
+    const prompt = composeContextRecoveryPrompt({
+      source: input.source,
+      brief: modelBrief ?? fallbackHandoffBrief(briefInputs),
+      roleBrief: input.role_brief,
+      latest: input.latest,
+    });
+    await ctx.runMutation(internal.handoff.applyContextRecovery, {
+      conversation_id: args.conversation_id,
+      prompt,
+      parked_at: input.parked_at ?? undefined,
+    });
+  },
+});
+
+// The restart itself, in one transaction: re-check the park the brief was
+// written for (a /compact typed meanwhile, or a person's own restart, wins),
+// lift it, queue the prompt, and start a fresh agent in this conversation.
+// start_session tears the old pane down first and carries the waiting
+// prompt as the agent's launch argument.
+export const applyContextRecovery = internalMutation({
+  args: { conversation_id: v.id("conversations"), prompt: v.string(), parked_at: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const conv: any = await ctx.db.get(args.conversation_id);
+    const now = Date.now();
+    const blocked = contextRecoveryBlocker(conv, now);
+    if (blocked || (conv.pending_api_error_at ?? undefined) !== args.parked_at) {
+      console.log(`[context recovery] ${args.conversation_id}: not applied, ${blocked ?? "a newer park replaced the one briefed"}`);
+      return { recovered: false };
+    }
+    await ctx.db.patch(conv._id, {
+      context_recovered_at: now,
+      pending_api_error: false,
+      pending_api_error_kind: undefined,
+      pending_api_error_at: undefined,
+      updated_at: now,
+    });
+    await enqueuePendingMessage(ctx, conv, conv.user_id, {
+      content: args.prompt,
+      client_id: `context-recovery:${conv._id}:${args.parked_at ?? now}`,
+    });
+    const agentType = fromConvexAgentType(conv.agent_type);
+    const model = launchModelKeyOf(conv.agent_type, conv.model);
+    await enqueueStartSession(ctx, conv.user_id, {
+      conversationId: conv._id,
+      agentType,
+      projectPath: conv.project_path || conv.git_root,
+      gitRoot: conv.git_root,
+      ...(model ? { model } : {}),
+      ...(conv.effort ? { effort: conv.effort } : {}),
+      ...(conv.cc_account ? { ccAccount: conv.cc_account } : {}),
+    });
+    console.log(`[context recovery] ${args.conversation_id}: restarted in a fresh context`);
+    return { recovered: true };
+  },
+});

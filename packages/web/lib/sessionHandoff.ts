@@ -18,11 +18,9 @@ export function isHandoffFrom(
   return !!from && (!linkId || from === linkId);
 }
 
-export function parseSessionHandoff(content: string): SessionHandoffPrompt | null {
-  const text = content.trim().replace(/\r\n/g, "\n");
-  const header = text.match(/^# Handed off from ([\w-]+): ([^\n]+)\n\nRan on ([^\n]+)\.\n\nThis session continues that work\./);
-  if (!header) return null;
-
+// "## Name" headings outside code fences, in order, so a quoted heading inside
+// a brief or a verbatim message never splits a section.
+function headingsOutsideFences(text: string, names: RegExp): Array<{ name: string; start: number; end: number }> {
   const headings: Array<{ name: string; start: number; end: number }> = [];
   let offset = 0;
   let fence: string | null = null;
@@ -31,11 +29,20 @@ export function parseSessionHandoff(content: string): SessionHandoffPrompt | nul
     if (marker) {
       if (!fence) fence = marker[1];
       else if (marker[1][0] === fence[0] && marker[1].length >= fence.length && line.slice(marker[0].length).trim() === "") fence = null;
-    } else if (!fence && /^## (Brief|Read more|Direction)$/.test(line)) {
+    } else if (!fence && names.test(line)) {
       headings.push({ name: line.slice(3), start: offset, end: offset + line.length });
     }
     offset += line.length + 1;
   }
+  return headings;
+}
+
+export function parseSessionHandoff(content: string): SessionHandoffPrompt | null {
+  const text = content.trim().replace(/\r\n/g, "\n");
+  const header = text.match(/^# Handed off from ([\w-]+): ([^\n]+)\n\nRan on ([^\n]+)\.\n\nThis session continues that work\./);
+  if (!header) return null;
+
+  const headings = headingsOutsideFences(text, /^## (Brief|Read more|Direction)$/);
   const briefHeading = headings.find(h => h.name === "Brief");
   const readHeading = headings.find(h => h.name === "Read more" && h.start > (briefHeading?.end ?? Infinity) && text.slice(h.end).trimStart().startsWith("The source transcript has "));
   if (!briefHeading || !readHeading) return null;
@@ -51,4 +58,22 @@ export function parseSessionHandoff(content: string): SessionHandoffPrompt | nul
     readMore,
     direction: directionHeading ? text.slice(directionHeading.end).trim() || null : null,
   };
+}
+
+/** The prompt a context recovery seeds the fresh agent with
+ *  (composeContextRecoveryPrompt), read back into its parts. */
+export interface ContextRecoveryPrompt {
+  sessionId: string;
+  /** Everything after the header line: the role, brief, latest messages and commands. */
+  body: string;
+}
+
+export function parseContextRecovery(content: string): ContextRecoveryPrompt | null {
+  const text = content.trim().replace(/\r\n/g, "\n");
+  const header = text.match(/^# Context recovered: ([\w-]+) · [^\n]*\n/);
+  if (!header) return null;
+  const headings = headingsOutsideFences(text, /^## (Brief|Read more)$/);
+  const brief = headings.find(h => h.name === "Brief");
+  if (!brief || !headings.some(h => h.name === "Read more" && h.start > brief.end)) return null;
+  return { sessionId: header[1], body: text.slice(header[0].length).trim() };
 }

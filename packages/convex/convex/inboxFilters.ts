@@ -143,7 +143,7 @@ export function nextAgentStatusOnAddMessages(
 // lives in @codecast/shared/contracts as the single source of truth shared
 // with the web client's ApiErrorCard rendering.
 export { isApiErrorBanner, classifyApiErrorBanner, CLIENT_ERROR_BANNER_PREFIX, blockedContinueClientId, BLOCKED_BANNER_KINDS, CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
-import { isApiErrorBanner as isApiErrorBannerFn, isLocalCommandLine, isNoResponseStub } from "@codecast/shared/contracts";
+import { isApiErrorBanner as isApiErrorBannerFn, classifyApiErrorBanner, isLocalCommandLine, isNoResponseStub } from "@codecast/shared/contracts";
 
 // Decides what an addMessages batch should do about stale API-error banners.
 //   - "supersede": a real turn arrived; delete banner(s) that precede it and
@@ -212,13 +212,47 @@ export function isRealTurn(m: TurnShape): boolean {
 // while still parked. Ties keep the later row, like the reduce it replaces.
 export function newestSignificantMessage<T extends TurnShape & { timestamp?: number }>(
   msgs: readonly T[],
+  parkedKind?: string | null,
 ): T | undefined {
-  let best: T | undefined;
-  for (const m of msgs) {
-    if (!isBannerTurn(m) && !isRealTurn(m)) continue;
-    if (!best || (m.timestamp || 0) >= (best.timestamp || 0)) best = m;
+  return parkWalk(msgs, parkedKind).newest;
+}
+
+// A full context is not lifted by a user row: a message queued into a session
+// whose window is full is written to the transcript, yet the window is as
+// full as before. Only the agent answering or a compaction that worked (its
+// summary row) proves it lifted. Counting queued messages as lifting deleted
+// the banner and cleared the park, so nothing recovered the session.
+const COMPACTION_SUMMARY_RE = /^This session is being continued from a previous conversation/;
+
+export function liftsPark(m: TurnShape, parkedKind: string | null | undefined): boolean {
+  if (!isRealTurn(m)) return false;
+  if (parkedKind !== "context" || m.role === "assistant") return true;
+  return COMPACTION_SUMMARY_RE.test((m.content ?? "").trimStart());
+}
+
+/** The batch read in time order against the park it starts under: the newest
+ *  banner-or-lifting turn, and the newest turn that lifts a park. Ties keep
+ *  the later row. */
+export function parkWalk<T extends TurnShape & { timestamp?: number }>(
+  msgs: readonly T[],
+  parkedKind?: string | null,
+): { newest: T | undefined; liftedAt: number } {
+  const ordered = msgs.map((m, i) => [m, i] as const)
+    .sort(([a, i], [b, j]) => (a.timestamp || 0) - (b.timestamp || 0) || i - j);
+  let newest: T | undefined;
+  let liftedAt = 0;
+  let parked = parkedKind ?? undefined;
+  for (const [m] of ordered) {
+    if (isBannerTurn(m)) {
+      newest = m;
+      parked = classifyApiErrorBanner(m.content) ?? undefined;
+    } else if (liftsPark(m, parked)) {
+      newest = m;
+      parked = undefined;
+      liftedAt = Math.max(liftedAt, m.timestamp || 0);
+    }
   }
-  return best;
+  return { newest, liftedAt };
 }
 
 // The next value of conversations.pending_api_error after a write. A banner as

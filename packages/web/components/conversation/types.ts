@@ -1,9 +1,9 @@
-import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage } from "@codecast/shared/contracts";
+import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage, VaultReadyMessage } from "@codecast/shared/contracts";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { SentFileData } from "@codecast/shared/files";
 import type { ChatWakePrompt, HuddleSummaryTag } from "../sessionMessage";
 import type { ExternalEventRecord } from "../../lib/externalEventRecord";
-import type { SessionHandoffPrompt } from "../../lib/sessionHandoff";
+import type { ContextRecoveryPrompt, SessionHandoffPrompt } from "../../lib/sessionHandoff";
 
 // View density for the conversation. The first three render the message feed
 // with progressively less chrome; "story" and "summary" replace the feed with
@@ -364,6 +364,7 @@ export type ParsedApiError = {
 export type UserMessageKind =
   | { kind: 'normal' }
   | { kind: 'session_handoff'; handoff: SessionHandoffPrompt }
+  | { kind: 'context_recovery'; recovery: ContextRecoveryPrompt }
   | { kind: 'command' }
   | { kind: 'bash_input'; command: string }
   | { kind: 'bash_output'; stdout: string; stderr: string }
@@ -384,6 +385,11 @@ export type UserMessageKind =
   | { kind: 'scheduled_task' }
   // The prompt that seats or re-seats a standing agent (isBootstrapPrompt).
   | { kind: 'role_brief' }
+  // A Workflow-tool agent's framed opening turn (parseWorkflowHarnessFrame):
+  // the boilerplate header dropped, the body unindented. A computed task is
+  // the agent's brief from the workflow script; a user request is the
+  // launching session's ask, relayed as context.
+  | { kind: 'workflow_frame'; frame: 'user request' | 'computed task'; body: string }
   | { kind: 'machine_move'; destination?: string; fromLabel?: string; machineChanged: boolean }
   | { kind: 'agent_switch'; toLabel: string; fromLabel?: string }
   // `variant: 'agent'` is a subagent's report to the session that launched it
@@ -397,6 +403,9 @@ export type UserMessageKind =
   | { kind: 'chat_wake'; wake: ChatWakePrompt }
   // The human's answer to a `cast decide` question (store answerDecision).
   | { kind: 'decision_answer'; decision: DecisionAnswerMessage }
+  // A person filled a secret this session asked for (secrets.fulfill sends
+  // formatVaultReady): a system line, not the person's words.
+  | { kind: 'vault_ready'; vault: VaultReadyMessage }
   // A session moving between its role and the person (<session-escalation …>,
   // org-roles-run-work.md R1 revised): an inline divider with the role's face,
   // the move and the whole line as markdown, in both threads.

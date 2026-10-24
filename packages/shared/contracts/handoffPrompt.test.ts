@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { composeHandoffPrompt, describeAgentRun } from "./handoffPrompt";
+import { composeContextRecoveryPrompt, composeHandoffPrompt, describeAgentRun, isContextRecoveryPrompt } from "./handoffPrompt";
 
 const source = {
   short_id: "jx7abcd",
@@ -60,5 +60,43 @@ describe("composeHandoffPrompt", () => {
     expect(out).toContain("# Handed off from x: Untitled session");
     expect(out).toContain("Ran on Codex.");
     expect(describeAgentRun(undefined, undefined)).toBe("Claude");
+  });
+});
+
+describe("composeContextRecoveryPrompt", () => {
+  const latest = [
+    { role: "user" as const, content: "Why has no market grown?", timestamp: Date.UTC(2026, 9, 13, 15) },
+    { role: "assistant" as const, content: "Checking the cold engine logs.", timestamp: Date.UTC(2026, 9, 13, 15, 1) },
+  ];
+
+  test("names the same session, keeps the role, the brief and the latest messages verbatim", () => {
+    const out = composeContextRecoveryPrompt({ source, brief, roleBrief: "You are the **Market Growth lead** (@growth) in Union.", latest });
+    expect(isContextRecoveryPrompt(out)).toBe(true);
+    expect(out.startsWith("# Context recovered: jx7abcd · Fix the auth race\n")).toBe(true);
+    expect(out).toContain("You are session jx7abcd, continuing in a fresh context");
+    expect(out).toContain("## Role\n\nYou are the **Market Growth lead**");
+    expect(out).toContain("## Brief\n\nGoal: fix the race.");
+    expect(out).toContain("### User · 2026-10-13T15:00:00.000Z\n\n```\nWhy has no market grown?\n```");
+    expect(out).toContain("### You · 2026-10-13T15:01:00.000Z");
+  });
+
+  test("points at the session's own history with read, ask and search", () => {
+    const out = composeContextRecoveryPrompt({ source, brief, latest });
+    expect(out).toContain("This session's earlier transcript has 143 messages");
+    expect(out).toContain("cast read jx7abcd 124:143");
+    expect(out).toContain('cast read jx7abcd --ask "<question>"');
+    expect(out).toContain('cast search "<topic>"');
+    expect(out).not.toContain("## Role");
+  });
+
+  test("a quoted message with its own code fence stays one block", () => {
+    const content = "Run this:\n```bash\nbun test\n```";
+    const out = composeContextRecoveryPrompt({ source, brief, latest: [{ role: "user", content, timestamp: 0 }] });
+    expect(out).toContain(`\`\`\`\`\n${content}\n\`\`\`\``);
+  });
+
+  test("ordinary text is not a recovery prompt", () => {
+    expect(isContextRecoveryPrompt("# Context recovered")).toBe(false);
+    expect(isContextRecoveryPrompt(composeHandoffPrompt({ source, brief }))).toBe(false);
   });
 });
