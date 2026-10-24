@@ -36,6 +36,7 @@ import { momentsTables } from "./momentsSchema";
 import { lineTrialTables } from "./lineTrialSchema";
 import { orgRoleTokenTables } from "./orgRoleTokensSchema";
 import { liveFlowTables } from "./liveFlowsSchema";
+import { flowMapTables } from "./flowMapSchema";
 import { sessionFlowTables } from "./sessionFlowsSchema";
 import { slackTables } from "./slackSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
@@ -139,6 +140,7 @@ export default defineSchema({
   ...lineTrialTables,
   ...orgRoleTokenTables,
   ...liveFlowTables,
+  ...flowMapTables,
   ...sessionFlowTables,
   ...slackTables,
   ...authTables,

@@ -427,6 +427,11 @@ crons.interval("price trial runs", { minutes: 2 }, (internal as any).lineTrial.p
 // corrects the day it belongs to. One small transaction per (user, day).
 crons.interval("roll up activity days", { hours: 1 }, internal.activityDays.sweep, {});
 
+// The flow map's counts (flowMap.ts): per workspace with a live flow, findings
+// per source and day (yesterday and today recounted), where each source's
+// problems stand, and open event groups no problem took.
+crons.interval("roll up the flow map", { hours: 1 }, (internal as any).flowMap.rollup, {});
+
 // A problem whose title was written from findings that have all left it is
 // renamed from the findings on it now (lineRetitle.ts). One index read per
 // open problem; a rename is one cheap call on the team's grouping budget.
