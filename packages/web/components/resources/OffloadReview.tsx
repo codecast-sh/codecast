@@ -374,6 +374,21 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
     preflight(canMove.map((c) => ({ sessionId: c.sessionId, destinationId: destOf(c), attested: [] })));
   });
 
+  // Each ticked session's move is rehearsed once per destination per review, when it is first ticked there; one that failed is asked again by the next review.
+  const rehearse = actions?.onRehearse;
+  const asked = React.useRef(new Set<string>());
+  const toRehearse = going.filter((c) => { const r = rehearsalOf(c); return (!r || r.status === "failed") && !asked.current.has(`${c.sessionId}:${destOf(c)}`); });
+  const rehearseKey = toRehearse.map((c) => `${c.sessionId}:${destOf(c)}`).join(",");
+  React.useEffect(() => {
+    if (!rehearse || !rehearseKey) return;
+    const t = setTimeout(() => {
+      for (const c of toRehearse) asked.current.add(`${c.sessionId}:${destOf(c)}`);
+      rehearse(toRehearse.map((c) => ({ sessionId: c.sessionId, destinationId: destOf(c), attested: [] })));
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rehearseKey]);
+
   const sumOf = (cs: OffloadCandidate[]) => ({
     cpu: cs.some((c) => c.relief.cpu === undefined) ? undefined : cs.reduce((a, c) => a + (c.relief.cpu ?? 0), 0),
     rss: cs.reduce((a, c) => a + (c.relief.rssHigh ?? 0), 0),
