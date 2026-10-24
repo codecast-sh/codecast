@@ -76,6 +76,10 @@ import { useSharedDraft } from "../hooks/useSharedDraft";
 import { SharedCarets } from "./SharedCarets";
 import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 import { useFileSearch } from "../lib/fsBrowse";
+import { findSecrets, type FoundSecret } from "@codecast/shared/contracts/secretShapes";
+import { ComposerCatch } from "./secrets/ComposerCatch";
+import { runningSubagents } from "../lib/runningSubagents";
+import { StopConfirm, stopNeedsConfirm, type StopRequest } from "./conversation/StopConfirm";
 
 const api = _typedApi as any;
 const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({ default: m.ComposeEditor })));
@@ -117,7 +121,26 @@ const CHANNEL_QUERY_RE = /^[a-z0-9_-]*/i;
 // hooks/useSessionRestart so the composer footer ladder, the on-message retry
 // bar, and the header restart strip all report the same real progress.
 
-const sacredInputs = new Map<string, { text: string; images?: any[] }>();
+// Live composer text by key: the session id, and the conversation id beside
+// it. A composer seeds from whichever of its keys was written last. Reading
+// the session key first brought back stale text: while session_id was
+// briefly unset the composer typed under the conversation key alone, and when
+// the id returned the remount restored the session key's older text, losing
+// the words typed in between.
+const sacredInputs = new Map<string, { text: string; seq: number }>();
+let sacredSeq = 0;
+function writeSacred(keys: string[], text: string): void {
+  const seq = ++sacredSeq;
+  for (const key of keys) sacredInputs.set(key, { text, seq });
+}
+function readSacred(keys: string[]): string | undefined {
+  let best: { text: string; seq: number } | undefined;
+  for (const key of keys) {
+    const entry = sacredInputs.get(key);
+    if (entry && (!best || entry.seq > best.seq)) best = entry;
+  }
+  return best?.text;
+}
 
 // True when a persisted draft is just a copy of a message already sent in this
 // conversation (see lib/staleDraft.ts) — refuse it at restore time. Reads the
@@ -221,7 +244,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // session_id stamped the key flips (conv id → session id) and this component
   // remounts — the freshest text lives under the conversation id.
   const [message, _setMessage] = useState(() => {
-    const sacred = sacredInputs.get(sacredKey)?.text ?? sacredInputs.get(conversationId)?.text;
+    const sacred = readSacred([sacredKey, conversationId]);
     if (sacred != null) return sacred;
     const persisted = cached?.draft_message ?? initialDraft ?? "";
     // Sacred text is live user input and always restores; the persisted
@@ -241,9 +264,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const setMessage = useCallback((val: string) => {
     if (val) hadTextRef.current = true;
     seededDraftRef.current = null;
-    sacredInputs.set(sacredKeyRef.current, { text: val });
-    // Mirror under the conversation id so the text survives the key flip above.
-    if (convIdRef.current !== sacredKeyRef.current) sacredInputs.set(convIdRef.current, { text: val });
+    // Under the conversation id too, so the text survives the key flip above.
+    writeSacred([sacredKeyRef.current, convIdRef.current], val);
     _setMessage(val);
   }, []);
   const messageRef = useRef(message);
@@ -1088,12 +1110,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (flipText && seededDraftRef.current !== null && flipText === seededDraftRef.current) {
         sacredInputs.delete(sacredKeyRef.current);
       } else {
-        sacredInputs.set(sacredKeyRef.current, { text: flipText });
+        writeSacred([sacredKeyRef.current, convIdRef.current], flipText);
       }
       saveDraftSnapshot(convIdRef.current);
       sacredKeyRef.current = sacredKey;
       convIdRef.current = conversationId;
-      const sacred = sacredInputs.get(sacredKey);
+      const sacred = readSacred([sacredKey, conversationId]);
       const row = useInboxStore.getState().getDraft(conversationId);
       let storeDraft = row?.draft_message;
       // Same stale-sent check the mount seed applies — without it, a resent-copy
@@ -1103,8 +1125,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         useInboxStore.getState().clearDraftFinal(conversationId);
         storeDraft = undefined;
       }
-      const newDraft = sacred?.text ?? storeDraft ?? "";
-      sacredInputs.set(sacredKey, { text: newDraft });
+      const newDraft = sacred ?? storeDraft ?? "";
+      writeSacred([sacredKey, conversationId], newDraft);
       _setMessage(newDraft);
       hadTextRef.current = !!newDraft;
       seededDraftRef.current = sacred == null && storeDraft ? newDraft : null;
@@ -1207,8 +1229,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // reseed a successor composer as a phantom draft.
       if (isSelectionEditedRef.current) {
         const real = savedDraftRef.current ?? "";
-        sacredInputs.set(sacredKeyRef.current, { text: real });
-        if (convIdRef.current !== sacredKeyRef.current) sacredInputs.set(convIdRef.current, { text: real });
+        writeSacred([sacredKeyRef.current, convIdRef.current], real);
         isSelectionEditedRef.current = false;
       }
       _setMessage(selectedMessageContent);
@@ -1265,7 +1286,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // composer attaches: a comment composer inside the same view never does.
   const reviewComposer = useReviewComposer();
   const attachSend = reviewComposer?.conversationId === conversationId ? reviewComposer.attachSend : undefined;
-  const handleSubmitRef = useRef<((e: React.FormEvent) => Promise<unknown>) | null>(null);
+  const handleSubmitRef = useRef<((e: React.FormEvent, forkTail?: boolean) => Promise<unknown>) | null>(null);
   useWatchEffect(() => {
     if (!attachSend) return;
     attachSend(() => { void handleSubmitRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent); });
@@ -1610,6 +1631,34 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // dismisses its host on send (the compose popup) can tell a committed send
   // from a refused one without waiting for delivery.
   const submitRefusedRef = useRef(false);
+  // A send whose text holds a credential waits for the person in
+  // ComposerCatch. Checked once per send, never per keystroke (typing budget).
+  // The bar's decision re-runs the same send with catchPassRef set.
+  const [caught, setCaught] = useState<{ text: string; found: FoundSecret[]; resume: () => void } | null>(null);
+  const catchPassRef = useRef(false);
+  useWatchEffect(() => setCaught(null), [conversationId]);
+  const holdForCredential = (text: string, resume: () => void): boolean => {
+    if (catchPassRef.current) return false;
+    const found = findSecrets(text);
+    if (found.length === 0) return false;
+    setCaught({ text, found, resume });
+    submitRefusedRef.current = true;
+    return true;
+  };
+  const releaseCaught = (text: string) => {
+    if (!caught) return;
+    setCaught(null);
+    if (text !== caught.text) {
+      if (composeMode && composeRef.current) composeRef.current.setMarkdown(text);
+      else { setMessage(text); messageRef.current = text; }
+    }
+    catchPassRef.current = true;
+    try { caught.resume(); } finally { catchPassRef.current = false; }
+  };
+  const cancelCaught = () => {
+    setCaught(null);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
   // The hosted assistant reads no images. Intake already refuses a new one,
   // but a restored draft can still carry some: a send holding any is refused
   // whole and the composer keeps everything, so nothing is dropped silently.
@@ -1628,6 +1677,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     let message = composeMode && composeRef.current
       ? composeRef.current.getMarkdown()
       : messageRef.current;
+    if (holdForCredential(message, () => {
+      void handleSubmitRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent, forkTail);
+      if (!submitRefusedRef.current) onSubmitWithIntent?.(false);
+    })) return false;
     suggestionRef.current?.settleSend(message);
     if (onGateSend) {
       // The pending batch rides a gate send the way it rides the main one:
@@ -1970,7 +2023,63 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     setSelectedImageIndex(null);
     setSelectedQueueIndex(null);
   };
+  // A turn this composer can stop: the agent is mid-turn and Escape reaches it.
+  const turnRunning = !!onSendEscape && !hostedConversation && (isAgentActive || (agentStatus !== "idle" && (!!isThinking || !!isConversationLive)));
+  // Stopping a turn stops the subagents it launched, so with any running the
+  // stop names them first (StopConfirm).
+  const [stopRequest, setStopRequest] = useState<StopRequest | null>(null);
+  const confirmStop = (run: () => void, send = false) => {
+    const subagents = runningSubagents(useInboxStore.getState().messages[conversationId]);
+    if (stopNeedsConfirm(subagents)) setStopRequest({ subagents, run, send });
+    else run();
+  };
+  const interruptTurn = () => confirmStop(() => onSendEscape?.());
+  // Stop & send (⇧Esc): stop the running turn, then deliver the text once it
+  // has stopped. A plain send still lands mid-turn.
+  const canStopAndSend = turnRunning && canQueryServer && pastedImages.length === 0;
+  const stopAndSendComposerText = () => {
+    if (!canStopAndSend || !messageRef.current.trim()) return;
+    confirmStop(() => queueComposerText(true), true);
+  };
+
+  // ⌘↵ in a session: queue the composer's text behind the running turn.
+  // `stop` also stops that turn, so the text goes in as soon as it has.
+  const queueComposerText = (stop = false) => {
+    const text = messageRef.current.trim();
+    if (!text) return;
+    sendingRef.current = true;
+    try {
+      // A real session queues on the server, in the line everyone in it
+      // sees and steers (SharedQueue). A session still being created, or
+      // a hosted one (its turn engine takes input its own way), keeps the
+      // queue in this window.
+      const clientId = `queued_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      if (stop) {
+        void useInboxStore.getState().stopAndSend(conversationId, text, clientId).catch((err) => toast.error(err instanceof Error ? err.message : "Could not stop and send"));
+        onMessageSent?.();
+      } else if (canQueryServer && !hostedConversation) useInboxStore.getState().queueMessage(conversationId, text, clientId);
+      else setQueuedMessages(prev => [...prev, text]);
+    } catch (error) {
+      captureException(error);
+      sendingRef.current = false;
+      toast.error(error instanceof Error ? error.message : "Could not save the queued message.");
+      return;
+    }
+    cancelPendingDraft();
+    setMessage("");
+    messageRef.current = "";
+    useInboxStore.getState().clearDraftFinal(conversationId);
+    sendingRef.current = false;
+    setSelectedQueueIndex(null);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (caught && e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelCaught();
+      return;
+    }
     if (canHandoff && e.altKey && e.shiftKey && e.code === "KeyH") {
       e.preventDefault();
       setHandoffOpen(true);
@@ -2181,6 +2290,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }
     }
 
+    if (e.key === "Escape" && e.shiftKey && canStopAndSend && messageRef.current.trim()) {
+      e.preventDefault();
+      e.stopPropagation();
+      stopAndSendComposerText();
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -2206,7 +2321,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         } else if (queuedMessages.length > 0) {
           escapeTimerRef.current = setTimeout(() => { escapeTimerRef.current = null; }, 250);
         } else {
-          escapeTimerRef.current = setTimeout(() => { escapeTimerRef.current = null; onSendEscape?.(); }, 250);
+          escapeTimerRef.current = setTimeout(() => { escapeTimerRef.current = null; interruptTurn(); }, 250);
         }
       }
       return;
@@ -2258,29 +2373,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       if (onGateSend) { void handleSubmit(e); return; }
-      const text = message.trim();
-      if (text) {
-        sendingRef.current = true;
-        try {
-          // A real session queues on the server, in the line everyone in it
-          // sees and steers (SharedQueue). A session still being created, or
-          // a hosted one (its turn engine takes input its own way), keeps the
-          // queue in this window.
-          if (canQueryServer && !hostedConversation) useInboxStore.getState().queueMessage(conversationId, text, `queued_${Date.now()}_${Math.random().toString(36).slice(2)}`);
-          else setQueuedMessages(prev => [...prev, text]);
-        } catch (error) {
-          captureException(error);
-          sendingRef.current = false;
-          toast.error(error instanceof Error ? error.message : "Could not save the queued message.");
-          return;
-        }
-        cancelPendingDraft();
-        setMessage("");
-        messageRef.current = "";
-        useInboxStore.getState().clearDraftFinal(conversationId);
-        sendingRef.current = false;
-        setSelectedQueueIndex(null);
-      }
+      if (holdForCredential(message, queueComposerText)) return;
+      queueComposerText();
       return;
     }
     if (e.key === "Enter" && e.altKey && e.shiftKey && onSendAndDismiss && triageShown) {
@@ -2321,7 +2415,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const hostedStop = hostedConversation && (agentStatus === "working" || agentStatus === "thinking") && !canSubmit
     ? { label: MODE_WORDS.hosted.stopWorking, onStop: () => useInboxStore.getState().stopHostedTurn(conversationId) }
     : undefined;
-  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} stop={hostedStop} />;
+  // A session's turn at work with nothing to send: the disc stops it.
+  const sessionStop = turnRunning && !canSubmit ? { label: "Stop", onStop: interruptTurn } : undefined;
+  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} stop={hostedStop ?? sessionStop} />;
   // Expand, stash, hand off and fork: beside the text, or in the surface's foot
   // row next to send when it brings one.
   const rowActions = (
@@ -2345,6 +2441,19 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         >
           <Maximize2 className="w-3 h-3" />
         </button>
+      )}
+      {canStopAndSend && hasContent && !onGateSend && !onWorkflowLaunch && (
+        <ShortcutTooltip label="Stop the turn, then send" action="msg.stopSend" side="top">
+          <button
+            type="button"
+            onClick={stopAndSendComposerText}
+            className="h-7 px-2.5 rounded-full transition-colors flex items-center gap-1.5 text-xs text-sol-text-dim border border-sol-border/60 hover:text-sol-red hover:border-sol-red/50 hover:bg-sol-red/10"
+            data-cc-stop-send=""
+          >
+            <span aria-hidden className="h-2 w-2 rounded-[2px] bg-current" />
+            Stop & send
+          </button>
+        </ShortcutTooltip>
       )}
       {onSendAndDismiss && triageShown && canSubmit && !onGateSend && !onWorkflowLaunch && (
         <ShortcutTooltip label="Send and stash" action="msg.sendDismiss" hint="the agent keeps running out of the inbox" side="top">
@@ -2398,6 +2507,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       onSubmit={handleFormSubmit}
       foot={composerFoot && !composeMode ? <ComposerFoot start={composerFoot} end={<>{rowActions}{sendButton}</>} /> : undefined}
       before={<>
+          <StopConfirm request={stopRequest} onClose={() => { setStopRequest(null); requestAnimationFrame(() => textareaRef.current?.focus()); }} />
           {serverDeleted && !isRestarting && (
             <div className={`mx-auto mb-2 ${inline ? "" : "px-4"} ${colWidth} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <div className="flex items-center justify-between gap-3 rounded-lg border border-sol-orange/40 bg-sol-orange/10 px-3 py-2">
@@ -2416,6 +2526,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           )}
           {!bareComposer && lightboxImageIndex === null && agentStatus === "compacting" && (
             <LiveCompactionCard conversationId={conversationId} expanded={isExpanded} />
+          )}
+          {caught && (
+            <div className={`mx-auto mb-2 ${inline ? "" : "px-4"} ${colWidth} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+              <ComposerCatch text={caught.text} found={caught.found} teamId={composeTeamId ? String(composeTeamId) : null} onSend={releaseCaught} onCancel={cancelCaught} />
+            </div>
           )}
       </>}
       meta={hostedConversation ? (

@@ -581,6 +581,7 @@ const ACTION_SURFACES: Record<string, DevSurface> = {
   "msg.fork": "actions.fleet",
   "msg.forkSend": "actions.fleet",
   "msg.queue": "actions.fleet",
+  "msg.stopSend": "actions.fleet",
   "msg.sendDismiss": "actions.fleet",
   "msg.handoff": "composer.handoff",
   "conv.toggleTree": "actions.fleet",

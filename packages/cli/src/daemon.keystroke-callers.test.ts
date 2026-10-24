@@ -142,6 +142,40 @@ test("guarded Escape observes only a successful send or signal", async () => {
   expect(sent).toHaveLength(2);
 });
 
+// Stop and send: the message waits queued for the stopped turn's settle. An
+// Escape that finds no turn to stop has no settle coming, so the daemon
+// releases the row itself; one that stops a turn leaves it to the settle.
+test("a stop-and-send Escape releases its queued message only when there is no turn to stop", async () => {
+  const start = source.indexOf('      case "escape": {');
+  const body = source.slice(start, source.indexOf('      case "rewind":', start));
+  const released: string[] = [];
+  let hook = "working", pane = "busy", injectedAt: number | null = null;
+  const clock = 1_800_000_000_000;
+  const deps = {
+    Date: { now: () => clock },
+    cloudAgents: { interrupt: async () => null },
+    appServerConversations: new Map(), persistedAppServerThreads: new Map(), latestInjectionTsFor: () => injectedAt,
+    log: () => {}, resolveCommandSessionId: async () => "sid", detectSessionAgentType: () => "claude",
+    resolveSessionCommandPane: async () => ({ tmuxTarget: "ct-claude-test:0.0", proc: { pid: 42 } }),
+    lastHookStatus: { get: () => ({ status: hook }) }, captureTmuxLiveState: async () => ({ state: pane }),
+    glyphlessPromptPattern: () => null, decideEscape, turnLooksActive,
+    tmuxExec: async () => {}, process: { kill: () => {} }, observeSessionInput: () => {},
+    syncServiceRef: { releaseQueued: async (id: string) => { released.push(id); } }, logConvexFailure: () => {},
+  };
+  const run = compile(`return async (release) => { let result, error; const commandArgs = JSON.stringify({ conversation_id: "conv", pressed_at: Date.now(), release_queued: release }); switch ("escape") { ${body} } return {result, error}; };`, deps);
+  expect((await run(true)).result).toBe("escape_sent");
+  expect(released).toEqual([]);
+  hook = "idle"; pane = "idle";
+  expect((await run(false)).result).toBe("escape_no_active_turn");
+  expect(released).toEqual([]);
+  expect((await run(true)).result).toBe("escape_no_active_turn");
+  expect(released).toEqual(["conv"]);
+  // A newer message started a turn after the press: the row queues behind it.
+  hook = "working"; pane = "busy"; injectedAt = clock + 1;
+  expect((await run(true)).result).toBe("escape_message_injected_after_press");
+  expect(released).toEqual(["conv"]);
+});
+
 test("a failed remote write never arms inference", async () => {
   const f = fixture(false);
   f.remoteWrite("ct-claude-test:0.0", [3]);

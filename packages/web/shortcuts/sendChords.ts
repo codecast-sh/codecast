@@ -17,6 +17,7 @@ export const SEND_CHORDS: ReadonlyArray<{ accel: string; label: string; surface?
   { accel: "alt+enter", label: "Send and advance" },
   { accel: "alt+shift+enter", label: "Send and stash", surface: "actions.fleet" },
   { accel: "meta+shift+enter", label: "Fork and send", surface: "actions.fleet" },
+  { accel: "shift+escape", label: "Stop and send", surface: "actions.fleet" },
   { accel: "meta+alt+enter", label: "Send together with others' drafts", surface: "actions.fleet" },
   { accel: "meta+shift+e", label: "Rich editor", surface: "actions.fleet" },
   { accel: "alt+shift+h", label: "Hand off to a teammate", surface: "composer.handoff" },
