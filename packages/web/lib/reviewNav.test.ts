@@ -4,7 +4,7 @@ import { JSDOM } from "jsdom";
 
 import { closeDomWindow } from "../test-helpers/domGlobals";
 // The walker is DOM-driven: replies are `.cc-msg-review` regions under
-// `#msg-<id>` rows, chunks are the top-level blocks of their `.cc-content`.
+// `#msg-<id>` rows (keyed by their `data-review-message`), chunks are the top-level blocks of their `.cc-content`.
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://app.test/" });
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -33,7 +33,7 @@ function mount(replies: Record<string, number>) {
     Object.entries(replies)
       .map(
         ([id, blocks]) =>
-          `<div id="msg-${id}"><div class="cc-msg-review"><div class="cc-content">${"<p>x</p>".repeat(blocks)}</div></div></div>`,
+          `<div id="msg-${id}"><div class="cc-msg-review" data-review-message="${id}"><div class="cc-content">${"<p>x</p>".repeat(blocks)}</div></div></div>`,
       )
       .join("") + `<form><textarea data-chat-input></textarea></form>`;
 }

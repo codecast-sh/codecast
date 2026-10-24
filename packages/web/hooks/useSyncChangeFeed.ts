@@ -29,7 +29,8 @@ import { beginSyncInflight } from "../store/syncActivity";
 // runs. The old Date.now()+overlap change feed survives in two roles here: a
 // one-time upgrade BRIDGE (a warm cache drains getChangesSince from its legacy
 // cursor, carrying the hard deletes of the away window, then the cursor is
-// dropped once the log cursors are stamped) and the dev-only directional
+// dropped once the log cursors are stamped; a cursor older than
+// LEGACY_BRIDGE_MAX_AGE_MS resyncs every scope instead) and the dev-only directional
 // shadow comparator (localStorage SYNCLOG_SHADOW=1) that asserts the log path
 // is a superset of the legacy feed.
 
@@ -63,6 +64,13 @@ const LEGACY_META_KEY = "changefeed:v1";
 const LEGACY_OVERLAP_MS = 10_000;
 const LEGACY_FEED_LIMIT = 1000;
 const LEGACY_MAX_PAGES = 50;
+// The bridge is worth running only for a cursor it can drain in one run. A
+// page of the legacy feed moved 148 s of history and took 14.6 s on prod
+// (2026-10-23), so an hour of history is ~25 pages and ~6 minutes, with every
+// floor held closed until the scopes stamp. An older cursor (a cache last
+// opened before the cutover) would replay for days and never reach the scopes,
+// so it takes the resync contract instead: full crawl backfill, scopes at head.
+export const LEGACY_BRIDGE_MAX_AGE_MS = 60 * 60 * 1000;
 
 // Single definition lives in the store (stampSyncAck's immediate-retire branch
 // reads the same key); re-exported here for the applier's tests.
@@ -381,37 +389,44 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   });
 }
 
+type ScopeHead = { scope_key: string; position: number; floor: number };
+
+// Resync: the log can no longer prove the gap behind this scope's cursor (or
+// it never had one and the legacy bridge cannot cover the away window). Drop
+// the cursor and every crawl watermark the scope owns, so the next crawl is a
+// FULL backfill, then restamp at head.
+function resetScopeForResync(head: ScopeHead): void {
+  const metaKey = scopeMetaKey(head.scope_key);
+  const s = useInboxStore.getState();
+  s.clearSyncMeta(metaKey);
+  s.clearCrawlMetaForScope(head.scope_key);
+  // The team feed cache only grows and learns of removals (a member who
+  // left) from this scope's rows alone; past retention the log cannot say
+  // which rows should have gone, so the cache goes and refills.
+  if (head.scope_key.startsWith("team:")) s.dropTeamFeedCache(head.scope_key.slice(5));
+  s.recordSyncMeta(metaKey, { cursor: head.position });
+  // Every write acknowledged at or below the head has landed in the floor
+  // the recut cursor stands on; a lock still holding one would re-assert its
+  // value over the floor's rows (found by the multi-window simulation).
+  s.retireAckedPending(head.scope_key, head.position);
+  // The one-shot floors stand on the cursor that was just moved: recut them
+  // (after the restamp, so the recut query is above the new cursor).
+  s.bumpSyncLogFloorEpoch();
+}
+
 // Catch one scope up to its head. Cold scope: stamp the cursor at the head we
 // were handed — the past is owned by the snapshot floors and cold backfill
-// (design D9), the future by the log from this position. Resync (retention
-// passed the cursor): drop the cursor and every crawl watermark the scope
-// owns, so the next crawl is a FULL backfill, then restamp at head.
+// (design D9), the future by the log from this position. Retention passed the
+// cursor: resync (resetScopeForResync).
 export async function catchUpScope(
   convex: any,
-  head: { scope_key: string; position: number; floor: number },
+  head: ScopeHead,
   purgedTeams: Set<string>,
 ): Promise<void> {
   const store = useInboxStore.getState();
   const metaKey = scopeMetaKey(head.scope_key);
   const meta = store.syncMeta[metaKey];
-
-  const resetForResync = () => {
-    const s = useInboxStore.getState();
-    s.clearSyncMeta(metaKey);
-    s.clearCrawlMetaForScope(head.scope_key);
-    // The team feed cache only grows and learns of removals (a member who
-    // left) from this scope's rows alone; past retention the log cannot say
-    // which rows should have gone, so the cache goes and refills.
-    if (head.scope_key.startsWith("team:")) s.dropTeamFeedCache(head.scope_key.slice(5));
-    s.recordSyncMeta(metaKey, { cursor: head.position });
-    // Every write acknowledged at or below the head has landed in the floor
-    // the recut cursor stands on; a lock still holding one would re-assert its
-    // value over the floor's rows (found by the multi-window simulation).
-    s.retireAckedPending(head.scope_key, head.position);
-    // The one-shot floors stand on the cursor that was just moved: recut them
-    // (after the restamp, so the recut query is above the new cursor).
-    s.bumpSyncLogFloorEpoch();
-  };
+  const resetForResync = () => resetScopeForResync(head);
 
   if (meta?.cursor === undefined) {
     store.recordSyncMeta(metaKey, { cursor: head.position });
@@ -512,9 +527,15 @@ export async function catchUp(convex: any): Promise<void> {
   // capture have higher positions and are replayed by the log next run.
   const res: any = await convex.query(api.syncLog.getHeads, {});
   if (!res) return;
-  const heads: Array<{ scope_key: string; position: number; floor: number }> = res.heads ?? [];
-  const hadLegacy = !!store.syncMeta[LEGACY_META_KEY]?.cursor;
-  const drainComplete = await drainLegacyBridge(convex);
+  const heads: ScopeHead[] = res.heads ?? [];
+  const legacyCursor = store.syncMeta[LEGACY_META_KEY]?.cursor;
+  const hadLegacy = !!legacyCursor;
+  // Too old to drain in a run: every scope resyncs instead, including one an
+  // earlier partial run stamped, since the gap behind it was never proven. It
+  // stands in for the drain only when there are scopes to resync; an auth blip
+  // ({heads: []}) keeps the legacy cursor for the next run.
+  const legacyStale = hadLegacy && runStart - legacyCursor > LEGACY_BRIDGE_MAX_AGE_MS;
+  const drainComplete = legacyStale ? heads.length > 0 : await drainLegacyBridge(convex);
   // Sequential by design: one serialized apply pipeline (design D7), so a stale
   // stage-two fetch can never land after a fresher one. `purgedTeams` fences a
   // scope revoked mid-run — its stale head must not restamp the cursor the
@@ -525,7 +546,7 @@ export async function catchUp(convex: any): Promise<void> {
   // A cold scope (no cursor) stamps at head and is therefore never "behind".
   for (const head of heads) {
     const cursor = store.syncMeta[scopeMetaKey(head.scope_key)]?.cursor;
-    store.setSyncLogLag(head.scope_key, cursor === undefined ? 0 : Math.max(0, head.position - cursor));
+    store.setSyncLogLag(head.scope_key, cursor === undefined || legacyStale ? 0 : Math.max(0, head.position - cursor));
   }
   // Each scope is isolated (review): one scope whose replay fails every run
   // (a range page the server cannot serve, a poisoned byIds row) must not stop
@@ -536,7 +557,8 @@ export async function catchUp(convex: any): Promise<void> {
   for (const head of heads) {
     if (head.scope_key.startsWith("team:") && purgedTeams.has(head.scope_key.slice(5))) continue;
     try {
-      await catchUpScope(convex, head, purgedTeams);
+      if (legacyStale) resetScopeForResync(head);
+      else await catchUpScope(convex, head, purgedTeams);
     } catch (e) {
       console.warn("[syncLog] scope catch-up failed", head.scope_key, e);
     } finally {

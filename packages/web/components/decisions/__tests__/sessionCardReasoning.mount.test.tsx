@@ -118,7 +118,10 @@ test("in the queue an advisory card opens as the sheet, with its place in the qu
   const { pane, unmount } = await mount(<SessionDecisionCard item={item(false)} stepper={stepper} />);
   const root = pane.firstElementChild!;
   expect(root.classList.contains("decision-sheet")).toBe(true);
-  expect(root.textContent).toContain("decision 2 of 5");
+  const place = pane.querySelector("[data-decision-place]")!;
+  expect(place.textContent).toContain("2 of 5");
+  expect(place.querySelector('[aria-label="Previous decision"]')).toBeNull(); // no onPrev handed in
+  expect(place.querySelector('[aria-label="Next decision"]')).not.toBeNull();
   readingOrder(pane);
   unmount();
 });

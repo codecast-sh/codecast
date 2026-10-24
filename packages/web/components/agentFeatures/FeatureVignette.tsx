@@ -378,6 +378,23 @@ const VIGNETTES: Record<string, (t: Tone) => ReactNode> = {
     </Panel>
   ),
 
+  vault: (t) => (
+    <div className="w-full max-w-[240px] space-y-1.5">
+      <Panel className="p-2">
+        <div className="flex items-center gap-1.5 text-sol-text">
+          <Lock className={`h-3 w-3 ${t.text}`} /> STRIPE_TEST_KEY
+        </div>
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <span className="flex-1 rounded border border-sol-border/70 bg-sol-bg-alt/60 px-1.5 py-0.5 tracking-widest text-sol-text-dim">••••••••••</span>
+          <span className={`rounded px-1.5 py-0.5 ${t.tile}`}>Save</span>
+        </div>
+      </Panel>
+      <div className="flex items-center gap-1.5 px-1 text-sol-text-dim">
+        <Dot className={t.dot} /> used by 3 sessions · 2m ago
+      </div>
+    </div>
+  ),
+
   computer: (t) => (
     <Panel className="relative w-full max-w-[240px] overflow-hidden">
       <div className="flex gap-1 border-b border-sol-border/60 px-2 py-1.5">

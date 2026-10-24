@@ -2,7 +2,7 @@
 // category's accent. Shared by the Agent features page, the illustrations and
 // the upsells, so a feature reads the same in every place it appears.
 import {
-  AlarmClock, AppWindow, Blocks, Brain, CheckCheck, Gauge, GitFork, GitPullRequest, Globe, Layers, LayoutDashboard,
+  AlarmClock, AppWindow, Blocks, Brain, CheckCheck, Gauge, GitFork, GitPullRequest, Globe, KeyRound, Layers, LayoutDashboard,
   ListChecks, MessagesSquare, Monitor, Network, Phone, Pin, Puzzle, Scale, Send, Smartphone, SquareSlash, Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -27,6 +27,7 @@ const ICONS: Record<string, LucideIcon> = {
   publish: Globe,
   mods: Puzzle,
   browser: AppWindow,
+  vault: KeyRound,
   computer: Monitor,
   sim: Smartphone,
   check: CheckCheck,

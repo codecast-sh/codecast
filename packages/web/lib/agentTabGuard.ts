@@ -4,7 +4,7 @@
 // theirs: the controls that open an Ask first secret, approve its read, or
 // take the guard off stay disabled here, saying who does it.
 
-import { useCallback, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
 import { approvesSecretRead } from "@codecast/shared/contracts/secrets";
 import { AGENT_TAB_EVENT, isAgentDrivenTab } from "./desktopHandoff";
 
@@ -23,8 +23,19 @@ function subscribe(onChange: () => void) {
   return () => document.removeEventListener(AGENT_TAB_EVENT, onChange);
 }
 
+const noSubscription = () => () => {};
+
+/** Answers for everything below it instead of this tab's stamp. The homepage
+ *  hero sets it, so its controls never listen to the visitor's document. */
+export const AgentTabOverride = createContext<boolean | undefined>(undefined);
+
 export function useAgentDrivenTab(): boolean {
-  return useSyncExternalStore(subscribe, isAgentDrivenTab, () => false);
+  const override = useContext(AgentTabOverride);
+  return useSyncExternalStore(
+    override === undefined ? subscribe : noSubscription,
+    override === undefined ? isAgentDrivenTab : () => override,
+    () => override ?? false,
+  );
 }
 
 /** Why option `index` of `decision` is held in an agent's tab, else undefined. */

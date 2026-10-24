@@ -8,6 +8,8 @@
  *   Convex        a stub client: queries load forever, writes resolve null
  *   entity pills  answered from the chapters' fixtures, no query, no store read
  *   personify     off, whatever the visitor chose
+ *   roles         each fixture row's own role snapshot, never the visitor's org
+ *   agent tab     never an agent's, so no control listens for the stamp
  *   comment tools off, whatever the visitor chose
  *   theme         light Classic (tokens are also re-declared on .hero-sandbox)
  *   reveal bands  reported as already inside one, so none mounts a real pane
@@ -52,6 +54,8 @@ import { MemoryRouter, UNSAFE_LocationContext } from "react-router";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeContext } from "@/components/ThemeProvider";
 import { PersonifyOverride } from "@/hooks/usePersonifyAll";
+import { RoleRowsOverride } from "@/hooks/useLiveIdentityRow";
+import { AgentTabOverride } from "@/lib/agentTabGuard";
 import { CommentToolsOverride } from "@/hooks/useCommentTools";
 import { EntityFixtureContext } from "@/lib/entityDisplay";
 import { HoverCardsOff } from "@/lib/hoverCardsOff";
@@ -167,6 +171,8 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
       <ConvexProvider client={heroConvexStub}>
         <ThemeContext.Provider value={HERO_THEME}>
           <PersonifyOverride.Provider value={false}>
+          <RoleRowsOverride.Provider value={null}>
+          <AgentTabOverride.Provider value={false}>
           <CommentToolsOverride.Provider value={false}>
           <TeamFeatureOverride.Provider value={NO_FEATURES}>
             <EntityFixtureContext.Provider value={HERO_ENTITIES}>
@@ -216,6 +222,8 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
             </EntityFixtureContext.Provider>
           </TeamFeatureOverride.Provider>
           </CommentToolsOverride.Provider>
+          </AgentTabOverride.Provider>
+          </RoleRowsOverride.Provider>
           </PersonifyOverride.Provider>
         </ThemeContext.Provider>
       </ConvexProvider>

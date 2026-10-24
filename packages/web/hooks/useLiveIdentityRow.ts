@@ -3,23 +3,40 @@
 // module (see usePersonifyAll). Every identity component reads its row through
 // this, so a role's standing session wears the role's given name and face on
 // every surface, even when the row it was handed carries no snapshot.
-import { useMemo } from "react";
+import { createContext, useContext, useMemo, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
-import { identityRowOf, liveRoleSig, roleAuthorOf, roleOfUser, speakerOf, withLiveRole, type IdentityRow, type SessionIdentity } from "../lib/sessionIdentity";
+import { identityRowOf, liveRoleSig, roleAuthorOf, roleOfUser, speakerOf, withLiveRole, type IdentityRow, type RoleRows, type SessionIdentity } from "../lib/sessionIdentity";
 import { orgRolesSig } from "./useOrgRoles";
 import { usePersonifyAll } from "./usePersonifyAll";
+
+/** Answers the role rows for everything below it instead of the store; null
+ *  is "no roles", so each row keeps the role snapshot it carries. The homepage
+ *  hero sets it, so its fixtures never read the visitor's org. */
+export const RoleRowsOverride = createContext<RoleRows | null | undefined>(undefined);
+
+const noSubscription = () => () => {};
 
 export function useLiveIdentityRow<T extends IdentityRow>(row: T): T;
 export function useLiveIdentityRow<T extends IdentityRow>(row: T | null): T | null;
 export function useLiveIdentityRow<T extends IdentityRow>(row: T | null): T | null {
-  // Subscribes to the matched role's fields alone: the org tree's ref flips
+  const override = useContext(RoleRowsOverride);
+  const rows = () => (override === undefined ? useInboxStore.getState().orgTree : override);
+  // A row with neither pointer is no role's (standingRoleOf), whatever the
+  // role rows say, so it costs the store no subscription: every card and
+  // sidebar row resolves its identity through here. Otherwise it subscribes
+  // to the matched role's fields alone, since the org tree's ref flips
   // whenever anything in the workspace's org changes.
-  const sig = useInboxStore((s) => liveRoleSig(row, s.orgTree));
+  const mayBeRole = !!row && (!!row.standing_role_id || !!row.acting_user_id);
+  const sig = useSyncExternalStore(
+    override === undefined && mayBeRole ? useInboxStore.subscribe : noSubscription,
+    () => liveRoleSig(row, rows()),
+    () => liveRoleSig(row, override === undefined ? useInboxStore.getInitialState().orgTree : override),
+  );
   return useMemo(
-    () => (row ? withLiveRole(row, useInboxStore.getState().orgTree) : null),
-    [row, sig], // eslint-disable-line react-hooks/exhaustive-deps
+    () => (row ? withLiveRole(row, rows()) : null),
+    [row, sig, override], // eslint-disable-line react-hooks/exhaustive-deps
   );
 }
 

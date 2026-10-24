@@ -657,7 +657,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
               // The queue's own controls: step either way, and the count opens the whole list.
               <span className="shrink-0 flex items-center rounded-full border border-sol-border text-[11px] text-sol-text-muted tabular-nums" data-decision-place>
                 {stepper.onPrev && stepper.total > 1 && (
-                  <button onClick={stepper.onPrev} className="pl-1.5 pr-0.5 py-0.5 rounded-l-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Previous decision (←)" aria-label="Previous decision">
+                  <button onClick={stepper.onPrev} className="pl-1.5 pr-0.5 py-0.5 rounded-l-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Previous decision" aria-label="Previous decision">
                     <ChevronLeft className="w-3.5 h-3.5" />
                   </button>
                 )}
@@ -667,7 +667,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
                   <span className="decision-head-short">{stepper.position}/{stepper.total}</span>
                 </Link>
                 {stepper.total > 1 && (
-                  <button onClick={stepper.onSkip} className="pl-0.5 pr-1.5 py-0.5 rounded-r-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Next decision (→)" aria-label="Next decision">
+                  <button onClick={stepper.onSkip} className="pl-0.5 pr-1.5 py-0.5 rounded-r-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Next decision" aria-label="Next decision">
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                 )}
