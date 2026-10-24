@@ -1407,6 +1407,13 @@ describe("orgProposals.reply (S39)", () => {
     expect((await db.get(p.id)).status).toBe("resolved");
     // A change already decided is left as decided: answering it again writes nothing.
     await expect(performReply(ctxOf(db), ME as any, { proposal: p.short_id, items: [{ verdict: "approve", seqs: [2] }] })).rejects.toThrow("op-1 is resolved");
+    // The same answers arriving again (an outbox replaying a reply whose
+    // first delivery closed the proposal) are delivered, not refused: the
+    // client would otherwise take back what the server already holds.
+    const before = JSON.stringify(p.rows());
+    expect(await performReply(ctxOf(db), ME as any, { proposal: p.short_id, provision: false, items: [{ verdict: "approve", seqs: [1] }, { verdict: "reject", seqs: [2, 3] }] })).toMatchObject({ applied: 0, resolved: true });
+    expect(JSON.stringify(p.rows())).toBe(before);
+    await expect(performReply(ctxOf(db), ME as any, { proposal: p.short_id, items: [{ verdict: "note", seqs: [1], text: "late" }] })).rejects.toThrow("op-1 is resolved");
   });
 
   test("a revised proposal refuses the whole reply and writes nothing; an agent caller, a bad change, a change answered twice and a verdict with no changes are refused", async () => {

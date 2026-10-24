@@ -1163,3 +1163,13 @@ describe("a hire that left an answer blank, and a bind run from the wrong folder
     expect((await bindTemplate(server.deps, "acme-growth", options)).project.dir).toBe(server.dir);
   });
 });
+
+// The update policy is the person's to change after the hire: bind carries it to
+// the server row, and a bind that names none leaves it as it was.
+test("bind --update-policy changes how releases reach the instance; a plain bind keeps it", async () => {
+  const f = fixture(); await f.install(); f.server.approve(); await f.reconcile();
+  await bindTemplate(f.server.deps, "product", { ...f.options, updatePolicy: "canary" });
+  expect(f.server.instances[0].update_policy).toBe("canary");
+  await bindTemplate(f.server.deps, "product", f.options);
+  expect(f.server.instances[0].update_policy).toBe("canary");
+});

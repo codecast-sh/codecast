@@ -875,14 +875,19 @@ export const andList = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.sl
 const clausesAbout = (subject: string, clauses: ReadonlyArray<(s: string) => string>): string[] => clauses.map((clause, i) => clause(i ? "it" : subject));
 const isClause = (x: unknown): x is (s: string) => string => typeof x === "function";
 const number =(n: number) => n.toLocaleString("en-US");
-/** The three limits in words, in one order: "2 hands, 8 wakes and 800,000 tokens". */
-export function capsWords(caps: { hands_per_day?: number | null; wakes_per_day?: number | null; tokens_per_day?: number | null }): string {
-  const parts: string[] = [];
-  const one = (n: number | null | undefined, unit: string, units: string) => { if (n !== undefined) parts.push(n === null ? `no limit on ${units}` : `${number(n)} ${n === 1 ? unit : units}`); };
+/** What a budget change sets, as one predicate: "may use up to 2 hands and 8
+ *  wakes a day and has no daily limit on tokens". Empty when it sets nothing. */
+export function capsWords(caps: { hands_per_day?: number | null; wakes_per_day?: number | null; tokens_per_day?: number | null; cards?: number }): string {
+  const daily: string[] = [], unlimited: string[] = [];
+  const one = (n: number | null | undefined, unit: string, units: string) => { if (n === null) unlimited.push(units); else if (n !== undefined) daily.push(`${number(n)} ${n === 1 ? unit : units}`); };
   one(caps.hands_per_day, "hand", "hands");
   one(caps.wakes_per_day, "wake", "wakes");
   one(caps.tokens_per_day, "token", "tokens");
-  return andList(parts);
+  return andList([
+    daily.length ? `may use up to ${andList(daily)} a day` : "",
+    unlimited.length ? `has no daily limit on ${andList(unlimited)}` : "",
+    caps.cards !== undefined ? `may hold up to ${number(caps.cards)} open ${caps.cards === 1 ? "card" : "cards"}` : "",
+  ].filter(Boolean));
 }
 
 /** The names a derived ask speaks in (S19): an agent by its handle, a
@@ -1612,7 +1617,7 @@ export function changeClauses(c: OrgChange, words: ChangeWords = {}): string[] {
       return [`${s} ${[gains && `also looks after ${gains}`, loses && `stops looking after ${loses}`].filter(Boolean).join(" and ") || "keeps its area of work"}`];
     }
     // A limit's number is never the card's to print (S23.2): there the change reads as the quiet sentence.
-    case "budget": return [brief ? quietChangeSentence(c, subject(who(c.handle))).replace(/\.$/, "") : `${subject(who(c.handle))} may use up to ${capsWords(c.caps)} a day`];
+    case "budget": return [brief ? quietChangeSentence(c, subject(who(c.handle))).replace(/\.$/, "") : (capsWords(c.caps) ? `${subject(who(c.handle))} ${capsWords(c.caps)}` : quietChangeSentence(c, subject(who(c.handle))).replace(/\.$/, ""))];
     case "trust": {
       const s = subject(who(c.handle)), on = autonomyOn(c.trust);
       if (brief) return [on ? `let ${s} start work in its area on its own` : `have ${s} ask before it starts work`];

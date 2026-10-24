@@ -1216,5 +1216,7 @@ describe("a role's charter edited in place", () => {
 test("a budget change can remove a daily limit: null is no limit, and reads that way", () => {
   expect(orgChangeError({ kind: "budget", handle: "growth", caps: { hands_per_day: null, tokens_per_day: null } })).toBeNull();
   expect(orgChangeError({ kind: "budget", handle: "growth", caps: {} })).not.toBeNull();
-  expect(capsWords({ hands_per_day: null, wakes_per_day: 12 })).toBe("no limit on hands and 12 wakes");
+  expect(capsWords({ hands_per_day: null, wakes_per_day: 12 })).toBe("may use up to 12 wakes a day and has no daily limit on hands");
+  expect(capsWords({ cards: 5 })).toBe("may hold up to 5 open cards");
+  expect(capsWords({})).toBe("");
 });

@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import type { OrgInitDeps } from "./orgInit.js";
 import { readStdinBody } from "./sendBody.js";
 import { LEARNING_OPT_IN_LABEL, LEARNING_OPT_IN_SENTENCE } from "@codecast/shared/contracts/orgTemplateLearningOptIn";
@@ -41,6 +41,7 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
   context(template.command("bind <instance>").description("Host step after approval: write the instance file from the answers, bind secret inputs to files on this machine, find or create the ledger tasks"))
     .option("--secret <key=path>", "Bind a secret input to a file on this host (repeatable); the path is recorded by hash, its contents never leave the machine", (value: string, all: string[]) => [...all, value], [])
     .option("--to <version>", "Move the instance to this published release first; without it, an upgrade accepted on the server (a person's Update, or the publisher's canary rollout) is performed")
+    .addOption(new Option("--update-policy <policy>", "How new releases reach this instance: manual, stable (offered as an Update) or canary (the publisher updates it, and the release is promoted once it runs clean here)").choices(["manual", "stable", "canary"]))
     .action(async (instance: string, options: any) => {
       const { bindTemplate } = await import("./orgTemplateRun.js");
       console.log(JSON.stringify(await bindTemplate(deps, instance, options), null, 2));

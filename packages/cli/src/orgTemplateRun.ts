@@ -14,7 +14,7 @@ import { fill, quoteTemplateArg, receiptPath, setupText, setupWords, toolsBlock 
 export { quoteTemplateArg, receiptPath };
 import { markSetup, nextHumanAsk, readiness, readinessHeader, recordEvidence, recordScores, setupRows, type InstanceState } from "./orgTemplateState.js";
 
-export type TemplateOptions = { dir: string; project?: string; team?: string; personal?: boolean; session?: string; adopt?: string[]; input?: string[]; secret?: string[]; to?: string; reportsTo?: string; apply?: boolean; dryRun?: boolean; status?: string; source?: string; detail?: string[]; evidence?: string; observedAt?: string; done?: boolean; skip?: boolean; open?: boolean };
+export type TemplateOptions = { dir: string; updatePolicy?: "manual" | "canary" | "stable"; project?: string; team?: string; personal?: boolean; session?: string; adopt?: string[]; input?: string[]; secret?: string[]; to?: string; reportsTo?: string; apply?: boolean; dryRun?: boolean; status?: string; source?: string; detail?: string[]; evidence?: string; observedAt?: string; done?: boolean; skip?: boolean; open?: boolean };
 export type TemplateReceipt = InstanceState & {
   schemaVersion: 1;
   instance: string;
@@ -437,6 +437,7 @@ async function registerInstance(deps: OrgInitDeps, receipt: TemplateReceipt, art
     project_id: receipt.project.id, role_id: receipt.role!.id, host: { machine: os.hostname(), dir: receipt.project.dir }, phase: "ready",
     config: receipt.config ?? {}, bindings: receipt.bindings, ledgers: receipt.ledgers, setup_text: setupText(artifact, receipt, true), from_session: options.session || sessionIdFromEnv() || undefined, ...boundary(receipt),
     routines: Object.fromEntries(Object.entries(receipt.routines).map(([id, r]) => [id, { triggerId: r.triggerId, external: r.external, retired: r.retired }])),
+    ...(options.updatePolicy ? { update_policy: options.updatePolicy } : {}),
   });
   receipt.instanceId = String(row._id ?? row.id);
   save(receipt);
