@@ -81,9 +81,6 @@ export type ShortcutAction =
   | 'permission.approve'
   | 'permission.deny'
   | 'permission.jumpOldest'
-  | 'review.nextFile'
-  | 'review.prevFile'
-  | 'review.comment'
   | 'review.approveBlock'
   | 'review.cutBlock'
   | 'review.undoVerdict'
@@ -451,9 +448,6 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'alt+8', action: 'workbench.8', skipInputCheck: true, description: 'Switch to saved layout 8' },
   { key: 'alt+9', action: 'workbench.9', skipInputCheck: true, description: 'Switch to saved layout 9' },
 
-  { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
-  { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },
-  { key: 'c', action: 'review.comment', when: 'review', description: 'Comment on line' },
   // Typed verdicts on the focused block of a message or plan under review
   // (MessageReview reads them with matchesAction). Each one joins the reply's
   // review batch and is sent to the agent as "Verdict: ...".

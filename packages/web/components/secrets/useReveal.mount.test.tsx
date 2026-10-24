@@ -19,7 +19,7 @@ async function mountReveal(payload: object) {
   const React = await import("react");
   const { ConvexProvider } = await import("convex/react");
   const { createRoot } = await import("react-dom/client");
-  const { useReveal, REVEAL_IDLE_MS } = await import("./parts");
+  const { useReveal, REVEAL_IDLE_MS } = await import("../../hooks/useReveal");
   const { act } = React;
 
   let reveals = 0;

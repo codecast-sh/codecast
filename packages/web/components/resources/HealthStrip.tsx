@@ -84,9 +84,9 @@ const GOVERNOR_FILL: Record<GovernorLevel, string> = {
 };
 
 const GOVERNOR_LABEL: Record<GovernorLevel, { text: string; tone: string }> = {
-  calm: { text: "Within budget", tone: "text-sol-text-dim" },
+  calm: { text: "Load normal", tone: "text-sol-text-dim" },
   busy: { text: "Busy", tone: "text-sol-yellow" },
-  over: { text: "Over budget: unattended work throttled, new starts held", tone: "text-sol-red" },
+  over: { text: "Overloaded: unattended work throttled, new starts held", tone: "text-sol-red" },
 };
 
 const W = 200;

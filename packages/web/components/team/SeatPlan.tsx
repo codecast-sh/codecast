@@ -11,20 +11,12 @@ import { useState } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import type { SeatOffer, SeatState } from "@codecast/convex/convex/teamBilling";
-import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import type { SeatOffer } from "@codecast/convex/convex/teamBilling";
+import type { EnforcedSeatState } from "../../hooks/useSeatState";
 import { useStripeRedirect } from "../simple/billing";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { seatUpgradeLedger } from "../consequential/seatUpgradeLedger";
 import { Button } from "../ui/button";
-
-export type EnforcedSeatState = Extract<SeatState, { enforced: true }>;
-
-/** The team's seat plan when seat billing is on here, else null. */
-export function useSeatState(teamId: Id<"teams">): EnforcedSeatState | null {
-  const state = useQueryNoThrow(api.teamBilling.getSeatState, { team_id: teamId }).data;
-  return state?.enforced ? state : null;
-}
 
 const DAY_MS = 86_400_000;
 const shortDate = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });

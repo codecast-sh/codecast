@@ -3,7 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { inProbation, type PasskeyMeta } from "@codecast/shared/contracts/secrets";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useInboxStore } from "../store/inboxStore";
-import { probationHours, useRemovePasskey } from "./settings/PasskeysSection";
+import { probationHours, useRemovePasskey } from "../hooks/useRemovePasskey";
 
 /**
  * A passkey set up with no grant behind it (an account's first, which an

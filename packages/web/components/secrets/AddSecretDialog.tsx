@@ -6,19 +6,19 @@
 
 import { useMemo, useRef, useState } from "react";
 import { ChevronLeft } from "lucide-react";
-import { useAction } from "convex/react";
 import { toast } from "sonner";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { SECRET_REDACTION_MIN, envFor, envNameIssue, totpParams, type LoginPayload, type SecretKind, type SecretMeta } from "@codecast/shared/contracts/secrets";
+import { SECRET_REDACTION_MIN, envFor, envNameIssue, totpParams, type SecretKind, type SecretMeta } from "@codecast/shared/contracts/secrets";
 import type { VaultScope } from "../../hooks/useSyncSecrets";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
-import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { DROP_OVER, FIELD, FIELD_MONO, FieldProblem, KIND, Row, useFileDrop } from "./parts";
+import { FieldProblem, Row } from "./parts";
+import { DROP_OVER, FIELD, FIELD_MONO, KIND, VAULT_DIALOG, defaultWhere } from "../../lib/secretLook";
+import { useFileDrop } from "../../hooks/useFileDrop";
+import { useCreate } from "../../hooks/useCreateSecret";
 import { ValueFields } from "./ValueForm";
-import { EMPTY_DRAFT, checkedPayload, loginEnv, nameIssue, namesIn, readEnvText, slugify, splitList, suggestName, vaultFailure, type ValueDraft } from "./vaultModel";
+import { EMPTY_DRAFT, checkedPayload, loginEnv, nameIssue, namesIn, readEnvText, slugify, splitList, suggestName, type ValueDraft } from "./vaultModel";
 
 /** One secret of a kind, or Import with the .env text so far ("" for an empty paste box). */
 export type AddMode = { kind: SecretKind } | { import: string };
@@ -30,37 +30,6 @@ const KINDS: SecretKind[] = ["key", "login", "file", "signin"];
 const NAME_EXAMPLE: Record<SecretKind, string> = { key: "stripe-test", login: "github-bot", file: "gcp-service-account", signin: "vercel" };
 /** A line under a form row's field, in the field's column (Row's 6.5rem label plus its gap). */
 const UNDER_FIELD = "-mt-1 pb-1 pl-[calc(6.5rem+0.75rem)] text-[11.5px]";
-
-/** Paint the row, create it, and settle the stub on the answer. Resolves with the error sentence, or null. */
-export function useCreate(scope: VaultScope) {
-  const create = useAction(api.secrets.create);
-  const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ""));
-  return async (where: "team" | "personal", fields: { name: string; kind: SecretKind; payload: unknown; env?: string[]; sites?: string[]; note?: string }) => {
-    const { stageSecret, settleSecretStub } = useInboxStore.getState();
-    const now = Date.now();
-    const stubId = `sec_stub_${now.toString(36)}${Math.random().toString(36).slice(2, 7)}`;
-    const team = where === "team" ? scope.team : null;
-    const { payload, ...meta } = fields;
-    stageSecret({
-      _id: stubId,
-      short_id: undefined as unknown as string,
-      status: "ready",
-      workspace: team ? team.key : scope.personal!,
-      team_id: team?.id,
-      created_by: me,
-      created_at: now,
-      updated_at: now,
-      ...meta,
-      env: meta.env?.length ? meta.env : undefined,
-      sites: meta.sites?.length ? meta.sites : undefined,
-      note: meta.note?.trim() || undefined,
-      has_otp: fields.kind === "login" ? !!(payload as LoginPayload).totp_seed : undefined,
-    } as SecretMeta);
-    const res: any = await create({ ...fields, ...(team ? { team_id: team.id as any } : { personal: true }) }).catch(vaultFailure);
-    settleSecretStub(stubId, res?.error ? null : res.short_id);
-    return res?.error ? (res.error as string) : null;
-  };
-}
 
 /** Team <name> or Only me, both always named, so where a secret lands is never a guess. */
 export function ScopePicker({ scope, value, onChange }: { scope: VaultScope; value: "team" | "personal"; onChange: (v: "team" | "personal") => void }) {
@@ -83,13 +52,6 @@ export function ScopePicker({ scope, value, onChange }: { scope: VaultScope; val
     </div>
   );
 }
-
-/** The Vault's dialogs: pinned near the top so a taller form grows downward and the controls above stay under the pointer. */
-export const VAULT_DIALOG =
-  "top-[12vh] w-[34rem] max-w-[calc(100vw-1.5rem)] translate-y-0 grid-cols-[minmax(0,1fr)] gap-0 overflow-hidden border-sol-border bg-sol-bg p-0 text-sol-text data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 sm:rounded-xl [&>*]:min-w-0";
-
-/** Where a new secret goes until the person picks: the team when there is one. The dialog and the composer's catch both open on it. */
-export const defaultWhere = (scope: VaultScope): "team" | "personal" => (scope.team ? "team" : "personal");
 
 /** `onSignin` hands over to Save a sign-in (SaveSignin.tsx) when its kind is picked: a sign-in is captured from a browser, never typed. */
 export function AddSecretDialog({ mode, onClose, onSignin, scope, rows, onCreated }: { mode: AddMode; onClose: () => void; onSignin: () => void; scope: VaultScope; rows: SecretMeta[]; onCreated?: (name: string) => void }) {

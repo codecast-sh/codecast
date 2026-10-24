@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SecretMeta } from "@codecast/shared/contracts/secrets";
-import { askFirstOffLedger, deleteLedger, rotateLedger } from "./SecretDetail";
-import { declineLedger } from "./ValueForm";
+import { askFirstOffLedger, declineLedger, deleteLedger, rotateLedger } from "../../lib/secretLedgers";
 
 const row = { _id: "s1", short_id: "sec-1", name: "zz-key", kind: "key", status: "ready", workspace: "user:u1", created_by: "u1", created_at: 0, updated_at: 0, use_count: 0 } as unknown as SecretMeta;
 

@@ -22,65 +22,58 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useDevices, type Device } from "../DeviceBadge";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { KeyCap } from "../KeyCap";
-import { ScopePicker, VAULT_DIALOG, type VaultScope } from "./AddSecretDialog";
-import { CommandDisclosure, FIELD_MONO, KindGlyph, Row } from "./parts";
+import { ScopePicker, type VaultScope } from "./AddSecretDialog";
+import { CommandDisclosure, KindGlyph, Row } from "./parts";
+import { FIELD_MONO, VAULT_DIALOG } from "../../lib/secretLook";
+import { shareSigninLedger } from "../../lib/secretLedgers";
 import { vaultFailure } from "./vaultModel";
+import { useSampleVault, type SampleVault } from "./sampleVault";
 
 type Team = { id: string; name: string } | null;
 type Saved = { short_id: string; name: string; host: string; cookies: number; action: "created" | "rotated" | "filled"; account_hint?: string };
 
 /** The command a person runs to save it through the agent browser instead. */
-export function agentBrowserLines(host: string, name: string, team: Team): string {
+function agentBrowserLines(host: string, name: string, team: Team): string {
   const site = host || "<site>";
   const where = team ? ` --team ${/^[\w.-]+$/.test(team.name) ? team.name : `"${team.name.replace(/"/g, '\\"')}"`}` : " --personal";
   return `cast browser login ${site}\ncast vault save-signin ${site}${name && name !== signinName(host) ? ` --name ${name}` : ""}${where}`;
 }
 
 /** The command's outcome in words a person can act on. */
-export function captureFailure(error: string, laptop: string): string {
+function captureFailure(error: string, laptop: string): string {
   if (error === "expired_ttl") return `${laptop} never picked it up: is it asleep, or its codecast daemon stopped?`;
   if (/Unknown command/i.test(error)) return `codecast on ${laptop} is too old for this: run cast update there`;
   return error;
 }
 
-/** Sharing a sign-in with a team gives every agent there the person's own session, so it is reviewed first, with what the check found. */
-export function shareSigninLedger(r: { host: string; team: string; people: number; laptop: string; cookies: number; account_hint?: string }): SwitchLedger {
-  return {
-    name: `Share your ${r.host} sign-in`,
-    subject: `Team · ${r.team}`,
-    shift: null,
-    figures: [
-      { value: String(r.people), label: r.people === 1 ? "person's agents sign in as you" : "people's agents sign in as you", tone: "warn" },
-      { value: String(r.cookies), label: r.cookies === 1 ? "cookie" : "cookies" },
-    ],
-    rows: [
-      { k: "Site", v: r.host },
-      { k: "Account", v: r.account_hint ? `${r.account_hint}, from Chrome on ${r.laptop}` : `Yours, from Chrome on ${r.laptop}`, tone: "warn" },
-      { k: "Stays alive", v: "Agents write newer cookies back" },
-      { k: "To undo", v: "Delete it, then sign out on the site", tone: "warn" },
-    ],
-    confirm: "Share with the team",
-    keep: "Cancel",
-  };
-}
-
 /** `profile` is the Chrome profile a 0 count was read from (a laptop on an older codecast leaves it out). */
 type Checked = { host: string; cookies: number; account_hint?: string; profile?: string };
 
-/** One `requestSigninCapture` command on a laptop and its answer: a check (counts the cookies) or a save. */
+/** A sample Vault's one laptop, whose Chrome always holds the site. */
+const SAMPLE_LAPTOPS: Device[] = [{ device_id: "sample-laptop", label: "Sample laptop", platform: "darwin", last_seen: 0, is_remote: false, local_project_roots: [], online: true }];
+
+/** What a laptop would answer a sample Vault's command, at once. */
+function sampleAnswer(sample: SampleVault, check: boolean, args: { site: string; name: string; team: Team }) {
+  return JSON.stringify(check ? { host: args.site, cookies: 2, account_hint: "sample@example.test" } : sample.saveSignin(args));
+}
+
+/** One `requestSigninCapture` command on a laptop and its answer: a check (counts the cookies) or a save. A sample Vault answers it itself. */
 function useLaptopCommand<T>(check: boolean) {
   const request = useMutation(api.secrets.requestSigninCapture);
-  const [sent, setSent] = useState<{ id: Id<"daemon_commands">; laptop: string; at: number } | null>(null);
+  const sample = useSampleVault();
+  const [sent, setSent] = useState<{ id: Id<"daemon_commands">; laptop: string; at: number; answer?: string } | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
-  const { data } = useQueryNoThrow(api.users.getCommandResult, sent ? { command_id: sent.id } : "skip");
+  const { data: live } = useQueryNoThrow(api.users.getCommandResult, sent && !sent.answer ? { command_id: sent.id } : "skip");
+  const data = sent?.answer ? { result: sent.answer, error: undefined, claimed_at: Date.now() } : live;
   const reset = () => {
     setRefused(null);
     setSent(null);
   };
   const start = async (args: { site: string; name: string; device: Device; team: Team }) => {
     reset();
+    if (sample) return setSent({ id: "sample" as Id<"daemon_commands">, laptop: args.device.label, at: Date.now(), answer: sampleAnswer(sample, check, args) });
     const res: any = await request({
       site: args.site,
       name: args.name || undefined,
@@ -114,8 +107,9 @@ function useLaptopCommand<T>(check: boolean) {
  * confirms a share that was never possible. `review` is the share review,
  * for the caller to show in place of its own dialog.
  */
-export function useSigninWays({ host, name, team, onSaved }: { host: string; name: string; team: Team; onSaved?: (s: Saved) => void }) {
-  const { onlineLocals } = useDevices();
+function useSigninWays({ host, name, team, onSaved }: { host: string; name: string; team: Team; onSaved?: (s: Saved) => void }) {
+  const devices = useDevices();
+  const onlineLocals = useSampleVault() ? SAMPLE_LAPTOPS : devices.onlineLocals;
   const people = useInboxStore((s) => peopleOf(s.teamMembers).length);
   const [picked, setPicked] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);

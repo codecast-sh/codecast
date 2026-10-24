@@ -13,11 +13,6 @@ import { KeyCap } from "../KeyCap";
 
 export type StopRequest = { subagents: RunningSubagent[]; run: () => void; send?: boolean };
 
-/** Whether a stop that would take these subagents with it asks first. */
-export function stopNeedsConfirm(subagents: RunningSubagent[]): boolean {
-  return subagents.length > 0 && useInboxStore.getState().clientState?.ui?.confirm_stop_subagents !== false;
-}
-
 export function StopConfirm({ request, onClose }: { request: StopRequest | null; onClose: () => void }) {
   const [dontAsk, setDontAsk] = useState(false);
   const confirm = () => {

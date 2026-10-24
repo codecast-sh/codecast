@@ -112,7 +112,7 @@ export const callerOf = internalQuery({
   handler: async (ctx, args) => await getAuthenticatedUserId(ctx, args.api_token),
 });
 
-async function writeKey(
+async function resolveWriteKey(
   ctx: any,
   userId: Id<"users">,
   args: { team_id?: Id<"teams">; personal?: boolean },
@@ -489,7 +489,7 @@ export const redactionVersion = query({
 export const resolveCreate = internalQuery({
   args: { user_id: v.id("users"), name: v.string(), ...workspaceArgs },
   handler: async (ctx, args) => {
-    const where = await writeKey(ctx, args.user_id, args);
+    const where = await resolveWriteKey(ctx, args.user_id, args);
     if ("error" in where) return where;
     const twin = await byName(ctx, where.workspace, args.name);
     if (twin) return { error: duplicate(twin) };
@@ -1014,7 +1014,7 @@ export const request = mutation({
     const why = args.why?.trim() || undefined;
     const problem = metaProblem({ name, env, sites, note: why });
     if (problem) return { error: problem };
-    const where = await writeKey(ctx, userId, args);
+    const where = await resolveWriteKey(ctx, userId, args);
     if ("error" in where) return where;
     const conversation = await resolveConversation(ctx, userId, args.conversation);
     const now = Date.now();
@@ -1116,7 +1116,7 @@ export const requestSigninCapture = mutation({
       const p = secretNameProblem(name);
       if (p) return { error: p };
     }
-    const where = await writeKey(ctx, userId, args);
+    const where = await resolveWriteKey(ctx, userId, args);
     if ("error" in where) return where;
     const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
     const laptop = pickOnlineLocalDevice(devices as any, Date.now(), args.device_id);

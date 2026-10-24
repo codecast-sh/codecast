@@ -12,7 +12,9 @@ import { fingerprint } from "@codecast/shared/contracts/secrets";
 import type { FoundSecret } from "@codecast/shared/contracts/secretShapes";
 import { KeyCap } from "../KeyCap";
 import { useSecrets, useVaultScope } from "../../hooks/useSyncSecrets";
-import { ScopePicker, defaultWhere, useCreate } from "./AddSecretDialog";
+import { ScopePicker } from "./AddSecretDialog";
+import { defaultWhere } from "../../lib/secretLook";
+import { useCreate } from "../../hooks/useCreateSecret";
 import { nameIssue, namesIn, saveRemaining, withVaultReferences } from "./vaultModel";
 
 export function ComposerCatch({

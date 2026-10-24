@@ -135,6 +135,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/mutativeMiddleware.ts:replayBridgeTs": {
     shared: "written by an undo replay's beforeReplay and read by its afterReplay in the same synchronous call, inside one window's turn",
   },
+  "store/undo/policies/work.ts:SECRET_CLEARS": CONSTANT,
   "store/undoStack.ts:liveEntryToasts": { shared: "ids of the undo toasts on screen; the sim renders no toasts" },
 
   // The store's engine (@platform/engine, mirrored under platform/packages).
@@ -243,6 +244,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/desktopApps.ts:placedByShell": DESKTOP,
   "lib/desktopHandoff.ts:IN_SHELL_ROOT_SEGMENTS": CONSTANT,
   "lib/dispatchBinding.ts:CALLER_REPORTED_ACTIONS": CONSTANT,
+  "lib/dispatchBinding.ts:QUIET_ACTIONS": CONSTANT,
   "lib/imageByteCache.ts:opaqueOrigins": IMAGE_URLS,
   "lib/inboxViewHistory.ts:applying": { shared: "true only inside a synchronous popstate re-apply, which the sim never drives" },
   "lib/migrationPlan.ts:CLAUDE_TYPES": CONSTANT,

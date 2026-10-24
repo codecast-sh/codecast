@@ -33,8 +33,9 @@ const RAW_USE_QUERY = /(?<![A-Za-z0-9_$])useQuery\s*\(/;
  * Down to 25 on 2026-10-03: the page degrade tests (components/__tests__/
  * *.degrade.test.tsx) mount each page over a backend missing every function,
  * and each enrichment they caught re-throwing moved onto useQueryNoThrow.
+ * Down to 22 on 2026-10-24: ActivityFeed's feed query moved into hooks/useTeamFeed.
  */
-const PIN = 23;
+const PIN = 22;
 
 const result = checkRatchet({
   name: "raw useQuery outside hooks",

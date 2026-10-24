@@ -13,7 +13,8 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 import { copyToClipboard } from "../../lib/utils";
 import { formatInviteExpiry } from "../../lib/team/inviteExpiry";
-import { SeatPlanRow, useSeatState } from "./SeatPlan";
+import { SeatPlanRow } from "./SeatPlan";
+import { useSeatState } from "../../hooks/useSeatState";
 import "./teamFlow.css";
 
 export interface InvitePanelProps {

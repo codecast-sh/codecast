@@ -9,12 +9,12 @@ import { useRef, useState, useSyncExternalStore } from "react";
 import { Headphones, Link2, Loader2, Lock, Mic, MicOff, Users, Video, VideoOff, Volume2 } from "lucide-react";
 import { CHANNEL_HUDDLE_WARNING_SIZE } from "@codecast/shared/contracts";
 import { GuestPreview, canPickSpeaker } from "../../lib/calls/guestRoom";
-import { readJoinPrefs, rememberCamera, rememberDeviceCheck, rememberMic } from "../../lib/calls/joinPrefs";
+import { rememberCamera, rememberDeviceCheck, rememberMic } from "../../lib/calls/joinPrefs";
 import { switchDevice } from "../../lib/calls/callManager";
 import { canStartPrivate, closeHuddleStart, declineAnswer, runHuddleStart, type HuddleStartRequest } from "../../lib/calls/huddleStart";
 import { useInboxStore } from "../../store/inboxStore";
-import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { usePreview } from "../../hooks/useGuestPreview";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { SelectBox } from "../ui/select-box";
@@ -92,21 +92,6 @@ export default function HuddleStartDialog({ req }: { req: HuddleStartRequest }) 
       </DialogContent>
     </Dialog>
   );
-}
-
-// One preview per open dialog, opened with the remembered devices and the
-// remembered on/off, and closed with the dialog (a Start disposes it first, so
-// the join opens the devices fresh rather than beside a lit preview).
-export function usePreview(): GuestPreview | null {
-  const [preview, setPreview] = useState<GuestPreview | null>(null);
-  useMountEffect(() => {
-    const prefs = readJoinPrefs();
-    const p = new GuestPreview({ micId: prefs.micDeviceId, cameraId: prefs.cameraDeviceId, speakerId: prefs.speakerDeviceId });
-    setPreview(p);
-    void p.start({ mic: prefs.micOn, camera: prefs.cameraOn });
-    return () => p.dispose();
-  });
-  return preview;
 }
 
 // Who the start reaches, as a line of facts: the room, then who hears it.

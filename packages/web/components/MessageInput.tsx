@@ -79,7 +79,8 @@ import { useFileSearch } from "../lib/fsBrowse";
 import { findSecrets, type FoundSecret } from "@codecast/shared/contracts/secretShapes";
 import { ComposerCatch } from "./secrets/ComposerCatch";
 import { runningSubagents } from "../lib/runningSubagents";
-import { StopConfirm, stopNeedsConfirm, type StopRequest } from "./conversation/StopConfirm";
+import { StopConfirm, type StopRequest } from "./conversation/StopConfirm";
+import { stopNeedsConfirm } from "../lib/stopNeedsConfirm";
 
 const api = _typedApi as any;
 const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({ default: m.ComposeEditor })));

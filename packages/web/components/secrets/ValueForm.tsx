@@ -7,10 +7,12 @@
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { type SecretKind, type SecretMeta } from "@codecast/shared/contracts/secrets";
-import { useInboxStore } from "../../store/inboxStore";
-import { useFillRequest, useSwapValue } from "../../hooks/useSyncSecrets";
+import { useFillRequest, useSwapValue, useVaultActions } from "../../hooks/useSyncSecrets";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
-import { FIELD_MONO, Row, SecretInput, useFileDrop } from "./parts";
+import { Row, SecretInput } from "./parts";
+import { FIELD_MONO } from "../../lib/secretLook";
+import { declineLedger } from "../../lib/secretLedgers";
+import { useFileDrop } from "../../hooks/useFileDrop";
 import { SigninRequestFill } from "./SaveSignin";
 import { EMPTY_DRAFT, checkedPayload, classifyPaste, type ValueDraft } from "./vaultModel";
 
@@ -236,23 +238,6 @@ function TypedValueEditor({ row, mode, review, onStart, onDone, onCancel, autoFo
   );
 }
 
-/** Declining a request, as the confirm shows it: the session that asked wakes told no value is coming. */
-export function declineLedger(row: SecretMeta): SwitchLedger {
-  return {
-    name: `Decline ${row.name}`,
-    subject: `Asked by ${row.requested_by_name ?? "an agent"}`,
-    shift: null,
-    figures: [],
-    rows: [
-      ...(row.request_why ? [{ k: "For", v: row.request_why }] : []),
-      { k: "Its session", v: "Wakes, told no value is coming", tone: "warn" as const },
-      { k: "To undo", v: "The agent asks again" },
-    ],
-    confirm: "Decline",
-    keep: "Keep it open",
-  };
-}
-
 /**
  * The other answer to a request: it closes, and the sessions that asked are
  * told no (secrets.remove). Waking a session goes through the confirm first;
@@ -260,11 +245,11 @@ export function declineLedger(row: SecretMeta): SwitchLedger {
  * request, so a stale card or a replay after someone filled it removes nothing.
  */
 export function DeclineRequest({ row, onDeclined, className }: { row: SecretMeta; onDeclined?: () => void; className: string }) {
-  const removeSecret = useInboxStore((s) => s.removeSecret);
+  const { remove } = useVaultActions();
   const [reviewing, setReviewing] = useState(false);
   const decline = () => {
     setReviewing(false);
-    removeSecret(row._id, "requested");
+    remove(row._id, "requested");
     onDeclined?.();
   };
   return (
