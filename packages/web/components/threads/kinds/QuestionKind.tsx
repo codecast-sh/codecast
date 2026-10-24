@@ -6,6 +6,7 @@ import type { ThreadCardModel } from "../../../lib/threadCards";
 import { AgentIcon } from "../../ConversationList";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "../../PublishedPageEmbed";
+import { useHeldOption } from "../../../lib/agentTabGuard";
 
 // The question kind: a pending decision (cast decide / AskUserQuestion),
 // answerable in place. The row is the question itself; open, the context,
@@ -37,6 +38,7 @@ export function QuestionLabel({ card }: { card: ThreadCardModel }) {
 export function QuestionExpanded({ card, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const d = decisionOf(card);
   const [text, setText] = useState("");
+  const held = useHeldOption(d);
   const answer = useCallback(
     (index: number) => useInboxStore.getState().answerDecision(d._id, { index }),
     [d._id],
@@ -61,10 +63,11 @@ export function QuestionExpanded({ card, focusComposer }: { card: ThreadCardMode
       {d.report_slug && <PublishedPageEmbed slug={d.report_slug} decision={d._id} />}
       <div className="th-question-options" role="group" aria-label="Answer options">
         {d.options.map((o, i) => (
-          <button key={i} type="button" className="th-question-option" onClick={() => answer(i)}>
+          <button key={i} type="button" className="th-question-option" onClick={() => answer(i)} disabled={!!held(i)} title={held(i)}>
             <span className="th-question-option-label">
               {o.label}
               {d.default_option === i && <span className="th-question-default"> · default</span>}
+              {held(i) && <span className="th-question-default"> · {held(i)}</span>}
             </span>
             {o.description && <span className="th-question-option-desc">{o.description}</span>}
           </button>

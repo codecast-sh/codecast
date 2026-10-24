@@ -24,7 +24,11 @@
  *    the tree is ground truth, an edit log is a story about it.
  * 3. SECRETS CANNOT TRAVEL. `git add -A` respects .gitignore, so a gitignored
  *    .env is excluded by git itself. This is stronger than a deny list: there is
- *    no list to keep current and no bug that could add one.
+ *    no list to keep current and no bug that could add one. A secret written to
+ *    a file git does not ignore (`cast vault get x > creds.json`) is caught
+ *    before the push instead: knownValuesInPush reads every file the push would
+ *    upload for the daemon's known values (the Vault's among them), and the
+ *    daemon holds the push back while one is there.
  * 4. NEVER TOUCHES A REAL BRANCH. The snapshot goes to a hidden ref, never to
  *    refs/heads/*, so pushing a session's unpushed commits can't rewrite a shared
  *    branch or trigger CI. `git ls-remote --heads` does not list it.
@@ -275,6 +279,64 @@ export async function pushWipSnapshot(
     const error = (err.stderr?.toString() || err.message || String(e)).slice(0, 300);
     return { ok: false, error, permanent: isPermanentPushFailure(error) };
   }
+}
+
+/** A file a push would upload larger than this is not read for known values: a credential sits in a config file, not a dump. */
+const SCAN_MAX_BYTES = 1024 * 1024;
+/** How much blob content one cat-file call hands back. */
+const SCAN_BATCH_BYTES = 32 * 1024 * 1024;
+
+/**
+ * The files holding a known secret value that a push of `sha` would upload:
+ * every blob reachable from it and not from `exclude` (the snapshot's base,
+ * the last snapshot pushed), so each earlier turn's tree in the chain counts,
+ * not only the tip's. Text blobs up to SCAN_MAX_BYTES are read and handed to
+ * `find` (knownValueNames), which names the values it sees. The result holds
+ * paths and secret names, never a value.
+ */
+export async function knownValuesInPush(
+  cwd: string,
+  sha: string,
+  exclude: string[],
+  find: (text: string) => string[],
+): Promise<Array<{ path: string; names: string[] }>> {
+  const pathOf = new Map<string, string>();
+  for (const line of (await git(cwd, ["rev-list", "--objects", "--ignore-missing", sha, "--not", ...exclude])).split("\n")) {
+    const space = line.indexOf(" ");
+    if (space > 0 && line.length > space + 1) pathOf.set(line.slice(0, space), line.slice(space + 1));
+  }
+  if (!pathOf.size) return [];
+  const batches: string[][] = [[]];
+  let batchBytes = 0;
+  for (const row of (await git(cwd, ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], undefined, [...pathOf.keys()].join("\n") + "\n")).split("\n")) {
+    const [id, type, size] = row.split(" ");
+    if (type !== "blob" || !(Number(size) <= SCAN_MAX_BYTES)) continue;
+    if (batchBytes + Number(size) > SCAN_BATCH_BYTES) {
+      batches.push([]);
+      batchBytes = 0;
+    }
+    batches[batches.length - 1]!.push(id!);
+    batchBytes += Number(size);
+  }
+  const found: Array<{ path: string; names: string[] }> = [];
+  for (const ids of batches) {
+    if (!ids.length) continue;
+    const out = await new Promise<Buffer>((resolve, reject) => {
+      const child = execFile("git", ["-C", cwd, "cat-file", "--batch"], { encoding: "buffer", maxBuffer: SCAN_BATCH_BYTES * 2 }, (err, stdout) => (err ? reject(err) : resolve(stdout as Buffer)));
+      child.stdin?.end(ids.join("\n") + "\n");
+    });
+    // Each object: "<id> blob <size>\n", its bytes, "\n".
+    for (let at = 0; at < out.length;) {
+      const eol = out.indexOf(0x0a, at);
+      const [id, , size] = out.subarray(at, eol).toString("utf-8").split(" ");
+      const body = out.subarray(eol + 1, eol + 1 + Number(size));
+      at = eol + 1 + Number(size) + 1;
+      if (body.subarray(0, 8000).includes(0)) continue; // binary, as git judges it
+      const names = find(body.toString("utf-8"));
+      if (names.length) found.push({ path: pathOf.get(id!)!, names });
+    }
+  }
+  return found;
 }
 
 /**

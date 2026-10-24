@@ -14,6 +14,8 @@ import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor,
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 import { typedPollAnswer } from "./typedPollAnswer";
+import { redactSecrets } from "./redact";
+import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { CLAUDE_TURN_STATUS_LINE } from "./daemon";
 import * as interactivePrompt from "./interactivePrompt";
@@ -154,7 +156,7 @@ function fixture(transport = "tmux", cached = true) {
     LaunchPromptCarriedError, transcriptHasUserPrompt, launchPromptCarries,
     holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer, isForcedPastDialog, setForcedPastDialog,
     clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END,
-    tmuxExec, execAsync,
+    tmuxExec, execAsync, redactSecrets,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
     CloudAgentHoldError, CloudAgentUnsentError, pollPendingNow: () => {},
@@ -600,6 +602,22 @@ describe("machine prompt delivery safety", () => {
     await f.scan([{ _id: "held", content: "please continue", delivery_force: true }]);
     expect(f.bodies).toEqual(["please continue"]);
     expect(f.events.filter((e: string) => e.startsWith("hold:"))).toEqual(["hold:held"]);
+  });
+
+  // The held screen syncs beside the message and goes to daemon.log, so a
+  // Vault value the pane printed above the dialog is redacted like a transcript.
+  test("the screen a hold carries is redacted", async () => {
+    setKnownValuesForTest([{ value: "zz-held-value-77ab", name: "zz-held", vault: true }]);
+    try {
+      const f = fixture();
+      f.pendingInteractivePrompts.clear();
+      f.state.menu = `zz-held-value-77ab\n${menu}`;
+      await f.scan([{ _id: "held", content: "please continue" }]);
+      expect(f.holds[0]?.holdScreen).toContain("[redacted:known:zz-held]");
+      expect(f.holds[0]?.holdScreen).not.toContain("zz-held-value-77ab");
+    } finally {
+      setKnownValuesForTest(null);
+    }
   });
 
   // The pre-paste "injected" write and the hold's re-pend are parallel mutations; a write

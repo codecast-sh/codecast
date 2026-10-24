@@ -14,6 +14,7 @@ import { chosenOptions } from "../../lib/decisionLinks";
 import { ANSWER_WORDS, answerView, buildDecisionAnswer, moveInOrder, togglePicked, type AnswerDraft } from "../../lib/decisionAnswer";
 import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeCardView";
 import { PassDecision } from "./PassDecision";
+import { useHeldOption } from "../../lib/agentTabGuard";
 
 // The answer footer, per kind (docs/architecture/decisions-as-documents.md
 // D1 / D4): single = one option (digits 1 to 9, or a typed answer); multi =
@@ -77,7 +78,10 @@ function GenericAnswerControls({
   const canPass = !!onDismiss && !hosted && !decision.trial && decision.status === "pending";
   const [passOpen, setPassOpen] = useState(false);
 
-  const answerSingle = useCallback((index: number) => onAnswer({ index }), [onAnswer]);
+  const held = useHeldOption(decision);
+  const answerSingle = useCallback((index: number) => {
+    if (!held(index)) onAnswer({ index });
+  }, [onAnswer, held]);
   const answerText = useCallback(() => {
     const t = otherText.trim();
     if (!t) return;
@@ -176,8 +180,9 @@ function GenericAnswerControls({
             keys={keys}
             compact={compact}
             onPick={answerSingle}
-            tone={(n) => (n === primary ? "primary" : "plain")}
+            tone={(n) => (n === primary && !held(n) ? "primary" : "plain")}
             tags={tags}
+            held={held}
           />
           <TypeAnswerButton onOpen={openOther} keys={keys} />
         </div>
@@ -250,7 +255,7 @@ function GenericAnswerControls({
       </div>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, decision.options, decision.form, decision.default_option, decision.blocking, picked, order, values, keys, recommendation, hosted, compact, answerSingle, move, submit, togglePick, setValue]);
+  }, [kind, decision.options, decision.form, decision.default_option, decision.blocking, picked, order, values, keys, recommendation, hosted, compact, answerSingle, held, move, submit, togglePick, setValue]);
 
   return (
     <div>

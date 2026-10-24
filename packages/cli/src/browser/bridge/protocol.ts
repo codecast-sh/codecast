@@ -261,6 +261,18 @@ export function targetIdOfTab(tabId: number): string {
   return (tabId >>> 0).toString(16).toUpperCase().padStart(8, "0");
 }
 
+/**
+ * CDP's WebAuthn domain installs virtual authenticators and mints credentials
+ * on them. In the person's signed-in Chrome that is a passkey an agent holds,
+ * which is exactly what Vault's Touch ID check exists to rule out, so no door
+ * into a browser forwards it: not the bridge, not `raw`, not the extension.
+ */
+export function isWebAuthnMethod(method: string): boolean {
+  return /^WebAuthn\.\w+$/i.test(method);
+}
+
+export const WEBAUTHN_REFUSAL = "refusing CDP's WebAuthn domain: agents cannot create or use passkeys";
+
 export function tabIdOfTarget(targetId: string): number | null {
   if (!/^[0-9A-Fa-f]{1,8}$/.test(targetId)) return null;
   return parseInt(targetId, 16);

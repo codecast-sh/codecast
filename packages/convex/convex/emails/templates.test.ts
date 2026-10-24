@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderEmail, escapeHtml, type RenderedEmail } from "./render";
 import {
   artifactComment,
+  passkeyAdded,
   passwordChanged,
   passwordReset,
   teamInvite,
@@ -25,6 +26,15 @@ const ALL: Array<{ name: string; email: RenderedEmail }> = [
       teamName: "Analytical Engines",
       inviteUrl: "https://codecast.sh/join/ABCD1234",
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    }),
+  },
+  {
+    name: "passkeyAdded",
+    email: passkeyAdded({
+      email: "dev@example.com",
+      passkeyName: "MacBook Touch ID",
+      addedAt: 1755172800000,
+      settingsUrl: "https://codecast.sh/settings",
     }),
   },
   {

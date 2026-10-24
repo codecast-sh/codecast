@@ -14,6 +14,7 @@ import { internalAction, mutation } from "../functions";
 import { BRAND, type RenderedEmail } from "./render";
 import {
   artifactComment,
+  passkeyAdded,
   passwordChanged,
   teamInvite,
   welcome,
@@ -83,6 +84,17 @@ export const sendPasswordChanged = internalAction({
       args.email,
       passwordChanged({ email: args.email, changedAt: args.changed_at }),
       "password-changed",
+    );
+  },
+});
+
+export const sendPasskeyAdded = internalAction({
+  args: { email: v.string(), passkey_name: v.string(), added_at: v.number(), settings_url: v.string() },
+  handler: async (_ctx, args) => {
+    await deliver(
+      args.email,
+      passkeyAdded({ email: args.email, passkeyName: args.passkey_name, addedAt: args.added_at, settingsUrl: args.settings_url }),
+      "passkey-added",
     );
   },
 });

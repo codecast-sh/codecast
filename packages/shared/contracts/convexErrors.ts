@@ -1,4 +1,25 @@
 /**
+ * What an ArgumentValidationError says is wrong ("Object contains extra field
+ * `x` that is not in the validator.", "Value does not match validator. Path:
+ * .kind"), without the dump of the call's arguments Convex appends to it
+ * (Object:, Value:, Validator:). The dump holds every argument the call
+ * carried, an api token and a secret's value included, so the text a CLI
+ * route answers, a log line or a UI shows is this sentence and never the raw
+ * message. Null when the error is not an argument validation error.
+ */
+export function argumentValidationProblem(err: unknown): string | null {
+  const text = String((err as any)?.message ?? err ?? "");
+  const at = text.indexOf("ArgumentValidationError");
+  if (at < 0) return null;
+  return text
+    .slice(at + "ArgumentValidationError".length)
+    .replace(/^:\s*/, "")
+    .split(/\n\s*\n|\s(?:Object|Value|Validator):/)[0]
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
  * Human-readable message from a thrown Convex error. The client wraps every
  * server throw as "[CONVEX M(fn:name)] [Request ID: …] Server Error\nUncaught
  * Error: <the actual message>\n    at handler (…)" — none of which belongs in
@@ -8,6 +29,8 @@
 export function humanizeConvexError(err: unknown, fallback = "Something went wrong"): string {
   const data = (err as any)?.data;
   if (data && typeof data === "object" && typeof data.message === "string") return data.message;
+  const refused = argumentValidationProblem(err);
+  if (refused !== null) return refused || fallback;
   let msg = String((err as any)?.message ?? err ?? "");
   // Drop the stack tail.
   msg = msg.split(/\n\s*at\s/)[0];
@@ -19,8 +42,8 @@ export function humanizeConvexError(err: unknown, fallback = "Something went wro
   // String(err) puts the error's own name ahead of the wrapper, so a lead can come first too.
   const LEADS = /^(\s*(Uncaught\s+)?(Convex|ArgumentValidation)?Error:\s*)+/i;
   msg = msg.replace(LEADS, "");
-  // The HTTP client (ConvexHttpClient, the CLI's) leaves out the
-  // "[CONVEX …]" tag and starts at the request id.
+  // The web client tags the call ("[CONVEX M(fn)]"); ConvexHttpClient, the
+  // CLI's, starts at the request id.
   msg = msg.replace(/^(\[CONVEX [^\]]*\]\s*)?(\[Request ID: [^\]]*\]\s*)?Server Error\s*/i, "");
   msg = msg.replace(LEADS, "");
   msg = msg.trim();

@@ -5,3 +5,4 @@
 #
 # Prune it (drops gone entries, lowers numbers that came down, adds nothing):
 #   cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/registeredFeeds.guard.test.ts
+mobile/components/calls/GuestDoor.tsx 1

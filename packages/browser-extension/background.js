@@ -547,6 +547,9 @@ async function handle(m) {
       return {};
 
     case "cdp": {
+      // CDP's WebAuthn domain mints virtual authenticators and passkeys in
+      // the person's Chrome; the host refuses it too (bridge/protocol.ts).
+      if (/^WebAuthn\./i.test(String(m.method))) throw new Error("refusing CDP's WebAuthn domain: agents cannot create or use passkeys");
       if (!attached.has(m.tabId)) await attachTab(m.tabId);
       const screenshot = m.method === "Page.captureScreenshot";
       try {

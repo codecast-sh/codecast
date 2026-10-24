@@ -62,8 +62,8 @@ import { isPidAlive } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
 import { withSession, type CdpEndpoint } from "../cdp.js";
 import {
-  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, randomNonce, secretMatches, tabIdOfTarget,
-  targetIdOfTab, type BridgeGroup, type BridgeReply, type BridgeTab,
+  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, isWebAuthnMethod, randomNonce, secretMatches, tabIdOfTarget,
+  targetIdOfTab, WEBAUTHN_REFUSAL, type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
 import { eventMessage, RawJson, readEventFrame, readReplyFrame, replyId, replyMessage, TrafficMeter, UNRELAYED_EVENTS } from "./frames.js";
 
@@ -1092,6 +1092,7 @@ export async function startBridgeHost(opts: {
     }
     if (typeof msg.id !== "number" || typeof msg.method !== "string") return;
     try {
+      if (isWebAuthnMethod(msg.method)) throw new Error(WEBAUTHN_REFUSAL);
       let result: unknown;
       if (msg.sessionId) {
         const tabId = client.sessions.get(msg.sessionId);

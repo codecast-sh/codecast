@@ -13,11 +13,14 @@ import {
   remoteSnapshotScript,
   applySnapshotFastForward,
   isPermanentPushFailure,
+  knownValuesInPush,
   pushWipSnapshot,
   restoreWipSnapshot,
   snapshotTree,
   wipRef,
 } from "./wipSnapshot.js";
+import { knownValueNames, setKnownValuesForTest } from "./knownValueRedaction.js";
+import { createTurnSnapshot } from "./treeSnapshot.js";
 
 // Real git per test, several commands each: 3 to 4s on a loaded machine, so
 // the 5s default times out under load.
@@ -722,5 +725,37 @@ describe("createWipSnapshotStrict (the cloud seed, ct-49433)", () => {
     } finally {
       fs.chmodSync(path.join(cwd, "locked.txt"), 0o644);
     }
+  });
+});
+
+describe("knownValuesInPush", () => {
+  const VALUE = "zz-Vault-Value-7731qx";
+  afterEach(() => setKnownValuesForTest(null));
+
+  test("names the file and the secret for a value in any turn the push carries, even one deleted since", async () => {
+    const { cwd } = repo();
+    setKnownValuesForTest([{ value: VALUE, name: "zz-key", vault: true }]);
+    fs.writeFileSync(path.join(cwd, "creds.json"), `{"token":"${VALUE}"}\n`);
+    const first = (await createTurnSnapshot(cwd))!;
+    fs.rmSync(path.join(cwd, "creds.json"));
+    fs.writeFileSync(path.join(cwd, "notes.txt"), "nothing secret\n");
+    const tip = (await createTurnSnapshot(cwd))!;
+    expect(tip.prev).toBe(first.sha);
+    const found = await knownValuesInPush(cwd, tip.sha, [tip.base], knownValueNames);
+    expect(found).toEqual([{ path: "creds.json", names: ["zz-key"] }]);
+    expect(JSON.stringify(found)).not.toContain(VALUE);
+    // Pushed already: only what is new since then is read.
+    expect(await knownValuesInPush(cwd, tip.sha, [tip.base, first.sha], knownValueNames)).toEqual([]);
+    // A last pushed snapshot git has since dropped is ignored, not an error.
+    expect(await knownValuesInPush(cwd, tip.sha, [tip.base, "0".repeat(40)], knownValueNames)).toHaveLength(1);
+  });
+
+  test("a binary file holding the value and a plain text file are not reported", async () => {
+    const { cwd } = repo();
+    setKnownValuesForTest([{ value: VALUE, name: "zz-key", vault: true }]);
+    fs.writeFileSync(path.join(cwd, "blob.bin"), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(VALUE)]));
+    fs.writeFileSync(path.join(cwd, "plain.txt"), "hello\n");
+    const snap = (await createTurnSnapshot(cwd))!;
+    expect(await knownValuesInPush(cwd, snap.sha, [snap.base], knownValueNames)).toEqual([]);
   });
 });

@@ -496,6 +496,12 @@ describe("bridge host as a CDP endpoint", () => {
     await expect(conn.send("Nope.nothing")).rejects.toThrow(/wasn't found/);
     // A made-up session is refused.
     await expect(conn.send("Runtime.evaluate", { expression: "1" }, "F".repeat(32))).rejects.toThrow(/Session with given id/);
+    // CDP's WebAuthn domain never reaches the extension, at either scope.
+    for (const method of ["WebAuthn.enable", "WebAuthn.addVirtualAuthenticator"]) {
+      await expect(conn.send(method, {}, sessionId)).rejects.toThrow(/agents cannot create or use passkeys/);
+      await expect(conn.send(method, {})).rejects.toThrow(/agents cannot create or use passkeys/);
+    }
+    expect(ext.seen.some((m) => /WebAuthn/i.test(String(m.method)))).toBe(false);
     conn.close();
   });
 

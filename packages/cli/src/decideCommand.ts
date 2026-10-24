@@ -275,13 +275,20 @@ export interface DecisionRow {
   messages_since?: number;
 }
 
+/** A duration with no direction, "5m", "3h", "2d"; under a minute is "under 1m". */
+/** A span in its largest unit. Ages round down ("6d ago" until a full 7d);
+ *  a time ahead passes Math.round, so a 7-day keep starting now reads 7d. */
+export function formatSpan(ms: number, round: (n: number) => number = Math.floor): string {
+  if (ms < 60000) return "under 1m";
+  const m = round(ms / 60000);
+  if (m < 60) return `${m}m`;
+  const h = round(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${round(h / 24)}d`;
+}
+
 export function formatAge(ms: number): string {
-  const m = Math.floor(ms / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
+  return ms < 60000 ? "just now" : `${formatSpan(ms)} ago`;
 }
 
 // An open ask the session has visibly moved past. Either signal alone marks
@@ -471,7 +478,7 @@ function printPreview(question: string, optionList: DecideOption[], defaultOptio
   if (!reportSlug && contextChars < 200) {
     console.log(
       fmt.muted(
-        `\n  Note: ${contextChars} characters of context. They will probably have to open the session to answer this.\n  Say what you found, what each option costs, and why you cannot pick — or attach --report.`
+        `\n  Note: ${contextChars} characters of context. They will probably have to open the session to answer this.\n  Open with what you would pick and why, in words someone who never saw this session follows, then the finding that forces the choice — or attach --report.`
       )
     );
   }
@@ -528,7 +535,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       [] as string[]
     )
     .option("--question <text>", stdinText("edit: replace the question"))
-    .option("--context <text>", stdinText("Markdown context: the reasoning, the tradeoff, what happens under each choice; a cast-canvas block renders inline, so options worth comparing can sit side by side"))
+    .option("--context <text>", stdinText("Markdown context for someone who never saw this session: what you would pick and why, the finding that forces the choice, what each answer does; a cast-canvas block renders inline, so options worth comparing can sit side by side"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
     .option("--proposal <xp-N>", "The expectations proposal this decision settles: an answer opening with Apply lands it, one opening with Keep closes it, any other course leaves it open for you")
     .option("--card <card.json>", "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop")

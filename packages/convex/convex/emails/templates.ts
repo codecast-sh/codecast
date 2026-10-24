@@ -9,7 +9,7 @@
 // email states in the footer why it was received; anything the user did NOT
 // initiate says clearly what to do if it wasn't them.
 
-import { createTemplates, type RenderedEmail } from "@platform/email";
+import { createTemplates, formatWhen, type RenderedEmail } from "@platform/email";
 import { BRAND, renderEmail, type EmailBlock } from "./render";
 
 // ---------------------------------------------------------------------------
@@ -181,5 +181,34 @@ export function artifactComment(args: {
       { kind: "linkFallback", url: args.pageUrl },
     ],
     reason: `You received this email because you own this published page on codecast.sh.`,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Security
+// ---------------------------------------------------------------------------
+
+/** A person's first passkey was added (passkeys.ts): it confirms Vault actions from now on, so one they did not add is an alarm. */
+export function passkeyAdded(args: { email: string; passkeyName: string; addedAt: number; settingsUrl: string }): RenderedEmail {
+  return renderEmail({
+    subject: "Touch ID was added to your Codecast account",
+    preheader: "If this was you, no action is needed.",
+    eyebrow: "security",
+    heading: "Touch ID added",
+    blocks: [
+      { kind: "text", value: "A passkey was added to your Codecast account. It now confirms revealing an Ask first secret, approving its use and switching Ask first off." },
+      {
+        kind: "meta",
+        rows: [
+          { label: "account", value: args.email },
+          { label: "passkey", value: args.passkeyName },
+          { label: "when", value: formatWhen(args.addedAt) },
+        ],
+      },
+      { kind: "text", value: "If this was you, no action is needed." },
+      { kind: "text", value: "If this **wasn't** you, remove the passkey in Settings now: whoever added it can confirm those actions as you." },
+      { kind: "button", label: "Review passkeys", url: args.settingsUrl },
+    ],
+    reason: `You received this security notice because a passkey was added to ${args.email} at codecast.sh.`,
   });
 }

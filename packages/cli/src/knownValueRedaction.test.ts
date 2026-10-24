@@ -16,7 +16,9 @@ import {
   redactWithMatcher,
   setKnownValuesForTest,
 } from "./knownValueRedaction.js";
+import { redactionValuesOf } from "@codecast/shared/contracts/secrets";
 import { redactSecrets } from "./secretRedaction.js";
+import { vaultRedactionSource } from "./secrets/redactionSource.js";
 
 const values = (list: Array<{ value: string }>) => list.map((v) => v.value);
 
@@ -189,5 +191,159 @@ describe("store", () => {
     } finally {
       store.stop();
     }
+  });
+});
+
+describe("vault values", () => {
+  const emptyHome = () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "kv-vault-"));
+    return { home, configDir: path.join(home, ".codecast") };
+  };
+  const fixedVault = (list: Array<{ name: string; value: string }>) => ({ values: () => list, refresh: async () => false });
+
+  test("a Vault value skips the shape floors but keeps a small minimum, and a Vault name beats an env name for the same value", () => {
+    const store = new KnownValueStore({
+      ...emptyHome(),
+      env: () => ({ STRIPE_TOKEN: "sk_vault_9f8e7d6c5b4a", OTHER_TOKEN: "correcthorse" }),
+      vault: fixedVault([
+        { name: "stripe", value: "sk_vault_9f8e7d6c5b4a" },
+        { name: "pin", value: "1234" },
+        { name: "word", value: "correcthorse" },
+        { name: "digits", value: "8675309" },
+      ]),
+    });
+    try {
+      const m = store.rebuild();
+      expect(m.size).toBe(3);
+      expect(redactKnownValues("sk_vault_9f8e7d6c5b4a 1234 correcthorse 8675309")).toBe("[redacted:known:stripe] 1234 [redacted:known:word] [redacted:known:digits]");
+    } finally {
+      store.stop();
+    }
+  });
+
+  test("a value with a quote, a backslash or a newline is caught once a tool call's input is JSON-stringified, once or twice", () => {
+    setKnownValuesForTest([
+      { value: 'pa"ss\\w0rd-77', name: "db", vault: true },
+      { value: "first-line-Xy7\nsecond-line-Zq9", name: "cert", vault: true },
+    ]);
+    try {
+      const input = { command: `psql --password='pa"ss\\w0rd-77'`, content: "first-line-Xy7\nsecond-line-Zq9" };
+      const once = redactSecrets(JSON.stringify(input));
+      expect(once).not.toContain("w0rd-77");
+      expect(once).not.toContain("second-line-Zq9");
+      expect(once).toContain("[redacted:known:db]");
+      expect(once).toContain("[redacted:known:cert]");
+      expect(redactSecrets(JSON.stringify({ input: JSON.stringify(input) }))).not.toMatch(/w0rd-77|second-line-Zq9/);
+    } finally {
+      setKnownValuesForTest(null);
+    }
+  });
+
+  test("a Vault login's password is caught inside a Basic auth header, a base64url token and a percent-encoded URL", () => {
+    const password = "zz-Tr0ub4dor&3xx";
+    setKnownValuesForTest([{ value: password, name: "zz-login", vault: true }]);
+    const basic = (user: string) => Buffer.from(`${user}:${password}`).toString("base64");
+    // Each username length puts the password at another byte offset inside the encoding.
+    for (const user of ["zzbot", "zzbot1", "zzbot12"]) {
+      const out = redactKnownValues(redactSecrets(`> Authorization: Basic ${basic(user)}`));
+      expect(out).toContain("[redacted:known:zz-login]");
+      expect(out).not.toContain(basic(user).slice(12, -4));
+      const url = Buffer.from(`${user}:${password}`).toString("base64url");
+      expect(redactKnownValues(`token=${url}`)).toContain("[redacted:known:zz-login]");
+    }
+    const out = redactKnownValues(redactSecrets("https://zzbot:zz-Tr0ub4dor%263xx@example.com/x"));
+    expect(out).toContain("[redacted:known:zz-login]");
+    expect(out).not.toContain("Tr0ub4dor");
+    setKnownValuesForTest([{ value: "zz/Pw0rd=9xq", name: "zz-slash", vault: true }]);
+    for (const url of ["https://u:zz%2FPw0rd%3D9xq@h/x", "https://u:zz%2fPw0rd%3d9xq@h/x"]) {
+      expect(redactKnownValues(url)).toBe("https://u:[redacted:known:zz-slash]@h/x");
+    }
+  });
+
+  test("an encoded form shorter than 8 chars is not matched, and a value outside the Vault gets no encoded forms", () => {
+    const short = buildMatcher([{ value: "ab", name: "x", vault: true }, { value: "pin123", name: "pin", vault: true }]);
+    expect(redactWithMatcher(Buffer.from("pin").toString("base64"), short)).toBe("cGlu");
+    const env = buildMatcher([{ value: "zq7Kp2Lm9Xw4", name: "key" }]);
+    const encoded = Buffer.from("zq7Kp2Lm9Xw4").toString("base64");
+    expect(redactWithMatcher(encoded, env)).toBe(encoded);
+  });
+
+  test("a Vault value inside a marker is dropped, so a second pass changes nothing", () => {
+    const m = buildMatcher([{ value: "redacted", name: "a", vault: true }, { value: "stripe-test", name: "stripe-test", vault: true }, { value: "zq7Kp2Lm9Xw4", name: "key" }]);
+    expect(m.size).toBe(1);
+    const once = redactWithMatcher("zq7Kp2Lm9Xw4 redacted stripe-test", m);
+    expect(redactWithMatcher(once, m)).toBe(once);
+  });
+
+  test("end to end: a transcript line holding a Vault value syncs with the secret's name", async () => {
+    let version = "team:a=1";
+    let values = [{ name: "prod-db", value: "opaque-Db-Pw-7731xyz" }];
+    const fetch = (async (url: string) =>
+      url.endsWith("/redaction-version") ? Response.json({ version }) : Response.json({ version, values })) as unknown as typeof globalThis.fetch;
+    const store = new KnownValueStore({
+      ...emptyHome(),
+      env: () => ({}),
+      vault: vaultRedactionSource({ endpoint: () => ({ siteUrl: "https://b.test", apiToken: "t" }), fetch }),
+    });
+    try {
+      store.rebuild();
+      await store.refreshVault();
+      const line = JSON.stringify({ type: "user", message: { content: "psql -p opaque-Db-Pw-7731xyz" } });
+      expect(redactSecrets(line)).toBe(JSON.stringify({ type: "user", message: { content: "psql -p [redacted:known:prod-db]" } }));
+
+      // A rotation reaches the matcher on the next tick.
+      version = "team:a=2";
+      values = [{ name: "prod-db", value: "rotated-Db-Pw-000111" }];
+      await store.refreshVault();
+      expect(redactSecrets("rotated-Db-Pw-000111")).toBe("[redacted:known:prod-db]");
+    } finally {
+      store.stop();
+    }
+  });
+
+  test("a refresh still in flight when the store stops installs nothing", async () => {
+    let land: (changed: boolean) => void = () => {};
+    const store = new KnownValueStore({
+      ...emptyHome(),
+      env: () => ({}),
+      vault: { values: () => [{ name: "late", value: "late-Value-Pw-445566" }], refresh: () => new Promise<boolean>((r) => (land = r)) },
+    });
+    store.start();
+    expect(redactKnownValues("late-Value-Pw-445566")).toBe("[redacted:known:late]");
+    const pending = store.refreshVault();
+    store.stop();
+    land(true);
+    await pending;
+    expect(redactKnownValues("late-Value-Pw-445566")).toBe("late-Value-Pw-445566");
+  });
+});
+
+describe("Vault values the redactor once dropped", () => {
+  // Generated, so no token-shaped literal sits in the repo.
+  const b64 = (n: number, seed: number) => Array.from({ length: n }, (_, i) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[(i * 7 + seed * 13 + ((i * i) % 11)) % 64]).join("");
+  const fromVault = (name: string, ...args: Parameters<typeof redactionValuesOf>) =>
+    buildMatcher(redactionValuesOf(...args).map((value) => ({ value, name, vault: true as const })));
+
+  test("a 14 KB kubeconfig: cat of the whole file and a grep of one line both come out redacted", () => {
+    const token = b64(1200, 4);
+    const keyData = b64(6000, 5);
+    const content = ["apiVersion: v1", "users:", "- name: admin", "  user:", `    certificate-authority-data: ${b64(7000, 6)}`, `    token: ${token}`, `    client-key-data: ${keyData}`].join("\n");
+    const m = fromVault("zz-kube", "file", { content });
+    const cat = redactWithMatcher(content, m);
+    for (const v of [token.slice(0, 40), keyData.slice(100, 140)]) expect(cat).not.toContain(v);
+    expect(redactWithMatcher(`    token: ${token}`, m)).toBe("    token: [redacted:known:zz-kube]");
+  });
+
+  test("a key over 8192 characters is redacted printed whole and from any piece boundary on", () => {
+    const value = b64(10_000, 7);
+    const m = fromVault("zz-long", "key", { value });
+    expect(redactWithMatcher(`KEY=${value}`, m)).not.toMatch(/[A-Za-z0-9+\/]{64}/);
+    expect(redactWithMatcher(value.slice(640, 2000), m)).not.toContain(value.slice(704, 800));
+  });
+
+  test("one printed line of a multi-line key is redacted", () => {
+    const [a, b] = [b64(30, 8), b64(30, 9)];
+    const m = fromVault("zz-k", "key", { value: `${a}\n${b}` });
+    expect(redactWithMatcher(`line 2: ${b}`, m)).toBe("line 2: [redacted:known:zz-k]");
   });
 });

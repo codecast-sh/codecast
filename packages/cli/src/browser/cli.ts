@@ -536,14 +536,14 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
     .option("--no-shot", "Skip the automatic screenshot")
     .action(async (url: string, o: { newTab?: boolean; wait: boolean; reload?: boolean; capture: boolean; shot?: boolean; real?: boolean; clone?: boolean }) => {
       if (!/^[a-z]+:\/\//i.test(url)) url = `https://${url}`;
-      if (isRealMode(o, me())) return openReal(url, o);
 
-      // The site policy gate. Before any browser work at all — a refused
-      // navigation must not even auto-start Chrome. This binds only THIS
-      // session's commands; other agents' tabs are never touched.
+      // The site policy gate, in either browser. Before any browser work at
+      // all — a refused navigation must not even auto-start Chrome. This binds
+      // only THIS session's commands; other agents' tabs are never touched.
       const policy = loadSitePolicy();
       const deny = refuseNavigation(url, me(), "open", policy);
       if (deny) die(deny.message, deny.hint);
+      if (isRealMode(o, me())) return openReal(url, o);
 
       const driver = await ensureDriver();
       const s = driver.state;

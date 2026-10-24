@@ -874,6 +874,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             docs: isDocs || isPlans,
             code: pathname === "/repo" || /^\/(repo|commit|pr)\//.test(pathname || ""),
             files: isVault,
+            vault: pathname === "/vault",
             pages: isPages,
             sessions: !!isSessions,
             // A flow's steps are a workflow: every workflow page

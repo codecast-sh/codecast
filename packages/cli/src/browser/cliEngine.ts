@@ -50,7 +50,7 @@ import { probeLiveness, readState, stopInstance, writeState } from "./instance.j
 import { provisionLocalLogins } from "./credentials.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
-import { auditLanding, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, viaFor } from "./siteGuard.js";
+import { auditLanding, browserJarRead, NAVIGATING_VERBS, refuseNavigation, signInHost, signInLandingNote, urlsLoadedBy, vaultJarRefusal, viaFor, webAuthnRefusal } from "./siteGuard.js";
 import { focusBrowserTabBlocking } from "./focusHttp.js";
 import { emitFailureBlock, engineSource } from "./capture.js";
 import { registerAuditCommand } from "./auditCommand.js";
@@ -528,6 +528,33 @@ export function engineStepLabel(verb: string, engineArgs: string[]): string {
   return `waiting for the browser to finish \`${verb}\``;
 }
 
+/** The URL of this session's tab, as the engine reports it. */
+function tabUrl(o: Ctx): string | null {
+  const tabs = engineTabs(o);
+  return (tabs.find((t) => t.active) ?? tabs[0])?.url ?? null;
+}
+
+/**
+ * The gates an engine command passes before it runs, ours or `raw`: no CDP
+ * WebAuthn method (an agent minting a passkey); every URL
+ * it loads by itself (`open`, `read <url>`, `tab new <url>`, …) against the
+ * site policy and the Vault page, so a refused page has no side door; and in
+ * the agent browser, a cookie or storage read that would hand this session an
+ * Ask first sign-in it holds no approval for. The human's Chrome and the
+ * desktop pane never hold one (signInOnOpen runs only here).
+ */
+function refuseEngineCommand(verb: string, args: string[], o: Ctx, owner: string | null): void {
+  const passkey = webAuthnRefusal(verb, args);
+  if (passkey) die(passkey.message, passkey.hint);
+  for (const url of urlsLoadedBy(verb, args, () => tabUrl(o))) {
+    const deny = refuseNavigation(url, owner, "open");
+    if (deny) die(deny.message, deny.hint);
+  }
+  const read = isRealSession(o.session) || isPaneSession(o.session) ? null : browserJarRead(verb, args);
+  const deny = read && vaultJarRefusal(read, read === "page" ? tabUrl(o) : null, detectSessionId?.() ?? null);
+  if (deny) die(deny.message, deny.hint);
+}
+
 /**
  * Run one command in our vocabulary against the engine, with every hook that
  * must apply to ALL of them:
@@ -563,10 +590,10 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     if (ref && /^[0-9a-f]{8}$/i.test(ref)) await grantTab(await requireRealBridge(), session, ref.toUpperCase());
   }
 
+  refuseEngineCommand(verb, args, o, owner);
+
   if (verb === "open") {
     const url = args.find((a) => !a.startsWith("--"));
-    const deny = url ? refuseNavigation(url, owner, "open") : null;
-    if (deny) die(deny.message, deny.hint);
     const wall = real && url ? walledOffFromExtension(url) : null;
     if (wall) die(wall, "the human opens this page in their own Chrome; hand them the URL and the steps.");
     // The real Chrome is the human's, already running; its bridge came up in
@@ -588,16 +615,11 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // Your logins for this site, as your real Chrome holds them right now —
     // the clone the browser started from may be hours old (credentials.ts).
     if (url && !real && !pane) await carryLogins(url);
+    // Then a sign-in the team saved in the Vault, where the browser still has
+    // none for the site; on a cloud host this is the one that applies.
+    if (url && !real && !pane) await useVaultSignin(url);
   } else {
     await ensurePinnedTab(session);
-  }
-
-  // `read <url>` fetches that URL, so the same site policy that gates `open`
-  // gates it — a denied site must not be readable through a side door.
-  if (verb === "read") {
-    const url = args.find((x) => !x.startsWith("-"));
-    const deny = url ? refuseNavigation(url, owner, "open") : null;
-    if (deny) die(deny.message, deny.hint);
   }
 
   // `tab <id>`, `tab close <id>` and `tab switch <id>` take what the footer
@@ -729,6 +751,20 @@ export async function carryLogins(
     if (r.injected) console.log(fmt.muted(`  carried ${r.injected} cookie${r.injected === 1 ? "" : "s"} for ${r.host} from your Chrome`));
   } catch {
     /* a courtesy: never fail the open over it */
+  }
+}
+
+/**
+ * A saved sign-in for the site (secrets/signinBrowser.ts), and a write-back of
+ * newer cookies when the browser already uses it. Loaded only when `open`
+ * runs, and never fails the open.
+ */
+async function useVaultSignin(url: string): Promise<void> {
+  try {
+    const { signInOnOpen } = await import("../secrets/signinBrowser.js");
+    await signInOnOpen(url, () => detectSessionId?.() ?? null, (line) => console.log(fmt.muted(`  ${line}`)));
+  } catch {
+    /* a courtesy, like carryLogins */
   }
 }
 
@@ -1319,6 +1355,8 @@ The human's Chrome is always the default, including before pairing and after res
     .action(async (args: string[] = []) => {
       if (!args.length) die("raw needs a command", "e.g. cast browser raw profiler start");
       const t = await targetOf("raw", args);
+      const at = t.args.findIndex((a) => !a.startsWith("-"));
+      if (at >= 0) refuseEngineCommand(t.args[at], t.args.slice(at + 1), t.ctx, auditOwner());
       const res = runEngine(t.args, t.ctx);
       if (res.stdout) process.stdout.write(res.stdout);
       if (res.stderr) process.stderr.write(res.stderr);

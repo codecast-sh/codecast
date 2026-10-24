@@ -5,10 +5,10 @@
 // verbs.
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
-import { formatAge } from "./decideCommand.js";
+import { formatAge, formatSpan } from "./decideCommand.js";
 import { scopeFor } from "./lineScope.js";
 
-export { formatAge };
+export { formatAge, formatSpan };
 
 export function fail(message: string): never {
   console.error(fmt.error(message));
@@ -59,4 +59,9 @@ export function sparkline(counts: readonly number[]): string {
 
 export function ago(at: number | null | undefined, now: number = Date.now()): string {
   return at ? formatAge(now - at) : "never";
+}
+
+/** A time ahead, "in 10d". */
+export function until(at: number, now: number = Date.now()): string {
+  return `in ${formatSpan(at - now, Math.round)}`;
 }

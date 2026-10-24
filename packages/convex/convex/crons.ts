@@ -119,6 +119,14 @@ crons.interval(
 
 // Separate entry from "check daemon health" so a failure in one alert never
 // stops the other. The 5 minute cadence is also this alert's debounce.
+// Pending permissions on a machine that stopped beating can never be answered;
+// expiring them keeps Needs Input honest. Its own entry, like the freeze alert.
+crons.interval(
+  "expire offline device permissions",
+  { minutes: 5 },
+  internal.permissions.expireOfflinePermissions
+);
+
 crons.interval(
   "check daemon loop freeze",
   { minutes: 5 },
@@ -540,10 +548,27 @@ crons.interval(
 
 crons.interval(
   // Stored GitHub deliveries past 7 days, read by nothing (sd-1079, ct-60898).
-  // A run pages through the backlog itself, 200 rows every 5 s.
+  // A run pages through the backlog itself, 200 rows every 5 s; hourly so a
+  // chain a failed page stopped starts again soon.
   "prune github webhook events",
-  { hours: 24 },
+  { hours: 1 },
   internal.githubWebhooks.pruneWebhookEvents,
+  {}
+);
+
+crons.interval(
+  // Vault: previous secret values past their 7 days of restore (secrets.ts).
+  "purge expired secret versions",
+  { hours: 6 },
+  internal.secrets.purgeExpiredVersions,
+  {}
+);
+
+crons.interval(
+  // Passkey challenges and presence grants past their 2 minutes (passkeys.ts).
+  "purge expired passkey challenges",
+  { hours: 1 },
+  internal.passkeys.purgeExpiredChallenges,
   {}
 );
 

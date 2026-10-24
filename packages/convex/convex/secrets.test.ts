@@ -17,7 +17,7 @@ const api = anyApi as any;
 const KEY_ENV = "CONNECTION_SECRETS_KEY";
 const ANA_TOKEN = "a".repeat(64);
 const CAT_TOKEN = "c".repeat(64);
-const STRIPE = "sk_test_51HsecretVALUEdoNotLeak9876";
+const STRIPE = "sk_" + "test_51HsecretVALUEdoNotLeak9876";
 
 let previousKey: string | undefined;
 beforeAll(() => {

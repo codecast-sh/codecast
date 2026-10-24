@@ -3,9 +3,11 @@
 // Only the unambiguous ones live here: a private key block, a vendor token
 // with its prefix, a file named like a credential store.
 import * as path from "node:path";
+import { VENDOR_TOKEN_RE } from "@codecast/shared/contracts/secretShapes";
 
 export const PRIVATE_KEY_RE = /^\s*-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/m;
-export const VENDOR_TOKEN_RE = /\b(?:sk-ant-[A-Za-z0-9_-]{24,}|sk-(?:proj-|or-v1-)?[A-Za-z0-9_-]{24,}|(?:ghp|gho|ghu|ghs)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|AIza[A-Za-z0-9_-]{35})\b/;
+// The vendor tokens are transcript redaction's own shapes (shared/contracts/secretShapes.ts).
+export { VENDOR_TOKEN_RE };
 const CREDENTIAL_FILE_NAMES = ["auth.json", ".credentials.json", "oauth_creds.json", "google_accounts.json", "hosts.yml", ".netrc", ".npmrc", ".pgpass", "pass.txt", "passwords.txt", "passwords.csv"];
 
 /** A path named like a credential store: .env files, keys, token files. */

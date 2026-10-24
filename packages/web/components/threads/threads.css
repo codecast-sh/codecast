@@ -493,14 +493,19 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
 }
 
 @media (hover: hover) {
-  .th-question-option:hover {
+  .th-question-option:not(:disabled):hover {
     border-color: color-mix(in srgb, var(--sol-blue) 50%, transparent);
     background: color-mix(in srgb, var(--sol-blue) 8%, transparent);
   }
 }
 
-.th-question-option:active {
+.th-question-option:not(:disabled):active {
   background: color-mix(in srgb, var(--sol-blue) 14%, transparent);
+}
+
+.th-question-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .th-question-option-label {

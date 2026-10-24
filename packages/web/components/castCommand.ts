@@ -341,6 +341,7 @@ const CAST_CATEGORY_ALIASES: Record<string, string> = {
   d: "doc",
   sched: "trigger",
   schedule: "trigger",
+  secrets: "vault",
 };
 
 export function normalizeCastCategory(category: string): string {
@@ -360,11 +361,67 @@ export function isFlowObjectCastCommand(cast: ParsedCastCommand | null | undefin
   return cast.subcommand === "run" || ((cast.subcommand === "validate" || cast.subcommand === "show") && /(^|\s)-(\s|$)/.test(cast.args));
 }
 
+/** `cast vault request`: the card is a field the person fills, so it stays out of a folded receipt like a decision. */
+export function isVaultRequestCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
+  return !!cast && normalizeCastCategory(cast.category) === "vault" && cast.subcommand === "request";
+}
+
 export function isDecideCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
   if (!cast) return false;
   if (normalizeCastCategory(cast.category) !== "decide") return false;
   const verb = extractDecideArgs(cast.subcommand, cast.args).verb;
   return verb !== "ls" && verb !== "show";
+}
+
+// ── cast vault ──────────────────────────────────────────────────────────────
+
+// `cast vault` verbs whose output IS a secret's value: the card names the
+// secrets and never renders what the command printed.
+const VAULT_VALUE_VERBS = new Set(["get", "env", "otp"]);
+
+// `cast vault` flags that take the word after them (cli secrets/command.ts).
+const VAULT_VALUE_FLAGS = new Set(["--field", "--kind", "--why", "--env", "--site", "--team", "--note", "--username", "--file", "--from-env"]);
+
+export interface VaultArgs {
+  /** The secret names the command addresses, in order. */
+  names: string[];
+  /** `run`: the command it runs with the secrets in its environment. */
+  command?: string;
+  kind?: string;
+  why?: string;
+  /** Whether the output is a value and must not render. */
+  hidesOutput: boolean;
+}
+
+export function extractVaultArgs(subcommand: string, args: string): VaultArgs {
+  // Everything after a bare `--` is the inner command of `run`.
+  const split = subcommand === "run" ? args.match(/(?:^|\s)--(?=\s|$)/) : null;
+  const own = split?.index !== undefined ? args.slice(0, split.index) : args;
+  const command = split?.index !== undefined ? args.slice(split.index + split[0].length).trim() || undefined : undefined;
+  const tokens = tokenizeShellArgs(own);
+  const names: string[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (!t.quoted && t.value.startsWith("-")) {
+      if (VAULT_VALUE_FLAGS.has(t.value)) i += 1;
+      continue;
+    }
+    if (!t.dynamic && t.value) names.push(t.value);
+  }
+  const kind = extractFlagValue(own, ["--kind"]);
+  const why = extractFlagValue(own, ["--why"]);
+  return {
+    names,
+    ...(command && { command }),
+    ...(kind && { kind }),
+    ...(why && { why }),
+    hidesOutput: VAULT_VALUE_VERBS.has(subcommand),
+  };
+}
+
+/** The sec-N a `cast vault` command printed, if any. */
+export function vaultShortIdIn(output: string): string | null {
+  return output.match(/\bsec-\d+\b/)?.[0] ?? null;
 }
 
 export interface CastBodyPart {

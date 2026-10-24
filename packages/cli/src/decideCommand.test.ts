@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, parseOptionPageArg, pageRefToSlug, attachOptionPages, type DecideOption, type DecisionRow } from "./decideCommand.js";
+import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, formatSpan, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, parseOptionPageArg, pageRefToSlug, attachOptionPages, type DecideOption, type DecisionRow } from "./decideCommand.js";
 
 describe("cast decide option parsing", () => {
   it("keeps a bare label as a label", () => {
@@ -138,6 +138,11 @@ describe("decision staleness", () => {
     expect(formatAge(5 * 60_000)).toBe("5m ago");
     expect(formatAge(3 * 60 * 60_000)).toBe("3h ago");
     expect(formatAge(50 * 60 * 60_000)).toBe("2d ago");
+    expect(formatSpan(20_000)).toBe("under 1m");
+    expect(formatSpan(3 * 60 * 60_000)).toBe("3h");
+    // A time ahead rounds to nearest: a 7-day keep that began a minute ago is "7d", not "6d".
+    expect(formatSpan(7 * 86_400_000 - 60_000)).toBe("6d");
+    expect(formatSpan(7 * 86_400_000 - 60_000, Math.round)).toBe("7d");
   });
 });
 
