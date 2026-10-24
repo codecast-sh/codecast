@@ -9,7 +9,7 @@
 // a headline only when the team may read the session, turns only when its
 // owner shares it in full. Both feeders mount only while the drawer is open.
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Link2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { areaOf, isGeneratedPath, pathInArea } from "@codecast/shared/changes";
 import {
@@ -20,16 +20,16 @@ import {
   type StoryRow,
   type StorySessionRow,
 } from "../../hooks/useSyncChanges";
-import { DiffStat, MetaDot } from "../entityDisplay";
+import { DiffStat } from "../entityDisplay";
 import { EntityIdPill } from "../EntityIdPill";
 import { CommitLinks } from "../repo/CommitLinks";
 import { ImageGalleryProvider } from "../ImageGallery";
 import { MarkdownImageSize } from "../../lib/markdownImageSize";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
-import { AreaTag, Byline, Provenance, ReleaseTag, RiskLine, Tip, clockOf } from "./StoryParts";
+import { AreaTag, Byline, Provenance, RiskLine, Timing, Tip, clockOf } from "./StoryParts";
 import { areaColor } from "./areaColor";
 import { plural } from "./format";
-import { useAreaColors } from "./storyContext";
+import { useAreaColors, useStoryCtx } from "./storyContext";
 import { KeyHint } from "./useChangesKeys";
 
 export const commitPath = (repository: string, sha: string) => `/commit/${repository}/${sha}`;
@@ -172,6 +172,7 @@ function SessionEvidence({ id, insight }: { id: string; insight: StorySessionRow
 }
 
 export function EvidenceDrawer({ story }: { story: StoryRow }) {
+  const ctx = useStoryCtx();
   const feed = useSyncStoryEvidence(String(story._id));
   useSyncStorySessions(String(story._id));
   const sessions = useStorySessions(story);
@@ -185,9 +186,19 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
       {/* The byline: who, when, where the reason came from, and the release it shipped in. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-sol-border/25 pb-3">
         <Byline story={story} />
-        <span className="font-mono text-[11px] text-sol-text/55">{clockOf(story.last_at)}</span>
+        <Timing story={story} live={ctx.live} />
         <Provenance story={story} />
-        <ReleaseTag story={story} />
+        {ctx.copyLink && (
+          <button
+            type="button"
+            onClick={() => ctx.copyLink?.(story)}
+            className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-[11px] text-sol-text/55 hover:bg-sol-bg-alt hover:text-sol-text"
+          >
+            <Link2 className="h-3 w-3" />
+            Copy link
+            <KeyHint action="changes.copyLink" />
+          </button>
+        )}
       </div>
       {story.body && (
         // The article's screenshots open full size in the lightbox, one gallery per story.
@@ -281,8 +292,6 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
 
       <p className="flex items-center gap-1.5 font-mono text-[10px] text-sol-text/45">
         <KeyHint action="changes.open" /> opens {story.conversation_ids.length ? "the session" : "the largest commit"}
-        <MetaDot />
-        <KeyHint action="changes.copyLink" /> copies a link
       </p>
     </div>
   );

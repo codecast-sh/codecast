@@ -28,6 +28,9 @@ import {
   type StoryRow as Story,
 } from "../../hooks/useSyncChanges";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { api } from "@codecast/convex/convex/_generated/api";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRepositories } from "../../hooks/useRepoBrowse";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
 import { useTabActive } from "../../hooks/usePagePresence";
@@ -42,14 +45,14 @@ import { commitPath } from "./EvidenceDrawer";
 import { assignAreaColors } from "./areaColor";
 import { nameOfPerson, peopleOf, personFor } from "./editionModel";
 import { plural } from "./format";
-import { NoMatch } from "./StoryParts";
+import { NoMatch, clockOf, waitingOn } from "./StoryParts";
 import { StoryRow } from "./StoryRow";
 import { StoryCtx, createFocusStore, type StoryContext } from "./storyContext";
 import { pickMedia, type PickedMedia } from "./storyMedia";
 import { SummaryMedia } from "./SummaryMedia";
 import { buildTimeline, dayZoom, groupWeeks, weekFolds, weekTop, type TimelineDay, type TimelineWeek } from "./timelineModel";
 import { escapeStep, focusedCommitHref, keepsOwnEnter, useChangesKeys } from "./useChangesKeys";
-import { changesHref, clearFilters, hasFilters, useChangesUrlState, type Zoom } from "./useChangesUrlState";
+import { EMPTY_URL, changesHref, clearFilters, hasFilters, useChangesUrlState, type Zoom } from "./useChangesUrlState";
 import { useMountEffect } from "../../hooks/useMountEffect";
 
 const releaseName = (r: { surface: string; version?: string; sha: string }) => `${r.surface} ${r.version ?? r.sha.slice(0, 7)}`;
@@ -71,8 +74,10 @@ function Skeleton() {
 }
 
 /** The day's housekeeping, folded under one line until asked for. */
-function SmallChanges({ stories }: { stories: readonly Story[] }) {
-  const [open, setOpen] = useState(false);
+function SmallChanges({ stories, openKey }: { stories: readonly Story[]; openKey?: string }) {
+  const [unfolded, setOpen] = useState(false);
+  // The open story stays on screen: a link to a small change lands unfolded.
+  const open = unfolded || (!!openKey && stories.some((s) => s.story_key === openKey));
   if (!stories.length) return null;
   return (
     <div className="mt-1">
@@ -120,10 +125,11 @@ function ZoomIn({ onClick, children }: { onClick: () => void; children: React.Re
  * the day is told whole: its sentence, its story in a few sentences, its
  * screenshots and pages, and the stories most worth opening.
  */
-function DaySection({ day, today, zoom, onOpen, onZoomIn }: {
+function DaySection({ day, today, zoom, openKey, onOpen, onZoomIn }: {
   day: TimelineDay;
   today: string;
   zoom: Zoom;
+  openKey?: string;
   onOpen: (key: string) => void;
   onZoomIn: () => void;
 }) {
@@ -131,7 +137,7 @@ function DaySection({ day, today, zoom, onOpen, onZoomIn }: {
   const count = day.stories.length + day.small.length;
   const meta = [
     count < day.total ? `${count} of ${day.total} changes` : plural(count, "change"),
-    ...day.releases.map((r) => `${releaseName(r)} shipped`),
+    ...day.releases.map((r) => `${releaseName(r)} ${(r.kind ?? (r.version ? "release" : "deploy")) === "deploy" ? "deployed" : "released"} ${clockOf(r.at)}`),
   ].join(" · ");
   // Every zoom shows the day's pictures; story by story, a few, since each story holds its own.
   const media = useMemo(() => pickMedia(leadStories(day), zoom === "changes" ? 3 : 4), [day, zoom]);
@@ -146,7 +152,7 @@ function DaySection({ day, today, zoom, onOpen, onZoomIn }: {
           <SummaryMedia media={media} onOpen={onOpen} />
           <div className="-mx-3 mt-4">
             {day.stories.map((s) => <StoryRow key={s.story_key} story={s} />)}
-            <SmallChanges stories={day.small} />
+            <SmallChanges stories={day.small} openKey={openKey} />
           </div>
           </>
         ) : (
@@ -324,9 +330,14 @@ export function ChangesPage() {
   const filterToggleRef = useRef<HTMLButtonElement>(null);
   const [focus] = useState(() => createFocusStore(url.story ?? null));
   const [filterOpen, setFilterOpen] = useState(false);
+  // A story link opens the story whatever the viewer's filters: the repository, the story, and every branch when it is off main.
+  const storyLink = useCallback((story: Pick<Story, "story_key" | "on_default_branch">) =>
+    `${location.origin}${changesHref({ ...EMPTY_URL, repo, story: story.story_key, branches: story.on_default_branch ? "main" : "all" })}`, [repo]);
+  const copyStoryLink = useCallback((story: Story) => void copyText(storyLink(story), "Link to the story copied"), [storyLink]);
+  const waiting = useMemo(() => new Set(shown.filter((s) => waitingOn(s, live).length > 0).map((s) => s.story_key)), [shown, live]);
   const ctx = useMemo<StoryContext>(() => ({
-    focus, waiting: new Set(), dimmed: new Set(), pick: focus.set, areaColors, proseLive: true,
-  }), [focus, areaColors]);
+    focus, waiting, dimmed: new Set(), pick: focus.set, areaColors, proseLive: true, live, copyLink: copyStoryLink,
+  }), [focus, waiting, areaColors, live, copyStoryLink]);
 
   const triggers = () => [...(rootRef.current?.querySelectorAll<HTMLElement>("[data-story-trigger]") ?? [])];
   const pointed = (): string | null =>
@@ -388,9 +399,9 @@ export function ChangesPage() {
       return true;
     },
     copyLink: () => {
-      const key = pointed();
-      const href = `${location.origin}${changesHref({ ...url, story: key ?? undefined })}`;
-      void copyText(href, key ? "Link to the story copied" : "Link copied");
+      const story = byKey.get(pointed() ?? "");
+      if (story) copyStoryLink(story);
+      else void copyText(`${location.origin}${changesHref(viewUrl)}`, "Link copied");
       return true;
     },
     escape: () => {
@@ -414,6 +425,18 @@ export function ChangesPage() {
     focus.set(key);
     rootRef.current?.querySelector<HTMLElement>(`[data-story-key="${CSS.escape(key)}"]`)?.scrollIntoView({ block: "center" });
   }, [url.story, byKey, focus]);
+
+  // A linked story older than the loaded weeks: ask which day it sits on, then
+  // load back to that week so the landing above finds it. The link names its repository.
+  const linked = url.story && !byKey.has(url.story) && feed.ready ? url.story : undefined;
+  const cachedDate = useInboxStore((s) => (linked ? (Object.values(s.changeStories ?? {}).find((r: any) => r.story_key === linked) as Story | undefined)?.date : undefined));
+  const located = useQueryNoThrow(api.changesQueries.storyLocation, linked && !cachedDate && teamId ? { team_id: teamId as Id<"teams">, story_key: linked } : "skip");
+  const linkedDate = cachedDate ?? located?.data?.date;
+  useWatchEffect(() => {
+    if (!linkedDate) return;
+    const back = Math.floor((Date.parse(`${today}T12:00:00Z`) - Date.parse(`${linkedDate}T12:00:00Z`)) / (7 * 86_400_000));
+    setChunks((c) => Math.max(c, Math.min(MAX_CHUNKS, back + 1)));
+  }, [linkedDate, today]);
 
   /** Open a story from outside its day (a week's top list): the landing effect scrolls it on screen. */
   const openStory = useCallback((key: string) => {
@@ -483,7 +506,7 @@ export function ChangesPage() {
                     {g.notes && <WeekSummary week={g.notes} label={label} byKey={byKey} onOpen={openStory} />}
                     {g.days.map((d) => {
                       const level = zoomedIn.has(d.date) || holdsOpen(d) ? "changes" : dayZoom(d.date, today, url.zoom);
-                      return <DaySection key={d.date} day={d} today={today} zoom={level === "weeks" ? "days" : level} onOpen={openStory} onZoomIn={() => zoomIn(d.date)} />;
+                      return <DaySection key={d.date} day={d} today={today} zoom={level === "weeks" ? "days" : level} openKey={url.story} onOpen={openStory} onZoomIn={() => zoomIn(d.date)} />;
                     })}
                   </Fragment>
                 );

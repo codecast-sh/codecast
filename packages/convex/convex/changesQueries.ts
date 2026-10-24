@@ -142,6 +142,24 @@ export const listStories = query({
   },
 });
 
+/**
+ * Where a linked story sits: its repository and day, so the page loads the
+ * timeline back that far before it opens the story. Null when the caller may
+ * not read the team or the story is gone.
+ */
+export const storyLocation = query({
+  args: { team_id: v.id("teams"), story_key: v.string(), api_token: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ repository: string; date: string } | null> => {
+    if (!(await changesReader(ctx, args.team_id, args.api_token))) return null;
+    const story: Doc<"change_stories"> | null = await ctx.db
+      .query("change_stories")
+      .withIndex("by_story_key", (q) => q.eq("story_key", args.story_key))
+      .first();
+    if (!story || String(story.team_id) !== String(args.team_id)) return null;
+    return { repository: story.repository, date: story.date };
+  },
+});
+
 // ── Editions ─────────────────────────────────────────────────────────────
 
 export type EditionRow = Omit<Doc<"digests">, "user_id" | "events" | "model" | "input_tokens" | "output_tokens" | "cost_usd" | "cap_version" | "cap_cost_usd" | "scheduled_id"> & {
@@ -249,7 +267,7 @@ export const liveStatus = query({
     for (const d of editions) {
       for (const r of d.releases ?? []) {
         const key = `${r.surface}|${r.sha}`;
-        if (!ships.has(key)) ships.set(key, { ...r, kind: r.version ? "release" : "deploy" });
+        if (!ships.has(key)) ships.set(key, { ...r, kind: r.kind ?? (r.version ? "release" : "deploy") });
       }
     }
     const latest = Object.values(latestShips(withoutShadowedReleases([...ships.values()]).filter((s) => s.at >= since)));

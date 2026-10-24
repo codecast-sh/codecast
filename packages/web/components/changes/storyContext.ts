@@ -2,7 +2,7 @@
 // update to a story component never mints a second context the page does not
 // provide.
 import { createContext, useContext, useSyncExternalStore } from "react";
-import type { StoryRow } from "../../hooks/useSyncChanges";
+import type { LiveRow, StoryRow } from "../../hooks/useSyncChanges";
 import type { AreaColors } from "./areaColor";
 
 /**
@@ -52,6 +52,10 @@ export type StoryContext = {
    * its commit subjects, for good (editionModel.notesCanArrive).
    */
   proseLive?: boolean;
+  /** What runs on each surface of the repository now, for "not deployed yet". */
+  live?: readonly LiveRow[];
+  /** Copy a link that opens this story on the page. */
+  copyLink?: (story: StoryRow) => void;
 };
 
 const idle = createFocusStore();

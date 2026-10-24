@@ -301,7 +301,14 @@ export const readEventsPage = internalQuery({
 
 // ── Writes ───────────────────────────────────────────────────────────────
 
-export const releaseArg = v.object({ surface: v.string(), version: v.optional(v.string()), sha: v.string(), at: v.number() });
+export const releaseArg = v.object({
+  surface: v.string(),
+  version: v.optional(v.string()),
+  sha: v.string(),
+  at: v.number(),
+  kind: v.optional(v.union(v.literal("release"), v.literal("deploy"))),
+  deploy: v.optional(v.string()),
+});
 
 const storyArg = v.object({
   story_key: v.string(),
@@ -332,8 +339,15 @@ const storyArg = v.object({
 
 export type StoryWrite = typeof storyArg.type;
 
-/** A ship as stories and editions store it: the release validator has no kind. */
-const releaseOf = (s: ShipEvent): typeof releaseArg.type => ({ surface: s.surface, ...(s.version ? { version: s.version } : {}), sha: s.sha, at: s.at });
+/** A ship as stories and editions store it, with the deploy object it recorded so the page can open it. */
+const releaseOf = (s: ShipEvent): typeof releaseArg.type => ({
+  surface: s.surface,
+  ...(s.version ? { version: s.version } : {}),
+  sha: s.sha,
+  at: s.at,
+  kind: s.kind,
+  ...(s.deploy ? { deploy: s.deploy } : {}),
+});
 
 /** The fields prose owns. Cleared when a story loses a session or a session narrows, so text drawn from it cannot outlive its access. */
 const PROSE_CLEARED = { body: undefined, why_source: undefined, risk_lines: undefined } as const;

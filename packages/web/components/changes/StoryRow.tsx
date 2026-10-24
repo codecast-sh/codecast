@@ -34,7 +34,7 @@ export const StoryRow = memo(function StoryRow({ story }: { story: Story }) {
               <span className="chg-ui line-clamp-3 min-w-0 flex-1 text-[14px] font-medium leading-[1.4] text-sol-text/90 [overflow-wrap:anywhere] group-data-[state=open]:text-[21px] group-data-[state=open]:font-bold group-data-[state=open]:leading-[1.25] group-data-[state=open]:tracking-tight group-data-[state=open]:text-sol-text">
                 <FadeText text={story.headline} />
               </span>
-              {waiting && <span className="shrink-0 font-mono text-[10px] text-sol-text/45">waiting</span>}
+              {waiting && <span className="shrink-0 font-mono text-[10px] text-[var(--sol-yellow)]">not deployed</span>}
               <RiskSrText story={story} />
               {/* The column keeps its width with nothing in it, so sizes line up down the block. */}
               <span

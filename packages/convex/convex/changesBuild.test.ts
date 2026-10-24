@@ -122,7 +122,7 @@ describe("changes.buildDay", () => {
 
     // The cli fix shipped in the release commit after it; the release commit is not a story.
     const cli = await byShas("b1");
-    expect(cli.release).toEqual({ surface: "cli", version: "1.2.3", sha: "r1", at: at("12:00") });
+    expect(cli.release).toEqual({ surface: "cli", version: "1.2.3", sha: "r1", at: at("12:00"), kind: "release" });
     expect(rows.some((s) => s.commit_shas.includes("r1"))).toBe(false);
 
     const docs = await byShas("d1");
@@ -132,7 +132,18 @@ describe("changes.buildDay", () => {
     expect(facts?.status).toBe("facts");
     expect(facts?.stats).toEqual({ commits: 5, stories: rows.length, releases: 1, people: 3, sessions: 1, private_sessions: 1 });
     expect(facts?.headline).toBe(`5 commits, 1 release, ${rows.length} stories`);
-    expect(facts?.releases).toEqual([{ surface: "cli", version: "1.2.3", sha: "r1", at: at("12:00") }]);
+    expect(facts?.releases).toEqual([{ surface: "cli", version: "1.2.3", sha: "r1", at: at("12:00"), kind: "release" }]);
+  });
+
+  test("a story a deploy marker carried keeps the deploy object it recorded", async () => {
+    const { t, ids, commit, build, byShas } = await setup();
+    await commit("c1", "fix(convex): retry the sync", "12:30", ["packages/convex/sync.ts"]);
+    await t.run(async (ctx) => ctx.db.insert("external_events", {
+      source: "codecast", team_id: ids.team, repository: REPO, kind: "deploy", title: "backend at d0d0d0d",
+      sha: "d0d0d0d", meta: { surface: "backend", deploy: "dp-7" }, dedupe_key: "deploy:test", created_at: at("13:15"),
+    } as any));
+    await build();
+    expect((await byShas("c1")).release).toEqual({ surface: "backend", sha: "d0d0d0d", at: at("13:15"), kind: "deploy", deploy: "dp-7" });
   });
 
   test("a private session reaches no story, no inputs row and no text", async () => {
