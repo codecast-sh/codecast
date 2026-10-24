@@ -2,6 +2,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { overrideFor, usageCost } from "@platform/agent/meter";
 import { dayStartUtc, resolveCounterTeam } from "./userSend";
+import { teamHasFeature } from "./teamFeatureGuard";
 
 // Per-day token and spend counters behind the "Tokens" and "Spend" chart
 // metrics. conversations.usage_totals is a lifetime total per session, so it
@@ -147,4 +148,33 @@ export async function fetchUserUsageDays(
     byDay.set(r.day_start, { day_start: r.day_start, token_hours: addHours(acc.token_hours, r.token_hours), spend_hours: addHours(acc.spend_hours, r.spend_hours) });
   }
   return [...byDay.values()];
+}
+
+/**
+ * May `viewerId` see teammates' tokens and spend counted in `teamId`? Only a
+ * member, and then as an admin, or as any member once the team turned on
+ * member_spend. Fails closed: no viewer, no team or no membership is no.
+ */
+export async function seesTeamSpend(
+  ctx: { db: any },
+  viewerId: Id<"users"> | null,
+  teamId: Id<"teams"> | null | undefined,
+): Promise<boolean> {
+  if (!viewerId || !teamId) return false;
+  const membership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", viewerId).eq("team_id", teamId))
+    .first();
+  if (!membership) return false;
+  return membership.role === "admin" || (await teamHasFeature(ctx, teamId, "member_spend"));
+}
+
+/** May `viewerId` see `targetId`'s tokens and spend in `teamId`? Their own always. */
+export async function canSeeMemberSpend(
+  ctx: { db: any },
+  viewerId: Id<"users"> | null,
+  targetId: Id<"users">,
+  teamId: Id<"teams"> | null | undefined,
+): Promise<boolean> {
+  return (!!viewerId && String(viewerId) === String(targetId)) || (await seesTeamSpend(ctx, viewerId, teamId));
 }

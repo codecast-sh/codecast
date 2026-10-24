@@ -20,7 +20,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { PAGE_DATA_LIMITS, type PageDataReader } from "@codecast/shared/contracts/pageData";
 import { isOnHumanBoard } from "@codecast/shared/tasks";
 import { parseWorkspaceKey } from "./accessKeys";
-import { fetchUserUsageDays } from "./usageDaily";
+import { fetchUserUsageDays, seesTeamSpend } from "./usageDaily";
 import { resolveWorkspaceProject } from "./projectRef";
 import { sourceByRef } from "./ingestScope";
 import { cachedManifest } from "../sources/app";
@@ -157,7 +157,7 @@ function teamOf(scope: ReaderScope): Id<"teams"> | null {
 const workspaceWords = (scope: ReaderScope) => (teamOf(scope) ? "the team workspace" : "the publisher's personal workspace");
 
 /** The people whose activity a workspace counts: a team's members who share activity, or the publisher alone. */
-async function people(ctx: Db, scope: ReaderScope): Promise<Array<{ user_id: Id<"users">; name: string }>> {
+async function people(ctx: Db, scope: ReaderScope): Promise<Array<{ user_id: Id<"users">; name: string; hidden: boolean }>> {
   const team = teamOf(scope);
   const ids: Id<"users">[] = team
     ? (await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", team)).collect())
@@ -167,7 +167,7 @@ async function people(ctx: Db, scope: ReaderScope): Promise<Array<{ user_id: Id<
   const out = [];
   for (const id of ids) {
     const user = await ctx.db.get(id);
-    out.push({ user_id: id, name: personName(user, id) });
+    out.push({ user_id: id, name: personName(user, id), hidden: !!user?.hide_activity });
   }
   return out.sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)));
 }
@@ -285,14 +285,19 @@ const usage: ReaderDef = {
   }),
   async page(ctx, scope, args, _cursor, now) {
     const team = teamOf(scope);
+    const byPerson = args.group_by === "person";
+    if (byPerson && team && !(await seesTeamSpend(ctx, scope.owner, team)))
+      throw new Error("Spend by person on this team is visible to its admins only");
     const start = windowStart(now, args.days as number);
     const items: unknown[][] = [];
     for (const person of await people(ctx, scope)) {
+      // A member who hides their activity is left out of team charts.
+      if (team && person.hidden) continue;
       const rows = await fetchUserUsageDays(ctx, person.user_id, team ?? undefined, args.days as number);
       for (const r of rows) {
         if (r.day_start < start) continue;
         const sum = (h: number[]) => h.reduce((a, b) => a + b, 0);
-        items.push([dayKey(r.day_start), args.group_by === "person" ? person.name : "", sum(r.token_hours), sum(r.spend_hours)]);
+        items.push([dayKey(r.day_start), byPerson ? person.name : "", sum(r.token_hours), sum(r.spend_hours)]);
       }
     }
     return { items, cursor: null };

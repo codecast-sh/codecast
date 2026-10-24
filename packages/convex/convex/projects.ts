@@ -7,9 +7,8 @@ import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, explicitWorkspace } from "./data";
 import { isTeamMember } from "./privacy";
+import { projectCountsFor } from "./lib/projectTaskCounts";
 import {
-  canAccessDoc,
-  canAccessPlan,
   canAccessProject,
   canAccessTask,
   requireTeamMembership,
@@ -70,27 +69,15 @@ export const list = query({
       projects = projects.filter((p: any) => p.status === args.status);
     }
 
-    // Enrich with task counts
-    const enriched = await Promise.all(
-      projects.map(async (p) => {
-        const tasks = await ctx.db
-          .query("tasks")
-          .withIndex("by_project_id", (q) => q.eq("project_id", p._id))
-          .collect();
-        const authorizedTasks = [];
-        for (const task of tasks) {
-          if (await canAccessTask(ctx, auth.userId, task)) authorizedTasks.push(task);
-        }
-        const total = authorizedTasks.length;
-        const done = authorizedTasks.filter((t) => t.status === "done").length;
-        const in_progress = authorizedTasks.filter((t) => t.status === "in_progress").length;
-        return { ...p, task_counts: { total, done, in_progress } };
-      })
-    );
-
-    return enriched;
+    // Board counts from project_task_counts: reading the tasks themselves
+    // timed out on projects with thousands of them.
+    const counts = await projectCountsFor(ctx, auth.userId, projects.map((p) => p._id));
+    return projects.map((p) => ({ ...p, task_counts: counts.get(String(p._id))! }));
   },
 });
+
+const PROJECT_TASK_LIMIT = 200;
+const PROJECT_TASK_ORDER = ["in_progress", "in_review", "open", "backlog", "done", "dropped"] as const;
 
 export const get = query({
   args: {
@@ -107,16 +94,28 @@ export const get = query({
       return null;
     }
 
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_project_id", (q) => q.eq("project_id", project._id))
-      .collect();
-    const authorizedTasks = [];
-    for (const task of tasks) {
-      if (await canAccessTask(ctx, auth.userId, task)) authorizedTasks.push(task);
+    // A project can hold thousands of tasks (a review files one per problem),
+    // so the whole set overruns the 16 MiB read and return limits. Return a
+    // bounded page, open work first, as the rows `cast project show` prints.
+    const tasks: Array<Record<string, unknown>> = [];
+    let truncated = false;
+    for (const status of PROJECT_TASK_ORDER) {
+      const room = PROJECT_TASK_LIMIT - tasks.length;
+      if (room <= 0) { truncated = true; break; }
+      const rows = await ctx.db
+        .query("tasks")
+        .withIndex("by_project_status", (q) => q.eq("project_id", project._id).eq("status", status))
+        .order("desc")
+        .take(room + 1);
+      if (rows.length > room) truncated = true;
+      for (const task of rows.slice(0, room)) {
+        if (!(await canAccessTask(ctx, auth.userId, task))) continue;
+        const { _id, short_id, title, status, priority, external } = task;
+        tasks.push({ _id, short_id, title, status, priority, external: external?.identifier ? { identifier: external.identifier } : undefined });
+      }
     }
 
-    return { ...project, tasks: authorizedTasks };
+    return { ...project, tasks, tasks_truncated: truncated };
   },
 });
 
@@ -163,31 +162,6 @@ export const update = mutation({
 
 // --- Web-facing queries ---
 
-async function enrichProject(ctx: any, userId: any, p: any) {
-  const [rawTasks, rawPlans, rawDocs] = await Promise.all([
-    ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect(),
-    ctx.db.query("plans").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect(),
-    ctx.db.query("docs").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect(),
-  ]);
-  const tasks = [];
-  const plans = [];
-  const docs = [];
-  for (const task of rawTasks) if (await canAccessTask(ctx, userId, task)) tasks.push(task);
-  for (const plan of rawPlans) if (await canAccessPlan(ctx, userId, plan)) plans.push(plan);
-  for (const doc of rawDocs) if (await canAccessDoc(ctx, userId, doc)) docs.push(doc);
-  return {
-    ...p,
-    task_counts: {
-      total: tasks.length,
-      done: tasks.filter((t: any) => t.status === "done").length,
-      in_progress: tasks.filter((t: any) => t.status === "in_progress").length,
-    },
-    plan_count: plans.length,
-    doc_count: docs.length,
-    active_plan_count: plans.filter((pl: any) => pl.status === "active").length,
-  };
-}
-
 export const webList = query({
   args: {
     status: v.optional(v.string()),
@@ -206,10 +180,14 @@ export const webList = query({
     if (args.workspace === "team" && args.team_id) {
       // team_id is client-supplied — only a member may list a team's projects.
       if (!(await isTeamMember(ctx, userId, args.team_id))) return [];
-      projects = await ctx.db
+      // team_id routes a row to the team; access is its workspace key. A
+      // project kept private inside the team carries the team id too.
+      const routed = await ctx.db
         .query("projects")
         .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
         .collect();
+      const access = await Promise.all(routed.map((p) => canAccessProject(ctx, userId, p)));
+      projects = routed.filter((_, i) => access[i]);
       if (args.status) {
         projects = projects.filter(p => p.status === args.status);
       }
@@ -238,7 +216,7 @@ export const webList = query({
       }
     }
 
-    return Promise.all(projects.map((p) => enrichProject(ctx, userId, p)));
+    return projects;
   },
 });
 
@@ -256,7 +234,7 @@ export const webGet = query({
     // *teamless* others' projects, so any team-tagged project was world-readable.)
     if (!(await canAccessProject(ctx, userId, project))) return null;
 
-    return enrichProject(ctx, userId, project);
+    return project;
   },
 });
 
@@ -272,7 +250,7 @@ export const webGetByIds = query({
       const project = await ctx.db.get(id);
       if (!project) continue;
       if (!(await canAccessProject(ctx, userId, project))) continue;
-      rows.push(await enrichProject(ctx, userId, project));
+      rows.push(project);
     }
     return rows;
   },

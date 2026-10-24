@@ -1821,13 +1821,26 @@ export const list = query({
       // The status filters below run in the database first where they can, so
       // rows they would drop never reach JS memory: finished work is most of a
       // team's table. A team status name ("today") is resolved per row below.
-      let scoped = db.query("tasks");
-      if (isTaskStatusCategory(args.status)) {
-        scoped = scoped.filter((q: any) => q.eq(q.field("status"), args.status));
-      } else if (!args.status && !args.include_done) {
-        scoped = scoped.filter((q: any) => q.and(...TERMINAL_TASK_CATEGORIES.map((s) => q.neq(q.field("status"), s))));
+      // Each wanted category is its own index range: a filter would still read
+      // every finished task (22k rows on a large team) to drop them. Legacy
+      // rows (no stored key) ride along on every range; the map dedupes them.
+      const categories = isTaskStatusCategory(args.status)
+        ? [args.status]
+        : !args.status && !args.include_done
+          ? TASK_STATUS_CATEGORIES.filter((s) => !TERMINAL_TASK_CATEGORIES.includes(s))
+          : null;
+      if (categories) {
+        const byId = new Map<string, any>();
+        for (const status of categories) {
+          const rows = await db.query("tasks")
+            .withIndex("by_workspace_status", (q: any) => q.eq("workspace", db.workspaceKey).eq("status", status))
+            .collect();
+          for (const row of rows) byId.set(String(row._id), row);
+        }
+        tasks = [...byId.values()];
+      } else {
+        tasks = await db.query("tasks").collect();
       }
-      tasks = await scoped.collect();
     }
 
     if (needsAccessFilter) {

@@ -87,6 +87,10 @@ export const CHURN_ONLY_FIELDS: Record<string, ReadonlySet<string>> = {
     "activity",
     "agent_status_probe",
   ]),
+  // An index key for the server's visibility propagation, copied from an array
+  // the row already carries; no client reads it.
+  tasks: new Set(["first_linked_conversation"]),
+  docs: new Set(["first_linked_conversation"]),
 };
 
 export function isChurnOnlyPatch(table: string, fields: Record<string, any>): boolean {
