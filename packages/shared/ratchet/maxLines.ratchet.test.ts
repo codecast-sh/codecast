@@ -61,6 +61,16 @@ import { join } from "node:path";
 // deploys.ts, orgTemplates.ts, files/page.tsx) were split rather than
 // listed, and PIN fell to 258. The growth is split work owed: check.ts +250,
 // workflow/runner.test.ts +250 and remote/session-move.ts +200 lead it.
+//
+// A fifth reset, by decision. On 2026-10-24 the shared checkout held the
+// unshipped work of about forty sessions, and 42 of its files broke this
+// ratchet. Ashot chose to raise the pins once rather than hold the work for
+// splits (decision sd-1473). The baseline of
+// 2026-10-24 re-pinned the 37 grown files to the content that shipped, listed
+// the five new ones (the vault's secrets.ts in convex and contracts, its
+// secrets.test.ts and secrets/command.ts, and conversation/classify.ts), and
+// PIN rose to 263. The growth is split work owed: daemon.ts +250, chat.test.ts
+// +200 and schema.ts +200 lead it.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -77,7 +87,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 258;
+const PIN = 263;
 
 const result = checkRatchet({
   name: "max lines",
