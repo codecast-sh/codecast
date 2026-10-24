@@ -55,6 +55,8 @@ function FlowsHome(props: LineViewProps) {
           {lib.lines.map((e) => <LibraryBranch key={e.flow.slug} entry={e} runsOf={runsOf} picked={null} onPick={open} depth={0} />)}
         </ul>
       </section>
+      {/* The flows the team's sessions ran (Claude Code workflows, `cast flow run`), each one Save from the library. */}
+      {sessions.answered ? <SessionShelf flows={sessions.flows} library={lib} names={props.workspace.names} /> : null}
       <section data-flows-segments>
         <h2 className="flv-h">Segments<span className="lw-num">{lib.segments.length}</span></h2>
         <ul className="fll-shelf">
@@ -63,7 +65,6 @@ function FlowsHome(props: LineViewProps) {
           ))}
         </ul>
       </section>
-      {sessions.answered ? <SessionShelf flows={sessions.flows} library={lib} names={props.workspace.names} /> : null}
     </div>
   );
 }
@@ -117,7 +118,9 @@ function NoLiveFlow({ lines, space }: { lines: LibraryEntry[]; space: string | n
 
 /** The live flow's head: its name, its switch (a team admin's), its load against its capacity, what it stalls on,
  *  and its hold with the way to clear it. */
-export function LiveFlowHead({ live, workspace, onOpenFlow, stalled = 0, children }: Pick<LineViewProps, "workspace"> & { live: LiveFlow; onOpenFlow: (slug: string) => void; stalled?: number; children?: ReactNode }) {
+/** `flows`: how many flows the live family holds (the main flow, its variants, the judge flow), when the map knows; the
+ *  head then names them by count, since the lanes below name each one. */
+export function LiveFlowHead({ live, workspace, onOpenFlow, stalled = 0, flows, children }: Pick<LineViewProps, "workspace"> & { live: LiveFlow; onOpenFlow: (slug: string) => void; stalled?: number; flows?: number; children?: ReactNode }) {
   const queue = useLiveQueue(live);
   const turnOn = () => useInboxStore.getState().setLiveFlowOn(live._id, true);
   const turnOff = () => useInboxStore.getState().setLiveFlowOn(live._id, false);
@@ -128,7 +131,9 @@ export function LiveFlowHead({ live, workspace, onOpenFlow, stalled = 0, childre
     <>
       <header className="fll-live-head">
         <span className="fll-live-k">Live</span>
-        <button type="button" className="fll-live-name" onClick={() => onOpenFlow(live.flow.slug)} data-live-flow-open={live.flow.slug}>{live.flow.label}</button>
+        {flows && flows > 1
+          ? <span className="fll-live-name" data-live-flow-count={flows}>{flows} flows</span>
+          : <button type="button" className="fll-live-name" onClick={() => onOpenFlow(live.flow.slug)} data-live-flow-open={live.flow.slug}>{live.flow.label}</button>}
         {admin ? <ConsequentialSwitch
           on={live.on}
           ledger={liveFlowLedger(live, queue.length)}
@@ -278,7 +283,7 @@ function SessionShelf({ flows, library, names }: { flows: SessionFlow[]; library
   const now = Date.now();
   return (
     <section data-flows-sessions>
-      <h2 className="flv-h">Used in sessions<span className="lw-num">{flows.length}</span></h2>
+      <h2 className="flv-h">From sessions<span className="lw-num">{flows.length}</span></h2>
       {flows.length === 0 ? <p className="flv-none" data-session-flows-none="">None yet</p> : (
       <table className="flh-table fll-sessions">
         <thead><tr><th>Flow</th><th data-num="">Steps</th><th data-num="">Runs</th><th>Last</th><th>Ran it</th><th>Sessions</th><th /></tr></thead>

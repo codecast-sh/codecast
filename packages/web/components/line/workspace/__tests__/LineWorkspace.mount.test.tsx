@@ -106,16 +106,18 @@ test("with no live flow the Flows stage is the library, and a flow the address n
   await act(async () => { root.unmount(); });
 }, 30_000);
 
-test("the header is the pipeline: five stages, the open one marked; G then a letter opens a stage, a digit never does", async () => {
+test("the nav: For you first with its count, then the stages on a rail, the open one marked; G then a letter opens a stage, a digit never does", async () => {
   search = "view=flows";
   useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  expect([...host.querySelectorAll<HTMLElement>("[data-pipeline-stage]")].map((b) => b.dataset.pipelineStage)).toEqual(["signals", "problems", "flows", "decisions", "shipped"]);
+  expect([...host.querySelectorAll<HTMLElement>("[data-pipeline-stage]")].map((b) => b.dataset.pipelineStage)).toEqual(["decisions", "signals", "problems", "flows", "shipped"]);
+  expect([...host.querySelectorAll<HTMLElement>("[data-pipeline-rail] [data-pipeline-stage]")].map((b) => b.dataset.pipelineStage)).toEqual(["signals", "problems", "flows", "shipped"]);
   // The library sits under Flows.
   expect(host.querySelector("[data-pipeline-stage='flows']")?.getAttribute("aria-current")).toBe("page");
   expect(host.querySelector("[data-flows-home]")).not.toBeNull();
-  // Decisions counts what the viewer can answer now; no left nav, no process picker, and the project filter only on Problems.
-  expect(host.querySelector("[data-pipeline-stage='decisions'] .pl-fig b")?.textContent).toBe("1");
+  // For you counts what the viewer can answer now; no process picker, and the project filter only on Problems.
+  expect(host.querySelector("[data-pipeline-stage='decisions'] .pn-label")?.textContent).toBe("For you");
+  expect(host.querySelector("[data-pipeline-stage='decisions'] .pn-n")?.textContent).toBe("1");
   expect(host.querySelector("[data-line-view-tab]")).toBeNull();
   expect(host.querySelector("[data-line-graph-pick]")).toBeNull();
   expect(host.querySelector("[data-line-project-filter]")).toBeNull();
@@ -126,8 +128,10 @@ test("the header is the pipeline: five stages, the open one marked; G then a let
   expect(pushed.at(-1)).toBe("/flows?view=problems");
   await key("g"); await key("s");
   expect(pushed.at(-1)).toBe("/flows?view=signals");
+  // With no live flow, Flows' home is the library this page already shows: nowhere new to go.
+  const before = pushed.length;
   await key("g"); await key("f");
-  expect(pushed.at(-1)).toBe("/flows");
+  expect(pushed.length).toBe(before);
   await act(async () => { root.unmount(); });
 }, 30_000);
 

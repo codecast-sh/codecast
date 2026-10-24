@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pipelineFigures, pipelineHome, pipelineStageForGoKey, pipelineStageOf, routeWords, signalCounts } from "../pipeline";
+import { PIPELINE_LABELS, PIPELINE_RAIL, pipelineFigures, pipelineHome, pipelineStageForGoKey, pipelineStageOf, routeWords, signalCounts } from "../pipeline";
 import { readLineSelection } from "../lineWorkspaceUrl";
 import { emptyOutcomes, type FlowMap, type FlowMapSource } from "@codecast/shared/contracts/flowMap";
 
@@ -22,7 +22,12 @@ const MAP: FlowMap = {
 
 const at = (search: string) => pipelineStageOf(readLineSelection(new URLSearchParams(search)));
 
-describe("the pipeline header", () => {
+describe("the pipeline nav", () => {
+  test("For you heads it; the rail holds the stages work moves through", () => {
+    expect(PIPELINE_LABELS.decisions).toBe("For you");
+    expect(PIPELINE_RAIL).toEqual(["signals", "problems", "flows", "shipped"]);
+  });
+
   test("every view sits under one stage", () => {
     expect(["view=signals", "view=timeline", "view=line&source=judge:x", "stage=judges", "view=signals&sig=issues"].map(at)).toEqual(Array(5).fill("signals"));
     expect(["view=problems", "view=problems&case=ct-1"].map(at)).toEqual(["problems", "problems"]);
@@ -31,8 +36,9 @@ describe("the pipeline header", () => {
     expect(["view=shipped", "view=deploys"].map(at)).toEqual(["shipped", "shipped"]);
   });
 
-  test("a stage's home is its view with nothing open; Flows opens the live flow's map", () => {
+  test("a stage's home is its view with nothing open; Flows opens the live flow's map, or the library with none", () => {
     expect(pipelineHome("flows")).toMatchObject({ view: "line", mode: "map", step: null, source: null });
+    expect(pipelineHome("flows", false)).toMatchObject({ view: "flows", item: null });
     expect(pipelineHome("decisions")).toMatchObject({ view: "foryou", need: null });
   });
 
@@ -41,7 +47,7 @@ describe("the pipeline header", () => {
     expect(["1", "2", "x"].map(pipelineStageForGoKey)).toEqual([null, null, null]);
   });
 
-  test("the figures read the map, and Decisions the viewer's own count", () => {
+  test("the figures read the map, and For you the viewer's own count", () => {
     const f = pipelineFigures(MAP, 28);
     expect(f.signals.n).toBe(7);
     expect(f.signals.state.map((s) => s.words)).toEqual(["1 stopped", "2 not filed", "2 off the flow"]);

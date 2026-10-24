@@ -1,36 +1,39 @@
-/* The pipeline header (PipelineHeader): five stages in one band, joined by a notch so it reads as one flow. */
-.pl {
-  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin: var(--lw-s3) var(--lw-s5) 0; border: 1px solid var(--lw-rule); border-radius: var(--lw-r-lg);
-  background: var(--lw-card); overflow: hidden; flex: none;
+/* The left nav (PipelineNav): For you on top, then the stages on a rail, each its number and its state. */
+.pn {
+  flex: none; width: 212px; display: flex; flex-direction: column; gap: var(--lw-s2); padding: var(--lw-s3) var(--lw-s2);
+  border-right: 1px solid var(--lw-rule-2); overflow-y: auto;
 }
-.pl-stage {
-  position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 11px 18px 12px 22px;
-  border: 0; background: none; font: inherit; color: var(--lw-ink); text-align: left; cursor: pointer;
-  transition: background var(--lw-fast);
+.pn-item {
+  position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; grid-template-rows: auto auto;
+  column-gap: 9px; row-gap: 1px; align-items: center; width: 100%; padding: 7px 9px 8px; border: 0; border-radius: 8px;
+  background: none; font: inherit; color: var(--lw-ink-2); text-align: left; cursor: pointer;
+  transition: background var(--lw-fast), color var(--lw-fast);
 }
-.pl-stage:first-child { padding-left: 18px; }
-/* The notch: each stage points into the next. */
-.pl-stage + .pl-stage::before {
-  content: ""; position: absolute; left: -7px; top: 50%; width: 12px; height: 12px; transform: translateY(-50%) rotate(45deg);
-  border-top: 1px solid var(--lw-rule); border-right: 1px solid var(--lw-rule); background: var(--pl-prev-bg, var(--lw-card)); z-index: 1;
+.pn-item:hover { background: var(--lw-paper-2); color: var(--lw-ink); }
+.pn-item[aria-current="page"] { background: var(--lw-card); color: var(--lw-ink); box-shadow: 0 1px 2px color-mix(in srgb, var(--sol-text) 12%, transparent); }
+.pn-item:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: -2px; }
+.pn-icon { grid-row: 1; grid-column: 1; width: 15px; height: 15px; opacity: .8; }
+.pn-label { grid-row: 1; grid-column: 2; font-size: var(--lw-fs-sm); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pn-n { grid-row: 1; grid-column: 3; font-size: var(--lw-fs-sm); font-weight: 650; font-variant-numeric: tabular-nums; color: var(--lw-ink); }
+.pn-n[data-tone="ask"] { color: var(--lw-person); }
+.pn-key { grid-row: 1; grid-column: 3; justify-self: end; display: inline-flex; gap: 2px; opacity: 0; transition: opacity var(--lw-fast); }
+.pn-item:hover .pn-key, .pn-item:focus-visible .pn-key { opacity: .7; }
+.pn-item:hover .pn-n, .pn-item:focus-visible .pn-n { opacity: 0; }
+.pn-state {
+  grid-row: 2; grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 0 8px; min-width: 0;
+  font-size: var(--lw-fs-xs); color: var(--lw-ink-3);
 }
-.pl-stage + .pl-stage { border-left: 1px solid var(--lw-rule-2); }
-.pl-stage:hover { background: var(--lw-paper-2); }
-.pl-stage:hover + .pl-stage { --pl-prev-bg: var(--lw-paper-2); }
-.pl-stage[aria-current="page"] { background: var(--lw-card-2); }
-.pl-stage[aria-current="page"] + .pl-stage { --pl-prev-bg: var(--lw-card-2); }
-.pl-stage[aria-current="page"]::after {
-  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--lw-person);
+.pn-unit { white-space: nowrap; }
+/* The rail: the stages work moves through, joined icon to icon. */
+.pn-rail { position: relative; display: flex; flex-direction: column; gap: 1px; padding-top: var(--lw-s2); border-top: 1px solid var(--lw-rule-2); }
+.pn-rail::before {
+  content: ""; position: absolute; left: 16.5px; top: calc(var(--lw-s2) + 16px); bottom: 28px; width: 1px;
+  background: var(--lw-rule); pointer-events: none;
 }
-.pl-stage:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person) 50%, transparent); outline-offset: -2px; }
-.pl-label { display: flex; align-items: center; gap: 6px; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); }
-.pl-stage[aria-current="page"] .pl-label { color: var(--lw-ink-2); }
-.pl-key { margin-left: auto; display: inline-flex; gap: 2px; opacity: 0; transition: opacity var(--lw-fast); }
-.pl-stage:hover .pl-key, .pl-stage:focus-visible .pl-key { opacity: .7; }
-.pl-fig { font-size: var(--lw-fs-md); color: var(--lw-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pl-fig b { font-size: var(--lw-fs-xl); font-weight: 700; letter-spacing: -.02em; color: var(--lw-ink); }
-.pl-state { display: flex; flex-wrap: wrap; gap: 2px 10px; min-height: 18px; font-size: var(--lw-fs-xs); color: var(--lw-ink-2); }
+.pn-rail .pn-icon { position: relative; z-index: 1; padding: 1px 0; background: var(--lw-paper, var(--sol-bg)); border-radius: 50%; box-sizing: content-box; }
+.pn-rail .pn-item:hover .pn-icon { background: var(--lw-paper-2); }
+.pn-rail .pn-item[aria-current="page"] .pn-icon { background: var(--lw-card); }
+
 .pl-word { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .pl-word > i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .pl-word[data-tone="ok"] > i { color: var(--lw-ok); }
@@ -43,8 +46,10 @@
 .pl-word[data-tone="calm"] > i { color: var(--lw-ink-3); }
 
 @media (max-width: 900px) {
-  .pl { grid-template-columns: repeat(5, minmax(120px, 1fr)); overflow-x: auto; }
-  .pl-fig b { font-size: var(--lw-fs-lg); }
+  .pn { width: 52px; padding: var(--lw-s2) 6px; }
+  .pn-item { grid-template-columns: 16px; padding: 8px; justify-content: center; }
+  .pn-label, .pn-n, .pn-key, .pn-state { display: none; }
+  .pn-rail::before { display: none; }
 }
 /* Until the feeds answer, the numbers are the cache's: dim, so one about to move never reads as settled. */
-.lw-pipeline[data-settling] .pl-fig b { opacity: .55; transition: opacity var(--lw-med); }
+.pn[data-settling] .pn-n { opacity: .55; transition: opacity var(--lw-med); }

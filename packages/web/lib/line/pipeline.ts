@@ -1,7 +1,8 @@
 // The flows app as one pipeline (doc "Signals to shipped: one pipeline"):
-// Signals, Problems, Flows, Decisions, Shipped. The header is the pipeline:
-// each stage one number and one state, and the way into its view. Every view
-// of the app sits under one stage, so the header marks where a person is
+// Signals, Problems, Flows, Decisions, Shipped. The left nav carries it: For
+// you (the decisions waiting on the viewer) first, then the stages work moves
+// through, each one number and one state, and the way into its view. Every
+// view of the app sits under one stage, so the nav marks where a person is
 // whatever address they came by. Pure, so a test reads it.
 import type { FlowMap, FlowMapGroup, FlowMapSource, FlowMapState } from "@codecast/shared/contracts/flowMap";
 import { lineViewHome, type LineSelection, type LineSelectionPatch } from "./lineWorkspaceUrl";
@@ -9,7 +10,11 @@ import { lineViewHome, type LineSelection, type LineSelectionPatch } from "./lin
 export const PIPELINE_STAGES = ["signals", "problems", "flows", "decisions", "shipped"] as const;
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
-export const PIPELINE_LABELS: Record<PipelineStage, string> = { signals: "Signals", problems: "Problems", flows: "Flows", decisions: "Decisions", shipped: "Shipped" };
+export const PIPELINE_LABELS: Record<PipelineStage, string> = { signals: "Signals", problems: "Problems", flows: "Flows", decisions: "For you", shipped: "Shipped" };
+
+/** The stages the nav's rail joins, in the order work moves through them; For you sits above them, since a decision
+ *  can wait at any of them. */
+export const PIPELINE_RAIL: ReadonlyArray<PipelineStage> = ["signals", "problems", "flows", "shipped"];
 
 /** The second key of the go chord (G, then this). No digit: an open decision answers on bare 1 to 9. */
 export const PIPELINE_KEYS: Record<PipelineStage, string> = { signals: "s", problems: "p", flows: "f", decisions: "d", shipped: "h" };
@@ -29,23 +34,24 @@ export function pipelineStageOf(s: Pick<LineSelection, "view" | "source">): Pipe
   }
 }
 
-/** A stage's home: its view with nothing open. Flows opens the live flow's map. */
-export function pipelineHome(stage: PipelineStage): LineSelectionPatch {
+/** A stage's home: its view with nothing open. Flows opens the live flow's map, or the library when the team has no
+ *  live flow. */
+export function pipelineHome(stage: PipelineStage, live = true): LineSelectionPatch {
   switch (stage) {
     case "signals": return lineViewHome("signals");
     case "problems": return lineViewHome("problems");
-    case "flows": return { ...lineViewHome("line"), mode: "map" };
+    case "flows": return live ? { ...lineViewHome("line"), mode: "map" } : lineViewHome("flows");
     case "decisions": return lineViewHome("foryou");
     case "shipped": return lineViewHome("shipped");
   }
 }
 
 export type StageTone = "ok" | "live" | "ask" | "warn" | "bad" | "calm";
-/** One stage in the header: its number with its unit, and its state in a few words, toned. */
+/** One stage in the nav: its number with its unit, and its state in a few words, toned. */
 export type StageFigure = { n: number | null; unit: string; state: Array<{ words: string; tone: StageTone }> };
 
-/** The header's five figures. `forYou` is the Decisions view's own count, so the number and the list agree. A stage
- *  the map has not answered for reads null. */
+/** The nav's five figures. `forYou` is the For you view's own count, so the number and the list agree. A stage the
+ *  map has not answered for reads null. */
 export function pipelineFigures(map: FlowMap | null, forYou: number): Record<PipelineStage, StageFigure> {
   const src = map?.sources ?? [];
   const unfiled = src.filter((s) => s.route === "unfiled").length;

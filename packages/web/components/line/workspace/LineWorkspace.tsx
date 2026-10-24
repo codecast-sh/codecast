@@ -1,14 +1,15 @@
 "use client";
 // The flows app (doc "Signals to shipped: one pipeline"; line-journeys.md LJ4,
-// LJ5; flows.md FL0): one app over every flow, its header the pipeline.
-// Signals (every source and where it goes), Problems, Flows (the live flow's
-// map), Decisions (what waits on the viewer, read and answered there) and
-// Shipped, each one number and one state, each the way into its view
-// (PipelineHeader). Every view sits under one stage (pipeline.ts), so the
-// header marks where a person is whatever address they came by. The workspace
-// switch heads the app; the project filter shows only on Problems, the one
-// view a project narrows. Pages switch on G then S / P / F / D / H: the shell
-// binds no digit, because an open decision answers on bare digits.
+// LJ5; flows.md FL0): one app over every flow, its left nav the pipeline. For
+// you (what waits on the viewer, read and answered there) heads it with its
+// count; then Signals (every source and where it goes), Problems, Flows (the
+// live flows' map) and Shipped on a rail, each one number and one state, each
+// the way into its view (PipelineNav). Every view sits under one stage
+// (pipeline.ts), so the nav marks where a person is whatever address they came
+// by. The workspace switch heads the app; the project filter shows only on
+// Problems, the one view a project narrows. Pages switch on G then D / S / P /
+// F / H: the shell binds no digit, because an open decision answers on bare
+// digits.
 // The selection lives in the URL (useLineSelection), so any state is a link.
 // `/flows` draws this over every project; `/flows/<owner>` draws it for one
 // flow, pinned to a project of its own; a project's Flow tab draws it pinned
@@ -35,7 +36,7 @@ import { lineSelectionSearch, lineViewHome, readLineSelection, type LineSelectio
 import { pipelineFigures, pipelineHome, pipelineStageForGoKey, pipelineStageOf, type PipelineStage } from "../../../lib/line/pipeline";
 import { useFlowMap } from "../../../hooks/useFlowMap";
 import { useLiveFlow } from "../../../hooks/useLiveFlow";
-import { PipelineHeader } from "./PipelineHeader";
+import { PipelineNav } from "./PipelineNav";
 import { NO_PROJECT, type RollupRow } from "../../../lib/lineFlow";
 import { usePopover } from "./usePopover";
 import { useLineSpaceKeys, type LineSpaceState } from "../../../hooks/useLineSpace";
@@ -174,12 +175,13 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   const search = useSearchParams();
   // A stage opens its home: nothing that was open elsewhere rides along (pipelineHome). From settings it leaves for
   // /flows, keeping the workspace's flow and project.
+  const hasLive = !!live;
   const openStage = useCallback((stage: PipelineStage) => {
-    if (!settings) return select(pipelineHome(stage));
+    if (!settings) return select(pipelineHome(stage, hasLive));
     const keep = new URLSearchParams();
     for (const k of ["project", "graph"]) { const x = search?.get(k); if (x) keep.set(k, x); }
-    router.push(`/flows${lineSelectionSearch(keep, pipelineHome(stage))}`);
-  }, [select, settings, search, router]);
+    router.push(`/flows${lineSelectionSearch(keep, pipelineHome(stage, hasLive))}`);
+  }, [select, settings, search, router, hasLive]);
   // An address that names a view or a mode by an earlier name (view=inbox, view=runs, mode=notebook) settles on the
   // name that holds its job now, in place: a link already sent opens where its job went, and Back is not spent on it.
   // Back and Forward return to where the page was scrolled (useStageScroll).
@@ -318,12 +320,9 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
             <Link href={settingsHref} className="lw-iconbtn" aria-label="Flow settings" aria-current={settings ? "page" : undefined} title={withShortcut("Settings", "line.settings")} data-line-settings-link><SlidersHorizontal className="w-4 h-4" /></Link>
           </div>
         </header>
-        {/* Until the feeds have answered, the counts are the cache's: shown dim, so a number about to move never reads as settled. */}
-        <div className="lw-pipeline" data-settling={ws.ready && ws.complete ? undefined : ""}>
-          <PipelineHeader figures={figures} at={stage} open={openStage} />
-        </div>
-
         <div className="lw-app-body">
+          {/* Until the feeds have answered, the counts are the cache's: shown dim, so a number about to move never reads as settled. */}
+          <PipelineNav figures={figures} at={stage} open={openStage} settling={!(ws.ready && ws.complete)} />
           <div className="lw-body" data-drawer-open={slideOpen && model && !settings ? "" : undefined}>
             <main className="lw-stage" ref={stageRef}>
               {settings && model && !unresolved ? (
