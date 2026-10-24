@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { hashToken, verifyApiToken, exchangeSetupTokenFor, createApiTokenDefinitions } from "./apiTokens";
+import { hashToken, verifyApiToken, exchangeSetupTokenFor, createApiTokenDefinitions, mintSetupToken } from "./apiTokens";
 import { DEVICE_BOUND_TOKEN_PREFIX, isDeviceBoundToken, presentToken, splitPresentedToken } from "../tokenFormat";
 
 // A token used to be bearer authority for a whole account: lift the file off a
@@ -220,6 +220,16 @@ describe("minting binds only when the machine names itself", () => {
     expect(t.api_tokens.find((r: any) => r._id !== "tok_setup")?.device_id).toBe(THIS_DEVICE);
     expect(await direct(t, from(exchanged!.auth_token, THIS_DEVICE))).toEqual({ status: 200, userId: USER });
     expect(await direct(t, from(exchanged!.auth_token, OTHER_DEVICE))).toEqual({ status: 401 });
+  });
+
+  test("a server-minted setup token is only a voucher, and redeems once into a bound token", async () => {
+    const t = { users: [{ _id: USER }], api_tokens: [] as any[] };
+    const { token, expiresAt } = await mintSetupToken(ctx(t), USER);
+    expect(expiresAt).toBeGreaterThan(Date.now());
+    expect(await direct(t, token)).toEqual({ status: 401 });
+    const exchanged = await exchangeSetupTokenFor(ctx(t), token, undefined, THIS_DEVICE);
+    expect(await direct(t, from(exchanged!.auth_token, THIS_DEVICE))).toEqual({ status: 200, userId: USER });
+    expect(await exchangeSetupTokenFor(ctx(t), token, undefined, THIS_DEVICE)).toBeNull();
   });
 
   test("a setup token exchange without a device stays unbound", async () => {

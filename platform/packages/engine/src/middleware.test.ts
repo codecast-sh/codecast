@@ -9,6 +9,7 @@ import {
   makeOutboxFailureDisposition,
   mutativeMiddleware,
   MAX_OUTBOX_BOOT_ATTEMPTS,
+  OutboxGaveUpError,
   receiptAsyncAction,
   sync,
   defaultIsServerId,
@@ -399,10 +400,18 @@ describe("outbox", () => {
     h.wireDispatch(async () => { throw new Error("network down"); });
 
     await waitFor(() => (h.outbox.get("e1")?.attempts ?? 0) === MAX_OUTBOX_BOOT_ATTEMPTS - 1);
-    // One more boot: the entry hits the cap and is dropped.
+    // One more boot: the entry hits the cap and is dropped, and the app
+    // hears it as final, the way it hears a refusal: a write that will never
+    // land must not stay painted as if it had.
+    const reported: unknown[] = [];
+    h.wrapped._setDispatchError((_action: string, error: unknown) => { reported.push(error); });
     h.wrapped._setDispatch(null);
     h.wireDispatch(async () => { throw new Error("network down"); });
     await waitFor(() => h.outbox.size === 0);
+    const gaveUp = reported.filter((e) => e instanceof OutboxGaveUpError);
+    expect(gaveUp).toHaveLength(1);
+    expect(isPermanentDispatchError(gaveUp[0])).toBe(true);
+    expect(String((gaveUp[0] as Error).message)).toContain("network down");
   });
 
   it("never re-dispatches a row whose direct send is still in flight", async () => {

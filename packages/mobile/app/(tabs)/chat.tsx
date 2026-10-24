@@ -1,8 +1,8 @@
 import { StyleSheet, TouchableOpacity, View as RNView, ActionSheetIOS, useWindowDimensions } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
-import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -10,6 +10,7 @@ import { teamFeatureEnabled } from '@codecast/shared/contracts';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatHomeList } from '@/components/chat/ChannelList';
+import { TeamActivityList } from '@/components/team/TeamActivityList';
 import { useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
 import { useActiveTeam, useSwitchActiveTeam } from '@/hooks/useWorkspaceArgs';
 import { getCallSnapshot, subscribeCall } from '@/lib/calls/callManager';
@@ -24,7 +25,14 @@ const TEAM_ICON_EMOJI: Record<string, string> = {
 // The Chat tab: the team talking, top level. Live huddles at the top so a
 // running call is the first thing on the screen, then channels, direct
 // messages and the people themselves. The team switcher lives in this header
-// because chat and calls are per-team rooms.
+// because chat and calls are per-team rooms. The Activity segment is the
+// team's sessions, the web's team Activity page.
+
+type Segment = 'chat' | 'activity';
+const SEGMENTS: { key: Segment; label: string }[] = [
+  { key: 'chat', label: 'Chat' },
+  { key: 'activity', label: 'Activity' },
+];
 
 export default function ChatScreen() {
   const Theme = useTheme();
@@ -37,6 +45,12 @@ export default function ChatScreen() {
   const { teamId: activeTeamId, activeTeam, validTeams } = useActiveTeam();
   const switchTeam = useSwitchActiveTeam();
   const teamName = activeTeam?.name || 'Team';
+  // A link can name the segment (`/team/activity` routes to ?segment=activity).
+  const linked = useLocalSearchParams<{ segment?: string }>().segment;
+  const [segment, setSegment] = useState<Segment>(linked === 'activity' ? 'activity' : 'chat');
+  useEffect(() => {
+    if (linked === 'activity' || linked === 'chat') setSegment(linked);
+  }, [linked]);
 
   // Chat and calls are per-team opt-ins (default off).
   const chatOn = teamFeatureEnabled(activeTeam as any, 'chat');
@@ -81,8 +95,8 @@ export default function ChatScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <RNView style={styles.header}>
-        <RNText style={styles.headerTitle}>Chat</RNText>
+      <RNView style={[styles.header, activeTeamId ? { borderBottomWidth: 0 } : null]}>
+        <RNText style={styles.headerTitle}>{segment === 'activity' ? 'Activity' : 'Chat'}</RNText>
         {activeTeam && (
           <TouchableOpacity
             style={styles.teamPill}
@@ -100,7 +114,7 @@ export default function ChatScreen() {
           </TouchableOpacity>
         )}
         <RNView style={{ flex: 1 }} />
-        {callsOn && (
+        {segment === 'chat' && callsOn && (
           <TouchableOpacity
             style={[styles.iconBtn, styles.iconBtnHuddle]}
             onPress={() => {
@@ -113,7 +127,7 @@ export default function ChatScreen() {
             <Ionicons name="headset" size={17} color={Theme.violet} />
           </TouchableOpacity>
         )}
-        {chatOn && (
+        {segment === 'chat' && chatOn && (
           <TouchableOpacity
             style={[styles.iconBtn, styles.iconBtnCompose]}
             onPress={() => {
@@ -129,6 +143,31 @@ export default function ChatScreen() {
       </RNView>
 
       {activeTeamId ? (
+        <RNView style={styles.segmentBar}>
+          <RNView style={styles.segmentContainer}>
+            {SEGMENTS.map((s) => (
+              <TouchableOpacity
+                key={s.key}
+                style={[styles.segmentBtn, segment === s.key && styles.segmentBtnActive]}
+                onPress={() => {
+                  void Haptics.selectionAsync();
+                  setSegment(s.key);
+                  if (linked) router.setParams({ segment: undefined } as never);
+                }}
+                activeOpacity={0.7}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: segment === s.key }}
+              >
+                <RNText style={[styles.segmentText, segment === s.key && styles.segmentTextActive]}>{s.label}</RNText>
+              </TouchableOpacity>
+            ))}
+          </RNView>
+        </RNView>
+      ) : null}
+
+      {activeTeamId && segment === 'activity' ? (
+        <TeamActivityList teamName={teamName} />
+      ) : activeTeamId ? (
         <ChatHomeList
           teamName={teamName}
           chatOn={chatOn}
@@ -164,6 +203,28 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontWeight: '700',
     color: Theme.text,
   },
+  segmentBar: {
+    backgroundColor: Theme.bgAlt,
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.borderLight,
+  },
+  segmentContainer: {
+    flexDirection: 'row',
+    backgroundColor: Theme.bgHighlight,
+    borderRadius: 8,
+    padding: 2,
+  },
+  segmentBtn: {
+    flex: 1,
+    paddingVertical: 6,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  segmentBtnActive: { backgroundColor: Theme.bg },
+  segmentText: { fontSize: 13, fontWeight: '600', color: Theme.textMuted0 },
+  segmentTextActive: { color: Theme.text },
   teamPill: {
     flexDirection: 'row',
     alignItems: 'center',

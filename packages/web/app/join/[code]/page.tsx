@@ -3,6 +3,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { joinErrorText } from "../../../lib/team/joinError";
 import { Check, Users } from "lucide-react";
 import { Logo } from "../../../components/Logo";
 import { AppLoader } from "../../../components/AppLoader";
@@ -149,7 +150,7 @@ export default function JoinTeamPage() {
       void switchWorkspace(teamId);
       goTo(`/settings/team/join?teamId=${teamId}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not join the team. Try again.");
+      setError(joinErrorText(err));
     } finally {
       setJoining(false);
     }

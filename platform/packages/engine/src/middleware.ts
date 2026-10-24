@@ -335,7 +335,7 @@ const RETRY_DELAYS = [1000, 2000, 4000];
 //  - backend system errors ("Your request timed out…", "Try again later"):
 //    transient overload, carry neither marker, and stay retryable.
 export function isPermanentDispatchError(error: unknown): boolean {
-  if (error instanceof CommandReceiptRejectedError) return true;
+  if (error instanceof CommandReceiptRejectedError || error instanceof OutboxGaveUpError) return true;
   // A backend that says "retryable" outranks the text match below. A thrown
   // application error reaches the client with its data attached, so a rate
   // limit — the one refusal that WILL accept the identical payload a moment
@@ -353,6 +353,18 @@ export function isPermanentDispatchError(error: unknown): boolean {
 // load forever) while letting writes stranded by an outage outlive reloads
 // that happen during that same outage.
 export const MAX_OUTBOX_BOOT_ATTEMPTS = 5;
+
+/**
+ * A parked write the outbox stopped replaying at the boot cap. To the app it
+ * is as final as a refusal: nothing will deliver it, so its paint must come
+ * back and the person must hear it did not land, the way a refusal is heard.
+ */
+export class OutboxGaveUpError extends Error {
+  constructor(action: string, cause: unknown) {
+    super(`"${action}" did not reach the server after ${MAX_OUTBOX_BOOT_ATTEMPTS} tries: ${String((cause as { message?: unknown })?.message ?? cause)}`);
+    this.name = "OutboxGaveUpError";
+  }
+}
 
 // Replay staleness ceiling. "Never drop user content" holds while delivery is
 // still meaningful; replaying a message parked for over a week delivers it
@@ -1642,7 +1654,12 @@ export function mutativeMiddleware(
             if (disposition.keep) {
               if (capturedEnqueue) await enqueueOutbox(capturedEnqueue, disposition.entry);
             } else {
-              rejectReceiptWaiter(entry.id, e);
+              // Given up: settled like a refusal, and reported as one.
+              const gaveUp = new OutboxGaveUpError(entry.action, e);
+              forgetWriter(entry.ts, cellsOf(entry.patches));
+              releaseRefusedLocks(entry.action, entry.locks ?? [], entry.id);
+              capturedError?.(entry.action, gaveUp, entry.args);
+              rejectReceiptWaiter(entry.id, gaveUp);
               await capturedRemove?.(entry.id);
             }
           }

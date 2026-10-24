@@ -41,6 +41,7 @@ Plan and reconsider:
 | Command | What it does |
 |---------|--------------|
 | `/cast-plan` | Explores the code, looks for earlier attempts in past sessions, asks you the open questions, then writes a plan with tasks for the team to review |
+| `/cast-research` | Turns the goal into questions about how the code works today, then has a fresh session that never sees the goal answer them with file and line references |
 | `/cast-rethink` | Steps back and rebuilds the history of a piece of work from earlier sessions and decisions before touching code |
 | `/cast-bakeoff` | Tries several approaches in parallel, one branch of the conversation each, then compares them side by side with a verdict |
 | `/cast-conflicts` | Finds other live sessions changing the same files, shows what they changed, and warns them |

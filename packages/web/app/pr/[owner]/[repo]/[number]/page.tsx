@@ -586,7 +586,7 @@ export function PRContent({
               />
             ))}
           {tab === "commits" && <PRCommits repository={repository} commits={pr.commits} total={pr.commits_count} read={details} />}
-          {tab === "checks" && <PRChecks checks={pr.checks} read={details} />}
+          {tab === "checks" && <PRChecks checks={pr.checks} read={details} pr={isAuthenticated && pr.state === "open" ? pr : undefined} sessionChoices={sessionChoices} />}
         </div>
 
 
