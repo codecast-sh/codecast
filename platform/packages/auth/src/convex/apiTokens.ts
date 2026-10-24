@@ -225,6 +225,31 @@ export async function exchangeSetupTokenFor(
   return { auth_token: newToken, user_id: tokenDoc.user_id };
 }
 
+/**
+ * A one hour setup token for `userId`: the voucher `cast login <token>`
+ * exchanges for a long lived token (exchangeSetupTokenFor). For a server path
+ * that signs a machine in on a person's behalf after they asked for it, such
+ * as joining a team machine; the web's createSetupToken is the other caller.
+ */
+export async function mintSetupToken(
+  ctx: DbCtx,
+  userId: GenericId<"users">,
+  tables: AuthTables = resolveTables(),
+): Promise<{ token: string; expiresAt: number }> {
+  const token = generateToken();
+  const now = Date.now();
+  const expiresAt = now + SETUP_TOKEN_TTL_MS;
+  await ctx.db.insert(tables.apiTokens, {
+    user_id: userId,
+    token_hash: await hashToken(token),
+    name: `${SETUP_TOKEN_PREFIX}${now}`,
+    created_at: now,
+    last_used_at: now,
+    expires_at: expiresAt,
+  });
+  return { token, expiresAt };
+}
+
 export type ApiTokenEvent =
   | { name: "cli_authed"; userId: string; method: "browser" | "setup_token" }
   | { name: "setup_token_generated"; userId: string };
@@ -324,23 +349,9 @@ export function createApiTokenDefinitions<Extras extends Record<string, unknown>
         throw new Error("Unauthorized: must be logged in to create setup token");
       }
 
-      const token = generateToken();
-      const tokenHash = await hashToken(token);
-      const now = Date.now();
-      const expiresAt = now + SETUP_TOKEN_TTL_MS;
-
-      await ctx.db.insert(tables.apiTokens, {
-        user_id: userId,
-        token_hash: tokenHash,
-        name: `${SETUP_TOKEN_PREFIX}${now}`,
-        created_at: now,
-        last_used_at: now,
-        expires_at: expiresAt,
-      });
-
+      const minted = await mintSetupToken(ctx, userId, tables);
       await onEvent(ctx, { name: "setup_token_generated", userId: userId.toString() });
-
-      return { token, expiresAt };
+      return minted;
     },
   };
 
