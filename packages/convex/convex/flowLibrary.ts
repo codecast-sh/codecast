@@ -16,12 +16,13 @@ import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
-import { flowBase, flowGraphAttr, publishableFlowSource, withGraphAttrs } from "@codecast/shared/contracts/flowPool";
+import { flowBase, flowFills, flowGraphAttr, publishableFlowSource, withGraphAttrs } from "@codecast/shared/contracts/flowPool";
 import { LINE_SLUG_RE } from "@codecast/shared/contracts/orgProposal";
 import { createDataContext } from "./data";
 import { isTeamMember, parseWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 
-import { isLineRunSlug, recordGraphVersion, upsertWorkflowFor } from "./workflows";
+import { isLineRunSlug, upsertWorkflowFor } from "./workflows";
+import { recordWorkflowVersion } from "./flowVersions";
 
 export type RunGraph = {
   hash: string; name: string; label?: string; source: string;
@@ -139,6 +140,7 @@ export const sessionFlows = query({
         label: f.label ?? null,
         kind: kind === "line" || kind === "segment" ? kind : null,
         base: flowBase({ source: f.source }),
+        fills: flowFills(f.source),
         nodes: f.nodes.map(({ prompt: _p, script: _s, ...n }) => n),
         edges: f.edges,
         runs: shown.map((r) => r._id),
@@ -153,6 +155,9 @@ export const sessionFlows = query({
     }));
   },
 });
+
+/** An `extends` that names a file (a path, or a .cast), not a library flow by slug. */
+export const isExtendsPath = (ext: string) => ext.includes("/") || ext.endsWith(".cast");
 
 const slugOf = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 
@@ -176,9 +181,12 @@ export const save = mutation({
     const label = args.label?.trim() || flow.label || flow.name;
     const slug = args.slug?.trim() || flow.saved?.slug || slugOf(label);
     if (!LINE_SLUG_RE.test(slug)) throw new ConvexError("A flow's name is 1 to 64 characters of a-z, 0-9 and -");
-    const variantOf = args.variant_of?.trim() || undefined;
+    // `extends="<slug>"` names a library flow (a backbone with its slots filled inline): it saves as that flow's variant.
+    // A path names a file of the session's checkout, which the library cannot hold.
+    const ext = flowGraphAttr(flow.source, "extends");
+    if (ext && isExtendsPath(ext)) throw new ConvexError("This graph extends a file of its checkout; publish it from there with cast flow publish");
+    const variantOf = args.variant_of?.trim() || ext || undefined;
     if (variantOf === slug) throw new ConvexError("A flow cannot be a variant of itself");
-    if (flowGraphAttr(flow.source, "extends")) throw new ConvexError("This graph extends a file of its checkout; publish it from there with cast flow publish");
     const kind = flowGraphAttr(flow.source, "kind") === "segment" ? "segment" : "line";
     const source = withGraphAttrs(flow.source, { kind, label, draft: null });
     const now = Date.now();
@@ -190,12 +198,13 @@ export const save = mutation({
     const held = pool.find((w) => w.slug === slug && publishableFlowSource(w.source));
     let workflowId: Id<"workflows">;
     if (held) {
-      await ctx.db.patch(held._id, { ...graph, origin, ...(variantOf ? { variant_of: variantOf } : {}), updated_at: now });
-      await recordGraphVersion(ctx, held._id, userId, origin, now);
+      // A save is a library flow's next version; a flow pinned to its repo stays pinned.
+      await ctx.db.patch(held._id, { ...graph, origin, ...(variantOf ? { variant_of: variantOf } : {}), ...(held.runs_from ? {} : { runs_from: "library" as const }), updated_at: now });
+      await recordWorkflowVersion(ctx, held._id, userId, origin, now);
       workflowId = held._id;
     } else {
       const publish = ws.type === "team" ? { workspace: "team" as const, team_id: ws.teamId } : { workspace: "personal" as const };
-      workflowId = (await upsertWorkflowFor(ctx, userId, { ...graph, slug, origin, serves: undefined, publish })).id;
+      workflowId = (await upsertWorkflowFor(ctx, userId, { ...graph, slug, origin, serves: undefined, publish, save: true, library: "switch" })).id;
       if (variantOf) await ctx.db.patch(workflowId, { variant_of: variantOf });
     }
     await ctx.db.patch(flow._id, { saved: { workflow_id: workflowId, slug } });

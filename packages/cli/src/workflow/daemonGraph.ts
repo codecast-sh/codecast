@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { parseWorkflowFile, parseWorkflowSource } from "./parser.js";
+import { parseWorkflowFile, parseWorkflowSource, resolveFlowSource, type ResolveFlow } from "./parser.js";
 import { resolveWorkflowSource } from "./templates.js";
 import type { WorkflowGraph } from "./types.js";
 import { repoLineForRun } from "../repoLine.js";
+import { materializePushedFlow } from "./flowPool.js";
+import { codecastPath } from "../codecastDir.js";
 
 // The graph `cast workflow run-daemon` executes for a run (the-line.md L9).
 //
@@ -28,8 +30,45 @@ export function graphForDaemonRun(...args: Parameters<typeof daemonRunGraph>): W
   return daemonRunGraph(...args).graph;
 }
 
+/** One library version a run executes (convex flowVersions.libraryOfRun): its graph, each station's text, and where they sit in a checkout. */
+export type LibraryVersion = {
+  workflow_id: string;
+  version_id: string;
+  /** The flow's slug, by which a variant may extend it (`extends="<slug>"`). */
+  slug?: string | null;
+  snapshot: { name: string; label?: string; goal?: string; source: string; nodes: Array<{ id: string; prompt?: string; script?: string }>; file: string; files: Array<{ node: string; prompt?: string; script?: string }> };
+};
+
+/**
+ * A library run's versions as files (ct-70169): the flow and each base it
+ * extends written at their checkout paths into one directory named by the
+ * versions, the flow first and its bases after, so a base's current text is
+ * what its stations read. Returns the flow's graph file.
+ */
+export function materializeLibraryRun(versions: LibraryVersion[], cacheRoot = codecastPath("flows")): string {
+  return materializeLibraryFiles(versions, cacheRoot)[0];
+}
+
+/** Each version's graph file, in the order given. */
+function materializeLibraryFiles(versions: LibraryVersion[], cacheRoot = codecastPath("flows")): string[] {
+  const key = `v-${versions.map((v) => v.version_id.replace(/[^\w-]/g, "")).join("-")}`.slice(0, 200);
+  return versions.map((v) => materializePushedFlow({ _id: key, slug: v.snapshot.name, name: v.snapshot.name, source: v.snapshot.source, nodes: v.snapshot.nodes, origin: { file: v.snapshot.file, files: v.snapshot.files } }, cacheRoot));
+}
+
+/** A library run's graph: a base the flow names by slug reads the version the run recorded, written beside the others. */
+export function parseLibraryRun(versions: LibraryVersion[], cacheRoot = codecastPath("flows")): WorkflowGraph {
+  const files = materializeLibraryFiles(versions, cacheRoot);
+  const bySlug = new Map(versions.slice(1).flatMap((v, i) => (v.slug ? [[v.slug, files[i + 1]] as const] : [])));
+  const resolveFlow: ResolveFlow = (slug, dir, read) => {
+    const file = bySlug.get(slug.replace(/\.cast$/, ""));
+    const src = file ? read(file) : null;
+    return file && src !== null ? { src, dir: path.dirname(file), file } : resolveFlowSource(slug, dir, read);
+  };
+  return parseWorkflowFile(files[0], { resolveFlow });
+}
+
 type DaemonRun = { workflow_name?: string | null; goal_override?: string | null; project_path?: string | null; task_short_id?: string | null; fresh_branch?: boolean | null; current_node_id?: string | null };
-type DaemonRow = { name?: string; slug?: string; goal?: string; model_stylesheet?: string; nodes?: any[]; edges?: any[]; stack?: string; source?: string; origin?: { device_id: string; root: string; file: string } | null } | null | undefined;
+type DaemonRow = { name?: string; slug?: string; goal?: string; model_stylesheet?: string; nodes?: any[]; edges?: any[]; stack?: string; source?: string; origin?: { device_id: string; root: string; file: string } | null; library?: { versions: LibraryVersion[] } } | null | undefined;
 
 /** The graph a daemon run executes, with the graph file on this machine it was read from: null when the stations came from anywhere else. */
 export function daemonRunGraph(
@@ -39,6 +78,14 @@ export function daemonRunGraph(
   deviceId?: string,
   resume = false,
 ): { graph: WorkflowGraph | null; file: string | null } {
+  // A run that recorded library versions runs them, on any machine, start or resume; no checkout's file is read.
+  if (wf?.library?.versions?.length) {
+    const graph = parseLibraryRun(wf.library.versions);
+    if (run.goal_override) graph.goal = run.goal_override;
+    if (wf.stack) graph.stack = wf.stack;
+    if (wf.name) graph.name = wf.name;
+    return { graph, file: null };
+  }
   const origin = (run.fresh_branch || resume) && deviceId && wf?.origin?.device_id === deviceId ? path.join(wf.origin.root, wf.origin.file) : null;
   if (origin && fs.existsSync(origin)) {
     const graph = parseWorkflowFile(origin);

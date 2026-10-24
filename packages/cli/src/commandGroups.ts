@@ -120,9 +120,10 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
   {
     token: "flow",
     description: "Flows: the team's library (ls, show, run, import, publish, validate), its live flows (show, on, off), and a flow's profile, finders, steps, trials, deploys, judges and moments",
-    load: () => Promise.all([import("./flowCommand.js"), import("./lineCommand.js")]).then(([f, l]) => (program: Command, deps: GroupDeps) => {
+    load: () => Promise.all([import("./flowCommand.js"), import("./lineCommand.js"), import("./flowVersionsCommand.js")]).then(([f, l, fv]) => (program: Command, deps: GroupDeps) => {
       const flow = f.registerFlowCommands(program, deps.flow);
       l.registerLineSubcommands(flow, deps);
+      fv.registerFlowVersionCommands(flow, deps.flow);
     }),
   },
   {

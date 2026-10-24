@@ -15,7 +15,7 @@ import { DOC_TYPES } from "@codecast/shared/docs";
 import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 import { lineSlotsValidator } from "./lib/lineSlotsValidator";
-import { workflowEdgeValidator, workflowNodeValidator } from "./lib/workflowGraphValidators";
+import { workflowEdgeValidator, workflowNodeValidator, workflowSnapshotValidator } from "./lib/workflowGraphValidators";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
@@ -7840,6 +7840,10 @@ export default defineSchema({
     // from a session (flowLibrary.save): its graph is whole, so its base is
     // named here rather than by `extends` (shared flowPool.flowBase reads both).
     variant_of: v.optional(v.string()),
+    // Where its runs read the graph (ct-70169): "library" = this row, the
+    // current version, on every machine; "repo" = the checkout's file (pinned).
+    // Unset: the resolution from before the library (daemonGraph.ts).
+    runs_from: v.optional(v.union(v.literal("library"), v.literal("repo"))),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -7860,6 +7864,8 @@ export default defineSchema({
     changed: v.array(v.string()),
     by: v.id("users"),
     at: v.number(),
+    // The version itself (ct-70169): a run in the library runs it, and a restore writes it back.
+    snapshot: v.optional(workflowSnapshotValidator),
   })
     .index("by_workflow_at", ["workflow_id", "at"]),
 
@@ -8071,6 +8077,8 @@ export default defineSchema({
     // A rerun from the trial page: its runner sets the earlier run's branch
     // aside and starts from origin/main (cli lineTrialBranch.ts).
     fresh_branch: v.optional(v.boolean()),
+    // The library versions the run executes, its flow and the base it extends (flowVersions.ts).
+    flow_versions: v.optional(v.array(v.object({ workflow_id: v.id("workflows"), version_id: v.id("workflow_versions") }))),
     // When a failed run was last resumed at a station as a new attempt: its
     // runner counts each station's visits again from then (cli runResume.ts).
     visits_reset_at: v.optional(v.number()),

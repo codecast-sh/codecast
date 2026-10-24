@@ -2,12 +2,13 @@ import { internalMutation, mutation, query } from "./functions";
 import { ConvexError, v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { LINE_SLUG_RE } from "@codecast/shared/contracts/orgProposal";
 import { publishableFlowSource } from "@codecast/shared/contracts/flowPool";
 import { createDataContext } from "./data";
 import { computeWorkspaceKey, isTeamMember } from "./lib/access";
 import { workflowEdgeValidator, workflowNodeValidator } from "./lib/workflowGraphValidators";
+import { libraryOfFlow, recordWorkflowVersion } from "./flowVersions";
 
 const nodeV = workflowNodeValidator;
 const edgeV = workflowEdgeValidator;
@@ -48,6 +49,11 @@ const upsertArgs = {
     workspace: v.union(v.literal("personal"), v.literal("team")),
     team_id: v.optional(v.id("teams")),
   })),
+  // A save (flowVersions.ts): `cast workflow push`, `cast flow save`. Only a
+  // save or a publish changes a library flow; a run's own push leaves it.
+  save: v.optional(v.boolean()),
+  // `cast flow save`: the flow's runs read the library from now on.
+  library: v.optional(v.boolean()),
 };
 
 type Publish = { workspace: "personal" | "team"; team_id?: Id<"teams"> };
@@ -77,20 +83,27 @@ const workflowBySlug = (ctx: any, userId: Id<"users">, slug: string) =>
  * version of the step): each station's hash, and which stations changed
  * since the version before.
  */
-export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }> }, now = Date.now()) {
+export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }> }, now = Date.now(), snapshot?: Doc<"workflow_versions">["snapshot"]) {
   const last = await ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", workflowId)).order("desc").first();
-  if (last?.graph_hash === origin.graph_hash) return null;
+  if (last?.graph_hash === origin.graph_hash) {
+    // A library flow's first save of a graph its history already names keeps that version, now with its content.
+    if (snapshot && !last.snapshot) await ctx.db.patch(last._id, { snapshot });
+    return null;
+  }
   const was = new Map<string, string>((last?.nodes ?? []).map((n: any) => [n.id, n.h]));
   const changed = origin.nodes.filter((n) => was.get(n.id) !== n.h).map((n) => n.id);
-  return await ctx.db.insert("workflow_versions", { workflow_id: workflowId, graph_hash: origin.graph_hash, nodes: origin.nodes, changed, by: userId, at: now });
+  return await ctx.db.insert("workflow_versions", { workflow_id: workflowId, graph_hash: origin.graph_hash, nodes: origin.nodes, changed, by: userId, at: now, ...(snapshot ? { snapshot } : {}) });
 }
 
 // `serves`: a list or null (a push: written as the file says), undefined (the web: left as it is).
-export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, ...args }: { name: string; slug: string; label?: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish }) {
+// `library`: "switch" puts the flow in the library (`cast flow save`, a session's Save); "new" only a flow this write creates (the web's).
+export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, save, library, ...args }: { name: string; slug: string; label?: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish; save?: boolean; library?: "switch" | "new" }) {
   const now = Date.now();
   const existing = await workflowBySlug(ctx, userId, args.slug);
 
   if (existing && create_only) throw new ConvexError(`${args.slug} already exists: reload to see its stations`);
+  // A library flow changes only on a save (flowVersions.ts).
+  if (existing?.runs_from === "library" && !save && !publish) return { id: existing._id, updated: false, held: true };
   const axes = await workflowAxes(ctx, userId, args.source, publish, existing);
   if (existing) {
     await ctx.db.patch(existing._id, {
@@ -105,9 +118,10 @@ export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_
       ...(args.origin ? { origin: args.origin } : {}),
       ...(serves !== undefined ? { serves: serves ?? undefined } : {}),
       ...(axes ?? {}),
+      ...(library === "switch" && existing.runs_from !== "library" ? { runs_from: "library" as const } : {}),
       updated_at: now,
     });
-    if (args.origin) await recordGraphVersion(ctx, existing._id, userId, args.origin, now);
+    await recordWorkflowVersion(ctx, existing._id, userId, args.origin, now);
     return { id: existing._id, updated: true };
   }
 
@@ -126,10 +140,11 @@ export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_
     model_stylesheet: args.model_stylesheet,
     ...(args.origin ? { origin: args.origin } : {}),
     ...(serves ? { serves } : {}),
+    ...(library ? { runs_from: "library" as const } : {}),
     created_at: now,
     updated_at: now,
   });
-  if (args.origin) await recordGraphVersion(ctx, id, userId, args.origin, now);
+  await recordWorkflowVersion(ctx, id, userId, args.origin, now);
   return { id, updated: false };
 }
 
@@ -141,7 +156,7 @@ export const upsert = mutation({
     const user = await ctx.db.get(result.userId);
     if (!user) return { error: "User not found" };
     // A push says what its file serves: none named, none served.
-    return await upsertWorkflowFor(ctx, result.userId, { ...args, serves: args.serves?.length ? args.serves : null });
+    return await upsertWorkflowFor(ctx, result.userId, { ...args, serves: args.serves?.length ? args.serves : null, library: args.library ? "switch" : undefined, save: args.save || args.library });
   },
 });
 
@@ -152,11 +167,12 @@ export const webUpsert = mutation({
   // Only a machine's push says where a graph lives; the web never does.
   // Which sources a version serves is the graph file's to say, so the web's edit leaves it.
   // Publishing is `cast flow publish`'s; the web's edit leaves where the row lives.
-  handler: async (ctx, { stack: _stack, origin: _origin, serves: _serves, publish: _publish, ...args }) => {
+  // The web's edit is a save, and a flow it creates runs from the library (ct-70169).
+  handler: async (ctx, { stack: _stack, origin: _origin, serves: _serves, publish: _publish, save: _save, library: _library, ...args }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not signed in");
     if (!LINE_SLUG_RE.test(args.slug)) throw new Error("A workflow slug is 1 to 64 characters of a-z, 0-9 and -");
-    return await upsertWorkflowFor(ctx, userId, args);
+    return await upsertWorkflowFor(ctx, userId, { ...args, save: true, library: "new" });
   },
 });
 
@@ -234,7 +250,7 @@ export const poolForCli = query({
     }
     return {
       flows: rows.map((r) => ({
-        _id: r._id, slug: r.slug, name: r.name, source: r.source, workspace: r.workspace, updated_at: r.updated_at,
+        _id: r._id, slug: r.slug, name: r.name, source: r.source, workspace: r.workspace, updated_at: r.updated_at, runs_from: r.runs_from ?? null,
         nodes: r.nodes.map((n: any) => ({ id: n.id, ...(n.prompt ? { prompt: n.prompt } : {}), ...(n.script ? { script: n.script } : {}) })),
         origin: r.origin ? { file: r.origin.file, files: r.origin.files } : null,
         by: names.get(String(r.user_id)) ?? null,
@@ -323,6 +339,6 @@ export const lineVersionForCli = query({
     if (!result) return { error: "Unauthorized" };
     const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", args.task)).first();
     const row = await lineVersionFor(ctx, result.userId, task);
-    return { version: row ? { slug: row.slug, name: row.name, origin: row.origin ? { device_id: row.origin.device_id, root: row.origin.root, file: row.origin.file } : null } : null };
+    return { version: row ? { slug: row.slug, name: row.name, origin: row.origin ? { device_id: row.origin.device_id, root: row.origin.root, file: row.origin.file } : null, ...(await libraryOfFlow(ctx, row._id)) } : null };
   },
 });

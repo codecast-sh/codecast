@@ -26,6 +26,8 @@ export type PoolFlow = PoolFlowSummary & {
   by?: string | null;
   /** The flow it extends (a variant), by slug. */
   extends: string | null;
+  /** Where a pushed flow's runs read its graph (ct-70169): the library's current version or the checkout's file; null when it says neither. */
+  runs_from?: "library" | "repo" | null;
 };
 
 /** A flow published to the workspace's pool, as /cli/workflows/pool returns it. */
@@ -37,6 +39,8 @@ export type PushedPoolRow = {
   workspace?: string | null;
   by?: string | null;
   mine?: boolean;
+  /** workflows.runs_from (ct-70169). */
+  runs_from?: "library" | "repo" | null;
   /** Each station's text as pushed (its own file's text, includes taken in). */
   nodes: Array<{ id: string; prompt?: string; script?: string }>;
   /** Where the graph and its station files sat in the publisher's checkout, repo-relative. */
@@ -117,7 +121,7 @@ export function poolFlows(cwd: string, session?: string | null, pushed: Readonly
     const base = newest.get(extendsSlug(graphExtendsOf(row.source)) ?? "");
     const file = materializePushedFlow(row, cacheRoot, base);
     const where = row.workspace?.startsWith("team:") ? "team" : "pushed";
-    out.push({ ...describeFlow(row.slug, row.source, where, file), by: row.mine ? null : row.by ?? null });
+    out.push({ ...describeFlow(row.slug, row.source, where, file), by: row.mine ? null : row.by ?? null, runs_from: row.runs_from ?? null });
   }
   return out;
 }

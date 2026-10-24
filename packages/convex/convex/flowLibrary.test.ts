@@ -106,6 +106,29 @@ describe("used in sessions", () => {
     expect(stored!.script).toContain("ship-widget");
   });
 
+  test("a graph that extends a library flow by slug saves as its variant; one that extends a file is refused", async () => {
+    const { t, ids, shelf } = await setup();
+    const runId = await t.run((ctx) => ctx.db.insert("workflow_runs", { user_id: ids.owner, workspace: ids.workspace, team_id: ids.team, workflow_name: "x", status: "running", node_statuses: [], created_at: T0, updated_at: T0 } as any));
+    const graph = (source: string, hash: string) => ({ hash, name: "calls", source, nodes, edges, file: ".codecast/flows/calls.cast", files: [], graph_nodes: [] });
+    const { recordRunGraph } = await import("./flowLibrary");
+    await t.run(async (ctx) => {
+      const run = await ctx.db.get(runId);
+      await recordRunGraph(ctx, run as any, graph(`digraph calls {\n  graph [extends="union-fix"]\n}\n`, "1111111111111111"), "graph");
+      await recordRunGraph(ctx, run as any, graph(`digraph calls {\n  graph [extends="../line/base.cast"]\n}\n`, "2222222222222222"), "graph");
+    });
+    const rows = await shelf();
+    const bySlug = rows.find((r: any) => r.graph_hash === "1111111111111111");
+    const byFile = rows.find((r: any) => r.graph_hash === "2222222222222222");
+    expect(bySlug.base).toBe("union-fix");
+    const saved = await t.withIdentity({ subject: ids.owner }).mutation(api.flowLibrary.save, { id: bySlug._id, slug: "calls" });
+    expect(saved.slug).toBe("calls");
+    const lib = (await t.run((ctx) => ctx.db.query("workflows").collect())).find((w: any) => w.slug === "calls") as any;
+    expect(lib.variant_of).toBe("union-fix");
+    expect(lib.source).toContain(`extends="union-fix"`);
+    expect(lib.runs_from).toBe("library");
+    await expect(t.withIdentity({ subject: ids.owner }).mutation(api.flowLibrary.save, { id: byFile._id, slug: "calls-file" })).rejects.toThrow(/extends a file/);
+  });
+
   test("save puts it in the team's library; a new graph under the same name is its next version", async () => {
     const { t, ids, runGraph, shelf } = await setup();
     await runGraph();

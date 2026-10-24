@@ -57,6 +57,36 @@ describe("graphForDaemonRun", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  test("a run that recorded library versions runs them, whatever the checkout's file says, on any machine (ct-70169)", () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "daemongraph-"));
+    const cache = fs.mkdtempSync(path.join(os.tmpdir(), "daemongraph-cache-"));
+    fs.mkdirSync(path.join(root, "line"));
+    fs.writeFileSync(path.join(root, "line/look.md"), "The checkout's uncommitted edit.");
+    fs.writeFileSync(path.join(root, "line/g.cast"), `digraph g { start [shape=Mdiamond]; look [prompt="@look.md"]; exit [shape=Msquare]; start -> look -> exit }`);
+    // The variant extends the base; the base's current version is written after it, so its stations read the base's text.
+    const base = { workflow_id: "w1", version_id: "v1b", snapshot: { name: "g", source: `digraph g { start [shape=Mdiamond]; look [prompt="@look.md"]; exit [shape=Msquare]; start -> look -> exit }`, nodes: [{ id: "look", prompt: "Base, current." }], file: "line/g.cast", files: [{ node: "look", prompt: "line/look.md" }] } };
+    const variant = { workflow_id: "w2", version_id: "v2a", snapshot: { name: "g_sys", source: `digraph g_sys { graph [extends="g.cast"]; fix [prompt="@sys/fix.md"]; look -> fix -> exit }`, nodes: [{ id: "look", prompt: "Base, as the variant was saved." }, { id: "fix", prompt: "System fix." }], file: "line/g-sys.cast", files: [{ node: "look", prompt: "line/look.md" }, { node: "fix", prompt: "line/sys/fix.md" }] } };
+    const wf = { name: "g_sys", nodes: [], edges: [], origin: { device_id: "dev-a", root, file: "line/g-sys.cast" }, library: { versions: [variant, base] } };
+    const run = { workflow_name: "g_sys", project_path: root, fresh_branch: true, goal_override: "Fix ct-1" };
+    const { materializeLibraryRun } = require("./daemonGraph");
+    const entry = materializeLibraryRun(wf.library.versions, cache);
+    expect(fs.readFileSync(path.join(path.dirname(entry), "look.md"), "utf-8")).toBe("Base, current.");
+    for (const device of ["dev-a", "dev-b"]) {
+      const { graph, file } = daemonRunGraph(run, wf, root, device, false);
+      expect(file).toBeNull();
+      expect(graph!.name).toBe("g_sys");
+      expect(graph!.goal).toBe("Fix ct-1");
+      expect(graph!.nodes.get("look")!.prompt).toBe("Base, current.");
+      expect(graph!.nodes.get("fix")!.prompt).toBe("System fix.");
+      expect(graph!.edges.filter((e: any) => e.from === "look").map((e: any) => e.to)).toEqual(["fix"]);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(cache, { recursive: true, force: true });
+  });
+
   test("null when the run has no nodes and its name is not a shipped template", () => {
     expect(graphForDaemonRun({ workflow_name: "not-a-template", project_path: "/nonexistent/path" }, EMPTY)).toBeNull();
     expect(graphForDaemonRun({ workflow_name: undefined, project_path: "/nonexistent/path" }, EMPTY)).toBeNull();

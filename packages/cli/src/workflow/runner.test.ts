@@ -426,11 +426,18 @@ describe("workflow/graphToPushPayload", () => {
   });
 
   test("every workflow push in the CLI goes through graphToPushPayload", () => {
-    const src = fs.readFileSync(path.resolve(__dirname, "../index.ts"), "utf-8");
-    const pushes = src.split("/cli/workflows/upsert").length - 1;
-    expect(pushes).toBeGreaterThanOrEqual(2);
-    expect(src.split("graphToPushPayload(graph)").length - 1).toBe(pushes);
-    expect(src).not.toContain("...(n.goal_gate !== undefined ? { goal_gate: n.goal_gate } : {})");
+    // A push serializes its graph itself, or through filePushBody, which does.
+    const count = (src: string, s: string) => src.split(s).length - 1;
+    expect(count(fs.readFileSync(path.resolve(__dirname, "filePush.ts"), "utf-8"), "graphToPushPayload(graph)")).toBe(1);
+    let total = 0;
+    for (const file of ["../index.ts", "../flowVersionsCommand.ts"]) {
+      const src = fs.readFileSync(path.resolve(__dirname, file), "utf-8");
+      const pushes = count(src, "/cli/workflows/upsert");
+      total += pushes;
+      expect(count(src, "graphToPushPayload(graph)") + count(src, "filePushBody(")).toBe(pushes);
+      expect(src).not.toContain("...(n.goal_gate !== undefined ? { goal_gate: n.goal_gate } : {})");
+    }
+    expect(total).toBeGreaterThanOrEqual(3);
   });
 });
 

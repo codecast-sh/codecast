@@ -24,6 +24,7 @@ import lineCast from "./workflow/templates/line.cast" with { type: "text" };
 import { LINE_TEMPLATE_FILES, resolveWorkflowSource, type ResolvedWorkflowSource } from "./workflow/templates.js";
 import { graphHash, parseWorkflowSource, validateWorkflow } from "./workflow/parser.js";
 import { graphToPushPayload } from "./workflow/runner.js";
+import { materializeLibraryRun, type LibraryVersion } from "./workflow/daemonGraph.js";
 import { findLineProfile, LineProfileError } from "./lineProfile.js";
 import {
   REPO_LINE_FILE_RE,
@@ -75,7 +76,9 @@ export function repoLineFor(cwd: string): ResolvedWorkflowSource | null {
  * machine: null when no version serves it or its file lives elsewhere, and
  * then the run in this process takes the repo's or role's line.
  */
-export function lineVersionFile(version: { origin?: { device_id: string; root: string; file: string } | null } | null | undefined, device: string): ResolvedWorkflowSource | null {
+export function lineVersionFile(version: { origin?: { device_id: string; root: string; file: string } | null; library?: { versions: LibraryVersion[] } } | null | undefined, device: string): ResolvedWorkflowSource | null {
+  // A version that runs from the library runs its saved graph on any machine (ct-70169).
+  if (version?.library?.versions?.length) return resolveWorkflowSource(materializeLibraryRun(version.library.versions));
   const o = version?.origin;
   if (!o || o.device_id !== device) return null;
   const file = path.join(o.root, o.file);

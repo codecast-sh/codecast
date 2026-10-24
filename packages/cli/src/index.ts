@@ -21416,7 +21416,6 @@ workflow
   .action(async (file: string | undefined, options: { publish?: boolean; team?: string }) => {
     const path = await import("path");
     const fs = await import("fs");
-    const { parseWorkflowFile } = await import("./workflow/parser.js");
 
     let filePath = file;
     if (!filePath) {
@@ -21440,36 +21439,14 @@ workflow
       process.exit(1);
     }
 
-    const graph = parseWorkflowFile(filePath);
-    const slug = graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const source = fs.readFileSync(filePath, "utf-8");
-
-    // the-line.md L8 node fidelity: the same serializer `cast workflow run`
-    // pushes with, so a daemon run of this graph matches a local run.
-    const { graphToPushPayload } = await import("./workflow/runner.js");
-    const { nodes, edges, stack, serves } = graphToPushPayload(graph);
-    // Where the graph lives, so the app can edit and try its steps here (line-workspace.md LW4).
-    const origin = (await import("./lineGraphEdit.js")).graphOrigin(filePath, graph, deviceId());
+    const { graph, slug, origin, body } = await (await import("./workflow/filePush.js")).filePushBody(filePath, deviceId());
     // A write names its workspace outright, so the flow never lands in a pool nobody was looking at.
     const publish = options.publish ? workspaceScope(await writeWorkspace(options.team)) : null;
-
+    // A push is a save: a flow whose runs read the library takes it as its next version (ct-70169).
     const response = await cliFetch(`${siteUrl}/cli/workflows/upsert`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_token: apiToken,
-        name: graph.name, label: graph.label ?? "",
-        slug,
-        goal: graph.goal,
-        source,
-        nodes,
-        edges,
-        stack,
-        ...(serves ? { serves } : {}),
-        model_stylesheet: graph.model_stylesheet,
-        ...(origin ? { origin } : {}),
-        ...(publish ? { publish } : {}),
-      }),
+      body: JSON.stringify({ api_token: apiToken, ...body, ...(publish ? { publish } : {}), save: true }),
     });
 
     const result = await response.json() as any;

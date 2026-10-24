@@ -148,6 +148,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       console.log(`${bold(found.label)}  ${dim(`${found.kind === "line" ? "flow" : found.kind} · ${home}`)}`);
       if (found.description) console.log(found.description);
       console.log(dim(`takes: ${found.takes.join(", ")}`));
+      if (found.runs_from) console.log(dim(`runs from ${found.runs_from}${found.runs_from === "library" ? " (cast flow versions " + found.slug + ")" : ""}`));
       if (found.extends) printVariantChanges(found.extends, base, changes);
       console.log("");
       // A fan-out's branches print under it, and the routes after its join are its own.

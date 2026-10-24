@@ -4840,9 +4840,9 @@ cliRoute("/cli/docs/patch", async (ctx, body) => {
 });
 
 // Workflows
-cliRoute("/cli/workflows/upsert", async (ctx, body) => {
-  return await ctx.runMutation(api.workflows.upsert, body);
-});
+cliRoute("/cli/workflows/upsert", async (ctx, body) => ctx.runMutation(api.workflows.upsert, body));
+// `cast flow versions|restore|pin` (flowVersions.ts, ct-70169).
+cliRoute("/cli/flows/versions", async (ctx, body) => ctx.runMutation((api as any).flowVersions.fromCli, body));
 cliRoute("/cli/workflows/line-version", async (ctx, body) => ctx.runQuery(api.workflows.lineVersionForCli, body));
 cliRoute("/cli/workflows/list", async (ctx, body) => {
   return await ctx.runMutation(api.workflows.list, body);

@@ -24,6 +24,7 @@ import { resolveOwnerDevice } from "./devices";
 import { openRunPrice } from "./lib/trialRunPrices";
 import { isLineRunSlug, lineVersionFor } from "./workflows";
 import { recordRoutineRunGraph, recordScriptRunGraph } from "./flowLibrary";
+import { libraryOfRun, runFlowVersions } from "./flowVersions";
 import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
 
@@ -652,6 +653,7 @@ export async function createRunCore(
     goal_override: opts.goal_override,
     project_path: opts.project_path,
     ...(opts.fresh_branch && opts.task ? { fresh_branch: true } : {}),
+    ...(await runFlowVersions(ctx, opts.workflow_id)),
     created_at: now,
     updated_at: now,
   });
@@ -1035,7 +1037,7 @@ export const getForDaemon = mutation({
 
     return {
       run: { ...run, task_short_id: taskShortId, plan_short_id: planShortId, gate_card: gateCard },
-      workflow: workflow || { name: "workflow", goal: run.goal_override, nodes: [], edges: [] },
+      workflow: workflow ? { ...workflow, ...(await libraryOfRun(ctx, run)) } : { name: "workflow", goal: run.goal_override, nodes: [], edges: [] },
     };
   },
 });

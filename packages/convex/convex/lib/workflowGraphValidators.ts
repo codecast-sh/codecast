@@ -45,6 +45,18 @@ export const graphFilesValidator = v.array(v.object({ node: v.string(), prompt: 
 /** Each station's own hash in a graph (cli parser.graphNodeHashes). */
 export const graphNodeHashesValidator = v.array(v.object({ id: v.string(), h: v.string() }));
 
+/** One version of a flow whole (ct-70169): what a library run materializes and a restore writes back. */
+export const workflowSnapshotValidator = v.object({
+  name: v.string(),
+  label: v.optional(v.string()),
+  goal: v.optional(v.string()),
+  source: v.string(),
+  nodes: v.array(workflowNodeValidator),
+  edges: v.array(workflowEdgeValidator),
+  file: v.string(),
+  files: graphFilesValidator,
+});
+
 /** A graph as a run path hands it over. */
 export const runGraphValidator = v.object({
   hash: v.string(),
