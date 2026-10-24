@@ -31,6 +31,7 @@ export * from "./apiErrorBanner";
 // Cloud placement: the one predicate the web composer and the Convex start
 // chokepoint share for "does this launch need a laptop to prepare the host".
 export * from "./cloudPlacement";
+export * from "./teamHosts";
 export * from "./cloudPlacementProgress";
 // Cloud workspace mode (isolated worktree vs the host's shared checkout) and
 // the ONE occupancy rule Convex, the CLI and `cast hosts ls` apply to it.

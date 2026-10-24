@@ -10,6 +10,7 @@ import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
 import type { OpenTaskReport, AgentStatus, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
+import { argumentValidationProblem } from "@codecast/shared/contracts";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
 import { filesForWire, type SyncFile } from "./userFiles.js";
 import { callFrameAtPath, referenceCallFrames } from "./callFrameRefs.js";
@@ -389,8 +390,16 @@ export interface CreateConversationParams {
 
 export class SyncService {
   /** Stores the snapshot; the answer names the sessions a person put at background priority on this machine. */
-  async reportMachineResources(snapshot: import("@codecast/shared/contracts").MachineResourceSnapshot): Promise<{ background_sessions?: string[] } | undefined> {
-    return await this.mutate("machineResources:report" as any, { api_token: this.apiToken, snapshot }) as any;
+  async reportMachineResources(snapshot: import("@codecast/shared/contracts").MachineResourceSnapshot): Promise<{ background_sessions?: string[]; unattended_sessions?: string[] } | undefined> {
+    try {
+      return await this.mutate("machineResources:report" as any, { api_token: this.apiToken, snapshot }) as any;
+    } catch (err) {
+      // The governor level is enrichment: a backend deployed before it knew
+      // the field rejects the whole report (closed validator), so send it bare.
+      if (snapshot.sample.governor === undefined || !/governor/.test(String(err))) throw err;
+      const { governor: _governor, ...sample } = snapshot.sample;
+      return await this.mutate("machineResources:report" as any, { api_token: this.apiToken, snapshot: { ...snapshot, sample } }) as any;
+    }
   }
 
   private client: ConvexHttpClient;
@@ -2002,6 +2011,16 @@ export class SyncService {
 
   // Terminal: "cancelled" is the one status the server's stuck-message cron
   // never re-pends. For a message that no delivery path can ever land.
+  // A "stop and send" whose Escape found no turn: the queued row goes now.
+  async releaseQueued(conversationId: string): Promise<void> {
+    return this.guarded(async () => {
+      await this.mutate("pendingMessages:releaseQueued" as any, {
+        conversation_id: conversationId,
+        api_token: this.apiToken,
+      });
+    });
+  }
+
   async cancelPendingMessage(messageId: string): Promise<void> {
     return this.guarded(async () => {
       await this.mutate("pendingMessages:cancelPendingMessage" as any, {
@@ -2322,19 +2341,26 @@ export class SyncService {
     session_id: string;
     tool_name: string;
     arguments_preview: string;
+    suggestions?: unknown[];
   }): Promise<string> {
     return this.guarded(async () => {
-      const permissionId = await this.mutate(
-        "permissions:createPermissionRequest" as any,
-        {
-          conversation_id: params.conversation_id,
-          session_id: params.session_id,
-          tool_name: params.tool_name,
-          arguments_preview: params.arguments_preview,
-          api_token: this.apiToken,
-        }
-      );
-      return permissionId as string;
+      const base = {
+        conversation_id: params.conversation_id,
+        session_id: params.session_id,
+        tool_name: params.tool_name,
+        arguments_preview: params.arguments_preview,
+        api_token: this.apiToken,
+      };
+      const create = (args: Record<string, unknown>) => this.mutate("permissions:createPermissionRequest" as any, args);
+      if (!params.suggestions?.length) return (await create(base)) as string;
+      try {
+        return (await create({ ...base, suggestions: params.suggestions })) as string;
+      } catch (err) {
+        // A server older than this CLI refuses the field and the whole call;
+        // the card still works without the "Always allow" rules.
+        if (!argumentValidationProblem(err)) throw err;
+        return (await create(base)) as string;
+      }
     });
   }
 
@@ -2370,6 +2396,8 @@ export class SyncService {
     status: "approved" | "denied" | "cancelled";
     resolved_at?: number;
     tool_name: string;
+    deny_message?: string;
+    remember?: boolean;
   } | null> {
     return this.guarded(async () => {
       const decision = await this.client.query(

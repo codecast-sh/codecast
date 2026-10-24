@@ -14,6 +14,7 @@ import { isInboxRoute, isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
 import { focusComposer } from "../lib/composerControl";
 import { isPeopleWindow } from "../lib/desktop";
+import { oldestBlocked } from "../lib/decisionQueue";
 import { useShortcutAction } from "./ShortcutProvider";
 import { useUndoWalk } from "../hooks/useUndoWalk";
 import { useTriageActions } from "../components/triage/useTriageActions";
@@ -130,6 +131,14 @@ export function useGlobalShortcutActions() {
     const store = useInboxStore.getState();
     const first = store.yourMoveOrder()[0];
     if (first) openSession(first._id);
+  }, [openSession]));
+
+  // The session whose prompt has waited longest, among the cards the panel
+  // shows as waiting on you (the same yourMoveOrder Ctrl+I reads).
+  useShortcutAction('permission.jumpOldest', useCallback(() => {
+    const store = useInboxStore.getState();
+    const oldest = oldestBlocked(store.yourMoveOrder());
+    if (oldest) openSession(oldest._id);
   }, [openSession]));
 
   useShortcutAction('session.jumpPinned', useCallback(() => {
@@ -278,6 +287,7 @@ export function useGlobalShortcutActions() {
   useShortcutAction('nav.forward', useCallback(() => { window.history.forward(); }, []));
 
   useShortcutAction('compose.focus', useCallback(() => { focusComposer(); }, []));
+  useShortcutAction('task.create', useCallback(() => { useInboxStore.getState().openCreateModal("task"); }, []));
 
   useShortcutAction('sidebar.toggleLeft', useCallback(() => {
     const store = useInboxStore.getState();

@@ -122,6 +122,7 @@ export type QueueKeyAction =
   | { kind: "answer"; option: number }
   | { kind: "open-session" }
   | { kind: "skip" }
+  | { kind: "prev" }
   | { kind: "dismiss" }
   | { kind: "pass" }
   | { kind: "open-free-text" }
@@ -172,7 +173,8 @@ export function routeQueueKey(
     return n < ctx.optionCount ? { kind: "answer", option: n } : null;
   }
   if (e.key === "o" || e.key === "O") return { kind: "open-session" };
-  if (e.key === "s" || e.key === "S") return { kind: "skip" };
+  if (e.key === "s" || e.key === "S" || e.key === "ArrowRight") return { kind: "skip" };
+  if (e.key === "ArrowLeft") return { kind: "prev" };
   // Dismiss = "I am not going to answer this": the card leaves the queue for
   // good (a `cast decide` row resolves as dismissed), the session is not told.
   if (e.key === "x" || e.key === "X") return { kind: "dismiss" };
@@ -480,4 +482,17 @@ export function awaitingOkIds(decisions: Record<string, SessionDecisionItem> | u
     awaitingOkMemo.set(decisions, ids);
   }
   return ids;
+}
+
+/** The session that has waited longest on a permission prompt, by when its
+ *  status turned blocked. Undefined when none is blocked. */
+export function oldestBlocked<T extends { agent_status?: string | null; agent_status_updated_at?: number | null }>(
+  sessions: readonly T[],
+): T | undefined {
+  let oldest: T | undefined;
+  for (const s of sessions) {
+    if (s.agent_status !== "permission_blocked") continue;
+    if (!oldest || (s.agent_status_updated_at ?? Infinity) < (oldest.agent_status_updated_at ?? Infinity)) oldest = s;
+  }
+  return oldest;
 }

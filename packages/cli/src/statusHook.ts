@@ -11,6 +11,33 @@
 // python3 remains only for the AskUserQuestion sidecar (nested JSON dump).
 import { HOOK_FIELDS_READ } from "./hookJson.js";
 import { HOOK_TOKEN_READ } from "./hookIdentity.js";
+import { PERMISSION_HOOK_PATH, PERMISSION_HOOK_WAIT_MS } from "./permissionHookWait.js";
+
+/** Hold a permission prompt for a web answer (permissionHookWait.ts). The
+ *  daemon reports the session blocked and opens the card; its decision, if one
+ *  comes, is printed for Claude Code to apply. Returns 1 when the daemon never
+ *  took the post (no daemon, a daemon without the route, a refusal), so the
+ *  caller reports status the ordinary way. */
+export const CODECAST_PERMISSION_WAIT = `
+codecast_permission_wait() {
+PORT=
+[ -f "$HOME/.codecast/hook-port" ] && IFS= read -r PORT <"$HOME/.codecast/hook-port" 2>/dev/null
+[ -n "$PORT" ] || return 1
+${HOOK_TOKEN_READ}
+set -- -s -f -X POST "http://127.0.0.1:$PORT${PERMISSION_HOOK_PATH}" --connect-timeout 1 --max-time ${PERMISSION_HOOK_WAIT_MS / 1000 + 10}
+set -- "$@" -H "Content-Type: application/json" --data-binary @-
+[ -n "\$CODECAST_HOOK_TOKEN" ] && set -- "$@" -H "Authorization: Bearer \$CODECAST_HOOK_TOKEN"
+OUT=$(printf '%s' "$INPUT" | curl "$@" 2>/dev/null)
+rc=$?
+[ $rc -eq 0 ] && [ -n "$OUT" ] && printf '%s\\n' "$OUT"
+# 7: nothing listening. 22: an HTTP error (no such route on an older daemon,
+# a refusal, the boot window). Any other ending means the daemon took the
+# post and already reported the prompt; reporting it again could re-block a
+# session that has moved on.
+[ $rc -eq 7 ] || [ $rc -eq 22 ] && return 1
+return 0
+}
+`;
 
 /** Report STATUS to the daemon. Returns instead of exiting so a combined
  *  UserPromptSubmit script can run the other jobs after a successful curl. */
@@ -102,7 +129,7 @@ set -uo pipefail
 # except when we need the AskUserQuestion questions array for the sidecar.
 INPUT=$(dd bs=65536 count=1 2>/dev/null || true)
 case "$INPUT" in
-  *AskUserQuestion*) INPUT="$INPUT$(cat)" ;;
+  *AskUserQuestion*|*PermissionRequest*) INPUT="$INPUT$(cat)" ;;
 esac
 [ -n "$INPUT" ] || exit 0
 
@@ -259,5 +286,11 @@ except Exception:
 fi
 
 ${CODECAST_STATUS_EMIT}
+${CODECAST_PERMISSION_WAIT}
+# A permission prompt waits for the web's answer. Claude Code shows its own
+# dialog meanwhile and takes whichever answer comes first.
+if [ "$EVENT" = "PermissionRequest" ] && [ "$STATUS" = "permission_blocked" ] && [ "$TOOL" != "AskUserQuestion" ]; then
+  codecast_permission_wait && exit 0
+fi
 codecast_status_emit
 `;

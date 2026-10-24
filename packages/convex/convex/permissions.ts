@@ -5,6 +5,7 @@ import { verifyApiToken } from "./apiTokens";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { Id } from "./_generated/dataModel";
 import { resolveEffectiveTeam } from "./data";
+import { runnerDeviceOf } from "./lib/runnerDevice";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -30,12 +31,37 @@ async function getAuthenticatedUserId(
 // tool call within milliseconds of each other; this collapses them into one row.
 const DUPLICATE_WINDOW_MS = 10_000;
 
+const MAX_DENY_MESSAGE = 2000;
+// Claude offers one to a few rules per call; anything past this is not a
+// suggestion list a person can read on a card.
+const MAX_SUGGESTIONS = 8;
+const MAX_SUGGESTIONS_BYTES = 8 * 1024;
+
+function boundedSuggestions(suggestions: unknown[] | undefined): { suggestions?: unknown[] } {
+  if (!suggestions?.length) return {};
+  const kept = suggestions.slice(0, MAX_SUGGESTIONS);
+  return JSON.stringify(kept).length <= MAX_SUGGESTIONS_BYTES ? { suggestions: kept } : {};
+}
+
+/** What a daemon needs to answer the agent: the verdict, its reason, whether
+ *  the suggested rules are kept. */
+function decisionFields(p: { status: string; resolved_at?: number; tool_name: string; deny_message?: string; remember?: boolean }) {
+  return {
+    status: p.status,
+    resolved_at: p.resolved_at,
+    tool_name: p.tool_name,
+    ...(p.deny_message ? { deny_message: p.deny_message } : {}),
+    ...(p.remember ? { remember: true } : {}),
+  };
+}
+
 export const createPermissionRequest = mutation({
   args: {
     conversation_id: v.id("conversations"),
     session_id: v.string(),
     tool_name: v.string(),
     arguments_preview: v.string(),
+    suggestions: v.optional(v.array(v.any())),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -79,6 +105,7 @@ export const createPermissionRequest = mutation({
       status: "pending",
       created_at: now,
       owner_user_id: conversation.user_id,
+      ...boundedSuggestions(args.suggestions),
     });
 
     return permissionId;
@@ -117,6 +144,10 @@ export const updatePermissionStatus = mutation({
   args: {
     permission_id: v.id("pending_permissions"),
     status: v.union(v.literal("approved"), v.literal("denied")),
+    // A denial's reason, sent to the model as the deny message.
+    message: v.optional(v.string()),
+    // An approval that also keeps the row's suggested rules.
+    remember: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -145,10 +176,14 @@ export const updatePermissionStatus = mutation({
       throw new Error("Permission already resolved");
     }
 
+    const message = args.status === "denied" ? args.message?.trim().slice(0, MAX_DENY_MESSAGE) : undefined;
+    const remember = args.status === "approved" && args.remember === true && (permission.suggestions?.length ?? 0) > 0;
     await ctx.db.patch(args.permission_id, {
       status: args.status,
       resolved_at: Date.now(),
       resolved_by: userId,
+      ...(message ? { deny_message: message } : {}),
+      ...(remember ? { remember: true } : {}),
     });
     await recordAuthorityEvent(ctx, {
       kind: "permission_answered",
@@ -266,12 +301,7 @@ export const getPermissionDecision = query({
       if (!conversation || conversation.user_id.toString() !== authUserId.toString()) {
         return null;
       }
-      return {
-        _id: permission._id,
-        status: permission.status,
-        resolved_at: permission.resolved_at,
-        tool_name: permission.tool_name,
-      };
+      return { ...decisionFields(permission), _id: permission._id };
     }
 
     const permissions = await ctx.db
@@ -295,12 +325,7 @@ export const getPermissionDecision = query({
       return null;
     }
 
-    return {
-      _id: latest._id,
-      status: latest.status,
-      resolved_at: latest.resolved_at,
-      tool_name: latest.tool_name,
-    };
+    return { ...decisionFields(latest), _id: latest._id };
   },
 });
 
@@ -340,11 +365,9 @@ export const getAllRespondedPermissions = query({
     return permissions
       .filter((p) => p.status !== "pending")
       .map((permission) => ({
+        ...decisionFields(permission),
         _id: permission._id,
         session_id: permission.session_id,
-        status: permission.status,
-        resolved_at: permission.resolved_at,
-        tool_name: permission.tool_name,
       }));
   },
 });
@@ -477,5 +500,38 @@ export const prunePendingPermissions = internalMutation({
       }
     }
     return { deleted, scanned: rows.length };
+  },
+});
+
+// A machine that has not beaten for this long is asleep or gone: nobody can
+// answer its prompts from here, and Needs Input should stop saying it waits.
+export const PERMISSION_DEVICE_LAPSE_MS = 5 * 60 * 1000;
+
+// Pending prompts whose machine stopped beating are cancelled, the same state a
+// prompt the agent moved past ends in. The device row's last_seen is the beat;
+// a conversation that names no device falls back to its owner's last daemon
+// heartbeat. Bounded like the prune above: the table stays small.
+export const expireOfflinePermissions = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const pending = (await ctx.db.query("pending_permissions").take(4000)).filter((p) => p.status === "pending");
+    const lapsedByConv = new Map<string, boolean>();
+    let expired = 0;
+    for (const p of pending) {
+      const key = String(p.conversation_id);
+      let lapsed = lapsedByConv.get(key);
+      if (lapsed === undefined) {
+        const conv = await ctx.db.get(p.conversation_id);
+        const device = conv ? await runnerDeviceOf(ctx, conv) : null;
+        const lastBeat = device ? device.last_seen : conv ? (await ctx.db.get(conv.user_id))?.last_heartbeat : undefined;
+        lapsed = !conv || now - (lastBeat ?? 0) > PERMISSION_DEVICE_LAPSE_MS;
+        lapsedByConv.set(key, lapsed);
+      }
+      if (!lapsed) continue;
+      await ctx.db.patch(p._id, { status: "cancelled", resolved_at: now });
+      expired++;
+    }
+    return { expired, pending: pending.length };
   },
 });

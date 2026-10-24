@@ -22,6 +22,7 @@ export type ShortcutAction =
   | 'session.create'
   | 'session.compose'
   | 'session.composeDock'
+  | 'task.create'
   | 'session.rename'
   | 'session.mruSwitch'
   | 'recents.open'
@@ -75,12 +76,17 @@ export type ShortcutAction =
   | 'msg.sendAdvance'
   | 'msg.sendDismiss'
   | 'msg.forkSend'
+  | 'msg.stopSend'
   | 'msg.handoff'
   | 'permission.approve'
   | 'permission.deny'
+  | 'permission.jumpOldest'
   | 'review.nextFile'
   | 'review.prevFile'
   | 'review.comment'
+  | 'review.approveBlock'
+  | 'review.cutBlock'
+  | 'review.undoVerdict'
   | 'compose.focus'
   | 'compose.richToggle'
   | 'sidebar.toggleLeft'
@@ -186,6 +192,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+j', action: 'session.next', skipInputCheck: true, description: 'Next session' },
   { key: 'ctrl+k', action: 'session.prev', skipInputCheck: true, description: 'Previous session' },
   { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to top needs-input session' },
+  // Y is approve inside a conversation; with Ctrl+Shift it finds the prompt
+  // that has waited longest anywhere.
+  { key: 'ctrl+shift+y', action: 'permission.jumpOldest', skipInputCheck: true, description: 'Jump to the oldest pending permission' },
   { key: 'alt+p', mac: 'ctrl+p', action: 'session.jumpPinned', skipInputCheck: true, description: 'Jump to pinned session' },
   { key: 'ctrl+shift+p', action: 'session.pin', skipInputCheck: true, description: 'Pin/unpin session' },
   // Ctrl+Shift+U = Unread. Non-destructive (the next visit clears it), so a
@@ -233,6 +242,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   // worksInModal because the same chord minimizes the center modal, whose
   // aria-modal would otherwise make the dispatcher stand down.
   { key: 'ctrl+shift+m', action: 'session.composeDock', skipInputCheck: true, worksInModal: true, description: 'New session in a docked composer (minimizes the open one)' },
+  // New task, beside Ctrl+N's new session (T as in task). Ctrl+T on mac,
+  // where New tab is Cmd+T; Alt+T elsewhere, where Ctrl+T is New tab, the same
+  // split session.jumpPinned and recents.open make.
+  { key: 'alt+t', mac: 'ctrl+t', action: 'task.create', skipInputCheck: true, description: 'New task' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
   // Fixed: a hold-to-walk gesture (hooks/useRecentSwitcher reads Ctrl down, Tab, Ctrl up).
   { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, fixed: true, description: 'Switch recently viewed (MRU)' },
@@ -397,6 +410,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'alt+enter', action: 'msg.sendAdvance', when: 'conversation', skipInputCheck: true, fixed: true, description: 'Send and advance' },
   { key: 'alt+shift+enter', action: 'msg.sendDismiss', when: 'conversation', skipInputCheck: true, fixed: true, description: 'Send and stash' },
   { key: 'ctrl+shift+enter', mac: 'meta+shift+enter', action: 'msg.forkSend', when: 'conversation', skipInputCheck: true, fixed: true, description: 'Fork and send' },
+  { key: 'shift+escape', action: 'msg.stopSend', when: 'conversation', skipInputCheck: true, fixed: true, description: 'Stop and send' },
   { key: 'alt+shift+h', action: 'msg.handoff', when: 'conversation', skipInputCheck: true, fixed: true, description: 'Hand off to a teammate' },
   { key: 'y', action: 'permission.approve', when: 'conversation', description: 'Approve permission' },
   { key: 'n', action: 'permission.deny', when: 'conversation', description: 'Deny permission' },
@@ -440,6 +454,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },
   { key: 'c', action: 'review.comment', when: 'review', description: 'Comment on line' },
+  // Typed verdicts on the focused block of a message or plan under review
+  // (MessageReview reads them with matchesAction). Each one joins the reply's
+  // review batch and is sent to the agent as "Verdict: ...".
+  { key: 'a', action: 'review.approveBlock', when: 'review', description: 'Approve this block' },
+  { key: 'd', action: 'review.cutBlock', when: 'review', description: 'Mark this block to cut' },
+  { key: 'z', action: 'review.undoVerdict', when: 'review', description: 'Undo the last verdict' },
 
 
   { key: '[', action: 'diff.prevChange', when: 'diff', description: 'Previous change' },

@@ -20,6 +20,7 @@ import { TASK_CONTEXT_HOOK, TASK_CONTEXT_HOOK_FILE, installTaskContextHookCodex,
 import { USER_PROMPT_HOOK, USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
 import { SESSION_TRAILER_HOOK, SESSION_TRAILER_HOOK_FILE } from "./sessionTrailerHook.js";
+import { PERMISSION_HOOK_TIMEOUT_S } from "./permissionHookWait.js";
 
 const SCRIPTS: Record<string, string> = {
   "codecast-status.sh": CODECAST_STATUS_HOOK,
@@ -49,6 +50,19 @@ const RETIRED_SHELL_CHANGES_EVENTS = ["PreToolUse", "PostToolUse", "PostToolUseF
 // startup past 5s. A timed out UserPromptSubmit or Stop hook loses the status
 // transition behind it, and the session then reads as idle for minutes.
 const HOOK_TIMEOUT_S = 10;
+// A PermissionRequest hook holds for the web's answer while Claude Code's own
+// dialog stays usable beside it (permissionHookWait.ts).
+const EVENT_TIMEOUT_S: Partial<Record<string, number>> = { PermissionRequest: PERMISSION_HOOK_TIMEOUT_S };
+
+/** The hook's events grouped by the timeout each runs under. */
+function eventsByTimeout(events: readonly string[]): Map<number, string[]> {
+  const groups = new Map<number, string[]>();
+  for (const event of events) {
+    const timeout = EVENT_TIMEOUT_S[event] ?? HOOK_TIMEOUT_S;
+    groups.set(timeout, [...(groups.get(timeout) ?? []), event]);
+  }
+  return groups;
+}
 
 function hooksDir(): string {
   return path.join(process.env.HOME || "", ".claude", "hooks");
@@ -119,7 +133,9 @@ export function installHarnessHooks(config: HookConfig = {}, opts: { featuresOnl
     if (hook.kind === "statusLine") {
       installOwnedStatusLine(file, { settingsPath: settings });
     } else if (hook.events.length > 0) {
-      installOwnedHook(hook.events, file, { timeout: HOOK_TIMEOUT_S, settingsPath: settings });
+      for (const [timeout, events] of eventsByTimeout(hook.events)) {
+        installOwnedHook(events, file, { timeout, settingsPath: settings });
+      }
     }
     CODEX_TWINS[hook.file]?.install();
   }

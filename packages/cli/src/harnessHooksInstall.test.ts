@@ -6,6 +6,7 @@ import { HARNESS_HOOKS } from "@codecast/shared/contracts";
 import { CODECAST_HOOK_SCRIPTS, STATUSLINE_HOOK_SCRIPT } from "./codecastOwned.js";
 import { installHarnessHooks, removeHarnessHooks, syncHarnessHooks } from "./harnessHooksInstall.js";
 import { readHarnessChanges, withHarnessCause } from "./harness.js";
+import { PERMISSION_HOOK_TIMEOUT_S } from "./permissionHookWait.js";
 
 let home: string;
 let prevHome: string | undefined;
@@ -179,5 +180,21 @@ describe("removeHarnessHooks", () => {
     const s = readSettings();
     expect(s.hooks).toBeUndefined();
     expect(s.statusLine).toBeUndefined();
+  });
+});
+
+describe("per-event timeouts", () => {
+  test("the status hook waits long on PermissionRequest and stays at 10s elsewhere", () => {
+    syncHarnessHooks({});
+    const s = readSettings();
+    const timeoutOf = (event: string) =>
+      (s.hooks?.[event] ?? []).flatMap((m: any) => m.hooks ?? []).find((h: any) => String(h.command).endsWith("codecast-status.sh"))?.timeout;
+    expect(timeoutOf("PermissionRequest")).toBe(PERMISSION_HOOK_TIMEOUT_S);
+    expect(timeoutOf("Stop")).toBe(10);
+    expect(timeoutOf("PreToolUse")).toBe(10);
+    // A refresh keeps one entry per event, both events still registered.
+    syncHarnessHooks({});
+    expect(commandsFor(readSettings(), "PermissionRequest").filter((c) => c.endsWith("codecast-status.sh"))).toHaveLength(1);
+    expect(commandsFor(readSettings(), "Stop").filter((c) => c.endsWith("codecast-status.sh"))).toHaveLength(1);
   });
 });

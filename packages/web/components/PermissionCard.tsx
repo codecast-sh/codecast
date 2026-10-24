@@ -45,6 +45,7 @@ type Permission = {
   status: "pending" | "approved" | "denied" | "cancelled";
   created_at: number;
   responded_at?: number;
+  suggestions?: unknown[];
 };
 
 /** The fields the view renders. A real row satisfies it, and so does a fixture with a plain string id. */
@@ -53,23 +54,95 @@ export type PermissionViewItem<PId extends string = string> = {
   tool_name: string;
   arguments_preview?: string;
   status: Permission["status"];
+  /** Claude Code's permission_suggestions: what "Always allow" would add. */
+  suggestions?: unknown[];
 };
+
+/**
+ * Claude's suggested permission updates, written the way its settings write
+ * them: `Bash(bun test:*)`, a directory, a mode. Empty when none can be named,
+ * and then there is nothing for "Always allow" to keep.
+ */
+export function permissionRuleLabels(suggestions: unknown[] | undefined): string[] {
+  const labels: string[] = [];
+  for (const s of suggestions ?? []) {
+    const u = s as any;
+    if (u?.type === "addRules" && u.behavior === "allow" && Array.isArray(u.rules)) {
+      for (const r of u.rules) if (r?.toolName) labels.push(r.ruleContent ? `${r.toolName}(${r.ruleContent})` : r.toolName);
+    } else if (u?.type === "addDirectories" && Array.isArray(u.directories)) {
+      for (const d of u.directories) if (typeof d === "string") labels.push(d);
+    } else if (u?.type === "setMode" && typeof u.mode === "string") {
+      labels.push(`mode: ${u.mode}`);
+    }
+  }
+  return labels;
+}
+
+const DENY_CLASS = "px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none";
+
+/** Approves and keeps the rule Claude suggested, named on the button itself. */
+function AlwaysAllowButton({ permission, onAlwaysAllow, className = "" }: { permission: PermissionViewItem; onAlwaysAllow?: (id: string) => void; className?: string }) {
+  const rules = permissionRuleLabels(permission.suggestions);
+  if (!onAlwaysAllow || rules.length === 0) return null;
+  const named = rules.join(" ");
+  return (
+    <button
+      onClick={() => onAlwaysAllow(permission._id)}
+      title={named}
+      data-always-allow
+      className={`min-w-0 max-w-[18rem] truncate py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-green/30 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors ${className}`}
+    >
+      Always allow <span className="font-mono font-normal">{named}</span>
+    </button>
+  );
+}
+
+/** The reason a denial sends the model, typed under the row Deny opened it on.
+ *  Enter denies (with or without a reason); Escape puts the buttons back. */
+function DenyReason({ onDeny, onCancel }: { onDeny: (message?: string) => void; onCancel: () => void }) {
+  const [reason, setReason] = useState("");
+  return (
+    <form
+      onSubmit={(e) => { e.preventDefault(); onDeny(reason.trim() || undefined); }}
+      className="flex items-center gap-1.5 px-2.5 pb-1.5"
+    >
+      <input
+        autoFocus
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          e.preventDefault();
+          e.stopPropagation();
+          onCancel();
+        }}
+        placeholder="Tell the agent why (optional)"
+        aria-label="Reason for denying"
+        className="flex-1 min-w-0 px-2 py-0.5 text-[11px] font-mono rounded border border-sol-border/40 bg-transparent text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-red/50"
+      />
+      <button type="submit" className={DENY_CLASS}>Deny</button>
+    </form>
+  );
+}
 
 export function PermissionRow({
   permission,
   onApprove,
   onDeny,
+  onAlwaysAllow,
   isExpanded,
   onToggleExpand,
   showToolName,
 }: {
   permission: PermissionViewItem;
   onApprove: () => void;
-  onDeny: () => void;
+  onDeny: (message?: string) => void;
+  onAlwaysAllow?: (id: string) => void;
   isExpanded: boolean;
   onToggleExpand: () => void;
   showToolName: boolean;
 }) {
+  const [denying, setDenying] = useState(false);
   if (permission.status !== "pending") return null;
 
   const preview = permission.arguments_preview;
@@ -101,14 +174,18 @@ export function PermissionRow({
           >
             Approve
           </button>
-          <button
-            onClick={onDeny}
-            className="px-2 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"
-          >
-            Deny
-          </button>
+          <AlwaysAllowButton permission={permission} onAlwaysAllow={onAlwaysAllow} className="px-2" />
+          {!denying && (
+            <button
+              onClick={() => setDenying(true)}
+              className="px-2 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"
+            >
+              Deny
+            </button>
+          )}
         </div>
       </div>
+      {denying && <DenyReason onDeny={onDeny} onCancel={() => setDenying(false)} />}
       {preview && isExpanded && (
         <button onClick={onToggleExpand} className="block w-full px-2 pb-1.5 -mt-0.5 text-left">
           <span className="text-[11px] font-mono text-sol-text-dim block whitespace-pre-wrap break-words">
@@ -137,7 +214,11 @@ export function PermissionStack({
   // session's question resolved when it was the last one), so the card leaves
   // on the press and nothing here waits on the server.
   const handleApprove = useCallback((id: Id<"pending_permissions">) => resolvePermission(id, "approved"), [resolvePermission]);
-  const handleDeny = useCallback((id: Id<"pending_permissions">) => resolvePermission(id, "denied"), [resolvePermission]);
+  const handleDeny = useCallback(
+    (id: Id<"pending_permissions">, message?: string) => resolvePermission(id, "denied", message ? { message } : undefined),
+    [resolvePermission],
+  );
+  const handleAlwaysAllow = useCallback((id: Id<"pending_permissions">) => resolvePermission(id, "approved", { remember: true }), [resolvePermission]);
   const handleApproveAll = useCallback(() => {
     for (const p of pending) resolvePermission(p._id, "approved");
   }, [pending, resolvePermission]);
@@ -173,6 +254,7 @@ export function PermissionStack({
       inflight={NO_INFLIGHT}
       onApprove={handleApprove}
       onDeny={handleDeny}
+      onAlwaysAllow={handleAlwaysAllow}
       onApproveAll={handleApproveAll}
       onDenyAll={handleDenyAll}
       onAllowAll={onAllowAll ? handleAllowAll : undefined}
@@ -191,6 +273,7 @@ export function PermissionStackView<PId extends string>({
   inflight,
   onApprove,
   onDeny,
+  onAlwaysAllow,
   onApproveAll,
   onDenyAll,
   onAllowAll,
@@ -199,7 +282,10 @@ export function PermissionStackView<PId extends string>({
   pending: PermissionViewItem<PId>[];
   inflight: ReadonlySet<string>;
   onApprove: (id: PId) => void;
-  onDeny: (id: PId) => void;
+  /** message: the reason typed under the row, sent to the agent. */
+  onDeny: (id: PId, message?: string) => void;
+  /** Approve and keep the row's suggested rules. Shown only for rows that have some. */
+  onAlwaysAllow?: (id: PId) => void;
   onApproveAll: () => void;
   onDenyAll: () => void;
   /** Present only when the session can bypass future prompts. */
@@ -209,6 +295,8 @@ export function PermissionStackView<PId extends string>({
   const [collapsed, setCollapsed] = useState(false);
   // Allow all switches the session's prompts off for good, so its button opens the review of that and the review's own button does it.
   const [allowReview, setAllowReview] = useState(false);
+  const [denying, setDenying] = useState(false);
+  const alwaysAllow = onAlwaysAllow as ((id: string) => void) | undefined;
 
   if (pending.length === 0) return null;
   const allowAllReview = allowReview && onAllowAll && (
@@ -269,13 +357,12 @@ export function PermissionStackView<PId extends string>({
               </button>
             )}
             {allowAllReview}
-            <button
-              onClick={() => onDeny(p._id)}
-              disabled={inflight.has(p._id)}
-              className="px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none"
-            >
-              Deny
-            </button>
+            <AlwaysAllowButton permission={p} onAlwaysAllow={alwaysAllow} className="px-2.5" />
+            {!denying && (
+              <button onClick={() => setDenying(true)} disabled={inflight.has(p._id)} className={DENY_CLASS}>
+                Deny
+              </button>
+            )}
           </div>
           <span className="text-[9px] text-sol-text-dim flex-shrink-0 hidden sm:flex items-center gap-1">
             <MenuKeyCaps action="permission.approve" className="contents" />/<MenuKeyCaps action="permission.deny" className="contents" />
@@ -288,6 +375,7 @@ export function PermissionStackView<PId extends string>({
             </span>
           </div>
         )}
+        {denying && <DenyReason onDeny={(message) => onDeny(p._id, message)} onCancel={() => setDenying(false)} />}
       </div>
     );
   }
@@ -347,7 +435,8 @@ export function PermissionStackView<PId extends string>({
             key={p._id}
             permission={p}
             onApprove={() => onApprove(p._id)}
-            onDeny={() => onDeny(p._id)}
+            onDeny={(message) => onDeny(p._id, message)}
+            onAlwaysAllow={alwaysAllow}
             isExpanded={expandedId === p._id}
             onToggleExpand={() => setExpandedId(expandedId === p._id ? null : p._id)}
             showToolName={!allSameTool}

@@ -3,6 +3,10 @@ import type { PermissionPrompt } from "./permissionDetector.js";
 
 export interface PermissionDecision {
   approved: boolean;
+  /** A denial's reason from the web card. */
+  message?: string;
+  /** The approval keeps Claude's suggested rules. */
+  remember?: boolean;
 }
 
 const POLL_INTERVAL_MS = 1000;
@@ -16,8 +20,9 @@ export async function handlePermissionRequest(
   syncService: SyncService,
   conversationId: string,
   sessionId: string,
-  prompt: PermissionPrompt,
-  log: (msg: string) => void
+  prompt: PermissionPrompt & { suggestions?: unknown[] },
+  log: (msg: string) => void,
+  onCreated?: (permissionId: string) => void,
 ): Promise<PermissionDecision | null> {
   try {
     const permissionId = await syncService.createPermissionRequest({
@@ -25,9 +30,11 @@ export async function handlePermissionRequest(
       session_id: sessionId,
       tool_name: prompt.tool_name,
       arguments_preview: prompt.arguments_preview,
+      ...(prompt.suggestions?.length ? { suggestions: prompt.suggestions } : {}),
     });
 
     log(`Created permission request ${permissionId} for tool: ${prompt.tool_name}`);
+    onCreated?.(permissionId);
 
     const startTime = Date.now();
     while (Date.now() - startTime < TIMEOUT_MS) {
@@ -40,7 +47,11 @@ export async function handlePermissionRequest(
         }
         const approved = decision.status === "approved";
         log(`Permission ${approved ? "approved" : "denied"} for tool: ${prompt.tool_name}`);
-        return { approved };
+        return {
+          approved,
+          ...(decision.deny_message ? { message: decision.deny_message } : {}),
+          ...(decision.remember ? { remember: true } : {}),
+        };
       }
 
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));

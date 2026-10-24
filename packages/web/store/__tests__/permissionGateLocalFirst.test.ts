@@ -42,6 +42,16 @@ describe("permission and gate answers are local-first", () => {
     expect(calls.map((c) => [c.action, c.args])).toEqual([["resolvePermission", [P1, "approved"]]]);
   });
 
+  it("carries a denial's reason and an always-allow to the server call", () => {
+    useInboxStore.getState().syncTable("pendingPermissions", [perm(P1), perm(P2)], permOpts as any);
+    useInboxStore.getState().resolvePermission(P1, "denied", { message: "run one file" });
+    useInboxStore.getState().resolvePermission(P2, "approved", { remember: true });
+    expect(calls.map((c) => [c.action, c.args])).toEqual([
+      ["resolvePermission", [P1, "denied", { message: "run one file" }]],
+      ["resolvePermission", [P2, "approved", { remember: true }]],
+    ]);
+  });
+
   it("keeps the card gone when a stale pending push arrives", () => {
     useInboxStore.getState().syncTable("pendingPermissions", [perm(P1)], permOpts as any);
     useInboxStore.getState().resolvePermission(P1, "denied");
