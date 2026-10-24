@@ -1,4 +1,5 @@
 import { CONTINUE_BANNER_KINDS, FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineForeignText, fromConvexAgentType, toConvexAgentType, resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
+import { splitReviewNote } from "./reviewNote";
 import { definitionLaunchFlags } from "../agentLaunch.js";
 import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
 import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
@@ -1366,6 +1367,10 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   const verdict = task.review_verdict;
   context["review_verdict"] = verdict && (verdict.at ?? 0) >= freshSince ? String(verdict.verdict) : "none";
   context["review_note"] = verdict?.note ? capForeignText(escapeForeignControlChars(String(verdict.note)), FOREIGN_TEXT_CAPS.descriptionChars) : "";
+  const card = splitReviewNote(context["review_note"]);
+  // A note with no words still asks something the person can place.
+  context["review_question"] = inlineForeignText(card.question) || `Ship "${context["task_title"]}"?`;
+  context["review_body"] = card.body;
   // One routable value for "how did the hand end": the execution status of a
   // handoff that placed the task in review, else none. A `changes` verdict
   // moves the task to in_progress without clearing execution_status, so
