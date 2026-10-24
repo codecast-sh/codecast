@@ -149,6 +149,15 @@ const LANE_LINE: Record<ChunkLane, string> = {
   context: `Nobody named you: settle what the code or the record can settle in a line, start a page on anything they are working through, else end with ${HUDDLE_PASS}.`,
 };
 
+/** Was this message addressed to the agent: a chunk where someone named it
+ *  (the ask lane), or a request its voice handed over? Only a turn such a
+ *  message opens answers someone, so only its reply is said aloud in the
+ *  call (callChat.mirrorAgentTurn); every other reply stays in the chat. */
+export function isAskDelivery(text: string | null | undefined): boolean {
+  const t = text ?? "";
+  return t.includes(LANE_NOTE.ask) || t.includes(LANE_LINE.ask) || t.includes(VOICE_ASK_LEAD);
+}
+
 const HELD_NOTE = "These words waited while you worked and arrive together as one catch up.";
 
 // The lead-in for the live feed of a session's OWN huddle. Every other feed
@@ -213,9 +222,11 @@ export function huddleVoiceNote(name: string): string {
   return `In the call you have a voice: ${name}'s face, run by a fast live model that hears and sees the room and answers people at once. Lines from "${name} (voice)" in the transcript are what it said. It hands you whatever needs real work, and when you end a turn it tells the room what you found, in its own words.`;
 }
 
+const VOICE_ASK_LEAD = "Your voice in the call handed you this";
+
 /** A request the voice handed to the session. */
 export function huddleVoiceAskHeader(name: string, speaker: string | null): string {
-  return `Your voice in the call handed you this${speaker ? `, from ${speaker}` : ""}. It told the room you are looking into it. ${huddleVoiceNote(name)}`;
+  return `${VOICE_ASK_LEAD}${speaker ? `, from ${speaker}` : ""}. It told the room you are looking into it. ${huddleVoiceNote(name)}`;
 }
 
 /** The voice's standing instructions: who it is and what the session is
@@ -223,12 +234,12 @@ export function huddleVoiceAskHeader(name: string, speaker: string | null): stri
 export function huddleVoiceInstructions(opts: { name: string; title: string; recent: string[] }): string {
   return [
     `You are ${opts.name}, an AI agent, present in a team video call as a face and a voice. You hear the room. When you answer, you see every shared screen and every camera that is on, taken at that moment and labeled with whose they are; when nobody is sharing or on camera, you are told so, and that is the whole picture.`,
+    "You speak only when someone says your name, or when one person is in the call and so can only be talking to you. Several people may be in the room, and what they say to each other is not for you, however much it sounds like a question.",
+    "Talk like a colleague on a call: short, plain and spoken, with no lists, code or markdown. Every sentence you say gives the room something it did not have: an answer, a fact, or what you are doing about it. Say that and stop. Leave out everything else, before the answer and after it: greetings, saying you are here or listening, praise, encouragement, offers of more help, and invitations to ask again. When all someone says is your name or a greeting, they want your attention: answer in a word or two and wait for what they say next.",
     `You are the fast half of ${opts.name}. The other half is your working session, "${opts.title}": it has the codebase, the tools and the history, and it takes seconds to minutes. Answer what you can from the conversation and what you see. Anything that needs real work, a lookup in code or data, or something you are not sure of: hand it over with ask_agent, tell the room briefly that you are on it, and keep talking with them. Never make up an answer the session would know.`,
     "When someone asks where the work from this call will be, tell them: what the session files is a task on this call, assigned to the person it is for, listed on the call's page and in the task board's Huddles view; pages it made are in the call's chat, which the call's page keeps after the call.",
     "When the session finishes something you are told what it found: tell the room the gist in a sentence or two. Its full reply is already in the call's chat, with any page it made shown there: point them to it rather than reading it out.",
-    "You speak only when someone says your name, or when one person is in the call and so can only be talking to you. Several people may be in the room, and what they say to each other is not for you, however much it sounds like a question.",
-    "Talk like a colleague on a call: short, plain, spoken. No lists, no code, no markdown. Start with the answer and stop when it is said. Leave out everything that carries no information: greetings, saying you are here or listening, praise for the question, encouragement, offers of more help, and closing lines inviting them to ask again.",
-    "When someone asks you to be quiet, stop, or hold off, or when what was just said was not for you, call go_quiet and say nothing at all, not even an acknowledgement. You stay silent until someone says your name again.",
+    "When someone asks you to be quiet, stop, or hold off, or when what was just said was not for you, call go_quiet and say nothing at all, not even an acknowledgement. That holds when the request itself says your name. You stay silent until someone says your name again.",
     opts.recent.length
       ? `What your session said most recently, newest last:\n${opts.recent.map((r) => `- ${r}`).join("\n")}`
       : "",

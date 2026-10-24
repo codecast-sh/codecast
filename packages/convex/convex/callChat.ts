@@ -21,10 +21,10 @@
 // sessions and never "mine".
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { huddleChatLineHeader, isHuddlePass, isRecRoomKey, isToolResultCarrier } from "@codecast/shared/contracts";
+import { huddleChatLineHeader, isAskDelivery, isHuddlePass, isRecRoomKey, isToolResultCarrier, reportedWorkIds } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
@@ -44,9 +44,11 @@ const MIRROR_RETRY_MS = 15_000;
 const MIRROR_ATTEMPTS = 2;
 // The most rows one mirror walks past the watermark: a few turns of tool calls.
 const MIRROR_SCAN = 200;
-// How long an ask waits for the reply its voice says. Past it the room has
-// moved on, and the reply is in the chat.
+// How long an ask stays open: what the session posts for it in that time is
+// said aloud. Past it the room has moved on, and the reply is in the chat.
 const ASKED_TELL_MS = 10 * 60_000;
+// How far back a worker's result looks for the turn that started it.
+const ORIGIN_SCAN = 200;
 
 export const list = query({
   args: {
@@ -318,19 +320,56 @@ export function agentLineText(m: { content?: string; is_encrypted?: boolean } | 
 /** Each turn's reply, oldest first: the last assistant words before the next
  *  thing said to the session. A user row that only carries tool results is
  *  the harness, not a new turn, so narration between tool calls never posts. */
-export function turnReplies<M extends { role: string; content?: string; is_encrypted?: boolean; tool_results?: readonly unknown[] }>(rows: M[]): M[] {
-  const out: M[] = [];
+export function turnReplies<M extends { role: string; content?: string; is_encrypted?: boolean; tool_results?: readonly unknown[] }>(rows: M[]): { reply: M; prompt: M | null }[] {
+  const out: { reply: M; prompt: M | null }[] = [];
   let last: M | null = null;
+  let prompt: M | null = null;
   for (const m of rows) {
     if (m.role === "assistant") {
       if (agentLineText(m)) last = m;
     } else if (m.role === "user" && !isToolResultCarrier(m)) {
-      if (last) out.push(last);
+      if (last) out.push({ reply: last, prompt });
       last = null;
+      prompt = m;
     }
   }
-  if (last) out.push(last);
+  if (last) out.push({ reply: last, prompt });
   return out;
+}
+
+/** Did someone ask for the turn behind this reply? Only a message
+ *  addressed to the agent counts (isAskDelivery): room talk, another
+ *  session's message, a trigger's wake and words typed into the session all
+ *  answer nobody in the room. A background worker's result is judged by the
+ *  turn that started the worker, found by the first tool result that printed
+ *  its id. A turn whose prompt or start is out of reach was not asked. */
+async function turnWasAsked(ctx: MutationCtx, conversationId: Id<"conversations">, turn: { reply: Doc<"messages">; prompt: Doc<"messages"> | null }): Promise<boolean> {
+  let prompt = turn.prompt ?? latestPrompt(await userRowsBefore(ctx, conversationId, turn.reply.timestamp));
+  for (let hop = 0; prompt && hop < 3; hop++) {
+    const ids = reportedWorkIds(prompt.content);
+    if (ids.length === 0) return isAskDelivery(prompt.content);
+    const earlier = await userRowsBefore(ctx, conversationId, prompt.timestamp);
+    let start = earlier.length - 1;
+    while (start >= 0 && !earlier[start].tool_results?.some((r) => ids.some((id) => r.content.includes(id)))) start--;
+    prompt = start < 0 ? null : latestPrompt(earlier.slice(start + 1));
+  }
+  return false;
+}
+
+/** The session's user rows before a moment, newest first. */
+function userRowsBefore(ctx: MutationCtx, conversationId: Id<"conversations">, before: number): Promise<Doc<"messages">[]> {
+  return ctx.db
+    .query("messages")
+    .withIndex("by_conversation_role_timestamp", (q) =>
+      q.eq("conversation_id", conversationId).eq("role", "user").lt("timestamp", before),
+    )
+    .order("desc")
+    .take(ORIGIN_SCAN);
+}
+
+/** The newest row that opened a turn, from rows newest first. */
+function latestPrompt(rows: Doc<"messages">[]): Doc<"messages"> | null {
+  return rows.find((m) => !isToolResultCarrier(m)) ?? null;
 }
 
 /** A fed session settled a turn: show its reply in the huddle chat.
@@ -378,7 +417,8 @@ export const mirrorAgentTurn = internalMutation({
       )
       .order("asc")
       .take(MIRROR_SCAN);
-    const replies = turnReplies(after);
+    const turns = turnReplies(after);
+    const replies = turns.map((t) => t.reply);
     const attempt = args.attempt ?? 0;
     if (replies.length === 0) {
       if (attempt + 1 < MIRROR_ATTEMPTS) {
@@ -402,15 +442,18 @@ export const mirrorAgentTurn = internalMutation({
         transcript_id: feed.transcript_id,
       });
     }
-    // Its voice says only what answers someone who asked (callFace.ts tell),
-    // once: the ask is spent on the first reply that posts.
-    const asked = posted.length > 0 && (feed.addressed_at ?? 0) > Date.now() - ASKED_TELL_MS;
-    await ctx.db.patch(feed._id, {
-      last_mirrored_message_id: replies[replies.length - 1]._id,
-      ...(asked ? { addressed_at: undefined } : {}),
-    });
+    await ctx.db.patch(feed._id, { last_mirrored_message_id: replies[replies.length - 1]._id });
     if (posted.length === 0) return { mirrored: false, reason: "passed" };
-    if (asked) await scheduleFaceTell(ctx, feed, posted.map((m) => m.content ?? ""));
+    // Its voice says only what answers someone who asked (callFace.ts tell):
+    // while an ask is open, every reply to a turn someone asked for. A first
+    // "on it" line and the worker result that follows both count.
+    const spoken: string[] = [];
+    if ((feed.addressed_at ?? 0) > Date.now() - ASKED_TELL_MS) {
+      for (const t of turns) {
+        if (!isHuddlePass(t.reply.content) && (await turnWasAsked(ctx, args.conversation_id, t))) spoken.push(t.reply.content ?? "");
+      }
+    }
+    if (spoken.length) await scheduleFaceTell(ctx, feed, spoken);
     return { mirrored: true };
   },
 });
