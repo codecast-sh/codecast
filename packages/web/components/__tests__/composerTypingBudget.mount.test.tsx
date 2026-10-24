@@ -106,6 +106,9 @@ beforeAll(async () => {
     );
   });
   await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+  // The store's boot hydration (inboxStore bootPersistence) ends with a write of its own; on a loaded machine it can
+  // land inside a keystroke's window and count as typing's. Let it settle before anything is measured.
+  for (let i = 0; i < 400 && !useInboxStore.getState().clientStateInitialized; i++) await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
   textarea = container.querySelector("textarea[data-composer-field]") as HTMLTextAreaElement;
   measure = async (fn) => {
     commits = 0;
