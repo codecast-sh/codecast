@@ -199,10 +199,13 @@ step they leave, one form each: an end by its own name, a route to a station as
 "outcome → station". A run shows each step done, current or stopped, and only
 the route it took, red only where it stopped.
 
-- **In a conversation**, a `cast flow run` card follows the run live (state in
-  words, the task, Stop while it runs) and stays visible, never folded into a
-  "ran N commands" receipt. A ` ```flow ` fence draws `{"flow":"<slug>"}` or
-  `{"run":"<id>"}` in any reply. The Workflow tool card carries "add to flows".
+- **In a conversation**, a flow is one object (FL8): a `cast flow run` card
+  follows the run live (state in words, the task, Stop while it runs, the
+  library it builds on, Save) and stays visible, never folded into a "ran N
+  commands" receipt; so does a flow the session wrote and read back
+  (`validate -`, `show -`, a dry run). A ` ```flow ` fence draws
+  `{"flow":"<slug>"}` or `{"run":"<id>"}` in any reply. The Workflow tool card
+  carries "add to flows".
 - **On a session's header**, Run through lists the pool's flows that take a
   branch, lines first, draws the picked one, and opens the shared confirm
   review: steps, agent sessions that start, questions for you, who does each
@@ -232,3 +235,50 @@ workflows`) carries the commands and the segment syntax. Session start adds
 one `<flows>` line naming this checkout's pool (`flowsLine` in
 `stableContext.ts`, about 320 bytes inside the 9000-byte budget the feed gives
 way to).
+
+## FL8. Flows a session writes, and backbones with slots
+
+An agent puts its work in a flow one of three ways, and the agent instructions
+(FL7, `cast flow --help`) say when each fits: a library flow that fits runs as
+it stands; a library flow that fits as a backbone is extended, with the parts
+this change needs done its own way written as generated segments; a flow is
+written whole only when nothing in the library has the work's shape.
+
+**Slots.** A backbone marks a node `slot="<what it must do>"`, optionally with
+`flow=` for the steps it runs when nothing fills it (`change` leaves its Check
+as a slot with the `check` segment as default). A flow that names the backbone
+by `extends="<slug>"` fills the slot with `subgraph <slot> { ... }`. The parser
+(`parser.ts`) reads a fill as an inline segment and expands it exactly as
+`flow=` expands a library segment (FL3): its steps take the slot's id as
+prefix, its first step is entered from the slot, and its last leaves by the
+slot's own edges. A fill written as a chain gets its start and exit made for
+it. A subgraph may fill only a slot of the base or a node of its own file, so
+a backbone's other stations stay the team's; an empty slot makes a flow a
+backbone that `cast flow run` and the runner refuse, naming the slots to fill.
+`extends` resolves a file beside the graph first, then a flow by name through
+the same resolver as `flow=` (a library run passes its own, pinned to the base
+version it recorded).
+
+**Flows written in a session.** `cast flow run -`, `validate -` and `show -`
+read the graph from stdin (`workflow/sessionFlow.ts`). The file is kept at
+`.codecast/session-flows/<slug>/<slug>.cast` inside the work tree (so a run's
+push records where it lives, and the library collects it as a session flow),
+hidden through the checkout's `info/exclude`, and marked `draft="<session>"` so
+the library offers it to nobody until saved. Each library flow it names by slug
+is pinned beside it by a one-line stub extending the file the pool read, so the
+runner, a separate process, parses the graph that was validated. A name the
+library holds is refused. `validate -`, `show -` and a dry run push it as the
+session's own draft graph and print where it is kept, so the transcript can draw
+it before it runs.
+
+**The object in a transcript** (`hooks/useFlowObject.ts`, shared by web
+`FlowFence` and the phone's `FlowCard`). A run draws the graph it ran (its
+workflows row through `graphOfRun`, readable by anyone who can read the run),
+the library's own copy when it is the same flow, else the team's session-flow
+row. A segment written in place reads as a filled slot ("written here"), read
+from the source (`flowFills`) or the session-flow row's `fills`; a pushed row's
+segment exits are found structurally, since stored nodes carry no segment
+fields. Save is the session-flow row for the run's graph (matched by
+`graph_hash` and workspace) through the store's `saveSessionFlow`; a saved one
+links to its library slug and version, and a graph the library already holds
+as it stands has no row and shows no Save.

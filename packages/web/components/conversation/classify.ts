@@ -7,7 +7,7 @@ import { stripMentionContext, stripPastedContent } from "@codecast/shared/contra
 import { jointAuthors, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { parseLineChat } from "@codecast/shared/contracts/lineChat";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, parseTaskCommentMessage, parseDecisionDiscussion, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
-import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, isFlowRunCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
+import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, isFlowObjectCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
 import { hasRichMarkdown } from "../../lib/richMarkdown";
 import { parseSessionHandoff } from "../../lib/sessionHandoff";
 import type { Message, ParsedApiError, ParsedContextBlock, TeammateMessagePart, ToolCall, UserMessageKind } from "./types";
@@ -578,10 +578,10 @@ export function isAlwaysVisibleToolCall(tc: ToolCall, result?: { content?: strin
   // authored twin of AskUserQuestion — the card is the ask, not a command.
   // A command whose output carries the setup marker holds a card the person
   // must act on (AgentToolSetupCard), so it stays out of the receipt too.
-  // A `cast flow run` is a change set on its way through a flow: its card
-  // follows the run live, so it stays visible like a running workflow.
+  // A `cast flow` command that draws a flow object (a run its card follows
+  // live, a flow the session defined) stays visible like a running workflow.
   if (hasAgentSetupMarker(result?.content)) return true;
-  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc)) || isFlowRunCastCommand(parseCastCommand(tc));
+  return isPlanWriteToolCall(tc) || isAskTool(tc.name) || tc.name === "SendUserFile" || tc.name === "Monitor" || tc.name === "monitor" || tc.name === "Workflow" || tc.name === "workflow" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc) || isDecideCastCommand(parseCastCommand(tc)) || isFlowObjectCastCommand(parseCastCommand(tc));
 }
 
 // A row that is nothing but tool calls: one-line receipts, not prose. The

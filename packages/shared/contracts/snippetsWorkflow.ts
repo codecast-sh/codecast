@@ -12,15 +12,23 @@ cast workflow run flow.cast --task ct-N     # or --plan pl-N
 cast workflow list | runs | push
 \`\`\`
 
-Flows are the team's shared pool of these graphs: lines that take a change to done, and segments (check, review, eval, decide, ship) that run one part of the path alone or inside a line. A finished change goes through a flow before it ships, and the run shows live where the change is.
+Flows are the team's library of these graphs: lines that take a change to done, and segments (check, review, eval, decide, ship) that do one part of the path. A finished change goes through a flow before it ships; the run draws live in the conversation, and a flow written there can be saved to the library from it.
+
+Choose by how well the library fits the work. A library flow that fits is run as it stands, since it carries what the team has learned. When one fits as a backbone but a step needs work particular to this change, extend it and fill its slots with steps you write, leaving the rest of it the team's. Write a whole flow only when nothing in the library has the shape of the work.
 
 \`\`\`bash
-cast flow ls                        # the pool, each flow with its steps
-cast flow run change                # this session's own edits through the standard line (or --task, --branch, --pr)
+cast flow ls                        # the library, each flow with its steps
+cast flow run change                # this session's own edits through a library flow (or --task, --branch, --pr)
+cast flow run - <<'EOF'             # a flow written here, checked before it starts
+digraph <name> {
+  graph [extends="<flow>"]          # a library flow as the backbone
+  subgraph <slot> { a -> b -> c }   # the steps that fill one of its slots
+}
+EOF
 cast flow import <wf_id>            # a Workflow-tool run becomes a flow: your draft until you make it general, then cast flow publish
 \`\`\`
 
-\`cast guide workflows\` shows the graph syntax, segments and the line commands.
+\`cast guide workflows\` shows the graph syntax, segments, slots and the line commands.
 ${WORKFLOW_SNIPPET_END}
 `;
 
@@ -56,8 +64,8 @@ digraph my_flow {
 A node with \`flow="<slug>"\` runs that segment in place: its steps join the graph under the node's name, its plain ends go on by the node's own edges, and \`<node>.exit\` in their conditions names which end it reached. A segment's stop ends the run in its words, unless the node routes \`outcome = failure\`. A flow says what it is on its graph line (\`graph [kind="segment", label="Review", description="...", takes="task,branch"]\`); a graph that declares a kind joins the pool, and the repo's own flows live in \`.codecast/flows/<slug>.cast\`.
 
 \`\`\`bash
-cast flow show <flow>               # its steps, who does each, and where each sends the work
-cast flow validate <file>           # read it with its segments expanded and name what is missing
+cast flow show <flow>               # its steps, who does each, where each sends the work, and its slots
+cast flow validate <flow|file|->    # read it with its segments and slots expanded and name what is missing
 cast flow publish <flow>            # a repo flow into the team's pool, on the Line page's Flows view
 \`\`\`
 
@@ -72,6 +80,19 @@ digraph trial {
   review -> build
   card [shape=hexagon]
   card -> exit
+}
+\`\`\`
+
+A backbone leaves part of itself to the flow that extends it: a node marked \`slot="<what it must do>"\`, with \`flow=\` for the steps it runs when nothing fills it. A flow naming it by \`extends="<flow>"\` fills the slot with \`subgraph <slot> { ... }\`, whose steps run in its place as a segment's would: written as a chain they start at the first and leave by the slot's own routes after the last, or they name their own start and exit. A subgraph fills only a slot or a node of its own flow, so the backbone's other stations stay as the team keeps them, and a backbone with an empty slot does not run. \`cast flow run -\` and \`cast flow validate -\` read the graph from stdin, keep it in \`.codecast/session-flows/\` (outside git) as this session's draft, and check it, slots included, before anything starts. \`change\` leaves its Check as a slot.
+
+\`\`\`dot
+digraph flaky_fix {
+  graph [extends="change", label="Change, flaky test"]
+  subgraph check {
+    reproduce [prompt="Run the flaky test until it fails and name the race"]
+    prove [shape=parallelogram, script="bun test --rerun-each 20"]
+    reproduce -> prove
+  }
 }
 \`\`\`
 `;

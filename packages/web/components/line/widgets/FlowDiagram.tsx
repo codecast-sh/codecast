@@ -34,7 +34,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
             {i > 0 ? <span className="fd-arrow" aria-hidden /> : null}
             {s.kind === "parallel" ? <Segment step={s} states={states} compact={compact} run={run} parallel />
               : s.kind === "segment" && s.inner.length > 1 ? <Segment step={s} states={states} compact={compact} run={run} />
-              : s.kind === "segment" && s.inner.length === 1 ? <Step step={{ ...s.inner[0], label: s.label, side: [...s.inner[0].side, ...s.side] }} state={states.get(s.inner[0].id) ?? "idle"} compact={compact} run={run} />
+              : s.kind === "segment" && s.inner.length === 1 ? <Step step={{ ...s.inner[0], label: s.label, side: [...s.inner[0].side, ...s.side], slot: s.slot }} state={states.get(s.inner[0].id) ?? "idle"} compact={compact} run={run} />
               : <Step step={s} state={states.get(s.id) ?? "idle"} compact={compact} run={run} />}
           </li>
         ))}
@@ -53,8 +53,8 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
 function Segment({ step, states, compact, run, parallel = false }: { step: DiagramStep; states: Map<string, StepState>; compact: boolean; run: RunLike; parallel?: boolean }) {
   const state = states.get(step.id) ?? "idle";
   return (
-    <div className="fd-seg" data-state={state} data-parallel={parallel ? "" : undefined}>
-      <div className="fd-seg-name">{step.label}{parallel ? <span className="fd-seg-par"> · {step.inner.length} side by side</span> : null}</div>
+    <div className="fd-seg" data-state={state} data-parallel={parallel ? "" : undefined} data-written={written(step) ? "" : undefined} title={slotTitle(step)}>
+      <div className="fd-seg-name">{step.label}{parallel ? <span className="fd-seg-par"> · {step.inner.length} side by side</span> : null}{written(step) ? <span className="fd-seg-tag">written here</span> : null}</div>
       <div className="fd-seg-steps">
         {step.inner.map((s, i) => (
           <div key={s.id} className="fd-seg-cell">
@@ -71,15 +71,21 @@ function Segment({ step, states, compact, run, parallel = false }: { step: Diagr
 function Step({ step, state, compact, run }: { step: DiagramStep; state: StepState; compact: boolean; run: RunLike }) {
   return (
     <div className="fd-step-wrap">
-      <div className="fd-step" data-kind={step.kind} data-state={state} title={`${step.label}: ${WHO[step.kind].word}`}>
+      <div className="fd-step" data-kind={step.kind} data-state={state} data-slot={step.slot?.filled === "empty" ? "" : undefined} data-written={written(step) ? "" : undefined} title={slotTitle(step) ?? `${step.label}: ${WHO[step.kind].word}`}>
         <Who kind={step.kind} />
         <span className="fd-step-name">{step.label}</span>
+        {step.slot?.filled === "empty" ? <span className="fd-seg-tag">slot</span> : written(step) ? <span className="fd-seg-tag">written here</span> : null}
         {state !== "idle" ? <span className="fd-dot" aria-label={state}>{STATE_MARK[state]}</span> : null}
       </div>
       {!compact && step.side.length ? <Routes routes={step.side} run={run} /> : null}
     </div>
   );
 }
+
+/** Steps the flow wrote in place for one of its segments (a backbone's slot it filled). */
+const written = (step: DiagramStep) => step.slot?.filled === "generated";
+/** A slot says what it must do, on hover. */
+const slotTitle = (step: DiagramStep) => (step.slot?.does ? `${step.label}: ${step.slot.does}` : undefined);
 
 function Who({ kind }: { kind: DiagramStep["kind"] }) {
   const { icon: Icon } = WHO[kind];

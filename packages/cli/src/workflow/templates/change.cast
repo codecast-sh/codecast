@@ -1,7 +1,9 @@
 // A line for a change made in a session (flows.md FL4): checked, reviewed by an
 // independent session, decided by the person who answers for it, then shipped.
 // Each station is a segment from the pool, so a fix to one reaches every flow
-// that uses it.
+// that uses it. Check is a slot: a flow that extends this one may prove its
+// change with steps of its own (subgraph check { ... }); the project's checks
+// run when nothing fills it.
 //
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
@@ -9,7 +11,7 @@ digraph change {
   graph [kind="line", label="Change", description="Check, review, decide, ship: the standard path for a session's change", takes="task,branch", goal="$task_title", on_failure=stop]
   rankdir=LR
   start [shape=Mdiamond]
-  check  [flow="check"]
+  check  [flow="check", slot="Prove the change does what it should"]
   review [flow="review"]
   decide [flow="decide"]
   ship   [flow="ship"]

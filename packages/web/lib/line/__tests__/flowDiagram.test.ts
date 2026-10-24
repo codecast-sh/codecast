@@ -107,4 +107,57 @@ describe("the fence and the command", () => {
     expect(flowCommandTarget("show", "@calling", "Calling  @calling · or-3", false).flow).toBeNull();
     expect(flowCommandTarget("on", "", "", true).flow).toBeNull();
   });
+  test("a flow the session wrote on stdin is named by where the CLI kept it; a file by its name", () => {
+    const kept = "✓ Spine, flaky test (line, draft of jx7bm3n): Investigate → Implement → Review\nkept at ../.codecast/session-flows/flaky-fix/flaky-fix.cast";
+    expect(flowCommandTarget("validate", "- <<'EOF'\ndigraph flaky_fix {}\nEOF", kept, false)).toEqual({ flow: "flaky-fix", runId: null, dryRun: false });
+    expect(flowCommandTarget("run", "--task ct-9 - --dry-run", kept, false)).toEqual({ flow: "flaky-fix", runId: null, dryRun: true });
+    expect(flowCommandTarget("validate", ".codecast/flows/spine.cast", "✓ Spine", false).flow).toBe("spine");
+    expect(flowCommandTarget("validate", "-", "✗ no graph", true).flow).toBeNull();
+  });
+});
+
+describe("a flow a session built on a backbone", () => {
+  // As a run's push stores it: the parser's expanded nodes (no segment fields) and the source as written.
+  const row = {
+    _id: "w1", slug: "flaky-fix", name: "flaky-fix", workspace: "user:u1",
+    source: `digraph flaky_fix { graph [extends="spine", label="Spine, flaky test"] subgraph implement { a -> b } }`,
+    nodes: [
+      { id: "start", label: "start", type: "start" }, { id: "exit", label: "Shipped", type: "exit" },
+      { id: "investigate", label: "Investigate", type: "agent" }, { id: "implement", label: "Implement", type: "conditional" },
+      { id: "implement__a", label: "Reproduce", type: "agent" }, { id: "implement__b", label: "Patch", type: "agent" },
+      { id: "implement__exit", label: "exit", type: "command" }, { id: "review", label: "Review", type: "agent" },
+    ],
+    edges: [
+      { from: "start", to: "investigate" }, { from: "investigate", to: "implement" }, { from: "implement", to: "implement__a" },
+      { from: "implement__a", to: "implement__b" }, { from: "implement__b", to: "implement__exit" },
+      { from: "implement__exit", to: "review", condition: "outcome = success" }, { from: "review", to: "exit" },
+    ],
+  };
+
+  test("draws its written segment as a filled slot, without the segment's exit as a step, and names its base", () => {
+    const f = pushedFlow(row);
+    expect(f.base).toBe("spine");
+    expect(f.label).toBe("Spine, flaky test");
+    const d = flowDiagram(f);
+    expect(d.steps.map((s) => s.label)).toEqual(["Investigate", "Implement", "Review"]);
+    expect(d.steps[1].inner.map((s) => s.label)).toEqual(["Reproduce", "Patch"]);
+    expect(d.steps[1].slot).toEqual({ does: "", filled: "generated" });
+    expect(f.uses).toEqual([]);
+    expect(d.end).toBe("Shipped");
+  });
+
+  test("a row with no source says what it wrote in place through its own list", () => {
+    const d = flowDiagram(pushedFlow({ ...row, source: null, fills: ["implement"], label: "Flaky fix" }));
+    expect(d.steps[1].slot?.filled).toBe("generated");
+  });
+
+  test("a backbone's empty slot reads as a slot", () => {
+    const backbone = pushedFlow({
+      _id: "w2", slug: "spine", name: "spine",
+      source: `digraph spine { graph [kind="line"] implement [slot="Make the change", label="Implement"] }`,
+      nodes: [{ id: "start", label: "start", type: "start" }, { id: "implement", label: "Implement", type: "agent" }, { id: "exit", label: "Done", type: "exit" }],
+      edges: [{ from: "start", to: "implement" }, { from: "implement", to: "exit" }],
+    });
+    expect(flowDiagram(backbone).steps[0]).toMatchObject({ kind: "segment", slot: { does: "Make the change", filled: "empty" } });
+  });
 });

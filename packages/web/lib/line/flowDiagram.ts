@@ -4,7 +4,7 @@
 // a loop back) in words under the step they leave; and a run's state on each
 // step. Pure: FlowDiagram draws it, and the Flows view, the `flow` fence and a
 // `cast flow run` card all read a flow through it.
-import { foldFlow, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn, type FlowStationKind } from "@codecast/shared/contracts/flowPool";
+import { foldFlow, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn, type FlowStation, type FlowStationKind } from "@codecast/shared/contracts/flowPool";
 import { edgeWords } from "./lineModel";
 
 export type StepState = "idle" | "done" | "current" | "stopped";
@@ -26,6 +26,8 @@ export type DiagramStep = {
   /** A segment's own steps, on its passing path. */
   inner: DiagramStep[];
   side: SideRoute[];
+  /** A slot: what it must do, and whether it is empty, runs its default steps, or holds steps written in place. */
+  slot?: FlowStation["slot"];
 };
 
 export type FlowDiagramModel = { steps: DiagramStep[]; end: string | null; endId: string | null };
@@ -104,6 +106,7 @@ function diagramOf(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<FlowEd
       kind: s.kind,
       inner: s.kind === "segment" ? innerSteps(nodes, edges, s.id, prefix) : [],
       side: routesOut((id) => segmentTopOf(id) === s.id, next, i, last),
+      ...(s.slot ? { slot: s.slot } : {}),
     };
   });
   const lastStep = main[main.length - 1];

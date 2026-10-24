@@ -1,7 +1,8 @@
 "use client";
 // A `cast flow` command in a transcript (docs/architecture/flows.md FL6). A
 // run draws the run it started, live: which flow, where the change is, and
-// the path it took. `show` draws the flow itself; a dry run shows what it would run on. Anything else
+// the path it took. `show` and `validate` draw the flow itself, a flow the
+// session wrote on stdin included; a dry run draws it with what it would run on. Anything else
 // (`ls`, `import`, a failed start) keeps the one-line row with its output
 // behind a click.
 import { Suspense, lazy, useState } from "react";
@@ -28,7 +29,7 @@ export function CastFlowBlock({ subcommand, args, rawCmd, output, isError }: { s
       </div>
       {target.runId ? (
         <Suspense fallback={<Cold />}><FlowRunCard runId={target.runId} /></Suspense>
-      ) : target.flow && subcommand === "show" ? (
+      ) : target.flow && !isError && (subcommand === "show" || subcommand === "validate" || target.dryRun) ? (
         <Suspense fallback={<Cold />}><FlowCard slug={target.flow} /></Suspense>
       ) : null}
       {/* A dry run started nothing: what it would have run on is its whole message. */}

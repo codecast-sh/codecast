@@ -1687,8 +1687,9 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     graph.goal = options.goalOverride;
   }
 
-  const { validateWorkflow, graphHash, graphNodeHashes } = await import("./parser");
-  const errors = validateWorkflow(graph);
+  const { validateWorkflow, graphHash, graphNodeHashes, emptySlots } = await import("./parser");
+  // A backbone runs only once a flow that extends it fills every slot.
+  const errors = [...validateWorkflow(graph), ...emptySlots(graph).map((s) => `Slot '${s.id}' is empty (${s.does}): fill it from a flow that extends this one, with subgraph ${s.id} { ... }`)];
   if (errors.length > 0) {
     console.error(`${c.red}Workflow validation errors:${c.reset}`);
     errors.forEach(e => console.error(`  ${c.red}✗ ${e}${c.reset}`));

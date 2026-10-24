@@ -20,6 +20,10 @@ export type FlowNodeIn = {
   segment_flow?: string;
   segment_entry?: boolean;
   segment_exit?: "done" | "stop";
+  /** A slot: what the segment here must do. Empty until a flow that extends this one fills it. */
+  slot?: string;
+  /** Steps the flow wrote in place for this segment (a filled slot), not a flow of the pool. */
+  segment_generated?: boolean;
   /** An exit that ends the run on purpose, in these words. */
   stop?: string;
 };
@@ -35,6 +39,8 @@ export type FlowStation = {
   /** For a segment, the flow it runs and how many stations that is. */
   flow?: string;
   steps?: number;
+  /** A slot: what it must do, and how it is filled (empty until a flow extending this one fills it). */
+  slot?: { does: string; filled: "empty" | "default" | "generated" };
   /** Where it sends work: the station (or end) by label, and the words for when. */
   next: Array<{ to: string; toId: string; when: string | null }>;
   /** On the path a change takes when every station passes. */
@@ -66,6 +72,21 @@ export function flowGraphAttr(source: string | null | undefined, key: string): s
   return m ? (m[1] ?? m[2] ?? null) : null;
 }
 
+/** The nodes a source fills with steps it writes in place (`subgraph <node> { ... }`), for a reader holding no parser. */
+export function flowFills(source: string | null | undefined): string[] {
+  return [...new Set([...(source ?? "").matchAll(/(?:^|[\s{;])subgraph\s+(?:"([^"]+)"|([\w-]+))\s*\{/g)].map((m) => m[1] ?? m[2]))];
+}
+
+/** The slots a source declares (`<node> [slot="what it must do"]`), by node id, for a reader holding no parser. */
+export function flowSlotsOf(source: string | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of (source ?? "").matchAll(/(?:^|[\s{;])(?:"([^"]+)"|([\w-]+))\s*\[([^\]]*)\]/g)) {
+    const slot = m[3].match(/\bslot\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([\w-]+))/);
+    if (slot) out[m[1] ?? m[2]] = (slot[1] ?? slot[2]).replace(/\\"/g, '"');
+  }
+  return out;
+}
+
 /** A graph the team's pool may hold (FL2, FL5): it says what kind of flow it is, and it is no session's draft. */
 export function publishableFlowSource(source: string | null | undefined): boolean {
   const kind = flowGraphAttr(source, "kind");
@@ -73,7 +94,7 @@ export function publishableFlowSource(source: string | null | undefined): boolea
 }
 
 function kindOf(n: FlowNodeIn): FlowStationKind {
-  if (n.segment_entry) return "segment";
+  if (n.segment_entry || n.slot) return "segment";
   if (n.type === "parallel_fanout") return "parallel";
   if (n.type === "parallel_fanin") return "join";
   if (n.type === "human") return "person";
@@ -160,6 +181,8 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
       label: n.label,
       kind: kindOf(n),
       ...(n.segment_entry ? { flow: n.segment_flow, steps: steps.get(id) ?? 0 } : {}),
+      // A segment written in place reads as a filled slot, its words those of the slot when the graph names them.
+      ...(n.slot || (n.segment_entry && n.segment_generated) ? { slot: { does: n.slot ?? "", filled: !n.segment_entry ? "empty" as const : n.segment_generated ? "generated" as const : "default" as const } } : {}),
       next: (outOf.get(id) ?? []).map((x) => ({ to: label(x.to), toId: x.to, when: x.when })),
       main: main.has(id),
     });

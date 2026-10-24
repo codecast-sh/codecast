@@ -47,6 +47,8 @@ export type SessionFlow = {
   kind: "line" | "segment" | null;
   /** The library flow it extends, by slug. */
   base: string | null;
+  /** The segments it wrote in place (a backbone's slots it filled), by node id. */
+  fills?: string[];
   nodes: Array<{ id: string; label: string; type: string; shape?: string }>;
   edges: Array<{ from: string; to: string; label?: string; condition?: string }>;
   /** Its runs, newest first (capped). */

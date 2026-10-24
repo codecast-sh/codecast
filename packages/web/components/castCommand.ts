@@ -351,8 +351,13 @@ export function normalizeCastCategory(category: string): string {
 // AskUserQuestion: the human needs to see the card in a condensed feed, not a
 // "ran 1 command" receipt they have to open.
 /** `cast flow run` that started a run (not a dry run): a change on its way through a flow, which the reader follows (flows.md FL6). */
-export function isFlowRunCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
-  return !!cast && normalizeCastCategory(cast.category) === "flow" && cast.subcommand === "run" && !/(^|\s)--dry-run\b/.test(cast.args);
+/**
+ * A `cast flow` command whose card is a flow object: a run (live), a dry run (what it would run), or a flow the
+ * session wrote on stdin and read back (`validate -`, `show -`). Reading a library flow by name stays a receipt.
+ */
+export function isFlowObjectCastCommand(cast: ParsedCastCommand | null | undefined): boolean {
+  if (!cast || normalizeCastCategory(cast.category) !== "flow") return false;
+  return cast.subcommand === "run" || ((cast.subcommand === "validate" || cast.subcommand === "show") && /(^|\s)-(\s|$)/.test(cast.args));
 }
 
 export function isDecideCastCommand(cast: ParsedCastCommand | null | undefined): boolean {

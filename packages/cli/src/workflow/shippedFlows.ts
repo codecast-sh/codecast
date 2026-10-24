@@ -13,7 +13,7 @@ import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 
 export const SHIPPED_FLOWS_SNAPSHOT_PATH = "packages/web/lib/line/shippedFlows.generated.ts";
 
-const NODE_FIELDS = ["id", "label", "shape", "type", "backend", "agent", "segment", "segment_label", "segment_flow", "segment_entry", "segment_exit", "stop"] as const;
+const NODE_FIELDS = ["id", "label", "shape", "type", "backend", "agent", "segment", "segment_label", "segment_flow", "segment_entry", "segment_exit", "slot", "segment_generated", "stop"] as const;
 
 export function shippedFlowsSnapshot() {
   return Object.entries(BUILTIN_WORKFLOW_TEMPLATES).filter(([slug, src]) => joinsPool(slug, src)).map(([slug, src]) => {

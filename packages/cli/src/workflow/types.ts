@@ -88,6 +88,10 @@ export interface WorkflowNode {
   segment_flow?: string;
   segment_entry?: boolean;
   segment_exit?: "done" | "stop";
+  /** A slot: a segment a flow leaves for the flow that extends it to fill, in words saying what it must do. */
+  slot?: string;
+  /** On a segment's stations: steps a flow wrote in place (`subgraph <node> { ... }`), not a flow of the pool. */
+  segment_generated?: boolean;
 }
 
 export interface WorkflowEdge {

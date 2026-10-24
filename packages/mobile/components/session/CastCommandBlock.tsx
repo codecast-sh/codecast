@@ -104,8 +104,8 @@ export function CastCommandBlock({ cast, output, isError, image }: {
   );
   const status = isError ? <RNText style={[styles.small, { color: Theme.red }]}>failed</RNText> : null;
 
-  // `cast flow run|show`: the run it started, live, or the flow itself (flows.md FL6). A dry run started nothing,
-  // so it shows what it would do (its output) rather than a card.
+  // `cast flow run|show|validate`: the run it started, live, or the flow itself (flows.md FL6), one the session
+  // wrote on stdin included. A dry run started nothing: it draws the flow over what it would run on.
   if (cat === 'flow') {
     const target = flowCommandTarget(subcommand, args, output, !!isError);
     const said = target.dryRun ? stripAnsiCodes(output).trim() : '';
@@ -117,7 +117,7 @@ export function CastCommandBlock({ cast, output, isError, image }: {
           {target.flow ? <RNText style={styles.summaryMuted} numberOfLines={1}>{target.flow}{target.dryRun ? ' · dry run' : ''}</RNText> : null}
           {status}
         </TouchableOpacity>
-        {target.runId ? <FlowRunCard runId={target.runId} /> : target.flow && subcommand === 'show' ? <FlowCard slug={target.flow} /> : null}
+        {target.runId ? <FlowRunCard runId={target.runId} /> : target.flow && !isError && (subcommand === 'show' || subcommand === 'validate' || target.dryRun) ? <FlowCard slug={target.flow} /> : null}
         {said && !open ? <RNText style={styles.rawOut} selectable>{said}</RNText> : null}
         {raw}
       </RNView>

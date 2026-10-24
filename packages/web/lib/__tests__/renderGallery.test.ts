@@ -6,7 +6,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { renderGalleryMessages } from "../renderGallery";
+import { renderGalleryMessages, renderGalleryRecords, GALLERY_FLOW } from "../renderGallery";
+import { pushedFlow } from "../line/flowPool";
+import { flowDiagram } from "../line/flowDiagram";
 import { classifyUserRows } from "../userRowKinds";
 import { parseApiErrorContent, parseCastCommand } from "../../components/conversation/classify";
 import { normalizeCastCategory } from "../../components/castCommand";
@@ -143,5 +145,19 @@ describe("render gallery", () => {
     expect(flags.length).toBeGreaterThan(5);
     expect(flags.filter((f) => !parsed.some((e) => e[f]))).toEqual([]);
     expect(parsed.some((e) => e.statusCode >= 500)).toBe(true);
+  });
+
+  test("shows the flow object: a flow a session defined, its live run with Save, a finished library run", () => {
+    const text = rows.map((r) => [r.content, ...(r.tool_calls ?? []).map((c) => c.input), ...(r.tool_results ?? []).map((t) => t.content)].join("\n")).join("\n");
+    const records = renderGalleryRecords(1_790_000_000_000, "u1", "team:t1");
+    for (const id of [GALLERY_FLOW.liveRun, GALLERY_FLOW.libraryRun, `session-flows/${GALLERY_FLOW.slug}/`]) expect(text).toContain(id);
+    const live = records.workflowRuns.find((r) => r._id === GALLERY_FLOW.liveRun)!;
+    expect(live.status).toBe("running");
+    // Save shows only when the run's graph has a session-flow row in its workspace, unsaved.
+    expect(records.sessionFlows.find((f) => f.graph_hash === live.graph_hash && f.workspace === live.workspace)?.saved).toBeNull();
+    // The defined graph draws a backbone's slot filled in place.
+    const drawn = flowDiagram(pushedFlow(records.workflows[0]));
+    expect(drawn.steps.find((s) => s.slot)?.slot?.filled).toBe("generated");
+    expect(records.workflowRuns.find((r) => r._id === GALLERY_FLOW.libraryRun)?.workflow_slug).toBe("check");
   });
 });

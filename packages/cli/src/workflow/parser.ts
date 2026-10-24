@@ -168,6 +168,23 @@ class Parser {
       return;
     }
 
+    // subgraph <node> { ... }: the steps that fill that node (a slot of the base, or a node of this file) in place
+    if (t.type === "IDENT" && t.value === "subgraph") {
+      this.consume();
+      const name = this.peekIs("IDENT") || this.peekIs("STRING") ? this.parseId() : null;
+      if (!name) throw new Error("A subgraph needs the name of the node it fills: subgraph <node> { ... }");
+      this.expect("LBRACE");
+      const fill: RawGraph = { name, attrs: {}, nodes: new Map(), edges: [], files: [] };
+      while (!this.peekIs("RBRACE") && !this.peekIs("EOF")) {
+        this.parseStatement(fill);
+        this.skipSemis();
+      }
+      this.expect("RBRACE");
+      if (fill.fills?.size) throw new Error(`subgraph ${name}: a fill holds steps, not another subgraph`);
+      (raw.fills ??= new Map()).set(name, fill);
+      return;
+    }
+
     // graph [ attrs ] - graph attributes
     if (t.type === "IDENT" && t.value === "graph") {
       this.consume();
@@ -296,6 +313,9 @@ class Parser {
     if (attrs.segment_flow) node.segment_flow = String(attrs.segment_flow);
     if (attrs.segment_entry === true || attrs.segment_entry === "true") node.segment_entry = true;
     if (attrs.segment_exit === "done" || attrs.segment_exit === "stop") node.segment_exit = attrs.segment_exit;
+    if (typeof attrs.slot === "string" && attrs.slot) node.slot = attrs.slot;
+    else if (attrs.slot === true) node.slot = node.label;
+    if (attrs.segment_generated === true || attrs.segment_generated === "true") node.segment_generated = true;
 
     return node;
   }
@@ -329,6 +349,8 @@ interface RawGraph {
   edges: WorkflowEdge[];
   /** The base files a variant was read on top of. */
   files: string[];
+  /** `subgraph <node> { ... }` blocks: the steps that fill that node, by node id. */
+  fills?: Map<string, RawGraph>;
 }
 
 /** Reads a file for the parser: absolute path in, its text or null when there is none. */
@@ -363,15 +385,24 @@ export function parseWorkflowFile(filePath: string, opts: ParseOptions = {}): Wo
  *   - a node this file routes (any edge out of it) has exactly the edges
  *     written here, so a node's routing is always read in one file;
  *   - `serves` (the finding sources a line version runs) is this file's own,
- *     never the base's.
+ *     never the base's;
+ *   - a base node marked `slot="<what it must do>"` is a segment left for the
+ *     variant to fill: `subgraph <slot> { ... }` writes its steps, and they
+ *     run in its place as a segment would (a slot's own `flow=` is the steps
+ *     it runs when nothing fills it). A subgraph may fill only a slot of the
+ *     base or a node this file adds, so a backbone keeps every other station.
+ *
+ * `extends` names a file beside this one, or a flow by name, read where a
+ * `flow="<slug>"` segment is read from (resolveFlowSource).
  *
  * A prompt or script read from a file takes in a shared part at a line that is
  * only `@include <file>` (relative to the including file).
  */
 export function parseWorkflowSource(src: string, dir?: string, opts: ParseOptions = {}, file?: string): WorkflowGraph {
   const read = opts.read ?? readDisk;
-  const loaded = loadRaw(src, dir, read, file ? [file] : []);
-  const raw = expandFlows(loaded, dir, read, opts.resolveFlow ?? resolveFlowSource, opts.inline !== false, []);
+  const resolve = opts.resolveFlow ?? resolveFlowSource;
+  const loaded = loadRaw(src, dir, read, file ? [file] : [], resolve);
+  const raw = expandFlows(loaded, dir, read, resolve, opts.inline !== false, []);
   const graph = buildGraph(raw);
   const sources = new Set<string>(raw.files);
   if (dir && opts.inline !== false) {
@@ -391,7 +422,7 @@ export function graphExtends(src: string): string | undefined {
   return ext === undefined ? undefined : String(ext);
 }
 
-function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: string[]): RawGraph {
+function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: string[], resolve: ResolveFlow = resolveFlowSource): RawGraph {
   const raw = new Parser(tokenize(src)).parseRaw();
   if (dir) {
     // `@file` against the file that wrote it, so a base's stations keep reading the base's files.
@@ -405,21 +436,31 @@ function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: st
     }
   }
   const ext = raw.attrs.extends;
-  if (ext === undefined) return raw;
-  const here = chain[chain.length - 1] ?? "the graph";
-  if (!dir) throw new Error(`${here}: extends="${ext}" resolves only from a graph file`);
-  const baseFile = path.resolve(dir, String(ext));
-  if (chain.includes(baseFile)) throw new Error(`${here}: extends="${ext}" comes back to itself`);
-  const baseSrc = read(baseFile);
-  if (baseSrc === null) throw new Error(`${here}: extends="${ext}": no graph at ${baseFile}`);
-  const base = loadRaw(baseSrc, path.dirname(baseFile), read, [...chain, baseFile]);
-  return inherit(base, raw, baseFile, here);
+  const here = chain[chain.length - 1] ?? raw.name;
+  if (ext === undefined) {
+    for (const id of raw.fills?.keys() ?? []) if (!raw.nodes.has(id)) throw new Error(`${here}: subgraph ${id} fills no node: declare ${id} in the graph, or name a slot of the flow this one extends`);
+    return raw;
+  }
+  // A file beside this one, else a flow by name (the repo's, then a shipped one).
+  const asFile = dir ? path.resolve(dir, String(ext)) : null;
+  const fileSrc = asFile ? read(asFile) : null;
+  const found: FlowSource | null = fileSrc !== null ? { src: fileSrc, dir: path.dirname(asFile!), file: asFile! } : resolve(String(ext), dir, read);
+  if (!found) throw new Error(`${here}: extends="${ext}": no graph at ${asFile ?? ext}, and no flow of that name in the pool`);
+  const key = found.file ?? `flow:${ext}`;
+  if (chain.includes(key)) throw new Error(`${here}: extends="${ext}" comes back to itself`);
+  const base = loadRaw(found.src, found.dir, read, [...chain, key], resolve);
+  return inherit(base, raw, key, here);
 }
 
 /** `child` written on top of `base` (parseWorkflowSource names the rules). */
 function inherit(base: RawGraph, child: RawGraph, baseFile: string, here: string): RawGraph {
   const removed = new Set([...child.nodes].filter(([, a]) => a.removed === true || a.removed === "true").map(([id]) => id));
   for (const id of removed) if (!base.nodes.has(id)) throw new Error(`${here}: removes ${id}, which ${path.basename(baseFile)} does not have`);
+  for (const id of child.fills?.keys() ?? []) {
+    const b = base.nodes.get(id);
+    if (b && !b.slot) throw new Error(`${here}: subgraph ${id} fills a station of ${path.basename(baseFile)} that is not a slot; its slots: ${[...base.nodes].filter(([, a]) => a.slot).map(([sid]) => sid).join(", ") || "none"}`);
+    if (!b && !child.nodes.has(id)) throw new Error(`${here}: subgraph ${id} fills no node: ${path.basename(baseFile)} has no slot ${id}${[...base.nodes].some(([, a]) => a.slot) ? ` (its slots: ${[...base.nodes].filter(([, a]) => a.slot).map(([sid]) => sid).join(", ")})` : ""}`);
+  }
   const routed = new Set(child.edges.map((e) => e.from));
   for (const e of child.edges) {
     const gone = [e.from, e.to].find((id) => removed.has(id));
@@ -442,7 +483,8 @@ function inherit(base: RawGraph, child: RawGraph, baseFile: string, here: string
     attrs,
     nodes,
     edges: [...base.edges.filter((e) => !routed.has(e.from) && !removed.has(e.from) && !removed.has(e.to)), ...child.edges],
-    files: [baseFile, ...base.files],
+    files: [...(path.isAbsolute(baseFile) ? [baseFile] : []), ...base.files],
+    fills: new Map([...(base.fills ?? [])].filter(([id]) => !removed.has(id)).concat([...(child.fills ?? [])])),
   };
 }
 
@@ -513,20 +555,30 @@ const ID_FIELDS = ["asker", "retry_target"];
  * `outcome = failure`: then it leaves by those edges with outcome failure.
  */
 function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, resolve: ResolveFlow, inline: boolean, chain: string[]): RawGraph {
-  const flowNodes = [...raw.nodes].filter(([, a]) => typeof a.flow === "string" && a.flow);
+  const fills = raw.fills ?? new Map<string, RawGraph>();
+  const flowNodes = [...raw.nodes].filter(([id, a]) => fills.has(id) || (typeof a.flow === "string" && a.flow));
   if (!flowNodes.length) return raw;
   const nodes = new Map(raw.nodes);
   let edges = [...raw.edges];
   const files = [...raw.files];
   for (const [id, attrs] of flowNodes) {
-    const slug = String(attrs.flow);
-    if (chain.includes(slug)) throw new Error(`${raw.name}: flow="${slug}" at ${id} comes back to itself (${[...chain, slug].join(" -> ")})`);
-    const found = resolve(slug, dir, read);
-    if (!found) throw new Error(`${raw.name}: ${id} names flow="${slug}", which is not in the pool (.codecast/flows/${slug}.cast or a shipped flow)`);
-    let seg = loadRaw(found.src, found.dir, read, found.file ? [found.file] : []);
-    seg = expandFlows(seg, found.dir, read, resolve, inline, [...chain, slug]);
-    if (found.file) files.push(found.file);
+    const fill = fills.get(id);
+    // A fill is this graph's own steps: no slug to name it by, read where this graph is read.
+    const slug = fill ? "" : String(attrs.flow);
+    let seg: RawGraph;
+    if (fill) {
+      seg = expandFlows(fillAsSegment(fill, raw.name), dir, read, resolve, inline, chain);
+    } else {
+      if (chain.includes(slug)) throw new Error(`${raw.name}: flow="${slug}" at ${id} comes back to itself (${[...chain, slug].join(" -> ")})`);
+      const found = resolve(slug, dir, read);
+      if (!found) throw new Error(`${raw.name}: ${id} names flow="${slug}", which is not in the pool (.codecast/flows/${slug}.cast or a shipped flow)`);
+      seg = loadRaw(found.src, found.dir, read, found.file ? [found.file] : [], resolve);
+      seg = expandFlows(seg, found.dir, read, resolve, inline, [...chain, slug]);
+      if (found.file) files.push(found.file);
+    }
     files.push(...seg.files);
+    const slot = typeof attrs.slot === "string" ? attrs.slot : attrs.slot === true ? String(attrs.label ?? id) : null;
+    const marks: Record<string, Attr> = { ...(slug ? { segment_flow: slug } : {}), ...(fill ? { segment_generated: true } : {}) };
     const starts = [...seg.nodes].filter(([, a]) => shapeOf(a) === "Mdiamond").map(([sid]) => sid);
     if (starts.length !== 1) throw new Error(`flow "${slug}" needs exactly one start node to be used as a segment`);
     const start = starts[0];
@@ -543,10 +595,11 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
     const routesFailure = out.some(mentionsFailure);
     edges = edges.filter((e) => e.from !== id);
     nodes.delete(id);
-    const segLabel = String(attrs.label ?? seg.attrs.label ?? slug);
+    // A fill has no name of its own: it reads as the node it fills.
+    const segLabel = String(attrs.label ?? seg.attrs.label ?? (slug || id.replace(/[-_]+/g, " ").replace(/^\w/, (c) => c.toUpperCase())));
     for (const [sid, a] of seg.nodes) {
       if (sid === start) continue;
-      const copy: Record<string, Attr> = { ...a, segment: id, segment_label: segLabel, segment_flow: slug };
+      const copy: Record<string, Attr> = { ...a, segment: id, segment_label: segLabel, ...marks };
       for (const f of STRING_FIELDS) {
         const v = copy[f];
         if (typeof v !== "string") continue;
@@ -559,7 +612,7 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
         const failing = isStopExit(a);
         const said = String(a.label ?? sid).replace(/[^\w .,:()-]/g, "");
         const exitId = `${p}${sid}`;
-        nodes.set(exitId, { shape: "parallelogram", label: said, script: `echo '{"exit": "${sid}"}'${failing ? "; exit 1" : ""}`, segment: id, segment_label: segLabel, segment_flow: slug, segment_exit: failing ? "stop" : "done" });
+        nodes.set(exitId, { shape: "parallelogram", label: said, script: `echo '{"exit": "${sid}"}'${failing ? "; exit 1" : ""}`, segment: id, segment_label: segLabel, ...marks, segment_exit: failing ? "stop" : "done" });
         // `<node>.exit` in the node's own conditions reads which exit the segment took.
         const which = (c: string) => c.replace(new RegExp(`(^|[^\\w.])${id}\\.exit\\b`, "g"), `$1${exitId}.json.exit`);
         for (const e of out.filter((e) => (failing ? mentionsFailure(e) : !mentionsFailure(e)))) edges.push({ ...e, from: exitId, ...(e.condition ? { condition: which(e.condition) } : {}) });
@@ -568,10 +621,46 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
       nodes.set(`${p}${sid}`, copy);
     }
     // The node itself is the segment's entry: a step that passes straight on, named for the segment.
-    nodes.set(id, { shape: "diamond", label: segLabel, segment: id, segment_label: segLabel, segment_flow: slug, segment_entry: true });
+    nodes.set(id, { shape: "diamond", label: segLabel, segment: id, segment_label: segLabel, ...marks, segment_entry: true, ...(slot ? { slot } : {}) });
     for (const e of seg.edges) edges.push({ ...e, from: rename(e.from), to: rename(e.to), ...(e.condition ? { condition: rewriteCondition(e.condition) } : {}) });
   }
-  return { ...raw, nodes, edges, files };
+  return { ...raw, nodes, edges, files, fills: undefined };
+}
+
+/**
+ * A subgraph's steps as a segment. One that writes its own start and exit is
+ * read as written; one that writes only its steps (`a -> b -> c`) starts at the
+ * one step nothing inside leads to and ends after the one that leads nowhere.
+ */
+function fillAsSegment(fill: RawGraph, graphName: string): RawGraph {
+  const ids = new Set([...fill.nodes.keys(), ...fill.edges.flatMap((e) => [e.from, e.to])]);
+  if (!ids.size) throw new Error(`${graphName}: subgraph ${fill.name} is empty: write the steps that fill it`);
+  if ([...fill.nodes.values()].some((a) => shapeOf(a) === "Mdiamond")) return fill;
+  const fresh = (base: string) => { let n = base; while (ids.has(n)) n = `_${n}`; return n; };
+  const firsts = [...ids].filter((id) => !fill.edges.some((e) => e.to === id));
+  const lasts = [...ids].filter((id) => !fill.edges.some((e) => e.from === id) && shapeOf(fill.nodes.get(id) ?? {}) !== "Msquare");
+  if (firsts.length !== 1) throw new Error(`${graphName}: subgraph ${fill.name} starts at ${firsts.length ? firsts.join(" and ") : "no step"}: route its steps from one first step, or write its own start [shape=Mdiamond]`);
+  const start = fresh("start");
+  const nodes = new Map(fill.nodes);
+  nodes.set(start, { shape: "Mdiamond" });
+  const edges = [{ from: start, to: firsts[0] }, ...fill.edges];
+  if (![...nodes.values()].some((a) => shapeOf(a) === "Msquare")) {
+    if (lasts.length !== 1) throw new Error(`${graphName}: subgraph ${fill.name} ends at ${lasts.join(" and ") || "no step"}: lead its steps to one last step, or write its own exit [shape=Msquare]`);
+    const exit = fresh("exit");
+    nodes.set(exit, { shape: "Msquare" });
+    edges.push({ from: lasts[0], to: exit });
+  }
+  return { ...fill, nodes, edges };
+}
+
+/** The slots a graph leaves empty, with what each must do: a graph with any is a backbone to extend, and does not run. */
+export function emptySlots(graph: WorkflowGraph): Array<{ id: string; label: string; does: string }> {
+  return [...graph.nodes.values()].filter((n) => n.slot && !n.segment_entry).map((n) => ({ id: n.id, label: n.label, does: n.slot! }));
+}
+
+/** The slots a graph has, filled or not: each one's id, what it must do, and how it is filled now. */
+export function graphSlots(graph: WorkflowGraph): Array<{ id: string; label: string; does: string; filled: "empty" | "default" | "generated" }> {
+  return [...graph.nodes.values()].filter((n) => n.slot).map((n) => ({ id: n.id, label: n.label, does: n.slot!, filled: !n.segment_entry ? "empty" : n.segment_generated ? "generated" : "default" }));
 }
 
 /** An absolute `@/path` value as that file's text, its `@include` lines taken in; any other value as written. */

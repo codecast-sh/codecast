@@ -40,11 +40,33 @@ async function cast(args: string[], cwd: string): Promise<{ code: number; out: s
   return { code: r.status ?? 1, out: r.stdout ?? "", err: r.stderr ?? "" };
 }
 
+/** When each way of putting work in a flow fits: what `cast flow --help` says after the verbs. */
+const FLOW_HELP = `
+Choosing a flow:
+  A library flow that fits the work runs as it stands: it carries what the team has learned.
+  A library flow that fits as a backbone, with a step this change needs done its own way, is
+  extended: name it with extends and fill its slots with steps you write. The rest stays the team's.
+  A flow written whole fits only when nothing in the library has the shape of the work.
+
+  cast flow run change                      a library flow, on this session's own edits
+  cast flow run - <<'EOF'                   a flow written here, checked before it starts
+  digraph flaky_fix {
+    graph [extends="change"]
+    subgraph check { reproduce -> prove }   steps that fill the backbone's check slot
+  }
+  EOF
+
+  cast flow show <flow> lists a flow's slots. A flow written here is kept in .codecast/session-flows/
+  as this session's draft; its run draws in the conversation, where it can be saved to the library.
+`;
+
 export function registerFlowCommands(program: Command, deps: FlowDeps): Command {
+
   const flow = program
     .command("flow")
     .description(commandGroup("flow").description)
-    .showHelpAfterError(true);
+    .showHelpAfterError(true)
+    .addHelpText("after", FLOW_HELP);
 
   flow
     .command("ls")
@@ -136,7 +158,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       for (const s of found.stations) {
         if (s.kind === "join" || branches.has(s.id)) continue;
         i++;
-        const what = s.kind === "segment" ? `segment ${s.flow}, ${s.steps} step${s.steps === 1 ? "" : "s"}` : s.kind === "parallel" ? `${s.next.length} side by side, then join` : s.kind;
+        const what = s.slot?.filled === "empty" ? "slot, empty" : s.kind === "segment" ? `${s.slot ? "slot" : "segment"} ${s.flow ?? "written here"}, ${s.steps} step${s.steps === 1 ? "" : "s"}` : s.kind === "parallel" ? `${s.next.length} side by side, then join` : s.kind;
         console.log(`${String(i).padStart(2)}. ${KIND_MARK[s.kind] ?? "·"} ${bold(s.label)}  ${dim(what)}`);
         if (s.kind === "parallel") {
           for (const n of s.next) console.log(`       ${KIND_MARK[byId.get(n.toId)?.kind ?? "agent"] ?? "·"} ${n.to}`);
@@ -145,19 +167,22 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         }
         for (const n of s.next) console.log(dim(`       → ${n.to}${n.when ? `  when ${n.when}` : ""}`));
       }
+      printSlots(found);
       if (found.ends.length) console.log(dim(`\nends: ${found.ends.join(", ")}`));
       if (found.errors.length) console.log(`\n✗ ${found.errors.join("\n✗ ")}`);
+      else if (slug === "-") await keepSessionFlow(found, deps);
     });
 
   flow
-    .command("validate <file>")
-    .description("Read a flow file (segments expanded) and name what is missing")
-    .action(async (file: string) => {
-      const abs = path.resolve(deps.realCwd(), file);
-      const f = describeFlow(path.basename(abs).replace(/\.cast$/, ""), fs.readFileSync(abs, "utf-8"), "repo", abs);
+    .command("validate <flow>")
+    .description("Read a flow (a file, a library name, or - for a graph on stdin), segments and slots expanded, and name what is missing")
+    .action(async (ref: string) => {
+      const f = await findFlow(ref, deps);
       if (f.errors.length) { for (const e of f.errors) console.error(`✗ ${e}`); process.exit(1); }
       const { flowPathWords } = await import("@codecast/shared/contracts/flowPool");
       console.log(`✓ ${f.label} (${f.kind}${f.draft ? `, draft of ${f.draft}` : ""}): ${flowPathWords(f).path}`);
+      printSlots(f);
+      if (ref === "-") await keepSessionFlow(f, deps);
     });
 
   flow
@@ -184,7 +209,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
 
   flow
     .command("run <flow>")
-    .description("Run a change through a flow: this session's own edits by default, or a task, branch or pull request")
+    .description("Run a change through a flow (a library name, a file, or - for a graph on stdin): this session's own edits by default, or a task, branch or pull request")
     .option("--task <id>", "The change is this task's (its branch, or the session's edits bound to it)")
     .option("--session [id]", "The change is a session's own uncommitted edits (default: this session)")
     .option("--branch <name>", "The change is this branch")
@@ -200,6 +225,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const cwd = deps.realCwd();
       const found = await findFlow(slug, teamDeps(deps, opts.team));
       if (found.errors.length) { console.error(`✗ ${found.slug} does not run: ${found.errors.join("; ")}`); process.exit(1); }
+      const empty = found.stations.filter((s) => s.slot?.filled === "empty");
+      if (empty.length) {
+        console.error(`✗ ${found.slug} is a backbone: ${empty.map((s) => s.id).join(", ")} ${empty.length === 1 ? "is a slot" : "are slots"} left to fill. Run a flow that extends it and fills ${empty.length === 1 ? "it" : "them"}:`);
+        console.error(`  cast flow run - <<'EOF'\n  digraph <name> {\n    graph [extends="${found.slug}"]\n${empty.map((s) => `    subgraph ${s.id} { ... }   // ${s.slot!.does}`).join("\n")}\n  }\n  EOF`);
+        process.exit(1);
+      }
       const top = (spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim();
       if (!top) { console.error("cast flow run works inside a git checkout"); process.exit(1); }
 
@@ -240,6 +271,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           for (const h of preview.held) console.log(`  held out: ${h.path} (${h.why})`);
         }
         console.log(dim("Nothing started (--dry-run)."));
+        if (slug === "-") await keepSessionFlow(found, deps);
         return;
       }
       if (!task) {
@@ -437,6 +469,26 @@ async function shortSessionId(session: string | null, deps: FlowDeps): Promise<s
   return conv ? String(conv).slice(0, 7) : session.slice(0, 8);
 }
 
+/**
+ * A flow this session wrote on stdin, kept for what comes next: where its file is (run it again, or edit it,
+ * by that path) and pushed as the session's own draft graph, so the transcript draws it before any run.
+ */
+async function keepSessionFlow(f: Pick<FoundFlow, "file" | "slug">, deps: FlowDeps): Promise<void> {
+  if (!f.file) return;
+  console.log(dim(`kept at ${path.relative(deps.realCwd(), f.file)}`));
+  await cast(["workflow", "push", f.file], deps.realCwd());
+}
+
+/** A flow's slots: each one's id, what it must do, and how it is filled. An empty one makes the flow a backbone to extend. */
+function printSlots(f: Pick<FoundFlow, "stations" | "slug">): void {
+  const slots = f.stations.filter((s) => s.slot);
+  if (!slots.length) return;
+  console.log(bold("\nslots"));
+  const how = { empty: "empty", default: "default steps", generated: "filled here" } as const;
+  for (const s of slots) console.log(`  ${s.id.padEnd(16)} ${how[s.slot!.filled].padEnd(14)} ${dim(s.slot!.does)}`);
+  if (slots.some((s) => s.slot!.filled === "empty")) console.log(dim(`  fill them from a flow with graph [extends="${f.slug}"] and subgraph <slot> { ... }`));
+}
+
 /** The deps with the pool read from a named team's workspace. */
 const teamDeps = (deps: FlowDeps, team?: string): FlowDeps => (team ? { ...deps, readWorkspace: () => deps.readWorkspace(team) } : deps);
 
@@ -454,6 +506,20 @@ async function readPool(deps: FlowDeps) {
 }
 
 async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[]): Promise<FoundFlow> {
+  if (slug === "-") {
+    // A graph this session writes now: kept in the checkout as its draft, the library flows it names pinned beside it.
+    const { readStdin, writeSessionFlow } = await import("./workflow/sessionFlow.js");
+    const text = readStdin();
+    if (!text.trim()) { console.error("No graph on stdin: pipe a flow's digraph in, e.g. cast flow run - <<'EOF' ... EOF"); process.exit(1); }
+    const top = (spawnSync("git", ["-C", deps.realCwd(), "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim() || deps.realCwd();
+    try {
+      const kept = writeSessionFlow(top, text, await shortSessionId(deps.callingSession() ?? null, deps), (pool ?? (await readPool(deps))));
+      return { ...describeFlow(kept.slug, kept.source, "repo", kept.file), source: kept.source };
+    } catch (err) {
+      console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  }
   const abs = path.resolve(deps.realCwd(), slug);
   if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
     const source = fs.readFileSync(abs, "utf-8");

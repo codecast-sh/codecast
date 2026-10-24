@@ -588,6 +588,11 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-step[data-state="stopped"] .fd-dot { color: #fff; background: var(--lw-bad); border-color: var(--lw-bad); }
 
 .fd-seg { display: flex; flex-direction: column; gap: 6px; padding: 7px 7px 7px; border-radius: 11px; position: relative; border: 1px dashed color-mix(in srgb, var(--lw-ink-3) 40%, transparent); background: color-mix(in srgb, var(--lw-card) 55%, transparent); }
+.fd-seg[data-written] { border-style: solid; border-color: color-mix(in srgb, var(--sol-violet) 45%, transparent); background: color-mix(in srgb, var(--sol-violet) 6%, var(--lw-card)); }
+.fd-seg-tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: var(--lw-fs-2xs); font-weight: 600; letter-spacing: 0; color: var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 12%, transparent); }
+.fd-step[data-slot] { border-style: dashed; background: transparent; color: var(--lw-ink-3); }
+.fd-step[data-slot] .fd-seg-tag { color: var(--lw-ink-3); background: color-mix(in srgb, var(--lw-ink-3) 12%, transparent); }
+.fd-step[data-written] { border-color: color-mix(in srgb, var(--sol-violet) 45%, transparent); }
 .fd-seg-name { margin: -2px 0 0 2px; white-space: nowrap; font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .02em; color: var(--lw-ink-2); }
 .fd-seg-steps { display: flex; align-items: flex-start; }
 .fd-seg[data-state="done"] { border-style: solid; border-color: color-mix(in srgb, var(--lw-ok) 45%, transparent); }
@@ -608,6 +613,12 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-end[data-reached] { border-style: solid; }
 .fd-end[data-reached] { color: var(--lw-ok); border-color: var(--lw-ok); background: var(--lw-ok-soft); }
 .fd[data-compact] { padding: 8px 10px; }
+.lw-flow-base { flex: none; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); text-decoration: none; }
+.lw-flow-base:hover { color: var(--lw-ink); text-decoration: underline; }
+.lw-flow-save { flex: none; font-size: var(--lw-fs-xs); padding: 1px 9px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--sol-blue) 45%, transparent); background: color-mix(in srgb, var(--sol-blue) 10%, transparent); color: var(--sol-blue); cursor: pointer; }
+.lw-flow-save:hover { background: color-mix(in srgb, var(--sol-blue) 18%, transparent); }
+.lw-flow-saved { flex: none; font-size: var(--lw-fs-xs); color: var(--sol-green); text-decoration: none; }
+.lw-flow-saved:hover { text-decoration: underline; }
 .lw-flow-stop { flex: none; font-size: var(--lw-fs-xs); padding: 1px 9px; border-radius: 6px; border: 1px solid var(--lw-rule); background: var(--lw-card); color: var(--lw-ink-2); cursor: pointer; }
 .lw-flow-stop:hover { border-color: var(--lw-bad); color: var(--lw-bad); }
 

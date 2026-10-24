@@ -31,6 +31,69 @@ import { DIFF_FENCE } from "./castDiff";
 /** Every gallery row's id starts with this, so a loader can replace an earlier copy. */
 export const GALLERY_ID_PREFIX = "gallery-";
 
+// The flow object (ct-69934): a flow a session defined on a backbone, a live run of it with Save, and a
+// finished run of a library flow. Their runs, graph and session-flow row are store records the loader seeds
+// (renderGalleryRecords); ids are lowercase so a run id reads as one in `cast flow run` output.
+export const GALLERY_FLOW = {
+  slug: "gallery-flaky-fix",
+  graphId: "galleryflowgraph00000001",
+  liveRun: "galleryflowrunlive000001",
+  libraryRun: "galleryflowrunlibrary001",
+  sessionFlow: "galleryflowsession000001",
+  hash: "galleryflowhash1",
+} as const;
+
+const FLOW_SOURCE = `digraph gallery_flaky_fix {
+  graph [extends="spine", label="Spine, flaky test"]
+  subgraph implement {
+    reproduce [label="Reproduce", prompt="Reproduce the flake 20 times."]
+    patch [label="Patch the race", prompt="Patch the race the investigation found."]
+    prove [label="Prove 20 runs", shape=parallelogram, script="bun test --rerun-each 20"]
+    reproduce -> patch -> prove
+  }
+}`;
+
+// The graph as the parser expands it (a backbone's slot filled in place), as a run's push stores it.
+const FLOW_NODES = [
+  { id: "start", label: "start", type: "start", shape: "Mdiamond" },
+  { id: "exit", label: "Shipped", type: "exit", shape: "Msquare" },
+  { id: "investigate", label: "Investigate", type: "agent", shape: "box" },
+  { id: "review", label: "Review", type: "agent", shape: "box" },
+  { id: "implement__reproduce", label: "Reproduce", type: "agent", shape: "box" },
+  { id: "implement__patch", label: "Patch the race", type: "agent", shape: "box" },
+  { id: "implement__prove", label: "Prove 20 runs", type: "command", shape: "parallelogram" },
+  { id: "implement__exit", label: "exit", type: "command", shape: "parallelogram" },
+  { id: "implement", label: "Implement", type: "conditional", shape: "diamond" },
+];
+const FLOW_EDGES = [
+  { from: "start", to: "investigate" },
+  { from: "investigate", to: "implement" },
+  { from: "review", to: "exit", condition: "outcome = success" },
+  { from: "review", to: "implement", label: "Changes asked" },
+  { from: "implement__exit", to: "review", condition: "outcome = success" },
+  { from: "implement", to: "implement__reproduce" },
+  { from: "implement__reproduce", to: "implement__patch" },
+  { from: "implement__patch", to: "implement__prove" },
+  { from: "implement__prove", to: "implement__exit" },
+];
+
+/**
+ * The store records the flow rows draw from, for a viewer and the workspace they read: the defined graph
+ * (the viewer's own draft push), its live run and session-flow row (unsaved, so Save shows), and a finished
+ * run of the shipped `check` segment (the library's own, so no Save).
+ */
+export function renderGalleryRecords(now: number, viewerId: string, workspace: string) {
+  const status = (node_id: string, s: "completed" | "running", label?: string) => ({ node_id, status: s, ...(label ? { label } : {}), started_at: now - 60_000, ...(s === "completed" ? { completed_at: now - 30_000 } : {}) });
+  return {
+    workflows: [{ _id: GALLERY_FLOW.graphId, user_id: viewerId, workspace: `user:${viewerId}`, slug: GALLERY_FLOW.slug, name: GALLERY_FLOW.slug, label: "Spine, flaky test", source: FLOW_SOURCE, nodes: FLOW_NODES, edges: FLOW_EDGES, created_at: now, updated_at: now }],
+    workflowRuns: [
+      { _id: GALLERY_FLOW.liveRun, user_id: viewerId, workflow_id: GALLERY_FLOW.graphId, workflow_slug: GALLERY_FLOW.slug, workflow_name: GALLERY_FLOW.slug, workflow_label: "Spine, flaky test", graph_hash: GALLERY_FLOW.hash, workspace, status: "running", current_node_id: "implement__patch", task_short_id: "ct-4102", node_statuses: [status("investigate", "completed"), status("implement", "completed"), status("implement__reproduce", "completed"), status("implement__patch", "running")], created_at: now - 120_000, updated_at: now },
+      { _id: GALLERY_FLOW.libraryRun, user_id: viewerId, workflow_slug: "check", workflow_name: "check", workspace, status: "completed", current_node_id: "passed", task_short_id: "ct-4103", node_statuses: [status("verify", "completed")], created_at: now - 300_000, updated_at: now - 200_000 },
+    ],
+    sessionFlows: [{ _id: GALLERY_FLOW.sessionFlow, workspace, graph_hash: GALLERY_FLOW.hash, from: "graph", name: GALLERY_FLOW.slug, label: "Spine, flaky test", kind: null, base: "spine", fills: ["implement"], nodes: FLOW_NODES, edges: FLOW_EDGES, runs: [GALLERY_FLOW.liveRun], run_count: 1, more: false, last_at: now, sessions: [], by: [viewerId], saved: null }],
+  };
+}
+
 type Row = {
   _id: string;
   role: "user" | "assistant" | "system";
@@ -393,6 +456,11 @@ export function renderGalleryMessages(now: number): Row[] {
   wf({ __wf: "node_done", node_id: "test", node_label: "Run tests", node_type: "command" });
   wf({ __wf: "node_failed", node_id: "lint", node_label: "Lint", node_type: "command" });
   wf({ __wf: "gate", prompt: "Approve the deploy to production?", choices: [{ key: "ship", label: "Ship", target: "deploy" }, { key: "hold", label: "Hold", target: "end" }], run_id: "gallery-run" });
+
+  section("Flows");
+  sh(`cast flow validate - <<'EOF'\n${FLOW_SOURCE}\nEOF`, `✓ Spine, flaky test (line, draft of jx7bm3n): Investigate → Implement → Review\n\nslots\n  implement        filled here    Make the change the investigation calls for\nkept at .codecast/session-flows/${GALLERY_FLOW.slug}/${GALLERY_FLOW.slug}.cast`);
+  sh(`cast flow run - <<'EOF'\n${FLOW_SOURCE}\nEOF`, `Spine, flaky test started on ct-4102: Investigate → Implement → Review\n  3 files from session jx7bm3n on codecast/${GALLERY_FLOW.slug}-ct-4102\n  run ${GALLERY_FLOW.liveRun} · cast workflow runs --task ct-4102`);
+  asst(`A finished run of a library flow:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.libraryRun}"}\n\`\`\``);
 
   section("System rows");
   sys("compact_boundary", "Conversation compacted");

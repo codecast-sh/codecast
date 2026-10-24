@@ -45,14 +45,22 @@ cast workflow run flow.cast --task ct-N     # or --plan pl-N
 cast workflow list | runs | push
 ```
 
-Flows are the team's shared pool of these graphs: lines that take a change to done, and segments (check, review, eval, decide, ship) that run one part of the path alone or inside a line. A finished change goes through a flow before it ships, and the run shows live where the change is.
+Flows are the team's library of these graphs: lines that take a change to done, and segments (check, review, eval, decide, ship) that do one part of the path. A finished change goes through a flow before it ships; the run draws live in the conversation, and a flow written there can be saved to the library from it.
+
+Choose by how well the library fits the work. A library flow that fits is run as it stands, since it carries what the team has learned. When one fits as a backbone but a step needs work particular to this change, extend it and fill its slots with steps you write, leaving the rest of it the team's. Write a whole flow only when nothing in the library has the shape of the work.
 
 ```bash
-cast flow ls                        # the pool, each flow with its steps
-cast flow run change                # this session's own edits through the standard line (or --task, --branch, --pr)
+cast flow ls                        # the library, each flow with its steps
+cast flow run change                # this session's own edits through a library flow (or --task, --branch, --pr)
+cast flow run - <<'EOF'             # a flow written here, checked before it starts
+digraph <name> {
+  graph [extends="<flow>"]          # a library flow as the backbone
+  subgraph <slot> { a -> b -> c }   # the steps that fill one of its slots
+}
+EOF
 cast flow import <wf_id>            # a Workflow-tool run becomes a flow: your draft until you make it general, then cast flow publish
 ```
 
-`cast guide workflows` shows the graph syntax, segments and the line commands.
+`cast guide workflows` shows the graph syntax, segments, slots and the line commands.
 <!-- cast @VERSION@ -->
 <!-- /codecast-workflows -->

@@ -11,7 +11,7 @@
 //   ... --clear               remove the gallery rows instead
 import { spawnSync } from "child_process";
 import { join } from "path";
-import { renderGalleryMessages, GALLERY_ID_PREFIX } from "../lib/renderGallery";
+import { renderGalleryMessages, renderGalleryRecords, GALLERY_ID_PREFIX } from "../lib/renderGallery";
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.includes(name);
@@ -30,6 +30,14 @@ const expression = `(() => {
   const kept = (s.messages[id] || []).filter((m) => !String(m._id).startsWith(${JSON.stringify(GALLERY_ID_PREFIX)}));
   const rows = ${JSON.stringify(rows)};
   store.getState().applyTailMessages(id, 0, [...kept, ...rows], null);
+  // The records the flow rows draw from (their runs, graph, session-flow row), for this viewer's workspace.
+  const viewer = String(s.currentUser?._id ?? "gallery-viewer");
+  const team = s.clientState?.ui?.active_team_id;
+  const records = JSON.parse(${JSON.stringify(JSON.stringify(renderGalleryRecords(Date.now(), "__VIEWER__", "__WORKSPACE__")))}.split("__VIEWER__").join(viewer).split("__WORKSPACE__").join(team ? "team:" + team : "user:" + viewer));
+  for (const [key, list] of Object.entries(records)) {
+    if (rows.length) store.getState().syncTable(key, list, { isDelta: true });
+    else store.setState((st) => ({ [key]: Object.fromEntries(Object.entries(st[key] || {}).filter(([k]) => !k.startsWith("galleryflow"))) }));
+  }
   return id + ": " + (rows.length ? rows.length + " gallery rows" : "gallery cleared");
 })()`;
 
