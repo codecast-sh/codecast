@@ -65,7 +65,7 @@ import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilit
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, recordRemoteLaunch, stableHostnameAsync } from "./remote/device.js";
 import { UNSAFE_PATH_RE, creatableStartFolder, missingFolderError, missingResumeFolderError, noLocalCheckoutBannerActionable, noLocalCheckoutError, placeFreshDeliverySession, type ConversationProjectInfo } from "./resumePlacement.js";
-import { liveRunnerPid, paneReplaceable, runPaneName } from "./workflow/runResume.js";
+import { liveRunnerPid, paneReplaceable, runnerPidFile, runPaneName } from "./workflow/runResume.js";
 import {
   accountSwitchRestartReason,
   previousAccountToClaim,
@@ -88,7 +88,7 @@ import {
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
 import { startMirrorProcess } from "./cloud/mirror/process.js";
-import { releaseSessionWorktree } from "./worktreeGc.js";
+import { releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { createTurnSnapshot, type TurnSnapshot } from "./treeSnapshot.js";
@@ -263,7 +263,8 @@ export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { decideSourceRestart, type SourceRestartState } from "./sourceRestart.js";
-import { freeDiskShare, sweepHostDisk } from "./hostDiskSweep.js";
+import { sweepHostDisk } from "./hostDiskSweep.js";
+import { diskFullHold, freeDiskShare } from "./diskFull.js";
 import { BUILD_ID_RE, BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
 import { markSynced, markExamined, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
@@ -1592,17 +1593,49 @@ async function launchWorkflowRun(siteUrl: string, apiToken: string, runId: strin
 // runner that dies on start is not restarted forever.
 const WORKFLOW_RESUME_TICK_MS = 2 * 60_000;
 const workflowResumes = new Map<string, number[]>();
-async function resumeOrphanedWorkflowRuns(): Promise<void> {
+type LiveRunsOnDevice = { runs?: Array<{ run_id: string; status: string; current_node_id: string | null; updated_at: number }>; failed?: string[] };
+async function fetchLiveRunsOnDevice(): Promise<LiveRunsOnDevice | null> {
   const siteUrl = getSiteUrl();
   const token = getAuthToken();
-  if (!siteUrl || !token) return;
+  if (!siteUrl || !token) return null;
   const resp = await fetch(`${siteUrl}/cli/workflow-runs/live-on-device`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: token, device: deviceId() }),
   });
-  const data = await resp.json().catch(() => null) as { runs?: Array<{ run_id: string; current_node_id: string | null; updated_at: number }>; failed?: string[] } | null;
-  for (const id of data?.failed ?? []) log(`[WORKFLOW] ${id} stayed pending with no runner; failed it so it can be rerun`);
+  const data = await resp.json().catch(() => null) as (LiveRunsOnDevice & { error?: string }) | null;
+  if (!resp.ok || !data || data.error || !Array.isArray(data.runs)) return null;
+  for (const id of data.failed ?? []) log(`[WORKFLOW] ${id} stayed pending with no runner; failed it so it can be rerun`);
+  return data;
+}
+
+// LIVE_RUNS_PAGE: the server answers at most this many runs of a status (workflow_runs.liveRunsForDevice).
+const LIVE_RUNS_PAGE = 100;
+/**
+ * The runs live on this machine: the server's running and paused runs here
+ * (a run at a card, or one a restart left without a runner) and every run a
+ * live runner here holds. Null when the server cannot say, or its answer may
+ * be cut short: a worktree is then kept (worktreeGc.ts).
+ */
+async function liveWorkflowRunIds(): Promise<Set<string> | null> {
+  const data = await fetchLiveRunsOnDevice().catch(() => null);
+  if (!data?.runs) return null;
+  for (const status of ["running", "paused"]) if (data.runs.filter((r) => r.status === status).length >= LIVE_RUNS_PAGE) return null;
+  const ids = new Set(data.runs.map((r) => String(r.run_id)));
+  try {
+    for (const f of fs.readdirSync(path.dirname(runnerPidFile("run")))) {
+      const id = f.endsWith(".pid") ? f.slice(0, -4) : null;
+      if (id && liveRunnerPid(id)) ids.add(id);
+    }
+  } catch { /* no runner has run here */ }
+  return ids;
+}
+
+async function resumeOrphanedWorkflowRuns(): Promise<void> {
+  const data = await fetchLiveRunsOnDevice();
+  const siteUrl = getSiteUrl();
+  const token = getAuthToken();
+  if (!data || !siteUrl || !token) return;
   const now = Date.now();
   for (const run of data?.runs ?? []) {
     if (liveRunnerPid(run.run_id)) continue;
@@ -5319,7 +5352,7 @@ async function sendHeartbeat(): Promise<void> {
         host_readiness: isRemoteDevice() ? await hostReadinessNext() : undefined,
         // The line checkouts this machine offers (config.json `line`), sent
         // only when they change; the server places line runs by them (lineSlots.ts).
-        line_slots: (lineSlotsReporter ??= new (await import("./lineSlots.js")).LineSlotsReporter()).next(config),
+        line_slots: (lineSlotsReporter ??= new (await import("./lineSlots.js")).LineSlotsReporter(log)).next(config),
         // Time since the last keyboard/mouse event anywhere on this machine
         // (macOS only; omitted elsewhere). Sent as a DURATION so the server can
         // anchor it to its own clock — daemon clock skew can't fake presence.
@@ -6000,7 +6033,7 @@ async function killConversationBackends(
   if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardownPlan.reapPidTree) && !error) {
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef
       ? syncServiceRef.isWorktreeShared(conversationId, p)
-      : Promise.reject(new Error("No session roster")));
+      : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds));
     log(`[WORKTREE-GC] ${verdict.action}${"reason" in verdict ? `: ${verdict.reason}` : ""}`);
   }
 
@@ -22205,7 +22238,7 @@ async function reapOneTerminal(
   if (gcCwd) {
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef && convId
       ? syncServiceRef.isWorktreeShared(convId, p)
-      : Promise.reject(new Error("No session roster"))).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
+      : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds)).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
     reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
   }
   return true;
@@ -28222,15 +28255,16 @@ async function sweepHostDiskIfDue(): Promise<void> {
   const workDir = path.join(process.env.HOME || "", "work");
   const free = freeDiskShare(process.env.HOME || "/");
   const sinceLast = Date.now() - lastHostSweepAt;
-  const low = free !== null && free < HOST_SWEEP_LOW_DISK_SHARE;
+  // A run that failed on the full disk (diskFull.ts) holds the machine's line runs until the sweep frees room.
+  const low = (free !== null && free < HOST_SWEEP_LOW_DISK_SHARE) || diskFullHold(process.env.HOME || "/") !== null;
   if (sinceLast < (low ? HOST_SWEEP_LOW_DISK_SPACING_MS : HOST_SWEEP_INTERVAL_MS)) return;
   hostSweepInFlight = true;
   lastHostSweepAt = Date.now();
   try {
     const rows = await syncServiceRef.liveSessionsOnThisDevice();
     const inUsePaths = rows.flatMap((r) => [r.project_path, r.cloud_checkout_path]).filter((p): p is string => !!p);
-    const r = await sweepHostDisk({ workDir, checkouts: await enumerateLocalRootsAsync(process.env.HOME || ""), inUsePaths, log });
-    log(`[DISK] sweep${low ? ` (disk ${Math.round((1 - free!) * 100)}% full)` : ""}: released ${r.released.length}, kept ${r.kept.length}${r.kept.length ? ` (${r.kept.slice(0, 5).map((k) => `${path.basename(k.path)}: ${k.reason}`).join("; ")})` : ""}`);
+    const r = await sweepHostDisk({ workDir, checkouts: await enumerateLocalRootsAsync(process.env.HOME || ""), inUsePaths, runTreesInUse: runTreesInUseVia(liveWorkflowRunIds), log });
+    log(`[DISK] sweep${low && free !== null ? ` (disk ${Math.round((1 - free) * 100)}% full)` : ""}: released ${r.released.length}, kept ${r.kept.length}${r.kept.length ? ` (${r.kept.slice(0, 5).map((k) => `${path.basename(k.path)}: ${k.reason}`).join("; ")})` : ""}`);
   } catch (err) {
     log(`[DISK] sweep failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {

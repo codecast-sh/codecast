@@ -64,3 +64,25 @@ test("worktrees are swept in checkouts kept outside ~/work too", async () => {
   const r = await sweepHostDisk({ workDir: work, checkouts: [checkout], inUsePaths: [], log: () => {} });
   expect(r.released.concat(r.kept.map((k) => k.path))).toContain(wt);
 });
+
+test("a line run's worktree goes once no live run works in it, whatever it holds; its branch stays (2026-10-24)", async () => {
+  const { work, repo } = world();
+  const tree = (name: string, runId: string) => {
+    const wt = path.join(repo, ".codecast", "worktrees", name);
+    git(repo, "worktree", "add", "-q", "-b", `codecast/${name}`, wt);
+    fs.writeFileSync(path.join(wt, "fix.txt"), "unmerged\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-qm", "the run's fix");
+    fs.writeFileSync(path.join(wt, "scratch.log"), "left over");
+    fs.mkdirSync(path.join(repo, ".git", "cast-line", name, "runs"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "cast-line", name, "runs", `${runId}.json`), JSON.stringify({ run_id: runId, context: { worktree: name } }));
+    return wt;
+  };
+  const failed = tree("agentwatch-ct-1", "run_failed");
+  const live = tree("agentwatch-ct-2", "run_live");
+  const { runTreesInUseVia } = await import("./worktreeGc.js");
+  const r = await sweepHostDisk({ workDir: work, inUsePaths: [], runTreesInUse: runTreesInUseVia(async () => new Set(["run_live"])), log: () => {} });
+  expect(r.released).toEqual([failed]);
+  expect(r.kept).toEqual([{ path: live, reason: "a live run works in it" }]);
+  expect(git(repo, "branch", "--list", "codecast/agentwatch-ct-1")).toContain("codecast/agentwatch-ct-1");
+});

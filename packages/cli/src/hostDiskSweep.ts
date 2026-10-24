@@ -13,14 +13,16 @@
  * and logged, for a person to decide.
  *
  * "In use" is the server's roster of live sessions this device runs
- * (cloud:hostSessions); a path any of them sits in is never touched.
+ * (cloud:hostSessions); a path any of them sits in is never touched. A line
+ * run's worktree is also in use while a live run works in it (`runTreesInUse`),
+ * and goes once none does, whatever it holds (worktreeGc.ts).
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileAsync } from "./proc.js";
 import { LANDED_REF, MOVE_CLONE_RE } from "./remote/session-move.js";
-import { releaseSessionWorktree, type GcVerdict } from "./worktreeGc.js";
+import { releaseSessionWorktree, type GcVerdict, type RunTreesInUse } from "./worktreeGc.js";
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -42,7 +44,9 @@ export async function moveCloneKeepReason(dir: string): Promise<string | null> {
 
 export type SweepResult = { released: string[]; kept: Array<{ path: string; reason: string }> };
 
-export async function sweepHostDisk(opts: { workDir: string; checkouts?: readonly string[]; inUsePaths: readonly string[]; log: (m: string) => void }): Promise<SweepResult> {
+type SweepOpts = { inUsePaths: readonly string[]; runTreesInUse?: RunTreesInUse; log: (m: string) => void };
+
+export async function sweepHostDisk(opts: SweepOpts & { workDir: string; checkouts?: readonly string[] }): Promise<SweepResult> {
   const result: SweepResult = { released: [], kept: [] };
   let entries: string[] = [];
   try { entries = fs.readdirSync(opts.workDir); } catch { return result; }
@@ -69,25 +73,15 @@ export async function sweepHostDisk(opts: { workDir: string; checkouts?: readonl
   return result;
 }
 
-async function sweepWorktrees(repo: string, opts: { inUsePaths: readonly string[]; log: (m: string) => void }, result: SweepResult): Promise<void> {
+async function sweepWorktrees(repo: string, opts: SweepOpts, result: SweepResult): Promise<void> {
   const root = path.join(repo, ".codecast", "worktrees");
   let names: string[] = [];
   try { names = fs.readdirSync(root); } catch { return; }
   for (const name of names) {
     const wt = path.join(root, name);
     if (!fs.statSync(wt).isDirectory() || inUse(wt, opts.inUsePaths)) continue;
-    const verdict: GcVerdict = await releaseSessionWorktree(wt, opts.log).catch((err) => ({ action: "kept" as const, name, path: wt, reason: String(err).slice(0, 120) }));
+    const verdict: GcVerdict = await releaseSessionWorktree(wt, opts.log, undefined, opts.runTreesInUse).catch((err) => ({ action: "kept" as const, name, path: wt, reason: String(err).slice(0, 120) }));
     if (verdict.action === "released") result.released.push(wt);
     else if (verdict.action === "kept") result.kept.push({ path: wt, reason: verdict.reason });
-  }
-}
-
-/** Free space on the disk holding `dir`, as a share of its size (0 to 1), or null when it cannot be read. */
-export function freeDiskShare(dir: string): number | null {
-  try {
-    const s = fs.statfsSync(dir);
-    return s.blocks > 0 ? s.bavail / s.blocks : null;
-  } catch {
-    return null;
   }
 }

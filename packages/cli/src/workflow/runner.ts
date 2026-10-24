@@ -4,6 +4,7 @@ import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
 import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { ParkedClock, taskWaiting } from "./parkedClock.js";
+import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition";
@@ -618,7 +619,7 @@ async function waitOnStation(
     await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "in_progress" });
   }
   let askedForHandoffAt = 0;
-  // The node's clock leaves out time the hand spends parked on its task's wait (parkedClock.ts).
+  // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
   const clock = new ParkedClock(startMs);
   while (clock.elapsed() < timeout) {
     await new Promise(r => setTimeout(r, pollInterval));
@@ -677,11 +678,17 @@ async function waitOnStation(
     }
     // A hand parked on a usage limit (or a throttle, a dropped connection)
     // files as needs_input, but it resumes on its own at the reset or the
-    // fleet's next account: wait for it within the node's timeout rather than
-    // read the park as its answer.
+    // fleet's next account: wait for it rather than read the park as its
+    // answer. A limit or a throttle stops the node's clock while it lasts: 18
+    // hands on the "wait for limit reset" dialog were killed at their node
+    // timeout after the pool's accounts hit their limits (2026-10-24). A
+    // connection or fatal park keeps the clock, so one that never comes back
+    // still ends.
     if (row.blocked_on && CONTINUE_BANNER_KINDS.includes(row.blocked_on)) {
-      if (lastState !== `parked:${row.blocked_on}`) console.log(`${c.dim}  ${shortId}: parked on ${row.blocked_on}, waiting for it to resume${c.reset}`);
+      const quota = row.blocked_on === "limit" || row.blocked_on === "throttle";
+      if (lastState !== `parked:${row.blocked_on}`) console.log(`${c.dim}  ${shortId}: parked on ${row.blocked_on}, waiting for it to resume${quota ? "; the node's clock stops until it does" : ""}${c.reset}`);
       lastState = `parked:${row.blocked_on}`;
+      if (quota) clock.park();
       continue;
     }
     // A live hand can read needs_input for a moment between a reply and its
@@ -1924,6 +1931,10 @@ async function driveRun(
       } catch {}
     }
   } else if (state.failed) {
+    // A full disk failed the run, not the problem: the machine holds its line
+    // runs and the problem goes back to the line's queue (diskFull.ts).
+    const diskFull = options.dryRun ? null : diskFullFailReason(options.cwd ?? process.cwd(), `${state.failReason ?? ""}\n${state.context["last_error"] ?? ""}`.trim(), options.taskId);
+    if (diskFull) state.failReason = diskFull.slice(0, 2000);
     console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
     // The run is reported over first: that stops its hands. The blocker
     // comment that follows goes to the session that owns the task, which is
@@ -1940,7 +1951,10 @@ async function driveRun(
         fail_reason: state.failReason,
       });
     }
-    await returnTaskOnFailure(options, graph, state);
+    // A problem the queue refuses (a trial's, which reruns under its budget) takes the ordinary failure path.
+    const requeued = diskFull && options.taskId ? await requeueAfterDiskFull((route, body) => cliCall(options, route, body), options.taskId) : null;
+    if (requeued) console.log(requeued.text);
+    if (!requeued?.queued) await returnTaskOnFailure(options, graph, state);
     return "failed";
   }
   return "completed";

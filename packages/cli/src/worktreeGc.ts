@@ -30,6 +30,15 @@
  * host whose git predates that flag (2.38). A subagent worktree whose working
  * tree is exactly what it last merged into its parent's checkout
  * (mergeBack.ts) is released too: the parent holds all of it.
+ *
+ * A line run's worktree (a run tree: its name is a run dir, runDirs.ts) is
+ * judged by use instead: it goes once no live run and no live session works
+ * in it, whatever it holds. Its branch stays, with every commit the run made;
+ * what it left uncommitted is a finished run's scratch. Under the content rule
+ * a failed, dissolved or unmerged run kept its worktree forever, a full
+ * checkout with its installs each: two of Union's line hosts filled their
+ * disks with 202 and 222 of them, and every run placed there failed at Start
+ * (2026-10-24).
  */
 
 import * as fs from "node:fs";
@@ -43,6 +52,27 @@ import { execFileAsync } from "./proc.js";
 import { locateWorktree } from "./worktreeEnv.js";
 import { runSide, type SnapshotResult } from "./cloud/syncSide.js";
 import { MERGED_REF_PREFIX, worktreeMatchesMergedBack } from "./mergeBack.js";
+import { runTreeNames, runTreesOf } from "./workflow/runDirs.js";
+
+/** The run trees of a checkout that a live run still works in, or null when that cannot be told. */
+export type RunTreesInUse = (repoRoot: string) => Promise<ReadonlySet<string> | null>;
+
+/**
+ * Run trees in use, from the ids of the runs live on this machine (null: cannot
+ * tell). The ids are read once and each checkout's trees once, however many
+ * worktrees a sweep asks about.
+ */
+export function runTreesInUseVia(liveRunIds: () => Promise<ReadonlySet<string> | null>): RunTreesInUse {
+  let ids: Promise<ReadonlySet<string> | null> | null = null;
+  const byRepo = new Map<string, Set<string> | null>();
+  return async (repoRoot) => {
+    ids ??= liveRunIds().catch(() => null);
+    const live = await ids;
+    if (!live) return null;
+    if (!byRepo.has(repoRoot)) byRepo.set(repoRoot, runTreesOf(repoRoot, live));
+    return byRepo.get(repoRoot)!;
+  };
+}
 
 export type GcVerdict =
   | { action: "released"; name: string; path: string }
@@ -214,6 +244,7 @@ export async function releaseSessionWorktree(
   cwd: string | undefined,
   log: (m: string) => void = () => {},
   isShared?: (worktreePath: string) => Promise<boolean>,
+  runTreesInUse?: RunTreesInUse,
 ): Promise<GcVerdict> {
   if (!cwd) return { action: "skipped", reason: "no cwd" };
   const wt = locateWorktree(cwd);
@@ -228,6 +259,16 @@ export async function releaseSessionWorktree(
     } catch {
       return { action: "kept", name: wt.name, path: worktreePath, reason: "cannot verify exclusive session ownership" };
     }
+  }
+  const runTree = !!runTreesInUse && runTreeNames(wt.repoRoot).has(wt.name);
+  if (runTree) {
+    const inUse = await runTreesInUse(wt.repoRoot).catch(() => null);
+    const reason = !inUse ? "cannot tell whether a live run works in it" : inUse.has(wt.name) ? "a live run works in it" : null;
+    if (reason) {
+      log(`[WORKTREE-GC] kept ${wt.name}: ${reason}`);
+      return { action: "kept", name: wt.name, path: worktreePath, reason };
+    }
+    return removeWorktree(wt.repoRoot, wt.name, worktreePath, log, { keepBranch: true });
   }
   let probe: WorktreeProbe;
   try {
@@ -247,20 +288,25 @@ export async function releaseSessionWorktree(
     log(`[WORKTREE-GC] kept ${wt.name}: ${reason}`);
     return { action: "kept", name: wt.name, path: worktreePath, reason };
   }
+  return removeWorktree(wt.repoRoot, wt.name, worktreePath, log, { keepBranch: false });
+}
+
+/** Remove a worktree: the workspace release when the workspace module tracks it, else a plain `git worktree remove`. */
+async function removeWorktree(repoRoot: string, name: string, worktreePath: string, log: (m: string) => void, opts: { keepBranch: boolean }): Promise<GcVerdict> {
   try {
     const ws = await import("./workspace/index.js");
-    if (ws.readState(wt.repoRoot, wt.name)) {
-      await ws.releaseWorkspace(wt.repoRoot, wt.name);
+    if (ws.readState(repoRoot, name)) {
+      await ws.releaseWorkspace(repoRoot, name);
     } else {
-      await git(wt.repoRoot, ["worktree", "remove", "--force", worktreePath]);
-      try { await git(wt.repoRoot, ["branch", "-D", `codecast/${wt.name}`]); } catch { /* branch may be named otherwise */ }
+      await git(repoRoot, ["worktree", "remove", "--force", worktreePath]);
+      if (!opts.keepBranch) try { await git(repoRoot, ["branch", "-D", `codecast/${name}`]); } catch { /* branch may be named otherwise */ }
     }
-    try { await git(wt.repoRoot, ["update-ref", "-d", `${MERGED_REF_PREFIX}${wt.name}`]); } catch { /* never merged back */ }
-    log(`[WORKTREE-GC] released ${wt.name} (${worktreePath})`);
-    return { action: "released", name: wt.name, path: worktreePath };
+    try { await git(repoRoot, ["update-ref", "-d", `${MERGED_REF_PREFIX}${name}`]); } catch { /* never merged back */ }
+    log(`[WORKTREE-GC] released ${name} (${worktreePath})`);
+    return { action: "released", name, path: worktreePath };
   } catch (err) {
     const reason = `remove failed: ${(err as Error).message.split("\n")[0]}`;
-    log(`[WORKTREE-GC] kept ${wt.name}: ${reason}`);
-    return { action: "kept", name: wt.name, path: worktreePath, reason };
+    log(`[WORKTREE-GC] kept ${name}: ${reason}`);
+    return { action: "kept", name, path: worktreePath, reason };
   }
 }

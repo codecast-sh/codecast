@@ -21171,9 +21171,15 @@ workflow
       } catch (err) {
         // Refused (an earlier run's hand still works in the worktree): the run
         // ends here with why, rather than waiting as pending with no runner.
-        const why = err instanceof Error ? err.message : String(err);
+        // A full disk is the machine's failure: it holds its line runs and the
+        // problem goes back to the queue (diskFull.ts).
+        const error = err instanceof Error ? err.message : String(err);
+        const { diskFullFailReason, requeueAfterDiskFull } = await import("./diskFull.js");
+        const diskFull = diskFullFailReason(projectPath, error, run.task_short_id);
+        const why = diskFull ?? error;
         console.error(why);
         await post("/cli/workflow-runs/progress", { run_id: runId, current_node_id: "start", node_id: "start", node_status: "failed", run_status: "failed", fail_reason: why.slice(0, 1500) }).catch(() => {});
+        if (diskFull) console.error((await requeueAfterDiskFull(post, run.task_short_id)).text);
         process.exit(1);
       }
     }

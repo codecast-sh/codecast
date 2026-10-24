@@ -10,10 +10,14 @@
  * plus the role's subpath under its own git root. `origin` is read from the
  * checkout and normalized (normalizeGitOrigin), so the laptop's clone and the
  * host's clone of one repo match whatever protocol cloned them.
+ *
+ * A checkout whose disk is full (diskFull.ts) is offered with no runs until
+ * it has room again, so admission places nothing there.
  */
 import { execFileSync } from "./proc.js";
 import { normalizeGitOrigin } from "@codecast/shared/contracts";
 import type { Config } from "./config/types.js";
+import { diskFullHold } from "./diskFull.js";
 
 export interface LineSlot {
   root: string;
@@ -53,9 +57,22 @@ function gitOrigin(root: string): string | undefined {
 export class LineSlotsReporter {
   private sentKey: string | null = null;
   private sentAt = 0;
+  // Each held checkout's root and why, as of the last beat: a change is logged once.
+  private held = new Map<string, string>();
 
-  next(config: Pick<Config, "line"> | null | undefined, now = Date.now(), originOf?: (root: string) => string | undefined): LineSlot[] | undefined {
-    const slots = readLineSlots(config, originOf);
+  constructor(private log: (m: string) => void = () => {}) {}
+
+  next(config: Pick<Config, "line"> | null | undefined, now = Date.now(), originOf?: (root: string) => string | undefined, holdOf: (root: string) => string | null = diskFullHold): LineSlot[] | undefined {
+    const held = new Map<string, string>();
+    const slots = readLineSlots(config, originOf).map((s) => {
+      const hold = holdOf(s.root);
+      if (!hold) return s;
+      held.set(s.root, hold);
+      return { ...s, runs: 0 };
+    });
+    for (const [root, hold] of held) if (!this.held.has(root)) this.log(`[LINE] ${root} takes no line runs: ${hold}`);
+    for (const root of this.held.keys()) if (!held.has(root)) this.log(`[LINE] ${root} takes line runs again: its disk has room`);
+    this.held = held;
     if (!slots.length && this.sentKey === null) return undefined;
     const key = JSON.stringify(slots);
     if (key === this.sentKey && now - this.sentAt < 10 * 60_000) return undefined;

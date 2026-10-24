@@ -45,6 +45,8 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
   let jumpAt: number;
   let jumpMs: number;
   let pinned: { state: string; status: string };
+  // Inbox reads on which the hand sits parked on a usage limit.
+  let limitReads: (n: number) => boolean;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-wf-late-"));
@@ -60,6 +62,7 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     jumpAt = 0;
     jumpMs = 0;
     pinned = { state: "", status: "" };
+    limitReads = () => false;
     globalThis.fetch = (async (url: any, init: any) => {
       const route = String(url).replace(/^https?:\/\/[^/]+/, "");
       const body = JSON.parse(init?.body || "{}");
@@ -71,7 +74,7 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
         if (reads === jumpAt) setSystemTime(new Date(Date.now() + jumpMs));
         if (reads === handoffAt) task = { ...task, status: "in_review", execution_status: handoffStatus, verification_evidence: "cannot build: x" };
         // The hand ended its turn on a backgrounded check: live, needs input, nothing pinned.
-        return reply({ sessions: [{ id: "conv_hand", work_state: "needs_input", is_live: true, message_count: 40 }] });
+        return reply({ sessions: [{ id: "conv_hand", work_state: "needs_input", is_live: true, message_count: 40, ...(limitReads(reads) ? { blocked_on: "limit" } : {}) }] });
       }
       // Asked for its handoff, the hand pins dormant on its check.
       if (route === "/cli/messages/send") pinned = { state: "Waiting on the project check", status: "dormant" };
@@ -153,5 +156,34 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     expect(reached("verify")).toBe(true);
     expect(logs.some((l) => l.includes("its task waits (until"))).toBe(true);
     expect(failReason()).not.toContain("killed after");
+  }, 30000);
+
+  test.each(builders)("%s: a hand parked on a usage limit outlives the node's timeout and routes on its handoff after", async (id) => {
+    // 18 hands sat on Claude's "wait for limit reset" dialog after the pool's
+    // accounts hit their limits, and were killed at their node timeout (2026-10-24).
+    limitReads = (n) => n >= 3 && n <= 6;
+    jumpAt = 5;
+    jumpMs = 11 * 60_000;
+    handoffAt = 9;
+    expect(await run(id)).toBe("completed");
+    expect(reached("verify")).toBe(true);
+    expect(logs.some((l) => l.includes("parked on limit"))).toBe(true);
+    expect(failReason()).not.toContain("killed after");
+  }, 30000);
+
+  test.each(builders)("%s: a hand parked on a connection error still ends at the node's timeout", async (id) => {
+    limitReads = () => true;
+    jumpAt = 5;
+    jumpMs = 11 * 60_000;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const res = await realFetch(url, init);
+      if (!String(url).endsWith("/cli/inbox")) return res;
+      const body = await res.json();
+      body.sessions[0].blocked_on = "connection";
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    expect(await run(id)).toBe("failed");
+    expect(failReason()).toContain("killed after 10m");
   }, 30000);
 });

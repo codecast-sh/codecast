@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createGitCapabilityStore } from "./gitCapability";
-import { keepReason, probeWorktree, releaseSessionWorktree, type WorktreeProbe } from "./worktreeGc";
+import { keepReason, probeWorktree, releaseSessionWorktree, runTreesInUseVia, type WorktreeProbe } from "./worktreeGc";
 import { acquireWorkspace } from "./workspace/lifecycle";
 import { readState } from "./workspace/contract";
 
@@ -329,3 +329,45 @@ describe("seeded worktrees (ct-49433): released when the laptop still holds all 
 function spawnSyncOk(repo: string, args: string[]): boolean {
   try { execFileSync("git", ["-C", repo, ...args], { stdio: "ignore" }); return true; } catch { return false; }
 }
+
+// Two of Union's line hosts filled their disks with 202 and 222 run worktrees
+// (agentwatch-ct-N) of failed, dissolved and unmerged runs, each kept for
+// holding work not on origin (2026-10-24).
+describe("line run worktrees: released once no live run or session works in them", () => {
+  /** A run tree as a line run leaves it: its run dir, a commit not on origin, an uncommitted leftover. */
+  function runTree(repo: string, name: string, runId: string): string {
+    const wt = addWorktree(repo, name);
+    commit(wt, "the run's fix", { "fix.txt": "unmerged fix\n" });
+    fs.writeFileSync(path.join(wt, "scratch.log"), "left by the run");
+    const runs = path.join(repo, ".git", "cast-line", name, "runs");
+    fs.mkdirSync(runs, { recursive: true });
+    fs.writeFileSync(path.join(runs, `${runId}.json`), JSON.stringify({ run_id: runId, node_id: "build", context: { worktree: name } }));
+    return wt;
+  }
+
+  test("a finished run's tree goes, its branch and commits stay", async () => {
+    const { repo } = makeRepo();
+    const wt = runTree(repo, "agentwatch-ct-1", "run_done");
+    const tip = sh(wt, "git", ["rev-parse", "HEAD"]);
+    const verdict = await releaseSessionWorktree(wt, () => {}, async () => false, runTreesInUseVia(async () => new Set(["run_other"])));
+    expect(verdict).toMatchObject({ action: "released" });
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(sh(repo, "git", ["rev-parse", "codecast/agentwatch-ct-1"])).toBe(tip);
+  }, 30_000);
+
+  test("kept while its run is live, while a session works in it, and when the live runs cannot be read", async () => {
+    const { repo } = makeRepo();
+    const wt = runTree(repo, "agentwatch-ct-2", "run_live");
+    expect(await releaseSessionWorktree(wt, () => {}, async () => false, runTreesInUseVia(async () => new Set(["run_live"])))).toMatchObject({ action: "kept", reason: "a live run works in it" });
+    expect(await releaseSessionWorktree(wt, () => {}, async () => true, runTreesInUseVia(async () => new Set()))).toMatchObject({ action: "kept", reason: "another session uses this worktree" });
+    expect(await releaseSessionWorktree(wt, () => {}, async () => false, runTreesInUseVia(async () => null))).toMatchObject({ action: "kept", reason: "cannot tell whether a live run works in it" });
+    expect(fs.existsSync(wt)).toBe(true);
+  }, 30_000);
+
+  test("an ordinary session worktree keeps today's rule", async () => {
+    const { repo } = makeRepo();
+    const wt = addWorktree(repo, "session-abc");
+    commit(wt, "local work", { "feature.txt": "unmerged work\n" });
+    expect(await releaseSessionWorktree(wt, () => {}, async () => false, runTreesInUseVia(async () => new Set()))).toMatchObject({ action: "kept", reason: "1 commit(s) not on origin" });
+  }, 30_000);
+});
