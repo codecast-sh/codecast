@@ -131,6 +131,9 @@ export type SharedDraftEvents = {
   version(v: number): void;
   /** Someone else's keystrokes just landed. */
   remoteEdit(userId: string): void;
+  /** What the box holds this moment, which can run ahead of the last edit(): a
+   *  key is in the box before React commits it and hands it over. */
+  local?(): { text: string; caret?: number } | null;
 };
 
 const parseSteps = (steps: string[]) => steps.map((s) => Step.fromJSON(sharedDraftSchema, JSON.parse(s)));
@@ -200,6 +203,10 @@ export class SharedDraftSession {
 
   /** Steps from the server starting at version `from`. */
   receive(from: number, steps: string[], clientIds: ClientIds): void {
+    // Take in what the box holds first, or the text shown below is built
+    // without the keys it has that edit() has not seen, and erases them.
+    const box = this.on.local?.();
+    if (box) this.edit(box.text, box.caret);
     const state = this.state;
     if (!state) return;
     const skip = getVersion(state) - from;

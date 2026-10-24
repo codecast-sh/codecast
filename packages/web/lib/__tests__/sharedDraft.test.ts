@@ -136,6 +136,38 @@ describe("SharedDraftSession", () => {
     expect(await late.s.join(() => "", { seed: false, othersLive: () => true })).toBe(t);
   });
 
+  it("keeps a keystroke the box holds that the session has not been told of yet", async () => {
+    // The box takes a key before React commits it and the effect hands it to
+    // edit(). A remote step landing in that gap must not write the box back
+    // to the text without it.
+    const { server } = fakeServer();
+    const a = box(server, "ann~1");
+    let boxText = "fix the login";
+    const shown: string[] = [];
+    const b = new SharedDraftSession("compose:c1", "cam~1", server, {
+      text: (next) => { boxText = next; shown.push(next); },
+      version: () => {},
+      remoteEdit: () => {},
+      local: () => ({ text: boxText }),
+    });
+    await a.s.join(() => "fix the login", { seed: true, othersLive: () => false });
+    await settle();
+    await b.join(() => boxText, { seed: false, othersLive: () => true });
+    boxText = "fix the login bug"; // typed into cam's box, not yet passed to edit()
+    a.s.edit("please fix the login");
+    await settle();
+    const r = await server.steps("compose:c1", 0);
+    b.receive(0, r.steps, r.clientIds);
+    expect(shown.at(-1)).toBe("please fix the login bug");
+    for (let i = 0; i < 5; i++) {
+      await settle();
+      const all = await server.steps("compose:c1", 0);
+      a.s.receive(0, all.steps, all.clientIds);
+      b.receive(0, all.steps, all.clientIds);
+    }
+    expect(a.s.text).toBe("please fix the login bug");
+  });
+
   it("keeps a caret in place when someone types before it", async () => {
     const { server } = fakeServer();
     const a = box(server, "ann~1");

@@ -21,6 +21,15 @@ export function runnerPidFile(runId: string): string {
 /** The tmux session a run's runner lives in on this machine. */
 export const runPaneName = (runId: string): string => `wf-${runId.slice(-6)}`;
 
+/**
+ * The line typed into a run's pane. The runner replaces the pane's shell, so
+ * the session and its tmux server (one per session, tmuxRoute.ts) end with
+ * the run. A shell left behind kept its server alive forever: 247 of them on
+ * 2026-10-23, and every fleet listing asks every server, so message delivery
+ * waited 40s on average.
+ */
+export const runPaneLaunchLine = (cast: string[], runId: string): string => `exec ${cast.join(" ")} workflow run-daemon ${runId}`;
+
 const SHELLS = new Set(["bash", "zsh", "sh", "fish", "dash", "ksh", "tcsh", "csh"]);
 /** A fresh pane's runner has this long to claim the run before the pane counts as dead. */
 export const PANE_CLAIM_GRACE_S = 120;

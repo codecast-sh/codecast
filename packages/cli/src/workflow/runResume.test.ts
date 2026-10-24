@@ -4,7 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource } from "./parser.js";
 import { runWorkflow, type RunOptions } from "./runner.js";
-import { checkpointPath, claimRun, isMidRun, PANE_CLAIM_GRACE_S, paneReplaceable, readCheckpoint, resumePoint, runnerPidFile, type ResumeRow } from "./runResume.js";
+import { checkpointPath, claimRun, isMidRun, PANE_CLAIM_GRACE_S, paneReplaceable, readCheckpoint, resumePoint, runnerPidFile, runPaneLaunchLine, type ResumeRow } from "./runResume.js";
 import { lineRunDir } from "./runner.js";
 import { deviceId } from "../remote/device.js";
 
@@ -422,5 +422,29 @@ describe("workflow/runResume paneReplaceable (one run, one pane)", () => {
     expect(paneReplaceable({ command: "bun", createdS: 0 }, 10_000)).toBe(false);
     expect(paneReplaceable({ command: "bash", createdS: 1000 }, 1000 + PANE_CLAIM_GRACE_S - 1)).toBe(false);
     expect(paneReplaceable({ command: "-zsh", createdS: 1000 }, 1000 + PANE_CLAIM_GRACE_S)).toBe(true);
+  });
+});
+
+describe("workflow/runResume runPaneLaunchLine", () => {
+  // A pane whose runner exited used to sit at its shell, holding its own tmux
+  // server forever (247 of them on 2026-10-23).
+  test("the run's pane, and its tmux server, end when the runner exits", async () => {
+    const { execFileSync } = await import("child_process");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launchline-"));
+    const tmux = (...args: string[]) => execFileSync("tmux", ["-S", path.join(dir, "s"), "-f", "/dev/null", ...args], { encoding: "utf-8" });
+    try {
+      tmux("new-session", "-d", "-s", "wf-test", "/bin/bash", "--norc", "--noprofile");
+      tmux("send-keys", "-t", "wf-test", "-l", runPaneLaunchLine(["true"], "th_test"));
+      tmux("send-keys", "-t", "wf-test", "Enter");
+      const deadline = Date.now() + 10_000;
+      let alive = true;
+      while (alive && Date.now() < deadline) {
+        try { tmux("has-session", "-t", "wf-test"); await new Promise((r) => setTimeout(r, 100)); } catch { alive = false; }
+      }
+      expect(alive).toBe(false);
+    } finally {
+      try { tmux("kill-server"); } catch {}
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -73,6 +73,7 @@ export function slotsNow(cfg: ReviewsConfig, idle: number | null): number {
   return idle * 100 < (cfg.busy_idle_percent ?? 15) ? Math.min(cfg.slots, cfg.slots_when_busy) : cfg.slots;
 }
 export const REVIEWS_TICK_MS = 30_000;
+const REVIEW_NICE = 10;
 
 export const reviewsConfigFile = () => codecastPath("agent-reviews.json");
 export const reviewsDir = () => path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "codecast", "agent-reviews");
@@ -291,6 +292,11 @@ export function startRun(claim: ReviewClaim, account: string, o: { checkout: str
   const env = reviewEnv(process.env, { ...o.gatewayEnv, DRY_RUN_HIDE_REGEX: `^${home}/.*/\\.env`, PATH: [o.castDir, path.dirname(bunPath()), process.env.PATH].filter(Boolean).join(path.delimiter) });
   const out = fs.openSync(path.join(dir, "harness.log"), "w");
   const child = spawn(bunPath(), argv, { cwd: dir, env, stdio: ["ignore", out, out], detached: true });
+  // A review is batch work nobody waits on. At the default priority a dozen of
+  // them held the CPU at 1% idle beside message delivery and the desktop app
+  // (2026-10-23); niced, they take what interactive work leaves. Everything
+  // the run starts inherits it.
+  if (child.pid) try { os.setPriority(child.pid, REVIEW_NICE); } catch {}
   fs.writeFileSync(path.join(dir, "pid"), `${child.pid}\n`);
   child.unref();
   fs.closeSync(out);

@@ -128,6 +128,10 @@ export function useSharedDraft(opts: {
         if (userId === myId) return;
         setEditors((prev) => ({ ...prev, [userId]: Date.now() }));
       },
+      local: () => {
+        const el = inputRef.current;
+        return el ? { text: el.value, caret: el.selectionEnd ?? undefined } : null;
+      },
     });
     sessionRef.current = session;
     void session
