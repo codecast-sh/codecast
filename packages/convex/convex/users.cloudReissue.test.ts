@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
+import { reissueStrandedCloudSpawns } from "./cloudPlacement";
 import { hashToken } from "./apiTokens";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
-import { daemonHeartbeat } from "./users";
+import { getFunctionName } from "convex/server";
+import { catchUpCameOnline, daemonHeartbeat } from "./users";
 
 // A row parked while no laptop was online carries "Waiting for <laptop> to
 // come online"; the beat that ends that wait is the daemon's REAL heartbeat
@@ -28,11 +30,25 @@ async function fixture(opts: { laptopLastSeen: number; laptopRoots?: string[]; e
   });
 }
 
-const ctx = (db: any) => ({ db, scheduler: { runAfter: async () => {} } });
-const beat = (db: any, over: Record<string, unknown> = {}) => (daemonHeartbeat as any)._handler(ctx(db), {
-  api_token: TOKEN, version: "1.0.0", platform: "darwin", pid: 1, device_id: "laptop", device_label: "macOS - MacBook",
-  is_remote_device: false, local_project_roots: ["/Users/me/app"], ...over,
+type Scheduled = { name: string; args: any };
+const ctx = (db: any, scheduled: Scheduled[] = []) => ({
+  db,
+  scheduler: { runAfter: async (_delay: number, ref: any, args: any) => { scheduled.push({ name: getFunctionName(ref), args }); } },
 });
+const beatOnly = async (db: any, over: Record<string, unknown> = {}) => {
+  const scheduled: Scheduled[] = [];
+  const reply = await (daemonHeartbeat as any)._handler(ctx(db, scheduled), {
+    api_token: TOKEN, version: "1.0.0", platform: "darwin", pid: 1, device_id: "laptop", device_label: "macOS - MacBook",
+    is_remote_device: false, local_project_roots: ["/Users/me/app"], ...over,
+  });
+  return { reply, catchUps: scheduled.filter((s) => s.name === "users:catchUpCameOnline") };
+};
+// The beat, then the catch-up it scheduled, as the scheduler would run them.
+const beat = async (db: any, over: Record<string, unknown> = {}) => {
+  const { reply, catchUps } = await beatOnly(db, over);
+  for (const c of catchUps) await (catchUpCameOnline as any)._handler(ctx(db), c.args);
+  return reply;
+};
 const spawns = (db: any) => db._tables.daemon_commands.filter((c: any) => c.command === "cloud_spawn");
 
 describe("daemonHeartbeat re-issues stranded cloud_spawns on a local device's offline→online transition", () => {
@@ -86,4 +102,45 @@ describe("daemonHeartbeat re-issues stranded cloud_spawns on a local device's of
     expect(spawns(db)).toHaveLength(1);
     expect(spawns(db)[0].target_device_id).toBe("desk");
   });
+});
+
+describe("the catch-up runs outside the beat", () => {
+  test("the transition beat reads no conversations and schedules the catch-up once", async () => {
+    // Busy cloud hosts write their conversations and commands many times a
+    // second. With these reads inside the beat, every beat lost its conflict
+    // retries and 500'd, the laptop stayed offline, and each next beat was
+    // again a transition beat (MacBook-Pro-182, 2026-10-23).
+    const db = await fixture({ laptopLastSeen: stale() });
+    const query = db.query.bind(db);
+    const read: string[] = [];
+    db.query = (table: string) => { read.push(table); return query(table); };
+    const { reply, catchUps } = await beatOnly(db);
+    expect(reply.error).toBeUndefined();
+    expect(read).not.toContain("conversations");
+    expect(catchUps.map((c) => c.args)).toEqual([{ user_id: USER, device_id: "laptop" }]);
+    expect(spawns(db)).toHaveLength(0);
+  });
+});
+
+// The catch-up runs as a scheduled mutation, which retries OCC without limit.
+// Reading every row a busy host owns (thousands of stations, each written by
+// its transcript syncs) made it lose every commit and hold a scheduler slot
+// for hours (2026-10-24), so it reads only the rows parked for a laptop.
+test("the catch-up reads only parked rows, never every conversation a host runs", async () => {
+  const stations = Array.from({ length: 50 }, (_, i) => ({ _id: `station_${i}`, user_id: USER, session_id: `st${i}`, owner_device_id: "host", project_path: "/Users/me/app" }));
+  const base = await fixture({ laptopLastSeen: stale() });
+  const db = makeFakeDb({ ...base._tables, conversations: [...base._tables.conversations, ...stations] });
+  const read: any[] = [];
+  const spy = {
+    ...db,
+    query: (table: string) => {
+      const q = db.query(table);
+      if (table !== "conversations") return q;
+      const withIndex = q.withIndex.bind(q);
+      return { ...q, withIndex: (name: string, fn: any) => { const r = withIndex(name, fn); return { ...r, collect: async () => { const rows = await r.collect(); read.push(...rows); return rows; } }; } };
+    },
+  };
+  await reissueStrandedCloudSpawns({ db: spy } as any, USER, "laptop");
+  expect(spawns(db)).toHaveLength(1);
+  expect(read.map((r) => r._id)).toEqual(["conv_1"]);
 });

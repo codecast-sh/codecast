@@ -22,6 +22,7 @@ import { DEVICE_ONLINE_MS, pathUnderRoot } from "./deviceRouting";
 import { releasePreviousOwner } from "./sessionRelease";
 import {
   CLOUD_START_RUN_MS,
+  cloudHostManaged,
   cloudPlacementFor,
   deviceDisplayName,
   deviceWakesOnUse,
@@ -424,7 +425,7 @@ export async function cloudPlacementNeeded(
   // prepared. Another remote machine — a second user's daemon on the same
   // box, a peer server — gets the plain start it was named for, and its own
   // daemon makes the worktree.
-  if (!target || !deviceWakesOnUse(target) || !target.cloud_host) return null;
+  if (!target || !cloudHostManaged(target)) return null;
   const runner = await ctx.db.get(opts.runnerUserId);
   if (runner?.is_bot) return null;
   const locals = devices.filter((d: any) => !d.is_remote);
@@ -454,10 +455,10 @@ export async function reissueStrandedCloudSpawns(ctx: Ctx, userId: Id<"users">, 
   for (const host of devices.filter((d: any) => deviceWakesOnUse(d))) {
     const rows = await ctx.db
       .query("conversations")
-      .withIndex("by_owner_device", (q: any) => q.eq("user_id", userId).eq("owner_device_id", host.device_id))
+      .withIndex("by_user_cloud_placement", (q: any) => q.eq("user_id", userId).eq("cloud_placement", "pending").eq("owner_device_id", host.device_id))
       .collect();
     for (const conv of rows) {
-      if (conv.cloud_placement !== "pending" || !conv.cloud_placement_token) continue;
+      if (!conv.cloud_placement_token) continue;
       if (conv.cloud_placement_failed_at) continue;
       if (!conv.project_path && !conv.git_root) continue;
       if (conv.inbox_killed_at || conv.status === "completed") continue;
