@@ -8,13 +8,15 @@ that no file in the repo can tell you.
 
 | | |
 |---|---|
-| Instance | `i-008b985d1d176faa2`, `r7g.8xlarge` (32 vCPU, 247 GB RAM, Graviton) |
+| Instance | `i-008b985d1d176faa2`, `r7g.16xlarge` (64 vCPU, 494 GB RAM, Graviton) since 2026-10-23 |
 | Account / region | Union AWS `767398104971`, `us-east-1d` |
 | Address | `35.174.124.200`, an Elastic IP (`eipalloc-01460914a27378b22`) |
 | Disk | 1.5 TB gp3 (vol-0c1fb3f658ebb7d8e, 6000 IOPS, 500 MB/s) mounted at `/srv` by filesystem label `codecast-data`; grown from 1 TB online on 2026-10-22 (`aws ec2 modify-volume`, then `resize2fs /dev/nvme1n1`) |
 | SSH | `ssh convex-prod` (alias in `~/.ssh/config`; key `~/.ssh/codecast-union.pem`, `IdentitiesOnly` required) |
 | DNS | `convex.codecast.sh`, an A record in Cloudflare, NOT proxied, TTL 60 |
 
+It was an `r7g.8xlarge` (32 vCPU) from 2026-09-22 to 2026-10-23, when a day at
+80 to 94% CPU from the growing agent fleet moved it to 64 vCPU (sd-1280).
 It was an `r7g.4xlarge` (16 vCPU) until 2026-09-22. CPU, not memory, forced the
 change: the box ran at 85 to 95% average CPU for four to eight hours on each of
 four straight workdays, and API calls began to time out at peak (sd-189).
@@ -78,7 +80,11 @@ idles at 5 to 20% CPU between roughly 22:00 and 07:00 UTC).
    `sudo docker exec postgres psql -U postgres -c "CHECKPOINT;"`
 2. Stop the instance. Let the OS shut the containers down; do NOT
    `docker stop` them, because an explicitly stopped container is not restarted
-   on boot even with `restart=unless-stopped`.
+   on boot even with `restart=unless-stopped`. The 2026-10-23 resize stopped
+   Postgres and the backend by hand and they stayed down: 5.5 minutes offline.
+   If that happens, start them by name (`docker start postgres`, then
+   `docker start convex-backend-1`), never `docker compose up -d` in
+   `/srv/convex`, which also starts the stale compose Caddy (see Known drift).
 3. Do the work, start the instance, then verify by what the stack DOES, not by
    whether ports answer: all four containers up, `pg_is_in_recovery()` false,
    `https://codecast.sh` 200, and one real query against Postgres
@@ -90,6 +96,6 @@ cold cache, not a fault.
 
 ## Cost
 
-About $1,250 a month for the instance on demand, plus about $120 for the volume (1.5 TB since 2026-10-22).
+About $2,500 a month for the instance on demand (r7g.16xlarge since 2026-10-23; $1,250 as an 8xlarge), plus about $120 for the volume (1.5 TB since 2026-10-22).
 It was about $625 before the resize. Nothing here is on a reserved instance or a
 savings plan yet, so the whole bill is on demand.
