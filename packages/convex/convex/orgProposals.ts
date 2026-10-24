@@ -1091,6 +1091,15 @@ async function sendIntoThread(ctx: Ctx, userId: Id<"users">, proposal: ProposalR
  *  empty with no `change_ids` is a note on the whole proposal. */
 export type OrgReplyArg = { verdict: OrgReplyVerdict; seqs: number[]; change_ids?: string[]; text?: string };
 
+/** Every change the answers name already stands as they decide it: an approval applied (or tried), a rejection skipped. A note decides nothing, so it never counts as answered. */
+export function alreadyAnswered(rows: ChangeRow[], items: OrgReplyArg[]): boolean {
+  const done = { approve: ["accepted", "applied", "failed"], reject: ["skipped"] } as Record<string, string[]>;
+  return items.length > 0 && items.every((item) => {
+    const named = rows.filter((c) => item.seqs.includes(c.seq) || (item.change_ids ?? []).includes(String(c._id)));
+    return !!done[item.verdict] && named.length > 0 && named.every((c) => done[item.verdict].includes(c.status));
+  });
+}
+
 /**
  * A person's answers to a proposal, sent together (S39). Approvals are
  * applied as accept is (the accept all core narrowed to their seqs: apply
@@ -1116,7 +1125,13 @@ export async function performReply(
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
   await requireAdmin(ctx, userId, proposal);
-  if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
+  if (proposal.status !== "open") {
+    // The same answers arriving again (a window's outbox replaying a reply
+    // whose first delivery closed the proposal) ask for what already
+    // happened: delivered, not refused, so the client keeps what it shows.
+    if (alreadyAnswered(await changesOf(ctx, proposal._id), args.items ?? [])) return { proposal: proposal.short_id, results: [], applied: 0, failed: 0, skipped: 0, noted: 0, remaining: 0, resolved: true };
+    throw new Error(`${proposal.short_id} is ${proposal.status}`);
+  }
   const rows = await changesOf(ctx, proposal._id);
   refuseIfRevised(proposal, rows, args.seen);
 

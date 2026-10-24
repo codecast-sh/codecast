@@ -3,7 +3,7 @@ import { applyFile, applyFileSession, looseSessionsOf } from "./lib/orgSessionFi
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { action, mutation, query } from "./functions";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -1140,17 +1140,48 @@ const takeable = <T extends { session: { state: string }; raw: any }>(rows: T[])
 
 export async function takeOverSessions(ctx: Ctx, userId: Id<"users">, roleId: Id<"org_roles">, opts: { leave?: boolean; dry?: boolean } = {}): Promise<RehomeResult | null> {
   if (opts.leave) return null;
+  const plan = await takeoverCandidates(ctx, userId, roleId);
+  return plan ? moveTakenOver(ctx, userId, plan, { dry: opts.dry }) : null;
+}
+
+/** The role, its scope and the sessions a takeover would move; reads only. */
+export async function takeoverCandidates(ctx: Ctx, userId: Id<"users">, roleId: Id<"org_roles">) {
   const role = await ctx.db.get(roleId);
   if (!role || role.status === "retired" || isScopeless(role.scope)) return null;
   const resolved = await resolveScope(ctx, userId, { role_id: String(role._id) });
   if (!resolved) return null;
   const roles = await rolesInBoundary(ctx, role);
-  const candidates = await sessionsOwnedBy(ctx, role, roles, takeable(await sessionsInScope(ctx, resolved, Date.now())));
+  const candidates: Array<{ raw: any }> = await sessionsOwnedBy(ctx, role, roles, takeable(await sessionsInScope(ctx, resolved, Date.now())));
+  return { role, roles, resolved, candidates };
+}
+
+export async function moveTakenOver(ctx: Ctx, userId: Id<"users">, plan: NonNullable<Awaited<ReturnType<typeof takeoverCandidates>>>, opts: { dry?: boolean } = {}): Promise<RehomeResult> {
+  const { role, roles, resolved, candidates } = plan;
   const took = await performRehomeSessions(ctx, userId, role, candidates, { dry: opts.dry, note: TAKEOVER_NOTE, by_rule: true });
   // The open tasks in the area that the wider role held move with it, by the
   // same rule (tasksOwnedBy), each with a history row.
   if (!opts.dry) for (const { task, from } of await tasksOwnedBy(ctx, role, roles, resolved.tasks)) await handTask(ctx, task, String(role._id), userId, from.name);
   return took;
+}
+
+/**
+ * The takeover a person's write (a scope gained, a role created or adopted)
+ * sets off. Finding the sessions reads every recent session of the workspace
+ * and their messages: inside the person's own mutation that read set changes
+ * with every message the team writes, so on a busy workspace the write could
+ * never commit (op-88 on 2026-10-23: every retry for two hours ended in a
+ * write conflict, and the approval never landed). On the backend it runs just
+ * after, on its own (orgTakeover.ts): the search in a query, the move in a
+ * small mutation. Null then: the sessions move moments later, recorded in the
+ * org log by the move itself. The test harness has no runMutation and runs
+ * it inline.
+ */
+export async function takeOverSessionsSoon(ctx: Ctx, userId: Id<"users">, roleId: Id<"org_roles">, opts: { leave?: boolean } = {}): Promise<RehomeResult | null> {
+  if (opts.leave) return null;
+  const scheduler = (ctx as any).scheduler;
+  if (!(ctx as any).runMutation || !scheduler) return takeOverSessions(ctx, userId, roleId, opts);
+  await scheduler.runAfter(0, internal.orgTakeover.run, { user_id: userId, role_id: roleId });
+  return null;
 }
 
 // A bare ref in a change ("pr-1", "pl-7", a project title) in the form the
@@ -1266,7 +1297,7 @@ export async function applyRole(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   // A role whose seat is an adopt later in this proposal has none yet: the
   // session to adopt would be filed as its hand and the adopt would refuse
   // it, so the takeover waits for applyAdopt, which runs it.
-  const tookOver = opts.awaiting_adopt ? "" : takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id, { leave: p.leave_sessions }), true);
+  const tookOver = opts.awaiting_adopt ? "" : takeoverPhrase(role.handle, await takeOverSessionsSoon(ctx, userId, role._id, { leave: p.leave_sessions }), true);
   return {
     status: "applied",
     note: `created @${role.handle} (${role.short_id})${seated ? `; ${seated} is its standing session, with its history and its helper sessions as they were` : provisioned ? ", standing session provisioned" : opts.awaiting_adopt ? `; its standing session is the adopt of ${opts.awaiting_adopt} in this proposal (skip that and provision from the role's page)` : ""}${tookOver ? `; ${tookOver}` : ""}`,
@@ -1513,7 +1544,7 @@ export async function applyAdopt(ctx: Ctx, userId: Id<"users">, boundary: Bounda
   const role = await liveRole(ctx, boundary, p.handle);
   try {
     const seated = await seatExistingSession(ctx, userId, role, p.conversation);
-    const tookOver = takeoverPhrase(role.handle, await takeOverSessions(ctx, userId, role._id, { leave: p.leave_sessions }), true);
+    const tookOver = takeoverPhrase(role.handle, await takeOverSessionsSoon(ctx, userId, role._id, { leave: p.leave_sessions }), true);
     return { status: "applied", note: `@${role.handle}: adopted ${seated} as its standing session${tookOver ? `; ${tookOver}` : ""}`, role: roleRef(role) };
   } catch (e: any) {
     if (e instanceof SeatTakenError) return { status: "error", error: e.message };

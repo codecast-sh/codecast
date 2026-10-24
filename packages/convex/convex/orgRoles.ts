@@ -35,7 +35,7 @@ import { canAccessPlan, canAccessProject, isTeamMember, workspaceForResource, wo
 import { charterPatch } from "./lib/orgCharter";
 // Used inside handlers only: orgInit imports this module, and a cycle is safe
 // for hoisted functions called at run time, never for values read at load.
-import { takeOverSessions, takeoverPhrase } from "./orgInit";
+import { takeOverSessionsSoon, takeoverPhrase } from "./orgInit";
 import { performArchiveAll } from "./orgProposals";
 import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 import { handOpenTasksUpChain } from "./tasks";
@@ -529,7 +529,7 @@ async function updateRole(
   // Settings did: its edit never moved a session.
   const was = scopeIds(role.scope);
   const gained = !!patch.scope && (scopeIds(patch.scope).project_ids.some((id) => !was.project_ids.includes(id)) || scopeIds(patch.scope).plan_ids.some((id) => !was.plan_ids.includes(id)));
-  const took = gained ? await takeOverSessions(ctx, userId, role._id, { leave: args.leave_sessions }) : null;
+  const took = gained ? await takeOverSessionsSoon(ctx, userId, role._id, { leave: args.leave_sessions }) : null;
   return { ...updated, ...(overlaps ? { overlaps } : {}), ...(reports_outside.length ? { reports_outside } : {}), ...(took ? { took_over: { ...took, phrase: takeoverPhrase(updated.handle, took, true) } } : {}), ...(handoffs.length ? { handoffs } : {}) };
 }
 
@@ -855,7 +855,7 @@ async function hireRoleCore(
   const provisioned = opts.provision || opts.adopt_conversation_id
     ? await performProvisionRole(ctx, userId, { role_id: String(role._id), model: opts.model, project_path: opts.project_path, agent_type: opts.agent_type, adopt_conversation_id: opts.adopt_conversation_id })
     : undefined;
-  const took = await takeOverSessions(ctx, userId, role._id, { leave: opts.leave_sessions });
+  const took = await takeOverSessionsSoon(ctx, userId, role._id, { leave: opts.leave_sessions });
   return {
     ...(provisioned ? { ...(await ctx.db.get(role._id)), provisioned } : role),
     ...(took ? { took_over: { ...took, phrase: takeoverPhrase(role.handle, took, true) } } : {}),

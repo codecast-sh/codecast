@@ -4,6 +4,7 @@ import { applyAdopt, applyRole, applyScope, previewTakeover, previewTakeovers, t
 import { performCreateRole, performHireRole, performRetireRole, performUpdateRole } from "./orgRoles";
 import { lineCandidates } from "./orgLine";
 import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
+import { candidates as takeoverCandidatesQuery, move as takeoverMove } from "./orgTakeover";
 
 // Taking over a scope takes over its sessions (org-roles-run-work.md R1): the
 // apply that gives a role a scope files the host's unowned sessions in it
@@ -138,6 +139,33 @@ describe("a scope change takes over the sessions in it", () => {
     const res = await applyRole(ctx, ME as any, BOUNDARY, { kind: "role", name: "Growth", handle: "growth", scope: { projects: ["pr-1"] } } as any, undefined, OPTS);
     expect((res as any).note).toContain("2 sessions now report to @growth");
     expect(roleOf(db, 1)).toBeDefined();
+  });
+
+  // op-88 (2026-10-23): the search read every recent session of the
+  // workspace inside the person's approval, every message the team wrote
+  // conflicted with it, and the approval never committed.
+  test("on the backend the person's write leaves the search to a query and the move to a small mutation", async () => {
+    const db = fixtures();
+    const scheduled: any[] = [];
+    const scanned: string[] = [];
+    const query = db.query.bind(db);
+    db.query = (table: string) => { scanned.push(table); return query(table); };
+    const ctx = { db, scheduler: { runAfter: async (...a: any[]) => { scheduled.push(a); } }, runMutation: async () => { throw new Error("no nested mutation here"); } } as any;
+    const res = await applyRole(ctx, ME as any, BOUNDARY, { kind: "role", name: "Growth", handle: "growth", scope: { projects: ["pr-1"] } } as any, undefined, OPTS);
+    expect([res.status, (res as any).note]).toEqual(["applied", expect.not.stringContaining("now report")]);
+    expect(scanned).not.toContain("messages");
+    expect(roleOf(db, 1)).toBeUndefined();
+    expect(scheduled.map((a) => a[2])).toEqual([{ user_id: ME, role_id: (res as any).role.id }]);
+
+    db.query = query;
+    const ids = await (takeoverCandidatesQuery as any)._handler({ db }, scheduled[0][2]);
+    expect([...ids].sort()).toEqual(["conversations_s1", "conversations_s2"]);
+    // A session killed between the search and the move stays where it is.
+    db._tables.conversations.find((c: any) => c._id === "conversations_s2").inbox_killed_at = NOW;
+    const took = await (takeoverMove as any)._handler({ db, scheduler: { runAfter: async () => {} } }, { ...scheduled[0][2], session_ids: ids });
+    expect(took.sessions).toEqual(["jx70001"]);
+    expect(roleOf(db, 1)).toBe((res as any).role.id);
+    expect(roleOf(db, 2)).toBeUndefined();
   });
 });
 
