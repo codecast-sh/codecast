@@ -62,6 +62,9 @@ describe("compileChainWorkflow (the-line.md L7)", () => {
   test("the upsert payload carries the definition attribute and the slug", () => {
     const payload = workflowUpsertPayload(compileChainWorkflow(chain, defs)) as any;
     expect(payload.slug).toBe("chain-implement");
+    // A push always says what the flow's label is; "" says it has none, so the stored one clears.
+    expect(payload.label).toBe("");
+    expect(payload.name).toBe(compileChainWorkflow(chain, defs).name);
     expect(payload.nodes.map((n: any) => n.id)).toEqual(["start", "step-1", "step-2", "step-3", "exit"]);
     expect(payload.nodes[1]).toEqual({
       id: "step-1", label: "planner", shape: "box", type: "agent",
