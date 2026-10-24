@@ -22,6 +22,7 @@ export type ShortcutAction =
   | 'session.create'
   | 'session.compose'
   | 'session.composeDock'
+  | 'task.create'
   | 'session.rename'
   | 'session.mruSwitch'
   | 'recents.open'
@@ -81,6 +82,9 @@ export type ShortcutAction =
   | 'review.nextFile'
   | 'review.prevFile'
   | 'review.comment'
+  | 'review.approveBlock'
+  | 'review.cutBlock'
+  | 'review.undoVerdict'
   | 'compose.focus'
   | 'compose.richToggle'
   | 'sidebar.toggleLeft'
@@ -233,6 +237,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   // worksInModal because the same chord minimizes the center modal, whose
   // aria-modal would otherwise make the dispatcher stand down.
   { key: 'ctrl+shift+m', action: 'session.composeDock', skipInputCheck: true, worksInModal: true, description: 'New session in a docked composer (minimizes the open one)' },
+  // New task, beside Ctrl+N's new session (T as in task). Ctrl+T on mac,
+  // where New tab is Cmd+T; Alt+T elsewhere, where Ctrl+T is New tab, the same
+  // split session.jumpPinned and recents.open make.
+  { key: 'alt+t', mac: 'ctrl+t', action: 'task.create', skipInputCheck: true, description: 'New task' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
   // Fixed: a hold-to-walk gesture (hooks/useRecentSwitcher reads Ctrl down, Tab, Ctrl up).
   { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, fixed: true, description: 'Switch recently viewed (MRU)' },
@@ -440,6 +448,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },
   { key: 'c', action: 'review.comment', when: 'review', description: 'Comment on line' },
+  // Typed verdicts on the focused block of a message or plan under review
+  // (MessageReview reads them with matchesAction). Each one joins the reply's
+  // review batch and is sent to the agent as "Verdict: ...".
+  { key: 'a', action: 'review.approveBlock', when: 'review', description: 'Approve this block' },
+  { key: 'd', action: 'review.cutBlock', when: 'review', description: 'Mark this block to cut' },
+  { key: 'z', action: 'review.undoVerdict', when: 'review', description: 'Undo the last verdict' },
 
 
   { key: '[', action: 'diff.prevChange', when: 'diff', description: 'Previous change' },

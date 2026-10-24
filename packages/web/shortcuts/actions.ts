@@ -278,6 +278,7 @@ export function useGlobalShortcutActions() {
   useShortcutAction('nav.forward', useCallback(() => { window.history.forward(); }, []));
 
   useShortcutAction('compose.focus', useCallback(() => { focusComposer(); }, []));
+  useShortcutAction('task.create', useCallback(() => { useInboxStore.getState().openCreateModal("task"); }, []));
 
   useShortcutAction('sidebar.toggleLeft', useCallback(() => {
     const store = useInboxStore.getState();
