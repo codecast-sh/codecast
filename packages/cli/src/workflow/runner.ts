@@ -33,8 +33,10 @@ function resolveNextNode(
   current: WorkflowNode,
   context: Record<string, string>
 ): WorkflowNode | null {
+  // A gate's labelled edges are its options: only choosing one follows it
+  // (resolveHumanGateTarget), never the fallthrough below.
   const outEdges = graph.edges
-    .filter(e => e.from === current.id)
+    .filter(e => e.from === current.id && !(current.type === "human" && e.label))
     .sort((a, b) => (b.weight || 0) - (a.weight || 0));
 
   // First pass: edges with conditions
@@ -969,23 +971,19 @@ async function executeHumanGate(
     console.log(`  ${c.bold}${choice.key}${c.reset} → ${choice.label.replace(/^\[.\]\s*/, "")}`);
   }
 
-  const answer = await promptUser("  Your choice: ");
-  const answerUpper = answer.trim().toUpperCase();
-
-  const match = choices.find(c => c.key.toUpperCase() === answerUpper);
-  if (match) {
-    context["human.gate.selected"] = match.key;
-    context["human.gate.label"] = match.label;
-    context["human.gate.target"] = match.target;
-    return match.key.toLowerCase();
+  // An answer that names no option is asked again: defaulting to the first
+  // option would take a typo for "ship".
+  for (;;) {
+    const answerUpper = (await promptUser("  Your choice: ")).trim().toUpperCase();
+    const match = choices.find(c => c.key.toUpperCase() === answerUpper);
+    if (match) {
+      context["human.gate.selected"] = match.key;
+      context["human.gate.label"] = match.label;
+      context["human.gate.target"] = match.target;
+      return match.key.toLowerCase();
+    }
+    console.log(`  ${c.yellow}pick one of ${choices.map(ch => ch.key).join(", ")}${c.reset}`);
   }
-
-  // Default to first choice
-  const first = choices[0];
-  context["human.gate.selected"] = first.key;
-  context["human.gate.label"] = first.label;
-  context["human.gate.target"] = first.target;
-  return first.key.toLowerCase();
 }
 
 // An edge out of a gate is an option (the-line.md L4): "[A] Approve :: what
@@ -1094,40 +1092,62 @@ async function executeRemoteHumanGate(
     return response ? "success" : "failure";
   }
 
-  const response = await ask(choices);
+  let response = await ask(choices);
   if (!response) return "failure";
   if (!resumed?.response) await continueFreshIfStale(graph, options, node);
+  // A question the presenting station answered is spent once the gate asks again.
+  delete context["human.gate.question"];
 
-  // The human's message is context for the next hand.
-  context["human.message"] = response;
+  for (;;) {
+    // The human's message is context for the next hand.
+    context["human.message"] = response;
 
-  // Match: exact key, OR message starts with "key:" / "key " / "[key]" prefix
-  const trimmed = response.trim();
-  const match = choices.find(ch => {
-    const k = ch.key.toUpperCase();
-    const r = trimmed.toUpperCase();
-    return r === k
-      || r.startsWith(k + ":")
-      || r.startsWith(k + " ")
-      || r.startsWith(`[${k}]`);
-  });
+    // Match: exact key, OR message starts with "key:" / "key " / "[key]" prefix
+    const trimmed = response.trim();
+    const match = choices.find(ch => {
+      const k = ch.key.toUpperCase();
+      const r = trimmed.toUpperCase();
+      return r === k
+        || r.startsWith(k + ":")
+        || r.startsWith(k + " ")
+        || r.startsWith(`[${k}]`);
+    });
 
-  if (match) {
-    // Strip the key prefix from the message so the agent gets clean instructions
-    const stripped = trimmed.replace(new RegExp(`^\\[?${match.key}\\]?[:\\s]*`, "i"), "").trim();
-    // A bare key ("A") is the choice, not a note: nothing to hand on.
-    if (stripped) context["human.message"] = stripped;
-    else delete context["human.message"];
-    context["human.gate.selected"] = match.key;
-    context["human.gate.label"] = match.label;
-    context["human.gate.target"] = match.target;
-    console.log(`  ${c.green}✓ received: ${match.label}${c.reset}`);
-    return match.key.toLowerCase();
+    if (match) {
+      // Strip the key prefix from the message so the agent gets clean instructions
+      const stripped = trimmed.replace(new RegExp(`^\\[?${match.key}\\]?[:\\s]*`, "i"), "").trim();
+      // A bare key ("A") is the choice, not a note: nothing to hand on.
+      if (stripped) context["human.message"] = stripped;
+      else delete context["human.message"];
+      context["human.gate.selected"] = match.key;
+      context["human.gate.label"] = match.label;
+      context["human.gate.target"] = match.target;
+      console.log(`  ${c.green}✓ received: ${match.label}${c.reset}`);
+      return match.key.toLowerCase();
+    }
+
+    // Free text names no option, so it never follows one ("can you explain
+    // plainly" once landed a change through Ship). A graph that routes free
+    // text says so with an unlabelled edge out of the gate.
+    if (outEdges.some(e => !e.label)) {
+      console.log(`  ${c.green}✓ received message (free-form)${c.reset}`);
+      return "success";
+    }
+    // Otherwise it is a question back: the station that presents the decision
+    // answers it and the gate asks again; a gate with no presenter asks again
+    // itself, the question on top of its document.
+    const asker = node.asker ? graph.nodes.get(node.asker) : undefined;
+    if (asker) {
+      context["human.gate.question"] = trimmed;
+      context["human.gate.target"] = asker.id;
+      console.log(`  ${c.yellow}? question back to ${asker.label}${c.reset}`);
+      return "success";
+    }
+    console.log(`  ${c.yellow}? a question, not a choice: asking again${c.reset}`);
+    const doc = [`**You asked:** ${trimmed}`, payload.doc_md].filter(Boolean).join("\n\n");
+    response = await reportGate(options, node.id, { ...payload, doc_md: doc }, choices);
+    if (!response) return "failure";
   }
-
-  // Pure free-form — route via success path (unconditional edges)
-  console.log(`  ${c.green}✓ received message (free-form)${c.reset}`);
-  return "success";
 }
 
 // Extract key from label like "[A] Approve" → "A"
@@ -1209,8 +1229,12 @@ export function buildNodePrompt(
     parts.push(`# Task: ${node.label}\n${goal ? `Complete this step of the goal: ${goal}` : node.label}`);
   }
 
-  // Surface human message prominently if present
-  if (context["human.message"]) {
+  // A question typed at the gate this station presents comes back here: the
+  // decision it posts again is the answer.
+  if (context["human.gate.question"] && presentsDecision(node, graph)) {
+    parts.push(`\n# The person's question about your decision\n${context["human.gate.question"]}\n\nThey asked instead of choosing. Answer it in the decision you post again.`);
+  } else if (context["human.message"]) {
+    // Surface human message prominently if present
     parts.push(`\n# Human Instructions\n${context["human.message"]}`);
   }
 
@@ -2004,6 +2028,9 @@ async function runNodeLoop(
     if (options.dryRun) {
       console.log(`${c.dim}  [dry-run]${c.reset}`);
       outcome = "success";
+      // A dry run walks a gate through its first option, as if it were chosen.
+      const option = current.type === "human" ? graph.edges.find(e => e.from === current.id && e.label) : undefined;
+      if (option) state.context["human.gate.target"] = option.to;
     } else if (current.type === "start") {
       outcome = "success";
     } else if (current.type === "command") {
