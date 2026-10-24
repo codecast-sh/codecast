@@ -22,6 +22,12 @@ export interface SurfaceMeta {
   maxUsdPerRep: number;
   /** The criteria a new freeze is judged by when neither the fixture nor --judge sets one. */
   criteria?: string | null;
+  /**
+   * False keeps the surface out of standing runs (check --cadence, the
+   * nightly) unless named: a rep too costly to repeat every night still runs
+   * when its sources change (check --stale) or by hand.
+   */
+  standingRuns?: boolean;
   /** Agent route: argv templates `snapshot` captures, e.g. [['brief'], ['org','inputs','--team','{team}','--json']]. */
   frozenReads?: string[][];
   /** Agent route: first words (or "w1 w2") that must be served, never live. */

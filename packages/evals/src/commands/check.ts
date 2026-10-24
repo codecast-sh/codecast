@@ -140,6 +140,11 @@ async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources
     if (agents.length) console.log(fmt.muted(`left out the agent surfaces (${agents.map((m) => m.id).join(', ')}): they run by hand, by name or with --route agent`));
     metas = metas.filter((m) => m.route === 'call');
   }
+  if (!ids.length && flags.cadence && flags.cadence !== BISECT_CADENCE) {
+    const off = metas.filter((m) => m.standingRuns === false);
+    if (off.length) console.log(fmt.muted(`left out of the ${flags.cadence} run (${off.map((m) => m.id).join(', ')}): they run when their sources change or by name`));
+    metas = metas.filter((m) => m.standingRuns !== false);
+  }
 
   /** With --stale: each surface's source hash at HEAD, which a budget refusal records. */
   let staleHashes = new Map<string, string>();

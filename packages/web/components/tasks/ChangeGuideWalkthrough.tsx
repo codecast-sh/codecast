@@ -13,7 +13,7 @@ import { cn } from "../../lib/utils";
 // verdict on the line's change card.
 
 // The author's prose: inline code as a quiet chip, not backtick glyphs.
-const PROSE = "prose-sm prose-invert max-w-none prose-p:my-1 prose-code:rounded prose-code:bg-sol-bg-alt prose-code:px-1 prose-code:py-px prose-code:text-[12px] prose-code:font-normal prose-code:text-sol-text prose-code:before:content-none prose-code:after:content-none";
+const PROSE = "prose-sm prose-invert max-w-none prose-p:my-1 prose-code:rounded prose-code:bg-sol-bg-alt prose-code:px-1 prose-code:py-px prose-code:text-[12px] prose-code:font-normal prose-code:text-sol-text";
 
 function StepLocation({ step }: { step: ChangeGuide["steps"][number] }) {
   const parts = step.file.split("/");

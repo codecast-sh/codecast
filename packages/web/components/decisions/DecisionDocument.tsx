@@ -14,7 +14,7 @@ import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
 import { DecisionOptionList } from "./DecisionOptionList";
 import { DecisionDiscussion } from "./DecisionDiscussion";
-import { DecisionBody, DecisionFacts, DecisionLadder, hasDecisionBody } from "./DecisionSections";
+import { DecisionBody, DecisionFacts, DecisionLadder, LeadRecommendation, hasDecisionBody } from "./DecisionSections";
 import { GateRunChip } from "./DecisionCompactCard";
 import { DeployedIn } from "../line/widgets/DeployedIn";
 import { OptionPages } from "./OptionPages";
@@ -121,6 +121,9 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
             </>
           )}
         </header>
+
+        {/* A lead's call and why, before the evidence it was made on. */}
+        <LeadRecommendation decision={decision} detail={detail} />
 
         {/* The doubt the record raised about the cause, where a reviewer cannot miss it. */}
         {doubt && <DoubtChip doubt={doubt} className="mt-3" />}

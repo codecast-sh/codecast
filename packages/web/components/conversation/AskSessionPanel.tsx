@@ -43,7 +43,7 @@ const ANSWER_COMPONENTS = { ...MESSAGE_MD_COMPONENTS, a: CiteAwareLink };
 const AnswerBody = memo(function AnswerBody({ result }: { result: AskResult }) {
   const markdown = linkAskCitations(result.answer, result.citations ?? []);
   return (
-    <div className="prose prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none text-[13px] leading-relaxed text-sol-text [&_p]:my-1.5 [&_ul]:my-1.5 [&_li]:my-0.5 [&_code]:text-[12px]">
+    <div className="prose prose-sm max-w-none text-[13px] leading-relaxed text-sol-text [&_p]:my-1.5 [&_ul]:my-1.5 [&_li]:my-0.5 [&_code]:text-[12px]">
       <ReactMarkdownBase remarkPlugins={entityRemarkPlugins} components={ANSWER_COMPONENTS}>{markdown}</ReactMarkdownBase>
     </div>
   );

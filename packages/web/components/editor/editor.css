@@ -573,11 +573,6 @@
   font-weight: normal;
 }
 
-.doc-read-body :not(pre) > code::before,
-.doc-read-body :not(pre) > code::after {
-  content: none; /* the prose plugin's backtick pseudo-quotes */
-}
-
 .doc-read-body blockquote {
   border-left: 3px solid var(--sol-border);
   color: var(--sol-text-dim);

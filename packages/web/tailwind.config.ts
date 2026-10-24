@@ -152,6 +152,9 @@ const config: Config = {
   					code: {
   						fontFamily: 'var(--font-mono), monospace'
   					},
+  					// The plugin quotes inline code with literal backticks; a code span reads as code without them.
+  					'code::before': { content: 'none' },
+  					'code::after': { content: 'none' },
   					pre: {
   						fontFamily: 'var(--font-mono), monospace'
   					}

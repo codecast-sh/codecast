@@ -108,6 +108,21 @@ export function DecisionBody({ decision, detail }: { decision: SessionDecisionIt
   );
 }
 
+/** The last lead's recommendation and its reasoning, read before the body: the ladder behind Details keeps the full climb. */
+export function LeadRecommendation({ decision, detail, className = "mt-4" }: { decision: SessionDecisionItem; detail: DecisionDetailItem; className?: string }) {
+  const hop = detail.ladder.findLast((h) => h.recommendation !== undefined);
+  if (!hop) return null;
+  const option = decision.options[hop.recommendation!]?.label ?? `option ${hop.recommendation! + 1}`;
+  return (
+    <div className={`${className} rounded-lg border border-sol-cyan/30 bg-sol-cyan/5 px-4 py-3`} data-decision-recommendation>
+      <div className="text-[12px] text-sol-text-muted">
+        <span className="text-sol-text">{hop.role?.name ?? "A lead"}</span> recommends <span className="text-sol-cyan">{option}</span>
+      </div>
+      {hop.note && <div className="decision-body mt-1 text-sol-text-muted"><MarkdownRenderer content={hop.note} /></div>}
+    </div>
+  );
+}
+
 /** The roles the question climbed through on its way to its people. */
 export function DecisionLadder({ decision, detail, now }: { decision: SessionDecisionItem; detail: DecisionDetailItem; now: number }) {
   const pending = decision.status === "pending";
