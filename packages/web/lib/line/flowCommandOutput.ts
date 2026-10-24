@@ -15,7 +15,7 @@ export function flowCommandTarget(subcommand: string, args: string, output: stri
   const words = [...args.trim().matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
   const text = stripAnsi(output);
   // `show <live flow>` may name it by label or id: its block's first line names the flow's slug (`● on   Union fix flow  agentwatch`).
-  const liveSlug = subcommand === "show" && !isError ? (text.match(/^[●○] (?:on |off)  .*  (\S+)$/m)?.[1] ?? null) : null;
+  const liveSlug = subcommand === "show" && !isError ? (text.match(/^[●○] (?:on |off) {2}.* {2}(\S+)$/m)?.[1] ?? null) : null;
   // The flag a value follows is skipped with it; `show @handle`, from an older CLI, named a role's flow: no graph to draw.
   const named = NAMES_A_FLOW.has(subcommand) ? (words.find((w, i) => w === "-" || (!w.startsWith("-") && !/^--(title|task|branch|pr|only|team|session)$/.test(words[i - 1] ?? "") && !/^ct-\d+$/.test(w))) ?? null) : null;
   // A graph on stdin (`-`) is a flow this session defined: the CLI prints where it keeps it, by name. A file reads as its name.
