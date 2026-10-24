@@ -1049,6 +1049,24 @@ export async function performSetCloudAutoscale(ctx: any, userId: Id<"users">, ho
   await ctx.db.patch(host._id, { cloud_autoscale: { enabled: policy.enabled, max_extra: policy.max_extra, size: policy.size, at: Date.now() } });
 }
 
+/** Set a host's autoscale policy: the CLI's `cast hosts autoscale`. The web
+ *  writes it through the store's setCloudAutoscale dispatch. */
+export const setCloudAutoscale = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    host_device_id: v.string(),
+    enabled: v.boolean(),
+    max_extra: v.number(),
+    size: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    await performSetCloudAutoscale(ctx, userId, args.host_device_id, { enabled: args.enabled, max_extra: args.max_extra, size: args.size });
+    return { enabled: args.enabled, max_extra: args.max_extra, size: args.size };
+  },
+});
+
 /** The caller's autoscale policies that are on, by template device: what `cast cloud start` reads before choosing a host. */
 export const autoscalePolicies = query({
   args: { api_token: v.optional(v.string()) },

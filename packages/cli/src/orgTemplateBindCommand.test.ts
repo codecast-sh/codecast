@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseBindArgs, runOrgTemplateBind, secretsDir } from "./orgTemplateBindCommand";
-import { encryptProviderKeyForTest, getProviderKeyPublicKey } from "./providerKeyCrypto";
+import { encryptProviderKey, getProviderKeyPublicKey } from "./providerKeyCrypto";
 
 // The daemon's host step (org-hire.md H3, H4): sealed secrets become 0600
 // files this device alone can read, and the CLI is run exactly as a person
@@ -32,7 +32,7 @@ describe("org_template_bind", () => {
   test("decrypts each sealed secret into a private file and runs the CLI with its path", async () => {
     const configDir = tmp();
     const pubkey = getProviderKeyPublicKey(configDir);
-    const sealed = encryptProviderKeyForTest(pubkey, "accounts.ads", "{\"token\":\"never-copied\"}");
+    const sealed = encryptProviderKey(pubkey, "accounts.ads", "{\"token\":\"never-copied\"}");
     const runs: string[][] = [];
     const result = await runOrgTemplateBind(configDir, args(configDir, { secrets: [{ key: "accounts.ads", payload: sealed }] }), async (cli) => {
       runs.push(cli);
@@ -65,7 +65,7 @@ describe("org_template_bind", () => {
   test("a secret sealed to another machine fails before the CLI runs, without the value", async () => {
     const configDir = tmp();
     const other = tmp();
-    const sealed = encryptProviderKeyForTest(getProviderKeyPublicKey(other), "accounts.ads", "secret-value");
+    const sealed = encryptProviderKey(getProviderKeyPublicKey(other), "accounts.ads", "secret-value");
     let ran = false;
     const failure = runOrgTemplateBind(configDir, args(configDir, { secrets: [{ key: "accounts.ads", payload: sealed }] }), async () => { ran = true; return { code: 0, stdout: "", stderr: "" }; });
     await expect(failure).rejects.toThrow(/sealed to another device's key/);

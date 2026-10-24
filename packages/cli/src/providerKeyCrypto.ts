@@ -73,9 +73,9 @@ export function decryptProviderKeyPayload(configDir: string, payload: EncryptedP
 }
 
 /** Encrypt a key to a device public key — the exact operations SubtleCrypto performs
- *  on the web, in node. Not used in production (the web encrypts); it exists so the
- *  round-trip is unit-tested against the real decrypt path with the real parameters. */
-export function encryptProviderKeyForTest(devicePublicKeyB64: string, provider: string, apiKey: string): EncryptedProviderKeyPayload {
+ *  on the web, in node. `cast devices key` seals with it, and the round-trip tests
+ *  run it against the real decrypt path with the real parameters. */
+export function encryptProviderKey(devicePublicKeyB64: string, provider: string, apiKey: string): EncryptedProviderKeyPayload {
   const eph = crypto.createECDH(PROVIDER_KEY_ECDH_NAMED_CURVE);
   eph.generateKeys();
   const shared = eph.computeSecret(Buffer.from(devicePublicKeyB64, "base64"));
