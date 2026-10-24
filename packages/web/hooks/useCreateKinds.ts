@@ -46,7 +46,7 @@ export function useCreateKinds(): CreateKind[] {
     const kinds: Array<CreateKind | false> = [
       { id: "session", label: words.newConversation, noun: words.conversation, keywords: "session conversation start agent compose run ask", icon: MessageSquare, tone: lead, key: "s", shortcut: "session.compose", run: (env) => env.compose(false) },
       mode.shows("actions.fleet") && { id: "session-docked", label: `${words.newConversation} (docked)`, noun: `${words.conversation} (docked)`, keywords: "session conversation docked small composer minimize corner", icon: PanelBottom, tone: "text-sol-cyan", shortcut: "session.composeDock", variant: true, run: (env) => env.compose(true) },
-      { id: "task", label: words.newTask, noun: words.task, keywords: "create todo to-do task add", icon: ListTodo, tone: lead, key: "t", run: (env) => env.openModal("task") },
+      { id: "task", label: words.newTask, noun: words.task, keywords: "create todo to-do task add", icon: ListTodo, tone: lead, key: "t", shortcut: "task.create", run: (env) => env.openModal("task") },
       { id: "doc", label: words.newDoc, noun: words.doc, keywords: "create note doc document write", icon: FileText, tone: "text-sol-text-dim", key: "d", run: (env) => env.openModal("doc") },
       // A plan is a company's page (pages.company), with no hosted page to land on.
       mode.shows("pages.company") && { id: "plan", label: "New plan", noun: "Plan", keywords: "create project", icon: MapIcon, tone: "text-sol-yellow", key: "p", run: (env) => env.openModal("plan") },
