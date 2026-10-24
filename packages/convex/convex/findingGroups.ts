@@ -102,6 +102,21 @@ export function dissolvedReason(task: Doc<"tasks">): string | null {
 }
 
 /**
+ * When a finding's evidence can place what it saw: no earlier than
+ * `happened_after` when its finder says so (0 for a review of a whole
+ * history, which cannot date what it found), else when it was observed. A
+ * fix is shown failing only by evidence placed after the fix went live.
+ */
+export const evidenceAt = (s: { observed_at?: number; happened_after?: number }): number | undefined => s.happened_after ?? s.observed_at;
+
+/**
+ * What a judge's finding on a moment says of when it happened. A bulk start
+ * (`cast line reviews start --batch`) opens its moment at the start, for a
+ * whole history, so its findings cannot date what they name.
+ */
+export const momentEvidence = (moment: Pick<Doc<"moments">, "batch">): { happened_after?: number } => (moment.batch ? { happened_after: 0 } : {});
+
+/**
  * Whether a closed problem still takes a finding: one a line run dissolved
  * keeps the evidence its reason already answers, so the same messages read
  * again do not open a fresh problem and a fresh run. That is evidence from
@@ -109,10 +124,10 @@ export function dissolvedReason(task: Doc<"tasks">): string | null {
  * closed it. Later evidence is a recurrence (recursAfterFix) or goes where it
  * would without the problem.
  */
-export function absorbsFinding(task: Doc<"tasks">, observedAt: number | undefined): string | null {
+export function absorbsFinding(task: Doc<"tasks">, at: number | undefined): string | null {
   const dissolved = task.cause?.dissolved;
   const until = dissolved ? dissolved.fixed_at ?? dissolved.at : undefined;
-  if (observedAt === undefined || !until || observedAt > until) return null;
+  if (at === undefined || !until || at > until) return null;
   return dissolvedReason(task);
 }
 
@@ -122,9 +137,9 @@ export function absorbsFinding(task: Doc<"tasks">, observedAt: number | undefine
  * is from after. It reopens that problem (signals.ts reopenAfterFix) rather
  * than sitting in it closed or opening a second problem beside it.
  */
-export function recursAfterFix(task: Doc<"tasks">, observedAt: number | undefined): boolean {
+export function recursAfterFix(task: Doc<"tasks">, at: number | undefined): boolean {
   const fixed = task.cause?.dissolved?.fixed_at;
-  return isTerminalTaskStatus(task.status) && !!fixed && observedAt !== undefined && observedAt > fixed;
+  return isTerminalTaskStatus(task.status) && !!fixed && at !== undefined && at > fixed;
 }
 
 /** Every reason closeRetireReason writes starts so; lib/problemEvidence.fateOf and judgeRetire.refound read it. */
@@ -222,8 +237,8 @@ export const causesForHits = internalQuery({
     workspace: v.string(),
     project_id: v.optional(v.id("projects")),
     hits: v.array(v.object({ id: v.id("signal_vectors"), score: v.number() })),
-    // When the finding was observed: a dissolved problem is a candidate for the evidence it answers, or that reopens it.
-    observed_at: v.optional(v.number()),
+    // When the finding's evidence places what it saw (evidenceAt): a dissolved problem is a candidate for the evidence it answers, or that reopens it.
+    evidence_at: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<ScoredCandidate[]> => {
     const best = new Map<string, { task: Doc<"tasks">; score: number; subjects: Set<string>; closed?: string }>();
@@ -246,7 +261,7 @@ export const causesForHits = internalQuery({
       const task = await ctx.db.get(taskId);
       if (!task || task.workspace !== args.workspace) continue;
       // A recurrence reads as an open problem: attaching it reopens the problem.
-      const closed = isTerminalTaskStatus(task.status) && !recursAfterFix(task, args.observed_at) ? absorbsFinding(task, args.observed_at) : undefined;
+      const closed = isTerminalTaskStatus(task.status) && !recursAfterFix(task, args.evidence_at) ? absorbsFinding(task, args.evidence_at) : undefined;
       if (closed === null) continue;
       if (args.project_id && task.project_id !== args.project_id) continue;
       best.set(key, { task, score: hit.score, subjects: new Set(signal.subject ? [signal.subject] : []), ...(closed ? { closed } : {}) });
@@ -291,13 +306,13 @@ export const otherScopes = internalQuery({
 export async function nearCauses(
   ctx: { runQuery: any; vectorSearch: any },
   where: { workspace: string; project_id?: Id<"projects"> },
-  finding: { vector: number[]; subject: string; observed_at?: number },
+  finding: { vector: number[]; subject: string; evidence_at?: number },
   opts: { cross?: boolean } = {},
 ): Promise<{ same: ScoredCandidate[]; cross: ScoredCandidate[] }> {
   const reach = async (filter: (q: any) => any): Promise<ScoredCandidate[]> => {
     const hits: Array<{ _id: Id<"signal_vectors">; _score: number }> = await ctx.vectorSearch("signal_vectors", "by_embedding", { vector: finding.vector, limit: GROUPING.hits + 1, filter });
     return hits.length
-      ? await ctx.runQuery(internal.findingGroups.causesForHits, { workspace: where.workspace, project_id: where.project_id, observed_at: finding.observed_at, hits: hits.map((h) => ({ id: h._id, score: h._score })) })
+      ? await ctx.runQuery(internal.findingGroups.causesForHits, { workspace: where.workspace, project_id: where.project_id, evidence_at: finding.evidence_at, hits: hits.map((h) => ({ id: h._id, score: h._score })) })
       : [];
   };
   const same = await reach((q) => q.eq("scope", vectorScope(where.workspace, finding.subject)));
@@ -322,14 +337,14 @@ export const askCandidates = (near: { same: ScoredCandidate[]; cross: ScoredCand
 export async function similarCandidates(
   ctx: { runQuery: any; runMutation: any; vectorSearch: any; scheduler: any },
   filer: { api_token: string } | { user_id: Id<"users"> },
-  signal: { source?: string; similar_text?: string; subject?: string; observed_at?: number },
+  signal: { source?: string; similar_text?: string; subject?: string; observed_at?: number; happened_after?: number },
   scope: Record<string, unknown>,
 ): Promise<{ scope: CallScope | null; vector?: number[]; candidates: ScoredCandidate[] }> {
   if (!signal.similar_text || !signal.subject) return { scope: null, candidates: [] };
   const where: CallScope & { project_id?: Id<"projects"> } = await ctx.runQuery(internal.findingGroups.scopeOf, { ...filer, ...scope, ...(signal.source ? { source: signal.source } : {}), subject: signal.subject });
   const embedded = await embedFinding(ctx, where, signal.similar_text);
   if (!embedded) return { scope: where, candidates: [] };
-  const near = await nearCauses(ctx, where, { vector: embedded.vector, subject: signal.subject, observed_at: signal.observed_at });
+  const near = await nearCauses(ctx, where, { vector: embedded.vector, subject: signal.subject, evidence_at: evidenceAt(signal) });
   return { scope: where, vector: embedded.vector, candidates: near.same };
 }
 
@@ -395,6 +410,7 @@ export type ProbeInputs = {
   subject: string;
   detail_md?: string;
   observed_at: number;
+  happened_after?: number;
   task_short_id: string | null;
   task_id: Id<"tasks"> | null;
   project_id: Id<"projects"> | null;
@@ -420,6 +436,7 @@ export const probeInputs = internalQuery({
       subject: row.subject,
       detail_md: row.detail_md,
       observed_at: row.observed_at,
+      ...(row.happened_after !== undefined ? { happened_after: row.happened_after } : {}),
       task_short_id: task?.short_id ?? null,
       task_id: row.task_id ?? null,
       project_id: task?.project_id ?? row.project_id ?? null,

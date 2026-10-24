@@ -2229,7 +2229,11 @@ export const update = mutation({
       }
     }
     Object.assign(updates, groundPatch(args), executionHintPatch(args));
-    if (args.watch_days !== undefined) updates.watch_until = watchUntilFor(args.watch_days, now);
+    if (args.watch_days !== undefined) {
+      // The watch station runs right after the ship: the fix is live from now, and older evidence never reopens it.
+      updates.watch_until = watchUntilFor(args.watch_days, now);
+      updates.watch_from = updates.watch_until ? now : undefined;
+    }
 
     if (nextStatus === "done" || nextStatus === "dropped") {
       updates.closed_at = now;

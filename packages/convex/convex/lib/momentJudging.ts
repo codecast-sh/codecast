@@ -9,7 +9,7 @@ import { sourceFilingScope } from "./ingestScope";
 import { sha256Hex } from "./hash";
 import { runModelCall, type CallScope } from "../modelCalls";
 import type { ModelCallResult, ModelCallSpec } from "@codecast/shared/contracts/modelCall";
-import { reembedFinding } from "../findingGroups";
+import { momentEvidence, reembedFinding } from "../findingGroups";
 import { newOnResample, type Ruling } from "../judgeRetire";
 import type { MomentRecord, MomentWindow } from "@codecast/shared/contracts/moments";
 import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, findingKey, findingKeyScope, findingSignal, judgeRequest, parseJudgeReply, quotesShareMessage, rulingsShown, type ExpectationsBrief, type JudgeFinding, type JudgeHandoff, type JudgeRuling, type JudgeSpec } from "@codecast/shared/contracts/judges";
@@ -232,6 +232,7 @@ async function fileFindings(ctx: any, f: Finishing, judge: Doc<"judges">, briefs
         user_id: f.source.owner_user_id,
         ...signals.get(key)!,
         observed_at: record.at ?? record.event_at,
+        ...momentEvidence(f.moment),
         ...sourceFilingScope(f.source),
         ...(project ? { project: String(project) } : {}),
       });

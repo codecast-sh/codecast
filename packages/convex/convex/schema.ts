@@ -6258,7 +6258,9 @@ export default defineSchema({
     )),
     readiness_note: v.optional(v.string()),
     // The watch after ship (LE12): a signal on one of the cause's
-    // fingerprints before this time reopens it.
+    // fingerprints before this time reopens it, when what it saw happened
+    // after watch_from, the moment the fix went live (signals.ts watchReopens).
+    watch_from: v.optional(v.number()),
     watch_until: v.optional(v.number()),
     // When a watch ended quiet and closed the cause as resolved (LE12).
     // Cleared by a reopen.
@@ -6347,6 +6349,11 @@ export default defineSchema({
     subject: v.optional(v.string()),
     goal_hint: v.optional(v.string()),
     observed_at: v.number(),
+    // The earliest the behavior it reports can have happened, when that is
+    // earlier than observed_at: 0 for a review of a whole history, which
+    // cannot date what it found. Whether it shows a fix failing reads this
+    // (findingGroups.evidenceAt).
+    happened_after: v.optional(v.number()),
     created_at: v.number(),
     // The cause it reached; absent while the signal is held: no open cause
     // holds its key and nothing converted it into one (LE4).

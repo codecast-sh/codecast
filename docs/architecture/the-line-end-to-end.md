@@ -356,8 +356,12 @@ profile sets `[line.merge] auto` or the line's role holds a merge grant
 (the-line.md L12). A prompt surface change records the eval run set as the new baseline.
 
 **Watch.** The cause enters `watch` for the profile's `watch_days` (default 7):
-`tasks.watch_until`. A signal with one of its fingerprints during watch
-reopens it with the signal attached. A watch that ends quiet closes the cause
+`tasks.watch_until`, starting when the fix went live (`tasks.watch_from`: the
+deploy's live time, else the ship). A signal with one of its fingerprints
+during watch reopens it with the signal attached when what it saw happened
+after `watch_from`; older evidence, and a finding that cannot date what it saw
+(a bulk review of a whole history files `happened_after: 0`), joins the cause
+and leaves the watch running. A watch that ends quiet closes the cause
 as `resolved`. `cast task update --watch-days N` sets the watch (0 ends it);
 the hourly `signals.sweepWatches` closes quiet ones as done with a note naming
 the quiet window.

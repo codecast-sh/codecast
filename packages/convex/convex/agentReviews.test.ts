@@ -129,6 +129,8 @@ describe("agent reviews", () => {
     expect(signals.map((x) => [x.source, x.subject, x.kind, x.severity, x.judge, x.moment])).toEqual([["judge:review", "review", "prompt_miss", 7, "review", a.moment], ["judge:review", "review", "prompt_miss", 5, "review", a.moment]]);
     expect(signals[0]!.project_id).toBe(ids.project);
     expect(signals[0]!.evidence_url).toBe("https://app.example/c/c_1");
+    // A bulk start reviews a whole history: its findings cannot date what they name, so none shows a fix failing.
+    expect(signals.map((x) => x.happened_after)).toEqual([0, 0]);
     const [run] = await t.run((ctx) => ctx.db.query("judge_runs").collect());
     expect(run).toMatchObject({ status: "ok", findings: 2, backend: "subscription", cost_usd: 0, expectations: [] });
     expect(JSON.parse(run!.findings_json!)[0]).toMatchObject({ expectation: "review", what_happened: expect.stringContaining("introduction"), quote: "Can we talk Tuesday?", cause_checked: true });

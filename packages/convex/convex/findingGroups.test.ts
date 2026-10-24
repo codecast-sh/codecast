@@ -39,7 +39,7 @@ describe("causesForHits", () => {
     });
     const candidates = await t.query(internal.findingGroups.causesForHits, {
       workspace: ids.ws,
-      observed_at: T0 + 1,
+      evidence_at: T0 + 1,
       hits: [
         { id: ids.withdrawnOpen, score: 0.9 },
         { id: ids.withdrawnClosed, score: 0.95 },

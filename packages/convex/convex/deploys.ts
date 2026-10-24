@@ -695,7 +695,10 @@ export const report = mutation({
       }
     }
     await ctx.db.patch(d._id, patch);
-    if (args.status === "live" && args.watch_days && (patch.status ?? d.status) === "live") await watchFromLive(ctx, d, now + args.watch_days * DAY);
+    if (args.status === "live" && args.watch_days && (patch.status ?? d.status) === "live") {
+      const live = patch.live_at ?? d.live_at ?? now;
+      await watchFromLive(ctx, d, live, live + args.watch_days * DAY);
+    }
     return { short_id: d.short_id, status: patch.status ?? d.status };
   },
 });
@@ -703,13 +706,14 @@ export const report = mutation({
 /**
  * A fix is in production only once its deploy is live, so its watch (LE12)
  * runs from then: each carried problem that shipped (done, or still in its
- * watch) is watched until `until`, never shortened.
+ * watch) is watched until `until`, never shortened, and only evidence from
+ * after `live` reopens it (signals.ts watchReopens).
  */
-async function watchFromLive(ctx: any, d: Doc<"deploys">, until: number): Promise<void> {
+async function watchFromLive(ctx: any, d: Doc<"deploys">, live: number, until: number): Promise<void> {
   for (const c of d.carries) {
     const task = await ctx.db.get(c.task_id);
     if (!task || task.status !== "done") continue;
-    if ((task.watch_until ?? 0) < until) await ctx.db.patch(task._id, { watch_until: until });
+    if ((task.watch_until ?? 0) < until) await ctx.db.patch(task._id, { watch_from: live, watch_until: until });
   }
 }
 

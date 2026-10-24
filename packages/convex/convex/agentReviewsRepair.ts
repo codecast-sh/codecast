@@ -42,6 +42,7 @@ export const refileHeld = internalAction({
           return f ? { similar_text: agentSimilarText(f) } : {};
         })()),
         observed_at: row.observed_at,
+        ...(row.happened_after !== undefined ? { happened_after: row.happened_after } : {}),
         ...sourceFilingScope(source),
         ...(row.project_id ? { project: String(row.project_id) } : {}),
       });
@@ -76,7 +77,7 @@ export const relistFinding = internalAction({
     const tasks = new Set<string>();
     for (const f of findings) {
       const signal = agentFindingSignal(f, { judge, judge_version: row.judge_version ?? "", moment, subject }, row.evidence_url);
-      const result = await ctx.runAction(internal.signals.ingestAs, { user_id: source.owner_user_id, ...signal, observed_at: row.observed_at, ...sourceFilingScope(source), ...(row.project_id ? { project: String(row.project_id) } : {}) });
+      const result = await ctx.runAction(internal.signals.ingestAs, { user_id: source.owner_user_id, ...signal, observed_at: row.observed_at, ...(row.happened_after !== undefined ? { happened_after: row.happened_after } : {}), ...sourceFilingScope(source), ...(row.project_id ? { project: String(row.project_id) } : {}) });
       relisted.push(result.short_id);
       if (result.task_short_id) tasks.add(result.task_short_id);
     }

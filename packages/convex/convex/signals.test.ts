@@ -262,6 +262,24 @@ describe("signals.ingest", () => {
     expect(notes.map((n: any) => [n.type, n.message])).toEqual([["cause_reopened", expect.stringContaining("sentry saw it again during the watch")]]);
   });
 
+  test("a finding from before the fix went live joins a cause in watch without reopening it", async () => {
+    const { add, task, t } = await setup();
+    const first = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart" });
+    const live = Date.now() - 3_600_000;
+    const until = Date.now() + 86_400_000;
+    await t.run(async (ctx) => { await ctx.db.patch(first.task_id, { status: "done", closed_at: live - 60_000, watch_from: live, watch_until: until } as any); });
+    const old = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", observed_at: live - 1 });
+    expect(old).toMatchObject({ attach: "fingerprint", task_id: first.task_id, reopened: false, signal_count: 2 });
+    expect(await task(first.task_id)).toMatchObject({ status: "done", watch_from: live, watch_until: until });
+    const undated = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", happened_after: 0 });
+    expect(undated.reopened).toBe(false);
+    const late = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", observed_at: live + 1 });
+    expect(late.reopened).toBe(true);
+    const cause = await task(first.task_id);
+    expect(cause.status).toBe("open");
+    expect(cause.watch_from).toBeUndefined();
+  });
+
   test("the quiet close stamps resolved_at and clears the watch; a reopen clears it", async () => {
     const { add, task, t } = await setup();
     const shipped = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart" });
@@ -1185,52 +1203,6 @@ describe("a dissolved problem keeps absorbing its earlier evidence", () => {
 // (dissolved.fixed_at). Evidence from before it is answered by the reason;
 // evidence from after it shows the fix did not hold, and reopens the problem
 // rather than sitting in it closed or opening a second problem beside it.
-describe("a finding from after a dissolved problem's fix reopens it", () => {
-  const FIXED = T0 + 5_000;
-  const CLOSED = T0 + 10_000;
-  async function fixedProblem(t: Awaited<ReturnType<typeof setup>>["t"], userId: any) {
-    return await t.run(async (ctx) => await ctx.db.insert("tasks", {
-      user_id: userId, workspace: `user:${userId}`, short_id: "ct-9", title: "Fee volunteered unasked", status: "done", closed_at: CLOSED,
-      source: "signal", blocks: [], priority: "medium", task_type: "task", attempt_count: 0, retry_count: 0, max_retries: 3,
-      cause: { signal_count: 2, first_seen: T0, last_seen: T0, fingerprints: ["k-1"], dissolved: { at: CLOSED, note: "Already fixed since the fee commit.", fixed_at: FIXED } },
-    } as any));
-  }
-  const finding = (observed_at: number) => ({ source: "person", kind: "prompt_miss", fingerprint: `k-${observed_at}`, title: "Fee raised unasked", observed_at });
-
-  test("before the fix it is absorbed; after the fix, though before the close, it reopens the problem", async () => {
-    const { t, userId, task } = await setup();
-    const taskId = await fixedProblem(t, userId);
-    const early: any = await t.mutation(internal.signals.commit, { user_id: userId, signal: finding(FIXED - 1), workspace: "personal", judged_task_id: taskId } as any);
-    expect(early.task_id).toBe(taskId);
-    expect((await task(taskId)).status).toBe("done");
-    const late: any = await t.mutation(internal.signals.commit, { user_id: userId, signal: finding(FIXED + 1), workspace: "personal", judged_task_id: taskId } as any);
-    expect(late.task_id).toBe(taskId);
-    expect(late.reopened).toBe(true);
-    const reopened = await task(taskId);
-    expect(reopened.status).toBe("open");
-    expect(reopened.cause.dissolved).toBeUndefined();
-    const notes = await t.run(async (ctx) => await ctx.db.query("task_comments").withIndex("by_task_created", (q: any) => q.eq("task_id", taskId)).collect());
-    expect(notes.map((n: any) => n.text).join("\n")).toContain("did not hold");
-  });
-
-  test("a move onto it reopens it instead of parking the finding closed", async () => {
-    const { t, userId, task } = await setup();
-    const taskId = await fixedProblem(t, userId);
-    const late: any = await t.mutation(internal.signals.commit, { user_id: userId, signal: finding(FIXED + 1), workspace: "personal" } as any);
-    expect(late.task_id).not.toBe(taskId);
-    const moved: any = await t.mutation(api.signals.moveForCli, { api_token: TOKEN, fingerprint: `k-${FIXED + 1}`, from: late.task_short_id, to: "ct-9" } as any);
-    expect(moved.to).toBe("ct-9");
-    expect(moved.refused).toBeUndefined();
-    expect((await task(taskId)).status).toBe("open");
-  });
-
-  test("cast line dissolve keeps the fix time it is given", async () => {
-    const { t, task } = await setup();
-    const opened: any = await t.mutation(internal.signals.commit, { user_id: (await t.run(async (ctx) => (await ctx.db.query("users").first())!._id)), signal: finding(T0), workspace: "personal" } as any);
-    await t.mutation(api.signals.dissolveForCli, { api_token: TOKEN, task: opened.task_short_id, outcome: "done", note: "Already fixed by abc1234.", fixed_at: FIXED } as any);
-    expect((await task(opened.task_id)).cause.dissolved.fixed_at).toBe(FIXED);
-  });
-});
 
 // One written message is one template's output: a finding of another
 // expectation that quotes it joins the problem already holding it

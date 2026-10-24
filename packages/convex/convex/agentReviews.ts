@@ -34,7 +34,7 @@ import { sha256Hex } from "./lib/hash";
 import { liveBodyKey, readKeptBody, readKeptJson } from "./lib/momentBody";
 import { putChunk } from "./replays";
 import { retireSignals } from "./judgeRetire";
-import { embedFinding } from "./findingGroups";
+import { embedFinding, momentEvidence } from "./findingGroups";
 import { firstSentence } from "@codecast/shared/contracts/judges";
 import { recordMomentEvents } from "./moments";
 import { AGENT_FINDINGS_TURN, agentFindingSignal, agentJudgePrompt, agentRunFinding, agentSimilarText, parseAgentFindings, type AgentFinding, type ReviewTranscript } from "@codecast/shared/contracts/agentJudges";
@@ -331,7 +331,7 @@ export const fileReview = internalAction({
           const signal = agentFindingSignal(f, { judge: h.judge.name, judge_version: h.judge.version, moment: h.moment.short_id, subject: h.moment.subject }, evidenceUrl);
           const already: Id<"signals"> | null = await ctx.runQuery(internal.agentReviews.filedSince, { workspace: h.source.workspace, fingerprint: signal.fingerprint, since: h.review.finished_at ?? h.review.updated_at });
           if (already) { signalIds.push(already); continue; }
-          const result = await ctx.runAction(internal.signals.ingestAs, { user_id: h.source.owner_user_id, ...signal, observed_at: h.moment.extracted_at ?? h.moment.event_at, ...sourceFilingScope(h.source), ...(project ? { project: String(project) } : {}) });
+          const result = await ctx.runAction(internal.signals.ingestAs, { user_id: h.source.owner_user_id, ...signal, observed_at: h.moment.extracted_at ?? h.moment.event_at, ...momentEvidence(h.moment), ...sourceFilingScope(h.source), ...(project ? { project: String(project) } : {}) });
           signalIds.push(result.signal_id);
         } catch (error) {
           console.error(`Agent review ${h.review.short_id}: filing a finding failed`, error);

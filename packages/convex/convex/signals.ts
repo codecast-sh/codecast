@@ -7,7 +7,8 @@
 // in whatever project it sits; else the cause one small model call names among
 // the five closest open causes of the project; else a new
 // cause (source "signal", triage "suggested"). A cause still in watch
-// (tasks.watch_until in the future) that receives a signal reopens.
+// (tasks.watch_until in the future) reopens on a signal whose evidence is from
+// after the fix went live (watchReopens).
 //
 // The model call needs an action, so ingest is three steps: a query reads the
 // fingerprint hit and the candidates, the action asks the judge when there is
@@ -48,7 +49,7 @@ import { isPlaced, placeSignal, scopeProject, type Placement } from "./lib/signa
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { ownDevice } from "./devices";
 import { regroundWhenRegrouped } from "./lineGround";
-import { GROUPING, absorbsFinding, askCandidates, closeRetireReason, nearCauses, judgedByCurrentVersion, keepSimilarity, recursAfterFix, retireOnClose, sampleFindings, similarCandidates, standsAsEvidence, type ProbeInputs, type ScoredCandidate } from "./findingGroups";
+import { GROUPING, absorbsFinding, askCandidates, closeRetireReason, evidenceAt, momentEvidence, nearCauses, judgedByCurrentVersion, keepSimilarity, recursAfterFix, retireOnClose, sampleFindings, similarCandidates, standsAsEvidence, type ProbeInputs, type ScoredCandidate } from "./findingGroups";
 import { runModelCall } from "./modelCalls";
 import { redirectDependents } from "./taskLinks";
 import { byUser } from "./lib/taskHistory";
@@ -88,6 +89,8 @@ const signalArgs = {
   subject: v.optional(v.string()),
   goal_hint: v.optional(v.string()),
   observed_at: v.optional(v.number()),
+  // The earliest what it saw can have happened (signals.happened_after): 0 when the finder cannot date it.
+  happened_after: v.optional(v.number()),
   // The role whose run introduced the defect (the fix-loop finder, szz:<sha>):
   // by id from a server path, by handle from `cast signal add --role`.
   role_id: v.optional(v.id("org_roles")),
@@ -137,6 +140,7 @@ export type SignalInput = {
   subject?: string;
   goal_hint?: string;
   observed_at?: number;
+  happened_after?: number;
   role_id?: Id<"org_roles">;
   role_handle?: string;
   issue?: boolean;
@@ -192,6 +196,7 @@ export function normalizeSignal(input: SignalInput): SignalInput {
     subject: clip(input.subject, SHORT_MAX),
     goal_hint: clip(input.goal_hint, SHORT_MAX),
     observed_at: input.observed_at,
+    happened_after: typeof input.happened_after === "number" && Number.isFinite(input.happened_after) ? Math.max(0, input.happened_after) : undefined,
     role_id: input.role_id,
     role_handle: clip(input.role_handle, SHORT_MAX),
     issue: input.issue || undefined,
@@ -207,6 +212,14 @@ export function normalizeSignal(input: SignalInput): SignalInput {
 }
 
 const inWatch = (task: Doc<"tasks">, now: number) => typeof task.watch_until === "number" && task.watch_until > now;
+/**
+ * Whether evidence placed at `at` (findingGroups.evidenceAt) reopens a cause
+ * in watch: only what happened after the fix went live shows it failing.
+ * Older evidence joins the cause and leaves its watch running. A watch from
+ * before watch_from was kept runs from the close.
+ */
+const watchReopens = (task: Doc<"tasks">, at: number | undefined, now: number) =>
+  inWatch(task, now) && at !== undefined && at > (task.watch_from ?? task.closed_at ?? 0);
 const isOpenCause = (task: Doc<"tasks">) => !isTerminalTaskStatus(task.status);
 /** With a project, only that project's causes are candidates; without one, the whole workspace's. */
 const inProject = (task: Doc<"tasks">, projectId: Id<"projects"> | null) => !projectId || task.project_id === projectId;
@@ -267,7 +280,7 @@ async function messageCause(ctx: any, workspace: string, signal: SignalInput, pr
   }
   for (const [id] of [...held].sort((a, b) => b[1] - a[1])) {
     const task: Doc<"tasks"> | null = await ctx.db.get(id as Id<"tasks">);
-    if (task && task.workspace === workspace && inProject(task, projectId) && takesFinding(task, signal.observed_at ?? now, now)) return task;
+    if (task && task.workspace === workspace && inProject(task, projectId) && takesFinding(task, evidenceAt(signal) ?? now, now)) return task;
   }
   return null;
 }
@@ -515,7 +528,7 @@ type WorkDb = Awaited<ReturnType<typeof createDataContext>>;
  * again (placeHeldKey) both climb.
  */
 async function attachDecision(ctx: any, workspace: string, signal: SignalInput, judged: Id<"tasks"> | null, projectId: Id<"projects"> | null, now: number, split: { from: string } | null = null): Promise<{ attach: SignalAttach; task: Doc<"tasks"> | null; issueKey: string | null }> {
-  const observedAt = signal.observed_at ?? now;
+  const at = evidenceAt(signal) ?? now;
   let attach: SignalAttach;
   let task: Doc<"tasks"> | null;
   // The key an issue's finding lives under now, through any merges (LL3).
@@ -533,7 +546,7 @@ async function attachDecision(ctx: any, workspace: string, signal: SignalInput, 
     const named: Doc<"tasks"> | null = judged ? await ctx.db.get(judged) : null;
     // The judge chose from open causes a moment ago; one closed or moved since
     // is no longer a place to attach.
-    if (named && named.workspace === workspace && inProject(named, projectId) && takesFinding(named, observedAt, now)) {
+    if (named && named.workspace === workspace && inProject(named, projectId) && takesFinding(named, at, now)) {
       task = named;
       attach = "judge";
     } else {
@@ -606,10 +619,11 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
     };
     signalCount = nextCause.signal_count;
     await ctx.db.patch(task._id, { cause: nextCause, updated_at: now });
-    if (inWatch(task, now)) {
+    const at = evidenceAt(signal) ?? now;
+    if (watchReopens(task, at, now)) {
       reopened = true;
       await reopenCause(ctx, task, userId, signal, now);
-    } else if (recursAfterFix(task, observedAt)) {
+    } else if (recursAfterFix(task, at)) {
       reopened = true;
       await reopenAfterFix(ctx, task._id, userId, { source: signal.source, title: signal.title, observed_at: observedAt }, now);
     }
@@ -634,6 +648,7 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
     subject: signal.subject,
     goal_hint: signal.goal_hint,
     observed_at: observedAt,
+    ...(signal.happened_after !== undefined ? { happened_after: signal.happened_after } : {}),
     created_at: now,
     task_id: taskId,
     project_id: task?.project_id ?? projectId ?? undefined,
@@ -960,7 +975,7 @@ async function endWatch(ctx: any, task: Doc<"tasks">, userId: Id<"users">, statu
   // The quiet close stamps resolved_at so the outcome survives the cleared
   // watch (LE12, the line page's "resolved"); a reopen clears it.
   const resolved = status === "open" ? { resolved_at: undefined } : { resolved_at: now };
-  await moveTaskStatus(ctx, task, status, { actorUserId: userId, now, extra: { ...resolved, watch_until: undefined } });
+  await moveTaskStatus(ctx, task, status, { actorUserId: userId, now, extra: { ...resolved, watch_from: undefined, watch_until: undefined } });
   await insertTaskComment(ctx, task._id, { author: "line", comment_type: "note", text: note });
 }
 
@@ -1097,7 +1112,7 @@ export const regroupProbe = internalAction({
         out.push({ signal: ref, error: f ? "no kept embedding" : "not found" });
         continue;
       }
-      const near = await nearCauses(ctx, { workspace: args.workspace, ...(f.project_id ? { project_id: f.project_id } : {}) }, { vector: f.embedding, subject: f.subject, observed_at: f.observed_at }, { cross: args.cross });
+      const near = await nearCauses(ctx, { workspace: args.workspace, ...(f.project_id ? { project_id: f.project_id } : {}) }, { vector: f.embedding, subject: f.subject, evidence_at: evidenceAt(f) }, { cross: args.cross });
       // Its own problem is where it is now; the question is whether another holds it.
       const elsewhere = (list: ScoredCandidate[]) => list.filter((c) => c.short_id !== f.task_short_id);
       const candidates = [...elsewhere(near.same), ...elsewhere(near.cross)];
@@ -1262,20 +1277,20 @@ async function moveSignalRows(ctx: any, rows: Doc<"signals">[], from: Doc<"tasks
   for (const row of rows) {
     await ctx.db.patch(row._id, { ...o.patch, task_id: to._id, project_id: to.project_id ?? row.project_id, attach: o.attach });
   }
-  // A problem in watch that takes a finding seen after it shipped has come
-  // back (LE12), however the finding reached it; older findings leave its
-  // outcome alone, so it never closes "quiet" over reports from its watch.
-  const shipped = to.closed_at ?? 0;
-  if (!isOpenCause(to) && inWatch(to, o.now) && seen.some((at) => at > shipped)) {
-    const late = rows.find((r) => (r.observed_at ?? r.created_at) > shipped)!;
+  // A problem in watch that takes a finding from after its fix went live has
+  // come back (LE12), however the finding reached it; older findings leave its
+  // outcome alone (watchReopens).
+  const rowAt = (r: Doc<"signals">) => evidenceAt(r) ?? r.created_at;
+  const late = isOpenCause(to) ? undefined : rows.find((r) => watchReopens(to, rowAt(r), o.now));
+  if (late) {
     await endWatch(ctx, (await ctx.db.get(to._id))!, o.userId, "open",
       `Reopened during watch: ${plural(rows.length)} moved here, and ${late.source} saw "${late.title}" after the fix shipped.`, o.now);
     await noticeCauseReopened(ctx, to, late.source);
   } else if (!isOpenCause(to)) {
     // A closed problem never holds a finding its reason does not answer: one
     // from after its fix reopens it (reopenAfterFix).
-    const late = rows.filter((r) => recursAfterFix(to, r.observed_at ?? r.created_at)).sort((a, b) => b.observed_at - a.observed_at)[0];
-    if (late) await reopenAfterFix(ctx, to._id, o.userId, { source: late.source, title: late.title, observed_at: late.observed_at }, o.now);
+    const recurred = rows.filter((r) => recursAfterFix(to, rowAt(r))).sort((a, b) => b.observed_at - a.observed_at)[0];
+    if (recurred) await reopenAfterFix(ctx, to._id, o.userId, { source: recurred.source, title: recurred.title, observed_at: recurred.observed_at }, o.now);
     // Still closed: what it took is the history its reason answers, not live work.
     else await retireOnClose(ctx, (await ctx.db.get(to._id))!, o.now, rows.map((r) => r._id));
   }
@@ -1297,7 +1312,7 @@ async function moveSignalRows(ctx: any, rows: Doc<"signals">[], from: Doc<"tasks
  */
 function takesAll(task: Doc<"tasks">, rows: Doc<"signals">[]): boolean {
   if (rows.length === 0) return false;
-  for (const row of rows) if (absorbsFinding(task, row.observed_at) === null && !recursAfterFix(task, row.observed_at)) return false;
+  for (const row of rows) if (absorbsFinding(task, evidenceAt(row)) === null && !recursAfterFix(task, evidenceAt(row))) return false;
   return true;
 }
 
@@ -1775,29 +1790,6 @@ export const regroupCases = internalMutation({
       const kept = (await ctx.db.get(target._id))!;
       if (!kept.cause?.issue_key) await ctx.db.patch(kept._id, { cause: { ...kept.cause!, issue_key: key } });
       out.push({ to: kept.short_id, key, moved: rows.map((r) => r.short_id), folded });
-    }
-    return out;
-  },
-});
-
-/**
- * One-off repair (run with packages/convex/run.sh): record when the fix went
- * live on problems a line dissolved before closes carried it, so evidence
- * from after the fix reopens them (findingGroups.recursAfterFix). Only a
- * dissolved problem in the workspace is stamped; `dry` reports only.
- */
-export const stampDissolvedFixes = internalMutation({
-  args: { workspace: v.string(), fixes: v.array(v.object({ task: v.string(), fixed_at: v.number() })), dry: v.optional(v.boolean()) },
-  handler: async (ctx, args) => {
-    const out: Array<{ task: string; stamped: boolean; why?: string }> = [];
-    for (const fix of args.fixes) {
-      const task: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", fix.task)).first();
-      if (!task || task.workspace !== args.workspace || !task.cause?.dissolved) {
-        out.push({ task: fix.task, stamped: false, why: !task ? "not found" : task.workspace !== args.workspace ? "other workspace" : "not dissolved" });
-        continue;
-      }
-      if (!args.dry) await ctx.db.patch(task._id, { cause: { ...task.cause, dissolved: { ...task.cause.dissolved, fixed_at: fix.fixed_at } } });
-      out.push({ task: fix.task, stamped: !args.dry });
     }
     return out;
   },

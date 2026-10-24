@@ -236,6 +236,8 @@ describe("the role trigger (DP4)", () => {
     await (report as any)._handler(ctx, { api_token: TOKEN, deploy: "dp-1", status: "live", watch_days: 7 });
     expect(t.deploys[0].status).toBe("live");
     expect(t.tasks[0].watch_until).toBeGreaterThan(NOW + 6 * DAY);
+    // Evidence from before this moment is older than the fix (signals.ts watchReopens).
+    expect(t.tasks[0].watch_from).toBe(t.deploys[0].live_at);
     expect(t.tasks[1].watch_until).toBeUndefined();
   });
 

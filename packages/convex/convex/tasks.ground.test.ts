@@ -35,6 +35,17 @@ describe("tasks.update ground fields", () => {
     expect(tables.tasks[0]).toMatchObject({ goal_ref: "in-3:week4_retention", category: "prompt", risk: "plan", readiness: "needs_context", readiness_note: "no repro yet" });
   });
 
+  test("--watch-days starts the watch now and records it; 0 ends it", async () => {
+    const { ctx, tables } = await makeCtx({ _id: "tasks_1", short_id: "ct-1", title: "t", user_id: OWNER, status: "done", source: "signal" });
+    const before = Date.now();
+    await run(ctx, { watch_days: 7 });
+    expect(tables.tasks[0].watch_from).toBeGreaterThanOrEqual(before);
+    expect(tables.tasks[0].watch_until).toBe(tables.tasks[0].watch_from + 7 * 86_400_000);
+    await run(ctx, { watch_days: 0 });
+    expect(tables.tasks[0].watch_from).toBeUndefined();
+    expect(tables.tasks[0].watch_until).toBeUndefined();
+  });
+
   test("an empty string clears a field; an absent one is left alone", async () => {
     const { ctx, tables } = await makeCtx({ _id: "tasks_1", short_id: "ct-1", title: "t", user_id: OWNER, status: "open", source: "agent", goal_ref: "none", category: "code", risk: "low" });
     await run(ctx, { category: "", goal_ref: "pj-a" });
