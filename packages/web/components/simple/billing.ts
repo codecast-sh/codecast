@@ -32,24 +32,12 @@ export function useUpgradesOpen(): boolean {
   return !!data?.available && data.plans.length > 0;
 }
 
-export function useBilling(open: OpenBillingPage = leaveForPage): BillingStatus & {
-  /** The first answer (or an error) has landed. */
-  known: boolean;
-  busy: boolean;
-  error: string | null;
-  checkout: (req: CheckoutRequest) => Promise<void>;
-  /** Stripe's billing portal: card, invoices, plan change and cancel. */
-  manage: () => Promise<void>;
-} {
-  const query = useQueryNoThrow(api.billing.billingAvailable, {});
-  const status = query.data ?? NOTHING_OFFERED;
-  const known = query.data !== undefined || !!query.error;
-  const startCheckout = useAction(api.billing.startCheckout);
-  const openPortal = useAction(api.billing.openPortal);
+/** Mints a Stripe page (checkout or portal) and opens it, holding `busy` and
+ *  the refusal's words meanwhile. Every billing door uses it: the wallet's
+ *  plan screen and a team's seat plan. */
+export function useStripeRedirect(open: OpenBillingPage = leaveForPage) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Both doors answer a BillingRedirect: a Stripe page to open, or why not.
   // A plan change for someone already subscribed comes back as the portal
   // (`via: "portal"`); either way the page to open is `url`.
   const redirect = async (mint: () => Promise<BillingRedirect>) => {
@@ -65,6 +53,24 @@ export function useBilling(open: OpenBillingPage = leaveForPage): BillingStatus 
       setBusy(false);
     }
   };
+  return { busy, error, redirect };
+}
+
+export function useBilling(open: OpenBillingPage = leaveForPage): BillingStatus & {
+  /** The first answer (or an error) has landed. */
+  known: boolean;
+  busy: boolean;
+  error: string | null;
+  checkout: (req: CheckoutRequest) => Promise<void>;
+  /** Stripe's billing portal: card, invoices, plan change and cancel. */
+  manage: () => Promise<void>;
+} {
+  const query = useQueryNoThrow(api.billing.billingAvailable, {});
+  const status = query.data ?? NOTHING_OFFERED;
+  const known = query.data !== undefined || !!query.error;
+  const startCheckout = useAction(api.billing.startCheckout);
+  const openPortal = useAction(api.billing.openPortal);
+  const { busy, error, redirect } = useStripeRedirect(open);
 
   return {
     ...status,

@@ -13,6 +13,7 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 import { copyToClipboard } from "../../lib/utils";
 import { formatInviteExpiry } from "../../lib/team/inviteExpiry";
+import { SeatPlanRow, useSeatState } from "./SeatPlan";
 import "./teamFlow.css";
 
 export interface InvitePanelProps {
@@ -25,7 +26,8 @@ type SendState =
   | { kind: "idle" }
   | { kind: "sending" }
   | { kind: "sent"; to: string }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  | { kind: "full" };
 
 function findTeamRole(teams: Array<{ _id?: string; role?: string } | null> | undefined, teamId: string) {
   return teams?.find((t) => t?._id === teamId)?.role;
@@ -42,6 +44,9 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
   const { data: team, error: teamError, retry: retryTeam } = useQueryNoThrow(api.teams.getTeam, { team_id: teamId });
   const regenerateInviteCode = useMutation(api.teams.regenerateInviteCode);
   const sendInviteEmail = useMutation(api.teams.sendInviteEmail);
+  const seats = useSeatState(teamId);
+  // Starter with every free seat taken: a new invite needs Pro first.
+  const seatsFull = !!seats && (seats.full || seats.lapsed) && !seats.grandfathered;
 
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -93,7 +98,11 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
     if (!email) return;
     setSendState({ kind: "sending" });
     try {
-      await sendInviteEmail({ team_id: teamId, email });
+      const res = await sendInviteEmail({ team_id: teamId, email });
+      if (!res.sent) {
+        setSendState({ kind: "full" });
+        return;
+      }
       setSendState({ kind: "sent", to: email });
       setInviteEmail("");
     } catch (err) {
@@ -111,6 +120,7 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
 
   return (
     <div className={`tf-accent-scope ${page ? "space-y-6" : "space-y-4 py-4"}`}>
+      {seats && <SeatPlanRow teamId={teamId} teamName={team?.name ?? ""} state={seats} />}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="team-invite-link" className="text-sol-text">Invite link</Label>
@@ -223,13 +233,13 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
               if (sendState.kind !== "idle") setSendState({ kind: "idle" });
             }}
             placeholder="teammate@example.com"
-            disabled={isExpired || sendState.kind === "sending"}
+            disabled={isExpired || seatsFull || sendState.kind === "sending"}
             className={`${page ? "text-base h-11" : "text-sm"} bg-sol-bg-alt border-sol-border text-sol-text`}
           />
           <Button
             type="submit"
             variant="outline"
-            disabled={isExpired || !inviteEmail.trim() || sendState.kind === "sending"}
+            disabled={isExpired || seatsFull || !inviteEmail.trim() || sendState.kind === "sending"}
             className={`${page ? "h-11 px-5" : ""} border-sol-border text-sol-text-muted hover:bg-sol-bg-alt`}
           >
             {sendState.kind === "sending" ? "Sending" : "Send"}
@@ -242,8 +252,8 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
         <p
           aria-live="polite"
           className={
-            sendState.kind === "sent" || sendState.kind === "error"
-              ? `text-sm ${sendState.kind === "error" ? "text-sol-red" : "text-sol-green"}`
+            sendState.kind === "sent" || sendState.kind === "error" || sendState.kind === "full"
+              ? `text-sm ${sendState.kind === "sent" ? "text-sol-green" : sendState.kind === "full" ? "text-sol-orange" : "text-sol-red"}`
               : "sr-only"
           }
         >
@@ -254,6 +264,7 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
             </span>
           )}
           {sendState.kind === "error" && sendState.message}
+          {sendState.kind === "full" && "No free seats left. Upgrade to Pro to invite more."}
         </p>
       </div>
 

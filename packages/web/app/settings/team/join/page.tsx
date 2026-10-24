@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { joinErrorText } from "../../../../lib/team/joinError";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { Users } from "lucide-react";
@@ -124,7 +125,7 @@ export default function JoinTeamPage() {
       setTeamId(id as Id<"teams">);
       setStep(1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not join the team. Try again.");
+      setError(joinErrorText(err));
     } finally {
       setJoining(false);
     }

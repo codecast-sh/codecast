@@ -1,7 +1,7 @@
 import { getUserOrToken } from "./lib/auth";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { mutation, query, action, internalMutation, internalQuery } from "./functions";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -29,6 +29,7 @@ import { bumpWindow } from "./ipRateLimit";
 import { emailProven, workDomain } from "./lib/workDomain";
 import { TEAM_RECORDINGS_PURGE_GRACE_MS } from "./lib/r2";
 import { stopTeamRecordings } from "./lib/callRecordingRuns";
+import { checkSeat, scheduleSeatSync, type SeatLimit } from "./lib/teamSeats";
 import {
   TEAM_MEMBERS_VIEW_CONTRACT_ID,
   TEAMS_GRANT_KEY,
@@ -298,17 +299,37 @@ export const createTeam = mutation({
   },
 });
 
+/** A seat refused by seat billing, thrown as data so a client can offer the
+ *  upgrade (`error.data.code`) instead of parsing a message. */
+export function seatRefusal(limit: SeatLimit): ConvexError<Record<string, string | number>> {
+  return new ConvexError({ ...limit });
+}
+
 /**
  * Add a person to a team as a member: the membership row (its sync scope event
  * rides the change log), their first team pointer if they have none, and the
- * team activity line. Idempotent.
+ * team activity line. Idempotent. The seat gate (lib/teamSeats.ts) runs first
+ * and throws `seatRefusal` when the team's plan has no seat for them; only an
+ * operator skips it. A team on Pro has its Stripe seats synced after.
  */
-export async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"teams">, how: string, actor: Id<"users"> = userId): Promise<void> {
+export async function addTeamMember(
+  ctx: any,
+  userId: Id<"users">,
+  team: Doc<"teams">,
+  how: string,
+  actor: Id<"users"> = userId,
+  opts: { skipSeatCheck?: boolean } = {},
+): Promise<void> {
   const existingMembership = await ctx.db
     .query("team_memberships")
     .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", team._id))
     .unique();
   if (existingMembership) return;
+  const user = await ctx.db.get(userId);
+  if (!opts.skipSeatCheck) {
+    const seat = await checkSeat(ctx, team, how, { exclude: { userId, email: user?.email } });
+    if (seat.kind === "blocked") throw seatRefusal(seat.limit);
+  }
   const now = Date.now();
   await ctx.db.insert("team_memberships", {
     user_id: userId,
@@ -320,7 +341,16 @@ export async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"te
     kind: "team_member_added", actor_user_id: actor, team_id: team._id, target_user_id: userId,
     detail: { after: { role: "member", how } },
   });
-  const user = await ctx.db.get(userId);
+  // Their emailed invite became this membership; it no longer holds a seat.
+  const email = user?.email?.trim().toLowerCase();
+  if (email) {
+    const invites = await ctx.db
+      .query("team_invites")
+      .withIndex("by_team_email", (q: any) => q.eq("team_id", team._id).eq("email", email))
+      .collect();
+    for (const invite of invites) if (!invite.accepted_at) await ctx.db.patch(invite._id, { accepted_at: now });
+  }
+  await scheduleSeatSync(ctx, team._id, "member_joined");
   if (!user?.team_id) {
     await ctx.db.patch(userId, {
       team_id: team._id,
@@ -345,7 +375,7 @@ export const addMemberByOperator = internalMutation({
   handler: async (ctx, args) => {
     const team = await ctx.db.get(args.team_id);
     if (!team || team.deleted_at) throw new Error("No such team");
-    await addTeamMember(ctx, args.user_id, team, "Added by a team admin");
+    await addTeamMember(ctx, args.user_id, team, "Added by a team admin", args.user_id, { skipSeatCheck: true });
   },
 });
 
@@ -663,6 +693,7 @@ export async function endMembership(
     .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
     .collect();
   for (const row of rows) await ctx.db.delete(row._id);
+  if (rows.length && "scheduler" in ctx) await scheduleSeatSync(ctx as any, teamId, "member_left");
   if (rows.length) {
     await recordAuthorityEvent(ctx, {
       kind: "team_member_removed", actor_user_id: actor, team_id: teamId, target_user_id: userId,
@@ -829,6 +860,7 @@ export const restoreTeam = internalMutation({
       deleted_by: undefined,
       deleted_members: undefined,
     });
+    await scheduleSeatSync(ctx, args.team_id, "team_restored");
     return { restored: true, members: seated };
   },
 });
@@ -972,11 +1004,23 @@ export const sendInviteEmail = mutation({
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       throw new Error("Invalid email address");
     }
+    // An invite holds a free seat until it is used or its link is replaced.
+    // Sending again to someone already invited on this link takes no new one.
+    const invite = await ctx.db
+      .query("team_invites")
+      .withIndex("by_team_email", (q) => q.eq("team_id", args.team_id).eq("email", email))
+      .first();
+    const holdsSeat = !!invite && !invite.accepted_at && invite.invite_code === team.invite_code;
+    const seat = await checkSeat(ctx, team, "invite_email", { adding: holdsSeat ? 0 : 1 });
+    if (seat.kind === "blocked") return { sent: false as const, upgrade_required: seat.limit };
     // Outbound email to arbitrary addresses is a spam vector — cap per sender.
     const limit = await bumpWindow(ctx.db, `invite-email:${authUserId}`, 30, 60 * 60 * 1000);
     if (!limit.ok) {
       throw new Error("Too many invites sent this hour — try again later");
     }
+    const inviteRow = { invite_code: team.invite_code, invited_by: authUserId, created_at: Date.now(), accepted_at: undefined };
+    if (invite) await ctx.db.patch(invite._id, inviteRow);
+    else await ctx.db.insert("team_invites", { team_id: args.team_id, email, ...inviteRow });
     const inviter = await ctx.db.get(authUserId);
     await ctx.scheduler.runAfter(0, internal.emails.send.sendTeamInvite, {
       to: email,
@@ -986,7 +1030,7 @@ export const sendInviteEmail = mutation({
       invite_url: `https://codecast.sh/join/${team.invite_code}`,
       expires_at: team.invite_code_expires_at,
     });
-    return { sent: true };
+    return { sent: true as const };
   },
 });
 
@@ -1221,24 +1265,32 @@ export const syncGithubOrg = action({
           });
           continue;
         }
-        await ctx.runMutation(internal.teams.updateUserTeamAndRole, {
+        const moved = await ctx.runMutation(internal.teams.updateUserTeamAndRole, {
           user_id: existingUser._id,
           team_id: requestingUser.team_id,
           role,
         });
+        if (moved.blocked) {
+          skipped.push({ github_username: member.login, reason: moved.blocked.message });
+          continue;
+        }
         imported.push({
           github_username: member.login,
           name: existingUser.name,
           role,
         });
       } else {
-        const newUserId = await ctx.runMutation(internal.teams.createUserFromGithub, {
+        const created = await ctx.runMutation(internal.teams.createUserFromGithub, {
           github_id: String(member.id),
           github_username: member.login,
           github_avatar_url: member.avatar_url,
           team_id: requestingUser.team_id,
           role,
         });
+        if (created.blocked) {
+          skipped.push({ github_username: member.login, reason: created.blocked.message });
+          continue;
+        }
         imported.push({
           github_username: member.login,
           name: member.login,
@@ -1288,7 +1340,7 @@ export const updateUserTeamAndRole = internalMutation({
     team_id: v.id("teams"),
     role: v.union(v.literal("member"), v.literal("admin")),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ blocked: SeatLimit | null }> => {
     const existingMembership = await ctx.db
       .query("team_memberships")
       .withIndex("by_user_team", (q) => q.eq("user_id", args.user_id).eq("team_id", args.team_id))
@@ -1296,17 +1348,24 @@ export const updateUserTeamAndRole = internalMutation({
     if (existingMembership) {
       await ctx.db.patch(existingMembership._id, { role: args.role });
     } else {
+      const team = await ctx.db.get(args.team_id);
+      if (!team) throw new Error("No such team");
+      const user = await ctx.db.get(args.user_id);
+      const seat = await checkSeat(ctx, team, "github_org_sync", { exclude: { userId: args.user_id, email: user?.email } });
+      if (seat.kind === "blocked") return { blocked: seat.limit };
       await ctx.db.insert("team_memberships", {
         user_id: args.user_id,
         team_id: args.team_id,
         role: args.role,
         joined_at: Date.now(),
       });
+      await scheduleSeatSync(ctx, args.team_id, "member_joined");
     }
     await ctx.db.patch(args.user_id, {
       team_id: args.team_id,
       role: args.role,
     });
+    return { blocked: null };
   },
 });
 
@@ -1321,7 +1380,11 @@ export const createUserFromGithub = internalMutation({
     team_id: v.id("teams"),
     role: v.union(v.literal("member"), v.literal("admin")),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ user_id: Id<"users"> | null; blocked: SeatLimit | null }> => {
+    const team = await ctx.db.get(args.team_id);
+    if (!team) throw new Error("No such team");
+    const seat = await checkSeat(ctx, team, "github_org_sync");
+    if (seat.kind === "blocked") return { user_id: null, blocked: seat.limit };
     const now = Date.now();
     const userId = await ctx.db.insert("users", {
       github_id: args.github_id,
@@ -1340,7 +1403,8 @@ export const createUserFromGithub = internalMutation({
       role: args.role,
       joined_at: now,
     });
-    return userId;
+    await scheduleSeatSync(ctx, args.team_id, "member_joined");
+    return { user_id: userId, blocked: null };
   },
 });
 

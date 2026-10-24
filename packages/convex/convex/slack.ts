@@ -8,6 +8,7 @@ import { isTeamAdmin, isTeamMember } from "./privacy";
 import { installationForTeam } from "./lib/slackOutbound";
 import { tokenHasScope } from "./lib/slackMirror";
 import { signStateWith, verifyStateWith } from "./lib/hmac";
+import { webOrigins } from "./lib/siteUrl";
 
 // The Slack adapter. Workspaces connect via the "Add to Slack" OAuth flow, which
 // stores a per-workspace bot token in `slack_installations` (replacing the single
@@ -82,9 +83,7 @@ export function slackRedirectUri(origin?: string): string {
 // redirect URL on the Slack app. Production plus the two local dev origins, so
 // a mirror can be exercised from a dev web against the shared backend.
 export function allowedWebOrigin(origin?: string): string {
-  const prod = webBaseUrl();
-  const allowed = new Set([prod, "https://local.codecast.sh", "http://localhost:3200"]);
-  return origin && allowed.has(origin) ? origin : prod;
+  return origin && webOrigins().has(origin) ? origin : webBaseUrl();
 }
 
 export function slackAuthorizeUrl(state: string, origin?: string): string {

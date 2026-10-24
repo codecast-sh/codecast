@@ -69,6 +69,7 @@ import { action, internalMutation, internalQuery, query } from "./functions";
 import { planIdValidator } from "./assistantSchema";
 import { siteUrl } from "./lib/siteUrl";
 import { alignPeriod, credit, moveSubscription, refundTopup, setPlan, walletByCustomer, walletRow } from "./lib/wallet";
+import { isTeamSeatSubscription } from "./lib/teamSeats";
 
 /** Where Stripe posts events: `<convex site>/api/webhooks/stripe`. */
 export const STRIPE_WEBHOOK_PATH = "/api/webhooks/stripe";
@@ -312,6 +313,7 @@ export type BillingOutcome =
   | `duplicate:${string}`
   | "duplicate_canceled"
   | "plan_canceled"
+  | `team:${string}`
   | `ignored:${string}`;
 
 /** The person an event is about: the wallet already holding the Stripe
@@ -606,6 +608,11 @@ async function applyEvent(ctx: ActionCtx, stripe: StripeClient, event: StripeEve
   // Taken as the read returns: a read that started earlier answered with
   // Stripe's state no later than this one.
   const readAt = subscription ? Date.now() : undefined;
+  // A team's seat subscription (teamBilling.ts) shares this account and
+  // webhook; it never touches a wallet.
+  if (subscription && isTeamSeatSubscription(subscription)) {
+    return (await ctx.runMutation(internal.teamBilling.applyTeamSubscription, { subscription_json: JSON.stringify(subscription), read_at: readAt! })) as BillingOutcome;
+  }
   const apply = () =>
     ctx.runMutation(internal.billing.applyStripeEvent, {
       id: event.id,
