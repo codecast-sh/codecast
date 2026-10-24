@@ -33,7 +33,8 @@ export function RepoCompareContent({ repository, base, head, family }: {
     {comparison.error && <p className="p-4 text-xs text-sol-red">{serverErrorText(comparison.error)}</p>}
     {comparison.pending && <p className="p-4 text-xs text-sol-text-muted">Reading this comparison from a checkout of this repository. It arrives as soon as that machine answers.</p>}
     {!comparison.ready && !comparison.error && !comparison.pending && <LoadingSkeleton />}
-    {data && <>
+    {data?.truncated && <p className="p-4 text-xs text-sol-yellow">This comparison is too large to show here. <a href={`https://github.com/${repository}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`} target="_blank" rel="noopener noreferrer" className="underline">Compare on GitHub</a></p>}
+    {data && !data.truncated && <>
       <div className="px-4 py-3 border-b border-sol-border/40 text-xs flex flex-wrap gap-4">
         <span>{data.total_commits} commits</span><span>{files.length} files returned</span><span>{data.ahead_by} ahead</span><span>{data.behind_by} behind</span>
         <a href={`https://github.com/${repository}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`} target="_blank" rel="noopener noreferrer" className="ml-auto text-sol-blue">Compare on GitHub</a>

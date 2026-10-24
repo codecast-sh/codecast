@@ -643,6 +643,8 @@ export function useRepoLastCommits(
 // ── Two refs side by side ──
 
 export type RepoCompare = {
+  /** Too large to cache: the row holds no commits or files. */
+  truncated?: boolean;
   ahead_by: number;
   behind_by: number;
   total_commits: number;
