@@ -8,7 +8,7 @@ import { addDays } from "@codecast/convex/convex/lib/teamDay";
 import { memberDisplayName } from "../../lib/liveEntities";
 import type { ChangesUrl } from "./useChangesUrlState";
 
-export type Ship = Pick<ShipEvent, "surface" | "version" | "sha" | "at">;
+export type Ship = Pick<ShipEvent, "surface" | "version" | "sha" | "at"> & { kind?: ShipEvent["kind"] };
 
 /** One area's ink bar: its file touches, the commits that made them, and the stories filed under it. */
 export type AreaTouch = { area: string; touches: number; commits: number; stories: number };
