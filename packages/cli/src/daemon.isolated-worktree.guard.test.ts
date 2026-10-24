@@ -9,7 +9,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { functionBlock } from "./test-helpers/sourceRegion.js";
 
-const daemon = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "daemon.ts"), "utf8");
+const here = path.dirname(fileURLToPath(import.meta.url));
+const daemon = fs.readFileSync(path.join(here, "daemon.ts"), "utf8");
+const legacy = fs.readFileSync(path.join(here, "worktreeLegacy.ts"), "utf8");
 
 describe("an isolated start never falls back to the main checkout", () => {
   test("a worktree that cannot be made fails the start, latching a full disk", () => {
@@ -25,6 +27,6 @@ describe("an isolated start never falls back to the main checkout", () => {
 
   test("createWorktree reports why it failed instead of null", () => {
     expect(functionBlock(daemon, "createWorktree").text).toContain("Promise<WorktreeResult | { error: string }>");
-    expect(functionBlock(daemon, "createWorktreeLegacy").text).not.toMatch(/return null;/);
+    expect(functionBlock(legacy, "createWorktreeLegacy").text).not.toMatch(/return null;/);
   });
 });

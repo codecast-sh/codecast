@@ -676,14 +676,8 @@ async function waitOnStation(
       console.log(`${c.dim}  ${shortId}: ${state}${c.reset}`);
       lastState = state;
     }
-    // A hand parked on a usage limit (or a throttle, a dropped connection)
-    // files as needs_input, but it resumes on its own at the reset or the
-    // fleet's next account: wait for it rather than read the park as its
-    // answer. A limit or a throttle stops the node's clock while it lasts: 18
-    // hands on the "wait for limit reset" dialog were killed at their node
-    // timeout after the pool's accounts hit their limits (2026-10-24). A
-    // connection or fatal park keeps the clock, so one that never comes back
-    // still ends.
+    // A parked hand (limit, throttle, dropped connection) resumes on its own: wait. A limit or throttle also stops
+    // the node's clock (18 limit-parked hands hit their timeout, 2026-10-24); other parks keep it, so they still end.
     if (row.blocked_on && CONTINUE_BANNER_KINDS.includes(row.blocked_on)) {
       const quota = row.blocked_on === "limit" || row.blocked_on === "throttle";
       if (lastState !== `parked:${row.blocked_on}`) console.log(`${c.dim}  ${shortId}: parked on ${row.blocked_on}, waiting for it to resume${quota ? "; the node's clock stops until it does" : ""}${c.reset}`);
@@ -1931,10 +1925,8 @@ async function driveRun(
       } catch {}
     }
   } else if (state.failed) {
-    // A full disk failed the run, not the problem: the machine holds its line
-    // runs and the problem goes back to the line's queue (diskFull.ts).
     const diskFull = options.dryRun ? null : diskFullFailReason(options.cwd ?? process.cwd(), `${state.failReason ?? ""}\n${state.context["last_error"] ?? ""}`.trim(), options.taskId);
-    if (diskFull) state.failReason = diskFull.slice(0, 2000);
+    if (diskFull) state.failReason = diskFull.slice(0, 2000); // the run failed, not the problem: the host holds line runs, the problem requeues
     console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
     // The run is reported over first: that stops its hands. The blocker
     // comment that follows goes to the session that owns the task, which is
@@ -1951,10 +1943,9 @@ async function driveRun(
         fail_reason: state.failReason,
       });
     }
-    // A problem the queue refuses (a trial's, which reruns under its budget) takes the ordinary failure path.
     const requeued = diskFull && options.taskId ? await requeueAfterDiskFull((route, body) => cliCall(options, route, body), options.taskId) : null;
     if (requeued) console.log(requeued.text);
-    if (!requeued?.queued) await returnTaskOnFailure(options, graph, state);
+    if (!requeued?.queued) await returnTaskOnFailure(options, graph, state); // a refused requeue (a trial's) fails as usual
     return "failed";
   }
   return "completed";
