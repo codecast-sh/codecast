@@ -126,7 +126,11 @@ const ids = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>(".lwp-
 const chips = (host: HTMLElement) => Object.fromEntries([...host.querySelectorAll<HTMLElement>("[data-line-status]")].map((b) => [b.dataset.lineStatus, Number(b.querySelector(".lw-num")?.textContent)]));
 
 test("figures, trend and chips: the chips partition the problems and sum to All", async () => {
-  const { host, root } = await mount(React.createElement(ProblemsView, props({}, failModel)));
+  // By family is the page's default grouping: problems no score reached yet sit under one heading, Closed folded.
+  const byFamily = await mount(React.createElement(ProblemsView, props({}, failModel)));
+  expect([...byFamily.host.querySelectorAll<HTMLElement>(".lwp-section")].map((s) => [s.dataset.lineProblemSection, s.hasAttribute("data-folded")])).toEqual([["family:unscored", false], ["closed", true]]);
+  await act(async () => { byFamily.root.unmount(); });
+  const { host, root } = await mount(React.createElement(ProblemsView, props({ group: "status" }, failModel)));
   const c = chips(host);
   expect(c.all).toBe(4);
   expect(Object.entries(c).filter(([k]) => k !== "all").reduce((n, [, v]) => n + v, 0)).toBe(c.all);
@@ -142,16 +146,16 @@ test("figures, trend and chips: the chips partition the problems and sum to All"
   expect(bar.getAttribute("href")).toContain(`found=${from}`);
   await click(bar);
   expect(picks.at(-1)).toEqual({ found: from });
-  // Not started and Closed fold to their headings under All; the rest are open, Failed under its cause.
+  // By status, Not started and Closed fold to their headings under All; the rest are open, Failed under its cause.
   expect([...host.querySelectorAll<HTMLElement>(".lwp-section")].map((s) => [s.dataset.lineProblemSection, s.hasAttribute("data-folded")])).toEqual([["failed", false], ["running", false], ["notstarted", true], ["closed", true]]);
   expect(ids(host)).toEqual(["t7", "t1"]);
-  // Four columns, the title whole with the judge's "Not met:" (it is what says this is a miss), its ref and project
-  // beneath, one status phrase.
+  // Five columns (the score among them), the title whole with the judge's "Not met:" (it is what says this is a miss),
+  // its ref and project beneath, one status phrase.
   const row = host.querySelector<HTMLElement>('.lwp-row[data-line-issue="t7"]')!;
   expect(row.querySelector(".lwp-title")?.textContent).toBe("Not met: Analyze dies before it reads the call");
   expect(row.querySelector(".lwp-under")?.textContent).toBe("ct-7 · Union");
   expect(row.querySelector(".lwp-c-status")?.textContent).toBe("Failed at Analyze");
-  expect(host.querySelectorAll(".lwp-th [role=columnheader]")).toHaveLength(4);
+  expect(host.querySelectorAll(".lwp-th [role=columnheader]")).toHaveLength(5);
   // What the old page drew and the spec removes is gone.
   for (const gone of [".lwp-waiting", ".lwp-off", ".lwp-c-src", ".lwp-c-fix", ".lwp-spark", ".lwp-c-ref", "[data-line-source-filter]", "[data-line-filter-back]"]) expect(host.querySelector(gone)).toBeNull();
   act(() => root.unmount());

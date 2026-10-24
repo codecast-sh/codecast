@@ -78,7 +78,7 @@ describe("cast connector on the wire", () => {
       h.logs.length = 0;
       await expect(h.run(verb, "union", "jobs.rerun")).rejects.toThrow(/exit 1/);
       expect(h.out()).toContain("is a person's call, made in the browser");
-      expect(h.out()).toMatch(/https?:\/\/\S+\/ops\/apps\?app=src-5/);
+      expect(h.out()).toMatch(/https?:\/\/\S+\/flows\?view=signals&sig=apps&app=src-5/);
     }
     h.logs.length = 0;
     await expect(h.run("grant", "union", "db.drop")).rejects.toThrow(/exit 1/);

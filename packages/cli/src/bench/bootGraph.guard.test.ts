@@ -341,7 +341,11 @@ describe("command groups stay off the boot graph", () => {
     // brings the deploy history (causeHistory.ts, changeCard.ts) along.
     // 494 on 2026-10-24: resumePlacement.ts, split out of daemon.ts for its
     // line pin (where a resume may run, and the refusal texts).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(494);
+    // 497 on 2026-10-24: diskFull.ts (a full disk holds the host's line runs),
+    // worktreeLegacy.ts (split out of daemon.ts for its line pin) and
+    // workflow/runDirs.ts, which the daemon now reads to release finished runs'
+    // worktrees.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(497);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

@@ -383,7 +383,8 @@ describe("applyRemote on an existing task", () => {
     expect(feed?.args.task_ids).toEqual(["task_1"]);
     const trigger = scheduled.find((s) => s.args?.event_type);
     expect(trigger?.args).toMatchObject({ event_type: "issues", action: "closed", repository: "LIN", team_id: "team_cc" });
-    expect(db._patched.length).toBe(1);
+    // One write to the task (the sync outbox rows it fans to each record their drain job).
+    expect(db._patched.filter((p: any) => p._id === "task_1").length).toBe(1);
   });
 
   test("a webhook kind wins over the derived one", async () => {
