@@ -573,7 +573,8 @@ describe("runPaneFinished", () => {
     const parent = spawn("/bin/sh", ["-c", "sleep 30 & wait"], { stdio: "ignore" });
     const idle = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
     try {
-      await new Promise((r) => setTimeout(r, 300));
+      // Under load the shell forks its child late: wait until it exists.
+      for (let i = 0; i < 100 && !(await paneChildren(String(parent.pid)))?.trim(); i++) await new Promise((r) => setTimeout(r, 100));
       const pane = spyOn(tmux, "tmuxRunAsync").mockResolvedValue({ status: 0, stdout: `${parent.pid}\n`, stderr: "" });
       expect(await runPaneFinished("ct-claude-x")).toBe(false);
       pane.mockResolvedValue({ status: 0, stdout: `${idle.pid}\n`, stderr: "" });
@@ -582,6 +583,38 @@ describe("runPaneFinished", () => {
     } finally {
       parent.kill("SIGKILL");
       idle.kill("SIGKILL");
+    }
+  }, 60_000);
+});
+
+// tr-1474 (2026-10-24): `tmux has-session` timed out at a high load seven
+// minutes into a live run; the old check read any non-zero answer as a gone
+// session, completed the run as "Agent session ended" and dropped it, though the
+// agent went on to report.
+describe("checkTaskCompletion's session check", () => {
+  it("ends a run only when tmux says the session is gone, not when it cannot answer", async () => {
+    const tmux = await import("./tmux.js");
+    const { scheduler, calls } = makeScheduler([]);
+    scheduler.track({ taskId: "t1", tmuxSession: "ct-claude-abc123", startedAt: Date.now(), maxRuntimeMs: 600_000, runSessionUuid: "u1" });
+    const probe = spyOn(tmux, "tmuxRunAsync").mockResolvedValue({ status: null, stdout: "", stderr: "", killed: true, signal: "SIGKILL" } as any);
+    try {
+      await scheduler.checkTaskCompletion("t1");
+      expect(calls.completed).toEqual([]);
+      expect(scheduler.running.has("t1")).toBe(true);
+
+      // A probe that never answers still meets the runtime cap.
+      scheduler.running.get("t1").startedAt = Date.now() - 700_000;
+      await scheduler.checkTaskCompletion("t1");
+      expect(calls.failed.map((f: { error: string }) => f.error)).toEqual(["Exceeded max runtime (10min)"]);
+      scheduler.track({ taskId: "t1", tmuxSession: "ct-claude-abc123", startedAt: Date.now(), maxRuntimeMs: 600_000, runSessionUuid: "u1" });
+
+      probe.mockResolvedValue({ status: 1, stdout: "", stderr: "can't find session: ct-claude-abc123", code: 1 } as any);
+      await scheduler.checkTaskCompletion("t1");
+      expect(calls.completed).toEqual(["t1"]);
+      expect(scheduler.running.has("t1")).toBe(false);
+    } finally {
+      probe.mockRestore();
+      scheduler.stop?.();
     }
   });
 });
