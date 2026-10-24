@@ -109,7 +109,7 @@ the category to the protected one).
   station, category with who assigned it, stack), the body (doc markdown or
   the report iframe), the options as full width rows with their bodies,
   evidence links, cost and risk, the ladder with recommendations, the answer
-  footer (the existing DecisionAnswerFooter, extended for multi, rank, form).
+  footer (the existing DecisionAnswerQuote, extended for multi, rank, form).
   The inline card in the conversation and the queue card stay compact and link
   to the page.
 
