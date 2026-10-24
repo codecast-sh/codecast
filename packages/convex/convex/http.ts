@@ -13,7 +13,7 @@ import { readConversationRange } from "./conversations";
 import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
 import { callRecordingGetUrl } from "./lib/r2";
 import { ipRateLimited } from "./lib/httpRateLimit";
-import { CLI_ERROR_STATUS } from "./lib/cliErrorStatus";
+import { cliErrorReply } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
@@ -2773,7 +2773,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, line_slots, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, wsl_distro, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, cloud_agent_blocks, settings, model_inventory, update_available } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, line_slots, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, wsl_distro, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, cloud_agent_blocks, settings, model_inventory, update_available, can_self_update, distribution, update_status, team_host } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2819,6 +2819,18 @@ http.route({
         settings,
         model_inventory,
         update_available: typeof update_available === "string" ? update_available : undefined,
+        can_self_update: typeof can_self_update === "boolean" ? can_self_update : undefined,
+        distribution: ["installer", "brew", "npm", "source"].includes(distribution) ? distribution : undefined,
+        update_status: update_status && (update_status.state === "installing" || update_status.state === "failed")
+          ? {
+              state: update_status.state,
+              error: typeof update_status.error === "string" ? update_status.error.slice(-500) : undefined,
+              at: typeof update_status.at === "number" ? update_status.at : undefined,
+            }
+          : undefined,
+        team_host: team_host && typeof team_host.key === "string" && typeof team_host.linux_user === "string"
+          ? { key: team_host.key, linux_user: team_host.linux_user }
+          : undefined,
       });
 
       if (result.error) {
@@ -2889,7 +2901,15 @@ http.route({
         }
       }
 
-      return new Response(JSON.stringify(result), {
+      // The beat's commands come from a query, so they never conflict with
+      // the claims and results other machines write (users.daemonHeartbeat).
+      const commands = await ctx.runQuery(api.users.getMyPendingCommands, {
+        api_token,
+        device_id: typeof device_id === "string" ? device_id : undefined,
+        boot_id: typeof boot_id === "string" ? boot_id : undefined,
+      });
+
+      return new Response(JSON.stringify({ ...result, commands }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
@@ -3884,24 +3904,9 @@ function cliRoute(
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
       } catch (error) {
-        // A ConvexError carries structured data — { code, message, retryable } —
-        // and flattening it to a string is what makes a caller unable to tell
-        // "wait and retry" from "this will never be accepted". Pass the data
-        // through, with a status that says the same thing, so an outbox can make
-        // that decision without parsing prose.
-        const data = (error as any)?.data;
-        if (data && typeof data === "object" && typeof data.code === "string") {
-          return new Response(
-            JSON.stringify({ ...data, error: data.message ?? data.code }),
-            {
-              status: CLI_ERROR_STATUS[data.code] ?? 500,
-              headers: { "Content-Type": "application/json", ...corsHeaders },
-            },
-          );
-        }
-        const msg = error instanceof Error ? error.message : String(error);
-        return new Response(JSON.stringify({ error: msg }), {
-          status: msg.includes("Unauthorized") ? 401 : 500,
+        const reply = cliErrorReply(error, path);
+        return new Response(JSON.stringify(reply.body), {
+          status: reply.status,
           headers: { "Content-Type": "application/json", ...corsHeaders },
         });
       }
@@ -4889,6 +4894,9 @@ cliRoute("/cli/vault/read", async (ctx, body) => ctx.runAction((api as any).secr
 cliRoute("/cli/vault/request", async (ctx, body) => ctx.runMutation((api as any).secrets.request, body));
 cliRoute("/cli/vault/fulfill", async (ctx, body) => ctx.runAction((api as any).secrets.fulfill, body));
 cliRoute("/cli/vault/rm", async (ctx, body) => ctx.runMutation((api as any).secrets.remove, body));
+cliRoute("/cli/vault/ask-first", async (ctx, body) => ctx.runMutation((api as any).secrets.setAskFirst, body));
+cliRoute("/cli/vault/versions", async (ctx, body) => ctx.runQuery((api as any).secrets.versions, body));
+cliRoute("/cli/vault/restore", async (ctx, body) => ctx.runAction((api as any).secrets.restore, body));
 cliRoute("/cli/vault/redaction-values", async (ctx, body) => ctx.runAction((api as any).secrets.redactionValues, body));
 cliRoute("/cli/vault/redaction-version", async (ctx, body) => ctx.runQuery((api as any).secrets.redactionVersion, body));
 cliRoute("/cli/mods/publish-state", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliPublish, body));
@@ -5051,6 +5059,8 @@ cliRoute("/cli/ship/run", async (ctx, body) => {
   }
 });
 cliRoute("/cli/pr/merge", async (ctx, body) => ctx.runAction((api as any).prCli.merge, body));
+cliRoute("/cli/pr/auto-merge", async (ctx, body) => ctx.runAction((api as any).prCli.autoMerge, body));
+cliRoute("/cli/pr/update-branch", async (ctx, body) => ctx.runAction((api as any).prCli.updateBranch, body));
 cliRoute("/cli/pr/close", async (ctx, body) => ctx.runAction((api as any).prCli.close, body));
 cliRoute("/cli/pr/reopen", async (ctx, body) => ctx.runAction((api as any).prCli.reopen, body));
 cliRoute("/cli/pr/draft", async (ctx, body) => ctx.runAction((api as any).prCli.draft, body));

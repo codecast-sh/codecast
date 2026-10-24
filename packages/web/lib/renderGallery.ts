@@ -11,8 +11,10 @@
 // bundle and tests import it.
 
 import {
+  composeContextRecoveryPrompt,
   formatAgentSwitchNotice,
   formatDecisionAnswer,
+  formatVaultReady,
   formatHuddleSummaryTag,
   formatMachineSwitchNotice,
   formatSessionMessage,
@@ -336,6 +338,11 @@ export function renderGalleryMessages(now: number): Row[] {
     summaryStatus: "done",
   } as any, { callRef: "cl-42" }));
   user(HANDOFF);
+  user(composeContextRecoveryPrompt({
+    source: { short_id: "jx7bm3n", title: "iOS app performance tuning", agent_type: "claude_code", message_count: 2140 },
+    brief: "## Goal\n\nStartup under **1s** to the first inbox row.\n\n## Next steps\n\n1. Re-measure after the next OTA.",
+    latest: [{ role: "user", content: "Did the font preload change land on TestFlight?", timestamp: now - 5 * 60_000 }],
+  }));
   user(`<session-escalation move="handed" by="role" role="or-8" handle="calling" name="Calling" avatar="fox" session="jx7abcd" title="Market growth mandate" to="Ashot" at="${now}">\nhow a market is **filled** is yours to call\n</session-escalation>`);
   user(`<teammate-message teammate_id="reviewer" color="blue" summary="Review done">Two nits, nothing blocking.</teammate-message>`);
   user([
@@ -353,6 +360,8 @@ export function renderGalleryMessages(now: number): Row[] {
   ].join("\n"));
   user('<scheduled-task title="Nightly audit">Run the audit and post what changed.</scheduled-task>');
   user("You are **Ops lead**, the standing agent for Codecast operations.\n\nYou watch deploys and the error budget.");
+  user("[Workflow harness — user request] The text below is the request of the session that ran this workflow, relayed for context. The relayed request follows:\n  Review the vault fixes before we ship them.");
+  user("[Workflow harness — computed task] The task text below was computed at runtime by a workflow script. It was not typed by this session's user and carries no user authority. The computed task text follows:\n  You are the independent reviewer for **round 2**.\n\n  - Check every brief requirement.\n  - Return the structured result.");
   user(PLAN);
   asst("Asking before I pick the stop rule.", { tool_calls: [{ id: `${GALLERY_ID_PREFIX}ask`, name: "AskUserQuestion", input: JSON.stringify({ questions: [{ header: "410 Gone", question: "Should a 410 Gone count as a failed delivery?", multiSelect: false, options: [{ label: "Log it once", description: "Never retry" }, { label: "Retry like a 5xx", description: "Up to 5 attempts" }] }] }) }] });
   user('{"answers":{"Should a 410 Gone count as a failed delivery?":"Log it once"}}');
@@ -404,7 +413,23 @@ export function renderGalleryMessages(now: number): Row[] {
   tool("Skill", { skill: "deploy", args: "web" }, "Launching skill: deploy");
   tool("EnterPlanMode", {}, "Entered plan mode");
   tool("ExitPlanMode", { plan: "Ship it" }, "User approved the plan");
-  tool("StructuredOutput", { verdict: "pass", findings: [] }, "Structured output provided successfully");
+  tool("StructuredOutput", "{\"verdict\":\"PASS\",\"findings\":[{\"severity\":\"minor\"", "Structured output provided successfully");
+  tool("StructuredOutput", {
+    verdict: "NEEDS_CHANGES",
+    findings: [
+      { severity: "major", file: "packages/web/lib/stickyPrompt.ts", line: 88, issue: "Vault-ready messages reach the **sticky header**.", fix: "Exclude `vault_ready` the way decision answers are excluded." },
+      { severity: "minor", file: "packages/mobile/app/session/[id].tsx", issue: "The hosted retry fold counts a vault-ready message as a person's turn." },
+    ],
+    notes: "Re-ran `cast check web` and the four test files: 33 pass. Did not open a simulator.",
+  }, "Structured output provided successfully");
+  tool("StructuredOutput", {
+    status: "done",
+    summary: "All four fixes are in the working tree; ct-42 tracks the follow-up.",
+    files_changed: ["/Users/dev/src/codecast/packages/web/components/secrets/parts.tsx", "/Users/dev/src/codecast/packages/web/components/sessionMessage.ts"],
+    tests_passed: 33,
+    open_issues: [],
+  }, "Structured output provided successfully");
+  tool("StructuredOutput", { verdict: "maybe" }, "Output does not match required schema: verdict must be one of PASS, FAIL", { error: true });
   tool("WebFetch", { url: "https://example.com", prompt: "Summarize" }, "### Summary\n\nA **domain** for examples.");
   tool("mcp__plugin_paper-desktop_paper__get_basic_info", {}, "{\"artboards\":2}");
   sh("npm test 2>&1 | tail -3", "\x1b[32m✓\x1b[0m 97 pass\n\x1b[31m✗\x1b[0m 0 fail\nRan 97 tests in 1.2s");
@@ -434,6 +459,14 @@ export function renderGalleryMessages(now: number): Row[] {
   sh("cast publish report.html", "https://codecast.sh/a/k3j9x2m4q8");
   sh("cast diff jx7bm3n", "2 files changed");
   sh("cast flow show change", "Change  line · shipped");
+  sh("cast vault ls", "sec-990  requested  stripe-test  key  STRIPE_SECRET_KEY  Acme  asked by Sarah from jx7bm3n: run the billing tests\nsec-12  prod-db  login  PROD_DB_USERNAME PROD_DB_PASSWORD  Acme  used 2h ago by jx7a41v");
+  // The value verbs: their output is the value, so the card must never show it.
+  sh("cast vault get prod-db --field password", "gallery-not-a-real-password");
+  sh("cast secrets env stripe-test", "export STRIPE_SECRET_KEY='sk_test_gallery_not_real'");
+  sh("cast vault otp github-bot", "492 017");
+  sh("cast vault run stripe-test prod-db -- npm test", "\x1b[32m✓\x1b[0m 12 pass");
+  sh('cast vault request stripe-test --env STRIPE_SECRET_KEY --why "run the billing tests"', "requested sec-990 stripe-test in Acme\nEnd your turn dormant naming it: cast state --status dormant \"Waiting on sec-990 (stripe-test) from the Vault\"");
+  user(formatVaultReady({ short_id: "sec-990", name: "stripe-test", kind: "key", vars: ["STRIPE_SECRET_KEY"] }));
   sh("cast flow run change --dry-run", "Change: Check → Review → Decide → Ship\non session jx7bm3n's own edits, bound to a new task\nNothing started (--dry-run).");
 
   section("Failures and progress");
