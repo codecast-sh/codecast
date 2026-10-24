@@ -1039,7 +1039,14 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
       }
     });
 
-  // ── the other verbs: reopen, draft, reviewers, edit ──
+  const HEAD_GUARD = "Refuse if the branch head is no longer this commit";
+  const mergeMethodOf = (options: any): string => {
+    const chosen = [options.squash && "squash", options.merge && "merge", options.rebase && "rebase"].filter(Boolean) as string[];
+    if (chosen.length > 1) fail("Pick one merge method: --squash, --merge, or --rebase.");
+    return chosen[0] ?? "squash";
+  };
+
+  // ── the other verbs: reopen, draft, reviewers, update-branch, auto-merge, edit ──
   const verb = (name: string, route: string, text: string, extra?: (cmd: any) => any, body?: (options: any) => Record<string, unknown>, done?: (result: any, options: any) => string) => {
     const cmd = pr.command(name)
       .argument("[ref]", "PR reference")
@@ -1077,6 +1084,27 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
     (result) => `reviewers now ${(result.requested_reviewers ?? []).join(", ") || "nobody"} on`,
   );
   verb(
+    "update-branch", "/cli/pr/update-branch",
+    "Merge the base branch into the pull request's branch on GitHub",
+    (cmd) => cmd.option("--head <sha>", HEAD_GUARD),
+    (options) => ({ expected_head_sha: options.head }),
+    () => "updated the branch of",
+  );
+  verb(
+    "auto-merge", "/cli/pr/auto-merge",
+    "Have GitHub merge the pull request once its required checks and reviews pass\n\n" +
+    "  cast pr auto-merge 123 --rebase   turn it on (squash by default)\n" +
+    "  cast pr auto-merge 123 --off      turn it off",
+    (cmd) => cmd
+      .option("--off", "Turn auto-merge off")
+      .option("--squash", "Squash the commits into one (default)")
+      .option("--merge", "Keep the commits and add a merge commit")
+      .option("--rebase", "Replay the commits onto the base branch")
+      .option("--head <sha>", HEAD_GUARD),
+    (options) => ({ enabled: !options.off, method: mergeMethodOf(options), expected_head_sha: options.head }),
+    (result) => (result.auto_merge ? `auto-merge (${result.method}) on for` : "auto-merge off for"),
+  );
+  verb(
     "edit", "/cli/pr/edit",
     "Change the title or the description",
     (cmd) => cmd.option("-t, --title <text>", "The new title").option("-b, --body <text>", stdinText("The new description")),
@@ -1097,18 +1125,18 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
     .option("--merge", "Keep the commits and add a merge commit")
     .option("--rebase", "Replay the commits onto the base branch")
     .option("--delete-branch", "Delete the head branch after it merges")
+    .option("--head <sha>", HEAD_GUARD)
     .option("--json", "Machine-readable output")
     .action(async (ref: string | undefined, options) => {
-      const chosen = [options.squash && "squash", options.merge && "merge", options.rebase && "rebase"]
-        .filter(Boolean) as string[];
-      if (chosen.length > 1) fail("Pick one merge method: --squash, --merge, or --rebase.");
-
+      const method = mergeMethodOf(options);
       const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
       const result = await apiPost(deps, "/cli/pr/merge", {
         ...locator,
-        method: chosen[0] ?? "squash",
+        method,
         delete_branch: options.deleteBranch || undefined,
+        expected_head_sha: options.head,
       });
+      if (result.error) fail(result.error);
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
         return;
