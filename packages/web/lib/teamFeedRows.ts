@@ -4,7 +4,7 @@
 // holds team_id and is_private for every session of theirs, and the two sets
 // are merged here into one list the feed renders. Pure, so it is testable
 // without a store or a DOM.
-import type { Conversation } from "../components/ConversationList";
+import type { Conversation } from "./conversationRow";
 import {
   effectiveMembershipVisibility,
   isVisibilityShareable,

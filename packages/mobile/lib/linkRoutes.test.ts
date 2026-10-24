@@ -33,6 +33,7 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/simple/approvals')).toBe('/decisions');
     expect(mobileRouteForUrl('https://codecast.sh/simple/routines')).toBe('/(tabs)/tasks?segment=routines');
     expect(mobileRouteForUrl('https://codecast.sh/triggers')).toBe('/(tabs)/tasks?segment=routines');
+    expect(mobileRouteForUrl('https://codecast.sh/team/activity?member=abc')).toBe('/(tabs)/chat?segment=activity');
     expect(mobileRouteForUrl('https://codecast.sh/simple/c/jx7abc123?x=1')).toBe('/session/jx7abc123');
     expect(mobileRouteForUrl('/simple/plan/')).toBe('/settings/plan');
     expect(mobileRouteForUrl('https://codecast.sh/simple/connections?whisk=connected')).toBe('/settings/mail');
@@ -44,6 +45,12 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/questions')).toBe('/decisions');
     expect(mobileRouteForUrl('https://codecast.sh/settings/plan?billing=done')).toBe('/settings/plan');
     expect(mobileRouteForUrl('https://codecast.sh/settings/integrations')).toBe('/settings/mail');
+  });
+
+  test('the Vault and a secret open the Vault settings page', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/vault')).toBe('/settings/vault');
+    expect(mobileRouteForUrl('/vault?s=sec-4')).toBe('/settings/vault?s=sec-4');
+    expect(mobileEntityRoute('secret', 'sec-12')).toBe('/settings/vault?s=sec-12');
   });
 
   test("the web's short page names open the same screens", () => {

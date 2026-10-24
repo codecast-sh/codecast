@@ -63,6 +63,8 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   // A call opens on the recording screen, which reads any call's words.
   call: '/recording',
   pr: '/pr',
+  // The Vault is a settings page; a secret opens its detail there.
+  secret: '/settings/vault',
 };
 
 /** The mobile route for an object id, or null when that type has no screen.
@@ -77,6 +79,7 @@ export function mobileEntityRoute(type: EntityType, id: string): string | null {
     const ref = parseRepoObjectId(id);
     return ref?.type === 'pr' ? `${base}/${ref.repository}/${ref.number}` : null;
   }
+  if (type === 'secret') return `${base}?s=${encodeURIComponent(id)}`;
   if (type === 'call') {
     const web = entityRoute('call', id);
     if (web?.startsWith('/calls/')) return `${base}/${web.slice('/calls/'.length)}`;
@@ -93,6 +96,8 @@ const PAGE_ROUTES: Record<string, string> = {
   '/plans': '/(tabs)/tasks?segment=plans',
   '/docs': '/(tabs)/tasks?segment=docs',
   '/triggers': '/(tabs)/tasks?segment=routines',
+  '/team/activity': '/(tabs)/chat?segment=activity',
+  '/vault': '/settings/vault',
   [settingsPathFor('plan')]: '/settings/plan',
   [settingsPathFor('integrations')]: '/settings/mail',
 };
