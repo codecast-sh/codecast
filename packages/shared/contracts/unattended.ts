@@ -15,3 +15,20 @@ export function unattendedOpening(startedBy = "an automated codecast run"): stri
 export function applyUnattended(prompt: string, startedBy?: string): string {
   return `${unattendedOpening(startedBy)}\n\n${prompt}`;
 }
+
+/**
+ * Whether nobody is watching this conversation: a worker under another
+ * session, a workflow station, a trigger run, a role's standing session, or a
+ * run started unattended (`cast spawn --unattended`, a role's hand). The load
+ * governor runs these at background priority while a machine is over its
+ * budget, and cloud placement sends their starts off the laptop.
+ */
+export function isUnattendedConversation(conv: {
+  unattended?: boolean;
+  is_subagent?: boolean;
+  workflow_run_id?: unknown;
+  agent_task_id?: unknown;
+  anchor_id?: unknown;
+} | null | undefined): boolean {
+  return !!conv && !!(conv.unattended || conv.is_subagent || conv.workflow_run_id || conv.agent_task_id || conv.anchor_id);
+}

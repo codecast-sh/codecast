@@ -1,3 +1,4 @@
+import { governor } from "./loadGovernor.js";
 import { exec } from "./proc.js";
 import { codecastPath } from "./codecastDir.js";
 import { promisify } from "util";
@@ -324,6 +325,8 @@ export class TaskScheduler {
   private async poll(): Promise<void> {
     if (this.stopped) return;
     if (this.running.size >= MAX_CONCURRENCY) return;
+    // Due runs stay due: the next poll after the machine drops below "over" starts them.
+    if (!governor.admit("trigger")) return;
 
     try {
       // Over-fetch so ineligible tasks (wrong machine) can't shadow eligible
@@ -633,8 +636,11 @@ export class TaskScheduler {
     const entry = this.running.get(taskId);
     if (!entry) return;
 
-    // Check if tmux session still exists
-    if ((await tmuxRunAsync(["has-session", "-t", entry.tmuxSession])).status !== 0) {
+    // The session is gone only when tmux says so. A probe that timed out or
+    // failed to start says nothing (tr-1474 ended a live run that way at a
+    // high load); the checks below still run, and the runtime cap bounds it.
+    const session = await tmuxRunAsync(["has-session", "-t", entry.tmuxSession]);
+    if (session.status !== 0 && isTmuxSessionMissingError(session)) {
       this.log(`tmux session ${entry.tmuxSession} ended for task ${taskId}`);
       await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended", undefined, entry.runSessionUuid);
       this.cleanupTask(taskId);

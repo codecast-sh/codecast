@@ -1,4 +1,6 @@
-// Sessions a person put at background priority from the resource sheet.
+// Sessions running at background priority: the ones a person put there from
+// the resource sheet, and the unattended ones the load governor puts there
+// while the machine is over its budget (loadGovernor.ts).
 //
 // Work that cannot leave the machine (a render over a local footage library)
 // still need not compete with everything interactive. At background priority
@@ -24,7 +26,10 @@ const setPriority: SetPriority = async (pid, background) => {
   }
 };
 
-const wanted = new Set<string>();
+/** Sessions the server says a person backgrounded, and the ones the governor holds there. */
+const byPerson = new Set<string>();
+const byGovernor = new Set<string>();
+const wanted = { has: (id: string) => byPerson.has(id) || byGovernor.has(id) };
 /** Processes this daemon put at background priority: pid to the start time it had. */
 const applied = new Map<number, number | undefined>();
 let lastSeen: ResourceProcess[] = [];
@@ -55,15 +60,25 @@ export async function applyBackground(processes: ResourceProcess[], run: SetPrio
 
 /** The server's answer to a report: applied at once to the processes last seen, so a press takes effect within a report. */
 export async function setBackgroundSessions(ids: readonly string[], run: SetPriority = setPriority): Promise<void> {
+  if (replace(byPerson, ids)) await reconcile(lastSeen, run);
+}
+
+/** The governor's set: applied at once to the processes last seen, like a person's press. */
+export async function setGovernorBackground(ids: readonly string[], run: SetPriority = setPriority): Promise<void> {
+  if (replace(byGovernor, ids)) await reconcile(lastSeen, run);
+}
+
+function replace(set: Set<string>, ids: readonly string[]): boolean {
   const next = new Set(ids);
-  if (next.size === wanted.size && [...next].every((id) => wanted.has(id))) return;
-  wanted.clear();
-  for (const id of next) wanted.add(id);
-  await reconcile(lastSeen, run);
+  if (next.size === set.size && [...next].every((id) => set.has(id))) return false;
+  set.clear();
+  for (const id of next) set.add(id);
+  return true;
 }
 
 export function resetBackgroundForTest(): void {
-  wanted.clear();
+  byPerson.clear();
+  byGovernor.clear();
   applied.clear();
   lastSeen = [];
 }

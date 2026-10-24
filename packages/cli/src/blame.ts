@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import open from "open";
 import { cliFetchRead } from "./cliHttp.js";
-import { contentLinesToMatch as selectContentLines, extractSessionTrailer, MAX_CONTENT_LINES, type ContentLine } from "@codecast/shared/blame";
+import { contentLinesToMatch as selectContentLines, extractSessionTrailer, MAX_CONTENT_LINES, overlapLinesBySha, type ContentLine } from "@codecast/shared/blame";
 import { defaultConfigDir } from "./config/configDir.js";
 import { webBaseUrl } from "./config/readLocalConfig.js";
 
@@ -58,6 +58,8 @@ export interface SessionRef {
   run_id?: string;
   role_id?: string;
   role_handle?: string;
+  // How the session was found: trailer, commit, hash, subject, overlap, edit.
+  via?: string;
 }
 
 export interface BlameResolution {
@@ -245,6 +247,7 @@ export function augmentPorcelain(raw: string, resolution: BlameResolution): stri
     if (ref.author_name) out.push(`codecast-author ${ref.author_name.replace(/[\r\n]/g, " ")}`);
     out.push(`codecast-url https://codecast.sh/conversation/${ref.conversation_id}`);
     if (ref.message_id) out.push(`codecast-message ${ref.message_id}`);
+    if (ref.via) out.push(`codecast-via ${ref.via}`);
   }
   return out.join("\n");
 }
@@ -281,6 +284,9 @@ export interface CommitDescriptor {
   // The conversation id the commit's Codecast-Session trailer names: the
   // session's own record of the commit, which the server checks first.
   session?: string;
+  // The commit's normalized lines in this file, for the server's line-overlap
+  // match against what sessions wrote. Sent only for commits with no trailer.
+  lines?: string[];
 }
 
 // sha → the conversation its Codecast-Session trailer names, read from the
@@ -334,6 +340,23 @@ async function resolveSessions(
   contentLines: ContentLine[],
 ): Promise<BlameResolution> {
   if (commits.length === 0 && contentLines.length === 0) return EMPTY_RESOLUTION;
+  try {
+    return await postResolve(siteUrl, apiToken, commits, filePath, contentLines);
+  } catch (error) {
+    // A backend older than the overlap match rejects the unknown `lines`
+    // field (closed validators); the rest of the answer is still worth having.
+    if (!commits.some((c) => c.lines) || !(error instanceof Error && error.message === "Internal error")) throw error;
+    return postResolve(siteUrl, apiToken, commits.map(({ lines: _lines, ...c }) => c), filePath, contentLines);
+  }
+}
+
+async function postResolve(
+  siteUrl: string,
+  apiToken: string,
+  commits: CommitDescriptor[],
+  filePath: string,
+  contentLines: ContentLine[],
+): Promise<BlameResolution> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RESOLVE_TIMEOUT_MS);
   try {
@@ -378,6 +401,12 @@ export async function resolveFromParsed(
   if (!config.auth_token || !config.convex_url) return EMPTY_RESOLUTION;
   const shas = [...new Set(parsed.lines.map((l) => l.sha))].filter((s) => s !== ZERO_SHA);
   const trailers = await readSessionTrailers(shas, path.dirname(absFilePath));
+  const overlapLines = overlapLinesBySha(
+    parsed.lines
+      .filter((line) => line.sha !== ZERO_SHA && !trailers.has(line.sha))
+      .map((line) => ({ sha: line.sha, text: line.content, authorMs: (parsed.commits.get(line.sha)?.authorTime ?? 0) * 1000 || undefined })),
+    Date.now(),
+  );
   const commits: CommitDescriptor[] = shas.map((sha) => {
     const meta = parsed.commits.get(sha);
     return {
@@ -385,6 +414,7 @@ export async function resolveFromParsed(
       summary: meta?.summary || undefined,
       author_time: meta?.authorTime ? meta.authorTime * 1000 : undefined,
       session: trailers.get(sha),
+      lines: overlapLines.get(sha),
     };
   });
   const contentLines = contentLinesToMatch(parsed, Date.now());

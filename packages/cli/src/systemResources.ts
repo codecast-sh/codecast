@@ -3,6 +3,7 @@ import { resourceProbe } from "./resourceProbe.js";
 import { envSessionLookup, type EnvSession } from "./processEnv.js";
 import { annotateLocalData } from "./localData.js";
 import { applyBackground } from "./backgroundPriority.js";
+import { poolStatus } from "./sim/pool.js";
 import fs from "node:fs/promises";
 import { execFileAsync } from "./proc.js";
 import type { ProcessInfo } from "./resourceMonitor.js";
@@ -18,9 +19,16 @@ export function resourceKind(command: string): ResourceKind {
   return "system";
 }
 
+/** The simulator a `launchd_sim` process runs, by the device directory its command names. */
+export function simulatorUdid(command: string | undefined): string | undefined {
+  return /launchd_sim\b.*\/Devices\/([0-9A-F-]{36})\//i.exec(command ?? "")?.[1];
+}
+
 /** Each process goes to the session whose agent it descends from; one outside
- *  every tree goes to the session its inherited environment names, as detached. */
-export function attributeProcesses(snapshot: Map<number, ProcessInfo>, sessions: Map<string, number>, envSession?: (p: ProcessInfo) => EnvSession | undefined): ResourceProcess[] {
+ *  every tree goes to the session its inherited environment names, as detached.
+ *  A simulator's processes descend from launchd, not the agent: they go to the
+ *  session holding that simulator in the pool (`simulatorHolder`). */
+export function attributeProcesses(snapshot: Map<number, ProcessInfo>, sessions: Map<string, number>, envSession?: (p: ProcessInfo) => EnvSession | undefined, simulatorHolder?: (udid: string) => string | undefined): ResourceProcess[] {
   const owners = new Map<number, string[]>();
   for (const [id, pid] of sessions) owners.set(pid, [...(owners.get(pid) ?? []), id].sort());
   return [...snapshot.values()].map(p => {
@@ -33,6 +41,9 @@ export function attributeProcesses(snapshot: Map<number, ProcessInfo>, sessions:
       if (resourceKind(cursor.command ?? "") === "simulator") kind = "simulator";
       ids = owners.get(cursor.pid);
       if (ids) break;
+      const udid = simulatorHolder && simulatorUdid(cursor.command);
+      const holder = udid ? simulatorHolder!(udid) : undefined;
+      if (holder) { ids = [holder]; break; }
       cursor = snapshot.get(cursor.ppid);
     }
     // An agent outside every tree is a session of its own, not the work of the session it was spawned from.
@@ -58,6 +69,15 @@ export function processesStartedOutside(snapshot: Map<number, ProcessInfo>, sess
   // A live agent keeps its tree (that stops with the agent); a stopped one still names its outside work.
   const withTarget = sessions.has(sessionId) ? sessions : new Map(sessions).set(sessionId, -1);
   return attributeProcesses(snapshot, withTarget, envSessionLookup(snapshot, withTarget, read, self, Infinity)).filter(p => p.sessionId === sessionId && p.detached);
+}
+
+/** Who holds each pool simulator, read from the pool's locks; empty where there is no pool. */
+function simulatorHolders(): (udid: string) => string | undefined {
+  const held = new Map<string, string>();
+  try {
+    for (const e of poolStatus()) if (e.state === "held" && e.session) held.set(e.udid.toUpperCase(), e.session);
+  } catch {}
+  return (udid) => held.get(udid.toUpperCase());
 }
 
 export function summarizeProcesses(rows: ResourceProcess[]) {
@@ -237,7 +257,7 @@ export async function collectMachineResources(deviceId: string, snapshot: Map<nu
       load1: os.loadavg()[0], logicalCpus: os.cpus().length, ...(snapshot ? { processCount: snapshot.size } : {}),
       ...(cpu === undefined ? {} : { cpuPercent: cpu }), ...memory, ...rates,
     },
-    ...summarizeProcesses(await applyBackground(await annotateLocalData(attributeProcesses(snapshot ?? new Map(), sessions, snapshot && envSessionLookup(snapshot, sessions))))),
+    ...summarizeProcesses(await applyBackground(await annotateLocalData(attributeProcesses(snapshot ?? new Map(), sessions, snapshot && envSessionLookup(snapshot, sessions), simulatorHolders())))),
     collectionDurationMs: Date.now() - start,
     limitations: [...(snapshot ? [] : ["Process capture failed or timed out; process totals and session attribution are unavailable."]), "Process RSS includes shared pages and is not reclaimable memory.", "Shared and detached services may remain after a session moves.", "Network totals cover physical Ethernet/Wi-Fi interfaces; loopback and tunnels are excluded.", "Disk rates cover block devices, including disk images on Mac; they are not per-session I/O.", "Thread counts are not collected by this adapter.", "Processes with more than 32 session owners are left unattributed.", ...(process.platform === "linux" ? ["Process CPU is the ps lifetime average; machine CPU uses the interval between samples."] : [])],
   };

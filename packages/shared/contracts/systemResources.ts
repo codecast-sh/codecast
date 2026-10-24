@@ -42,6 +42,8 @@ export interface ResourcePoint {
   diskWriteBytesPerSecond?: number;
   networkReceivedBytesPerSecond?: number;
   networkSentBytesPerSecond?: number;
+  /** The daemon's load governor level when sampled (packages/cli/src/loadGovernor.ts). */
+  governor?: "calm" | "busy" | "over";
 }
 
 export interface ResourceGroup {
@@ -67,6 +69,13 @@ export const RESOURCE_PROCESS_LIMIT = 256;
 export const RESOURCE_HISTORY_LIMIT = 120;
 export const RESOURCE_STALE_MS = 120_000;
 
+/** CPU use at which a machine counts as busy: the overload alert's bar, and what a machine chip warns at. */
+export const CPU_BUSY_PERCENT = 90;
+
+export function cpuBusy(p: { cpuPercent?: number }): boolean {
+  return (p.cpuPercent ?? 0) >= CPU_BUSY_PERCENT;
+}
+
 // How long a reason must hold before it counts as an incident. Short spikes
 // (a build, a test run, an agent fan-out) are normal work, not something to act on.
 const SUSTAIN_MS = 3 * 60_000;
@@ -86,7 +95,7 @@ export function sustainedResourcePressure(points: ResourcePoint[], now: number):
     if (!p.memoryAvailableIsEstimate && p.memoryTotal > 0 && p.memoryAvailable / p.memoryTotal < 0.1) return "Available memory has stayed below 10%";
     // Load average is not a reason: it counts every runnable and blocked thread, so a
     // fleet of agent processes keeps it far above the core count while the CPU idles.
-    if ((p.cpuPercent ?? 0) >= 90) return "CPU use has stayed above 90%";
+    if (cpuBusy(p)) return `CPU use has stayed above ${CPU_BUSY_PERCENT}%`;
     return null;
   };
   let incident: ResourceIncident | null = null;

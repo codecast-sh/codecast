@@ -335,6 +335,8 @@ export const createSessionFromCli = mutation({
     // nested under it (see resolveSpawnParent).
     parent_session: v.optional(v.string()),
     spawner_session: v.optional(v.string()),
+    // `cast spawn --unattended`: nobody watches this run (isUnattendedConversation).
+    unattended: v.optional(v.boolean()),
     // `cast spawn --as <name>`: a definition in the caller's workspace.
     definition: v.optional(v.string()),
     // The line's review station (the-line.md L3): a task short id. The new
@@ -443,6 +445,7 @@ export const createSessionFromCli = mutation({
       mergeBackOnDone: !!subagentFields && !!asDef.isolated && (args.merge_back ?? asDef.mergeBack ?? false),
     });
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
+    if (roleGate || args.unattended) await ctx.db.patch(conversationId, { unattended: true });
     if (review) {
       await ctx.db.patch(conversationId, { review_of_task_id: review.task._id });
       if (review.role) await countHand(ctx, review.role);

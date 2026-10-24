@@ -2,7 +2,8 @@
 
 // One machine's vitals over the last hour: a row of metric cells, each a
 // value over its own trace, sharing one hover cursor so every cell reads the
-// same moment. A thin band underneath carries the OS memory-pressure state.
+// same moment. Thin bands underneath carry the load governor's level (what the
+// daemon is doing about load) and the OS memory-pressure state.
 import React from "react";
 import { sustainedResourcePressure, type ResourcePoint, type ResourcePressure } from "@codecast/shared/contracts";
 import { cn } from "../../lib/utils";
@@ -72,6 +73,20 @@ const PRESSURE_FILL: Record<ResourcePressure, string> = {
   elevated: "fill-sol-yellow",
   critical: "fill-sol-red",
   unknown: "fill-sol-text-dim/20",
+};
+
+type GovernorLevel = NonNullable<ResourcePoint["governor"]>;
+
+const GOVERNOR_FILL: Record<GovernorLevel, string> = {
+  calm: "fill-sol-green/50",
+  busy: "fill-sol-yellow",
+  over: "fill-sol-red",
+};
+
+const GOVERNOR_LABEL: Record<GovernorLevel, { text: string; tone: string }> = {
+  calm: { text: "Within budget", tone: "text-sol-text-dim" },
+  busy: { text: "Busy", tone: "text-sol-yellow" },
+  over: { text: "Over budget: unattended work throttled, new starts held", tone: "text-sol-red" },
 };
 
 const W = 200;
@@ -154,12 +169,22 @@ export function HealthStrip({ machine, freshness, now }: { machine: ResourceMach
   const span = Math.max(1, t1 - t0);
   const dim = freshness !== "live";
   const hoverAt = hover !== null ? pts[hover]?.at : undefined;
+  const governed = pts.some((p) => p.governor);
+  const level = (hover !== null ? pts[hover] : pts[pts.length - 1])?.governor;
   return (
     <div className="border-b border-sol-border/30">
       <div className="grid grid-cols-2 divide-sol-border/20 sm:grid-cols-3 xl:grid-cols-6 [&>*]:border-sol-border/20 [&>*]:border-r [&>*]:border-b xl:[&>*]:border-b-0">
         {metrics.map((m) => <Cell key={m.key} m={m} pts={pts} t0={t0} t1={t1} hover={hover} setHover={setHover} dim={dim} />)}
       </div>
       <div className="relative px-3 pb-2 pt-1">
+        {governed && (
+          <svg viewBox={`0 0 ${W} 4`} preserveAspectRatio="none" className="mb-0.5 block h-1 w-full" aria-label="Load governor level over the last hour">
+            {pts.map((p, i) => {
+              const next = pts[i + 1]?.at ?? t1;
+              return p.governor ? <rect key={p.at} x={((p.at - t0) / span) * W} width={Math.max(0.3, ((next - p.at) / span) * W)} y={0} height={4} className={GOVERNOR_FILL[p.governor]} /> : null;
+            })}
+          </svg>
+        )}
         <svg viewBox={`0 0 ${W} 4`} preserveAspectRatio="none" className="block h-1 w-full" aria-label="Memory pressure over the last hour">
           {pts.map((p, i) => {
             const next = pts[i + 1]?.at ?? t1;
@@ -171,6 +196,7 @@ export function HealthStrip({ machine, freshness, now }: { machine: ResourceMach
           <span className="truncate">
             {freshness === "stale" && <span className="text-sol-yellow">Last sample {fmtAgo(machine.receivedAt, now)}; values may be out of date · </span>}
             {freshness === "offline" && <span className="text-sol-text-muted">Offline · last sample {fmtAgo(machine.receivedAt, now)} · </span>}
+            {level && <span className={GOVERNOR_LABEL[level].tone}>{GOVERNOR_LABEL[level].text} · </span>}
             {incident
               ? <span className={incident.level === "critical" ? "text-sol-red" : "text-sol-yellow"}>{incident.reason} since {fmtAgo(incident.since, now)}</span>
               : <span>memory pressure: {pts[pts.length - 1].pressure}</span>}

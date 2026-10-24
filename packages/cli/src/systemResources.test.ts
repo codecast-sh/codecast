@@ -104,3 +104,17 @@ test("missing memory pressure probes do not falsely recover an incident", () => 
   expect(sustainedResourcePressure(history, now)?.level).toBe("critical");
   expect(sustainedResourcePressure([...history, point(now + 30000, "normal"), point(now + 60000, "normal"), point(now + 90000, "normal")], now + 90000)).toBeNull();
 });
+
+test("a simulator's processes go to the session holding it in the pool", () => {
+  const udid = "B5843005-C32D-4A55-8FE4-97EA737B0FC5";
+  const snapshot = new Map([
+    [10, { pid: 10, ppid: 1, cpu: 50, rss: 1, command: "claude --session-id s1" }],
+    [20, { pid: 20, ppid: 1, cpu: 1, rss: 1, command: `launchd_sim /Users/a/Library/Developer/CoreSimulator/Devices/${udid}/data/var/run/launchd_bootstrap.plist` }],
+    [21, { pid: 21, ppid: 20, cpu: 80, rss: 1, command: "/Library/.../26.1.simruntime/Contents/Resources/RuntimeRoot/usr/libexec/routined" }],
+    [30, { pid: 30, ppid: 1, cpu: 1, rss: 1, command: "launchd_sim /x/CoreSimulator/Devices/0C4219F2-0269-4078-9C3E-005529EE1932/data/b.plist" }],
+  ]);
+  const rows = attributeProcesses(snapshot as any, new Map([["s1", 10]]), undefined, (u) => (u === udid ? "s1" : undefined));
+  expect(rows.find((r) => r.pid === 21)?.sessionId).toBe("s1");
+  expect(rows.find((r) => r.pid === 20)?.sessionId).toBe("s1");
+  expect(rows.find((r) => r.pid === 30)?.sessionId).toBeUndefined();
+});

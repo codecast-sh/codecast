@@ -3,7 +3,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { resourceSnapshot } from "./machineResourcesSchema";
-import { RESOURCE_HISTORY_LIMIT, RESOURCE_PROCESS_LIMIT, deviceDisplayName, fmtBytes, fmtCpu, sustainedResourcePressure, type MachineResourceSnapshot, type ResourceIncident, type ResourcePoint } from "@codecast/shared/contracts";
+import { RESOURCE_HISTORY_LIMIT, RESOURCE_PROCESS_LIMIT, deviceDisplayName, fmtBytes, fmtCpu, isUnattendedConversation, sustainedResourcePressure, type MachineResourceSnapshot, type ResourceIncident, type ResourcePoint } from "@codecast/shared/contracts";
 import { emitNotification } from "./notificationRouter";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -45,7 +45,25 @@ export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users"
   if (existing) await ctx.db.patch(existing._id, { ...data, ...stamp });
   else await ctx.db.insert("machine_resources", { ...data, ...stamp });
   if (alert) await notifyOverload(ctx, userId, device, snapshot, alert, now);
-  return { accepted: true, background_sessions };
+  return { accepted: true, background_sessions, unattended_sessions: await unattendedSessions(ctx, snapshot) };
+}
+
+/**
+ * The sessions on this machine nobody is watching (isUnattendedConversation).
+ * The daemon's load governor runs them at background priority while the
+ * machine is over its budget. Sent with accepted reports only; the daemon
+ * keeps the last answer between them.
+ */
+async function unattendedSessions(ctx: MutationCtx, snapshot: MachineResourceSnapshot): Promise<string[]> {
+  const ids = new Set<string>();
+  for (const p of snapshot.processes) if (p.sessionId) ids.add(p.sessionId);
+  const out: string[] = [];
+  for (const sessionId of ids) {
+    const managed = await ctx.db.query("managed_sessions").withIndex("by_session_id", q => q.eq("session_id", sessionId)).first();
+    const conv = managed?.conversation_id ? await ctx.db.get(managed.conversation_id) : null;
+    if (isUnattendedConversation(conv)) out.push(sessionId);
+  }
+  return out;
 }
 
 /** A fresh incident after this long rings again; an escalation to critical always does. */

@@ -9,6 +9,7 @@ export const resourcePoint = v.object({
   load1: v.number(), logicalCpus: v.number(), processCount: v.optional(v.number()), threadCount: v.optional(v.number()),
   diskReadBytesPerSecond: v.optional(v.number()), diskWriteBytesPerSecond: v.optional(v.number()),
   networkReceivedBytesPerSecond: v.optional(v.number()), networkSentBytesPerSecond: v.optional(v.number()),
+  governor: v.optional(v.union(v.literal("calm"), v.literal("busy"), v.literal("over"))),
 });
 export const resourceSnapshot = v.object({
   version: v.literal(1), deviceId: v.string(), platform: v.string(), sample: resourcePoint,

@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { applyBackground, resetBackgroundForTest, setBackgroundSessions } from "./backgroundPriority";
+import { applyBackground, resetBackgroundForTest, setBackgroundSessions, setGovernorBackground } from "./backgroundPriority";
 import type { ResourceProcess } from "@codecast/shared/contracts";
 
 const proc = (pid: number, sessionId?: string, startedAt = 100): ResourceProcess => ({ pid, ppid: 1, name: "ffmpeg", kind: "tool", cpu: 300, rss: 1, startedAt, ...(sessionId ? { sessionId } : {}) });
@@ -46,4 +46,18 @@ test("start-time jitter between samples is the same process", async () => {
   await applyBackground([proc(1, "s1", 100_420)], run);
   await setBackgroundSessions([], run);
   expect(calls).toEqual([[1, true], [1, false]]);
+});
+
+test("the governor's set and a person's set are one union: releasing one keeps what the other holds", async () => {
+  const calls: Array<[number, boolean]> = [];
+  const run = async (pid: number, bg: boolean) => { calls.push([pid, bg]); return true; };
+  await applyBackground([proc(1, "s1"), proc(2, "s2")], run);
+  await setBackgroundSessions(["s1"], run);
+  await setGovernorBackground(["s1", "s2"], run);
+  expect(calls).toEqual([[1, true], [2, true]]);
+
+  await setGovernorBackground([], run);
+  expect(calls.slice(2)).toEqual([[2, false]]);
+  await setBackgroundSessions([], run);
+  expect(calls.slice(3)).toEqual([[1, false]]);
 });

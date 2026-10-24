@@ -394,6 +394,7 @@ export async function ensureUp(
 
   let { state, address } = hostState(host);
   if (state === "missing") throw new HostGone(host);
+  const wasRunning = state === "running";
 
   if (state === "stopped") {
     onProgress(`starting ${host.id}`);
@@ -445,7 +446,10 @@ export async function ensureUp(
   }
   // A host's first boot from a machine image streams its disk in from the
   // snapshot: cloud-init finished at 140s on 2026-09-29, past the old 150s.
-  const sshDeadline = Date.now() + (host.platform === "darwin" ? 25 * 60_000 : 6 * 60_000);
+  // A host that was already running has booted: if it does not answer within
+  // a slow handshake or two its OS is gone (AWS "impaired", 2026-10-24), and a
+  // caller with a fallback (cloud-first spawns) should not wait 6 minutes for it.
+  const sshDeadline = Date.now() + (wasRunning ? 90_000 : host.platform === "darwin" ? 25 * 60_000 : 6 * 60_000);
   for (;;) {
     try {
       execFileSync(

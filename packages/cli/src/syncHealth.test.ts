@@ -62,16 +62,23 @@ test('transcript and network backlogs count an affected conversation only once',
   } finally { queue.stop(); }
 });
 
-test('heartbeat paths share a scan and refresh the result after thirty seconds', async () => {
+test('readers never wait on a scan: one runs at a time, the next thirty seconds after it finished', async () => {
   let now = 1000, calls = 0;
-  const read = createStuckSyncReader(async () => { calls++; return []; }, () => now);
-  const first = read();
-  expect(read()).toBe(first);
-  await first;
+  let finish: (r: any[]) => void = () => {};
+  const read = createStuckSyncReader(() => { calls++; return new Promise((r) => { finish = r; }); }, () => now);
+  expect(read()).toEqual([]);
+  now += 60_000;
+  expect(read()).toEqual([]);
+  expect(calls).toBe(1);
+  const stuck = [{ sessionId: 'a' }] as any[];
+  finish(stuck);
+  await new Promise((r) => setTimeout(r, 0));
+  expect(read()).toBe(stuck);
   now += 29_999;
-  expect(read()).toBe(first);
+  read();
+  expect(calls).toBe(1);
   now++;
-  expect(read()).not.toBe(first);
+  expect(read()).toBe(stuck);
   expect(calls).toBe(2);
 });
 
