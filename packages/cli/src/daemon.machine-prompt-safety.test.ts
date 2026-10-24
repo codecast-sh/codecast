@@ -39,7 +39,7 @@ function fixture(transport = "tmux", cached = true) {
   const bodies: string[] = [];
   const commands: string[] = [];
   const captureSizes: number[] = [];
-  const hooks = { capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null };
+  const hooks = { capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null, markWrite: undefined as undefined | ((id: string) => Promise<unknown>) };
   const timers: Array<{ fn: () => unknown; ms: number; cancelled: boolean }> = [];
   const clock = { now: 1_000_000, steps: 0 };
   const step = (ms = 0) => {
@@ -132,6 +132,7 @@ function fixture(transport = "tmux", cached = true) {
   const statuses: Array<{ messageId: string; status: string }> = [];
   const holds: Array<{ id: string; holdReason?: string; holdScreen?: string }> = [];
   const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean; pasted: boolean }>();
+  const injectedMarkWrites = new Map<string, Promise<unknown>>();
   const launchPromptCarries = new Map<string, { conversationId: string; tmuxSession: string; projectPath: string; sessionId: string; transcript: string; startedAt: number }>();
   const syncService = {
     getConversationOwnerInfo: async () => null,
@@ -210,6 +211,7 @@ function fixture(transport = "tmux", cached = true) {
       ? { tmuxTarget: "target:0.0", source: "started" }
       : { tmuxTarget: null, proc: { tty: "ttys-test", termProgram: transport } },
     markInjectedBestEffort: (_sync: unknown, id: string) => {
+      const write = hooks.markWrite?.(id); if (write) injectedMarkWrites.set(id, write);
       statuses.push({ messageId: id, status: "injected" });
       injectedMessageTs.set(id, { ts: clock.now, conversationId: "conv", confirmed: false, pasted: false });
     },
@@ -223,7 +225,7 @@ function fixture(transport = "tmux", cached = true) {
     selfHealIfTimersStalled: () => {}, assertLegacyDeliveryEnvelope: () => {},
     messagesInFlight: new Map(), conversationDeliveryActive: new Set(), injectedMessageTs,
     IN_FLIGHT_HARD_TTL_MS: 10000, compactionRedeliveryBypass: new Set(), injectionDedupWindowMs: () => 10000,
-    messageRetryTimers: new Set(), syncService, conversationCache: cached ? { sid: "conv" } : {}, titleCache: {},
+    messageRetryTimers: new Set(), injectedMarkWrites, syncService, conversationCache: cached ? { sid: "conv" } : {}, titleCache: {},
     sendAgentStatus: () => {}, recentSessionInjections: new Map(), resetReconnectDelay: () => {},
     checkForInteractivePrompt: async () => {},
   };
@@ -240,12 +242,12 @@ function fixture(transport = "tmux", cached = true) {
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
       "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "herdrKey", "injectViaHerdr", "injectThroughPane", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
-      "deliverMessage", "deliverMessageIntoSession", "launchPromptCarried", "settleLaunchPrompt",
+      "deliverMessage", "deliverMessageIntoSession", "launchPromptCarried", "settleLaunchPrompt", "injectedMarkSettled", "rependAfterAttempt",
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
     ];
     const constants = [
       "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
-      "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
+      "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
       "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME",
     ].map(name => {
       const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
@@ -598,6 +600,19 @@ describe("machine prompt delivery safety", () => {
     await f.scan([{ _id: "held", content: "please continue", delivery_force: true }]);
     expect(f.bodies).toEqual(["please continue"]);
     expect(f.events.filter((e: string) => e.startsWith("hold:"))).toEqual(["hold:held"]);
+  });
+
+  // The pre-paste "injected" write and the hold's re-pend are parallel mutations; a write
+  // landing second stranded the row "injected" with nothing pasted (2026-10-24).
+  test("a hold re-pends only after the attempt's own injected write has landed", async () => {
+    const f = fixture(), settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+    f.pendingInteractivePrompts.clear(); f.state.menu = menu;
+    let land!: () => void;
+    f.hooks.markWrite = () => new Promise<void>((resolve) => { land = () => { f.events.push("injected-landed"); resolve(); }; });
+    await f.scan([{ _id: "held", content: "please continue" }]); await settle();
+    expect(f.events).toEqual([]);
+    land(); await settle();
+    expect(f.events).toEqual(["injected-landed", "hold:held"]);
   });
 
   // Claude Code clears the screen as it boots, so a capture can land on a blank

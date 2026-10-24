@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clearMessageDeliveryStateForConversation, markInjectedBestEffort } from "./daemon.js";
+import { clearMessageDeliveryStateForConversation, injectedMarkSettled, markInjectedBestEffort } from "./daemon.js";
 
 // Regression test for the "web message reaches 'Delivering to session' then never pastes" bug
 // (session fdc3bd59 / jx7174z, 2026-05-25). deliverMessage marked the pending message
@@ -101,5 +101,33 @@ describe("mark-injected confirmation and dedup persistence", () => {
     await new Promise(r => setTimeout(r, 50));
     expect(calls.length).toBe(1);
     expect(clearMessageDeliveryStateForConversation("conv_ok")).toEqual({ inFlight: 0, dedup: 1, preserved: 0 });
+  });
+});
+
+// 2026-10-24: a move's continue, refused by a Codex prompt, was re-pended while
+// that attempt's "injected" write was still in flight. Daemon mutations run in
+// parallel, the late write won, and the row sat "injected" with nothing pasted
+// until it was cancelled. A re-pend waits for the attempt's own write.
+describe("injectedMarkSettled", () => {
+  test("waits for the write itself, past the mark's own timeout", async () => {
+    let landed = false;
+    const sync = {
+      updateMessageStatus: (_: StatusArg) => new Promise<void>((resolve) => setTimeout(() => { landed = true; resolve(); }, 80)),
+    };
+    await markInjectedBestEffort(sync, "msg_slow", 10);
+    expect(landed).toBe(false);
+    await injectedMarkSettled("msg_slow");
+    expect(landed).toBe(true);
+  });
+
+  test("returns at once when no write is in flight, and gives up on a hung one at its cap", async () => {
+    const start = Date.now();
+    await injectedMarkSettled("msg_none");
+    expect(Date.now() - start).toBeLessThan(20);
+    const sync = { updateMessageStatus: (_: StatusArg) => new Promise<void>(() => {}) };
+    await markInjectedBestEffort(sync, "msg_hung", 10);
+    const capped = Date.now();
+    await injectedMarkSettled("msg_hung", 40);
+    expect(Date.now() - capped).toBeGreaterThanOrEqual(35);
   });
 });

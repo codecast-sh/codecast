@@ -2073,6 +2073,37 @@ const MARK_INJECTED_TIMEOUT_MS = 8_000;
 // (not the mark) is what holds redelivery back.
 const MARK_INJECTED_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 45_000, 90_000];
 const markInjectedRetryActive = new Set<string>();
+// The "injected" write each delivery attempt sends before its paste, while it
+// is in flight. Daemon mutations run in parallel (syncService.mutate skips the
+// client queue), so a re-pend sent after a refused paste could land BEFORE this
+// write, and the late "injected" then stranded a message nothing had pasted:
+// no scan reads injected rows, and a move's continue sat behind a closed
+// Codex prompt until it was cancelled (2026-10-24). A re-pend waits for it.
+const injectedMarkWrites = new Map<string, Promise<unknown>>();
+
+// Bounded: a write still unsettled this long is a stalled backend, and holding
+// the re-pend past it only delays the message.
+const INJECTED_MARK_SETTLE_CAP_MS = 30_000;
+
+export function injectedMarkSettled(messageId: string, capMs: number = INJECTED_MARK_SETTLE_CAP_MS): Promise<void> {
+  const write = injectedMarkWrites.get(messageId);
+  if (!write) return Promise.resolve();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    write.then(() => undefined, () => undefined),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, capMs); }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
+// Back to "pending" after a refused or failed attempt, once that attempt's own
+// "injected" write has settled.
+export function rependAfterAttempt(
+  syncService: Pick<SyncService, "retryMessage">,
+  messageId: string,
+  opts?: { holdReason?: string; holdScreen?: string },
+): Promise<void> {
+  return injectedMarkSettled(messageId).then(() => syncService.retryMessage(messageId, opts));
+}
 
 export function markInjectedBestEffort(
   syncService: Pick<SyncService, "updateMessageStatus">,
@@ -2098,8 +2129,12 @@ export function markInjectedBestEffort(
   const attempt = (): Promise<boolean> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const pasteVerified = injectedMessageTs.get(messageId)?.pasted === true;
+    // The write itself, not the timed race below: it can land after the timeout.
+    const write = syncService.updateMessageStatus({ messageId, status: "injected", ...(pasteVerified ? { pasteVerified: true } : {}) });
+    injectedMarkWrites.set(messageId, write);
+    void write.finally(() => { if (injectedMarkWrites.get(messageId) === write) injectedMarkWrites.delete(messageId); }).catch(() => {});
     return Promise.race([
-      syncService.updateMessageStatus({ messageId, status: "injected", ...(pasteVerified ? { pasteVerified: true } : {}) }).then(() => true),
+      write.then(() => true),
       new Promise<boolean>((_, reject) => {
         timer = setTimeout(() => reject(new Error("mark_injected_timeout")), timeoutMs);
       }),
@@ -31683,7 +31718,7 @@ async function main(): Promise<void> {
     setTimeout(async () => {
       messageRetryTimers.delete(messageId);
       try {
-        await syncService.retryMessage(messageId, holdReason ? { holdReason } : undefined);
+        await rependAfterAttempt(syncService, messageId, holdReason ? { holdReason } : undefined);
         logDelivery(`Retry ${retryCount + 1} triggered for msg=${messageId.slice(0, 8)}`);
         // A hold re-pends the row unchanged (same retry count, same reason),
         // so the subscription has nothing new to push: drive the scan now
@@ -31978,9 +32013,10 @@ async function main(): Promise<void> {
             // hold, and re-drive when the prompt closes.
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
             holdConversationForPrompt(msg.conversation_id);
-            syncService.retryMessage(msg._id, err instanceof InputBlockedError
+            const hold = err instanceof InputBlockedError
               ? { holdReason: err.holdReason, holdScreen: err.screen }
-              : { holdReason: "waiting for a human answer in the terminal" }).catch(logConvexFailure);
+              : { holdReason: "waiting for a human answer in the terminal" };
+            rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
           } else if (err instanceof CloudAgentHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
