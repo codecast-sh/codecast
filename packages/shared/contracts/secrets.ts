@@ -878,7 +878,8 @@ export const PRESENCE_TTL_MS = 2 * 60 * 1000;
 /** The code every presence gate refuses with, first in its message, so a client knows to run the passkey ceremony and retry. */
 export const PRESENCE_REQUIRED = "presence_required";
 
-const PRESENCE_PHRASE: Record<PresenceAction, string> = {
+/** What each action does, as a clause after "to": the refusal and the confirm page both say it. */
+export const PRESENCE_PHRASE: Record<PresenceAction, string> = {
   reveal: "reveal an Ask first secret",
   approve: "approve an Ask first read",
   ask_first_off: "turn Ask first off",
@@ -895,6 +896,9 @@ export function isPresenceRequired(err: unknown): boolean {
   const text = typeof err === "string" ? err : err instanceof Error ? err.message : typeof (err as any)?.error === "string" ? (err as any).error : "";
   return text.includes(`${PRESENCE_REQUIRED}:`);
 }
+
+/** What a client's gated press answers when the person did not confirm with Touch ID, so nothing was sent. */
+export const NOT_CONFIRMED = Symbol("not confirmed");
 
 /** A passkey as its owner's settings list shows it; the public key never leaves the backend. */
 export type PasskeyMeta = {

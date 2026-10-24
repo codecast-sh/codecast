@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { ExternalLink, Lock } from "lucide-react";
+import { ExternalLink, Fingerprint, Lock } from "lucide-react";
 import type { DecisionOption } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
@@ -17,7 +17,9 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 // The whole row is the click target when onPick is given (single answers,
 // multi toggles). A rank row passes its arrows as `trailing` and no onPick,
 // since a button cannot nest buttons. A `held` row is a disabled button
-// whose reason sits at its end (an agent's tab: lib/agentTabGuard).
+// whose reason sits at its end (an agent's tab: lib/agentTabGuard); a `gated`
+// row carries a fingerprint, since picking it asks for Touch ID first
+// (lib/passkeyPresence useApproveGate).
 export type OptionTone = "primary" | "picked" | "plain";
 
 /** The asker's own "recommended" mark at the end of an option's label. */
@@ -33,6 +35,7 @@ export function DecisionOptionRow({
   trailing,
   tags,
   held,
+  gated,
   compact = false,
 }: {
   option: DecisionOption;
@@ -50,6 +53,8 @@ export function DecisionOptionRow({
   tags?: ReactNode;
   /** Why this row cannot be picked here; it renders disabled with the reason. */
   held?: string;
+  /** Picking this row asks for Touch ID first. */
+  gated?: boolean;
   compact?: boolean;
 }) {
   // An asker's "(Recommended)" is a mark, not part of the option's name: it
@@ -113,6 +118,7 @@ export function DecisionOptionRow({
         {extras}
       </span>
       {held && <span data-held className="shrink-0 self-center inline-flex items-center gap-1 text-[10.5px] font-medium text-sol-text-dim"><Lock className="w-3 h-3" />{held}</span>}
+      {gated && !held && <Fingerprint data-gated aria-label="Asks for Touch ID" className="shrink-0 self-center w-3.5 h-3.5 text-sol-text-dim" />}
       {suggested && <span data-cc-suggested className="shrink-0 self-center text-[10.5px] font-medium text-sol-text-dim">Suggested</span>}
       {trailing && <span className="shrink-0 flex items-center gap-0.5 self-center">{trailing}</span>}
     </>
@@ -121,7 +127,7 @@ export function DecisionOptionRow({
   return held ? (
     <button type="button" disabled title={held} className={cls} data-option={position} data-suggested={suggested ? "" : undefined}>{body}</button>
   ) : onPick ? (
-    <button type="button" onClick={onPick} className={cls} data-option={position} data-suggested={suggested ? "" : undefined}>{body}</button>
+    <button type="button" onClick={onPick} title={gated ? "Confirm with Touch ID" : undefined} className={cls} data-option={position} data-suggested={suggested ? "" : undefined}>{body}</button>
   ) : (
     <div className={cls} data-option={position} data-suggested={suggested ? "" : undefined}>{body}</div>
   );
@@ -139,6 +145,7 @@ export function DecisionOptionList({
   leading,
   trailing,
   held,
+  gated,
   compact = false,
 }: {
   options: DecisionOption[];
@@ -149,6 +156,7 @@ export function DecisionOptionList({
   leading?: (position: number) => ReactNode;
   trailing?: (position: number) => ReactNode;
   held?: (position: number) => string | undefined;
+  gated?: (position: number) => boolean;
   compact?: boolean;
 }) {
   return (
@@ -165,6 +173,7 @@ export function DecisionOptionList({
           leading={leading?.(n)}
           trailing={trailing?.(n)}
           held={held?.(n)}
+          gated={gated?.(n)}
           compact={compact}
         />
       ))}

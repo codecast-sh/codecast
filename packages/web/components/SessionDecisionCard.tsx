@@ -28,6 +28,7 @@ import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
 import { PublishedPageEmbed } from "./PublishedPageEmbed";
 import { useHeldOption } from "../lib/agentTabGuard";
+import { NOT_CONFIRMED } from "@codecast/shared/contracts/secrets";
 import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, List } from "lucide-react";
 import Link from "next/link";
 import { ShareControl } from "./ShareControl";
@@ -104,7 +105,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
 }) {
   const {
     messages, needsMessages, poll, recentText, question, options, permissions, isPermissionCard, isInfraDialog,
-    answer: answerItem, answerFreeText: answerItemFreeText, dismiss: dismissItem,
+    answer: answerItem, gated, answerFreeText: answerItemFreeText, dismiss: dismissItem,
   } = useDecisionAnswer(item);
   const answerDecision = useInboxStore((s) => s.answerDecision);
   const openSessionRoute = useOpenSession();
@@ -219,9 +220,11 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
   const held = useHeldOption(decisionRow);
   const answer = useCallback((index: number) => {
     if (held(index)) return;
-    answerItem(index);
-    onDone();
-  }, [answerItem, onDone, held]);
+    const sent = answerItem(index);
+    // One that asks for Touch ID moves on once confirmed; cancelled, it stays to be answered.
+    if (gated(index)) void Promise.resolve(sent).then((r) => r !== NOT_CONFIRMED && onDone(), () => {});
+    else onDone();
+  }, [answerItem, onDone, held, gated]);
   const answerFreeText = useCallback((text: string) => {
     if (!text.trim()) return;
     answerItemFreeText(text);
@@ -592,6 +595,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             // A hosted conversation marks no option before the person picks one.
             tone={(n) => (n === 0 && !hosted && !held(options[n]?.index ?? -1) ? "primary" : "plain")}
             held={(n) => held(options[n]?.index ?? -1)}
+            gated={(n) => gated(options[n]?.index ?? -1)}
             tags={(n) => item.defaultOption === options[n]?.index && (
               <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">proceeding with this</span>
             )}

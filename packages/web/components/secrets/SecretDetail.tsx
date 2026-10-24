@@ -5,7 +5,7 @@
 // first, previous values with Restore, who used it from which session, and Delete.
 
 import { useMemo, useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Loader2, Lock, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Fingerprint, Loader2, Lock, X } from "lucide-react";
 import { envNameIssue, isExpiring, siteProblem, type EnvNameIssue, type FilePayload, type KeyPayload, type LoginPayload, type SecretMeta, type SecretVersionMeta, type SigninPayload } from "@codecast/shared/contracts/secrets";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { useInboxStore } from "../../store/inboxStore";
@@ -17,6 +17,7 @@ import { SwitchReview, type SwitchFigure, type SwitchLedger } from "../consequen
 import { KeyCap } from "../KeyCap";
 import { Switch } from "../ui/switch";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
+import { usePresence } from "../../lib/passkeyPresence";
 import { FieldProblem, KIND, KindGlyph, MaskedField, ReplaceButton, Row, ScopeMark, TotpCode, useCopy, useReveal, type Replace } from "./parts";
 import { DeclineRequest, ValueEditor } from "./ValueForm";
 import { EVENT_TONE, EVENT_VERB, HEALTH, envVars, formatIn, isStub, nameIssue, namesIn, isStaged, secretHealth, splitList, withPendingAskFirst } from "./vaultModel";
@@ -366,9 +367,10 @@ function Versions({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
   );
 }
 
-/** Ask first: on is one press; off removes a guard, so it goes through the confirm. */
+/** Ask first: on is one press; off removes a guard, so it goes through the confirm and then Touch ID. */
 export function AskFirst({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
   const setSecretAskFirst = useInboxStore((s) => s.setSecretAskFirst);
+  const confirm = usePresence();
   const saving = !!useAskFirstLock(row._id);
   const [reviewing, setReviewing] = useState(false);
   const on = !!row.ask_first;
@@ -377,11 +379,12 @@ export function AskFirst({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
   const held = on && agentTab ? PERSON_ONLY.askFirstOff : undefined;
   return (
     <Row label="Ask first">
-      <span className="flex items-center gap-2 pt-0.5" title={held}>
+      <span className="flex items-center gap-2 pt-0.5" title={held ?? (on ? "Turn off with Touch ID" : undefined)}>
         <Switch checked={on} onCheckedChange={(next) => (next ? setSecretAskFirst(row._id, true) : setReviewing(true))} disabled={isStub(row) || !!held} aria-label="Ask first" aria-busy={saving || undefined} />
         <span className={`text-[12px] ${on ? "text-sol-cyan" : "text-sol-text-dim"}`} data-vault-ask-first={on ? "on" : "off"}>
           {on ? "Agents ask you per session" : "Agents read it unasked"}
         </span>
+        {on && !held && <Fingerprint size={12} className="shrink-0 text-sol-text-dim" aria-label="Turning it off asks for Touch ID" data-vault-ask-first-gated />}
         {held && (
           <span className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim" data-vault-held>
             <Lock size={11} />
@@ -396,7 +399,7 @@ export function AskFirst({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
           onClose={() => setReviewing(false)}
           onConfirm={() => {
             setReviewing(false);
-            setSecretAskFirst(row._id, false);
+            void confirm("ask_first_off", row._id).then((ok) => ok && setSecretAskFirst(row._id, false));
           }}
         />
       )}
@@ -406,10 +409,11 @@ export function AskFirst({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
 
 /** The value fields for a ready secret, per kind; `replace` goes on the field that holds the value. */
 function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
-  const { payload, seed, load, error, loading } = useReveal(row._id, row.value_updated_at);
-  // An agent's tab never fetches an Ask first value: a person reveals and copies it.
+  const gated = !!row.ask_first;
+  const { payload, seed, load, error, loading } = useReveal(row._id, row.value_updated_at, gated);
+  // An agent's tab never fetches an Ask first value: a person reveals and copies it, with Touch ID.
   const agentTab = useAgentDrivenTab();
-  const held = row.ask_first && agentTab ? PERSON_ONLY.reveal : undefined;
+  const held = gated && agentTab ? PERSON_ONLY.reveal : undefined;
   const field = <T,>(pick: (p: T) => string | undefined) => async () => {
     const p = await load();
     return p ? pick(p as T) : undefined;
@@ -417,21 +421,21 @@ function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
   const p = payload as any;
   let body: ReactNode;
   if (row.kind === "key") {
-    body = <MaskedField label="Value" value={p?.value} load={field<KeyPayload>((x) => x.value)} hint={row.fingerprint} replace={replace} held={held} />;
+    body = <MaskedField label="Value" value={p?.value} load={field<KeyPayload>((x) => x.value)} hint={row.fingerprint} replace={replace} held={held} gated={gated} />;
   } else if (row.kind === "login") {
     const login = p as LoginPayload | null;
     // A replace edits the login's lines together, so its editor takes all their rows.
     body = replace?.editor ?? (
       <>
-        <MaskedField label="Username" value={login ? login.username ?? "" : undefined} load={field<LoginPayload>((x) => x.username)} plain held={held} />
-        <MaskedField label="Password" value={login?.password} load={field<LoginPayload>((x) => x.password)} replace={replace} held={held} />
+        <MaskedField label="Username" value={login ? login.username ?? "" : undefined} load={field<LoginPayload>((x) => x.username)} plain held={held} gated={gated} />
+        <MaskedField label="Password" value={login?.password} load={field<LoginPayload>((x) => x.password)} replace={replace} held={held} gated={gated} />
         {/* has_otp is stored with the value; a login saved before it existed says nothing, so it keeps the row until a fetch tells. */}
-        {row.has_otp !== false && seed !== null && <TotpCode seed={seed} fetchSeed={field<LoginPayload>((x) => x.totp_seed)} fetching={loading} held={held} />}
+        {row.has_otp !== false && seed !== null && <TotpCode seed={seed} fetchSeed={field<LoginPayload>((x) => x.totp_seed)} fetching={loading} held={held} gated={gated} />}
       </>
     );
   } else if (row.kind === "file") {
     const file = p as FilePayload | null;
-    body = <MaskedField label={file?.filename ?? "Content"} value={file?.content} load={field<FilePayload>((x) => x.content)} multiline replace={replace} held={held} />;
+    body = <MaskedField label={file?.filename ?? "Content"} value={file?.content} load={field<FilePayload>((x) => x.content)} multiline replace={replace} held={held} gated={gated} />;
   } else {
     const s = p as SigninPayload | null;
     const exp = row.signin_expires_at;
@@ -453,8 +457,8 @@ function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
               <span className="text-sol-text-dim"> · {s.cookies.length} cookies</span>
             </span>
           ) : (
-            <button type="button" onClick={() => void load()} disabled={loading || !!held} title={held} className="inline-flex items-center gap-1 rounded-md border border-sol-border px-2 py-0.5 text-[12px] text-sol-text-muted hover:text-sol-text disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:text-sol-text-muted">
-              {held && <Lock size={11} />}
+            <button type="button" onClick={() => void load()} disabled={loading || !!held} title={held ?? (gated ? "Show with Touch ID" : undefined)} className="inline-flex items-center gap-1 rounded-md border border-sol-border px-2 py-0.5 text-[12px] text-sol-text-muted hover:text-sol-text disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:text-sol-text-muted">
+              {held ? <Lock size={11} /> : gated ? <Fingerprint size={11} /> : null}
               {loading ? "Loading" : "Show"}
             </button>
           )}

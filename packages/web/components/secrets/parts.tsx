@@ -9,14 +9,15 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Check, ChevronRight, CircleHelp, Copy, Eye, EyeOff, FileText, Globe, KeyRound, Loader2, Lock, RefreshCw, UserRound, Users, X, type LucideIcon } from "lucide-react";
-import { totp, type EnvNameIssue, type LoginPayload, type SecretKind, type SecretMeta, type SecretPayload } from "@codecast/shared/contracts/secrets";
+import { Check, ChevronRight, CircleHelp, Copy, Eye, EyeOff, FileText, Fingerprint, Globe, KeyRound, Loader2, Lock, RefreshCw, UserRound, Users, X, type LucideIcon } from "lucide-react";
+import { NOT_CONFIRMED, totp, type EnvNameIssue, type LoginPayload, type SecretKind, type SecretMeta, type SecretPayload } from "@codecast/shared/contracts/secrets";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { EntityIdPill } from "../EntityIdPill";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
+import { usePresence, withPresence } from "../../lib/passkeyPresence";
 import { KIND_LOOK, vaultFailure } from "./vaultModel";
 
 const KIND_ICON: Record<SecretKind, LucideIcon> = { key: KeyRound, login: UserRound, file: FileText, signin: Globe };
@@ -52,10 +53,12 @@ export const REVEAL_IDLE_MS = 45_000;
  * A login's 2FA seed stays for the component's life, so its code keeps ticking
  * while the panel is open; `seed` is undefined until fetched, null when the
  * login has none. Each fetch records a reveal on the server before the value
- * leaves it.
+ * leaves it. An Ask first secret (`askFirst`) confirms with Touch ID before
+ * each fetch (lib/passkeyPresence); cancelled, the fetch answers null.
  */
-export function useReveal(id: string, version?: number) {
+export function useReveal(id: string, version?: number, askFirst?: boolean) {
   const reveal = useAction(api.secrets.reveal);
+  const confirm = usePresence();
   const [payload, setPayload] = useState<SecretPayload | null>(null);
   const [seed, setSeed] = useState<string | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
@@ -89,11 +92,17 @@ export function useReveal(id: string, version?: number) {
       return payload;
     }
     if (inflight.current) return inflight.current;
-    const gen = generation.current;
+    // Taken when the fetch starts, after any Touch ID prompt, whose sheet can blur the window.
+    let gen = generation.current;
+    const fetchValue = () => {
+      gen = generation.current;
+      return reveal({ ref: id });
+    };
     setLoading(true);
     setError(null);
-    inflight.current = reveal({ ref: id })
+    inflight.current = withPresence(() => confirm("reveal", id), fetchValue, !!askFirst)
       .then((res: any) => {
+        if (res === NOT_CONFIRMED) return null;
         if (res?.error) {
           setError(res.error);
           return null;
@@ -116,7 +125,7 @@ export function useReveal(id: string, version?: number) {
         if (gen === generation.current) inflight.current = null;
       });
     return inflight.current;
-  }, [id, shown, payload, reveal, touch]);
+  }, [id, shown, payload, reveal, touch, confirm, askFirst]);
   return { payload, seed, error, loading, load, drop };
 }
 
@@ -152,9 +161,9 @@ export function useCopy() {
  * row around it never moves; the words go to screen readers and the title.
  * `withLabel` also shows them, where the button sits in a line of text.
  * `get` may fetch the text first. `held` disables it and says who copies it
- * instead (lib/agentTabGuard).
+ * instead (lib/agentTabGuard); `gated` says the fetch asks for Touch ID.
  */
-export function CopyButton({ get, label = "Copy", className = "", withLabel, held }: { get: () => Promise<string | undefined> | string | undefined; label?: string; className?: string; withLabel?: boolean; held?: string }) {
+export function CopyButton({ get, label = "Copy", className = "", withLabel, held, gated }: { get: () => Promise<string | undefined> | string | undefined; label?: string; className?: string; withLabel?: boolean; held?: string; gated?: boolean }) {
   const { state, copy } = useCopy();
   const words = state === "copied" ? "Copied" : state === "failed" ? "Not copied" : "";
   const glyph = (on: boolean) => `transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] ${on ? "opacity-100 scale-100" : "opacity-0 scale-75"}`;
@@ -163,7 +172,7 @@ export function CopyButton({ get, label = "Copy", className = "", withLabel, hel
       type="button"
       onClick={() => void copy(get)}
       disabled={!!held}
-      title={held ?? (words || label)}
+      title={held ?? (words || (gated ? `${label} with Touch ID` : label))}
       aria-label={label}
       className={`inline-flex h-6 shrink-0 items-center justify-center rounded text-[11px] transition-[color,background-color,transform] duration-150 active:scale-[0.94] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 ${withLabel ? "px-1.5" : "w-6"} ${held ? "text-sol-text-dim" : state === "copied" ? "text-sol-green" : state === "failed" ? "text-sol-red" : "text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"} ${className}`}
       data-vault-copy
@@ -203,19 +212,19 @@ export const FIELD_MONO = `${FIELD} font-mono`;
 
 const DOTS = "••••••••••••";
 
-/** The eye that shows a value, or hides it again; where `held` says who reveals it instead, a disabled lock. */
-function RevealButton({ shown, label, onClick, held, disabled, ...rest }: { shown?: boolean; label: string; onClick: () => void; held?: string; disabled?: boolean } & Record<`data-${string}`, unknown>) {
+/** The eye that shows a value, or hides it again; a fingerprint where showing it asks for Touch ID (`gated`); where `held` says who reveals it instead, a disabled lock. */
+function RevealButton({ shown, label, onClick, held, gated, disabled, ...rest }: { shown?: boolean; label: string; onClick: () => void; held?: string; gated?: boolean; disabled?: boolean } & Record<`data-${string}`, unknown>) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled || !!held}
-      title={held ?? (shown ? "Hide" : "Reveal")}
+      title={held ?? (shown ? "Hide" : gated ? "Reveal with Touch ID" : "Reveal")}
       aria-label={label}
       className="inline-flex h-6 w-6 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-sol-text-dim"
       {...rest}
     >
-      {held ? <Lock size={13} /> : shown ? <EyeOff size={13} /> : <Eye size={13} />}
+      {held ? <Lock size={13} /> : shown ? <EyeOff size={13} /> : gated ? <Fingerprint size={13} /> : <Eye size={13} />}
     </button>
   );
 }
@@ -230,6 +239,7 @@ export function MaskedField({
   plain,
   replace,
   held,
+  gated,
 }: {
   label: string;
   /** The field's value once revealed, else undefined. */
@@ -245,6 +255,8 @@ export function MaskedField({
   replace?: Replace;
   /** Who reveals and copies it instead of this tab, when not this tab. */
   held?: string;
+  /** Revealing and copying it ask for Touch ID. */
+  gated?: boolean;
 }) {
   const [shown, setShown] = useState(false);
   // A dropped value comes back masked: a later copy fetches it without showing it.
@@ -270,8 +282,8 @@ export function MaskedField({
       actions={
         <>
           {replace && <ReplaceButton onClick={replace.start} saving={replace.saving} />}
-          {!(plain && visible) && <RevealButton shown={shown} label={shown ? `Hide ${label}` : `Reveal ${label}`} onClick={() => void toggle()} held={held} data-vault-reveal />}
-          <CopyButton get={load} label={`Copy ${label}`} held={held} />
+          {!(plain && visible) && <RevealButton shown={shown} label={shown ? `Hide ${label}` : `Reveal ${label}`} onClick={() => void toggle()} held={held} gated={gated} data-vault-reveal />}
+          <CopyButton get={load} label={`Copy ${label}`} held={held} gated={gated} />
         </>
       }
     >
@@ -388,7 +400,7 @@ export function SecretInput({
  * ring that empties as it runs out. Copy sits in the actions column either
  * way, and while masked it fetches the seed and copies the current code.
  */
-export function TotpCode({ seed, fetchSeed, fetching, held }: { seed: string | undefined; fetchSeed?: () => Promise<string | undefined>; fetching?: boolean; held?: string }) {
+export function TotpCode({ seed, fetchSeed, fetching, held, gated }: { seed: string | undefined; fetchSeed?: () => Promise<string | undefined>; fetching?: boolean; held?: string; gated?: boolean }) {
   const [now, setNow] = useState(() => ({ code: "", remaining: 30, period: 30, refill: false }));
   const [broken, setBroken] = useState(false);
   useWatchEffect(() => {
@@ -431,8 +443,8 @@ export function TotpCode({ seed, fetchSeed, fetching, held }: { seed: string | u
       label="2FA code"
       actions={
         <>
-          {!seed && <RevealButton label="Show 2FA code" onClick={() => void fetchSeed?.()} disabled={fetching} held={held} data-vault-show-code />}
-          <CopyButton get={copy} label="Copy code" held={held} />
+          {!seed && <RevealButton label="Show 2FA code" onClick={() => void fetchSeed?.()} disabled={fetching} held={held} gated={gated} data-vault-show-code />}
+          <CopyButton get={copy} label="Copy code" held={held} gated={!seed && gated} />
         </>
       }
     >

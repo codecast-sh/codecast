@@ -50,6 +50,7 @@ const ICON_NAMES = {
   up: { fontawesome: 'chevron-up', feather: 'chevron-up' },
   down: { fontawesome: 'chevron-down', feather: 'chevron-down' },
   page: { fontawesome: 'external-link', feather: 'external-link' },
+  lock: { fontawesome: 'lock', feather: 'lock' },
 } as const;
 
 function LookIcon({ look, name, size, color }: { look: AnswerLook; name: keyof typeof ICON_NAMES; size: number; color: string }) {
@@ -98,6 +99,7 @@ export function AnswerControls({
   onAnswer,
   look,
   proceedingWith,
+  guarded,
 }: {
   decisionId: string;
   decision: Pick<SessionDecisionItem, 'options' | 'form' | 'kind'>;
@@ -105,6 +107,8 @@ export function AnswerControls({
   look: AnswerLook;
   /** The option a non-blocking ask goes ahead with if nobody answers. */
   proceedingWith?: number;
+  /** Options that take Touch ID before they answer; they carry a lock. */
+  guarded?: (index: number) => boolean;
 }) {
   const [draft, patchDraft] = useDecisionDraft<AnswerDraft>(decisionId);
   const [error, setError] = useState<string | null>(null);
@@ -158,7 +162,10 @@ export function AnswerControls({
                 </View>
               ) : null}
               <View style={styles.optionBody}>
-                <Text style={[styles.optionLabel, { color: look.text }]}>{o.label}</Text>
+                <View style={styles.labelRow}>
+                  <Text style={[styles.optionLabel, { color: look.text }]}>{o.label}</Text>
+                  {guarded?.(i) ? <LookIcon look={look} name="lock" size={14} color={look.muted} /> : null}
+                </View>
                 {o.description ? <Text style={[styles.optionDesc, { color: look.muted }]}>{o.description}</Text> : null}
                 {proceedingWith === i ? <Text style={[styles.tag, { color: look.faint }]}>{ANSWER_WORDS.proceeding}</Text> : null}
                 {o.page_slug ? (
@@ -255,7 +262,8 @@ const styles = StyleSheet.create({
   badge: { width: 24, height: 24, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 1 },
   badgeText: { fontSize: 12, fontWeight: '600' },
   optionBody: { flex: 1, gap: 4 },
-  optionLabel: { fontSize: 16, lineHeight: 22, fontWeight: '600' },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  optionLabel: { flexShrink: 1, fontSize: 16, lineHeight: 22, fontWeight: '600' },
   optionDesc: { fontSize: 13, lineHeight: 19 },
   tag: { fontSize: 11 },
   link: { fontSize: 13 },

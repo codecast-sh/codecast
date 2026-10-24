@@ -1,5 +1,5 @@
-import { useCallback, useMemo } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { useCallback, useMemo, useRef } from 'react';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Text, TextInput } from '@/components/Themed';
@@ -17,6 +17,8 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import type { AnswerDraft } from '@codecast/web/lib/decisionAnswer';
 import { AnswerButton, AnswerControls, appAnswerLook } from '@/components/decisions/AnswerControls';
 import { decisionAnswerLabel } from '@codecast/shared/contracts';
+import { approvesSecretRead } from '@codecast/shared/contracts/secrets';
+import { confirmPresence } from '@/lib/presence';
 
 const pageUrl = (slug: string) => `https://codecast.sh/a/${slug}`;
 
@@ -67,13 +69,28 @@ export default function DecisionScreen() {
     else router.back();
   }, [nextId, router]);
 
-  const answer = useCallback((input: DecisionAnswerInput) => {
+  const source = item ?? row;
+  // Approving an Ask first read takes Touch ID first (lib/presence); one
+  // confirmation at a time, so a second press while the sheet is up is a no-op.
+  const confirming = useRef(false);
+  const answer = useCallback(async (input: DecisionAnswerInput) => {
+    if (source && 'index' in input && input.index !== undefined && approvesSecretRead(source, input.index)) {
+      if (confirming.current) return;
+      confirming.current = true;
+      try {
+        if (!(await confirmPresence('approve', decisionId))) return;
+      } catch (e) {
+        Alert.alert('Touch ID', (e as Error).message);
+        return;
+      } finally {
+        confirming.current = false;
+      }
+    }
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     answerDecision(decisionId, input);
     goNext();
-  }, [answerDecision, decisionId, goNext]);
+  }, [answerDecision, decisionId, goNext, source]);
 
-  const source = item ?? row;
   if (!source) {
     return (
       <>
@@ -137,7 +154,7 @@ export default function DecisionScreen() {
           ) : null}
           {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(pageUrl(reportSlug))} /> : null}
 
-          <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} />
+          <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} guarded={(i) => approvesSecretRead(source, i)} />
 
           {kind === 'single' && !writing ? (
             <TouchableOpacity onPress={() => patchDraft({ otherOpen: true })} hitSlop={8}>

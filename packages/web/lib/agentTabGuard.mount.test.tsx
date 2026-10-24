@@ -1,13 +1,15 @@
 // In a tab the cast browser drives (the agent-tab stamp), an Ask first
 // secret's reveal and copy, the Approve of its read, and turning Ask first
 // off are disabled and say a person does them; in a person's tab every one
-// works. Run: cd packages/web && bun test lib/agentTabGuard.mount.test.tsx
+// works, an Approve after Touch ID. Run: cd packages/web && bun test lib/agentTabGuard.mount.test.tsx
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../test-helpers/globals";
 import { closeDomWindow } from "../test-helpers/domGlobals";
 import { APPROVE_FOR_SESSION, DENY } from "@codecast/shared/contracts/secrets";
+import { getFunctionName } from "convex/server";
+import { ConvexProvider } from "convex/react";
 import { AGENT_TAB_EVENT, AGENT_TAB_KEY } from "./desktopHandoff";
 import { PERSON_ONLY, heldOption, useAgentDrivenTab } from "./agentTabGuard";
 
@@ -94,15 +96,37 @@ describe("an Ask first decision card", () => {
     unmount();
   }, 30_000); // the first mount pays for loading the store under a loaded machine
 
-  test("in a person's tab, Approve answers", async () => {
+  test("in a person's tab, Approve carries a fingerprint and answers once Touch ID confirms it", async () => {
+    // A passkey assertion against a fake Convex client (lib/passkeyPresence.mount.test.tsx covers the ceremony).
+    const buf = (n: number) => new Uint8Array(n).buffer;
+    const calls: string[] = [];
+    const client = {
+      action: async (ref: any) => {
+        const name = getFunctionName(ref);
+        calls.push(name);
+        return name === "passkeys:presenceBegin" ? { challenge_id: "ch-zz", options: { challenge: "Y2g", allowCredentials: [] }, expires_at: Date.now() + 60_000 } : { granted: true };
+      },
+    };
+    const restore = replaceGlobals({ PublicKeyCredential: function PublicKeyCredential() {} });
+    Object.defineProperty(dom.window.navigator, "credentials", {
+      configurable: true,
+      value: { get: async () => ({ id: "AQ", rawId: buf(1), type: "public-key", getClientExtensionResults: () => ({}), response: { authenticatorData: buf(37), clientDataJSON: buf(9), signature: buf(64), userHandle: null } }) },
+    });
     const answers: any[] = [];
-    const { container, unmount } = await mount(<DecisionAnswerControls decision={decision} onAnswer={(a) => answers.push(a)} size="compact" />);
-    const [approve] = rows(container);
+    const { container, unmount } = await mount(
+      <ConvexProvider client={client as any}>
+        <DecisionAnswerControls decision={decision} onAnswer={(a) => answers.push(a)} size="compact" />
+      </ConvexProvider>,
+    );
+    const [approve, deny] = rows(container);
     expect(approve.disabled).toBe(false);
     expect(approve.querySelector("[data-held]")).toBeNull();
-    await act(() => { approve.click(); });
+    expect([!!approve.querySelector("[data-gated]"), !!deny.querySelector("[data-gated]")]).toEqual([true, false]);
+    await act(async () => { approve.click(); await new Promise((r) => setTimeout(r, 0)); });
+    expect(calls).toEqual(["passkeys:presenceBegin", "passkeys:presenceFinish"]);
     expect(answers).toEqual([{ index: 0 }]);
     unmount();
+    restore();
   });
 });
 

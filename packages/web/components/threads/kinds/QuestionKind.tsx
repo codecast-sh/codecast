@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { CornerDownRight, X } from "lucide-react";
+import { CornerDownRight, Fingerprint, X } from "lucide-react";
 import { useInboxStore, type SessionDecisionItem } from "../../../store/inboxStore";
 import { sessionLabel } from "../../../lib/notificationTypes";
 import type { ThreadCardModel } from "../../../lib/threadCards";
@@ -7,6 +7,7 @@ import { AgentIcon } from "../../ConversationList";
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { PublishedPageEmbed } from "../../PublishedPageEmbed";
 import { useHeldOption } from "../../../lib/agentTabGuard";
+import { useApproveGate } from "../../../lib/passkeyPresence";
 
 // The question kind: a pending decision (cast decide / AskUserQuestion),
 // answerable in place. The row is the question itself; open, the context,
@@ -39,9 +40,10 @@ export function QuestionExpanded({ card, focusComposer }: { card: ThreadCardMode
   const d = decisionOf(card);
   const [text, setText] = useState("");
   const held = useHeldOption(d);
+  const gate = useApproveGate(d);
   const answer = useCallback(
-    (index: number) => useInboxStore.getState().answerDecision(d._id, { index }),
-    [d._id],
+    (index: number) => gate.answer(index, () => void useInboxStore.getState().answerDecision(d._id, { index })),
+    [d._id, gate],
   );
   const answerText = useCallback(() => {
     const t = text.trim();
@@ -63,11 +65,12 @@ export function QuestionExpanded({ card, focusComposer }: { card: ThreadCardMode
       {d.report_slug && <PublishedPageEmbed slug={d.report_slug} decision={d._id} />}
       <div className="th-question-options" role="group" aria-label="Answer options">
         {d.options.map((o, i) => (
-          <button key={i} type="button" className="th-question-option" onClick={() => answer(i)} disabled={!!held(i)} title={held(i)}>
+          <button key={i} type="button" className="th-question-option" onClick={() => answer(i)} disabled={!!held(i)} title={held(i) ?? (gate.gated(i) ? "Confirm with Touch ID" : undefined)}>
             <span className="th-question-option-label">
               {o.label}
               {d.default_option === i && <span className="th-question-default"> · default</span>}
               {held(i) && <span className="th-question-default"> · {held(i)}</span>}
+              {gate.gated(i) && !held(i) && <Fingerprint aria-label="Asks for Touch ID" className="th-question-default inline w-3 h-3 ml-1 align-[-2px]" />}
             </span>
             {o.description && <span className="th-question-option-desc">{o.description}</span>}
           </button>

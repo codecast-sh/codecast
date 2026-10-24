@@ -15,6 +15,7 @@ import { ANSWER_WORDS, answerView, buildDecisionAnswer, moveInOrder, togglePicke
 import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeCardView";
 import { PassDecision } from "./PassDecision";
 import { useHeldOption } from "../../lib/agentTabGuard";
+import { useApproveGate } from "../../lib/passkeyPresence";
 
 // The answer footer, per kind (docs/architecture/decisions-as-documents.md
 // D1 / D4): single = one option (digits 1 to 9, or a typed answer); multi =
@@ -79,9 +80,10 @@ function GenericAnswerControls({
   const [passOpen, setPassOpen] = useState(false);
 
   const held = useHeldOption(decision);
+  const gate = useApproveGate(decision);
   const answerSingle = useCallback((index: number) => {
-    if (!held(index)) onAnswer({ index });
-  }, [onAnswer, held]);
+    if (!held(index)) gate.answer(index, () => onAnswer({ index }));
+  }, [onAnswer, held, gate]);
   const answerText = useCallback(() => {
     const t = otherText.trim();
     if (!t) return;
@@ -183,6 +185,7 @@ function GenericAnswerControls({
             tone={(n) => (n === primary && !held(n) ? "primary" : "plain")}
             tags={tags}
             held={held}
+            gated={gate.gated}
           />
           <TypeAnswerButton onOpen={openOther} keys={keys} />
         </div>
@@ -255,7 +258,7 @@ function GenericAnswerControls({
       </div>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, decision.options, decision.form, decision.default_option, decision.blocking, picked, order, values, keys, recommendation, hosted, compact, answerSingle, held, move, submit, togglePick, setValue]);
+  }, [kind, decision.options, decision.form, decision.default_option, decision.blocking, picked, order, values, keys, recommendation, hosted, compact, answerSingle, held, gate, move, submit, togglePick, setValue]);
 
   return (
     <div>

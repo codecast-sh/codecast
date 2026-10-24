@@ -57,6 +57,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@rrweb/record": "2.1.7",
     "@sentry/react": "^10.45.0",
+    "@simplewebauthn/browser": "^14.0.0",
     "@tanstack/react-virtual": "3.14.2",
     "@tiptap/core": "^3.20.4",
     "@tiptap/extension-bubble-menu": "^3.20.4",

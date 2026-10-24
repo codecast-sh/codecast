@@ -12,6 +12,8 @@ export const PERSON_ONLY = {
   reveal: "A person reveals this",
   approve: "A person approves this",
   askFirstOff: "A person turns this off",
+  enroll: "A person sets up Touch ID",
+  confirm: "A person confirms this",
 } as const;
 
 // A driver that attached to a document already parsing stamps it late and

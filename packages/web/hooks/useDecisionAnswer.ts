@@ -7,6 +7,7 @@ import { buildSingleAnswerPayload, buildFreeTextPayload } from "../lib/pollPaylo
 import { sendToSession } from "../lib/sendToSession";
 import { PERMISSION_SKIP_TOOLS } from "../components/PermissionCard";
 import type { QueueItem } from "../lib/decisionQueue";
+import { useApproveGate } from "../lib/passkeyPresence";
 
 // What a queue item asks and the three gestures that settle it: answer an
 // option, answer in words, or dismiss. One model for every surface that
@@ -21,6 +22,9 @@ import type { QueueItem } from "../lib/decisionQueue";
 export function useDecisionAnswer(item: QueueItem | null) {
   const answerDecision = useInboxStore((s) => s.answerDecision);
   const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
+  const decisionRow = useInboxStore((s) => (item?.source === "decide" && item.decisionId ? s.sessionDecisions[item.decisionId] : undefined));
+  // Approving an Ask first read confirms with Touch ID first (lib/passkeyPresence).
+  const { gated, answer: gatedAnswer } = useApproveGate(decisionRow);
 
   const conversationId = item?.conversationId ?? null;
   const needsMessages = !!item && item.source !== "decide";
@@ -50,15 +54,17 @@ export function useDecisionAnswer(item: QueueItem | null) {
   const isInfraDialog = !!item && item.source !== "decide" && isUsageLimitDialog(options.map((o) => o.label));
 
   // A decision's answer hands back its dispatch, so a card that held its
-  // buttons can tell a refusal from a write still on its way.
+  // buttons can tell a refusal from a write still on its way; NOT_CONFIRMED
+  // when its Touch ID was cancelled and nothing was sent.
   const answer = useCallback((index: number): Promise<unknown> | undefined => {
     if (!item) return;
     if (item.source === "decide" && item.decisionId) {
-      return answerDecision(item.decisionId, { index });
+      const id = item.decisionId;
+      return gatedAnswer(index, () => answerDecision(id, { index }));
     } else if (poll) {
       sendToSession(item.conversationId, buildSingleAnswerPayload(poll.question, index));
     }
-  }, [item, poll, answerDecision]);
+  }, [item, poll, answerDecision, gatedAnswer]);
 
   const answerFreeText = useCallback((text: string) => {
     const trimmed = text.trim();
@@ -83,5 +89,5 @@ export function useDecisionAnswer(item: QueueItem | null) {
     else resolveSessionQuestion(item.conversationId);
   }, [item, answerDecision, resolveSessionQuestion]);
 
-  return { messages, needsMessages, poll, recentText, question, options, permissions, isPermissionCard, isInfraDialog, answer, answerFreeText, dismiss };
+  return { messages, needsMessages, poll, recentText, question, options, permissions, isPermissionCard, isInfraDialog, answer, gated, answerFreeText, dismiss };
 }

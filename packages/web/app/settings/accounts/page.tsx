@@ -1,4 +1,5 @@
 import { OtherAddresses } from "../../../components/settings/OtherAddresses";
+import { PasskeysSection } from "../../../components/settings/PasskeysSection";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useState, Suspense } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -200,6 +201,8 @@ function AccountsContent() {
           </p>
         )}
       </SettingsSection>
+
+      <PasskeysSection />
 
       <SettingsSection title={<span className="text-sol-red">Danger zone</span>} icon={TriangleAlert}>
         {!showDeleteConfirm ? (

@@ -1541,7 +1541,7 @@ export const getUserStats = query({
 const RESERVED_USERNAMES = new Set([
   // Top-level route segments (web/src/App.tsx)
   "about", "features", "documentation", "privacy", "security", "support", "terms",
-  "login", "signup", "signin", "logout", "forgot-password", "reset-password", "auth",
+  "login", "signup", "signin", "logout", "forgot-password", "reset-password", "confirm", "auth",
   "join", "inbox", "feed", "search", "notifications", "conversation", "docs", "plans",
   "tasks", "projects", "goals", "workflows", "routines", "schedules", "sessions", "resources", "team",
   "admin", "config", "memory", "dashboard", "explore", "timeline", "windows", "orchestration",

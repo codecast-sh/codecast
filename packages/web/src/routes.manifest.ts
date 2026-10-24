@@ -131,6 +131,7 @@ const Login = lazy(() => import("@/app/login/page"));
 const Signup = lazy(() => import("@/app/signup/page"));
 const ForgotPassword = lazy(() => import("@/app/forgot-password/page"));
 const ResetPassword = lazy(() => import("@/app/reset-password/page"));
+const Confirm = lazy(() => import("@/app/confirm/page"));
 const AuthCli = lazy(() => import("@/app/auth/cli/page"));
 const ArtifactAuth = lazy(() => import("@/app/artifacts/auth/page"));
 const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
@@ -331,6 +332,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "signup", component: cast(Signup), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "forgot-password", component: cast(ForgotPassword), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "reset-password", component: cast(ResetPassword), layout: "auth", guestOk: true, guestKind: "public" },
+  { path: "confirm", component: cast(Confirm), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "auth/cli", component: cast(AuthCli), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "slack/connect", component: cast(SlackConnect), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "connect/whisk", component: cast(WhiskReturn), layout: "auth", guestOk: true, guestKind: "public" },

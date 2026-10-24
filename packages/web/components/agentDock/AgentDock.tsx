@@ -21,7 +21,8 @@
 // answer it was not meant to get.
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
-import { ArrowUp, Camera, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, EyeOff, Inbox, Plus, Settings2, X } from "lucide-react";
+import { ArrowUp, Camera, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, EyeOff, Fingerprint, Inbox, Plus, Settings2, X } from "lucide-react";
+import { NOT_CONFIRMED } from "@codecast/shared/contracts/secrets";
 import { getProjectName, useInboxStore, type InboxSession } from "../../store/inboxStore";
 import { useMinePlacement } from "../../hooks/useNeedsInputCount";
 import { useDecisionQueue, lastAssistantText } from "../../hooks/useDecisionQueue";
@@ -301,8 +302,13 @@ function DockCard({ entry, entries, onGo, onClose }: { entry: DockEntry; entries
   const answerAt = useCallback((n: number) => {
     const opt = options[n];
     if (!opt) return;
+    // Touch ID is its own deliberate confirm, so an option that asks for it skips the hold and moves on once confirmed.
+    if (decision.gated(opt.index)) {
+      void Promise.resolve(decision.answer(opt.index)).then((r) => r !== NOT_CONFIRMED && onGo(after), () => {});
+      return;
+    }
     hold({ label: `Answered "${opt.label}"`, tone: "ok", commit: () => decision.answer(opt.index), picked: n });
-  }, [options, hold, decision]);
+  }, [options, hold, decision, onGo, after]);
   // Stash takes the agent out of the inbox and leaves it running (the inbox's
   // own Stash); on a question it dismisses the question and the agent keeps
   // waiting. Kill is the one that stops the agent.
@@ -375,6 +381,7 @@ function DockCard({ entry, entries, onGo, onClose }: { entry: DockEntry; entries
                     <span className="block">{o.label}</span>
                     {o.description && <span className="block text-xs text-sol-text-dim">{o.description}</span>}
                   </span>
+                  {decision.gated(o.index) && <Fingerprint aria-label="Asks for Touch ID" className="ml-auto h-3.5 w-3.5 shrink-0 self-center text-sol-text-dim" />}
                 </button>
               ))}
             </div>

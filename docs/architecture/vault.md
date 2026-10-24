@@ -453,6 +453,18 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
   shows in the person's passkey list, and they are emailed ("Touch ID was
   added", `emails/templates.ts passkeyAdded`), so one they did not add is an
   alarm they can act on by removing it.
+- Web (`lib/passkeyPresence.ts`): a gated press confirms first (`usePresence`,
+  single flight per action and target), then calls; a `presence_required`
+  refusal, returned or thrown by the dispatch, confirms once more and calls
+  again (`withPresence`). Gated controls carry a fingerprint: Reveal, Copy and
+  Show of an Ask first value (`useReveal(id, version, askFirst)`), the
+  Approve of an Ask first decision wherever it renders (`useApproveGate`,
+  inside `useDecisionAnswer` for the queue card, the dock and the hosted
+  card), and Ask first off after its confirm. With no passkey a toast offers
+  Set up Touch ID, then a second press for the assertion. In the desktop app
+  the same calls open `/confirm` in the system browser and wait on the
+  challenge. Settings > Accounts lists passkeys (rename, Remove with Touch ID,
+  Add). A cancelled confirm answers `NOT_CONFIRMED` and sends nothing.
 
 ## Previous values
 

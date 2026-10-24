@@ -63,11 +63,7 @@ export async function openLink(url: string): Promise<void> {
 export async function openWebPage(absolute: string): Promise<void> {
   if (/^https?:/i.test(absolute)) {
     try {
-      await WebBrowser.openBrowserAsync(absolute, {
-        presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
-        controlsColor: Theme.blue,
-        toolbarColor: Theme.bg,
-      });
+      await openInAppBrowser(absolute);
       return;
     } catch {
       // Fall through to the system handler.
@@ -79,4 +75,13 @@ export async function openWebPage(absolute: string): Promise<void> {
   } catch {
     // Nothing can open it: stay put rather than surfacing a native error.
   }
+}
+
+/** The in-app browser sheet; resolves when it closes (on Android, once it opened). */
+export function openInAppBrowser(url: string): Promise<WebBrowser.WebBrowserResult> {
+  return WebBrowser.openBrowserAsync(url, {
+    presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
+    controlsColor: Theme.blue,
+    toolbarColor: Theme.bg,
+  });
 }

@@ -51,6 +51,7 @@ const Login = lazy(() => import("@/app/login/page"));
 const Signup = lazy(() => import("@/app/signup/page"));
 const ForgotPassword = lazy(() => import("@/app/forgot-password/page"));
 const ResetPassword = lazy(() => import("@/app/reset-password/page"));
+const Confirm = lazy(() => import("@/app/confirm/page"));
 const AuthCli = lazy(() => import("@/app/auth/cli/page"));
 const ArtifactAuth = lazy(() => import("@/app/artifacts/auth/page"));
 const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
@@ -255,6 +256,8 @@ export function App() {
             <Route path="signup" element={<E name="Signup"><Signup /></E>} />
             <Route path="forgot-password" element={<E name="ForgotPassword"><ForgotPassword /></E>} />
             <Route path="reset-password" element={<E name="ResetPassword"><ResetPassword /></E>} />
+            {/* Touch ID for the desktop app and the phone, signed in or not (lib/passkeyPresence). */}
+            <Route path="confirm" element={<E name="Confirm"><Confirm /></E>} />
             <Route path="auth/cli" element={<E name="AuthCli"><AuthCli /></E>} />
             <Route path="slack/connect" element={<E name="SlackConnect"><SlackConnect /></E>} />
             {/* Whisk's return after connecting mail and calendar (convex/whisk.ts). */}
