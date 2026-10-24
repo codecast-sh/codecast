@@ -9,8 +9,9 @@ import type { ReactNode } from "react";
 import { sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
 import { usePersonifyAll } from "../../hooks/usePersonifyAll";
 import { SessionFace } from "./SessionFace";
+import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 
-export function SessionGlyph({ row, size = 16, className, fallback = null, badge }: {
+export function SessionGlyph({ row: rawRow, size = 16, className, fallback = null, badge }: {
   row: IdentityRow | null | undefined;
   size?: number | string;
   className?: string;
@@ -19,6 +20,7 @@ export function SessionGlyph({ row, size = 16, className, fallback = null, badge
   badge?: ReactNode;
 }) {
   const personifyAll = usePersonifyAll();
+  const row = useLiveIdentityRow(rawRow ?? null);
   if (!row) return <>{fallback}</>;
   if (sessionIdentity(row, personifyAll).kind === "plain") return <>{fallback}</>;
   return <SessionFace row={row} size={size} className={className} badge={badge} />;

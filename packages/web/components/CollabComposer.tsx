@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -31,6 +31,8 @@ import { SharedCarets } from "./SharedCarets";
 import { ConversationChat } from "./conversation/ConversationChat";
 import { useConversationChatPeople } from "../hooks/useConversationChatPeople";
 import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
+import { roleAuthorOf } from "../lib/sessionIdentity";
+import { useLiveIdentityRow } from "../hooks/useLiveIdentityRow";
 // ── Live composer co-presence ────────────────────────────────────────────────
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
@@ -255,6 +257,15 @@ export const CollabComposer = memo(function CollabComposer({
     : (access?.level as SendLevel) ?? "shared";
   const canSend = level === "granted" || level === "team" || level === "owner";
   const owner = ownerLabel(conversation);
+  // A role's standing session is addressed as the role ("Message Hazel…");
+  // the access lines keep naming the person who owns it, who grants sending.
+  const c = conversation as any;
+  const identityBase = useMemo(
+    () => ({ _id: String(conversation._id), standing_role_id: c.standing_role_id ?? null, acting_user_id: c.acting_user_id ?? null }),
+    [conversation._id, c.standing_role_id, c.acting_user_id], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const roleName = roleAuthorOf(useLiveIdentityRow(identityBase))?.name ?? null;
+  const target = roleName ?? `${owner}'s session`;
   // A session whose machine stopped beating is not live: what is sent waits
   // in the queue until that machine is back, so the strip says where it waits.
   const runnerSilence = useRunnerSilence(conversation._id.toString(), canSend && isConvexId(conversation._id.toString()));
@@ -324,7 +335,7 @@ export const CollabComposer = memo(function CollabComposer({
       case "granted":
       case "team":
         if (runnerSilence) return { tone: "muted", icon: <Send className="w-3 h-3" />, text: <>What you send waits for <b>{owner}</b>'s machine: {runnerSilence}.</> };
-        return { tone: "cyan", icon: <Send className="w-3 h-3" />, text: <>You can send into <b>{owner}</b>'s live session — they run as commands.</> };
+        return { tone: "cyan", icon: <Send className="w-3 h-3" />, text: roleName ? <>You can send to <b>{roleName}</b>. Messages run as commands.</> : <>You can send into <b>{owner}</b>'s live session — they run as commands.</> };
       case "requested":
         return { tone: "amber", icon: <Loader2 className="w-3 h-3 animate-spin" />, text: <>Waiting for <b>{owner}</b> to allow you to send…</> };
       case "denied":
@@ -386,7 +397,7 @@ export const CollabComposer = memo(function CollabComposer({
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={busy}
-              placeholder={canSend ? `Message ${owner}'s session…` : "Write together…"}
+              placeholder={canSend ? `Message ${target}…` : "Write together…"}
               rows={1}
               className="[grid-area:1/1] w-full bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
             />

@@ -9,6 +9,8 @@
 // rename/avatar change still re-renders.
 import { useMemo } from "react";
 import { useInboxStore } from "../store/inboxStore";
+import { roleOfUser, type RoleRows } from "../lib/sessionIdentity";
+import { orgRolesSig } from "./useOrgRoles";
 
 export type RosterIdentity = {
   _id: string;
@@ -18,6 +20,9 @@ export type RosterIdentity = {
   github_avatar_url?: string;
   github_username?: string;
   is_bot?: boolean;
+  /** Set on a role's bot user: the role it is the bot of (lib/sessionIdentity
+   *  roleOfUser). `name` is then the role's given name; draw `role.face`. */
+  role?: NonNullable<ReturnType<typeof roleOfUser>>;
 };
 
 function identityLine(m: any): string {
@@ -65,11 +70,29 @@ export function rosterIdentity(members: any[] | null | undefined): RosterIdentit
   return _identityList;
 }
 
+/** The roster with each role's bot user named as its role (one home: the role
+ *  rows, read through roleOfUser). The bot user keeps its own name on the
+ *  server, where chat derives its mention handle from it; the person reads the
+ *  role's given name and face. Returns `list` itself when no member is a role's. */
+export function withRoleIdentities(list: RosterIdentity[], rows: RoleRows | null | undefined): RosterIdentity[] {
+  let out: RosterIdentity[] | null = null;
+  list.forEach((m, i) => {
+    const role = m.is_bot ? roleOfUser(m._id, rows) : null;
+    if (!role) return;
+    out ??= list.slice();
+    out[i] = { ...m, name: role.name, image: undefined, role };
+  });
+  return out ?? list;
+}
+
 /** Subscribe to roster identity only (never presence/counters). */
 export function useTeamRosterIdentity(): RosterIdentity[] {
   const sig = useInboxStore((s) => memberListSig(s.teamMembers));
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the churny array
-  return useMemo(() => rosterIdentity(useInboxStore.getState().teamMembers), [sig]);
+  const rolesSig = useInboxStore((s) => orgRolesSig(s.orgTree));
+  return useMemo(() => {
+    const st = useInboxStore.getState();
+    return withRoleIdentities(rosterIdentity(st.teamMembers), st.orgTree);
+  }, [sig, rolesSig]); // eslint-disable-line react-hooks/exhaustive-deps -- the sigs stand in for the churny arrays
 }
 
 /** The viewer projected to the same identity fields. `s.currentUser` is the

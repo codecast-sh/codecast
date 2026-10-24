@@ -67,6 +67,7 @@ import { ReplayMomentEmbed } from "./ops/ReplayMomentEmbed";
 import { DecisionCompactCard } from "./decisions/DecisionCompactCard";
 import { replayFacts } from "./ops/opsModel";
 import { deployFacts } from "../lib/line/deployWords";
+import { useRoleAuthor } from "../hooks/useLiveIdentityRow";
 
 // The preview card a SHARED object renders as — the rich sibling of the inline
 // pill. remarkEntityCards promotes a references-only paragraph (or list) into
@@ -355,6 +356,7 @@ function SessionCardBody({ session, expanded }: { session: any; expanded: boolea
 function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any; compact: boolean }) {
   const clamp = compact ? "line-clamp-2" : "line-clamp-3";
 
+  const roleAuthor = useRoleAuthor();
   if (type === "task") {
     const last = Array.isArray(entity.comments) && entity.comments.length > 0
       ? [...entity.comments].sort((a: any, b: any) => (a.created_at ?? 0) - (b.created_at ?? 0)).at(-1)
@@ -369,7 +371,7 @@ function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any;
         )}
         {last?.text && (
           <div className="flex items-baseline gap-1 border-l-2 border-[color-mix(in_srgb,var(--sol-border)_70%,transparent)] pl-1.5 text-[10px] leading-snug">
-            {last.author && <span className="flex-shrink-0 font-medium text-sol-text-muted">{last.author}</span>}
+            {last.author && <span className="flex-shrink-0 font-medium text-sol-text-muted">{roleAuthor({ userId: last.author_user_id, session: last.session_info })?.name ?? last.author}</span>}
             <span className="min-w-0 truncate text-sol-text-dim">{stripMarkdown(last.text)}</span>
             {last.created_at && <span className="ml-auto flex-shrink-0 text-sol-text-dim/70">{relativeTime(last.created_at)}</span>}
           </div>
@@ -447,6 +449,7 @@ export function CardMarkdown({ content }: { content: string }) {
 }
 
 function CommentRows({ comments }: { comments: any[] }) {
+  const roleAuthor = useRoleAuthor();
   const ordered = [...comments].sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
   if (ordered.length === 0) return null;
   return (
@@ -454,7 +457,7 @@ function CommentRows({ comments }: { comments: any[] }) {
       {ordered.map((c: any, i: number) => (
         <div key={c._id ?? i} className="space-y-1 text-[12px] leading-relaxed">
           <div className="flex flex-wrap items-baseline gap-x-2 text-sol-text-muted">
-            <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{c.session_info?.title || c.author}</span>
+            <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{roleAuthor({ userId: c.author_user_id, session: c.session_info })?.name || c.session_info?.title || c.author}</span>
             {c.created_at && <span className="text-[11px] text-sol-text-dim">{relativeTime(c.created_at)}</span>}
           </div>
           <CardMarkdown content={c.text || ""} />

@@ -13,9 +13,10 @@ import { identityLine, sessionIdentity, type IdentityRow } from "../../lib/sessi
 import { usePersonifyAll } from "../../hooks/usePersonifyAll";
 import { RoleHoverCard } from "./RoleHoverCard";
 import { highlightMatch } from "../../lib/searchHighlight";
+import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 
 export function SessionIdentityLine({
-  row, title, className, nameClassName, titleClassName, after, highlight, personifyAll: inheritedPersonifyAll,
+  row: rawRow, title, className, nameClassName, titleClassName, after, highlight, personifyAll: inheritedPersonifyAll,
 }: {
   row: IdentityRow;
   personifyAll?: boolean;
@@ -30,6 +31,7 @@ export function SessionIdentityLine({
   highlight?: string;
 }) {
   const personifyAll = usePersonifyAll(inheritedPersonifyAll);
+  const row = useLiveIdentityRow(rawRow);
   const line = identityLine(row, title, personifyAll);
   const id = sessionIdentity(row, personifyAll);
   const who = (

@@ -6,8 +6,9 @@ import type { ReactNode } from "react";
 import { RoleAvatar } from "../org/avatars";
 import { avatarLength } from "../../lib/orgAvatars";
 import { faceBadgeSize, faceIdentity, type IdentityRow } from "../../lib/sessionIdentity";
+import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 
-export function SessionFace({ row, size = 18, className, title, badge }: {
+export function SessionFace({ row: rawRow, size = 18, className, title, badge }: {
   row: IdentityRow;
   /** Pixels, or any CSS length: a face in a sentence draws at "1em" so it
    *  rides the prose it sits in. */
@@ -22,7 +23,7 @@ export function SessionFace({ row, size = 18, className, title, badge }: {
   // Always draws a face, even for a row nobody personified: the picker and the
   // hover cards preview the face a session WOULD wear. IdentityFace is the one
   // that decides whether a face appears on a card at all.
-  const id = faceIdentity(row);
+  const id = faceIdentity(useLiveIdentityRow(rawRow));
   const badgeSize = typeof size === "number" ? faceBadgeSize(size) : 0;
   const showBadge = badge && badgeSize > 0;
   const box = avatarLength(size);

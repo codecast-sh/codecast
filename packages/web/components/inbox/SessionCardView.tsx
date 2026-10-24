@@ -25,7 +25,9 @@ import { cleanUserMessage } from "../sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { AnchorScopePill, HeadOfPeopleFace } from "../anchor/AnchorIdentity";
 import { IdentityFace, SessionIdentityLine } from "../identity";
-import { sessionIdentity } from "../../lib/sessionIdentity";
+import { sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
+import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
+import { RoleAvatar } from "../org/avatars";
 import type { AnchorIdentity } from "../../hooks/useSyncAnchors";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { BranchCodeLink } from "../repo/RepositoryLinks";
@@ -138,8 +140,12 @@ export type SessionCardViewProps = {
   liveness: SessionCardLiveness;
   /** The signed-in viewer; a row by anyone else, with no steering rights, is read-only. */
   viewerId: string | null;
-  /** The session's author, shown only when it is not the viewer. */
-  author: { name: string; avatar?: string | null } | null;
+  /** The session's author, shown only when it is not the viewer. `face` is a
+   *  role's avatar key: a role's standing session is shown as its role. */
+  author: { name: string; avatar?: string | null; face?: AvatarKey } | null;
+  /** Who the row is (lib/sessionIdentity) with its role read live; defaults
+   *  to the session row itself. */
+  identity?: IdentityRow;
   /** Teammates who have this session open. */
   viewers: any[];
   /** The title of the session that spawned this one. */
@@ -203,6 +209,7 @@ export function SessionCardView({
   liveness,
   viewerId,
   author,
+  identity: identityProp,
   viewers,
   spawnedByTitle,
   anchorIdentity,
@@ -266,7 +273,8 @@ export function SessionCardView({
   // face once somebody gives it one, or when the workspace asks for every
   // session to have one. A role's standing session always has one — the role
   // IS the identity.
-  const isPersonified = sessionIdentity(session, chrome.personifyAll).kind !== "plain";
+  const identity = identityProp ?? session;
+  const isPersonified = sessionIdentity(identity, chrome.personifyAll).kind !== "plain";
   // Row thumbnail for sessions that contain images (server-denormalized
   // image_preview_url). Clicking it zooms the image (ImageLightbox), not the
   // session. It lives on the RIGHT edge — a left thumb pushes the title column
@@ -563,7 +571,7 @@ export function SessionCardView({
           {isPersonified ? (
             <IdentityFace
               personifyAll={chrome.personifyAll}
-              row={session}
+              row={identity as typeof session}
               size={22}
               onPick={(e) => onPickCharacter?.(session, e)}
               side="bottom"
@@ -597,7 +605,7 @@ export function SessionCardView({
               the row's identity and never truncates; the title does. */}
           <SessionIdentityLine
             personifyAll={chrome.personifyAll}
-            row={session}
+            row={identity}
             title={displayTitle}
             className="min-w-0 flex-1"
             nameClassName={isUnread && !isActive ? "font-semibold" : ""}
@@ -725,17 +733,21 @@ export function SessionCardView({
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
-              <AvatarImg
-                src={author.avatar}
-                alt={author.name}
-                className="w-3.5 h-3.5 rounded-full object-cover"
-                fallback={
-                  <span className="w-3.5 h-3.5 rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-[8px] font-semibold leading-none">
-                    {author.name.charAt(0).toUpperCase()}
-                  </span>
-                }
-              />
-              <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.name.split(" ")[0]}</span>
+              {author.face ? (
+                <RoleAvatar avatar={author.face} size={14} title={author.name} />
+              ) : (
+                <AvatarImg
+                  src={author.avatar}
+                  alt={author.name}
+                  className="w-3.5 h-3.5 rounded-full object-cover"
+                  fallback={
+                    <span className="w-3.5 h-3.5 rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-[8px] font-semibold leading-none">
+                      {author.name.charAt(0).toUpperCase()}
+                    </span>
+                  }
+                />
+              )}
+              <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.face ? author.name : author.name.split(" ")[0]}</span>
             </span>
           )}
           {viewers.length > 0 && <ViewerFaces members={viewers} size={14} max={3} />}

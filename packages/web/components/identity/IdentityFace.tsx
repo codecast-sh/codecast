@@ -7,11 +7,12 @@ import { usePersonifyAll } from "../../hooks/usePersonifyAll";
 import { RoleHoverCard } from "./RoleHoverCard";
 import { SessionFace } from "./SessionFace";
 import { SessionHoverCard } from "./SessionHoverCard";
+import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 
 type Side = "top" | "bottom" | "left" | "right";
 type Align = "start" | "center" | "end";
 
-export function IdentityFace({ row, size = 18, className, hover = true, onPick, side = "bottom", align = "start", badge, personifyAll }: {
+export function IdentityFace({ row: rawRow, size = 18, className, hover = true, onPick, side = "bottom", align = "start", badge, personifyAll }: {
   row: IdentityRow & Record<string, unknown>;
   personifyAll?: boolean;
   size?: number;
@@ -24,6 +25,7 @@ export function IdentityFace({ row, size = 18, className, hover = true, onPick, 
   /** Corner glyph riding the face (the agent brand); forwarded to SessionFace. */
   badge?: ReactNode;
 }) {
+  const row = useLiveIdentityRow(rawRow);
   const id = sessionIdentity(row, usePersonifyAll(personifyAll));
   // Not personified: the caller draws whatever it drew before (the agent icon),
   // so opting out costs the row nothing.
@@ -53,7 +55,7 @@ export function IdentityFace({ row, size = 18, className, hover = true, onPick, 
  *  character the session card, a plain session nothing. IdentityFace wraps its
  *  face in it; a surface that names the session beside the face (a message's
  *  speaker line) wraps both, so the name opens the same card. */
-export function IdentityHover({ row, personifyAll, side = "bottom", align = "start", triggerClassName, children }: {
+export function IdentityHover({ row: rawRow, personifyAll, side = "bottom", align = "start", triggerClassName, children }: {
   row: IdentityRow & Record<string, unknown>;
   personifyAll?: boolean;
   side?: Side;
@@ -61,6 +63,7 @@ export function IdentityHover({ row, personifyAll, side = "bottom", align = "sta
   triggerClassName?: string;
   children: ReactNode;
 }) {
+  const row = useLiveIdentityRow(rawRow);
   const id = sessionIdentity(row, usePersonifyAll(personifyAll));
   if (id.kind === "plain") return <>{children}</>;
   if (id.kind === "role") return <RoleHoverCard role={id.role} side={side} align={align} triggerClassName={triggerClassName}>{children}</RoleHoverCard>;

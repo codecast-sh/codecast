@@ -10,13 +10,15 @@ import { SessionFace } from "./SessionFace";
 import { RoleAvatar } from "../org/avatars";
 import { sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
 import { isAvatarKey, defaultAvatarFor } from "@codecast/shared/contracts/orgAvatars";
+import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 
 type HoverRow = IdentityRow & Record<string, any>;
 
-export function SessionIdentityHeader({ row, size = 36 }: { row: HoverRow; size?: number }) {
+export function SessionIdentityHeader({ row: rawRow, size = 36 }: { row: HoverRow; size?: number }) {
   // Resolved as personified: this header sits under a face (the card opens
   // off one, the picker previews one), so it names the character that face
   // belongs to even when the row itself has not opted in.
+  const row = useLiveIdentityRow(rawRow);
   const id = sessionIdentity(row, true) as Exclude<ReturnType<typeof sessionIdentity>, { kind: "plain" }>;
   const title = (row.title ?? "").trim();
   const showTitle = title && !(id.kind === "role" && title === id.name);

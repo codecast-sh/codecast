@@ -4305,6 +4305,13 @@ describe("resolveSessionAuthor", () => {
     { _id: "u3", email: "kim@x.com" },
   ];
 
+  it("a role's standing session is shown as its role's given name and face, never its bot user's title", () => {
+    const role = { _id: "or1", short_id: "or-1", name: "Cam's Engineering Co-worker", handle: "cam-coworker", avatar: "hare", status: "active", tenure_kind: "standing" as const, given_name: "Hazel" };
+    const bot = { _id: "bot1", name: "Cam's Engineering Co-worker" } as any;
+    expect(resolveSessionAuthor({ user_id: "u2", acting_user_id: "bot1", standing_role_id: "or1", role }, null, me, [...roster, bot]))
+      .toEqual({ name: "Hazel", avatar: null, face: "hare" });
+  });
+
   it("returns null for the current user's own session (user_id === me)", () => {
     expect(resolveSessionAuthor({ user_id: "me" }, null, me, roster)).toBeNull();
   });
