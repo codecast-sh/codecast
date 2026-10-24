@@ -109,7 +109,6 @@ export function ReviewMenu({
 }) {
   const submit = useAction(api.reviews.submitPending);
   const hand = useMutation(api.reviews.handPendingToSession);
-  const resolveNote = useMutation(api.codeComments.resolve);
   const discard = useMutation(api.codeComments.discardPendingReview);
   const setOpen = onOpenChange;
   const [verdict, setVerdict] = useState<Verdict>("COMMENT");
@@ -153,27 +152,18 @@ export function ReviewMenu({
     }
   };
 
-  // The send landed and some notes stayed open: resolve just those.
-  const retryResolve = async (outcome: Extract<SendOutcome, { kind: "resolve_failed" }>, to?: string) => {
-    setBusy("hand");
-    const open: string[] = [];
-    let reason = outcome.reason;
-    for (const id of outcome.open_ids) {
-      try {
-        await resolveNote({ comment_id: id });
-      } catch (e: any) {
-        open.push(id);
-        reason = e?.message ?? reason;
-      }
-    }
-    setBusy(null);
-    settle(deliveredOutcome(outcome.sent_ids, outcome.waiting, { open_ids: open, reason }), undefined, to);
+  // The send landed and some notes stayed open: resolve just those, through
+  // the store action that owns code comment resolves (it paints at once and
+  // rolls back if the server refuses).
+  const retryResolve = (outcome: Extract<SendOutcome, { kind: "resolve_failed" }>, to?: string) => {
+    useInboxStore.getState().resolveCodeCommentThread(outcome.open_ids, true);
+    settle(deliveredOutcome(outcome.sent_ids, outcome.waiting, { open_ids: [] }), undefined, to);
   };
 
   const retry = () => {
     if (!handResult) return;
     const { outcome, ref, to } = handResult;
-    if (outcome.kind === "resolve_failed") void retryResolve(outcome, to);
+    if (outcome.kind === "resolve_failed") retryResolve(outcome, to);
     else void handOff(ref);
   };
 

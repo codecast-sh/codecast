@@ -116,8 +116,17 @@ describe("Review popover: send to session", () => {
     await press(document.querySelector("[data-pr-hand-resolve]")!);
     await press(button("Send to session"));
     expect(document.querySelector("[data-pr-hand-outcome]")!.textContent).toContain("1 note still open: write conflict");
-    await press(button("Resolve again"));
-    expect(calls.filter((c) => c.name === "codeComments:resolve").map((c) => c.args)).toEqual([{ comment_id: "n2" }]);
+    const { useInboxStore } = await import("../../store/inboxStore");
+    const resolved: Array<[string[], boolean]> = [];
+    const real = useInboxStore.getState().resolveCodeCommentThread;
+    useInboxStore.setState({ resolveCodeCommentThread: (ids: string[], on: boolean) => { resolved.push([ids, on]); } } as any);
+    try {
+      await press(button("Resolve again"));
+    } finally {
+      useInboxStore.setState({ resolveCodeCommentThread: real } as any);
+    }
+    // Through the store action that owns code comment resolves, open ids only.
+    expect(resolved).toEqual([[["n2"], true]]);
     // The send is not repeated.
     expect(handCalls()).toHaveLength(1);
     expect(toasts).toEqual([{ kind: "success", text: "2 notes sent to the session and resolved" }]);
