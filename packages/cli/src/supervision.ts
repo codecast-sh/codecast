@@ -68,12 +68,22 @@ export function daemonLauncherMatchesCommand(launcher: string, executable: strin
 // exec (not plain invocation) so the daemon replaces the shell and launchd tracks
 // the daemon's pid as the job instance — kickstart, KeepAlive, and the mutual
 // supervision pid checks all depend on that.
-export function buildDaemonLauncherScript(opts: { daemonCommand: string }): string {
+export function buildDaemonLauncherScript(opts: { daemonCommand: string; loginPathFile?: string }): string {
+  const loginPath = opts.loginPathFile
+    ? `# The login shell's PATH from \`cast start\` (loginShellPath.ts), ahead of
+# launchd's bare one, so agents find Homebrew, nvm and mise binaries.
+LOGIN_PATH_FILE=${shellEscapeForSh(opts.loginPathFile)}
+if [ -r "$LOGIN_PATH_FILE" ]; then
+  LOGIN_PATH=$(head -n 1 "$LOGIN_PATH_FILE")
+  [ -n "$LOGIN_PATH" ] && PATH="$LOGIN_PATH:$PATH" && export PATH
+fi
+`
+    : "";
   return `#!/bin/sh
 # A watchdog bootstrapped from inside a Claude Code session would hand that
 # session's markers to every daemon it revives (agentEnv.ts).
 ${AGENT_ENV_UNSET_SH}
-# Codecast daemon launcher. The LaunchAgent runs this via /bin/sh so the login
+${loginPath}# Codecast daemon launcher. The LaunchAgent runs this via /bin/sh so the login
 # item's identity stays stable across binary self-updates (see supervision.ts).
 exec ${opts.daemonCommand}
 `;

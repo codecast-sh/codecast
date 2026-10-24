@@ -45,18 +45,29 @@ function runInstaller({ token, timeout }) {
 
 // `run`, `exists`, `home` and `platform` are injected so the rules stay
 // testable under plain node, the way computerPermissions.js does it.
-function createDaemonSetup({ run, exists = fs.existsSync, home = os.homedir(), platform = process.platform, env = process.env } = {}) {
+function createDaemonSetup({ run, exists = fs.existsSync, readFile = (p) => fs.readFileSync(p, "utf8"), home = os.homedir(), platform = process.platform, env = process.env } = {}) {
   const install = run ?? ((token) => runInstaller({ token, timeout: SETUP_TIMEOUT_MS }));
   let inFlight = null;
 
   // installed: a cast binary is on this machine. linked: it holds a sign-in.
-  // A page offers setup when either is false.
+  // authFailed: the server keeps refusing that sign-in (the daemon's
+  // authExpired), so the machine syncs nothing until someone signs in again.
+  // A page offers setup when installed or linked is false, and a sign in
+  // again when authFailed is true.
   function state() {
     const supported = platform === "darwin" || platform === "linux";
     const cli = resolveCli({ env, home, exists });
     const installed = cli !== "cast";
     const linked = exists(path.join(home, ".codecast", "config.json"));
-    return { supported, installed, linked, running: inFlight !== null };
+    return { supported, installed, linked, authFailed: linked && authExpired(), running: inFlight !== null };
+  }
+
+  function authExpired() {
+    try {
+      return JSON.parse(readFile(path.join(home, ".codecast", "daemon.state"))).authExpired === true;
+    } catch {
+      return false;
+    }
   }
 
   // One run at a time: a second click joins the run already going.

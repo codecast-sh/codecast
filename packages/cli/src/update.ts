@@ -143,6 +143,23 @@ export function isDevMode(): boolean {
   return updater.isDevMode();
 }
 
+/** How this binary got here. Every channel ships the same self-swapping
+ *  binary (npm/install.js, the Homebrew formula), so the channel alone never
+ *  blocks an update; running from source or a folder this user cannot write
+ *  does, and the device page disables Update for those. */
+export type Distribution = "installer" | "brew" | "npm" | "source";
+
+export function installChannel(
+  execPath = process.execPath,
+  devMode = isDevMode(),
+  writable = (dir: string) => { try { fs.accessSync(dir, fs.constants.W_OK); return true; } catch { return false; } },
+): { distribution: Distribution; can_self_update: boolean } {
+  if (devMode) return { distribution: "source", can_self_update: false };
+  const distribution: Distribution = /\/Cellar\/|\/homebrew\//i.test(execPath) ? "brew" : /\/node_modules\//.test(execPath) ? "npm" : "installer";
+  const dir = execPath.slice(0, Math.max(execPath.lastIndexOf("/"), 1));
+  return { distribution, can_self_update: writable(dir) };
+}
+
 export function updateRecentlyFailed(version: string): boolean {
   return updater.updateRecentlyFailed(version);
 }

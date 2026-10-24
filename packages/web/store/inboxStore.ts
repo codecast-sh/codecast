@@ -2,6 +2,7 @@ import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActi
 import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress } from "@codecast/shared/contracts";
+import { cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
 import { crawlScopesClearedBy, crawlWatermarkScope } from "../hooks/syncMetaKeys";
@@ -228,6 +229,7 @@ import { stampSessionCommand } from "./sessionCommandStamp";
 import { isConvexId } from "../lib/entityLinks";
 import { firstRun } from "./firstRunState";
 import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
+import { pendingJoinRow } from "../lib/teamMachines";
 import { projectRootOf } from "../lib/recentProjectPaths";
 import { cloudPlacementFor, CLOUD_SESSION_SOURCES, isHostedAgentType, type CloudSessionSource } from "@codecast/shared/contracts";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
@@ -550,10 +552,6 @@ export type ProjectItem = {
   non_goals?: string[];
   risks?: string[];
   budget?: { tokens_per_day?: number; hands_per_day?: number };
-  task_counts: { total: number; done: number; in_progress: number };
-  plan_count: number;
-  doc_count: number;
-  active_plan_count: number;
   created_at: number;
   updated_at: number;
 };
@@ -568,7 +566,7 @@ export type PrStatus = {
 };
 
 /** The role a session row belongs to, as the server snapshots it on the row. */
-export type SessionRoleSnapshot = { _id: string; short_id: string; name: string; handle: string; avatar: string; status: string; tenure_kind: "standing" | "program" };
+export type SessionRoleSnapshot = { _id: string; short_id: string; name: string; handle: string; avatar: string; status: string; tenure_kind: "standing" | "program"; given_name?: string | null };
 
 export type CloudContextTooLarge = { total_bytes: number; cap_bytes: number; files: Array<{ path: string; bytes: number }> };
 
@@ -1773,11 +1771,12 @@ export type ClientUI = {
   // A reading mark, so it follows the person to every device.
   pr_viewed_files?: Record<string, string[]>;
   // The conversation diff pane's base (shared/diff DiffBase), by conversation id.
-  diff_base?: Record<string, "session" | "branch" | "commit" | "turn">;
+  diff_base?: Record<string, "session" | "branch" | "commit" | "turn" | "review">;
   // Files the reader marked seen in a conversation's diff pane, by conversation
-  // id, then path, to the stamp of the file's text when marked: a mark lapses
-  // when the file changes after it (lib/diffSeenMarks).
-  diff_seen_files?: Record<string, Record<string, string>>;
+  // id, then path, to the stamp of the file's text when marked and the change
+  // that wrote it: a mark lapses when the file changes after it, and the
+  // "review" base diffs from it (lib/diffSeenMarks SeenMark).
+  diff_seen_files?: Record<string, Record<string, string | { h: string; at?: string; prev?: { h: string; at?: string } }>>;
   // Where a new line note goes on a pull request: held for the review, or out
   // at once. A reading habit, so it follows the person.
   pr_note_mode?: "review" | "now";
@@ -1996,6 +1995,13 @@ export type ClientUI = {
   // press, an unmute or a record the only things that open it. Stamped LWW:
   // "may the app hold my microphone" is about the person, not the machine.
   call_mic_auto_open?: boolean;
+  // Whether starting or answering a call shows the camera and microphone
+  // check first (HuddleStartDialog). Absent means ON; stamped LWW, like the
+  // join prefs above it.
+  call_device_check?: boolean;
+  // Whether stopping a turn that has subagents running asks first, listing
+  // them (StopConfirm). Absent means ask; stamped LWW, about the person.
+  confirm_stop_subagents?: boolean;
   // Fold the pinned thread-state panel above the composer down to its headline
   // row. Expanded by default — the panel exists to be read on arrival — and
   // left unstamped, so it stays a per-device reading preference like the other
@@ -5679,6 +5685,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   addReviewComment: (conversationId: string, comment: PendingComment) => void;
   commitReviewComment: (conversationId: string, id: string, body: string) => void;
   removeReviewComment: (conversationId: string, id: string) => void;
+  applyReviewVerdict: (conversationId: string, item: PendingComment) => void;
+  clearReviewVerdict: (conversationId: string, id: string) => void;
   clearReviewComments: (conversationId: string) => void;
   getReviewComments: (conversationId: string) => PendingComment[];
 
@@ -5835,7 +5843,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setTeamMembershipVisibility: (teamId: string, visibility: TeamVisibilityLevel, mode?: VisibilityChangeMode) => void;
   toggleBookmark: (conversationId: string, messageId: string) => void;
   /** Approve or deny one tool-permission request; the card leaves at once. */
-  resolvePermission: (permissionId: string, status: "approved" | "denied") => void;
+  /** opts: a denial's reason for the model; remember keeps the row's suggested rules. */
+  resolvePermission: (permissionId: string, status: "approved" | "denied", opts?: { message?: string; remember?: boolean }) => void;
   /** Answer a workflow run's open gate (a choice key or free text). */
   respondToGate: (runId: string, response: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
@@ -5861,7 +5870,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
+  stopAndSend: (convId: string, content: string, clientId: string) => Promise<any>;
   startResourceOffload: (args: ResourceOffloadIntent) => Promise<any>;
+  requestMoveRehearsals: (args: { request_id: string; source_device_id: string; selections: Array<{ conversation_id: string; session_id: string; destination_id: string }> }) => Promise<any>;
   cancelResourceOffload: (batchId: string) => Promise<any>;
   setSessionBackground: (deviceId: string, sessionId: string, background: boolean) => Promise<any>;
   hibernateSession: (requestId: string, convId: string, sessionId: string, ownerDeviceId: string) => Promise<any>;
@@ -6212,6 +6223,16 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // window and never persisted: another window may sit on another machine.
   localDevice: { viewer: string; deviceId: string } | null;
   setMachineRoster: (devices: MachineCandidate[]) => void;
+  // Team machines (teamHosts.list): a Linux box a team owns, each member on
+  // it as their own user. Server shape; see lib/teamMachines.ts.
+  teamMachines: import("../lib/teamMachines").TeamMachine[];
+  setTeamMachines: (rows: import("../lib/teamMachines").TeamMachine[]) => void;
+  /** Join a team machine: the row shows you joining at once; the admin daemon does the rest. */
+  joinTeamMachine: (hostId: string, opts?: { linux_user?: string }) => void;
+  /** Take a member off a team machine (yourself, or anyone when you manage it). */
+  removeTeamMachineMember: (memberId: string) => void;
+  renameTeamMachine: (hostId: string, name: string) => void;
+  unregisterTeamMachine: (hostId: string) => void;
   /** Drop machines from the roster (Settings > Machines). The server refuses
    *  an online machine, whose next heartbeat would list it again. */
   removeMachines: (deviceIds: string[]) => void;
@@ -6220,6 +6241,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setDeviceShares: (deviceId: string, teamIds: string[]) => void;
   setDeviceSnippet: (deviceId: string, change: DeviceSnippetChange) => Promise<unknown>;
   setProviderKey: (deviceId: string, change: ProviderKeyCommand) => Promise<{ command_id?: string } | undefined>;
+  requestDeviceUpdate: (deviceId: string) => Promise<unknown>;
   /** Start, stop or adjust keeping a cloud session's folder in step with a laptop copy (dispatch setLocalMirror → cloud_live_sync on that laptop): a mode, a conflict pick, or watch-only's overwrite. */
   setLocalMirror: (conversationId: string, enable: boolean, deviceId?: string, opts?: { overwrite?: boolean; mode?: import("@codecast/shared/contracts").LocalMirrorMode; resolve?: import("@codecast/shared/contracts").MirrorResolve }) => void;
   /** Wake, sleep, apply setup, save or delete an image on a cloud host, or launch another like it (dispatch cloudHostAction → cloud_host_action on the laptop that manages it). `arg`: the image to delete, or the new host's size. */
@@ -6646,6 +6668,16 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   upsertAgentChain: (fields: Partial<AgentChainSpec> & { name: string; description: string; _id?: string }) => Promise<any>;
   removeAgentChain: (id: string) => void;
 
+  // -- Vault (docs/architecture/vault.md): metadata only --
+  updateSecretMeta: (id: string, fields: { name?: string; note?: string; env?: string[]; sites?: string[] }) => void;
+  /** `only: "requested"` is a decline: the server keeps a row filled since (secrets.remove). */
+  removeSecret: (id: string, only?: "requested") => void;
+  setSecretAskFirst: (id: string, askFirst: boolean) => void;
+  stageSecret: (row: SecretMeta, hold?: readonly (keyof SecretMeta)[]) => void;
+  /** A secret's Activity or Previous (`events:<id>`, `versions:<id>`) as a press shows it; undefined drops it. */
+  stageSecretHistory: (key: string, rows: unknown[] | undefined) => void;
+  settleSecretStub: (stubId: string, shortId: string | null) => void;
+
   addTaskComment: (shortId: string, text: string, commentType?: string, imageIds?: string[]) => Promise<any>;
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
@@ -6792,6 +6824,18 @@ function stripImageRef(s: string): string {
 function lastTimelineMessage(draft: Draft, convId: string): Message | undefined {
   const pending = draft.pendingMessages[convId]?.findLast((m) => !m._isLocalQueue && !m._isFailed);
   return pending ?? draft.messages[convId]?.at(-1);
+}
+
+// A queue row in the conversation's pending status row, the one home of
+// queue rows: the line shows the new entry at once, and the server's push of
+// the real row replaces it.
+function draftQueuedRow(draft: Draft, convId: string, content: string, clientId: string): void {
+  const me = draft.currentUser as any;
+  const status = ((draft as any).pendingMessageStatus[convId] ??= { _id: convId, conversation_id: convId });
+  status.inflight = [...(status.inflight ?? []), {
+    message_id: clientId, client_id: clientId, created_at: Date.now(), status: "held", queued: true, content,
+    from_user_id: me?._id ? String(me._id) : undefined, from_name: me?.name || me?.email?.split("@")[0], from_image: me?.image || me?.github_avatar_url,
+  }];
 }
 
 export function appendOptimisticMessage(draft: Draft, convId: string, content: string, images?: OptimisticImage[], clientId?: string): string {
@@ -7105,7 +7149,7 @@ export type SyncOpts = {
   // to omit — a mistake here only costs an extra render, never a dropped update.
   ignoreFields?: string[];
   // Non-scalar fields the identity reuse compares by content (a server-joined
-  // object that changes with no scalar on the row: projects.task_counts).
+  // object that changes with no scalar on the row: projects.line_profile).
   deepFields?: readonly string[];
   // Fields owned by a separate overlay channel (syncOverlay), not the base
   // payload. On a base sync these keep their previous (overlay-set) value rather
@@ -9286,6 +9330,21 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!c || c.body === body) return;
     c.body = body;
   }),
+  // A typed verdict on a block: lands on the block's existing quote when it
+  // has one, else joins the batch as `item` (lib/reviewActions setBlockVerdict).
+  applyReviewVerdict: sync(function (this: Draft, conversationId: string, item: PendingComment) {
+    const list = (this.reviewComments[conversationId] ??= []);
+    const have = list.find((c) => c.messageId === item.messageId && c.blockIndex === item.blockIndex && !c.image && !c.page && !c.proposal);
+    if (!have) return void list.push(item);
+    have.verdict = item.verdict;
+    have.verdictAt = item.verdictAt;
+  }),
+  clearReviewVerdict: sync(function (this: Draft, conversationId: string, id: string) {
+    const c = this.reviewComments[conversationId]?.find((c) => c.id === id);
+    if (!c) return;
+    delete c.verdict;
+    delete c.verdictAt;
+  }),
   removeReviewComment: sync(function (this: Draft, conversationId: string, id: string) {
     const list = this.reviewComments[conversationId] ?? [];
     const removed = list.find((c) => c.id === id);
@@ -9404,6 +9463,31 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.machineRoster = devices;
     this.machineRosterLive = true;
   }),
+  teamMachines: [],
+  setTeamMachines: sync(function (this: Draft, rows: import("../lib/teamMachines").TeamMachine[]) {
+    this.teamMachines = rows;
+  }),
+  joinTeamMachine: action(function (this: Draft, hostId: string, _opts?: { linux_user?: string }) {
+    const host = this.teamMachines.find((h) => h._id === hostId);
+    const me = this.currentUser?._id;
+    if (!host || !me) return;
+    const mine = host.members.find((m) => m.user_id === me && !m.is_admin);
+    if (mine) Object.assign(mine, { status: "joining", step: "queued", error: undefined, stalled: false });
+    else host.members.push(pendingJoinRow(me, this.currentUser?.name ?? "You"));
+  }),
+  removeTeamMachineMember: action(function (this: Draft, memberId: string) {
+    for (const host of this.teamMachines) {
+      const m = host.members.find((r) => r._id === memberId);
+      if (m) Object.assign(m, { status: "removing", step: undefined, error: undefined });
+    }
+  }),
+  renameTeamMachine: action(function (this: Draft, hostId: string, name: string) {
+    const host = this.teamMachines.find((h) => h._id === hostId);
+    if (host) host.name = name.trim();
+  }),
+  unregisterTeamMachine: action(function (this: Draft, hostId: string) {
+    this.teamMachines = this.teamMachines.filter((h) => h._id !== hostId);
+  }),
   removeMachines: action(function (this: Draft, deviceIds: string[]) {
     const gone = new Set(deviceIds);
     this.machineRoster = this.machineRoster.filter((d) => !gone.has(d.device_id));
@@ -9447,6 +9531,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // A provider key set or removed on one device paints the roster row's
   // managed ids (never the key); the setProviderKey side effect sends the
   // sealed key to the device and answers with the command to watch.
+  // Settings > Daemon's Update paints the request on the roster row; the
+  // requestDeviceUpdate side effect writes it to the device row.
+  requestDeviceUpdate: asyncAction(function (this: Draft, deviceId: string) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) Object.assign(row, { update_state: "requested", update_requested_at: Date.now(), update_error: undefined });
+  }),
   setProviderKey: asyncAction(function (this: Draft, deviceId: string, change: ProviderKeyCommand) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.managed_provider_ids = managedIdsAfter(row.managed_provider_ids, change);
@@ -10668,7 +10758,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // refuses it. Resolving the conversation's last pending request unblocks
   // the session, so its question is marked resolved in the same commit. The
   // resolvePermission side effect runs permissions.updatePermissionStatus.
-  resolvePermission: action(function (this: Draft, permissionId: string, _status: "approved" | "denied") {
+  resolvePermission: action(function (this: Draft, permissionId: string, _status: "approved" | "denied", _opts?: { message?: string; remember?: boolean }) {
     const row = this.pendingPermissions[permissionId] as any;
     if (!row) return;
     delete this.pendingPermissions[permissionId];
@@ -10815,15 +10905,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // server releases the row when the turn ends
   // (managedSessions.applyAgentStatus), or now via releaseQueued.
   queueMessage: action(function (this: Draft, convId: string, content: string, clientId: string) {
-    // The one home of queue rows is the conversation's pending status row:
-    // the line shows the new entry at once, and the server's push of the
-    // real row replaces it.
-    const me = this.currentUser as any;
-    const status = ((this as any).pendingMessageStatus[convId] ??= { _id: convId, conversation_id: convId });
-    status.inflight = [...(status.inflight ?? []), {
-      message_id: clientId, client_id: clientId, created_at: Date.now(), status: "held", queued: true, content,
-      from_user_id: me?._id ? String(me._id) : undefined, from_name: me?.name || me?.email?.split("@")[0], from_image: me?.image || me?.github_avatar_url,
-    }];
+    draftQueuedRow(this, convId, content, clientId);
   }),
 
   releaseQueued: action(function (this: Draft, convId: string) {
@@ -10897,7 +10979,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // The press time rides along so the daemon can tell an Escape aimed at the
   // previous turn from one for the turn a queued message started after it.
-  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession", { pressed_at: Date.now() }),
+  // The request id binds the press to a sessionCommands row, which the
+  // header reads to say when no daemon took the stop (lib/sessionCommands).
+  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession", { pressed_at: Date.now(), request_id: crypto.randomUUID() }),
+  // Stop the running turn and deliver this message once it has stopped
+  // (conversations.stopAndSendToSession): the press and the queue row in one.
+  stopAndSend: (convId: string, content: string, clientId: string) => get().convCommand(convId, "stopAndSendToSession", { content, client_id: clientId, pressed_at: Date.now(), request_id: crypto.randomUUID() }),
 
   // Generic local-first session daemon-command. Routes any api.conversations.*
   // command (kill/restart/repair/reconfigure/rewind/fork/sendKeys/sendEscape)
@@ -10911,6 +10998,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const ids = [...new Set(args.selections.map(s => s.destination_id))].map(destination_id => ({ destination_id, batch_id: `mg-${crypto.randomUUID().replaceAll("-", "")}` }));
     this.migrationBatches = [...resourceOffloadStubs(args, ids, Date.now(), this.sessions), ...(this.migrationBatches ?? [])];
     return { batch_ids: ids };
+  }),
+  // The offload review asks the source machine to rehearse moves: pending rows
+  // paint at once, and the server's rows (same ids by request and pair) replace them.
+  requestMoveRehearsals: asyncAction(function (this: Draft, args: { request_id: string; source_device_id: string; selections: Array<{ conversation_id: string; session_id: string; destination_id: string }> }) {
+    const at = Date.now();
+    const stubs = args.selections.map((s, i) => ({ _id: `${args.request_id}:${i}`, request_id: args.request_id, session_id: s.session_id, destination_id: s.destination_id, status: "pending" as const, result: null, error: null, created_at: at }));
+    this.moveRehearsals = [...(this.moveRehearsals ?? []), ...stubs];
   }),
   cancelResourceOffload: asyncAction(function (this: Draft, batchId: string) {
     const requested_at = Date.now();
@@ -10970,8 +11064,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete this.sessionCommands[requestId];
   }),
 
-  convCommand: asyncAction(function (this: Draft, convId: string, command: string, _extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
-    if (command === "sendEscapeToSession") {
+  convCommand: asyncAction(function (this: Draft, convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) {
+    if (command === "sendEscapeToSession" || command === "stopAndSendToSession") {
+      if (extraArgs?.request_id) stampSessionCommand(this, { _id: extraArgs.request_id, conversation_id: convId, command: "escape", kind: "interrupt" });
+      // Stop and send: the message waits in the shared queue until the stop lands.
+      if (command === "stopAndSendToSession") draftQueuedRow(this, convId, extraArgs!.content, extraArgs!.client_id);
       // The interruption line paints off whichever row the view holds. The
       // sessions row is the inbox's windowed copy and is absent for a subagent
       // or stashed conversation the user is looking at; the conversations row
@@ -13132,6 +13229,49 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete (this.agentChains as any)[id];
   }),
 
+  // Vault. Only metadata moves through the store: a value goes straight to its
+  // Convex action (create, rotate, fulfill, reveal), so no outbox, cache or
+  // replica ever holds one. Edits normalize the way the server does, so its
+  // echo equals the draft and the field lock clears; updated_at is the
+  // server's clock, so no edit writes it (a local stamp would never match).
+  updateSecretMeta: action(function (this: Draft, id: string, fields: SecretMetaEdit) {
+    const row = (this.secrets as any)[id];
+    if (!row) return;
+    Object.assign(row, cleanSecretEdit(fields));
+  }),
+  removeSecret: action(function (this: Draft, id: string, _only?: "requested") {
+    delete (this.secrets as any)[id];
+  }),
+  setSecretAskFirst: action(function (this: Draft, id: string, askFirst: boolean) {
+    const row = (this.secrets as any)[id];
+    if (!row) return;
+    row.ask_first = askFirst;
+  }),
+  // A row painted before the server has it: a create's stub, keyed by a stub id
+  // and given its short_id when the create answers (registry altKey), or a
+  // fill or value swap whose value went straight to its action. `hold` names
+  // the fields a list push must not put back meanwhile: each takes a field
+  // lock at the painted value, retired by the server's matching echo.
+  stageSecret: sync(function (this: Draft, row: SecretMeta, hold: readonly (keyof SecretMeta)[] = []) {
+    (this.secrets as any)[row._id] = row;
+    const ts = Date.now();
+    for (const field of hold) this.pending[`secrets:${row._id}:${field}`] = fieldLockEntry(row[field], ts);
+  }),
+  // The lines a press adds to a detail panel's history before the server writes
+  // them; the query's next answer (secretHistory) replaces the whole list.
+  stageSecretHistory: sync(function (this: Draft, key: string, rows: unknown[] | undefined) {
+    const history = this.secretHistory as any;
+    if (rows) history[key] = { _id: key, rows };
+    else delete history[key];
+  }),
+  settleSecretStub: sync(function (this: Draft, stubId: string, shortId: string | null) {
+    const rows = this.secrets as any;
+    if (!rows[stubId]) return;
+    // The snapshot can land before the action answers; then the real row is already here.
+    if (!shortId || Object.values(rows).some((r: any) => r._id !== stubId && r.short_id === shortId)) delete rows[stubId];
+    else rows[stubId].short_id = shortId;
+  }),
+
   // Local-first create: an optimistic stub renders the row instantly (the
   // quick-add loop on task detail fires several per second). The stub carries a
   // minted client_key and is keyed by `temp_task_<key>`; when the server row
@@ -13242,10 +13382,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
         status: opts.status || "active",
         ...(team ? { team_id: team } : {}),
         workspace: team ? `team:${team}` : `user:${me}`,
-        task_counts: { total: 0, done: 0, in_progress: 0 },
-        plan_count: 0,
-        doc_count: 0,
-        active_plan_count: 0,
         created_at: now,
         updated_at: now,
       } as ProjectItem;

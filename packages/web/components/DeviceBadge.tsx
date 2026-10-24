@@ -66,6 +66,13 @@ export type Device = {
   cli_version?: string;
   update_available?: string;
   update_required?: boolean;
+  /** Self update (convex lib/deviceUpdate.ts): can this install replace its
+   *  own binary, how it was installed, and the Update button's request. */
+  can_self_update?: boolean;
+  distribution?: "installer" | "brew" | "npm" | "source";
+  update_requested_at?: number;
+  update_state?: "requested" | "installing" | "failed";
+  update_error?: string;
   /** When this daemon process started (devices.listDevices). */
   daemon_started_at?: number;
   /** Per-repo git health on this device (daemon gitPlane sweep). */

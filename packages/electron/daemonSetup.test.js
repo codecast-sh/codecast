@@ -8,13 +8,24 @@ const on = (...paths) => (p) => paths.includes(p);
 
 test("a fresh Mac has neither the CLI nor a sign-in", () => {
   const s = createDaemonSetup({ exists: on(), home: HOME, platform: "darwin", env: {} }).state();
-  assert.deepEqual(s, { supported: true, installed: false, linked: false, running: false });
+  assert.deepEqual(s, { supported: true, installed: false, linked: false, authFailed: false, running: false });
 });
 
 test("an installed, linked machine reports both", () => {
   const s = createDaemonSetup({ exists: on(`${HOME}/.local/bin/cast`, `${HOME}/.codecast/config.json`), home: HOME, platform: "darwin", env: {} }).state();
   assert.equal(s.installed, true);
   assert.equal(s.linked, true);
+});
+
+test("a linked machine whose daemon marked its sign-in expired reports authFailed", () => {
+  const files = { [`${HOME}/.codecast/daemon.state`]: JSON.stringify({ authExpired: true }) };
+  const readFile = (p) => { if (!(p in files)) throw new Error("ENOENT"); return files[p]; };
+  const linked = on(`${HOME}/.local/bin/cast`, `${HOME}/.codecast/config.json`);
+  assert.equal(createDaemonSetup({ exists: linked, readFile, home: HOME, platform: "darwin", env: {} }).state().authFailed, true);
+  files[`${HOME}/.codecast/daemon.state`] = JSON.stringify({ authExpired: false });
+  assert.equal(createDaemonSetup({ exists: linked, readFile, home: HOME, platform: "darwin", env: {} }).state().authFailed, false);
+  files[`${HOME}/.codecast/daemon.state`] = "{not json";
+  assert.equal(createDaemonSetup({ exists: linked, readFile, home: HOME, platform: "darwin", env: {} }).state().authFailed, false);
 });
 
 test("setup runs the installer once with the token and reports success", async () => {

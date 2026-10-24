@@ -1,4 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./functions";
+import { selfUpdateBlocked } from "./lib/deviceUpdate";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
@@ -1231,6 +1232,11 @@ export const listDevices = query({
         cli_version: d.cli_version ?? undefined,
         update_available: d.update_available ?? undefined,
         update_required: d.cli_version ? isBelowMinimum(d.cli_version, minCliVersion) : false,
+        can_self_update: d.can_self_update ?? undefined,
+        distribution: d.distribution ?? undefined,
+        update_requested_at: d.update_requested_at ?? undefined,
+        update_state: d.update_state ?? undefined,
+        update_error: d.update_error ?? undefined,
         model_inventory: d.model_inventory ?? undefined,
         // Managed provider keys (pl-207): the ECDH public key the web seals a key
         // to, and which providers have a key on this device (ids only).
@@ -1518,6 +1524,7 @@ export const listAgentBoxes = query({
       online: boolean;
       last_seen: number;
       local_project_roots: string[];
+      cli_version: string | undefined;
     }> = [];
     for (const { device: d, runner, teamId, canEdit } of await listTeamMachines(ctx, userId)) {
       out.push({
@@ -1536,6 +1543,7 @@ export const listAgentBoxes = query({
         online: now - d.last_seen < DEVICE_ONLINE_MS,
         last_seen: bucketTs(d.last_seen)!,
         local_project_roots: d.local_project_roots ?? [],
+        cli_version: d.cli_version ?? undefined,
       });
     }
     return out.sort((a, b) => b.last_seen - a.last_seen);
@@ -1652,6 +1660,18 @@ export async function performSetDeviceShares(
   return { shared_team_ids: [...wanted].sort() };
 }
 
+/** Open one of the caller's machines to exactly `team_ids` (empty closes it):
+ *  the CLI's `cast devices share`. The web writes the same fact through the
+ *  store's setDeviceShares dispatch. */
+export const setDeviceShares = mutation({
+  args: { api_token: v.optional(v.string()), device_id: v.string(), team_ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    return performSetDeviceShares(ctx, userId, args.device_id, args.team_ids);
+  },
+});
+
 /** The caller's own device row, or a thrown error: every device-targeted
  *  command below is for a machine the caller owns. */
 /** The user's own device row by device id, or null: the one ownership test every device-targeted write uses. */
@@ -1671,25 +1691,48 @@ async function requireOwnDevice(ctx: any, apiToken: string | undefined, deviceId
 }
 
 /**
- * Settings > Daemon's Update button: update this one machine now. The same
- * `force_update` the admin tools send, targeted at the device; the daemon
- * reports, replaces its binary and restarts, so the page sees the new version
- * on the next heartbeat. Works with automatic update off: that switch stops
- * updates nobody asked for, and this is one somebody asked for.
+ * Settings > Daemon's Update button: update this one machine now. Works with
+ * automatic update off: that switch stops updates nobody asked for, and this
+ * is one somebody asked for. The request is desired state on the row
+ * (lib/deviceUpdate.ts): every beat hands it to the daemon until the machine
+ * runs the new version, so a laptop asleep when it was pressed still gets it.
+ * A daemon that predates the request (no can_self_update on its row) gets the
+ * old `force_update` command as well.
  */
 export const requestDeviceUpdate = mutation({
   args: { api_token: v.optional(v.string()), device_id: v.string() },
   handler: async (ctx, args) => {
-    const { userId } = await requireOwnDevice(ctx, args.api_token, args.device_id);
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "force_update" as const,
-      created_at: Date.now(),
-      target_device_id: args.device_id,
-    });
-    return { command_id: commandId };
+    const { userId, device } = await requireOwnDevice(ctx, args.api_token, args.device_id);
+    return applyDeviceUpdateRequest(ctx, userId, device);
   },
 });
+
+/** The store's requestDeviceUpdate side effect (convex/dispatch.ts). */
+export async function performRequestDeviceUpdate(ctx: any, userId: Id<"users">, deviceId: string) {
+  const device = await ownDevice(ctx, userId, deviceId);
+  if (!device) throw new Error("Unknown device");
+  return applyDeviceUpdateRequest(ctx, userId, device);
+}
+
+async function applyDeviceUpdateRequest(ctx: any, userId: Id<"users">, device: any) {
+  const blocked = selfUpdateBlocked(device);
+  if (blocked) throw new Error(`Cannot update this machine from here: ${blocked.toLowerCase()}`);
+  const now = Date.now();
+  await ctx.db.patch(device._id, {
+    update_requested_version: device.update_available || undefined,
+    update_requested_at: now,
+    update_state: "requested" as const,
+    update_error: undefined,
+  });
+  if (device.can_self_update !== undefined) return { requested_at: now };
+  const commandId = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "force_update" as const,
+    created_at: now,
+    target_device_id: device.device_id,
+  });
+  return { requested_at: now, command_id: commandId };
+}
 
 export const setDeviceSnippet = mutation({
   args: {
@@ -1855,6 +1898,7 @@ export const enqueueCloudAgentActionCommand = mutation({
  */
 export const enqueueAgentToolSetupCommand = mutation({
   args: {
+    api_token: v.optional(v.string()),
     conversation_id: v.optional(v.id("conversations")),
     device_id: v.optional(v.string()),
     tool: v.union(v.literal("browser"), v.literal("computer")),
@@ -1865,14 +1909,14 @@ export const enqueueAgentToolSetupCommand = mutation({
     let queueOwner: Id<"users">;
     let target: string;
     if (args.conversation_id) {
-      const userId = await getAuthUserId(ctx);
+      const userId = await getAuthenticatedUserId(ctx, args.api_token);
       if (!userId) throw new Error("Authentication required");
       const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
       if (!conv.owner_device_id) throw new Error("No machine hosts this session yet");
       queueOwner = conv.user_id;
       target = conv.owner_device_id;
     } else {
-      const { userId } = await requireOwnDevice(ctx, undefined, args.device_id!);
+      const { userId } = await requireOwnDevice(ctx, args.api_token, args.device_id!);
       queueOwner = userId;
       target = args.device_id!;
     }
@@ -1899,9 +1943,9 @@ const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "clou
  * send it (canReadSessionCommand).
  */
 export const watchedCommandOutcome = query({
-  args: { command_id: v.id("daemon_commands") },
+  args: { api_token: v.optional(v.string()), command_id: v.id("daemon_commands") },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
     const row = await ctx.db.get(args.command_id);
     if (!row || !WATCHED_COMMANDS.has(row.command) || !(await canReadSessionCommand(ctx, userId, row))) return null;

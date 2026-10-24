@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { Terminal } from "lucide-react";
+import { LogIn, Terminal } from "lucide-react";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { bridge } from "../lib/desktop";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -18,8 +21,64 @@ const DISMISS_DURATION_MS = 30 * 60 * 1000;
 const TIER_TONE: Record<OfflineTier, StatusNotice["tone"]> = { warn: "yellow", alert: "orange", severe: "red" };
 
 export function CliOfflineBanner() {
-  useStatusNotice("cli-offline", useCliOfflineNotice());
+  const signedOut = useSignedOutNotice();
+  const offline = useCliOfflineNotice();
+  // A refused sign-in also stops the beats, so the machine reads as offline;
+  // restarting would not help, signing in again does.
+  useStatusNotice("cli-offline", signedOut ?? offline);
   return null;
+}
+
+const SIGNED_OUT_POLL_MS = 60_000;
+
+// In the desktop app the shell reads this machine's daemon state
+// (daemonSetup.js): a sign-in the server keeps refusing gets a one-click
+// sign in again, which reruns the setup with a fresh setup token.
+function useSignedOutNotice(): StatusNotice | null {
+  const createSetupToken = useMutation(api.apiTokens.createSetupToken);
+  const [authFailed, setAuthFailed] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "running" | "failed">("idle");
+  const probe = () => bridge("getDaemonSetup")?.().then((m) => setAuthFailed(m.authFailed === true)).catch(() => {});
+  useMountEffect(() => {
+    if (!bridge("getDaemonSetup")) return;
+    void probe();
+    const timer = setInterval(probe, SIGNED_OUT_POLL_MS);
+    window.addEventListener("focus", probe);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", probe);
+    };
+  });
+  const run = bridge("runDaemonSetup");
+  if (!authFailed || !run) return null;
+
+  const signIn = async () => {
+    setPhase("running");
+    try {
+      const { token } = await createSetupToken({});
+      const result = await run(token);
+      setPhase(result.ok ? "idle" : "failed");
+    } catch {
+      setPhase("failed");
+    }
+    await probe();
+  };
+
+  return {
+    tone: "red",
+    icon: LogIn,
+    title: "This machine is signed out. Nothing syncs.",
+    detail: phase === "failed" ? <>Sign in did not finish. Run <code className="font-mono">cast auth</code> on this machine.</> : undefined,
+    action: (
+      <button
+        onClick={signIn}
+        disabled={phase === "running"}
+        className="px-2 py-0.5 text-xs font-medium rounded bg-sol-red/20 text-sol-red hover:bg-sol-red/30 disabled:opacity-60"
+      >
+        {phase === "running" ? "Signing in…" : "Sign in again"}
+      </button>
+    ),
+  };
 }
 
 // Every hook runs before the first early return, so the notice can bail out

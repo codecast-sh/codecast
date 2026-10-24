@@ -231,7 +231,8 @@ declare global {
 // Rides the generic app IPC, so a shell without the handler just rejects:
 // the first rejection turns the forwarder off for this renderer.
 
-export type DaemonSetupState = { supported: boolean; installed: boolean; linked: boolean; running: boolean };
+/** authFailed: the daemon's sign-in is refused (absent on older shells). */
+export type DaemonSetupState = { supported: boolean; installed: boolean; linked: boolean; authFailed?: boolean; running: boolean };
 
 export type ShareCursor = { id: string; name: string; nx: number; ny: number };
 

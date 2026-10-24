@@ -1,9 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { useMutation } from "convex/react";
 import { Cpu, RefreshCw } from "lucide-react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { selfUpdateBlocked } from "@codecast/convex/convex/lib/deviceUpdate";
+import { useInboxStore } from "../../../store/inboxStore";
 import { Switch } from "../../../components/ui/switch";
 import { Button } from "../../../components/ui/button";
 import { SettingsCallout, SettingsRow, SettingsSection } from "../../../components/settings/ui";
@@ -75,15 +74,22 @@ function versionLine(d: Device): string {
   return "Up to date.";
 }
 
+// A request the daemon has not picked up in this long no longer holds the
+// button: an older daemon reports no run, and pressing again is the retry.
+const REQUEST_HOLD_MS = 10 * 60 * 1000;
+
 function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useDeviceSettingsPanel> }) {
   const { pending, run, setSnippet } = panel;
-  const requestUpdate = useMutation(api.devices.requestDeviceUpdate);
-  const [requested, setRequested] = useState<string | null>(null);
+  const requestUpdate = useInboxStore((s) => s.requestDeviceUpdate);
   // Older daemons report no value; they always update themselves and cannot
   // take the command, so the switch waits for an update.
   const known = d.settings?.auto_update !== undefined;
   const auto = d.settings?.auto_update !== false;
-  const updating = requested === d.device_id && requested !== null;
+  const blocked = selfUpdateBlocked(d);
+  const target = d.update_available ? `v${d.update_available}` : "the latest release";
+  const held =
+    d.update_state === "installing" ||
+    (d.update_state === "requested" && Date.now() - (d.update_requested_at ?? 0) < REQUEST_HOLD_MS);
 
   return (
     <SettingsSection title="Updates" icon={RefreshCw}>
@@ -106,29 +112,29 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
           aria-label="Update automatically"
         />
       </SettingsRow>
-      {(d.update_available || d.update_required) && (
+      {(d.update_available || d.update_required || d.update_state) && (
         <SettingsRow
           label="Update now"
           description={
-            updating
-              ? "Updating. The daemon restarts on the new version in a few seconds."
-              : !d.online
-                ? "This machine is offline. Update it when it reconnects."
-                : `Install ${d.update_available ? `v${d.update_available}` : "the latest release"} on this machine and restart its daemon. Running agents keep running.`
+            blocked
+              ? `${blocked}. Update it on the machine.`
+              : d.update_state === "installing"
+                ? `Installing ${target}.`
+                : d.update_state === "failed"
+                  ? <span className="text-sol-red">Failed: <code className="font-mono">{d.update_error ?? "no error reported"}</code></span>
+                  : d.update_state === "requested"
+                    ? d.online ? `Requested ${relativeSeen(d.update_requested_at ?? Date.now())}.` : "Requested. Installs when this machine reconnects."
+                    : `Install ${target} and restart the daemon. Running agents keep running.`
           }
         >
+          {d.update_state && !blocked && <StatePill tone={d.update_state === "failed" ? "warn" : "info"}>{d.update_state}</StatePill>}
           <Button
             size="sm"
             variant="cyan"
-            disabled={!d.online || updating || pending.has("update")}
-            onClick={() =>
-              run("update", async () => {
-                await requestUpdate({ device_id: d.device_id });
-                setRequested(d.device_id);
-              })
-            }
+            disabled={!!blocked || held || pending.has("update")}
+            onClick={() => run("update", () => requestUpdate(d.device_id))}
           >
-            Update
+            {d.update_state === "failed" ? "Retry" : "Update"}
           </Button>
         </SettingsRow>
       )}
