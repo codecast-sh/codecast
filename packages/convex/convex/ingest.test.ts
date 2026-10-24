@@ -23,6 +23,7 @@ import {
   linkSignal,
   promoteDue,
   promotionInputs,
+  queuePromotions,
   rotateKey,
   setGroupStatus,
   sourceForKey,
@@ -452,6 +453,23 @@ describe("what one source can cost (review fixes)", () => {
     }
     expect(names(w).filter((n) => n === "ingest:promote")).toHaveLength(SOURCE_CAPS.promotions_per_hour + 3);
     expect(due()).toHaveLength(0);
+  });
+
+  test("groups opened before their kind promoted queue behind the cap and file through promoteDue", async () => {
+    const w = await armedWorld();
+    const { source } = await teamSource(w, { promote: [], fingerprint_prefix: "union" });
+    await batch(w, source._id, [err("Old", { fingerprint: "old" }), { type: "job_failed", job: "nightly", error: "x", at: NOW }]);
+    expect(names(w)).not.toContain("ingest:promote");
+    const [errGroup, jobGroup] = w.db._tables.event_groups;
+    await h(updateSource)(w.as("u1"), { ...TEAM, source: "union", promote: ["new"] });
+    const out = await h(queuePromotions)(w.internalCtx, { short_ids: [errGroup.short_id, jobGroup.short_id, "eg-999"] });
+    expect(out).toEqual({
+      queued: [errGroup.short_id],
+      skipped: [{ short_id: jobGroup.short_id, why: "union promotes no job transition" }, { short_id: "eg-999", why: "no such group" }],
+    });
+    expect(w.db._tables.event_groups[0].promotion_due).toMatchObject({ transition: "new", fingerprint: `union:${errGroup.fingerprint}` });
+    expect(await h(promoteDue)(w.internalCtx, {})).toEqual({ due: 1, filed: 1 });
+    expect(w.scheduled.find((s) => s.name === "ingest:promote")?.args).toMatchObject({ group_id: errGroup._id, transition: "new", fingerprint: `union:${errGroup.fingerprint}` });
   });
 
   test("a deploy's sha joins the release's errors to the commit and the session that wrote it", async () => {

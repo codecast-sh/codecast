@@ -107,6 +107,14 @@ many areas names none, and its signals are placed by what they are about
 fingerprint that is stable across rewording. The profile entry is a
 declaration; the finder itself lives where its data lives.
 
+A finder also says how a person names it: `label` (what the team calls the
+source, "Aivery corrections"), `what` (one line on what it listens to) and
+`group`, the section of the source list it belongs in: `conversations` (what
+the product's agents say to people), `people` (what people report or
+correct), `product` (how the running product behaves: errors, checks,
+metrics) or `pipeline` (the line's own machinery). All three are optional;
+a surface without them names the finder by its source.
+
 `opens_causes = true` on a finder is the line's explicit conversion step: a
 signal of that source that no open cause holds opens a new cause (LE4).
 Without it the finder's signals are held as signals, attaching only to a cause

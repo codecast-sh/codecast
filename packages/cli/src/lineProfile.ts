@@ -15,6 +15,7 @@ import {
   CODECAST_PRINCIPLES,
   CODECAST_PROMPTING,
   COMMAND_KEYS,
+  LINE_FINDER_GROUPS,
   LINE_PROFILE_DEFAULTS,
   LINE_PROFILE_REL_PATH,
   MERGE_KEYS,
@@ -23,6 +24,7 @@ import {
   lineProfileNotes,
   splitFinderKind,
   type LineFinder,
+  type LineFinderGroup,
   type LineProfile,
   type LineValueSource,
 } from "@codecast/shared/contracts/lineProfile";
@@ -69,7 +71,7 @@ export type LineProfileValues = Omit<{ [K in keyof LineProfile]?: LineProfile[K]
 };
 
 export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "deploy", "finders"] as const;
-export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "opens_causes", "project"] as const;
+export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "opens_causes", "project", "label", "what", "group"] as const;
 
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
 
@@ -207,6 +209,13 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
           if (f.opens_causes) finder.opens_causes = true;
         }
         if (f.project !== undefined) finder.project = text(f.project, `${at} project`);
+        if (f.label !== undefined) finder.label = text(f.label, `${at} label`);
+        if (f.what !== undefined) finder.what = text(f.what, `${at} what`);
+        if (f.group !== undefined) {
+          const group = text(f.group, `${at} group`);
+          if (!(LINE_FINDER_GROUPS as readonly string[]).includes(group)) throw new LineProfileError(`${at} group must be one of ${LINE_FINDER_GROUPS.join(", ")}`);
+          finder.group = group as LineFinderGroup;
+        }
         return finder;
       });
     }
@@ -357,7 +366,7 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
   out.push("", `finders (${p.finders.length}, ${r.sources.finders})`);
   for (const f of p.finders) {
     const kinds = f.kind === "any" ? "any" : f.kind.join(", ");
-    out.push(`  ${f.id}  ${f.source}  ${kinds}  ${f.fingerprint}  -> ${f.project ?? p.project ?? "(no project)"}${f.opens_causes ? "  opens problems" : ""}${f.runs ? `\n    runs: ${f.runs}` : ""}`);
+    out.push(`  ${f.id}${f.label ? ` "${f.label}"` : ""}${f.group ? ` [${f.group}]` : ""}  ${f.source}  ${kinds}  ${f.fingerprint}  -> ${f.project ?? p.project ?? "(no project)"}${f.opens_causes ? "  opens problems" : ""}${f.what ? `\n    what: ${f.what}` : ""}${f.runs ? `\n    runs: ${f.runs}` : ""}`);
   }
   if (r.notes.length) out.push("", ...r.notes.map((n) => `note: ${n}`));
   if (r.warnings.length) out.push("", ...r.warnings.map((w) => `warning: ${w}`));
@@ -415,6 +424,9 @@ export function starterLineProfile(opts: { project: string; team?: string | null
     `# fingerprint = "lesson:<rule>"`,
     `# runs = "the weekly lessons routine"`,
     `# opens_causes = true             # a finding no problem holds opens one; otherwise it stays a finding`,
+    `# label = "Lessons"                # what a person calls it`,
+    `# what = "A lesson a finished run wrote down"`,
+    `# group = "pipeline"               # conversations, people, product or pipeline`,
     ``,
   ].join("\n");
 }

@@ -115,7 +115,10 @@ export function defaultBranchCiRun(payload: any): Omit<CiRun, "team_id"> | null 
   if (headRepository && headRepository !== repository) return null;
   const conclusion: string | undefined = run.conclusion ?? undefined;
   if (!conclusion || CI_SILENT_CONCLUSIONS.has(conclusion)) return null;
-  const workflow: string | undefined = run.name ?? run.workflow?.name ?? run.path;
+  // The workflow's own name, never the run's: a workflow with a run-name
+  // (`Deploy <sha> for <actor>`) reports it as the run's name, which would make
+  // every run a group of its own that no later run can turn green.
+  const workflow: string | undefined = payload?.workflow?.name ?? run.name ?? run.path;
   if (!workflow) return null;
   const started = Date.parse(run.run_started_at ?? run.created_at ?? "");
   return {

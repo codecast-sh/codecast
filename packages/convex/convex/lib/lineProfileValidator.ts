@@ -15,6 +15,9 @@ export const lineFinderValidator = v.object({
   runs: v.optional(v.string()),
   opens_causes: v.optional(v.boolean()),
   single_purpose: v.optional(v.boolean()),
+  label: v.optional(v.string()),
+  what: v.optional(v.string()),
+  group: v.optional(v.union(v.literal("conversations"), v.literal("people"), v.literal("product"), v.literal("pipeline"))),
 });
 
 // The repo's own line (line-map.md LX5): its parsed stations and routes ride

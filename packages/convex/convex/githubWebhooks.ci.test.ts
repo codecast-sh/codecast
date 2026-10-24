@@ -100,6 +100,12 @@ describe("defaultBranchCiRun", () => {
     expect(defaultBranchCiRun(workflowRun({ event: "schedule" }))?.ok).toBe(false);
   });
 
+  test("a run is keyed by its workflow's name, not its run-name", () => {
+    const deploy = (sha: string, conclusion: string) => ({ ...workflowRun({ name: `Deploy ${sha} for Ashot`, path: ".github/workflows/deploy.yml", event: "workflow_dispatch", conclusion }), workflow: { name: "Deploy", path: ".github/workflows/deploy.yml" } });
+    expect(defaultBranchCiRun(deploy("66ea7ce711", "failure"))?.workflow).toBe("Deploy");
+    expect(defaultBranchCiRun(deploy("ff2c9aa41c", "success"))?.workflow).toBe("Deploy");
+  });
+
   test("pull request runs, other branches, unfinished and silent runs are not", () => {
     expect(defaultBranchCiRun(workflowRun({ event: "pull_request", head_branch: "feature" }))).toBeNull();
     // A pull request from a fork's own main reports head_branch main.

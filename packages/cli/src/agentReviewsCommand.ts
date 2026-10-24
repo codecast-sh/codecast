@@ -21,9 +21,9 @@ const mins = (ms?: number | null) => (ms == null ? "–" : `${(ms / 60_000).toFi
 const usd = (n?: number | null) => (n == null ? "–" : `$${n.toFixed(2)}`);
 
 export function registerReviewsCommands(line: Command, deps: PublishDeps): void {
-  const scope = async () => {
+  const scope = async (team?: string) => {
     const { scopeFor } = await import("./lineScope.js");
-    const s: Record<string, unknown> = { ...(await scopeFor(deps, undefined, true)) };
+    const s: Record<string, unknown> = { ...(await scopeFor(deps, team, true)) };
     delete s.project;
     return s;
   };
@@ -37,8 +37,9 @@ export function registerReviewsCommands(line: Command, deps: PublishDeps): void 
     .option("--file <path>", "Subjects, one per line (or - for stdin)")
     .option("--batch <label>", "A label to watch, cancel or retry these by")
     .option("--as-of <iso>", "Read each as it stood at this time instead of now (a replay, to compare with an earlier review)")
+    .option("--team <name>", "The workspace whose source it is (default: the repo profile's [line] team)")
     .option("--json", "Machine-readable output")
-    .action(async (given: string[], options: { source: string; kind: string; file?: string; batch?: string; asOf?: string; json?: boolean }) => {
+    .action(async (given: string[], options: { source: string; kind: string; file?: string; batch?: string; asOf?: string; team?: string; json?: boolean }) => {
       const asOf = options.asOf ? Date.parse(options.asOf) : undefined;
       if (options.asOf && !Number.isFinite(asOf)) { console.error(fmt.error(`--as-of takes a time, not ${options.asOf}`)); process.exit(2); }
       const fromFile = options.file ? fs.readFileSync(options.file === "-" ? 0 : options.file, "utf8").split(/\s+/) : [];
@@ -47,7 +48,7 @@ export function registerReviewsCommands(line: Command, deps: PublishDeps): void 
       let opened = 0;
       let joined = 0;
       for (let i = 0; i < subjects.length; i += START_BATCH) {
-        const r = await apiPost(deps, "/cli/reviews/start", { ...(await scope()), source: options.source, kind: options.kind, subjects: subjects.slice(i, i + START_BATCH), ...(options.batch ? { batch: options.batch } : {}), ...(asOf ? { as_of: asOf } : {}) });
+        const r = await apiPost(deps, "/cli/reviews/start", { ...(await scope(options.team)), source: options.source, kind: options.kind, subjects: subjects.slice(i, i + START_BATCH), ...(options.batch ? { batch: options.batch } : {}), ...(asOf ? { as_of: asOf } : {}) });
         opened += r.opened;
         joined += r.joined;
       }
@@ -114,9 +115,10 @@ export function registerReviewsCommands(line: Command, deps: PublishDeps): void 
     .description("The queue: how many wait, run, finished and failed, what runs where, and what the newest took")
     .option("--source <name>", "One source")
     .option("--batch <label>", "One bulk start")
+    .option("--team <name>", "The workspace to read (default: the repo profile's [line] team)")
     .option("--json", "Machine-readable output")
-    .action(async (options: { source?: string; batch?: string; json?: boolean }) => {
-      const r = await apiPost(deps, "/cli/reviews/status", { ...(await scope()), ...(options.source ? { source: options.source } : {}), ...(options.batch ? { batch: options.batch } : {}) }, { read: true });
+    .action(async (options: { source?: string; batch?: string; team?: string; json?: boolean }) => {
+      const r = await apiPost(deps, "/cli/reviews/status", { ...(await scope(options.team)), ...(options.source ? { source: options.source } : {}), ...(options.batch ? { batch: options.batch } : {}) }, { read: true });
       if (options.json) return console.log(JSON.stringify({ ...r, machine: { config: readReviewsConfig(), running_here: heldRuns().length } }, null, 2));
       const c = r.counts;
       const total = c.queued + c.running + c.done + c.failed;

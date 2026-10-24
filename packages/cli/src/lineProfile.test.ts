@@ -149,6 +149,14 @@ describe("line profile (LP2)", () => {
     expect(err(`[line]\nteam = = 1`)?.message).toContain("invalid TOML");
   });
 
+  test("a finder names itself for people: label, a one-line what, and its group", () => {
+    const finder = (extra: string) => `[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\n${extra}`;
+    const parsed = parseLineProfileText(finder(`label = "Aivery corrections"\nwhat = "A thumbs-down on one of Aivery's posts"\ngroup = "people"`));
+    expect(parsed.values.finders![0]).toMatchObject({ label: "Aivery corrections", what: "A thumbs-down on one of Aivery's posts", group: "people" });
+    expect(parseLineProfileText(finder("")).values.finders![0]).not.toHaveProperty("label");
+    expect(() => parseLineProfileText(finder(`group = "ops"`))).toThrow('[[line.finders]] "a" group must be one of conversations, people, product, pipeline');
+  });
+
   test("kind is one value, a list, or any; a sentence is read as its list with a warning", () => {
     const parse = (kind: string) => parseLineProfileText(`[[line.finders]]\nid = "a"\nsource = "s"\nkind = ${kind}\nfingerprint = "f"`);
     expect(parse(`"bug"`).values.finders![0].kind).toEqual(["bug"]);

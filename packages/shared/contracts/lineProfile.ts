@@ -24,7 +24,17 @@ export interface LineFinder {
   opens_causes?: boolean;
   /** The project its signals go to, when not the profile's. */
   project?: string;
+  /** What a person calls this source ("Aivery corrections"), shown wherever the source is listed. */
+  label?: string;
+  /** One line on what it listens to, shown under the label. */
+  what?: string;
+  /** Which section of the source list it sits in. */
+  group?: LineFinderGroup;
 }
+
+/** The sections a source list is grouped into: what people say, what people do, how the product runs, and the line's own machinery. */
+export const LINE_FINDER_GROUPS = ["conversations", "people", "product", "pipeline"] as const;
+export type LineFinderGroup = (typeof LINE_FINDER_GROUPS)[number];
 
 export interface LineProfile {
   team: string | null;
