@@ -4,8 +4,8 @@ digraph decide {
   graph [kind="segment", label="Decide", description="The person who answers for the change says ship, revise or drop", takes="task"]
   start [shape=Mdiamond]
   decide [label="Decide", shape=hexagon, category=review,
-    prompt="Ship this change?\nTask: $task_title. It passed its checks and review on $branch.",
-    doc="$review_note"]
+    prompt="$review_question\nIt passed its checks and review.",
+    doc="$review_body"]
   ship    [shape=Msquare, label="Ship"]
   revise  [shape=Msquare, label="Revise", stop="Sent back for revision. $human_message"]
   dropped [shape=Msquare, label="Dropped", stop="Dropped at the gate. $human_message"]

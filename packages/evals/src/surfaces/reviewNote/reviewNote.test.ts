@@ -45,9 +45,9 @@ describe('reading the verdict', () => {
   });
 });
 
-test('the card is decide.cast Ship card with the note as its document', () => {
-  const card = renderCard({ task_title: 'X works', branch: 'b' }, 'Approve.\nnit a.ts:1 y -> rejected');
-  expect(card).toStartWith('Question: Ship this change?\nTask: X works. It passed its checks and review on b.\n\nAnswers:\n1. Ship (Land the change)');
-  expect(card).toEndWith('Document:\nApprove.\nnit a.ts:1 y -> rejected');
+test('the card is decide.cast Ship card: the first line of the note asks, the rest is its document', () => {
+  const card = renderCard({ task_title: 'X works', branch: 'b' }, 'Ship the fix that makes X work?\nX works now.\nnit a.ts:1 y -> rejected');
+  expect(card).toStartWith('Question: Ship the fix that makes X work?\nIt passed its checks and review.\n\nAnswers:\n1. Ship (Land the change)');
+  expect(card).toEndWith('Document:\nX works now.\nnit a.ts:1 y -> rejected');
   expect(findingLines(card)).toBe(1);
 });

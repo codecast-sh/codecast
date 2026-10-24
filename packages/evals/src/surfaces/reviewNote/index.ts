@@ -5,6 +5,7 @@ import type { CheckResult, ConvoMessage, ProductionReply } from '@platform/evals
 import { UsageError } from '@platform/evals/cli';
 
 import { parseWorkflowFile } from '../../../../cli/src/workflow/parser';
+import { splitReviewNote } from '../../../../cli/src/workflow/reviewNote';
 import { parseJsonBlock } from '../../../../convex/convex/lib/anthropic';
 import type { MessageRow } from '../../adapters/convo';
 import { readSessionMoment, SESSION_LINE_FORMS } from '../../adapters/moment';
@@ -105,12 +106,13 @@ export function verdictOfCommand(text: string): Verdict | null {
 /** decide.cast's Ship card with the note as its document, read from this tree's decide.cast. */
 export function renderCard(snap: Pick<ReviewNoteSnap, 'task_title' | 'branch'>, note: string): string {
   const graph = parseWorkflowFile(join(REPO_ROOT, DECIDE));
-  const [question, ...context] = renderBrief(graph.nodes.get('decide')?.prompt ?? '', { task_title: snap.task_title, branch: snap.branch }).split('\n');
+  const { question: review_question, body: review_body } = splitReviewNote(note);
+  const [question, ...context] = renderBrief(graph.nodes.get('decide')?.prompt ?? '', { task_title: snap.task_title, branch: snap.branch, review_question }).split('\n');
   const answers = graph.edges.filter((e) => e.from === 'decide' && e.label).map((e, i) => {
     const [head, what] = e.label!.split('::').map((x) => x.trim());
     return `${i + 1}. ${head!.replace(/^\[\w\]\s*/, '')} (${what})`;
   });
-  return [`Question: ${question}`, ...context, '', 'Answers:', ...answers, '', 'Document:', note.trim() || '(empty)'].join('\n');
+  return [`Question: ${question}`, ...context, '', 'Answers:', ...answers, '', 'Document:', review_body || '(empty)'].join('\n');
 }
 
 const FINDING = /^(blocker|high|medium|low|nit)\s+\S+:\d+/gm;
