@@ -3,11 +3,11 @@
 // and this index names it by slug, so a flow that uses a team flow as a segment resolves it here, on this machine,
 // for a local run and a daemon run alike. Read by the parser after the repo's and the shipped flows.
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { codecastPath } from "../codecastDir.js";
 
 /** ~/.codecast/flows, or CODECAST_FLOWS_CACHE (tests point it at a temp dir). */
-export const defaultFlowsCache = () => process.env.CODECAST_FLOWS_CACHE || path.join(os.homedir(), ".codecast", "flows");
+export const defaultFlowsCache = () => process.env.CODECAST_FLOWS_CACHE || codecastPath("flows");
 const indexFile = (cacheRoot: string) => path.join(cacheRoot, "index.json");
 
 /** The team flows' files by slug, as last read from the pool. */

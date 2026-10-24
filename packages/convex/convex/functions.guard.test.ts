@@ -180,7 +180,11 @@ describe("comments complete-view write choke", () => {
 
     const users = readFileSync(join(DIR, "users.ts"), "utf8");
     expect(users).not.toContain("ctx.db.delete(comment._id)");
-    expect(users).toContain("deleteCommentWithRevision(ctx, comment, conv)");
+    // Account deletion lives in accountDelete.ts: it deletes each conversation, whose delete reaches every client
+    // through the sync log, and hands the conversation's own rows, comments among them, to purgeConversationRows.
+    const accountDelete = readFileSync(join(DIR, "accountDelete.ts"), "utf8");
+    expect(accountDelete).toContain("internal.sessionDelete.purgeConversationRows");
+    expect(accountDelete).not.toContain('query("comments")');
 
     const merge = readFileSync(join(DIR, "admin_mergeUser.ts"), "utf8");
     expect(merge).toContain('if (table === "comments")');
@@ -261,8 +265,9 @@ describe("small principal-view write chokes", () => {
     expect(bookmarks).toContain("deleteBookmarkWithRevision");
     expect(bookmarks).toContain("validateBookmarkTarget");
 
-    const users = readFileSync(join(DIR, "users.ts"), "utf8");
-    expect(users).toContain("deleteBookmarkWithRevision(ctx, b)");
+    // Account deletion (accountDelete.ts) removes the account's bookmarks through the writer.
+    const accountDelete = readFileSync(join(DIR, "accountDelete.ts"), "utf8");
+    expect(accountDelete).toContain("deleteBookmarkWithRevision(ctx, b)");
     const merge = readFileSync(join(DIR, "admin_mergeUser.ts"), "utf8");
     expect(merge).toContain("moveBookmarkPrincipalWithRevision");
   });

@@ -10,7 +10,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn } from "./proc.js";
 import { whichBin } from "./proc.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { LOGIN_PATH_FILENAME, captureLoginShellPath } from "./loginShellPath.js";

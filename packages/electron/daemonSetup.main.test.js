@@ -13,7 +13,7 @@ afterEach(harness.teardown);
 test("the shell reports this machine's CLI and sign-in state", async () => {
   const rig = harness.loadShell();
   const state = await rig.handlers.get("get-daemon-setup")(rig.event());
-  assert.deepEqual(Object.keys(state).sort(), ["installed", "linked", "running", "supported"]);
+  assert.deepEqual(Object.keys(state).sort(), ["authFailed", "installed", "linked", "running", "supported"]);
   assert.equal(state.running, false);
 });
 

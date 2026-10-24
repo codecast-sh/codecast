@@ -117,6 +117,10 @@ jobs:
       - uses: ./.github/actions/setup-bun
 
       - name: Build
+        # The web bundle outgrew V8's default heap on the runner: on 2026-10-24
+        # vite died with "JavaScript heap out of memory" (exit 134).
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: bun run build
 
   typecheck:
