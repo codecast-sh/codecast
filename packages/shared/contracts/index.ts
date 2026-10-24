@@ -55,7 +55,6 @@ export * from "./castMotion";
 export * from "./harnessHooks";
 export * from "./agentSwitch";
 export * from "./machineSwitch";
-export * from "./homeDirectory";
 export * from "./forkSeed";
 export * from "./teamFeatures";
 export * from "./stableContext";

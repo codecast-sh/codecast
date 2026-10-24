@@ -339,7 +339,9 @@ describe("command groups stay off the boot graph", () => {
     // backgroundPriority, systemdDaemonUnit, localData) and contracts/lineDeploy.ts,
     // the profile leaf split out of deploys.ts so the line profile no longer
     // brings the deploy history (causeHistory.ts, changeCard.ts) along.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(493);
+    // 494 on 2026-10-24: resumePlacement.ts, split out of daemon.ts for its
+    // line pin (where a resume may run, and the refusal texts).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(494);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
