@@ -70,7 +70,9 @@ import { join } from "node:path";
 // the five new ones (the vault's secrets.ts in convex and contracts, its
 // secrets.test.ts and secrets/command.ts, and conversation/classify.ts), and
 // PIN rose to 263. The growth is split work owed: daemon.ts +250, chat.test.ts
-// +200 and schema.ts +200 lead it.
+// +200 and schema.ts +200 lead it. The same ship's later passes that day grew
+// 12 more listed files by one step (MessageReview.tsx by two), re-pinned under
+// the same decision.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
