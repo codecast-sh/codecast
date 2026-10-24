@@ -12,7 +12,8 @@ import { compressImage } from "../../lib/compressImage";
 import { threadStateView } from "../../lib/threadState";
 import { sessionIdleAt, sessionLiveAt } from "../../lib/liveness";
 import { sessionPanePath, startPaneDrag } from "../../lib/stage";
-import { roleLookingAfter } from "../../lib/sessionIdentity";
+import { identityRowOf, identitySig, roleLookingAfter } from "../../lib/sessionIdentity";
+import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 import { clickBucketChip, clickProjectChip } from "../../store/chipFilterClicks";
 import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
@@ -249,9 +250,20 @@ export const SessionCard = memo(function SessionCard({
       user: name || email || avatar_url ? { name: name || null, email: email || null, avatar_url: avatar_url || null } : null,
     };
   }, [convMetaSig]);
+  // Who this row is (lib/sessionIdentity), with the role read from the role
+  // rows. A thin row (a favorite, a visited teammate's session) carries no
+  // role pointer, so the conversation's acting bot finds the role for it.
+  const sessionIdentitySig = identitySig(session as any);
+  const identityBase = useMemo(() => {
+    const row = identityRowOf(session as any);
+    return row.acting_user_id || !convMeta?.acting_user_id ? row : { ...row, acting_user_id: convMeta.acting_user_id };
+  }, [sessionIdentitySig, convMeta?.acting_user_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const identity = useLiveIdentityRow(identityBase);
+  // A role's own card names the role on its title line, so the meta row adds
+  // no author chip repeating it.
   const author = useMemo(
-    () => resolveSessionAuthor(session, convMeta, currentUser, teamMembers),
-    [session.user_id, session.author_name, session.author_avatar, session.acting_user_id, convMeta, currentUser, teamMembers],
+    () => identity.standing_role_id && identity.role ? null : resolveSessionAuthor({ ...session, standing_role_id: identity.standing_role_id, role: identity.role }, convMeta, currentUser, teamMembers),
+    [session.user_id, session.author_name, session.author_avatar, session.acting_user_id, identity, convMeta, currentUser, teamMembers], // eslint-disable-line react-hooks/exhaustive-deps
   );
   // An anchor's own row is marked as such — the glyph in place of the agent
   // icon, and the scope pill (Personal / team name) beside the title — so a
@@ -337,6 +349,7 @@ export const SessionCard = memo(function SessionCard({
       }}
       viewerId={meId}
       author={author}
+      identity={identity}
       viewers={viewers}
       spawnedByTitle={spawnedByTitleOf(st, spawnedById)}
       anchorIdentity={anchorIdentity}
