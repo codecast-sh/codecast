@@ -17,13 +17,16 @@
 import React, { lazy, memo, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
-import type { PendingComment } from "../lib/quoteFormat";
+import type { PendingComment, ReviewVerdict } from "../lib/quoteFormat";
+import { VerdictLabel } from "./ReviewVerdictLabel";
+import { ProsePlacementChip } from "./comments/AnchorPlacementNote";
+import { resolveProseAnchor, type ProsePlacement } from "@codecast/shared/comments";
 import { AvatarImg } from "../lib/avatarCache";
 import { getQuoteUnits, quoteUnitAt, unitTop } from "../lib/quoteUnits";
-import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
+import { createReviewComment, exitReviewMode, setBlockVerdict, undoLastVerdict } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { stepReviewBlock } from "../lib/reviewNav";
-import { altChordDirection } from "../shortcuts";
+import { altChordDirection, matchesAction } from "../shortcuts";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useCommentTools } from "../hooks/useCommentTools";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -157,12 +160,28 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
   // frozen offset would leave the handle stranded on the block's lower lines.
   const measureActive = engaged || isReviewTarget || hoverIndex !== null || rightActive || menuBlock !== null || flashBlock !== null;
 
+  // Where each quote's block is in the text as it reads now. A doc edited or a
+  // plan rewritten under a quote moves its card to the block that still holds
+  // the quoted text, or marks it outdated (shared/comments/proseAnchor). Display
+  // only: the batch still sends exactly what was quoted.
+  const [blockTexts, setBlockTexts] = useState<string[]>([]);
+  const placements = useMemo(() => {
+    const out = new Map<string, ProsePlacement>();
+    if (blockTexts.length === 0) return out;
+    for (const c of myComments) {
+      if (c.filePath || !c.quote) continue;
+      out.set(c.id, resolveProseAnchor({ text: c.quote, index: c.blockIndex }, blockTexts));
+    }
+    return out;
+  }, [myComments, blockTexts]);
+  const drawnBlock = useCallback((c: PendingComment) => placements.get(c.id)?.index ?? c.blockIndex, [placements]);
+
   // Drop a stuck peek highlight: removing a chip via its Remove button unmounts it
   // before onMouseLeave fires, so clear the peek when its block no longer has any
   // comment (or all comments are gone) — otherwise the overlay lingers.
   useWatchEffect(() => {
-    if (peekBlock !== null && !myComments.some((c) => c.blockIndex === peekBlock)) setPeekBlock(null);
-  }, [myComments, peekBlock]);
+    if (peekBlock !== null && !myComments.some((c) => drawnBlock(c) === peekBlock)) setPeekBlock(null);
+  }, [myComments, peekBlock, drawnBlock]);
 
   // ----- measure each quote unit's vertical position + available left margin -----
   const measure = useCallback(() => {
@@ -170,12 +189,15 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
     if (!el) return;
     // Layout-space offsets (offsetTop/offsetHeight), not bounding rects, so the
     // rail cards + hover handle stay aligned under browser zoom — see unitTop.
-    const next = getQuoteUnits(el).map((u) => ({ top: unitTop(el, u), height: u.offsetHeight }));
+    const units = getQuoteUnits(el);
+    const next = units.map((u) => ({ top: unitTop(el, u), height: u.offsetHeight }));
     setRects((prev) =>
       prev.length === next.length && prev.every((r, i) => r.top === next[i].top && r.height === next[i].height)
         ? prev
         : next,
     );
+    const texts = units.map((u) => u.innerText ?? u.textContent ?? "");
+    setBlockTexts((prev) => (prev.length === texts.length && prev.every((t, i) => t === texts[i]) ? prev : texts));
     // Empty space to the left of the content, inside the scroll viewport. Use it
     // for the rail (at whatever width fits) so the text column keeps full width;
     // fall back to shrinking inline only when the margin is too small to be useful.
@@ -261,8 +283,8 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
 
   // ----- stack rail cards: anchor to their block, push down to avoid overlap -----
   const sortedComments = useMemo(
-    () => [...myComments].sort((a, b) => a.blockIndex - b.blockIndex || a.createdAt - b.createdAt),
-    [myComments],
+    () => [...myComments].sort((a, b) => drawnBlock(a) - drawnBlock(b) || a.createdAt - b.createdAt),
+    [myComments, drawnBlock],
   );
 
   const restack = useCallback(() => {
@@ -271,7 +293,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
     let prevBottom = -Infinity;
     const tops: Record<string, number> = {};
     for (const c of sortedComments) {
-      const anchor = rects[c.blockIndex]?.top ?? 0;
+      const anchor = rects[drawnBlock(c)]?.top ?? 0;
       const top = Math.max(anchor, prevBottom + GAP);
       const h = cardRefs.current.get(c.id)?.offsetHeight ?? 90;
       tops[c.id] = top;
@@ -282,7 +304,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
       return same ? prev : tops;
     });
     if (Number.isFinite(prevBottom)) setRailBottom(prevBottom + GAP * 2);
-  }, [sortedComments, rects, engaged]);
+  }, [sortedComments, rects, engaged, drawnBlock]);
 
   useLayoutEffect(() => { restack(); }, [restack, editingId]);
 
@@ -417,6 +439,25 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
           return;
         }
       }
+      // a / d: a typed verdict on the active block, then on to the next block
+      // so a long plan reads as one pass. z takes the last verdict back.
+      const native = e.nativeEvent;
+      const verdict: ReviewVerdict | null = matchesAction(native, "review.approveBlock") ? "approve"
+        : matchesAction(native, "review.cutBlock") ? "cut" : null;
+      if (verdict) {
+        e.preventDefault();
+        setBlockVerdict(conversationId, messageId, cur, blockText(cur), verdict);
+        stepReviewBlock(messageId, 1);
+        return;
+      }
+      if (matchesAction(native, "review.undoVerdict")) {
+        const undone = undoLastVerdict(conversationId);
+        if (undone) {
+          e.preventDefault();
+          useInboxStore.getState().setReviewTarget(undone.messageId, undone.blockIndex);
+        }
+        return;
+      }
       // ↑/↓, j/k and the ⌥J/⌥K chords all walk chunks; the walker crosses into
       // the neighbouring reply at either edge and drops back into the composer
       // past the last chunk (lib/reviewNav).
@@ -444,7 +485,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
         exitReviewMode();
       }
     },
-    [isReviewTarget, myComments, conversationId, messageId, startComment],
+    [isReviewTarget, myComments, conversationId, messageId, startComment, blockText],
   );
 
   // keep active block in view + hold focus so single-letter keys are captured here
@@ -617,7 +658,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
               }}
               className="cc-rail-item"
               data-review-comment={c.id}
-              style={{ top: stackTops[c.id] ?? rects[c.blockIndex]?.top ?? 0 }}
+              style={{ top: stackTops[c.id] ?? rects[drawnBlock(c)]?.top ?? 0 }}
             >
               {c.id === editingId ? (
                 <CommentEditor
@@ -631,10 +672,11 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
                 <CommentChip
                   comment={c}
                   author={author}
+                  placement={placements.get(c.id)}
                   active={isReviewTarget && activeBlock === c.blockIndex}
                   onEdit={() => useInboxStore.getState().setReviewEditingId(c.id)}
                   onRemove={() => { setPeekBlock(null); useInboxStore.getState().removeReviewComment(conversationId, c.id); }}
-                  onPeek={() => setPeekBlock(c.blockIndex)}
+                  onPeek={() => setPeekBlock(drawnBlock(c))}
                   onPeekEnd={() => setPeekBlock(null)}
                 />
               )}
@@ -676,6 +718,7 @@ function CommentAvatar({ author }: { author: any }) {
 const CommentChip = memo(function CommentChip({
   comment,
   author,
+  placement,
   active,
   onEdit,
   onRemove,
@@ -684,6 +727,7 @@ const CommentChip = memo(function CommentChip({
 }: {
   comment: PendingComment;
   author: any;
+  placement?: ProsePlacement;
   active: boolean;
   onEdit: () => void;
   onRemove: () => void;
@@ -702,6 +746,8 @@ const CommentChip = memo(function CommentChip({
           only a note, or the editor where you're actively writing one, does. */}
       {comment.body ? <CommentAvatar author={author} /> : null}
       <div className="cc-comment-main">
+        {comment.verdict && <VerdictLabel verdict={comment.verdict} />}
+        <ProsePlacementChip placement={placement} />
         {comment.body ? (
           <div className="cc-comment-body">{comment.body}</div>
         ) : (

@@ -1,4 +1,4 @@
-import type { AnchorPlacement, CodeAnchorText } from "@codecast/shared/comments";
+import { prosePlacementLabel, type AnchorPlacement, type CodeAnchorText, type ProsePlacement } from "@codecast/shared/comments";
 
 // What a line thread says when the code under it moved on
 // (shared/comments/codeAnchor.ts). A moved thread names the line it was
@@ -11,11 +11,25 @@ export function AnchorPlacementChip({ placement }: { placement?: AnchorPlacement
     return <span className="text-[11px] text-sol-text-dim" data-anchor-state="moved">moved from line {placement.from}</span>;
   }
   if (placement?.state !== "outdated") return null;
+  return <OutdatedTag title="The code this comment was written on is no longer in the file" />;
+}
+
+/** The same chip for a note on prose (shared/comments/proseAnchor.ts): "moved"
+ *  when its block moved, OUTDATED when the block is gone or cannot be told
+ *  apart from a copy of it. */
+export function ProsePlacementChip({ placement }: { placement?: ProsePlacement | null }) {
+  const label = prosePlacementLabel(placement ?? null);
+  if (label === "moved") return <span className="text-[11px] text-sol-text-dim" data-anchor-state="moved">moved</span>;
+  if (label !== "outdated") return null;
+  return <OutdatedTag title="The text this note was written on is no longer here" />;
+}
+
+function OutdatedTag({ title }: { title: string }) {
   return (
     <span
       className="rounded-sm border border-sol-yellow/40 px-1 py-px text-[10px] uppercase tracking-wider text-sol-yellow"
       data-anchor-state="outdated"
-      title="The code this comment was written on is no longer in the file"
+      title={title}
     >
       outdated
     </span>
