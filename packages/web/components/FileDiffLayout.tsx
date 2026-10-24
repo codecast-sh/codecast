@@ -796,6 +796,7 @@ function FlowDiffView({
             header={sidebarHeader}
             commonPrefix={commonPrefix}
             fileMarks={fileMarks}
+            reviewable={!!onToggleViewed}
           />
         </aside>
       )}
@@ -1382,6 +1383,7 @@ export function FileDiffLayout({
                 selectedFileRef={selectedFileRef}
                 commonPrefix={commonPrefix}
                 fileMarks={fileMarks}
+                reviewable={!!onToggleViewed}
               />
             </div>
           )}
@@ -1422,6 +1424,7 @@ export function FileDiffLayout({
               selectedFileRef={selectedFileRef}
               commonPrefix={commonPrefix}
               fileMarks={fileMarks}
+              reviewable={!!onToggleViewed}
             />
           </Panel>
 

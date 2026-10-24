@@ -308,4 +308,4 @@ export function generateUnifiedPatch(filename: string, oldContent: string, newCo
 
 
 export { selectFoldInputs, type FoldInputRef } from "./foldInputs";
-export { selectRangeFoldInputs, computeRangeFiles, diffBaseStart, contentHash, DIFF_BASES, type DiffBase, type DiffBaseInputs, type RangeDiffFile } from "./rangeFold";
+export { selectRangeFoldInputs, selectReviewFoldInputs, lastChangeIds, computeRangeFiles, diffBaseStart, contentHash, DIFF_BASES, type DiffBase, type DiffBaseInputs, type RangeDiffFile } from "./rangeFold";

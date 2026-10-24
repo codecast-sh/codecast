@@ -16,9 +16,9 @@ import type { FileChangeEntry } from "../store/diffViewerStore";
 import { useInboxStore, useTrackedStore, isConvexId } from "../store/inboxStore";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useFileChangeBodies } from "../hooks/useFileChangeBodies";
-import { DIFF_BASES, diffBaseStart, selectRangeFoldInputs, type DiffBase } from "@codecast/shared/diff";
+import { DIFF_BASES, diffBaseStart, lastChangeIds, selectRangeFoldInputs, selectReviewFoldInputs, type DiffBase } from "@codecast/shared/diff";
 import { SegmentedToggle } from "./SegmentedToggle";
-import { isSeen, toggleSeenFile } from "../lib/diffSeenMarks";
+import { hasReviewBase, isSeen, reviewBaseId, toggleSeenFile } from "../lib/diffSeenMarks";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { getRelativePath } from "@codecast/shared/render";
 import { shareTokenArg } from "../lib/shareTokenScope";
@@ -392,16 +392,19 @@ const BASE_LABELS: Record<DiffBase, { label: string; title: string }> = {
   branch: { label: "Branch", title: "Since the branch left the default branch, as far as this session's commits show" },
   commit: { label: "Commit", title: "Changes since the session's last commit" },
   turn: { label: "Turn", title: "Changes since your last message" },
+  review: { label: "Review", title: "Each file since you last marked it viewed" },
 };
 const BASE_UNAVAILABLE: Partial<Record<DiffBase, string>> = {
   commit: "This session has not committed yet",
   turn: "No message of yours is loaded here",
+  review: "Mark a file viewed first",
 };
 const BASE_EMPTY: Record<DiffBase, string> = {
   session: "No changes yet",
   branch: "Nothing changed since the branch base",
   commit: "Nothing changed since the last commit",
   turn: "Nothing changed since your last message",
+  review: "Nothing changed since your review",
 };
 
 export function DiffPane({ conversation }: { conversation?: ConversationData }) {
@@ -419,9 +422,10 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
   // nothing here (no commit yet) shows disabled, and a remembered choice that
   // names nothing falls back to the whole session.
   const turnStartedAt = useMemo(() => lastPromptAt(conversation?.messages), [conversation?.messages]);
+  const reviewable = hasReviewBase(seenMarks);
   const starts = useMemo(
-    () => Object.fromEntries(DIFF_BASES.map((b) => [b, diffBaseStart(changes, b, { turnStartedAt, branch: conversation?.git_branch })])) as Record<DiffBase, number | null>,
-    [changes, turnStartedAt, conversation?.git_branch],
+    () => Object.fromEntries(DIFF_BASES.map((b) => [b, b === "review" && !reviewable ? null : diffBaseStart(changes, b, { turnStartedAt, branch: conversation?.git_branch })])) as Record<DiffBase, number | null>,
+    [changes, turnStartedAt, conversation?.git_branch, reviewable],
   );
   const base: DiffBase = starts[chosenBase] === null ? "session" : chosenBase;
 
@@ -431,7 +435,14 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
   // still on its way join the tree as it lands.
   const from = rangeStart ?? starts[base] ?? 0;
   const to = rangeStart !== null ? rangeEnd : selectedChangeIndex;
-  const foldInputs = useMemo(() => selectRangeFoldInputs(changes, from, to), [changes, from, to]);
+  // The review base starts each file at the version its mark recorded.
+  const byReview = base === "review" && rangeStart === null;
+  const foldInputs = useMemo(
+    () => byReview
+      ? selectReviewFoldInputs(changes, to, (path, lastId) => reviewBaseId(seenMarks?.[path], lastId))
+      : selectRangeFoldInputs(changes, from, to),
+    [byReview, changes, from, to, seenMarks],
+  );
   const needed = useMemo(() => [...new Set([...foldInputs.base, ...foldInputs.head])], [foldInputs]);
   useFileChangeBodies(conversationId, needed);
   const { files: diffFiles, pending: pendingFiles } = useMemo(
@@ -439,8 +450,10 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
     [foldInputs, bodies, missingBodies],
   );
 
-  // Viewed marks: live only while the file's text is the one marked.
+  // Viewed marks: live only while the file's text is the one marked. A mark
+  // records the file's last change too, the version the review base diffs from.
   const hashByPath = useMemo(() => new Map(diffFiles.map((f) => [f.filename, f.contentHash])), [diffFiles]);
+  const lastIdByPath = useMemo(() => lastChangeIds(changes, to), [changes, to]);
   const fileMarks = useMemo(() => (path: string) => {
     const hash = hashByPath.get(path);
     return hash && isSeen(seenMarks, path, hash) ? { viewed: true } : undefined;
@@ -449,9 +462,9 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
     if (!conversationId) return undefined;
     return (path: string) => {
       const hash = hashByPath.get(path);
-      if (hash) toggleSeenFile(conversationId, path, hash);
+      if (hash) toggleSeenFile(conversationId, path, hash, lastIdByPath.get(path));
     };
-  }, [conversationId, hashByPath]);
+  }, [conversationId, hashByPath, lastIdByPath]);
 
   // Line comments in the panel share anchors with the transcript's inline diffs:
   // the same conversation + getRelativePath(file) identity, so a durable thread
@@ -510,6 +523,8 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
   const lastShown = to ?? changes.length - 1;
   const positionLabel = (rangeStart !== null
     ? `Changes ${rangeStart + 1} to ${lastShown + 1} of ${changes.length}`
+    : byReview
+      ? `Since your review, to change ${lastShown + 1} of ${changes.length}`
     : from > 0
       ? `Changes ${Math.min(from + 1, changes.length)} to ${lastShown + 1} of ${changes.length}`
       : selectedChangeIndex !== null

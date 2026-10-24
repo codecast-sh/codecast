@@ -4,6 +4,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { getFileStatus } from "../lib/patchParser";
 import { cn } from "../lib/utils";
 import { buildFileTreeFromStripped, shortenPrefix, stripCommonPrefix, type FileTreeNode } from "../lib/diffFileTree";
+import { SegmentedToggle } from "./SegmentedToggle";
 import type { DiffFile, FileDiffLayoutProps } from "./FileDiffLayout";
 
 function FileTreeItem({
@@ -121,6 +122,7 @@ export function FileSidebar({
   selectedFileRef,
   commonPrefix,
   fileMarks,
+  reviewable = false,
   flow = false,
 }: {
   files: DiffFile[];
@@ -130,10 +132,14 @@ export function FileSidebar({
   selectedFileRef?: React.RefObject<HTMLButtonElement | null>;
   commonPrefix?: string;
   fileMarks?: FileDiffLayoutProps["fileMarks"];
+  /** The reader can mark files viewed: show review progress and the To review filter. */
+  reviewable?: boolean;
   /** In the page's flow: sized by its content, never a scroller of its own. */
   flow?: boolean;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [toReviewOnly, setToReviewOnly] = useState(false);
+  const isViewed = (f: DiffFile) => !!fileMarks?.(f.originalFilename ?? f.filename)?.viewed;
 
   const strippedFiles = useMemo(() => stripCommonPrefix(files), [files]);
 
@@ -155,10 +161,11 @@ export function FileSidebar({
   }, [allDirPaths]);
 
   const filteredFiles = useMemo(() => {
-    if (!searchQuery.trim()) return strippedFiles;
-    const query = searchQuery.toLowerCase();
-    return strippedFiles.filter((f) => f.filename.toLowerCase().includes(query));
-  }, [strippedFiles, searchQuery]);
+    const query = searchQuery.trim().toLowerCase();
+    return strippedFiles.filter((f) =>
+      (!query || f.filename.toLowerCase().includes(query)) && !(reviewable && toReviewOnly && isViewed(f)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strippedFiles, searchQuery, reviewable, toReviewOnly, fileMarks]);
 
   const fileTree = useMemo(() => buildFileTreeFromStripped(filteredFiles), [filteredFiles]);
 
@@ -179,9 +186,11 @@ export function FileSidebar({
 
   const totalAdditions = files.reduce((sum, f) => sum + f.additions, 0);
   const totalDeletions = files.reduce((sum, f) => sum + f.deletions, 0);
-  const viewedCount = fileMarks
-    ? files.filter((f) => fileMarks(f.originalFilename ?? f.filename)?.viewed).length
-    : 0;
+  const viewedFiles = fileMarks ? files.filter(isViewed) : [];
+  const viewedCount = viewedFiles.length;
+  const linesOf = (list: DiffFile[]) => list.reduce((sum, f) => sum + f.additions + f.deletions, 0);
+  const totalLines = totalAdditions + totalDeletions;
+  const reviewedLines = linesOf(viewedFiles);
 
   return (
     <div className={flow ? "flex flex-col bg-sol-bg rounded-lg border border-sol-border/70 overflow-clip" : "h-full flex flex-col bg-sol-bg border-r border-sol-border"}>
@@ -193,7 +202,7 @@ export function FileSidebar({
               {filteredFiles.length === files.length
                 ? `${files.length} ${files.length === 1 ? "file" : "files"} changed`
                 : `${filteredFiles.length} of ${files.length} files`}
-              {viewedCount > 0 && (
+              {viewedCount > 0 && !reviewable && (
                 <span className="ml-1.5 text-sol-green">{viewedCount} viewed</span>
               )}
             </div>
@@ -246,6 +255,32 @@ export function FileSidebar({
           </div>
         )}
       </div>
+      {reviewable && files.length > 0 && (
+        <div className="px-3 py-2 border-b border-sol-border/50 space-y-1.5">
+          <SegmentedToggle
+            size="sm"
+            fullWidth
+            value={toReviewOnly ? "todo" : "all"}
+            onChange={(key) => setToReviewOnly(key === "todo")}
+            items={[
+              { key: "all", label: "All", count: files.length },
+              { key: "todo", label: "To review", count: files.length - viewedCount },
+            ]}
+          />
+          <div
+            className="h-1 rounded-full bg-sol-border/40 overflow-hidden"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={totalLines}
+            aria-valuenow={reviewedLines}
+          >
+            <div className="h-full bg-sol-green transition-[width]" style={{ width: `${totalLines ? (reviewedLines / totalLines) * 100 : 0}%` }} />
+          </div>
+          <div className="text-[11px] text-sol-text-dim tabular-nums">
+            {reviewedLines} of {totalLines} changed lines reviewed
+          </div>
+        </div>
+      )}
       <div className={flow ? "py-1" : "flex-1 overflow-y-auto py-1"}>
         {fileTree.map((node) => (
           <FileTreeItem
@@ -259,6 +294,9 @@ export function FileSidebar({
             selectedFileRef={selectedFileRef}
           />
         ))}
+        {filteredFiles.length === 0 && !searchQuery && toReviewOnly && (
+          <div className="px-3 py-4 text-xs text-sol-text-dim text-center">All reviewed</div>
+        )}
         {filteredFiles.length === 0 && searchQuery && (
           <div className="px-3 py-4 text-xs text-sol-text-dim text-center">
             No files match "{searchQuery}"

@@ -10,9 +10,10 @@ import { selectFoldInputs, type FoldInputRef } from "./foldInputs";
 /** Where the diff starts. `session`: the session's first edit. `branch`: the
  *  merge base with the default branch, as far as the session's own commits
  *  show it. `commit`: the session's last commit. `turn`: the last message the
- *  person sent. */
-export type DiffBase = "session" | "branch" | "commit" | "turn";
-export const DIFF_BASES: readonly DiffBase[] = ["session", "branch", "commit", "turn"];
+ *  person sent. `review`: per file, the version the reader last marked viewed
+ *  (selectReviewFoldInputs); a file never marked starts with the session. */
+export type DiffBase = "session" | "branch" | "commit" | "turn" | "review";
+export const DIFF_BASES: readonly DiffBase[] = ["session", "branch", "commit", "turn", "review"];
 
 export type DiffBaseInputs = {
   /** When the person last spoke (the last user message's timestamp). */
@@ -34,7 +35,7 @@ const isDefaultBranch = (name: string | null | undefined, inputs: DiffBaseInputs
  * A start equal to `changes.length` is a real answer: nothing changed since.
  */
 export function diffBaseStart(changes: readonly BaseRef[], base: DiffBase, inputs: DiffBaseInputs = {}): number | null {
-  if (base === "session") return 0;
+  if (base === "session" || base === "review") return 0;
   if (base === "turn") {
     if (inputs.turnStartedAt === undefined) return null;
     const at = changes.findIndex((c) => c.timestamp >= inputs.turnStartedAt!);
@@ -68,6 +69,47 @@ export function selectRangeFoldInputs<T extends FoldInputRef>(changes: T[], from
     base: from > 0 ? ofTouched(selectFoldInputs(changes, from - 1)) : [],
     head: ofTouched(selectFoldInputs(changes, end)),
   };
+}
+
+/** Each file's last change at or before `to`: the id a "viewed" mark records
+ *  as the version it was made on. */
+export function lastChangeIds<T extends FoldInputRef & { id: string }>(changes: readonly T[], to: number | null): Map<string, string> {
+  const end = Math.min(to ?? changes.length - 1, changes.length - 1);
+  const last = new Map<string, string>();
+  for (let i = 0; i <= end; i++) if (changes[i].changeType !== "commit") last.set(changes[i].filePath, changes[i].id);
+  return last;
+}
+
+/**
+ * The fold for the `review` base: each file from its own boundary. `baseIdOf`
+ * names the change a file's diff starts after (the version its reader
+ * reviewed), given the file's last change; undefined, or a change outside
+ * `[0, to]`, starts the file with the session. One selectRangeFoldInputs per
+ * distinct boundary, each keeping only its own files.
+ */
+export function selectReviewFoldInputs<T extends FoldInputRef & { id: string }>(
+  changes: T[],
+  to: number | null,
+  baseIdOf: (filePath: string, lastId: string) => string | undefined,
+): { base: T[]; head: T[] } {
+  const end = Math.min(to ?? changes.length - 1, changes.length - 1);
+  const indexOf = new Map<string, number>();
+  for (let i = 0; i <= end; i++) indexOf.set(changes[i].id, i);
+  const byStart = new Map<number, Set<string>>();
+  for (const [filePath, lastId] of lastChangeIds(changes, to)) {
+    const id = baseIdOf(filePath, lastId);
+    const at = id === undefined ? undefined : indexOf.get(id);
+    const from = at === undefined ? 0 : at + 1;
+    (byStart.get(from) ?? byStart.set(from, new Set()).get(from)!).add(filePath);
+  }
+  const base: T[] = [];
+  const head: T[] = [];
+  for (const [from, paths] of byStart) {
+    const part = selectRangeFoldInputs(changes, from, end);
+    base.push(...part.base.filter((c) => paths.has(c.filePath)));
+    head.push(...part.head.filter((c) => paths.has(c.filePath)));
+  }
+  return { base, head };
 }
 
 /**

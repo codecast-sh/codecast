@@ -5,7 +5,9 @@ import {
   computeRangeFiles,
   diffBaseStart,
   generateUnifiedPatch,
+  lastChangeIds,
   selectRangeFoldInputs,
+  selectReviewFoldInputs,
   type CumulativeChange,
 } from "./index";
 
@@ -153,5 +155,47 @@ describe("diffBaseStart", () => {
     expect(diffBaseStart(history, "turn", { turnStartedAt: 125 })).toBe(3);
     expect(diffBaseStart(history, "turn", { turnStartedAt: 500 })).toBe(history.length);
     expect(diffBaseStart(history, "turn")).toBeNull();
+  });
+});
+
+describe("selectReviewFoldInputs", () => {
+  const ch = (i: number, filePath: string, oldContent: string | undefined, newContent: string, changeType: Change["changeType"] = "write"): Change =>
+    ({ id: `c${i}`, sequenceIndex: i, timestamp: 1000 + i, filePath, changeType, oldContent, newContent });
+  const history: Change[] = [
+    ch(0, "a.ts", undefined, "a1\n"),
+    ch(1, "b.ts", undefined, "b1\n"),
+    ch(2, "a.ts", "a1\n", "a2\n"),
+    ch(3, "b.ts", "b1\n", "b2\n"),
+    ch(4, "a.ts", "a2\n", "a3\n"),
+  ];
+
+  test("each file folds from its own reviewed change; unmarked files from the start", () => {
+    // a.ts reviewed at c2 (text a2), b.ts never reviewed.
+    const { base, head } = selectReviewFoldInputs(history, null, (path) => (path === "a.ts" ? "c2" : undefined));
+    const files = computeRangeFiles(base, head);
+    const a = files.find((f) => f.filename === "a.ts")!;
+    const b = files.find((f) => f.filename === "b.ts")!;
+    expect(a.patch).toContain("-a2");
+    expect(a.patch).toContain("+a3");
+    expect(a.patch).not.toContain("a1");
+    expect(b.status).toBe("added");
+    expect(b.patch).toContain("+b2");
+  });
+
+  test("matches a plain range fold for every file when all share one boundary", () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const h = randomHistory(seed, 30);
+      const from = 10;
+      const review = selectReviewFoldInputs(h, null, () => h[from - 1].id);
+      expect(unstamped(computeRangeFiles(review.base, review.head))).toEqual(unstamped(fold(h, from, null)));
+    }
+  });
+
+  test("lastChangeIds names each file's last change up to the cut", () => {
+    expect(Object.fromEntries(lastChangeIds(history, 3))).toEqual({ "a.ts": "c2", "b.ts": "c3" });
+  });
+
+  test("the review base starts at the session for diffBaseStart", () => {
+    expect(diffBaseStart(history, "review")).toBe(0);
   });
 });
