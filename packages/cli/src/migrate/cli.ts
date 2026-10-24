@@ -23,6 +23,7 @@ import type { Command } from "commander";
 import { commandGroup } from "../commandGroups.js";
 import { deviceId as localDeviceId } from "../remote/device.js";
 import { convexClient } from "../remote/cli.js";
+import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
@@ -168,7 +169,7 @@ export function registerMigrateCommand(program: Command): void {
       }
       let moved: { command_id: string; cross_user?: boolean };
       try {
-        moved = await client.mutation(api.devices.reassignToDevice, { api_token: token, conversation_id: session, device_id: to.device_id, allow_cross_user: opts.take === true });
+        moved = await client.mutation(api.devices.reassignToDevice, { api_token: token, conversation_id: session, device_id: to.device_id, allow_cross_user: opts.take === true, request_id: randomUUID() });
       } catch (err) {
         const message = humanizeConvexError(err);
         console.error(`${session}: ${message}${/another account|team machine/.test(message) ? " (pass --take to move it anyway)" : ""}`);
