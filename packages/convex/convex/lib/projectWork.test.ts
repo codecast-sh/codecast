@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeFakeDb } from "../testDb";
 import { projectTasks, projectProgress } from "./projectWork";
+import { backfillProjectCountsPage } from "./projectTaskCounts";
 
 // A project's tasks, as every server read of a project's work sees them:
 // access from each row's workspace stamp, never from team_id.
@@ -22,9 +23,9 @@ const db = () => makeFakeDb({
   ],
   projects: [{ _id: P, user_id: OWNER, team_id: TEAM, workspace: WS, title: "Growth", status: "active" }],
   tasks: [
-    { _id: "tasks_shared", user_id: OWNER, team_id: TEAM, workspace: WS, project_id: P, status: "open", source: "human", title: "shared" },
+    { _id: "tasks_shared", _creationTime: 1, user_id: OWNER, team_id: TEAM, workspace: WS, project_id: P, status: "open", source: "human", title: "shared" },
     // Routed to the team, readable by its owner only.
-    { _id: "tasks_private", user_id: OWNER, team_id: TEAM, workspace: `user:${OWNER}`, project_id: P, status: "done", source: "human", title: "private" },
+    { _id: "tasks_private", _creationTime: 2, user_id: OWNER, team_id: TEAM, workspace: `user:${OWNER}`, project_id: P, status: "done", source: "human", title: "private" },
   ],
 });
 
@@ -33,7 +34,11 @@ describe("projectTasks", () => {
     const titles = async (who: string) => (await projectTasks({ db: db() }, who as any, P)).map((t: any) => t.title).sort();
     expect(await titles(OWNER)).toEqual(["private", "shared"]);
     expect(await titles(MATE)).toEqual(["shared"]);
-    expect(await projectProgress({ db: db() }, MATE as any, P)).toEqual({ total: 1, done: 0, in_progress: 0, open: 1 });
+    // Progress reads project_task_counts, which the backfill fills from the seeded rows.
+    const counted = db();
+    await backfillProjectCountsPage({ db: counted }, 100);
+    expect(await projectProgress({ db: counted }, MATE as any, P)).toEqual({ total: 1, done: 0, in_progress: 0, open: 1 });
+    expect(await projectProgress({ db: counted }, OWNER as any, P)).toEqual({ total: 2, done: 1, in_progress: 0, open: 1 });
   });
 
   test("source-level: tasks.list's project and initiative branch reads through projectTasks, not the team_id filter", () => {

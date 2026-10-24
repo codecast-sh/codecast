@@ -355,7 +355,7 @@ describe("applyLogPage: a delete for an id the replica does not hold needs no by
   });
 });
 
-describe("applyLogPage: review findings (sessions twins, seeds, project counts)", () => {
+describe("applyLogPage: review findings (sessions twins, seeds, projects)", () => {
   const { catchUpScope, scopeMetaKey, catchUp } = require("../../hooks/useSyncChangeFeed");
   const scripted = (pages: any[]) => {
     const calls: any[] = [];
@@ -394,21 +394,20 @@ describe("applyLogPage: review findings (sessions twins, seeds, project counts)"
     expect((useInboxStore.getState() as any).sessions.c2.title).toBe("new");
   });
 
-  test("a task status change refetches its held project so the joined counts move", async () => {
+  // Project rows carry no counts joined from their tasks, so a task change
+  // costs its held project nothing: each refetch recounted every task, plan
+  // and doc of the project, 40 MB on a large team, once per open tab.
+  test("a task status change applies directly and refetches no project", async () => {
     useInboxStore.setState(base({
       tasks: { t1: { _id: "t1", title: "a", status: "open", project_id: "p1" } },
-      projects: { p1: { _id: "p1", name: "P", task_counts: { total: 1, done: 0, in_progress: 0 } } },
+      projects: { p1: { _id: "p1", name: "P" } },
     }) as any);
     const convex = scripted([
       { actions: [{ position: 1, entity_type: "tasks", entity_id: "t1", op: "upsert", patch: { status: "done" } }], nextFrom: 1, hasMore: false },
-      [{ _id: "p1", name: "P", task_counts: { total: 1, done: 1, in_progress: 0 } }], // projects.webGetByIds
     ]);
     await catchUpScope(convex, { scope_key: "user:u1", position: 1, floor: 0 }, new Set());
-    expect(convex.calls).toHaveLength(2);
-    expect(convex.calls[1].ids).toEqual(["p1"]);
-    const s = useInboxStore.getState() as any;
-    expect(s.tasks.t1.status).toBe("done"); // the patch applied directly
-    expect(s.projects.p1.task_counts.done).toBe(1);
+    expect(convex.calls).toHaveLength(1);
+    expect((useInboxStore.getState() as any).tasks.t1.status).toBe("done");
   });
 
   test("a title edit refetches nothing, and an unheld project is never fetched", async () => {
@@ -424,26 +423,6 @@ describe("applyLogPage: review findings (sessions twins, seeds, project counts)"
     ]);
     await catchUpScope(convex, { scope_key: "user:u1", position: 2, floor: 0 }, new Set());
     expect(convex.calls).toHaveLength(1);
-  });
-
-  test("a project's own patch on the same page never suppresses the count refetch", async () => {
-    useInboxStore.setState(base({
-      tasks: { t1: { _id: "t1", title: "a", status: "open", project_id: "p1" } },
-      projects: { p1: { _id: "p1", name: "P", task_counts: { total: 1, done: 0, in_progress: 0 } } },
-    }) as any);
-    const convex = scripted([
-      { actions: [
-        { position: 1, entity_type: "tasks", entity_id: "t1", op: "upsert", patch: { status: "done" } },
-        { position: 2, entity_type: "projects", entity_id: "p1", op: "upsert", patch: { name: "P2" } },
-      ], nextFrom: 2, hasMore: false },
-      [{ _id: "p1", name: "P2", task_counts: { total: 1, done: 1, in_progress: 0 } }], // projects.webGetByIds
-    ]);
-    await catchUpScope(convex, { scope_key: "user:u1", position: 2, floor: 0 }, new Set());
-    expect(convex.calls).toHaveLength(2);
-    expect(convex.calls[1].ids).toEqual(["p1"]);
-    const s = useInboxStore.getState() as any;
-    expect(s.projects.p1.name).toBe("P2"); // the project's patch applied directly
-    expect(s.projects.p1.task_counts.done).toBe(1); // and the joined counts still refetched
   });
 
   test("catchUp stamps each scope after its turn, never on an empty heads list", async () => {

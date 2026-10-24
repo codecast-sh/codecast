@@ -7,6 +7,7 @@ import { commitRecordedBy } from "./githubWebhooks";
 import { repositoryOfCheckout } from "./users";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { listSessionOwnerIds, stampSeatOwners } from "./sessionOwners";
+import { backfillProjectCountsPage, resetProjectCounts } from "./lib/projectTaskCounts";
 import { EXECUTIVE_ASSISTANT_NAME, HEAD_OF_PEOPLE_HANDLE, HEAD_OF_PEOPLE_NAME, LEGACY_HEAD_OF_PEOPLE_HANDLE, LEGACY_HEAD_OF_PEOPLE_NAME, isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
 import { defaultAssistantHandle, executiveAssistantCharter, ensureRoleRoutine, headOfPeopleCharter, roleRoutineOf, standingConversationOf } from "./orgRoles";
 import { isScopeless } from "./lib/orgScope";
@@ -1092,3 +1093,79 @@ export async function releaseFolderHeld(ctx: { db: any; scheduler?: any }, args:
     return { dryRun, roles: roles.length, ...counts, released, stamped, rows };
   }
 }
+
+// One-time backfill: stamp first_linked_conversation (the indexed copy of a
+// task's conversation_ids[0] / a doc's related_conversation_ids[0]) on rows
+// written before the change-feed interceptor stamped it, so a visibility change
+// finds them by index (lib/access.ts recomputeWorkspaceForConversation). The
+// field is churn-exempt, so these patches stream nothing to clients. Dry by
+// default; pages through tasks, then docs.
+//   npx convex run migrations:stampFirstLinkedConversation '{"dryRun":false}'
+export const stampFirstLinkedConversation = internalMutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    table: v.optional(v.union(v.literal("tasks"), v.literal("docs"))),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const table = args.table ?? "tasks";
+    const page = await ctx.db.query(table).paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 200 });
+    let stamped = 0;
+    for (const row of page.page as any[]) {
+      const first = (table === "tasks" ? row.conversation_ids : row.related_conversation_ids)?.[0];
+      if (!first || row.first_linked_conversation === first) continue;
+      stamped++;
+      if (!dryRun) await ctx.db.patch(row._id, { first_linked_conversation: first });
+    }
+    const next = !page.isDone
+      ? { table, cursor: page.continueCursor }
+      : table === "tasks" ? { table: "docs" as const, cursor: undefined } : null;
+    if (!dryRun && next) {
+      await ctx.scheduler.runAfter(0, internal.migrations.stampFirstLinkedConversation, { dryRun, ...next, numItems: args.numItems });
+    }
+    return { dryRun, table, scanned: page.page.length, stamped, done: !next };
+  },
+});
+
+// One-time backfill: stamp status_at on done decision_inbox rows written before
+// setInboxStatus stamped it, from the decision's resolve time, so the recently
+// handled reads (listForUserCore, listHandledByRoles) find them by index. Dry
+// by default.
+//   npx convex run migrations:stampInboxStatusAt '{"dryRun":false}'
+export const stampInboxStatusAt = internalMutation({
+  args: { dryRun: v.optional(v.boolean()), cursor: v.optional(v.string()), numItems: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const page = await ctx.db.query("decision_inbox").paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 200 });
+    let stamped = 0;
+    for (const row of page.page) {
+      if (row.status !== "done" || row.status_at !== undefined) continue;
+      const decision = await ctx.db.get(row.decision_id);
+      stamped++;
+      if (!dryRun) await ctx.db.patch(row._id, { status_at: decision?.resolved_at ?? row.created_at });
+    }
+    if (!dryRun && !page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.stampInboxStatusAt, { dryRun, cursor: page.continueCursor, numItems: args.numItems });
+    }
+    return { dryRun, scanned: page.page.length, stamped, done: page.isDone };
+  },
+});
+
+// Count every task into project_task_counts (lib/projectTaskCounts.ts), one page
+// per run, scheduling the next until the cursor catches up. Safe while tasks
+// are being written: the interceptor keeps counted tasks current and leaves
+// newer ones to this walk. `reset` drops the counts first and recounts from
+// zero (reconcile after a suspected drift).
+//   npx convex run migrations:backfillProjectTaskCounts '{}'
+//   npx convex run migrations:backfillProjectTaskCounts '{"reset":true}'
+export const backfillProjectTaskCounts = internalMutation({
+  args: { reset: v.optional(v.boolean()), numItems: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const dropped = args.reset ? await resetProjectCounts(ctx) : 0;
+    const { scanned, done } = await backfillProjectCountsPage(ctx, args.numItems ?? 100);
+    if (!done) await ctx.scheduler.runAfter(0, internal.migrations.backfillProjectTaskCounts, { numItems: args.numItems });
+    return { dropped, scanned, done };
+  },
+});

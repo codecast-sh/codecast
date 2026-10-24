@@ -16,6 +16,7 @@ import {
   linkedConversationId,
 } from "./access";
 import { createDataContext, scopedFetch } from "../data";
+import { firstLinkedConversationStamp } from "./accessKeys";
 
 // The workspace key is the ACCESS axis, stored on every work item and
 // independent of team_id (ROUTING). These tests pin the two invariants the
@@ -265,8 +266,8 @@ describe("propagation — the stored key follows the linked conversation", () =>
     plans: [{ _id: "p1", user_id: OWNER, team_id: TEAM, created_from_conversation_id: "c1", workspace: "user:u_owner", title: "plan" }],
     docs: [
       { _id: "d1", user_id: OWNER, team_id: TEAM, conversation_id: "c1", workspace: "user:u_owner", title: "doc" },
-      // Array-only link, owner's row: reached by the owner scan.
-      { _id: "d2", user_id: OWNER, team_id: TEAM, related_conversation_ids: ["c1"], workspace: "user:u_owner", title: "related" },
+      // Array-only link: reached through its indexed first id.
+      { _id: "d2", user_id: OWNER, team_id: TEAM, related_conversation_ids: ["c1"], first_linked_conversation: "c1", workspace: "user:u_owner", title: "related" },
       // Unrelated row: must not be touched.
       { _id: "d3", user_id: OWNER, team_id: TEAM, workspace: "team:t_team", title: "unrelated" },
     ],
@@ -335,12 +336,13 @@ describe("propagation — the stored key follows the linked conversation", () =>
     expect(keys(db).d3).toBe("team:t_team"); // unlinked, untouched
   });
 
-  // A folder rule backfill patches 32 sessions per batch; scanning the owner's
-  // work items once per session read past Convex's 100 MB limit.
-  test("one execution scans the owner's work items once, however many sessions it patches", async () => {
+  // A visibility write used to scan the owner's tasks, plans and docs (up to
+  // 12k rows, 32 MB) to find array links, on every late path restamp.
+  test("array links are found by index, with no scan of the owner's work items", async () => {
     const db: any = fixture({
-      conversations: [1, 2, 3].map((i) => ({ _id: `c${i}`, user_id: OWNER, team_id: TEAM, is_private: true })),
-      docs: [1, 2, 3].map((i) => ({ _id: `d${i}`, user_id: OWNER, team_id: TEAM, related_conversation_ids: [`c${i}`], workspace: "user:u_owner" })),
+      conversations: [{ _id: "c1", user_id: OWNER, team_id: TEAM, is_private: true }],
+      tasks: [{ _id: "t1", user_id: MATE, team_id: TEAM, conversation_ids: ["c1", "c9"], first_linked_conversation: "c1", workspace: "user:u_owner" }],
+      docs: [{ _id: "d1", user_id: OWNER, team_id: TEAM, related_conversation_ids: ["c2"], first_linked_conversation: "c2", workspace: "user:u_owner" }],
     });
     let ownerScans = 0;
     const query = db.query.bind(db);
@@ -350,9 +352,17 @@ describe("propagation — the stored key follows the linked conversation", () =>
       q.withIndex = (name: string, fn: any) => { if (name === "by_user_id") ownerScans++; return withIndex(name, fn); };
       return q;
     };
-    for (const conv of [...db._tables.conversations]) await patchConversationVisibility({ db } as any, conv, { is_private: false });
-    expect(db._tables.docs.map((d: any) => d.workspace)).toEqual(["team:t_team", "team:t_team", "team:t_team"]);
-    expect(ownerScans).toBe(3); // tasks, plans, docs: once each
+    await patchConversationVisibility({ db } as any, db._tables.conversations[0], { is_private: false });
+    expect(db._tables.tasks[0].workspace).toBe("team:t_team");
+    expect(db._tables.docs[0].workspace).toBe("user:u_owner");
+    expect(ownerScans).toBe(0);
+  });
+
+  test("the first-link stamp follows the array a write sets", () => {
+    expect(firstLinkedConversationStamp("tasks", { conversation_ids: ["c1", "c2"] })).toEqual({ first_linked_conversation: "c1" });
+    expect(firstLinkedConversationStamp("docs", { related_conversation_ids: [] })).toEqual({ first_linked_conversation: undefined });
+    expect(firstLinkedConversationStamp("tasks", { title: "x" })).toBeNull();
+    expect(firstLinkedConversationStamp("plans", { conversation_ids: ["c1"] })).toBeNull();
   });
 
   test("a second recompute in the same execution sees the key the first one wrote", async () => {

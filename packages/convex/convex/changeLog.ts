@@ -21,7 +21,8 @@ import {
   type ActionExtra,
   type SyncAckCollector,
 } from "./syncLog";
-import { accessStampFor, computeWorkspaceKeyDb, type AccessStamp } from "./lib/accessKeys";
+import { accessStampFor, computeWorkspaceKeyDb, firstLinkedConversationStamp, type AccessStamp } from "./lib/accessKeys";
+import { countBucket, moveProjectCount, touchesProjectCount } from "./lib/projectTaskCounts";
 import { withdrawDeletedConversation } from "./lib/changesDirty";
 import { agentTypeChangeRefusal } from "@codecast/shared/contracts";
 
@@ -219,6 +220,8 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
     system: rawDb.system,
 
     async insert(table: string, doc: any) {
+      const link = firstLinkedConversationStamp(table, doc);
+      if (link) doc = { ...doc, ...link };
       const id = await rawDb.insert(table, doc);
       if (TRACKED_TABLES.has(table as any)) {
         const scope = scopeFromDoc(doc);
@@ -233,6 +236,7 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
           await rawDb.patch(id, { workspace: key });
           doc = { ...doc, workspace: key };
         }
+        if (table === "tasks" && countBucket(doc)) await moveProjectCount({ db: rawDb }, null, await rawDb.get(id));
         if (!syncLogDisabled()) {
           const full = { _id: id, ...doc };
           const extra = syncExtra(rawDb, table, postWriteDoc(rawDb, id, full), buildCargo(table, doc, { full: true }));
@@ -251,11 +255,14 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
 
     async patch(id: any, fields: any) {
       const table = trackedTableOf(rawDb, id);
+      const link = table && firstLinkedConversationStamp(table, fields);
+      if (link) fields = { ...fields, ...link };
       // A patch that touches scope fields can MOVE the entity between scopes; the
       // departed scope needs a revocation action, which requires the pre-write doc.
       const movesScope = !!table && Object.keys(fields).some((k) => SCOPE_FIELDS.has(k));
       const movesAgent = table === "conversations" && "agent_type" in fields;
-      const preDoc = movesScope || movesAgent ? await rawDb.get(id) : null;
+      const movesCount = table === "tasks" && touchesProjectCount(fields);
+      const preDoc = movesScope || movesAgent || movesCount ? await rawDb.get(id) : null;
       // Every writer passes here, so a conversation can never cross between
       // hosted and local, whichever mutation writes agent_type first.
       if (movesAgent) assertAgentTypeKept(preDoc, fields.agent_type);
@@ -263,6 +270,7 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
         ? syncScopeFromStamp(await accessStampFor({ db: rawDb }, table, preDoc))
         : null;
       const res = await rawDb.patch(id, fields);
+      if (movesCount) await moveProjectCount({ db: rawDb }, preDoc, await rawDb.get(id));
       if (table) {
         const entityId = String(id);
         const existing = await lookupChangeRow(rawDb, entityId);
@@ -304,12 +312,15 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
 
     async replace(id: any, doc: any) {
       const table = trackedTableOf(rawDb, id);
+      const link = table && firstLinkedConversationStamp(table, doc);
+      if (link) doc = { ...doc, ...link };
       const preDoc = table ? await rawDb.get(id) : null;
       if (table === "conversations") assertAgentTypeKept(preDoc, doc?.agent_type);
       const preScope = preDoc && table
         ? syncScopeFromStamp(await accessStampFor({ db: rawDb }, table, preDoc))
         : null;
       const res = await rawDb.replace(id, doc);
+      if (table === "tasks") await moveProjectCount({ db: rawDb }, preDoc, await rawDb.get(id));
       if (table) {
         // `undefined` (not null): a replaced entity usually already has a
         // change_log row from its insert — look it up and flip it, don't add one.
@@ -339,6 +350,7 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
         ? syncScopeFromStamp(await accessStampFor({ db: rawDb }, table, preDoc))
         : null;
       const res = await rawDb.delete(id);
+      if (table === "tasks" && preDoc) await moveProjectCount({ db: rawDb }, preDoc, null);
       // Changes stories built from a deleted session lose it in this transaction.
       if (table === "conversations") await withdrawDeletedConversation({ db: rawDb }, id);
       if (table && scope) {

@@ -96,10 +96,10 @@ describe("all-workspace access", () => {
   });
 });
 
-// A large team's `cast task ls` hit the 64 MB query cap: the scoped read pulled
-// every keyed row in again through the legacy index only to skip it, and the
-// task list pulled every finished task in only to drop it. Both now stay in
-// the database; these record which rows each index read handed to JS.
+// A large team's `cast task ls` read 22k rows: the scoped read pulled every
+// keyed row in again through the team index only to skip it, and the task
+// list pulled every finished task in only to drop it. Both now stay in the
+// database; these record which rows each index read handed to JS.
 describe("scoped reads leave skipped rows in the database", () => {
   function spyReads(db: any) {
     const reads: Record<string, string[]> = {};
@@ -122,7 +122,7 @@ describe("scoped reads leave skipped rows in the database", () => {
     return reads;
   }
 
-  test("the legacy team index reads unkeyed rows only", async () => {
+  test("the legacy read hands over unkeyed rows only, and each keyed row once", async () => {
     const { createDataContext } = await import("./data");
     const db = workspaceDb("tasks");
     db._tables.tasks.push({ _id: "legacy-team", user_id: OTHER, team_id: TEAM, title: "Old", status: "open", created_at: 1, updated_at: 1 });
@@ -130,7 +130,7 @@ describe("scoped reads leave skipped rows in the database", () => {
     const dc = await createDataContext({ db } as any, { userId: VIEWER as any, workspace: "team", team_id: TEAM as any });
     const rows = await dc.query("tasks").collect();
     expect(rows.map((r: any) => r._id).sort()).toEqual(["legacy-team", "team-row"]);
-    expect(reads.by_team_id.sort()).toEqual(["legacy-private", "legacy-team"]);
+    expect(reads.by_workspace.sort()).toEqual(["legacy-private", "legacy-team", "team-row"]);
   });
 
   test("cast task ls leaves finished tasks in the database", async () => {
@@ -146,7 +146,9 @@ describe("scoped reads leave skipped rows in the database", () => {
     const reads = spyReads(db);
     const rows = await (list as any)._handler({ db, auth: browserAuth }, { api_token: "fixture-token", workspace: "team", team_id: TEAM });
     expect(rows.map((r: any) => r._id)).toEqual(["team-row"]);
-    expect(reads.by_workspace).toEqual(["team-row"]);
+    expect(reads.by_workspace_status).toEqual(["team-row"]);
+    expect(Object.values(reads).flat()).not.toContain("done-row");
+    expect(Object.values(reads).flat()).not.toContain("dropped-row");
 
     const all = await (list as any)._handler({ db, auth: browserAuth }, { api_token: "fixture-token", workspace: "team", team_id: TEAM, include_done: true });
     expect(all.map((r: any) => r._id).sort()).toEqual(["done-row", "dropped-row", "team-row"]);

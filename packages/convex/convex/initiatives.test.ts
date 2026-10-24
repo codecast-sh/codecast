@@ -5,6 +5,7 @@ import { performCreateRole } from "./orgRoles";
 import { performUndo } from "./orgChanges";
 import { addProject, create, get, list, postUpdate, record, removeProject, report, setProjects, update, webGet, webList, webUpdates } from "./initiatives";
 import { INITIATIVE_RECORD_MAX } from "@codecast/shared/contracts/initiative";
+import { backfillProjectCountsPage } from "./lib/projectTaskCounts";
 import { servedInitiatives } from "./lib/roleInitiatives";
 
 // Initiatives (initiatives-projects-role-page.md I1). Pinned here: who may
@@ -48,6 +49,7 @@ function fixtures() {
     conversations: [],
     session_owners: [],
     managed_sessions: [],
+    // Real rows always carry _creationTime; the count backfill walks by it.
     tasks: [
       { _id: "tasks_1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "done", title: "a", source: "human" },
       { _id: "tasks_2", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "open", title: "b", source: "human" },
@@ -59,7 +61,7 @@ function fixtures() {
       { _id: "tasks_7", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, status: "open", title: "g", source: "agent" },
       // Someone else's private task in Growth: not the caller's to read.
       { _id: "tasks_6", user_id: STRANGER, workspace: `user:${STRANGER}`, project_id: P, status: "done", title: "f", source: "human" },
-    ],
+    ].map((t, i) => ({ _creationTime: i + 1, ...t })),
     plans: [{ _id: "plans_growth", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, title: "Growth plan", status: "active" }],
     projects: [
       project(P, "Growth"),
@@ -317,6 +319,7 @@ describe("initiatives: projects", () => {
 
   test("the terminal reads join project titles and roll up the board's task counts; the synced row stays raw", async () => {
     const db = fixtures();
+    await backfillProjectCountsPage({ db }, 100);
     await run(create, db, { ...inTeam, title: "Win enterprise", status: "active", project_ids: [P, Q] });
     const [row] = await run(list, db, { status: "active" });
     // Growth counts the rows its board shows (shared/tasks projectTaskCounts):

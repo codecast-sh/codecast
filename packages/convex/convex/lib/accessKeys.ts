@@ -126,6 +126,23 @@ export function linkedConversationId(record: any): string | undefined {
   return undefined;
 }
 
+// Convex cannot index into an array, so the array links above (a doc's
+// related_conversation_ids, a task's conversation_ids) carry their first id in
+// an indexed scalar, `first_linked_conversation`. A visibility change finds the
+// rows it re-keys through that index instead of scanning the owner's work
+// items. The change-feed interceptor stamps it on every write that sets the
+// array; this returns the stamp a write's fields call for, or null.
+const ARRAY_LINK_FIELD: Record<string, string> = { tasks: "conversation_ids", docs: "related_conversation_ids" };
+
+export function firstLinkedConversationStamp(
+  table: string,
+  fields: Record<string, any>,
+): { first_linked_conversation: any } | null {
+  const field = ARRAY_LINK_FIELD[table];
+  if (!field || !(field in fields)) return null;
+  return { first_linked_conversation: fields[field]?.[0] ?? undefined };
+}
+
 // ── Stored workspace key (the ACCESS axis) ──────────────────────────────────
 //
 // One stored value per row answers "who may read this": `team:<teamId>` or

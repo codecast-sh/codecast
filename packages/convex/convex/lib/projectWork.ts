@@ -1,6 +1,7 @@
 import type { Id } from "../_generated/dataModel";
-import { projectTaskCounts, type ProjectProgress } from "@codecast/shared/tasks";
+import type { ProjectProgress } from "@codecast/shared/tasks";
 import { canAccessTask } from "./access";
+import { projectCountsFor } from "./projectTaskCounts";
 
 // A project's progress as the board states it (shared/tasks
 // projectTaskCounts): the tasks that name the project and that the project's
@@ -18,6 +19,7 @@ export async function projectTasks(ctx: Ctx, userId: Id<"users">, projectId: Id<
   return out;
 }
 
+/** The same number, from project_task_counts rather than the tasks. */
 export async function projectProgress(ctx: Ctx, userId: Id<"users">, projectId: Id<"projects">): Promise<ProjectProgress> {
-  return projectTaskCounts(await projectTasks(ctx, userId, projectId), [projectId]);
+  return (await projectCountsFor(ctx, userId, [projectId])).get(String(projectId))!;
 }

@@ -39,6 +39,7 @@ import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
+import { secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded } from "./lib/superseded";
@@ -713,7 +714,11 @@ export function normalizeVerdict(row: DecisionRow, raw: Verdict): Verdict | { er
   return { status: "answered", answer_json: values, answer_text: raw.answer_text };
 }
 
-export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants">; via?: Id<"conversations"> };
+// signed_in: a person answering from the app with their own sign-in (the
+// web's resolve and dispatch rail), never through an api token, which the
+// session that asked holds too. Only Vault's Ask first reads it
+// (secretApprovalRefusal).
+export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants">; via?: Id<"conversations">; signed_in?: boolean };
 
 export const HOSTED_ANSWER_REFUSED = "Only the owner can answer a hosted assistant's question";
 
@@ -731,6 +736,14 @@ export async function hostedAnswerRefusal(ctx: Ctx, row: { conversation_id?: Id<
   return HOSTED_ANSWER_REFUSED;
 }
 
+// Every refusal a resolve path checks before it writes: a hosted
+// conversation's question is its owner's, and a Vault Ask first decision is a
+// signed-in person's, whose Approve takes Touch ID (secretApprovalRefusal,
+// which reads the verdict for that). Returns why, or null.
+export async function answerRefusal(ctx: Ctx, row: DecisionRow, by: AnsweredBy, verdict?: Pick<Verdict, "status" | "answer_index">): Promise<string | null> {
+  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict));
+}
+
 // The one place a decision is resolved, for every path (web resolve, CLI
 // answer, a role under a grant, a stack auto default, a dismissal). First
 // writer wins: a row that is no longer pending is left alone.
@@ -746,7 +759,7 @@ export async function finalizeAnswer(
   opts: { deliver: boolean; now?: number },
 ): Promise<{ already_resolved: boolean; answer_label?: string; delivered?: boolean; resumed_run?: boolean }> {
   if (row.status !== "pending") return { already_resolved: true };
-  const refusal = await hostedAnswerRefusal(ctx, row, by);
+  const refusal = await answerRefusal(ctx, row, by, verdict);
   if (refusal) throw new Error(refusal);
   const now = opts.now ?? Date.now();
   const label = answerLabel(row, verdict);
@@ -845,6 +858,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await noticeAnsweredForPeople(ctx, row, verdict, by);
   // An expectations proposal's card applies or drops it (LM5).
   await settleExpectationCard(ctx, row, verdict, by, now);
+  // A Vault Ask first read's decision grants or denies that session (vault.md).
+  await settleSecretApproval(ctx, row, verdict, by, now);
   // Tasks waiting on this decision settle (task-graph.md TG2).
   await scheduleDecisionSettle(ctx as any, row, by);
   // A dismissal delivers no message, so a hosted turn parked on this
@@ -913,7 +928,7 @@ export async function settleClientResolution(
     answer_text: patch.answer_text,
     answer_json: patch.answer_json,
   };
-  const by: AnsweredBy = { kind: "user", id: String(userId), user_id: userId };
+  const by: AnsweredBy = { kind: "user", id: String(userId), user_id: userId, signed_in: true };
   await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
   const consumed = await settleResolution(ctx, row, verdict, by, now);
   if (row.workflow_run_id && !consumed) await deliverAnswer(ctx, row, verdict, by);
@@ -946,7 +961,7 @@ export async function setInboxStatus(ctx: Ctx, decisionId: Id<"session_decisions
     .query("decision_inbox")
     .withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId))
     .collect();
-  for (const r of rows) if (r.status !== status) await ctx.db.patch(r._id, { status });
+  for (const r of rows) if (r.status !== status) await ctx.db.patch(r._id, { status, status_at: Date.now() });
 }
 
 // Override tracking (D2): a person answering a reopened granted decision
@@ -1784,7 +1799,7 @@ export async function answerCore(
   const now = Date.now();
   const by = await answererFor(ctx, auth, row, args.session_id, now, !!args.for_human);
   if ("error" in by) return by;
-  const refusal = await hostedAnswerRefusal(ctx, row, by);
+  const refusal = await answerRefusal(ctx, row, by);
   if (refusal) return { error: refusal };
   const verdict = normalizeVerdict(row, { status: "answered", answer_index: args.answer_index, answer_json: args.answer_json, answer_text: args.answer_text });
   if ("error" in verdict) return verdict;
@@ -1847,7 +1862,7 @@ export const resolve = mutation({
     if (row.status !== "pending") return { already_resolved: true };
     const verdict = normalizeVerdict(row, args);
     if ("error" in verdict) throw new Error(verdict.error);
-    return finalizeAnswer(ctx, row, verdict, { kind: "user", id: String(userId), user_id: userId }, { deliver: false });
+    return finalizeAnswer(ctx, row, verdict, { kind: "user", id: String(userId), user_id: userId, signed_in: true }, { deliver: false });
   },
 });
 
@@ -2325,26 +2340,25 @@ export async function listForUserCore(ctx: Ctx, userId: Id<"users">, now: number
   const cutoff = now - RESOLVED_WINDOW_MS;
   const out = new Map<string, DecisionRow>();
 
-  for (const status of ["pending", "done"] as const) {
-    const inbox = await ctx.db
-      .query("decision_inbox")
-      .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
-      .collect();
-    for (const r of inbox) {
-      const d: DecisionRow | null = await ctx.db.get(r.decision_id);
-      if (!d) continue;
-      // A stale inbox row from before assignment must not keep the card on
-      // the previous person's stack: asked_user_ids is the people set.
-      if (d.asked_user_ids !== undefined && !d.asked_user_ids.some((id) => String(id) === String(userId))) continue;
-      if (d.status === "pending" || (d.resolved_at ?? 0) >= cutoff) out.set(String(d._id), d);
-    }
+  // Pending rows whole; resolved ones only inside the window, by index. Reading
+  // every row a person was ever asked, to keep the last day's, cost 12 MB a call.
+  const inboxRows = [
+    ...(await ctx.db.query("decision_inbox").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).collect()),
+    ...(await ctx.db.query("decision_inbox").withIndex("by_user_status_at", (q: any) => q.eq("user_id", userId).eq("status", "done").gte("status_at", cutoff)).collect()),
+  ];
+  for (const r of inboxRows) {
+    const d: DecisionRow | null = await ctx.db.get(r.decision_id);
+    if (!d) continue;
+    // A stale inbox row from before assignment must not keep the card on
+    // the previous person's stack: asked_user_ids is the people set.
+    if (d.asked_user_ids !== undefined && !d.asked_user_ids.some((id) => String(id) === String(userId))) continue;
+    if (d.status === "pending" || (d.resolved_at ?? 0) >= cutoff) out.set(String(d._id), d);
   }
 
   for (const status of ["pending", "answered", "dismissed", "withdrawn"] as const) {
-    const rows: DecisionRow[] = await ctx.db
-      .query("session_decisions")
-      .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
-      .collect();
+    const rows: DecisionRow[] = status === "pending"
+      ? await ctx.db.query("session_decisions").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status)).collect()
+      : await ctx.db.query("session_decisions").withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", userId).eq("status", status).gte("resolved_at", cutoff)).collect();
     for (const r of rows) {
       if (r.asked_user_ids !== undefined) continue; // an inbox row carries it
       if (r.status === "pending" || (r.resolved_at ?? 0) >= cutoff) out.set(String(r._id), r);
@@ -2380,12 +2394,15 @@ const OPEN_PROBLEM_STATUSES = ["backlog", "open", "in_progress", "in_review"] as
  * either: the live session's title, `in_queue` (in the viewer's own queue,
  * which the queue surfaces read), `passed_to` as who it was given to (null
  * when nobody), and a line decision's `problem_severity`, the worst finding's
- * on its problem (1 to 10, null when no judge scored one).
+ * on its problem (1 to 10, null when no judge scored one). Takes rows that
+ * already stand and carry their live session (withLiveSession over
+ * currentDecisions): each check reads the run, its problem and its workflow
+ * per row, so a feed runs it once.
  */
 async function decisionRowsForViewer(ctx: Ctx, rows: DecisionRow[], inQueue: (row: DecisionRow) => boolean | Promise<boolean>, extra: Record<string, unknown> = {}) {
   const severity = new Map<string, number | null>();
   const out = [];
-  for (const r of await withLiveSession(ctx, await currentDecisions(ctx, rows))) {
+  for (const r of rows) {
     let worst: number | null = null;
     if (r.workflow_run_id && r.task_id) {
       const key = String(r.task_id);
@@ -2458,7 +2475,8 @@ export const listOpenForLines = query({
         if (task.project_id && trialProjects.has(String(task.project_id))) continue;
         take(d);
       }
-      out.push(...(await decisionRowsForViewer(ctx, rows, (r) => inViewerQueue(ctx, r, userId), { line_workspace: workspace })));
+      const standing = await withLiveSession(ctx, await currentDecisions(ctx, rows));
+      out.push(...(await decisionRowsForViewer(ctx, standing, (r) => inViewerQueue(ctx, r, userId), { line_workspace: workspace })));
     }
     return out;
   },
@@ -2516,7 +2534,7 @@ export const listHandledByRoles = query({
     const cutoff = Date.now() - HANDLED_WINDOW_MS;
     const inbox = await ctx.db
       .query("decision_inbox")
-      .withIndex("by_user_status", (q) => q.eq("user_id", userId).eq("status", "done"))
+      .withIndex("by_user_status_at", (q) => q.eq("user_id", userId).eq("status", "done").gte("status_at", cutoff))
       .collect();
     const out = [];
     for (const r of inbox) {

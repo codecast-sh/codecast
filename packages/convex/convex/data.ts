@@ -434,8 +434,10 @@ async function canAccess(
 
 // Chokepoint query for a scoped table: rows whose ACCESS key equals the
 // context's key. Reads by_workspace, then unions the legacy rows (no stored key
-// yet) from the old routing/owner index, filtered by their computed key —
-// so the answer is identical before and after the backfill.
+// yet), filtered by their computed key — so the answer is identical before and
+// after the backfill. A caller may narrow the keyed side with another index
+// that leads with workspace (`withIndex("by_workspace_status", ...)`); its rows
+// are still checked against the key, so the range cannot widen access.
 function wrapWorkspaceQuery(
   ctx: { db: any },
   table: string,
@@ -443,27 +445,29 @@ function wrapWorkspaceQuery(
   key: WorkspaceKey,
   userId: Id<"users">,
 ): any {
-  // The legacy side asks the database for unkeyed rows only. Without that
-  // filter every keyed row in the team (or owned by the user) was read into JS
-  // a second time just to be skipped, which doubled memory and put a large
-  // team's `cast task ls` over the 64 MB query cap.
-  const unkeyed = (q: any) => q.or(q.eq(q.field("workspace"), undefined), q.eq(q.field("workspace"), ""));
-  const legacyBase = () => (workspace.type === "team"
-    ? ctx.db.query(table).withIndex("by_team_id", (q: any) => q.eq("team_id", workspace.teamId))
-    : ctx.db.query(table).withIndex("by_user_id", (q: any) => q.eq("user_id", userId))).filter(unkeyed);
-  const keyed = () => ctx.db.query(table).withIndex("by_workspace", (q: any) => q.eq("workspace", key));
+  // The legacy side reads unkeyed rows straight off by_workspace (a missing
+  // key and "" are both index values), then keeps this team's or this owner's.
+  // Reading them through by_team_id with a filter read every keyed row in the
+  // team as well: 22k rows and 48 MB for one `cast task ls` on a large team.
+  const mine = (q: any) => workspace.type === "team"
+    ? q.eq(q.field("team_id"), workspace.teamId)
+    : q.eq(q.field("user_id"), userId);
+  const legacyBases = () => [undefined, ""].map((empty) =>
+    ctx.db.query(table).withIndex("by_workspace", (q: any) => q.eq("workspace", empty)).filter(mine));
 
-  const build = (mods: Array<(q: any) => any>) => {
-    let a = keyed();
-    let b = legacyBase();
-    for (const m of mods) { a = m(a); b = m(b); }
-    return [a, b];
+  const build = (mods: Array<(q: any) => any>, index?: [string, any]) => {
+    let a = index
+      ? ctx.db.query(table).withIndex(index[0], index[1])
+      : ctx.db.query(table).withIndex("by_workspace", (q: any) => q.eq("workspace", key));
+    let legacy = legacyBases();
+    for (const m of mods) { a = m(a); legacy = legacy.map(m); }
+    return [a, legacy] as const;
   };
-  const merge = async (mods: Array<(q: any) => any>): Promise<any[]> => {
-    const [a, b] = build(mods);
-    const out: any[] = await a.collect();
+  const merge = async (mods: Array<(q: any) => any>, index?: [string, any]): Promise<any[]> => {
+    const [a, legacy] = build(mods, index);
+    const out: any[] = (await a.collect()).filter((d: any) => d.workspace === key);
     const seen = new Set(out.map((d: any) => String(d._id)));
-    for (const d of await b.collect()) {
+    for (const d of (await Promise.all(legacy.map((q: any) => q.collect()))).flat()) {
       if (seen.has(String(d._id))) continue;
       if (typeof d.workspace === "string" && d.workspace) continue; // keyed elsewhere
       if ((await resolveWorkspaceKey(ctx, d)) === key) { seen.add(String(d._id)); out.push(d); }
@@ -471,18 +475,20 @@ function wrapWorkspaceQuery(
     return out;
   };
 
-  const wrap = (mods: Array<(q: any) => any>): any => ({
-    filter: (fn: any) => wrap([...mods, (q) => q.filter(fn)]),
-    order: (dir: any) => wrap([...mods, (q) => q.order(dir)]),
-    withIndex: (_name: string, _fn: any) => wrap(mods), // scope index is fixed
-    async collect() { return merge(mods); },
-    async first() { return (await merge(mods))[0] ?? null; },
-    async take(n: number) { return (await merge(mods)).slice(0, n); },
+  const wrap = (mods: Array<(q: any) => any>, index?: [string, any]): any => ({
+    filter: (fn: any) => wrap([...mods, (q) => q.filter(fn)], index),
+    order: (dir: any) => wrap([...mods, (q) => q.order(dir)], index),
+    // Only a workspace-led index narrows the keyed side; any other is ignored,
+    // because the scope index is fixed.
+    withIndex: (name: string, fn: any) => wrap(mods, name.startsWith("by_workspace") ? [name, fn] : index),
+    async collect() { return merge(mods, index); },
+    async first() { return (await merge(mods, index))[0] ?? null; },
+    async take(n: number) { return (await merge(mods, index)).slice(0, n); },
     async paginate(opts: any) {
       // Pagination rides the keyed index; legacy rows (no stored key) join
       // only after the backfill. Every page is still filtered by the key so
       // the boundary never depends on the index alone.
-      const [a] = build(mods);
+      const [a] = build(mods, index);
       const result = await a.paginate(opts);
       const page: any[] = [];
       for (const d of result.page) {
