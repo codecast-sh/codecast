@@ -1277,3 +1277,74 @@ describe("workflow/runner (a station that presents a decision, sent back to)", (
     expect(readsSinceSend).toBeGreaterThanOrEqual(4);
   }, 30000);
 });
+
+// ── Free text at a gate is a question, never a choice ───────────────────────
+
+describe("workflow/runner (typed text at a ship gate)", () => {
+  let tmpDir: string;
+  let cap: ReturnType<typeof captureConsole>;
+  let origFetch: typeof fetch;
+  let gates: any[];
+  let replies: string[];
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    cap = captureConsole();
+    origFetch = globalThis.fetch;
+    gates = [];
+    globalThis.fetch = (async (url: any, init: any) => {
+      const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+      const body = JSON.parse(init?.body || "{}");
+      if (route === "/cli/workflow-runs/gate") gates.push(body);
+      const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
+      // Each posted gate is answered by the next reply in line.
+      if (route === "/cli/workflow-runs/poll-gate") return reply({ status: "running", gate_response: replies[gates.length - 1] ?? null });
+      return reply({ ok: true });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    cap.restore();
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  const mark = (name: string) => `script="echo ${name} >> ${tmpDir}/ran"`;
+  const ran = () => fs.existsSync(`${tmpDir}/ran`) ? fs.readFileSync(`${tmpDir}/ran`, "utf8").trim().split("\n") : [];
+  const run = (presenter: boolean) => runWorkflow(parseWorkflowSource(`digraph change {
+    start [shape=Mdiamond]
+    ${presenter ? `present [shape=parallelogram, ${mark("present")}]` : ""}
+    decide [label="Decide", shape=hexagon, ${presenter ? "asker=present, " : ""}prompt="Ship it?", doc="the review"]
+    ship [shape=parallelogram, ${mark("ship")}]
+    revise [shape=Msquare, label="Revise"]
+    dropped [shape=Msquare, label="Dropped"]
+    exit [shape=Msquare]
+    start -> ${presenter ? "present -> " : ""}decide
+    decide -> ship    [label="[S] Ship :: Land the change"]
+    decide -> revise  [label="[R] Revise :: Your note goes back"]
+    decide -> dropped [label="[D] Drop :: Leave it"]
+    ship -> exit
+  }`), { cwd: tmpDir, runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
+
+  test("a typed question does not reach Ship: the gate asks again with the question on top", async () => {
+    replies = ["can ou explain plainly", "D"];
+    await run(false);
+    expect(ran()).not.toContain("ship");
+    expect(gates).toHaveLength(2);
+    expect(gates[1].doc_md).toStartWith("**You asked:** can ou explain plainly");
+    expect(gates[1].doc_md).toContain("the review");
+  }, 20000);
+
+  test("a typed question goes back to the presenting station, which runs again before the gate asks again", async () => {
+    replies = ["what does this change for callers?", "S"];
+    expect(await run(true)).toBe("completed");
+    expect(ran()).toEqual(["present", "present", "ship"]);
+    expect(gates).toHaveLength(2);
+  }, 20000);
+
+  test("a chosen option still routes, a note beside it included", async () => {
+    replies = ["S: looks right"];
+    expect(await run(false)).toBe("completed");
+    expect(ran()).toEqual(["ship"]);
+  }, 20000);
+});

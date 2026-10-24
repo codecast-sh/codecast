@@ -1,7 +1,11 @@
 // codecast's prove command (scripts/line.ts, line-profile.md LP4): the replay
 // JSON it reads, and the majority rule a miss and a guard are held to.
 import { describe, expect, test } from "bun:test";
-import { provenEntry, replayRuns } from "./line";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { provenEntry, replayRuns, shipRange } from "./line";
 
 const run = (status: string, score: number | null = null) => ({ status, score, gatesFailed: [], missedFloors: [] }) as any;
 
@@ -22,4 +26,71 @@ describe("scripts/line.ts prove", () => {
     expect(provenEntry("g-1", "guard", [run("pass"), run("pass"), run("crash")])).toEqual({ freeze: "g-1", kind: "guard", passed: 2, scored: 2, ok: true });
     expect(provenEntry("fz-2", "miss", [run("crash")])).toEqual({ freeze: "fz-2", kind: "miss", passed: 0, scored: 0, ok: false, error: "no rep scored" });
   });
+});
+
+describe("scripts/line.ts ship", () => {
+  test("lands only the branch's own commits when the local default branch lags origin's", () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "line-ship-"));
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+    const commit = (file: string) => { writeFileSync(path.join(repo, file), `${file}\n`); git("add", file); git("commit", "-qm", file); };
+    try {
+      git("init", "-q", "-b", "main");
+      commit("a.txt");
+      git("checkout", "-q", "-b", "work");
+      commit("upstream.txt");
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      commit("change.txt");
+      expect(git("diff", "--name-only", shipRange(repo, "main"))).toBe("change.txt");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("a tree that already holds the change, as a session's own edits do, counts as landed; one without it gets the change", () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "line-ship-"));
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+    const ship = (tree: string) => execFileSync("bun", [path.join(import.meta.dir, "line.ts"), "ship", "--base", "main", "--tree", tree], { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git("init", "-q", "-b", "main");
+      writeFileSync(path.join(repo, "a.txt"), "a\n");
+      git("add", "a.txt");
+      git("commit", "-qm", "a");
+      git("worktree", "add", "-q", "--detach", "tree", "main");
+      git("checkout", "-q", "-b", "work");
+      writeFileSync(path.join(repo, "a.txt"), "a\nchanged\n");
+      git("commit", "-qam", "change");
+      writeFileSync(path.join(repo, "tree/a.txt"), "a\nchanged\n");
+      expect(ship(path.join(repo, "tree"))).toStartWith("already in the working tree");
+      writeFileSync(path.join(repo, "tree/a.txt"), "a\n");
+      expect(ship(path.join(repo, "tree"))).toStartWith("applied to the working tree");
+      expect(readFileSync(path.join(repo, "tree/a.txt"), "utf8")).toBe("a\nchanged\n");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("a tree that holds the branch's first commit, as a session's edits under review rounds do, gets only the later commits", () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "line-ship-"));
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+    const ship = (tree: string) => execFileSync("bun", [path.join(import.meta.dir, "line.ts"), "ship", "--base", "main", "--tree", tree], { cwd: repo, encoding: "utf8" }).trim();
+    try {
+      git("init", "-q", "-b", "main");
+      writeFileSync(path.join(repo, "a.txt"), "a\nb\nc\nd\ne\nf\ng\n");
+      git("add", "a.txt");
+      git("commit", "-qm", "a");
+      git("worktree", "add", "-q", "--detach", "tree", "main");
+      git("checkout", "-q", "-b", "work");
+      writeFileSync(path.join(repo, "a.txt"), "a\nround 1\nc\nd\ne\nf\ng\n");
+      git("commit", "-qam", "session edits");
+      writeFileSync(path.join(repo, "a.txt"), "a\nround 2\nc\nd\ne\nf\nreview fix\n");
+      git("commit", "-qam", "review round");
+      writeFileSync(path.join(repo, "tree/a.txt"), "a\nround 1\nc\nd\ne\nf\ng\n");
+      writeFileSync(path.join(repo, "tree/other.txt"), "someone else's work\n");
+      expect(ship(path.join(repo, "tree"))).toContain("the last 1 of 2 commits");
+      expect(readFileSync(path.join(repo, "tree/a.txt"), "utf8")).toBe("a\nround 2\nc\nd\ne\nf\nreview fix\n");
+      expect(readFileSync(path.join(repo, "tree/other.txt"), "utf8")).toBe("someone else's work\n");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 30000);
 });
