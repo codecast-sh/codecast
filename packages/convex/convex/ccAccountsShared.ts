@@ -1,6 +1,8 @@
 // Pure shared pieces for CC account switching — safe to import from schema.ts,
 // the mutations (accountSwitch.ts), and tests. No server/_generated imports.
 
+import { isWorkflowRunLog } from "./lib/runLog";
+export { isWorkflowRunLog };
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import {
@@ -164,6 +166,16 @@ export function profileHasSetupToken(
   return !!profile?.setup_token && profile.setup_token.expires_at > now;
 }
 
+/** The profile's saved login is dead and nothing else carries it: a live
+ *  minted token outranks the saved login at launch, so its expiry is moot
+ *  until the token goes. What "login expired" / "sign in again" key on. */
+export function profileNeedsSignIn(
+  profile: { login_expired_at?: number | null; setup_token?: { expires_at: number } } | undefined | null,
+  now: number,
+): boolean {
+  return !!profile?.login_expired_at && !profileHasSetupToken(profile, now);
+}
+
 /** A profile can carry sessions when a launch credential is on file and not
  *  past its lifetime: its own credential store, or a minted setup-token (which
  *  also covers a saved login that has expired). */
@@ -264,6 +276,20 @@ export function continueNeedsRestart(
   // continue would retry the same spent (or dead) login.
   if (!conv.cc_account) return fleetAccount(device?.cc_accounts, now).viaToken;
   return conv.cc_account !== continueTargetPin(device, now);
+}
+
+/** The account a cloud host runs on when it carries a setup token of its own
+ * (its cc-launch.json names a profile with a live token): the laptop's
+ * credential pushes never override it, so the host's sessions run there
+ * whatever the laptop runs. Undefined for a local device and for a host that
+ * runs the pushed login. */
+export function hostOwnAccount(
+  device: { is_remote?: boolean; cc_accounts?: FleetAccounts } | undefined,
+  now: number,
+): string | undefined {
+  if (device?.is_remote !== true) return undefined;
+  const fleet = fleetAccount(device.cc_accounts, now);
+  return fleet.viaToken ? fleet.email : undefined;
 }
 
 /** Whether a parked session's banner says anything about the device's ACTIVE
@@ -611,6 +637,12 @@ export const AUTO_SWITCH_CONTINUE_KEY = "__continue__";
 // would ever get its own free continue while the other was recovering.
 export const AUTO_SWITCH_CODEX_CONTINUE_KEY = "__continue_codex__";
 export const AUTO_SWITCH_AUTH_RESTART_KEY = "__auth_restart__";
+
+// The same key for a cloud host's own account (hostOwnAccount): one per
+// account, so a continue on one host's account is not taken for another's.
+export function hostContinueAttemptKey(email: string): string {
+  return `__continue_host__:${email}`;
+}
 
 export function authRestartAttemptKey(conversationId: string): string {
   return `${AUTO_SWITCH_AUTH_RESTART_KEY}:${conversationId}`;
@@ -1060,19 +1092,24 @@ export function parkedAccountResetAt(
 // (a marked opencode/pi client error) is OUT of the blocked set for everyone.
 // A statusful 5xx banner is kind "fatal": Claude Code writes it only after its
 // own retries are spent. Dismissed is an explicit user "go away" — never
-// auto-revive.
+// auto-revive. A workflow run's log is never blocked: no agent of its own runs
+// there, so a continue only wakes a fresh one that asks what it is for.
 export function isBlockedConversation(conv: {
   pending_api_error?: boolean;
   pending_api_error_kind?: string | null;
   agent_type?: string;
   inbox_dismissed_at?: number | null;
+  is_workflow_primary?: boolean;
+  session_id?: string | null;
 }): boolean {
   return (
     conv.pending_api_error === true &&
     blockedKindsForAgent(conv.agent_type).has(conv.pending_api_error_kind ?? "") &&
-    !conv.inbox_dismissed_at
+    !conv.inbox_dismissed_at &&
+    !isWorkflowRunLog(conv)
   );
 }
+
 
 // The revive window: a park older than this is the graveyard, not the current
 // incident. Measured from when the block landed (the banner's own timestamp),
@@ -1275,3 +1312,4 @@ export function shouldSweepStaleFlag(
 ): boolean {
   return conv.pending_api_error === true && !isCurrentBlock(conv, now);
 }
+

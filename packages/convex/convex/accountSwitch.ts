@@ -31,6 +31,8 @@ import {
   splitAuthParks,
   AUTO_SWITCH_CONTINUE_KEY,
   AUTO_SWITCH_CODEX_CONTINUE_KEY,
+  hostContinueAttemptKey,
+  hostOwnAccount,
   AUTO_SWITCH_PROBE_RETRY_MS,
   resetCreditAttemptKey,
   authRestartAttemptKey,
@@ -38,6 +40,7 @@ import {
   isAutoContinueEnabled,
   autoRecoveryEnabled,
   isBlockedConversation,
+  isWorkflowRunLog,
   isCurrentBlock,
   blockedAt,
   BLOCKED_WINDOW_MS,
@@ -72,7 +75,7 @@ import {
 import { decideSwitchAhead } from "./ccSwitchAhead";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
-import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode } from "@codecast/shared/contracts";
+import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS } from "@codecast/shared/contracts";
 
 
 // A revive targets the CURRENT incident, not history: pending_api_error flags
@@ -102,11 +105,15 @@ async function listBlockedConversations(
   totalBlocked: number;
 }> {
   const now = Date.now();
-  // updated_at is never older than the block, so the index range is a
-  // superset; isCurrentBlock then drops old parks whose row was touched since.
+  // Only the flagged rows: a read of every recently updated conversation took
+  // the busy sessions along, and their writes failed the commit of every
+  // scheduled check that called this. updated_at is never older than the
+  // block, so the range is a superset; isCurrentBlock then drops old parks
+  // whose row was touched since.
   const recent = await ctx.db
     .query("conversations")
-    .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId).gt("updated_at", now - BLOCKED_WINDOW_MS))
+    .withIndex("by_user_pending_api_error", (q: any) =>
+      q.eq("user_id", userId).eq("pending_api_error", true).gt("updated_at", now - BLOCKED_WINDOW_MS))
     .order("desc")
     .take(1000);
   const all: Doc<"conversations">[] = recent.map(withSafetyBlock).filter((c: Doc<"conversations">) => isBlockedConversation(c) && isCurrentBlock(c, now));
@@ -193,21 +200,27 @@ function recoveryDecision(
 // workers (an orchestrator waiting on a workflow) never switched at all.
 // Fleet-store machines only: there the parent follows the switch without a
 // restart, while a legacy switch would restart it and kill its live workers.
+// A workflow station is the exception: it nests under its run's log, where no
+// agent runs, and is a process of its own that a continue reaches. It is
+// revived as itself, so its run survives the switch (jx73gnf, 2026-10-23).
 async function workerParks(
   ctx: { db: any },
   primary: Doc<"devices"> | undefined,
   skipped: Doc<"conversations">[],
   blocked: Doc<"conversations">[],
-): Promise<{ workers: Doc<"conversations">[]; parents: Doc<"conversations">[] }> {
+): Promise<{ workers: Doc<"conversations">[]; parents: Doc<"conversations">[]; stations: Doc<"conversations">[] }> {
   const workers: Doc<"conversations">[] = [];
+  const stations: Doc<"conversations">[] = [];
   const parents = new Map<string, Doc<"conversations"> | null>(blocked.map((c) => [c._id, null]));
-  if (!primary?.cc_accounts?.fleet_store || !autoRecoveryEnabled(primary)) return { workers, parents: [] };
+  const runLogs = new Set<string>();
+  if (!primary?.cc_accounts?.fleet_store || !autoRecoveryEnabled(primary)) return { workers, parents: [], stations };
   for (const worker of skipped) {
     const parentId = worker.parent_conversation_id;
     if (worker.pending_api_error_kind !== "limit" || worker.agent_type === "codex" || !parentId) continue;
-    if (!parents.has(parentId)) {
+    if (!parents.has(parentId) && !runLogs.has(parentId)) {
       const parent: Doc<"conversations"> | null = await ctx.db.get(parentId);
-      parents.set(parentId, parent && !isSubagentConversation(parent) && !parent.inbox_dismissed_at
+      if (parent && isWorkflowRunLog(parent)) runLogs.add(parentId);
+      else parents.set(parentId, parent && !isSubagentConversation(parent) && !parent.inbox_dismissed_at
         ? {
             ...parent,
             pending_api_error: true,
@@ -217,10 +230,14 @@ async function workerParks(
           }
         : null);
     }
+    if (runLogs.has(parentId)) {
+      if (!worker.inbox_dismissed_at) stations.push(worker);
+      continue;
+    }
     // A parent parked on its own already carries the recovery.
     if (parents.get(parentId)) workers.push(worker);
   }
-  return { workers, parents: [...parents.values()].filter((p): p is Doc<"conversations"> => !!p) };
+  return { workers, parents: [...parents.values()].filter((p): p is Doc<"conversations"> => !!p), stations };
 }
 
 async function dismissSkippedWorkersAutomatically(
@@ -764,9 +781,15 @@ export async function onFreshApiErrorPark(
   ctx: { db?: any; scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
   userId: Id<"users">,
   kind: string,
+  conversationId?: Id<"conversations">,
 ): Promise<void> {
   if (kind === "limit" || kind === "auth") await scheduleAutoSwitchCheck(ctx, userId);
   if (PACED_CONTINUE_KINDS.has(kind)) await scheduleThrottleContinue(ctx, userId);
+  // A full context heals by restarting the session fresh (handoff.ts); the
+  // recovery re-checks the park when it fires, so a /compact typed first wins.
+  if (kind === "context" && conversationId) {
+    await ctx.scheduler.runAfter(CONTEXT_RECOVERY_DELAY_MS, internal.handoff.recoverContext, { conversation_id: conversationId });
+  }
   await ctx.scheduler.runAfter(BLOCKED_NOTIFY_DEBOUNCE_MS, internal.accountSwitch.blockedNotifyCheck, {
     user_id: userId,
   });
@@ -940,9 +963,9 @@ export const reportLoginFlowUrl = mutation({
 // waiting `claude auth login`. It travels in the clear: exchanging it needs
 // the PKCE verifier, which never leaves that CLI process.
 export const submitLoginCode = mutation({
-  args: { device_id: v.string(), started_at: v.number(), code: v.string() },
+  args: { api_token: v.optional(v.string()), device_id: v.string(), started_at: v.number(), code: v.string() },
   handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx);
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
     const now = Date.now();
     const device = await findFlowDevice(ctx, userId, args.device_id, now);
@@ -1838,9 +1861,9 @@ export const autoSwitchCheck = internalMutation({
     // A worker stopped on a limit is evidence about the account, and its
     // parent is the session to recover (workerParks): the parent stands in
     // for it below, and the worker stays blocked until the pass acts on it.
-    const { workers, parents } = await workerParks(ctx, primary, listed.skipped, listed.blocked);
-    const skipped = listed.skipped.filter((c) => !workers.includes(c));
-    const blocked = [...listed.blocked, ...parents];
+    const { workers, parents, stations } = await workerParks(ctx, primary, listed.skipped, listed.blocked);
+    const skipped = listed.skipped.filter((c) => !workers.includes(c) && !stations.includes(c));
+    const blocked = [...listed.blocked, ...parents, ...stations];
     const releaseWorkers = () => dismissSkippedWorkers(ctx, workers);
     // Before any account decision: the workers this pass will not act on leave
     // the blocked set now, whatever the pass decides about the rest.
@@ -1862,7 +1885,23 @@ export const autoSwitchCheck = internalMutation({
     // cooldown, forever), and could spend a Claude account's week on sessions
     // a Claude switch cannot reach.
     const codexLimit = limitBlocked.filter((c) => c.agent_type === "codex");
-    const claudeLimit = limitBlocked.filter((c) => c.agent_type !== "codex");
+    // The account the fleet runs on: the keychain login, or the launch profile
+    // after a token switch (fleetAccount). Every "active" read below means this.
+    const activeEmail = fleetAccount(primary.cc_accounts, now).email;
+    const activeProfiles = primary.cc_accounts?.profiles ?? [];
+    const onlineById = new Map(online.map((d) => [d.device_id, d]));
+    // A cloud host on a setup token of its own runs THAT account
+    // (hostOwnAccount), so its parks are evidence about that account alone,
+    // read from the laptop's meters for it. Judged on the laptop's account
+    // instead, a host out for the week got a "continue" every few minutes
+    // into the same wall (jx75sbx, 2026-10-24). A host account the laptop does
+    // not track has no meters to read and stays with the laptop's decision.
+    const hostAccountOf = (c: Doc<"conversations">): string | undefined => {
+      const email = hostOwnAccount(c.owner_device_id ? onlineById.get(c.owner_device_id) : undefined, now);
+      return email && email !== activeEmail && activeProfiles.some((p) => p.email === email) ? email : undefined;
+    };
+    const hostLimit = limitBlocked.filter((c) => c.agent_type !== "codex" && hostAccountOf(c));
+    const claudeLimit = limitBlocked.filter((c) => c.agent_type !== "codex" && !hostAccountOf(c));
     const authParks = blocked.filter((c) => c.pending_api_error_kind === "auth" && recentEnough(c) &&
       (!c.owner_device_id || c.owner_device_id === primary.device_id));
     const { restart: authRestart, dead: authDead } = splitAuthParks(
@@ -1874,7 +1913,7 @@ export const autoSwitchCheck = internalMutation({
     const activeDead = authDead.length > 0;
     const authSwitch = allowSwitch && activeDead ? authParks : [];
     const targets = [...claudeLimit, ...authSwitch];
-    if (targets.length === 0 && authRestart.length === 0 && codexLimit.length === 0) {
+    if (targets.length === 0 && authRestart.length === 0 && codexLimit.length === 0 && hostLimit.length === 0) {
       if (authParks.length > 0 && !activeDead) {
         const retryAt = now + AUTO_SWITCH_PROBE_RETRY_MS;
         if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
@@ -1925,10 +1964,6 @@ export const autoSwitchCheck = internalMutation({
     // What the human sees on the meter that closed, and where the loop would
     // move — the reason every switch/proposal is recorded with, so the park
     // card can explain the account change instead of it happening silently.
-    const activeProfiles = primary.cc_accounts?.profiles ?? [];
-    // The account the fleet runs on: the keychain login, or the launch profile
-    // after a token switch (fleetAccount). Every "active" read below means this.
-    const activeEmail = fleetAccount(primary.cc_accounts, now).email;
     const activeProfile = activeProfiles.find((p) => p.email && p.email === activeEmail);
     const buildDecision = (kind: RecoveryDecisionKind, target?: DecisionTarget) =>
       recoveryDecision(primary, kind, claudeLimit.length + authSwitch.length, now, target);
@@ -1982,7 +2017,7 @@ export const autoSwitchCheck = internalMutation({
     // decide; when Codex is all that is parked it always answers, so the
     // caller never reaches decideAutoSwitch with an empty target list.
     const runCodexPass = async () => {
-      const soleParks = targets.length === 0;
+      const soleParks = targets.length === 0 && hostLimit.length === 0;
       const codexDecision = decideAutoSwitch({
         now,
         resetCredit: codexResetCreditOffer(primary, codexLimit),
@@ -2076,13 +2111,50 @@ export const autoSwitchCheck = internalMutation({
       if ("acted" in viaCodex) return viaCodex;
       codexRetryAt = viaCodex.retry_at;
     }
-    // The soonest either provider is worth another look.
-    const withCodexRetry = (at: number): number => Math.min(at, codexRetryAt ?? at);
+
+    // The host pass: each host account's parks get the same decision on that
+    // account's meters, switching OFF. Moving a host to another account means
+    // a token for it on the host, which no command delivers, so a spent host
+    // account waits for its own reset rather than taking the laptop's.
+    let hostRetryAt: number | undefined;
+    for (const email of new Set(hostLimit.map(hostAccountOf))) {
+      const parks = hostLimit.filter((c) => hostAccountOf(c) === email);
+      const key = hostContinueAttemptKey(email!);
+      const hostDecision = decideAutoSwitch({
+        now,
+        parkedAt: Math.max(...parks.map(blockedAt)),
+        activeEmail: email,
+        profiles: activeProfiles,
+        attempts,
+        allowSwitch: false,
+        continueKey: key,
+        models: parks.flatMap((c) => (c.model ? [c.model] : [])),
+      });
+      if (hostDecision.action === "continue") {
+        const res = await continueLimitParks(ctx, args.user_id, { blocked: parks, online, primary, now });
+        if (res.probe) state = { ...state, limit_probe: res.probe, throttle_check_at: res.throttle_check_at };
+        await recordAction(`host_continue:${email}`, [key], await bookCodexFollowUp());
+        console.log(`autoSwitchCheck: continuing ${res.probe ? 1 : parks.length} of ${parks.length} conversation(s) parked on host account ${email}`);
+        return { acted: "host_continue", conversations: parks.length, restarted: res.restarted };
+      }
+      const retryAt = hostDecision.action === "wait" || hostDecision.action === "exhausted" ? hostDecision.retry_at : now + AUTO_SWITCH_PROBE_RETRY_MS;
+      hostRetryAt = Math.min(retryAt, hostRetryAt ?? retryAt);
+    }
+
+    // The soonest any other account is worth another look.
+    const withCodexRetry = (at: number): number => Math.min(at, codexRetryAt ?? at, hostRetryAt ?? at);
+    if (targets.length === 0) {
+      const retryAt = withCodexRetry(hostRetryAt!);
+      if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
+        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+        await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, next_check_at: retryAt } });
+      }
+      return { acted: "host_wait", next_check_at: retryAt };
+    }
 
     // A park is read as a fact about the account the session ran on: the
     // owning device's active login unless the row pins another account's
     // token. Only the former can wait on the active account's windows.
-    const onlineById = new Map(online.map((d) => [d.device_id, d]));
     const parksOnActive = targets.filter((c) =>
       parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary, now),
     );
