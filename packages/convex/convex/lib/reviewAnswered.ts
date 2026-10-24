@@ -3,7 +3,8 @@
 // replies, a note counts as answered when the reply
 //
 //   1. quotes it: the note's words appear in the reply, or a quoted line of
-//      the reply (`> …`) is a stretch of the note;
+//      the reply (`> …`) is a stretch of the note, or of the text a composer
+//      quote quoted (quoteDrafts.ts);
 //   2. names its place: the note's file with a line inside the note's lines
 //      (`a.ts:42`, "a.ts line 42", "line 42 of a.ts");
 //   3. answers its message: the reply follows the very message that carried
@@ -22,6 +23,8 @@ export type SentNote = {
   line_number?: number;
   line_end?: number;
   sent_client_id?: string;
+  /** The message text a composer quote quoted. */
+  quote?: string;
 };
 
 export type AnswerReason = "quote" | "place" | "parent";
@@ -34,11 +37,12 @@ const normalize = (text: string) => text.toLowerCase().replace(/[`*_]/g, "").rep
 function quotes(note: SentNote, reply: string, replyNorm: string): boolean {
   const body = normalize(note.content);
   if (body.length >= MIN_QUOTE_CHARS && replyNorm.includes(body)) return true;
+  const quote = note.quote ? normalize(note.quote) : "";
   for (const line of reply.split("\n")) {
     const m = line.match(/^\s*>+\s?(.*)$/);
     if (!m) continue;
     const quoted = normalize(m[1]);
-    if (quoted.length >= MIN_QUOTE_CHARS && body.includes(quoted)) return true;
+    if (quoted.length >= MIN_QUOTE_CHARS && (body.includes(quoted) || quote.includes(quoted))) return true;
   }
   return false;
 }
@@ -139,6 +143,7 @@ export async function markAnsweredReviewNotes(
       line_number: n.line_number,
       line_end: n.line_end,
       sent_client_id: n.sent_client_id,
+      quote: n.prose_anchor?.text,
     })),
     { content: message.content, parentClientId },
     batchSizes,

@@ -31,6 +31,7 @@ import { touchThread } from "./threadReads";
 import type { MutationCtx } from "./_generated/server";
 import { codeThreadRootKey } from "@codecast/shared/comments";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
+import { isQuoteRow, withoutQuoteRows } from "./lib/quoteRows";
 
 const GITHUB_API_BASE = "https://api.github.com";
 // The feed row clips a long summary and expands it on click, so keep the whole
@@ -55,6 +56,8 @@ export async function canAccessComment(
   if (comment.author_user_id && String(comment.author_user_id) === String(userId)) return true;
   // A note in an unsubmitted review is the author's alone, as it is on GitHub.
   if (comment.pending_review) return false;
+  // So is a composer quote, sent or not (lib/quoteRows).
+  if (isQuoteRow(comment)) return false;
 
   // A row carrying a workspace key is decided by it ALONE (ct-49560). Review
   // notes are the only rows that carry one, and the repository branch below
@@ -745,12 +748,15 @@ async function threadRows(ctx: Ctx, comment: Doc<"review_comments">): Promise<Do
     .withIndex("by_parent", (q: any) => q.eq("parent_id", root._id))
     .collect();
   const rows = [root, ...replies];
-  if (comment.pull_request_id && comment.file_path && comment.line_number != null) {
+  // A pending note is its author's private draft: it joins no line's thread,
+  // and no line's thread reaches into it.
+  if (!comment.pending_review && comment.pull_request_id && comment.file_path && comment.line_number != null) {
     const siblings: Doc<"review_comments">[] = await ctx.db
       .query("review_comments")
       .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", comment.pull_request_id))
       .collect();
     for (const row of siblings) {
+      if (row.pending_review) continue;
       if (row.file_path === comment.file_path && row.line_number === comment.line_number && !rows.some((r) => r._id === row._id)) {
         rows.push(row);
       }
@@ -775,13 +781,17 @@ export async function pendingRowsFor(
   ctx: Ctx,
   userId: Id<"users">,
   pullRequestId: Id<"pull_requests">,
+  opts: { includeResolved?: boolean } = {},
 ): Promise<Doc<"review_comments">[]> {
   const rows: Doc<"review_comments">[] = await ctx.db
     .query("review_comments")
     .withIndex("by_pull_request", (q: any) => q.eq("pull_request_id", pullRequestId))
     .collect();
+  // A pending note the reviewer resolved (handed to a session and resolved)
+  // is done: it leaves the batch and never goes to GitHub. Discard still
+  // clears it.
   return rows
-    .filter((r) => r.pending_review && String(r.author_user_id) === String(userId))
+    .filter((r) => r.pending_review && String(r.author_user_id) === String(userId) && (opts.includeResolved || !r.resolved))
     .sort((a, b) => a.created_at - b.created_at);
 }
 
@@ -798,7 +808,7 @@ export const discardPendingReview = mutation({
   args: { api_token: v.optional(v.string()), pull_request_id: v.id("pull_requests") },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
-    const rows = await pendingRowsFor(ctx, userId, args.pull_request_id);
+    const rows = await pendingRowsFor(ctx, userId, args.pull_request_id, { includeResolved: true });
     for (const row of rows) await ctx.db.delete(row._id);
     return { discarded: rows.length };
   },
@@ -892,7 +902,7 @@ export const listForFile = query({
         q.eq("repository", normalizeRepository(args.repository)).eq("file_path", args.file_path))
       .collect();
     const matching = args.ref ? rows.filter((c) => c.ref === args.ref) : rows;
-    return await filterAccessible(ctx, userId, matching);
+    return await filterAccessible(ctx, userId, withoutQuoteRows(matching));
   },
 });
 
@@ -908,7 +918,7 @@ export const listForRef = query({
       .query("review_comments")
       .withIndex("by_repository_file", (q) => q.eq("repository", normalizeRepository(args.repository)))
       .collect();
-    return await filterAccessible(ctx, userId, rows.filter((c) => c.ref === args.ref));
+    return await filterAccessible(ctx, userId, withoutQuoteRows(rows.filter((c) => c.ref === args.ref)));
   },
 });
 
@@ -925,7 +935,7 @@ export const listForPR = query({
       .query("review_comments")
       .withIndex("by_pull_request", (q) => q.eq("pull_request_id", args.pull_request_id))
       .collect();
-    return withoutOthersPending(rows, userId).sort((a, b) => a.created_at - b.created_at);
+    return withoutOthersPending(withoutQuoteRows(rows), userId).sort((a, b) => a.created_at - b.created_at);
   },
 });
 
@@ -942,7 +952,7 @@ export const listForConversation = query({
       .query("review_comments")
       .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
       .collect();
-    return withoutOthersPending(rows, userId).sort((a, b) => a.created_at - b.created_at);
+    return withoutOthersPending(withoutQuoteRows(rows), userId).sort((a, b) => a.created_at - b.created_at);
   },
 });
 
@@ -1007,7 +1017,7 @@ export const remove = mutation({
  * comment settles its root and every reply, so a thread never reads half
  * open. The GitHub side follows once, from the comment the caller named.
  */
-async function setThreadResolved(
+export async function setThreadResolved(
   ctx: Ctx,
   userId: Id<"users">,
   commentId: Id<"review_comments">,

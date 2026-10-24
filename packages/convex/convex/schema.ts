@@ -1,10 +1,12 @@
+import { distributionValidator, updateStateValidator } from "./lib/deviceUpdate";
 import { resourceOffloadIntent } from "./resourceOffloadSchema";
 import { syncOutboxTables } from "./syncOutboxSchema";
 import { pushReceiptTables } from "./pushReceiptsSchema";
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
+import { AGENT_STATUSES, DAEMON_COMMANDS, TEAM_FEATURE_KEYS, type TeamFeatureKey } from "@codecast/shared/contracts";
+import { SECRET_EVENT_KINDS } from "@codecast/shared/contracts/secrets";
 import { cloudAutoscaleValidator, cloudHostReportValidator, cloudPlacementProgressValidator, hostReadinessValidator, localMirrorValidator } from "./lib/cloudHostValidators";
 import { openTaskValidator } from "./lib/openTasksValidator";
 import { changeGuideValidator } from "./lib/changeGuideValidator";
@@ -13,6 +15,7 @@ import { TASK_EFFORTS, TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLO
 import { taskWaitValidator } from "./lib/taskWaitValidator";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { LINE_CATEGORIES } from "@codecast/shared/contracts/goalsBrief";
+import { proseAnchorValidator } from "./lib/proseAnchorValidator";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 import { lineSlotsValidator } from "./lib/lineSlotsValidator";
 import { workflowEdgeValidator, workflowNodeValidator, workflowSnapshotValidator } from "./lib/workflowGraphValidators";
@@ -31,6 +34,7 @@ import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } 
 import { agentTables } from "./agentSchema";
 import { expectationTables } from "./expectationsSchema";
 import { machineResourceTables } from "./machineResourcesSchema";
+import { teamHostTables } from "./teamHostsSchema";
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { momentsTables } from "./momentsSchema";
 import { lineTrialTables } from "./lineTrialSchema";
@@ -39,6 +43,7 @@ import { liveFlowTables } from "./liveFlowsSchema";
 import { flowMapTables } from "./flowMapSchema";
 import { sessionFlowTables } from "./sessionFlowsSchema";
 import { slackTables } from "./slackSchema";
+import { passkeyTables } from "./passkeysSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
 import { decisionValidator, intentSourceValidator, milestoneValidator, questionValidator, scoreValidator } from "./lib/initiativeValidators";
 
@@ -81,16 +86,12 @@ const visibilitySegment = v.object({
   visibility: teamVisibilityLevelValue,
 });
 
-const teamFeaturesValidator = v.object({
-  chat: v.optional(v.boolean()),
-  calls: v.optional(v.boolean()),
-  org: v.optional(v.boolean()),
-  changes: v.optional(v.boolean()),
-  agent_faces: v.optional(v.boolean()),
-  agent_realtime: v.optional(v.boolean()),
-  ship: v.optional(v.boolean()),
-  line: v.optional(v.boolean()),
-});
+// One optional flag per catalog key, so a new team feature can be stored the
+// moment it is catalogued (a hand list here once lacked "line").
+const optionalFlag = () => v.optional(v.boolean());
+const teamFeaturesValidator = v.object(
+  Object.fromEntries(TEAM_FEATURE_KEYS.map((k) => [k, optionalFlag()])) as Record<TeamFeatureKey, ReturnType<typeof optionalFlag>>,
+);
 
 // A ship of one surface (cli, desktop, backend...) as Changes records it on a
 // story ("shipped in cli 1.1.163") and on a day's edition.
@@ -99,6 +100,9 @@ const changeReleaseValidator = v.object({
   version: v.optional(v.string()),
   sha: v.string(),
   at: v.number(),
+  // A pushed tag or bump (`release`), or a `cast ship mark` (`deploy`), and the deploy object it recorded (dp-N).
+  kind: v.optional(v.union(v.literal("release"), v.literal("deploy"))),
+  deploy: v.optional(v.string()),
 });
 
 // The entity kinds that can participate in entity-conversation links.
@@ -132,6 +136,7 @@ export default defineSchema({
   // spread here because a deploy only ships what this file names.
   ...capabilityTables,
   ...machineResourceTables,
+  ...teamHostTables,
   ...googleOAuthTables,
   ...oauthConnectorTables,
   // External data: sources, groups, samples, replays, metric watches, app calls (external-data.md).
@@ -143,6 +148,7 @@ export default defineSchema({
   ...flowMapTables,
   ...sessionFlowTables,
   ...slackTables,
+  ...passkeyTables,
   ...authTables,
   users: defineTable({
     email: v.optional(v.string()),
@@ -493,6 +499,49 @@ export default defineSchema({
   })
     .index("by_user_team", ["user_id", "team_id"])
     .index("by_team_status", ["team_id", "status"]),
+
+  // A team's seat plan (teamBilling.ts, lib/teamSeats.ts): no row, or a row
+  // without a live subscription, is the free Starter plan; a live Stripe
+  // subscription on the per-seat price is Pro. The Stripe fields are a copy
+  // of the subscription as last read from Stripe (`subscription_read_at`);
+  // Stripe's events only prompt a re-read. Server only: no query returns the
+  // row, so Stripe ids never reach a member's client.
+  team_subscriptions: defineTable({
+    team_id: v.id("teams"),
+    stripe_customer_id: v.optional(v.string()),
+    stripe_subscription_id: v.optional(v.string()),
+    subscription_status: v.optional(v.string()),
+    price_id: v.optional(v.string()),
+    quantity: v.optional(v.number()),
+    trial_end: v.optional(v.number()),
+    current_period_end: v.optional(v.number()),
+    cancel_at_period_end: v.optional(v.boolean()),
+    subscription_read_at: v.optional(v.number()),
+    // A Stripe read for this team failed for a reason that may pass (network,
+    // 5xx). Newer than `subscription_read_at`: the plan is unconfirmed, and
+    // the seat gate fails open.
+    refresh_failed_at: v.optional(v.number()),
+    // An admin opened checkout; until its subscription lands the gate fails open.
+    checkout_started_at: v.optional(v.number()),
+    // The team was already over the free capacity when seat billing first
+    // judged it: it keeps adding seats without a plan.
+    grandfathered_at: v.optional(v.number()),
+  })
+    .index("by_team", ["team_id"])
+    .index("by_customer", ["stripe_customer_id"]),
+
+  // An emailed invite (teams.sendInviteEmail). It holds a free seat while it
+  // is pending: sent with the team's current invite code, that code not yet
+  // expired, and the address not yet a member. A new invite link revokes it.
+  team_invites: defineTable({
+    team_id: v.id("teams"),
+    email: v.string(),
+    invite_code: v.string(),
+    invited_by: v.id("users"),
+    created_at: v.number(),
+    accepted_at: v.optional(v.number()),
+  })
+    .index("by_team_email", ["team_id", "email"]),
 
   // The one outstanding code proving a user holds their account email, for
   // finding their team by domain (teamDiscovery.ts). Only a hash is stored.
@@ -906,6 +955,10 @@ export default defineSchema({
     draft_message: v.optional(v.string()),
     last_user_message_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
+    // Started with nobody watching (`cast spawn --unattended`, a role's hand).
+    // Read through isUnattendedConversation (@codecast/shared), which also
+    // counts workers, workflow stations, trigger runs and standing sessions.
+    unattended: v.optional(v.boolean()),
     cli_flags: v.optional(v.string()),
     // LEGACY: now written to conversation_context.stable_context (off the hot
     // doc). Still declared so pre-diet rows validate; readers fall back to it
@@ -969,6 +1022,10 @@ export default defineSchema({
     // cleared in lockstep with pending_api_error; the web blocked-sessions
     // banner and session rows render "Xm ago" from it.
     pending_api_error_at: v.optional(v.number()),
+    // When codecast last restarted this session in a fresh context after its
+    // context filled and could not be compacted (handoff.recoverContext). A
+    // second overflow inside the cooldown stays parked for a person.
+    context_recovered_at: v.optional(v.number()),
     // A hosted assistant conversation whose last turn ended on a stop notice:
     // the notice's kind (NOTICE_KINDS in contracts/assistant). Written by
     // assistant/turns.ts tellStopped and cleared when the next turn starts,
@@ -1263,6 +1320,10 @@ export default defineSchema({
     // Sparse in practice (only banner-parked conversations are true) — lets the
     // stale-flag sweep find expired pending_api_error rows without a table scan.
     .index("by_pending_api_error", ["pending_api_error", "updated_at"])
+    // One person's parked conversations (accountSwitch listBlockedConversations):
+    // reading them through by_user_updated took every busy session along, and
+    // the scheduled checks lost every commit to those sessions' writes.
+    .index("by_user_pending_api_error", ["user_id", "pending_api_error", "updated_at"])
     // started_at last: a folder's rows come newest session first, not newest
     // row first. A folder's past sessions synced today get new rows, and the
     // Sync page's list must still open on the sessions run most recently.
@@ -1317,6 +1378,11 @@ export default defineSchema({
     // findSharedCheckoutOccupant): a start reads these, not every station the
     // host runs, so a station's transcript writes never conflict with a spawn.
     .index("by_owner_device_workspace", ["user_id", "owner_device_id", "cloud_workspace"])
+    // Sparse: rows parked on a cloud host for a laptop to prepare
+    // (cloudPlacement reissueStrandedCloudSpawns). A laptop's catch-up reads
+    // these, not every station its hosts run, so it commits against their
+    // transcript writes instead of retrying forever in a scheduler slot.
+    .index("by_user_cloud_placement", ["user_id", "cloud_placement", "owner_device_id"])
     // Sparse and written only at a worker's start, queue and end: the fleet's
     // running and queued rows for one user (subagentFleet.ts).
     .index("by_user_subagent_slot", ["user_id", "subagent_slot", "subagent_slot_at"])
@@ -1771,6 +1837,18 @@ export default defineSchema({
   // F1): scope edits are human only, and every one lands here as a
   // task_history style row until the charter becomes a doc. old/new carry the
   // scope as JSON so a reader can diff what a person added or removed.
+  // A role's tokens today, one row per conversation that works for it
+  // (lib/orgCaps roleTokensToday): each session's transcript writes only its
+  // own row, so they never conflict with a spawn reading the role.
+  org_role_tokens: defineTable({
+    role_id: v.id("org_roles"),
+    conversation_id: v.id("conversations"),
+    day: v.string(),
+    tokens: v.number(),
+  })
+    .index("by_conversation_day", ["conversation_id", "day"])
+    .index("by_role_day", ["role_id", "day"]),
+
   org_role_history: defineTable({
     role_id: v.id("org_roles"),
     user_id: v.optional(v.id("users")),
@@ -3106,6 +3184,15 @@ export default defineSchema({
     // update to (absent when none), for the device page. Heartbeat-written.
     cli_version: v.optional(v.string()),
     update_available: v.optional(v.string()),
+    // Self update as desired state (lib/deviceUpdate.ts): whether this install
+    // can replace its own binary and how it was installed (heartbeat), the
+    // Update button's request (web), and the daemon's run for it (heartbeat).
+    can_self_update: v.optional(v.boolean()),
+    distribution: v.optional(distributionValidator),
+    update_requested_version: v.optional(v.string()),
+    update_requested_at: v.optional(v.number()),
+    update_state: v.optional(updateStateValidator),
+    update_error: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),
@@ -3417,6 +3504,12 @@ export default defineSchema({
     // API's count of base commits the head lacks.
     mergeable: v.optional(v.union(v.boolean(), v.null())),
     mergeable_state: v.optional(v.string()),
+    // GitHub's auto-merge request on the pull request, null when none is set.
+    // Written from pull_request webhook payloads (processPRMetaEvent).
+    auto_merge: v.optional(v.union(v.null(), v.object({
+      merge_method: v.optional(v.string()),
+      enabled_by: v.optional(v.string()),
+    }))),
     behind_by: v.optional(v.number()),
     merge_state_checked_at: v.optional(v.number()),
     // "approved" | "changes_requested" | "review_required" | "none"
@@ -3490,11 +3583,14 @@ export default defineSchema({
     // A team's pull requests touched in a trailing window (page data readers).
     .index("by_team_updated", ["team_id", "updated_at"]),
 
-  // linked_session_ids as an index (lib/prSessions.ts): written only by
-  // syncPullRequestSessions, read to find the pull requests a session links.
+  // linked_session_ids as an index (lib/prSessions.ts): written only there,
+  // read to find the pull requests a session links. `tier` is how strong the
+  // link is: "observed" (the session sat on the branch) or "committed" (its own
+  // commit is on the pull request). Absent reads as observed.
   pull_request_sessions: defineTable({
     pull_request_id: v.id("pull_requests"),
     conversation_id: v.id("conversations"),
+    tier: v.optional(v.union(v.literal("observed"), v.literal("committed"))),
   })
     .index("by_pull_request", ["pull_request_id"])
     .index("by_conversation", ["conversation_id"]),
@@ -3649,6 +3745,19 @@ export default defineSchema({
     // the note, named its file and line, or answered a batch of this one note.
     answered_message_id: v.optional(v.id("messages")),
     answered_at: v.optional(v.number()),
+    // ── Composer quotes (quoteDrafts.ts) ──
+    // A quote on a block of an assistant message, waiting in its author's
+    // composer to ride their next message. `client_id` is the batch item's id,
+    // `content` its note, `conversation_id` the conversation it quotes. Its
+    // author's alone, before and after sending; the send stamps `sent_*` and
+    // lib/reviewAnswered stamps `answered_*` like any sent note. Every other
+    // reader of this table skips these rows (isQuoteRow).
+    origin: v.optional(v.literal("quote")),
+    message_id: v.optional(v.id("messages")),
+    block_index: v.optional(v.number()),
+    // The quoted text and where it sat (shared/comments/proseAnchor.ts).
+    prose_anchor: v.optional(proseAnchorValidator),
+    verdict: v.optional(v.union(v.literal("approve"), v.literal("cut"))),
     // ── Findings as promises (fix loop) ──
     // A line reviewer's finding, or a person's note, that was fixed, deferred
     // or rejected. A deferred finding is a promise: it needs an owner (a user
@@ -3675,7 +3784,8 @@ export default defineSchema({
     .index("by_sent_conversation_answered", ["sent_to_conversation_id", "answered_at"])
     .index("by_conversation", ["conversation_id"])
     .index("by_task", ["task_id"])
-    .index("by_parent", ["parent_id"]),
+    .index("by_parent", ["parent_id"])
+    .index("by_author_client_id", ["author_user_id", "client_id"]),
 
   // External activity as first class events: one row per commit, push, PR
   // change, review, check result, merge, merge-state change, code comment,
@@ -4572,6 +4682,14 @@ export default defineSchema({
     // (owner, resolved_at) instead of scanning the whole table — the scan made
     // that live per-daemon subscription re-run on every other user's writes.
     owner_user_id: v.optional(v.id("users")),
+    // Claude Code's permission_suggestions for this call (PermissionUpdate
+    // objects, as the PermissionRequest hook handed them over). The card shows
+    // them as the rules "Always allow" would add.
+    suggestions: v.optional(v.array(v.any())),
+    // The answer beyond approve/deny: the reason a denial sends the model, and
+    // whether an approval keeps the suggested rules.
+    deny_message: v.optional(v.string()),
+    remember: v.optional(v.boolean()),
   })
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_session", ["session_id"])
@@ -4799,7 +4917,8 @@ export default defineSchema({
     .index("by_category_status_created", ["category", "status", "created_at"])
     // org.health and the analyzer inputs: one workspace's week, member by
     // member, never the deployment's newest rows.
-    .index("by_user_status_created", ["user_id", "status", "created_at"]),
+    .index("by_user_status_created", ["user_id", "status", "created_at"])
+    .index("by_user_status_resolved", ["user_id", "status", "resolved_at"]),
 
   // One row per person a decision is visible to (D2): the queue reads
   // (user, pending) here and joins the decision. `done` once the decision is
@@ -4809,8 +4928,12 @@ export default defineSchema({
     user_id: v.id("users"),
     status: v.union(v.literal("pending"), v.literal("done")),
     created_at: v.number(),
+    // When status last changed: the recently handled reads take a window of
+    // done rows by index instead of every row a person was ever asked.
+    status_at: v.optional(v.number()),
   })
     .index("by_user_status", ["user_id", "status"])
+    .index("by_user_status_at", ["user_id", "status", "status_at"])
     .index("by_decision", ["decision_id"]),
 
   // An ordered set of decisions one person clears in one sitting (D5).
@@ -5409,6 +5532,23 @@ export default defineSchema({
     // Trial projects (lineTrial.priceRunsTick prices their runs).
     .index("by_trial_since", ["line_trial.since"]),
 
+  // How many of a project's board tasks sit in one (workspace, status) bucket,
+  // kept by the write interceptor (lib/projectTaskCounts.ts) so a project list
+  // never reads the tasks themselves.
+  project_task_counts: defineTable({
+    project_id: v.id("projects"),
+    workspace: v.string(),
+    status: v.string(),
+    count: v.number(),
+  }).index("by_bucket", ["project_id", "workspace", "status"]),
+
+  // Single row: the backfill cursor for project_task_counts (tasks created at
+  // or before `through` are counted; `done` once the backfill caught up).
+  project_task_count_state: defineTable({
+    through: v.number(),
+    done: v.boolean(),
+  }),
+
   // An initiative (docs/architecture/initiatives-projects-role-page.md I1): a
   // goal the company is trying to reach, carried by an intentional set of
   // projects, with one owner who drives it. The row shape is
@@ -5652,11 +5792,9 @@ export default defineSchema({
   // Vault (docs/architecture/vault.md): the team's keys, logins, files and
   // saved browser sign-ins, one row per secret. `workspace` is ACCESS (a team
   // secret is every member's, a personal one its owner's); team_id is routing.
-  // value_enc is the payload JSON encrypted under the deployment's connection
-  // key with the workspace in its derivation (secrets.ts), so a row moved to
-  // another workspace no longer decrypts. No query returns it; values leave
-  // only through secrets.reveal and secrets.cliRead, each recording an event.
-  // A `requested` row is an agent's ask with no value yet.
+  // The value lives in secret_values (value_id), never on this row, so the
+  // list and every metadata read load no ciphertext. A `requested` row is an
+  // agent's ask with no value yet.
   secrets: defineTable({
     workspace: v.string(),
     team_id: v.optional(v.id("teams")),
@@ -5664,9 +5802,17 @@ export default defineSchema({
     name: v.string(),
     kind: v.union(v.literal("key"), v.literal("login"), v.literal("signin"), v.literal("file")),
     status: v.union(v.literal("ready"), v.literal("requested")),
+    // The current value (secret_values). value_enc is the LEGACY inline
+    // ciphertext of rows written before the split; secrets.moveValuesOut
+    // moves it there.
+    value_id: v.optional(v.id("secret_values")),
     value_enc: v.optional(v.string()),
     env: v.optional(v.array(v.string())),
     sites: v.optional(v.array(v.string())),
+    // A sign-in whose sites or cookies an api token set with no person
+    // vouching: whose token it was. Only that user's browsers sign in with it
+    // or write it back until a person sets its sites (secrets.ts scopedBy).
+    sites_by_token: v.optional(v.id("users")),
     note: v.optional(v.string()),
     // First 4 and last 4 of a key (shared/contracts/secrets fingerprint).
     fingerprint: v.optional(v.string()),
@@ -5676,46 +5822,110 @@ export default defineSchema({
     created_at: v.number(),
     updated_by: v.optional(v.id("users")),
     updated_at: v.number(),
+    // When the VALUE last changed (create, rotate, fill, refresh, restore):
+    // the version a sign-in's write-back names. updated_at also moves on a
+    // metadata edit and is for display. Absent on rows written before it;
+    // updated_at stands in until the next write.
+    value_updated_at: v.optional(v.number()),
     rotated_at: v.optional(v.number()),
     last_used_at: v.optional(v.number()),
     last_used_by_conversation: v.optional(v.id("conversations")),
     use_count: v.optional(v.number()),
-    // A request (`cast vault request`): who asked, from which session, and why.
+    // A request (`cast vault request`): who asked first, from which session,
+    // and why. Every later session that asks for the same name is added to
+    // also_requested_from, and the fill wakes them all.
     requested_by: v.optional(v.id("users")),
     requested_from_conversation: v.optional(v.id("conversations")),
+    also_requested_from: v.optional(v.array(v.id("conversations"))),
     request_why: v.optional(v.string()),
+    // A login with a 2FA seed, set when the value is written (never by decrypting on read).
+    has_otp: v.optional(v.boolean()),
+    // Ask first: an agent's read needs a person's approval per session (secret_approvals).
+    ask_first: v.optional(v.boolean()),
+    // How many previous values secret_versions holds for it, kept by every write that moves one.
+    version_count: v.optional(v.number()),
   })
     .index("by_workspace", ["workspace"])
     .index("by_workspace_name", ["workspace", "name"])
     .index("by_short_id", ["short_id"]),
 
+  // A secret's previous values: rotate (and a fulfill over a stored value)
+  // keeps the old ciphertext here for 7 days so a person can restore it
+  // (secrets.restore); a cron purges the expired ones. A sign-in's cookie
+  // refresh writes no version. Bound to its workspace like the row's own.
+  secret_versions: defineTable({
+    secret_id: v.id("secrets"),
+    workspace: v.string(),
+    // The kept value (secret_values); value_enc is the LEGACY inline copy.
+    value_id: v.optional(v.id("secret_values")),
+    value_enc: v.optional(v.string()),
+    fingerprint: v.optional(v.string()),
+    signin_expires_at: v.optional(v.number()),
+    has_otp: v.optional(v.boolean()),
+    rotated_at: v.number(),
+    rotated_by: v.id("users"),
+    expires_at: v.number(),
+  })
+    .index("by_secret", ["secret_id", "rotated_at"])
+    .index("by_expires_at", ["expires_at"]),
+
+  // Every ciphertext a secret holds, current or kept: the payload JSON
+  // encrypted under the deployment's connection key with the workspace in its
+  // derivation (secrets.ts), so a value moved to another workspace no longer
+  // decrypts. A row of its own so that a metadata read never loads up to
+  // SECRET_PAYLOAD_MAX of ciphertext per secret: only the value paths (reveal,
+  // cliRead, the redaction feed, a rotate's merge) read it, by id. No query
+  // returns it.
+  secret_values: defineTable({
+    secret_id: v.id("secrets"),
+    workspace: v.string(),
+    value_enc: v.string(),
+  }).index("by_secret", ["secret_id"]),
+
+  // Ask first, per session: an agent's read of an ask_first secret files a
+  // decision on its conversation (pending); a person's Approve makes it
+  // approved for that conversation while it is active, for
+  // SECRET_APPROVAL_TTL_MS at most (`at` is when it was approved), Deny
+  // denied. A new value or an Ask first switch clears a secret's approvals.
+  // The decision is the audit.
+  secret_approvals: defineTable({
+    secret_id: v.id("secrets"),
+    workspace: v.string(),
+    conversation_id: v.id("conversations"),
+    decision_id: v.id("session_decisions"),
+    status: v.union(v.literal("pending"), v.literal("approved"), v.literal("denied")),
+    approved_by: v.optional(v.id("users")),
+    at: v.number(),
+  })
+    .index("by_secret_conversation", ["secret_id", "conversation_id"])
+    .index("by_decision", ["decision_id"]),
+
   // Vault's audit trail: every create, change, reveal, agent read and request
   // of a secret, with who and from which session. Kept after the secret is
   // deleted (secret_name says what it was). Only the secret's panel reads it.
+  // Rows with no secret are the workspace-wide redaction_sync counts of
+  // earlier daemon fetches: none are written now, and nothing reads them.
   secret_events: defineTable({
-    secret_id: v.id("secrets"),
+    secret_id: v.optional(v.id("secrets")),
     workspace: v.string(),
-    secret_name: v.string(),
-    kind: v.union(
-      v.literal("created"),
-      v.literal("updated"),
-      v.literal("rotated"),
-      v.literal("revealed"),
-      v.literal("read"),
-      v.literal("injected"),
-      v.literal("signed_in"),
-      v.literal("refreshed"),
-      v.literal("requested"),
-      v.literal("fulfilled"),
-      v.literal("deleted"),
-    ),
+    secret_name: v.optional(v.string()),
+    // So the trail stays findable by sec-N after the secret is deleted.
+    secret_short_id: v.optional(v.string()),
+    kind: v.union(...SECRET_EVENT_KINDS.map((k) => v.literal(k))),
     actor_user_id: v.optional(v.id("users")),
     conversation_id: v.optional(v.id("conversations")),
     // What an agent read it for: get, run, env, otp or signin.
     purpose: v.optional(v.string()),
+    // The approval decision an ask_first read filed or that settled it.
+    decision_id: v.optional(v.id("session_decisions")),
+    // Those old workspace-wide rows: how many values the daemon received.
+    count: v.optional(v.number()),
     at: v.number(),
   })
     .index("by_secret_at", ["secret_id", "at"])
+    // Whether a value reached a user since it was written (secrets.ts reachedUser).
+    .index("by_secret_actor_kind_at", ["secret_id", "actor_user_id", "kind", "at"])
+    .index("by_short_id_at", ["secret_short_id", "at"])
     .index("by_workspace_at", ["workspace", "at"]),
 
   // What a mod's local half published ($.publish): one value per mod and key,
@@ -6063,6 +6273,8 @@ export default defineSchema({
 
     // Session linkage
     conversation_ids: v.optional(v.array(v.id("conversations"))),
+    // conversation_ids[0], indexed (lib/accessKeys.ts firstLinkedConversationStamp).
+    first_linked_conversation: v.optional(v.id("conversations")),
     created_from_conversation: v.optional(v.id("conversations")),
     created_from_insight: v.optional(v.id("session_insights")),
     // The call this task was pulled from (a transcripts row). Set by `cast
@@ -6297,6 +6509,7 @@ export default defineSchema({
     .index("by_workspace", ["workspace"])
     // A workspace's tasks touched in a trailing window (page data readers).
     .index("by_workspace_updated", ["workspace", "updated_at"])
+    .index("by_workspace_status", ["workspace", "status"])
     // LE6: the open causes in a whole workspace role's boundary.
     .index("by_workspace_source_status", ["workspace", "source", "status"])
     // LE5: the open causes no one has grounded yet (readiness unset), which
@@ -6311,6 +6524,7 @@ export default defineSchema({
     // their scored value, so the queue reads its head without the backlog.
     .index("by_workspace_source_status_readiness_score", ["workspace", "source", "status", "readiness", "cause.scored.score"])
     .index("by_created_from_conversation", ["created_from_conversation"])
+    .index("by_first_linked_conversation", ["first_linked_conversation"])
     .index("by_from_call", ["from_call"])
     .index("by_user_insight", ["user_id", "created_from_insight"])
     .index("by_workflow_run", ["workflow_run_id"])
@@ -6583,6 +6797,8 @@ export default defineSchema({
     task_ids: v.optional(v.array(v.id("tasks"))),
     conversation_id: v.optional(v.id("conversations")),
     related_conversation_ids: v.optional(v.array(v.id("conversations"))),
+    // related_conversation_ids[0], indexed (lib/accessKeys.ts firstLinkedConversationStamp).
+    first_linked_conversation: v.optional(v.id("conversations")),
 
     source: v.union(
       v.literal("agent"),
@@ -6648,6 +6864,7 @@ export default defineSchema({
     .index("by_workspace", ["workspace"])
     .index("by_source_file", ["source_file"])
     .index("by_conversation_id", ["conversation_id"])
+    .index("by_first_linked_conversation", ["first_linked_conversation"])
     .index("by_share_token", ["share_token"])
     .searchIndex("search_docs_v2", {
       searchField: "title",
@@ -8646,7 +8863,9 @@ export default defineSchema({
     // placeholder: a reply in a thread the anchor follows woke it without
     // addressing it, and the anchor decides whether to speak; "passed" is its
     // decision to stay quiet. Neither renders anywhere and neither counts as a
-    // reply — see @codecast/shared/chat isSilentAgentRow.
+    // reply — see @codecast/shared/chat isSilentAgentRow. A session handed a
+    // chat line gets a "thinking" row of its own (chatSessionReplies), closed
+    // as a "passed" tombstone when it answers elsewhere or not at all.
     agent_status: v.optional(v.union(
       v.literal("thinking"),
       v.literal("streaming"),
@@ -8699,6 +8918,9 @@ export default defineSchema({
     .index("by_channel_created", ["channel_id", "created_at"])
     .index("by_thread_created", ["thread_root_id", "created_at"])
     .index("by_channel_client_id", ["channel_id", "client_id"])
+    // A session's open "thinking" rows (chatSessionReplies): found when its
+    // reply lands or its turn ends, without scanning the channel.
+    .index("by_origin_session_status", ["origin_session_id", "agent_status"])
     // A Slack event about a line WE posted (a reply under it, a reaction, an
     // edit) names our stamped ts, not the derived inbound client id, so the
     // outbound stamp needs its own lookup (slackSync.findMirroredRow).

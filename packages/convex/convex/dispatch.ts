@@ -7,7 +7,7 @@ import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
 import { relateCore } from "./taskLinks";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
-import { guardClientResolution, hostedAnswerRefusal, passCore, type PassTarget, unassignCore, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
+import { answerRefusal, guardClientResolution, passCore, type PassTarget, unassignCore, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { discussCore } from "./decisionDiscussion";
 import { sendLineChatCore } from "./lineChat";
@@ -16,7 +16,8 @@ import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceSnippet, performSetProviderKey } from "./devices";
+import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceSnippet, performRequestDeviceUpdate, performSetProviderKey } from "./devices";
+import { performJoinTeamHost, performRemoveTeamHostMember, performRenameTeamHost, performUnregisterTeamHost } from "./teamHosts";
 import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/contracts";
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
@@ -43,6 +44,7 @@ import { deleteSessionAsOwner } from "./sessionDelete";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { startHostedConversationFor } from "./assistant/entry";
+import { parseQuoteDrafts, quotesWaiting, removeQuotes, saveQuotes, stampQuotesSent } from "./quoteDrafts";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser, reorderQueuedForUser, mergeQueuedForUser, releaseQueuedForUser } from "./pendingMessages";
 import { enqueueCloudSpawn, performCloudHostAction, performSetCloudAutoscale, performSetLocalMirror } from "./cloud";
 import type { CloudHostAction, LocalMirrorMode, MirrorResolve } from "@codecast/shared/contracts";
@@ -485,11 +487,13 @@ export async function applyPatches(
         }
         if (!permitted) continue;
         if (table === "session_decisions" && safe.status !== "answered" && safe.status !== "dismissed") continue;
-        // A hosted assistant's question is answered by its owner only. The
-        // refusal throws, so the outbox treats it as permanent and the client
-        // takes its painted answer back instead of showing it as answered.
+        // A hosted assistant's question is answered by its owner only, and a
+        // Vault Ask first one by the asking session's owner, whose Approve
+        // takes a passkey grant. The refusal
+        // throws, so the outbox treats it as permanent and the client takes
+        // its painted answer back instead of showing it as answered.
         if (table === "session_decisions") {
-          const refusal = await hostedAnswerRefusal(ctx as any, doc as any, { kind: "user", id: String(userId), user_id: userId });
+          const refusal = await answerRefusal(ctx as any, doc as any, { kind: "user", id: String(userId), user_id: userId, signed_in: true }, { status: safe.status, answer_index: safe.answer_index });
           if (refusal) throw new Error(refusal);
         }
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
@@ -697,6 +701,27 @@ async function linkConversationToObject(
     await addConversationToWorkItem(ctx, userId, "plan", plan, conversationId);
     return;
   }
+}
+
+/** A side effect whose function answers a refusal as { error }: throw it, so the rail reads it as refused. */
+function refuseOnError<T>(res: T): T {
+  const error = (res as { error?: unknown } | null)?.error;
+  if (typeof error === "string") throw new Error(error);
+  return res;
+}
+
+/**
+ * A Vault write from the web, run only while its row exists. A stub that never
+ * reached the server has nothing to change there. A row deleted since the
+ * write was queued (another window, the CLI, a decline) already holds what a
+ * delete wanted and leaves an edit nothing to land on, and the list snapshot
+ * drops it from the client too: the write settles quietly, where a refusal
+ * would toast about an action that did no harm.
+ */
+async function liveSecretWrite(ctx: HandlerCtx, id: string, write: () => Promise<unknown>) {
+  const rowId = opsRowId(ctx, "secrets", id);
+  if (!rowId || !(await ctx.db.get(rowId))) return;
+  return refuseOnError(await write());
 }
 
 const SIDE_EFFECTS: Record<string, HandlerFn> = {
@@ -1373,9 +1398,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   sendMessage: async (
     ctx,
     userId,
-    [convId, content, imageIds, clientId]: [string, string, string[] | undefined, string | undefined],
+    // quoteIds: the composer quotes the message carries (quoteDrafts.ts), sent
+    // only by builds with the quote record on. Older builds send four args.
+    [convId, content, imageIds, clientId, quoteIds]: [string, string, string[] | undefined, string | undefined, string[] | undefined],
     result,
   ) => {
+    const quoteClientIds = Array.isArray(quoteIds) && quoteIds.length ? quoteIds : undefined;
     if (hasReceiptCommandId(result)) {
       const commandId = receiptCommandId("sendMessage", result);
       return await ctx.runMutation!(api.pendingMessages.sendMessageV2, {
@@ -1384,6 +1412,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         conversation_id: convId as Id<"conversations">,
         content,
         ...(imageIds?.length ? { image_storage_ids: imageIds as Id<"_storage">[] } : {}),
+        ...(quoteClientIds ? { quote_client_ids: quoteClientIds } : {}),
       });
     }
     const conversation = await ctx.db.get(convId as Id<"conversations">);
@@ -1401,12 +1430,29 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     // Single canonical writer: dedups on client_id, stamps owner_user_id for the daemon's
     // delivery poll, and wakes the conversation (un-dismiss, completed→active).
-    return await enqueuePendingMessage(ctx, conversation, userId, {
+    const stampQuotes = quoteClientIds && clientId ? quoteClientIds : undefined;
+    const waiting = await quotesWaiting(ctx, conversation._id, stampQuotes);
+    const queued = await enqueuePendingMessage(ctx, conversation, userId, {
       content,
       image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
       client_id: clientId,
       human: true,
     });
+    if (stampQuotes) await stampQuotesSent(ctx, userId, conversation._id, clientId!, stampQuotes, waiting);
+    return queued;
+  },
+  // The composer's quote batch, mirrored (quoteDrafts.ts). The batch itself is
+  // local; these keep its server twin in step. A quote on a conversation that
+  // has no server row yet has nothing to attach to and is skipped.
+  saveQuoteDrafts: async (ctx, userId, [convId, raw]: [string, unknown]) => {
+    const drafts = parseQuoteDrafts(raw);
+    if (!isServerId(convId) || drafts.length === 0) return;
+    return await saveQuotes(ctx, userId, convId as Id<"conversations">, drafts);
+  },
+  removeQuoteDrafts: async (ctx, userId, [clientIds]: [unknown]) => {
+    const ids = Array.isArray(clientIds) ? clientIds.filter((id): id is string => typeof id === "string") : [];
+    if (ids.length === 0) return;
+    return await removeQuotes(ctx, userId, ids);
   },
 
   // Runner or second-party owner; runner-addressed, deduplicated, and re-queues
@@ -1450,6 +1496,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // on the roster draft; device_shares is the server home of that fact.
   setDeviceShares: async (ctx, userId, [deviceId, teamIds]: [string, string[]]) =>
     performSetDeviceShares(ctx as any, userId, deviceId, teamIds),
+  // Team machines (teamHosts.ts): the web paints the teamMachines rows; the
+  // server writes the member row and queues the admin daemon's work.
+  joinTeamMachine: async (ctx, userId, [hostId, opts]: [string, { linux_user?: string } | undefined]) =>
+    performJoinTeamHost(ctx as any, userId, hostId as Id<"team_hosts">, opts ?? {}),
+  removeTeamMachineMember: async (ctx, userId, [memberId]: [string]) =>
+    performRemoveTeamHostMember(ctx as any, userId, memberId as Id<"team_host_members">),
+  renameTeamMachine: async (ctx, userId, [hostId, name]: [string, string]) =>
+    performRenameTeamHost(ctx as any, userId, hostId as Id<"team_hosts">, name),
+  unregisterTeamMachine: async (ctx, userId, [hostId]: [string]) =>
+    performUnregisterTeamHost(ctx as any, userId, hostId as Id<"team_hosts">),
   // A snippet or machine setting switched on one device: the web paints the
   // roster row's settings; the device's apply_snippet command does the rest.
   setDeviceSnippet: async (ctx, userId, [deviceId, change]: [string, DeviceSnippetChange]) =>
@@ -1458,6 +1514,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // row's managed ids; the key itself travels sealed to the device.
   setProviderKey: async (ctx, userId, [deviceId, change]: [string, ProviderKeyCommand]) =>
     performSetProviderKey(ctx as any, userId, deviceId, change),
+  // Settings > Daemon's Update: the web paints the row's request; the row
+  // itself is what the device's next beat picks up.
+  requestDeviceUpdate: async (ctx, userId, [deviceId]: [string]) =>
+    performRequestDeviceUpdate(ctx as any, userId, deviceId),
 
   linkConversation: async (ctx, userId, [objectType, objectId, conversationId]: [string, string, string]) => {
     await linkConversationToObject(
@@ -1934,6 +1994,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(id)) return;
     await (ctx as any).runMutation(api.agentDefinitions.removeChain, { id });
   },
+  // Vault metadata edits and deletes; no value ever rides this rail. The
+  // secrets functions answer a refusal as { error } for the CLI; here it
+  // throws, so the outbox reads it as permanent and the client takes its paint
+  // back. A row that is gone settles quietly instead (liveSecretWrite).
+  updateSecretMeta: async (ctx, userId, [id, fields]: [string, Record<string, any>]) =>
+    liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.updateMeta, { ref: id, ...fields })),
+  // A decline names "requested": a request filled since then is kept (secrets.remove).
+  removeSecret: async (ctx, userId, [id, only]: [string, "requested" | undefined]) =>
+    liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.remove, { ref: id, ...(only ? { only } : {}) })),
+  setSecretAskFirst: async (ctx, userId, [id, askFirst]: [string, boolean]) =>
+    liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setAskFirst, { ref: id, ask_first: askFirst })),
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,
@@ -2122,10 +2193,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
 
   // The client already removed the permission card (store resolvePermission).
-  resolvePermission: async (ctx, _userId, [permissionId, status]: [string, "approved" | "denied"]) => {
+  resolvePermission: async (ctx, _userId, [permissionId, status, opts]: [string, "approved" | "denied", { message?: string; remember?: boolean }?]) => {
     return await (ctx as any).runMutation(api.permissions.updatePermissionStatus, {
       permission_id: permissionId as Id<"pending_permissions">,
       status,
+      ...(opts?.message ? { message: opts.message } : {}),
+      ...(opts?.remember ? { remember: true } : {}),
     });
   },
   // The client already shows the run as running (store respondToGate).
@@ -3078,6 +3151,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   startResourceOffload: async (ctx, _userId, [args], result) => {
     return ctx.runMutation!(api.resourceOffload.start, { ...args, batch_ids: result.batch_ids });
   },
+  requestMoveRehearsals: async (ctx, _userId, [args]) => {
+    return ctx.runMutation!(api.moveRehearsals.request, args);
+  },
   cancelResourceOffload: async (ctx, _userId, [batch_id], result) => {
     return ctx.runMutation!(api.sessionMigrations.cancelBatch, { batch_id, requested_at: result.requested_at });
   },
@@ -3131,5 +3207,6 @@ const SESSION_COMMANDS = {
   sendKeysToSession: api.conversations.sendKeysToSession,
   setPermissionMode: api.conversations.setPermissionMode,
   sendEscapeToSession: api.conversations.sendEscapeToSession,
+  stopAndSendToSession: api.conversations.stopAndSendToSession,
   resumeSession: api.users.resumeSession,
 };

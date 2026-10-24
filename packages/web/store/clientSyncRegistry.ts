@@ -491,14 +491,12 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     workspaceScoped: true,
     // Liberal delta cache like the others; a snapshot here was the one
-    // remaining collection that pruned by absence. The member counts are joined
-    // from tasks/plans/docs and move without any scalar on the row changing,
-    // so they must be content-compared or a refetch lands as a no-op. The line
-    // profile (signals.publishProfile) is replaced whole without touching any
-    // scalar, so it is content-compared for the same reason. A create paints
+    // remaining collection that pruned by absence. The line profile
+    // (signals.publishProfile) is replaced whole without touching any scalar,
+    // so it is content-compared or a refetch lands as a no-op. A create paints
     // a stub keyed by its `client_key`; the server row carrying the same key
     // supersedes it.
-    sync: { isDelta: true, altKey: "client_key", deepFields: ["task_counts", "line_profile"] },
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["line_profile"] },
   },
   // Initiatives (initiatives-projects-role-page.md I1). SNAPSHOT, not delta:
   // initiatives.webList returns the complete visible set of the workspace, so
@@ -754,6 +752,31 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, name",
     sync: { altKey: "client_key" },
     feeds: ["agentDefinitions.list"],
+  },
+  // Vault (docs/architecture/vault.md): secrets' metadata only. Values never
+  // reach the store, IndexedDB or the outbox: create, rotate, fulfill and
+  // reveal call their Convex actions directly. A create paints a stub that
+  // takes its short_id from the action's answer, and the snapshot carrying
+  // that short_id supersedes it. A few small rows, hydrated before first paint
+  // so a returning Vault never paints empty while its cache loads.
+  secrets: {
+    persistence: { kind: "collection", key: "secrets" },
+    localFirst: true,
+    workspaceScoped: true,
+    indexes: "_id, name",
+    sync: { altKey: "short_id" },
+    feeds: ["secrets.list"],
+  },
+  // A secret's history in its detail panel: per secret opened, one row for its
+  // activity (`events:<id>`) and one for its previous values (`versions:<id>`),
+  // each holding the query's answer in `rows`. Metadata only, as in the list;
+  // no value is ever in either answer. Delta: each panel feeds its own rows and
+  // must not evict another secret's.
+  secretHistory: {
+    persistence: { kind: "collection", key: "secretHistory" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["rows"] },
+    feeds: ["secrets.events", "secrets.versions"],
   },
   agentChains: {
     persistence: { kind: "collection", key: "agentChains" },
@@ -1184,6 +1207,17 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, pull_request_id, repository, file_path, created_at",
     feeds: ["codeComments.listForPR", "codeComments.listForRef", "codeComments.listForFile"],
   },
+  // The server record of the viewer's composer quotes (convex quoteDrafts.ts),
+  // fed per conversation on screen. Read-only here: the composer's batch
+  // (reviewComments) is where a quote is written while it waits, and these
+  // rows say what became of it once its message went: sent, then answered.
+  quoteDrafts: {
+    persistence: { kind: "collection", key: "quoteDrafts" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    indexes: "_id, conversation_id, client_id",
+    feeds: ["quoteDrafts.listForConversation"],
+  },
   // A project's update posts, each with its comment thread embedded, fed for
   // the project on screen (projectUpdates.webList returns its complete set,
   // so the feeder prunes absent rows of that project). A post renders from
@@ -1376,6 +1410,15 @@ export const CLIENT_SYNC_REGISTRY = {
   machineRoster: {
     persistence: { kind: "meta", key: "machineRoster" },
     feeds: ["devices.listDevices"],
+  },
+  // Team machines on the viewer's teams, with members and load
+  // (teamHosts.list, the complete set). Persisted so Settings and the machine
+  // menu paint the cached rows on open; joins and removals write through the
+  // same-named dispatch side effects (joinTeamMachine, removeTeamMachineMember).
+  teamMachines: {
+    persistence: { kind: "meta", key: "teamMachines" },
+    feeds: ["teamHosts.list"],
+    writtenBy: ["teamHosts"],
   },
   // The viewer's notification list (notifications.list, the complete recent
   // set, so a snapshot). Persisted so the phone's Notifications tab and its
@@ -1940,6 +1983,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   issueSyncSources: "shared",
   agentDefinitions: "shared",
   agentChains: "shared",
+  secrets: "shared",
+  secretHistory: "shared",
   workflows: "shared",
   workflowRuns: "shared",
   signals: "shared",
@@ -1981,6 +2026,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   commits: "shared",
   pullRequests: "shared",
   codeComments: "shared",
+  quoteDrafts: "shared",
   projectUpdates: "shared",
   externalEvents: "shared",
   changeStories: "shared",
@@ -1999,6 +2045,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   pendingMessageStatus: "shared",
   messageFeed: "shared",
   machineRoster: "shared",
+  teamMachines: "shared",
   notifications: "shared",
   // Fed in every window by useCallSync (calls are window effects, not host
   // feeders), like the liveRooms roster it is split from.

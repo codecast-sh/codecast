@@ -1,3 +1,4 @@
+import { isWorkflowRunLog } from "./lib/runLog";
 import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
 import { noteWriteCause } from "./lifecycleEvents";
 import type { RegisteredMutation } from "convex/server";
@@ -35,6 +36,7 @@ import { countersFor } from "./lib/orgCaps";
 import { liveRolesByHandle } from "./lib/orgAccess";
 import { byQueueOrder, isWaitingInQueue, queueAtBefore, queueOrder } from "./lib/sessionQueue";
 import { formatJointMessage, jointPartsOf, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
+import { quotesWaiting, stampQuotesSent } from "./quoteDrafts";
 
 export {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -462,7 +464,11 @@ export async function enqueuePendingMessage(
     });
   }
 
-  if (fields.hold || (fields.defer && !conversation.standing_role_id)) {
+  // A run's own log has no agent: a turn there would only start a fresh one
+  // that asks what it is for (jx73gnf, 2026-10-23). Whatever is sent stays on
+  // its record and wakes nothing. The run's gates are answered by their own
+  // mutation (respondToGate), never through here.
+  if (fields.hold || (fields.defer && !conversation.standing_role_id) || isWorkflowRunLog(conversation)) {
     return await insertEnqueuedPendingMessage(ctx, {
       conversationId: conversation._id,
       fromUserId,
@@ -669,12 +675,16 @@ export const sendMessageV2 = mutation({
     content: v.string(),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
     client_id: v.string(),
+    // The composer quotes this message carries (quoteDrafts.ts): stamped sent
+    // here, in the transaction that queues it.
+    quote_client_ids: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
     const imageStorageIds = args.image_storage_ids?.length
       ? args.image_storage_ids
       : undefined;
+    const quoteClientIds = args.quote_client_ids?.length ? args.quote_client_ids : undefined;
     return runLocalCommand(ctx, {
       principalId: userId,
       commandId: args.command_id,
@@ -684,6 +694,9 @@ export const sendMessageV2 = mutation({
         content: args.content,
         imageStorageIds,
         clientId: args.client_id,
+        // Only when present, so a send without quotes keeps the fingerprint
+        // every earlier receipt was written with.
+        ...(quoteClientIds ? { quoteClientIds } : {}),
       },
     }, async () => {
       if (args.command_id !== args.client_id) {
@@ -757,6 +770,7 @@ export const sendMessageV2 = mutation({
         };
       }
 
+      const waiting = await quotesWaiting(ctx, conversation._id, quoteClientIds);
       if (!existing) {
         await enqueuePendingMessage(ctx, conversation, userId, {
           content: args.content,
@@ -765,10 +779,14 @@ export const sendMessageV2 = mutation({
           human: true,
         });
       }
+      const quotes = quoteClientIds
+        ? await stampQuotesSent(ctx, userId, conversation._id, args.client_id, quoteClientIds, waiting)
+        : undefined;
       return {
         status: "acknowledged" as const,
         coverageViews: [],
         coverageCommandIds: [messagesCommandCoverageTarget(conversation._id)],
+        ...(quotes ? { result: { quotes } } : {}),
       };
     });
   },
@@ -1285,6 +1303,17 @@ export async function releaseQueuedForUser(ctx: { db: any; scheduler?: any }, us
   }
   return released;
 }
+
+// The daemon's release: a "stop and send" whose Escape found no turn to stop
+// has no settle coming, so the daemon lets the queued row go itself.
+export const releaseQueued = mutation({
+  args: { conversation_id: v.id("conversations"), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Not authenticated");
+    return await releaseQueuedForUser(ctx, userId, args.conversation_id);
+  },
+});
 
 export const reorderQueued = mutation({
   args: { conversation_id: v.id("conversations"), message_id: v.string(), before_id: v.union(v.string(), v.null()) },
