@@ -3,6 +3,7 @@ import { ChevronDown } from "lucide-react";
 import { type Comment, type CommentThread as Thread, commentAuthorName } from "../../lib/commentThread";
 import { CommentCard } from "./CommentCard";
 import { CommentComposer } from "./CommentComposer";
+import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
 
 // One thread (the global conversation thread, or a per-message anchored thread):
 // an optional header, the chat cards oldest→newest, then the composer. Owns the
@@ -49,7 +50,8 @@ export function CommentThread({
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
   const [collapsed, setCollapsed] = useState(false);
 
-  const nameById = new Map(thread.comments.map((c) => [c._id, commentAuthorName(c, currentUserId, agentType)]));
+  const agentName = useConversationSpeaker(conversationId, agentType).name;
+  const nameById = new Map(thread.comments.map((c) => [c._id, commentAuthorName(c, currentUserId, agentName)]));
 
   return (
     <div className={"cc-thread cc-thread-" + variant + (collapsed ? " cc-thread-collapsed" : "")}>
@@ -76,6 +78,7 @@ export function CommentThread({
         )}
         {thread.comments.map((c) => (
           <CommentCard
+            conversationId={conversationId}
             key={c._id}
             comment={c}
             currentUserId={currentUserId}
@@ -84,6 +87,7 @@ export function CommentThread({
             onReply={(rc) => setReplyTo(rc)}
             onEdit={onEdit}
             onDelete={onDelete}
+            onRetryAgent={onAskAgent ? () => onAskAgent(thread.messageId) : undefined}
           />
         ))}
       </div>

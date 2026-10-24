@@ -1141,6 +1141,9 @@ type AskAgentExecution =
     }
   | { ok: false; failure: CommentFailure };
 
+// Test seam: the fork's enqueue, swappable so a failed hand-off is testable.
+export const askAgentDelivery = { enqueue: enqueuePendingMessage };
+
 async function executeAskAgentInThread(
   ctx: MutationCtx,
   userId: Id<"users">,
@@ -1249,38 +1252,47 @@ async function executeAskAgentInThread(
         client_id: args.client_id,
       });
 
-      let forkId: Id<"conversations">;
-      if (existingForkId) {
-        forkId = existingForkId;
-        await ctx.db.patch(forkId, {
-          comment_fork_comment_id: commentId,
-          comment_fork_prompt_at: now,
-        });
-      } else {
-        const fork = await ctx.runMutation(api.conversations.forkFromMessage, {
-          conversation_id: args.conversation_id,
-        });
-        forkId = fork.conversation_id as Id<"conversations">;
-        await ctx.db.patch(forkId, {
-          is_subagent: true,
-          parent_conversation_id: args.conversation_id,
-          comment_fork_parent: args.conversation_id,
-          comment_fork_message_id: args.message_id?.toString(),
-          comment_fork_comment_id: commentId,
-          comment_fork_prompt_at: now,
-          title: "Comment thread reply",
-        });
-      }
-      await writer.patch(commentId, { fork_conversation_id: forkId });
+      // A fork or enqueue that fails leaves no agent to answer, so the
+      // placeholder says so ("error") instead of reading "thinking" forever;
+      // the thread offers a retry.
+      let forkId: Id<"conversations"> | undefined;
+      try {
+        if (existingForkId) {
+          forkId = existingForkId;
+          await ctx.db.patch(forkId, {
+            comment_fork_comment_id: commentId,
+            comment_fork_prompt_at: now,
+          });
+        } else {
+          const fork = await ctx.runMutation(api.conversations.forkFromMessage, {
+            conversation_id: args.conversation_id,
+          });
+          forkId = fork.conversation_id as Id<"conversations">;
+          await ctx.db.patch(forkId, {
+            is_subagent: true,
+            parent_conversation_id: args.conversation_id,
+            comment_fork_parent: args.conversation_id,
+            comment_fork_message_id: args.message_id?.toString(),
+            comment_fork_comment_id: commentId,
+            comment_fork_prompt_at: now,
+            title: "Comment thread reply",
+          });
+        }
+        await writer.patch(commentId, { fork_conversation_id: forkId });
 
-      const forkConversation = await ctx.db.get(forkId);
-      if (forkConversation) {
-        await enqueuePendingMessage(ctx, forkConversation, userId, {
+        const forkConversation = await ctx.db.get(forkId);
+        if (!forkConversation) throw new Error("The reply session is gone");
+        await askAgentDelivery.enqueue(ctx, forkConversation, userId, {
           content: prompt,
           // Fenced execution requires a retry-stable delivery identity. The
           // authoritative placeholder id is stable across command replay and
           // cannot be supplied or poisoned by the client.
           client_id: `comment-agent:${commentId}`,
+        });
+      } catch (error) {
+        await writer.patch(commentId, {
+          agent_status: "error",
+          content: `Could not reach the agent: ${error instanceof Error ? error.message : String(error)}`,
         });
       }
       return { commentId, forkConversationId: forkId };

@@ -12,6 +12,7 @@ import {
 import { CommentCard } from "./CommentCard";
 import { CommentComposer } from "./CommentComposer";
 import { PingAgentButton } from "./PingAgentButton";
+import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
 import { AnchorPlacementNote, placementBorderClass } from "./AnchorPlacementNote";
 import type { AnchorPlacement } from "@codecast/shared/comments";
 
@@ -47,7 +48,8 @@ function FileLineThreadImpl({
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
 
   const agentBusy = comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));
-  const nameById = new Map(comments.map((c) => [c._id, commentAuthorName(c, currentUserId)]));
+  const agentName = useConversationSpeaker(conversationId, agentType).name;
+  const nameById = new Map(comments.map((c) => [c._id, commentAuthorName(c, currentUserId, agentName)]));
   const pingAgent = () => askAgent(undefined, { filePath, lineNumber });
 
   const startReply = (c: Comment) => { setReplyTo(c); setComposing(true); };
@@ -58,6 +60,7 @@ function FileLineThreadImpl({
       <AnchorPlacementNote placement={placement} anchorLines={comments.find((c) => c.anchor_lines)?.anchor_lines} />
       {comments.map((c) => (
         <CommentCard
+          conversationId={conversationId}
           key={c._id}
           comment={c}
           currentUserId={currentUserId}
@@ -66,6 +69,7 @@ function FileLineThreadImpl({
           onReply={startReply}
           onEdit={editComment}
           onDelete={deleteComment}
+          onRetryAgent={pingAgent}
         />
       ))}
 
@@ -95,7 +99,7 @@ function FileLineThreadImpl({
             </button>
           )}
           {isAuthenticated && !agentBusy && (
-            <PingAgentButton agentType={agentType} onClick={pingAgent} />
+            <PingAgentButton conversationId={conversationId} agentType={agentType} onClick={pingAgent} />
           )}
           {isAuthenticated && (
             <button

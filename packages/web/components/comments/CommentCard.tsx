@@ -1,5 +1,5 @@
 import { memo, useLayoutEffect, useRef, useState } from "react";
-import { Reply, Pencil, Trash2, Loader2 } from "lucide-react";
+import { Reply, Pencil, Trash2, Loader2, RotateCcw } from "lucide-react";
 import { relTimeShort } from "../../lib/utils";
 import {
   type Comment,
@@ -11,23 +11,30 @@ import {
 import { CommentAvatar } from "./CommentAvatar";
 import { CommentMarkdown } from "./CommentMarkdown";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
 
 function CommentCardImpl({
   comment,
+  conversationId,
   currentUserId,
   agentType,
   replyingToName,
   onReply,
   onEdit,
   onDelete,
+  onRetryAgent,
 }: {
   comment: Comment;
+  /** The conversation whose agent writes the agent comments. */
+  conversationId: string;
   currentUserId?: string;
   agentType?: string;
   replyingToName?: string;
   onReply: (c: Comment) => void;
   onEdit: (commentId: string, content: string) => void | Promise<void>;
   onDelete: (commentId: string) => void | Promise<void>;
+  /** Ask the agent again; offered on a reply whose hand-off failed. */
+  onRetryAgent?: () => void | Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(comment.content);
@@ -35,9 +42,11 @@ function CommentCardImpl({
 
   const agent = isAgentComment(comment);
   const mine = isOwnComment(comment, currentUserId);
-  const name = commentAuthorName(comment, currentUserId, agentType);
+  const speaker = useConversationSpeaker(conversationId, agentType);
+  const name = commentAuthorName(comment, currentUserId, speaker.name);
   const avatar = commentAuthorAvatar(comment);
   const thinking = agent && comment.agent_status === "thinking";
+  const failed = agent && comment.agent_status === "error";
 
   useLayoutEffect(() => {
     if (!editing) return;
@@ -59,12 +68,14 @@ function CommentCardImpl({
 
   return (
     <div className={"cc-cmt group" + (agent ? " cc-cmt-agent" : " cc-cmt-user")}>
-      <CommentAvatar name={name} image={avatar} isAgent={agent} agentType={agentType} />
+      <CommentAvatar name={name} image={avatar} isAgent={agent} agentType={agentType} identity={speaker.row} />
       <div className="cc-cmt-main">
         <div className="cc-cmt-head">
           <span className="cc-cmt-name">{name}</span>
           {thinking ? (
             <span className="cc-cmt-thinking"><Loader2 className="w-3 h-3 animate-spin" /> thinking…</span>
+          ) : failed ? (
+            <span className="cc-cmt-time text-sol-red">no reply</span>
           ) : (
             <span className="cc-cmt-time">{relTimeShort(comment.created_at)}</span>
           )}
@@ -105,6 +116,20 @@ function CommentCardImpl({
               <CommentMarkdown content={comment.content} />
             </div>
             <div className="cc-cmt-actions">
+              {failed && onRetryAgent && (
+                <button
+                  type="button"
+                  className="cc-comment-btn"
+                  data-comment-agent-retry
+                  onClick={() => {
+                    // The failed placeholder is the asker's row; it gives way to the new ask.
+                    if (currentUserId && comment.user_id === currentUserId) void onDelete(comment._id);
+                    void onRetryAgent();
+                  }}
+                >
+                  <RotateCcw className="w-3 h-3" /> Retry
+                </button>
+              )}
               <button type="button" className="cc-comment-btn" onClick={() => onReply(comment)}>
                 <Reply className="w-3 h-3" /> Reply
               </button>

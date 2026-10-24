@@ -877,6 +877,7 @@ export const comment = httpAction(async (ctx, request) => {
       const flushed = await ctx.runMutation(api.artifacts.deliverPendingComments, {
         slug: String(body.slug ?? ""),
         owner_key: typeof body.owner_key === "string" ? body.owner_key : undefined,
+        ...(body.resolve === true ? { resolve: true } : {}),
       });
       return json(flushed);
     }

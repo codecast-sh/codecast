@@ -17,12 +17,13 @@ import { internalMutation, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
-import { canAccessComment } from "./codeComments";
+import { canAccessComment, setThreadResolved } from "./codeComments";
 import { createDataContext } from "./data";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { normalizeRepository } from "./lib/gitRefs";
 import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
-import { buildReviewBatchPrompt, type ReviewVerdict } from "@codecast/shared/comments";
+import { buildReviewBatchPrompt, deliveredOutcome, type ReviewVerdict, type SendOutcome } from "@codecast/shared/comments";
+import { sessionWaiting } from "./lib/sendOutcome";
 import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 
 /** The notes one author wrote in one worktree, oldest first. */
@@ -249,6 +250,8 @@ export const send = mutation({
     stale_ids: v.optional(v.array(v.id("review_comments"))),
     /** The batch's page, when the caller knows it. */
     url: v.optional(v.string()),
+    /** Resolve the notes once they are sent (`cast review send --resolve`). */
+    resolve: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -266,6 +269,7 @@ export const send = mutation({
       ref: newest.ref ?? undefined,
       url: args.url ?? undefined,
       stale_ids: args.stale_ids,
+      resolve: args.resolve,
     }, conversation);
   },
 });
@@ -277,6 +281,9 @@ export const send = mutation({
  * submitted review (reviews.deliverSubmittedReview) all come through here, so
  * a session reads the same shape whichever surface wrote the notes. A review
  * carries its verdict and summary, and may carry no notes at all.
+ *
+ * `resolve` resolves exactly the rows sent, after the message is queued. A row
+ * that cannot be resolved stays open and the outcome names it; the send stands.
  */
 export async function sendNotesToSession(
   ctx: any,
@@ -291,9 +298,10 @@ export async function sendNotesToSession(
     pullRequest?: { number: number; url?: string | null };
     verdict?: ReviewVerdict;
     summary?: string | null;
+    resolve?: boolean;
   },
   resolved?: Doc<"conversations">,
-): Promise<{ sent: number; conversation_id: Id<"conversations">; short_id?: string; content: string }> {
+): Promise<{ sent: number; conversation_id: Id<"conversations">; short_id?: string; content: string; outcome: SendOutcome }> {
   const conversation = resolved ?? (await findConversationByAnyRef(ctx, conversationRef, userId));
   if (!conversation) throw new Error(`No session matches ${conversationRef}`);
   if (!(await canSendProductMessage(ctx, userId, conversation))) {
@@ -325,6 +333,7 @@ export async function sendNotesToSession(
   // delivered message keeps it, which is how a reply is matched to its batch
   // (lib/reviewAnswered).
   const clientId = `review-batch:${conversation._id}:${rows[0]?._id ?? opts.verdict ?? "review"}:${now}`;
+  const waiting = await sessionWaiting(ctx, conversation._id, now);
   await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true });
   for (const row of rows) {
     await ctx.db.patch(row._id, {
@@ -336,7 +345,28 @@ export async function sendNotesToSession(
     });
   }
 
-  return { sent: rows.length, conversation_id: conversation._id, short_id: conversation.short_id ?? undefined, content };
+  const sentIds = rows.map((r) => String(r._id));
+  const outcome = deliveredOutcome(sentIds, waiting, opts.resolve ? await resolveSentRows(ctx, userId, rows) : undefined);
+  return { sent: rows.length, conversation_id: conversation._id, short_id: conversation.short_id ?? undefined, content, outcome };
+}
+
+/** Resolve each sent note's thread; a refusal leaves that note open and is reported, never thrown. */
+async function resolveSentRows(
+  ctx: any,
+  userId: Id<"users">,
+  rows: Doc<"review_comments">[],
+): Promise<{ open_ids: string[]; reason?: string }> {
+  const open: string[] = [];
+  let reason: string | undefined;
+  for (const row of rows) {
+    try {
+      await setThreadResolved(ctx, userId, row._id, true);
+    } catch (error) {
+      open.push(String(row._id));
+      reason ??= error instanceof Error ? error.message : String(error);
+    }
+  }
+  return { open_ids: open, reason };
 }
 
 /** One note by id, for `cast review rm` / `edit` to confirm before acting. */

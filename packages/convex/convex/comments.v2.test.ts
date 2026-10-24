@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import {
   addCommentV2,
+  askAgentDelivery,
   askAgentInThreadV2,
   countOpenCommentThreads,
   deleteComment,
@@ -759,6 +760,50 @@ describe("comments write-choke coverage", () => {
     expect(forkCalls).toBe(1);
     expect(commentsFor(ctx)).toHaveLength(1);
     expect(ctx.db._tables.pending_messages).toHaveLength(1);
+  });
+
+  test("a fork that fails leaves the placeholder at error, not thinking forever", async () => {
+    const ctx = context(OWNER, { conversations: [conversation()] }, {
+      async runMutation() {
+        throw new Error("fork refused");
+      },
+    });
+    const receipt = await (askAgentInThreadV2 as any)._handler(ctx, {
+      command_id: "ask-agent-fork-fails",
+      conversation_id: CONVERSATION,
+      client_id: "optimistic-fails",
+    });
+    expect(receipt).toMatchObject({ status: "acknowledged" });
+    expect(commentsFor(ctx)).toHaveLength(1);
+    expect(commentsFor(ctx)[0]).toMatchObject({ author_kind: "agent", agent_status: "error" });
+    expect(commentsFor(ctx)[0].content).toContain("fork refused");
+    expect(ctx.db._tables.pending_messages ?? []).toHaveLength(0);
+  });
+
+  test("an enqueue that fails, or a fork that vanished, also writes error", async () => {
+    const forkId = "conversation-comment-fork" as any;
+    const realEnqueue = askAgentDelivery.enqueue;
+    askAgentDelivery.enqueue = (async () => { throw new Error("queue closed"); }) as any;
+    try {
+      const ctx = context(OWNER, { conversations: [conversation(), conversation(forkId)] }, {
+        async runMutation() {
+          return { conversation_id: forkId };
+        },
+      });
+      await (askAgentInThreadV2 as any)._handler(ctx, { command_id: "ask-enqueue-fails", conversation_id: CONVERSATION, client_id: "optimistic-enqueue" });
+      expect(commentsFor(ctx)[0]).toMatchObject({ agent_status: "error", fork_conversation_id: forkId });
+      expect(commentsFor(ctx)[0].content).toContain("queue closed");
+    } finally {
+      askAgentDelivery.enqueue = realEnqueue;
+    }
+
+    const gone = context(OWNER, { conversations: [conversation()] }, {
+      async runMutation() {
+        return { conversation_id: "conversation-never-written" };
+      },
+    });
+    await (askAgentInThreadV2 as any)._handler(gone, { command_id: "ask-fork-gone", conversation_id: CONVERSATION, client_id: "optimistic-gone" });
+    expect(commentsFor(gone)[0]).toMatchObject({ agent_status: "error" });
   });
 
   test("a file:line anchor scopes the agent thread and shows up in the prompt", async () => {

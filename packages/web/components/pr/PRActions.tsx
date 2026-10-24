@@ -31,11 +31,12 @@ import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { formatAcceleratorParts, withShortcut } from "../../shortcuts";
 import { ConfirmButton } from "../integrations/parts";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
-import { prMergeLedger } from "../consequential/ledgers";
+import { prAutoMergeLedger, prMergeLedger, prUpdateBranchLedger } from "../consequential/ledgers";
 import { CodeMenuItem, CodeShareItems } from "../menus/CodeShareItems";
 import { copyText } from "../../lib/copyText";
 import { sharePageUrl } from "../../lib/utils";
 import { useInboxStore } from "../../store/inboxStore";
+import { deliveredOutcome, describeSendOutcome, failedOutcome, type SendOutcome } from "@codecast/shared/comments";
 import { accentVar } from "../../lib/externalEvents";
 import { mergeStateMeta, notePlace, prStateKey, type CodeCommentRow } from "../../lib/prView";
 import { prPageHref, toStandaloneHref } from "../../lib/repoView";
@@ -108,33 +109,86 @@ export function ReviewMenu({
 }) {
   const submit = useAction(api.reviews.submitPending);
   const hand = useMutation(api.reviews.handPendingToSession);
+  const resolveNote = useMutation(api.codeComments.resolve);
   const discard = useMutation(api.codeComments.discardPendingReview);
   const setOpen = onOpenChange;
   const [verdict, setVerdict] = useState<Verdict>("COMMENT");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState<"submit" | "hand" | null>(null);
   const [picking, setPicking] = useState(false);
+  // Send and resolve: the notes leave the review once the session has them.
+  const [resolveOnSend, setResolveOnSend] = useState(false);
+  // A hand-off that did not fully land stays on screen with a retry; the
+  // notes are still in the review either way.
+  const [handResult, setHandResult] = useState<{ outcome: SendOutcome; ref?: string; to?: string } | null>(null);
   const shepherd = pr.shepherd_conversation_id as string | undefined;
 
   const own = authorLogin && pr.author_github_username?.toLowerCase() === authorLogin.toLowerCase();
   const openPr = pr.state === "open";
   const count = notes.length;
 
+  const settle = (outcome: SendOutcome, ref?: string, to?: string) => {
+    if (outcome.kind === "failed" || outcome.kind === "resolve_failed") {
+      setHandResult({ outcome, ref, to });
+      return;
+    }
+    toast.success(describeSendOutcome(outcome, { to }));
+    setHandResult(null);
+    setPicking(false);
+    setOpen(false);
+  };
+
+  const handOff = async (conversationRef?: string) => {
+    setBusy("hand");
+    try {
+      // `resolve` goes only when chosen, so a plain send still works against
+      // a backend that predates it.
+      const result = await hand({ pull_request_id: pr._id, conversation_ref: conversationRef, ...(resolveOnSend ? { resolve: true } : {}) });
+      const outcome: SendOutcome = result?.outcome ?? deliveredOutcome(notes.map((n) => String(n._id)), null);
+      settle(outcome, conversationRef, result?.short_id);
+    } catch (e: any) {
+      settle(failedOutcome(e?.message ?? e), conversationRef);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // The send landed and some notes stayed open: resolve just those.
+  const retryResolve = async (outcome: Extract<SendOutcome, { kind: "resolve_failed" }>, to?: string) => {
+    setBusy("hand");
+    const open: string[] = [];
+    let reason = outcome.reason;
+    for (const id of outcome.open_ids) {
+      try {
+        await resolveNote({ comment_id: id });
+      } catch (e: any) {
+        open.push(id);
+        reason = e?.message ?? reason;
+      }
+    }
+    setBusy(null);
+    settle(deliveredOutcome(outcome.sent_ids, outcome.waiting, { open_ids: open, reason }), undefined, to);
+  };
+
+  const retry = () => {
+    if (!handResult) return;
+    const { outcome, ref, to } = handResult;
+    if (outcome.kind === "resolve_failed") void retryResolve(outcome, to);
+    else void handOff(ref);
+  };
+
   const run = async (kind: "submit" | "hand", conversationRef?: string) => {
+    if (kind === "hand") return handOff(conversationRef);
     setBusy(kind);
     try {
-      if (kind === "submit") {
-        const result = await submit({ pull_request_id: pr._id, event: verdict, body: body.trim() || undefined });
-        const withNotes = count ? ` with ${count} ${count === 1 ? "note" : "notes"}` : "";
-        const toSession = result?.delivered_to?.short_id ? `, delivered to session ${result.delivered_to.short_id}` : "";
-        if (report(result, `Review sent${withNotes}${toSession}`)) {
-          setBody("");
-          setOpen(false);
-        }
-      } else {
-        const result = await hand({ pull_request_id: pr._id, conversation_ref: conversationRef });
-        toast.success(`${result.sent} ${result.sent === 1 ? "note" : "notes"} sent to the session`);
-        setPicking(false);
+      const result = await submit({ pull_request_id: pr._id, event: verdict, body: body.trim() || undefined });
+      const withNotes = count ? ` with ${count} ${count === 1 ? "note" : "notes"}` : "";
+      const delivered = result?.delivered_to;
+      const toSession = delivered?.short_id ? `, delivered to session ${delivered.short_id}` : "";
+      if (report(result, `Review sent${withNotes}${toSession}`)) {
+        // GitHub has the review; a session that could not take it is worth saying.
+        if (delivered?.outcome?.kind === "failed") toast.warning(`The session did not get it: ${delivered.outcome.reason}`);
+        setBody("");
         setOpen(false);
       }
     } catch (e: any) {
@@ -281,6 +335,23 @@ export function ReviewMenu({
         </div>
 
         <div className="px-4 py-2.5 border-t border-sol-border/50 bg-sol-bg-alt/30">
+          {handResult && (
+            <div className="mb-2 flex items-center gap-2 text-[11px] text-sol-red" data-pr-hand-outcome={handResult.outcome.kind}>
+              <span className="min-w-0 flex-1 truncate" title={describeSendOutcome(handResult.outcome, { to: handResult.to })}>
+                {describeSendOutcome(handResult.outcome, { to: handResult.to })}
+              </span>
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={retry}
+                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-sol-red/40 px-2 py-0.5 text-sol-red hover:bg-sol-red/10 disabled:opacity-50 transition-colors"
+                data-pr-hand-retry
+              >
+                <RotateCcw className="w-3 h-3" />
+                {handResult.outcome.kind === "resolve_failed" ? "Resolve again" : "Retry"}
+              </button>
+            </div>
+          )}
           <div className="flex items-center gap-3">
             {count > 0 && (
               <ConfirmButton
@@ -301,6 +372,22 @@ export function ReviewMenu({
               >
                 <Radio className="w-3.5 h-3.5" />
                 {busy === "hand" ? "Sending" : "Send to session"}
+              </button>
+            )}
+            {count > 0 && (shepherd || sessionChoices.length > 0) && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={resolveOnSend}
+                onClick={() => setResolveOnSend((v) => !v)}
+                className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                  resolveOnSend ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/60 text-sol-text-dim hover:text-sol-text"
+                }`}
+                title="Resolve the notes once the session has them: they leave your review and never go to GitHub"
+                data-pr-hand-resolve
+              >
+                {resolveOnSend ? <Check className="w-3 h-3" /> : <span className="w-3" />}
+                and resolve
               </button>
             )}
             <button
@@ -337,9 +424,13 @@ const METHODS: { key: MergeMethod; label: string; hint: string }[] = [
   { key: "rebase", label: "Rebase and merge", hint: "Replay the commits on the base branch" },
 ];
 
-/** Merge: the method is remembered on this device; the branch goes by default. */
+/** Merge: the method is remembered on this device; the branch goes by default.
+ *  Every press is pinned to the head on screen, so GitHub refuses it if the
+ *  branch moved since (an agent pushing while the person reads). */
 export function MergeMenu({ pr }: { pr: any }) {
   const merge = useAction(api.prCli.merge);
+  const autoMerge = useAction(api.prCli.autoMerge);
+  const updateBranch = useAction(api.prCli.updateBranch);
   // The method and the branch choice follow the person, through the same
   // synced preference bag as every other reading habit.
   const method: MergeMethod = useInboxStore((s) => s.clientState.ui?.pr_merge_method) ?? "squash";
@@ -347,26 +438,40 @@ export function MergeMenu({ pr }: { pr: any }) {
   const setMethod = (next: MergeMethod) => useInboxStore.getState().updateClientUI({ pr_merge_method: next });
   const setDeleteBranch = (next: boolean) => useInboxStore.getState().updateClientUI({ pr_delete_branch: next });
   const [busy, setBusy] = useState(false);
-  const [reviewing, setReviewing] = useState(false);
+  const [reviewing, setReviewing] = useState<"merge" | "auto" | "update" | null>(null);
 
   if (prStateKey(pr) !== "open") return null;
   const state = mergeStateMeta(pr);
   const blocked = pr.mergeable === false || pr.mergeable_state === "blocked" || pr.mergeable_state === "dirty";
   const reason = blocked ? state?.label : pr.checks_state === "pending" ? "Checks are still running" : undefined;
+  const behind = pr.mergeable_state === "behind" || (pr.behind_by ?? 0) > 0;
+  const autoOn = !!pr.auto_merge;
+  const methodLabel = METHODS.find((m) => m.key === method)!.label;
+  const target = { repository: pr.repository, number: pr.number, expected_head_sha: pr.head_sha };
 
   // A merge lands on the base branch and is undone only by a revert: every path to it opens the review first.
-  const ask = () => setReviewing(true);
-  const go = async () => {
-    setReviewing(false);
+  const ask = () => setReviewing("merge");
+  const act = async (fn: () => Promise<any>, done: (result: any) => string) => {
+    setReviewing(null);
     setBusy(true);
     try {
-      const result = await merge({ repository: pr.repository, number: pr.number, method, delete_branch: deleteBranch });
-      report(result, result?.branch_deleted ? `Merged, ${pr.head_ref} deleted` : "Merged");
+      const result = await fn();
+      report(result, done(result));
     } catch (e: any) {
-      toast.error(e?.message ?? "Merge refused");
+      toast.error(e?.message ?? "Refused");
     } finally {
       setBusy(false);
     }
+  };
+  const go = {
+    merge: () => act(() => merge({ ...target, method, delete_branch: deleteBranch }), (r) => (r?.branch_deleted ? `Merged, ${pr.head_ref} deleted` : "Merged")),
+    auto: () => act(() => autoMerge({ ...target, enabled: true, method }), () => "Auto-merge on"),
+    update: () => act(() => updateBranch(target), () => `Merged ${pr.base_ref ?? "the base branch"} into ${pr.head_ref ?? "the branch"}`),
+  };
+  const ledger = {
+    merge: () => prMergeLedger({ title: pr.title ?? "", number: pr.number, base: pr.base_ref ?? "the base branch", head: pr.head_ref, headSha: pr.head_sha, method: methodLabel, deleteBranch, files: pr.changed_files, additions: pr.additions, deletions: pr.deletions, checks: pr.checks_state, blockedBy: blocked ? state?.label : undefined }),
+    auto: () => prAutoMergeLedger({ title: pr.title ?? "", number: pr.number, base: pr.base_ref ?? "the base branch", headSha: pr.head_sha, method: methodLabel, checks: pr.checks_state }),
+    update: () => prUpdateBranchLedger({ title: pr.title ?? "", number: pr.number, base: pr.base_ref ?? "the base branch", head: pr.head_ref, headSha: pr.head_sha, behindBy: pr.behind_by }),
   };
 
   return (
@@ -377,11 +482,12 @@ export function MergeMenu({ pr }: { pr: any }) {
         onClick={ask}
         aria-haspopup="dialog"
         data-pr-merge
-        title={reason ? `${reason}. GitHub decides; try anyway from the menu.` : `${METHODS.find((m) => m.key === method)!.label}${deleteBranch ? ", then delete the branch" : ""}`}
+        title={reason ? `${reason}. GitHub decides; try anyway from the menu.` : `${methodLabel}${deleteBranch ? ", then delete the branch" : ""}`}
         className="inline-flex items-center gap-1.5 px-3 py-1 text-[12px] font-medium text-sol-violet hover:bg-sol-violet/10 disabled:opacity-50 transition-colors"
       >
         <GitMerge className="w-3.5 h-3.5" />
-        {busy ? "Merging" : "Merge"}
+        {busy ? "Working" : "Merge"}
+        {autoOn && <span className="rounded-full bg-sol-violet/15 px-1.5 text-[10px]" title={`GitHub merges it once checks pass${pr.auto_merge.enabled_by ? `, set by ${pr.auto_merge.enabled_by}` : ""}`}>auto</span>}
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -411,6 +517,28 @@ export function MergeMenu({ pr }: { pr: any }) {
             {deleteBranch ? <Check className="w-3 h-3 text-sol-cyan" /> : <span className="w-3" />}
             Delete {pr.head_ref ?? "the branch"} after merging
           </DropdownMenuItem>
+          <DropdownMenuSeparator className="bg-sol-border" />
+          {autoOn ? (
+            <DropdownMenuItem
+              className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-text"
+              onClick={() => { void act(() => autoMerge({ ...target, enabled: false }), () => "Auto-merge off"); }}
+              data-pr-auto-merge-off
+            >
+              <Check className="w-3 h-3 text-sol-cyan" />
+              Auto-merge when checks pass
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-text" onClick={() => setReviewing("auto")} data-pr-auto-merge>
+              <span className="w-3" />
+              Auto-merge when checks pass
+            </DropdownMenuItem>
+          )}
+          {behind && (
+            <DropdownMenuItem className="flex items-center gap-2 cursor-pointer text-[12px] text-sol-text" onClick={() => setReviewing("update")} data-pr-update-branch>
+              <GitBranch className="w-3 h-3" />
+              Update branch from {pr.base_ref ?? "base"}
+            </DropdownMenuItem>
+          )}
           {blocked && (
             <>
               <DropdownMenuSeparator className="bg-sol-border" />
@@ -422,11 +550,7 @@ export function MergeMenu({ pr }: { pr: any }) {
         </DropdownMenuContent>
       </DropdownMenu>
       {reviewing && (
-        <SwitchReview
-          ledger={prMergeLedger({ title: pr.title ?? "", number: pr.number, base: pr.base_ref ?? "the base branch", head: pr.head_ref, method: METHODS.find((m) => m.key === method)!.label, deleteBranch, files: pr.changed_files, additions: pr.additions, deletions: pr.deletions, checks: pr.checks_state, blockedBy: blocked ? state?.label : undefined })}
-          onClose={() => setReviewing(false)}
-          onConfirm={go}
-        />
+        <SwitchReview ledger={ledger[reviewing]()} onClose={() => setReviewing(null)} onConfirm={go[reviewing]} />
       )}
     </span>
   );

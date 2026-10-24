@@ -183,3 +183,68 @@ describe("reviewNotes.send", () => {
     expect(batch.map((r: any) => r.content)).toEqual(["what I actually meant"]);
   });
 });
+
+describe("reviewNotes.send outcome", () => {
+  const live = (agent_status: string) => ({ _id: "ms1", conversation_id: CONV, user_id: USER, session_id: "sess-1", pid: 1, started_at: 0, last_heartbeat: Date.now(), agent_status });
+
+  test("an old client's arguments still get every old field, plus the outcome", async () => {
+    const ctx = context(USER, { managed_sessions: [live("idle")] });
+    await addNote(ctx);
+    const result = await (send as any)._handler(ctx, { git_root: ROOT, conversation_ref: "sess-1" });
+    expect(result.sent).toBe(1);
+    expect(result.conversation_id).toBe(CONV);
+    expect(typeof result.content).toBe("string");
+    expect(result.outcome).toEqual({ kind: "sent", sent_ids: [ctx.db._tables.review_comments[0]._id] });
+    // Nothing is resolved unless asked.
+    expect(ctx.db._tables.review_comments[0].resolved).toBe(false);
+  });
+
+  test("a session mid-turn or offline: queued, with why", async () => {
+    const busy = context(USER, { managed_sessions: [live("working")] });
+    await addNote(busy);
+    expect((await (send as any)._handler(busy, { git_root: ROOT, conversation_ref: "sess-1" })).outcome)
+      .toMatchObject({ kind: "queued", waiting: "busy" });
+
+    const offline = context(USER);
+    await addNote(offline);
+    expect((await (send as any)._handler(offline, { git_root: ROOT, conversation_ref: "sess-1" })).outcome)
+      .toMatchObject({ kind: "queued", waiting: "offline" });
+  });
+
+  test("resolve resolves exactly the notes sent, after sending", async () => {
+    const ctx = context(USER, { managed_sessions: [live("idle")] });
+    await addNote(ctx, { content: "first" });
+    await addNote(ctx, { content: "second" });
+    // Another worktree's note is not in this batch and stays open.
+    await addNote(ctx, { content: "elsewhere", git_root: "/Users/ashot/src/other" });
+    const result = await (send as any)._handler(ctx, { git_root: ROOT, conversation_ref: "sess-1", resolve: true });
+    const [first, second, elsewhere] = ctx.db._tables.review_comments;
+    expect(result.outcome).toEqual({ kind: "sent_and_resolved", sent_ids: [first._id, second._id] });
+    expect(first.resolved).toBe(true);
+    expect(second.resolved).toBe(true);
+    expect(typeof first.sent_at).toBe("number");
+    expect(elsewhere.resolved).toBe(false);
+    expect(ctx.db._tables.pending_messages.length).toBe(1);
+  });
+
+  test("a resolve that fails keeps the send and names the notes still open", async () => {
+    const ctx = context(USER, { managed_sessions: [live("idle")] });
+    await addNote(ctx, { content: "first" });
+    await addNote(ctx, { content: "second" });
+    const stuck = ctx.db._tables.review_comments[1]._id;
+    const patch = ctx.db.patch.bind(ctx.db);
+    ctx.db.patch = async (id: any, fields: any) => {
+      if (id === stuck && fields.resolved === true) throw new Error("write conflict");
+      return await patch(id, fields);
+    };
+    const result = await (send as any)._handler(ctx, { git_root: ROOT, conversation_ref: "sess-1", resolve: true });
+    expect(result.outcome).toEqual({
+      kind: "resolve_failed",
+      sent_ids: [ctx.db._tables.review_comments[0]._id, stuck],
+      open_ids: [stuck],
+      reason: "write conflict",
+    });
+    expect(ctx.db._tables.pending_messages.length).toBe(1);
+    for (const row of ctx.db._tables.review_comments) expect(typeof row.sent_at).toBe("number");
+  });
+});

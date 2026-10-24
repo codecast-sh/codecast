@@ -1,4 +1,5 @@
 import { lineSlotsValidator } from "./lib/lineSlotsValidator";
+import { distributionValidator, selfUpdateBeatPatch, updateRequestFor, updateStatusValidator } from "./lib/deviceUpdate";
 import { getUserOrToken } from "./lib/auth";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
@@ -37,19 +38,19 @@ import {
   type ActivityScope,
   type ScopedInterval,
 } from "./lib/activityDaily";
-import { fetchUserUsageDays } from "./lib/usageDaily";
+import { canSeeMemberSpend, fetchUserUsageDays } from "./lib/usageDaily";
 import { bucketPunchcardRows } from "./lib/activityPunchcard";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
-import { deleteCommentWithRevision } from "./commentViewWrites";
 import { agentCommentLevelValidator } from "./threadReads";
 import { gatedSnippetAvailability } from "./teamFeatures";
-import { deleteBookmarkWithRevision } from "./bookmarkViewWrites";
+import { startAccountDeletion } from "./accountDelete";
 import { readLocalViewRevision } from "./localFirstCommands";
 import { daemonLastSeenStale } from "./lib/daemonLiveness";
+import { linkTeamHostBeat } from "./teamHosts";
 import {
   CURRENT_USER_GRANT_KEY,
   CURRENT_USER_VIEW_CONTRACT_ID,
@@ -475,9 +476,17 @@ export const daemonHeartbeat = mutation({
     // A newer release the daemon could update to; "" once it checked and found
     // none, absent before its first check (and from older daemons).
     update_available: v.optional(v.string()),
+    // Self update (lib/deviceUpdate.ts): can this install replace its binary,
+    // how it was installed, and its run for the row's update request.
+    can_self_update: v.optional(v.boolean()),
+    distribution: v.optional(distributionValidator),
+    update_status: v.optional(updateStatusValidator),
     // Live model inventory for dynamic clients (opencode/pi) — the daemon sends
     // it only when its hash changes.
     model_inventory: v.optional(modelInventoryValidator),
+    // The daemon runs on a team machine: its marker's key and the Linux user
+    // it runs as (teamHosts.linkTeamHostBeat).
+    team_host: v.optional(v.object({ key: v.string(), linux_user: v.string() })),
   },
   handler: async (ctx, args) => {
     // updateLastUsed=true here is the ONLY token-doc refresh: heartbeat is a
@@ -545,7 +554,10 @@ export const daemonHeartbeat = mutation({
 
     // Volatile liveness/queue fields: refresh on a throttle, when queue zeroness
     // flips (so a newly-stuck queue still surfaces promptly), or when we're already
-    // writing a sticky change anyway.
+    // writing a sticky change anyway. The queue and load copies on the user doc
+    // follow the owner rule above: two machines, one with an empty queue, saw
+    // a flip on every beat and wrote the user doc each time, conflicting with
+    // each other. Each machine's own values stay on its device row below.
     const lastSeenStale = daemonLastSeenStale(existingUser?.daemon_last_seen, now);
     const queueZeronessFlipped =
       ((existingUser?.daemon_pending_sync_count ?? 0) === 0) !== (newPending === 0);
@@ -554,9 +566,11 @@ export const daemonHeartbeat = mutation({
     const loadFlipped =
       args.loop_freeze_ms !== undefined &&
       ((existingUser?.daemon_loop_freeze_ms ?? 0) === 0) !== (args.loop_freeze_ms === 0);
-    if (lastSeenStale || queueZeronessFlipped || loadFlipped || Object.keys(patch).length > 0) {
+    if (lastSeenStale || (ownsMachineFields && (queueZeronessFlipped || loadFlipped)) || Object.keys(patch).length > 0) {
       patch.daemon_last_seen = now;
       patch.last_heartbeat = now;
+    }
+    if (ownsMachineFields && "daemon_last_seen" in patch) {
       patch.daemon_pending_sync_count = newPending;
       patch.daemon_oldest_pending_ms = newOldest;
       if (args.loop_freeze_ms !== undefined) patch.daemon_loop_freeze_ms = args.loop_freeze_ms;
@@ -592,6 +606,7 @@ export const daemonHeartbeat = mutation({
 
     // Per-device row upsert (multi-machine): the stable, non-clobbered source the
     // read paths consume via getOnlineLocalRoots (union across online devices).
+    let deviceRow: any = null;
     if (args.device_id) {
       const existingDevice = await ctx.db
         .query("devices")
@@ -599,8 +614,10 @@ export const daemonHeartbeat = mutation({
           q.eq("user_id", auth.userId).eq("device_id", args.device_id!),
         )
         .first();
+      // A team machine names every member's device after itself.
+      const teamHost = args.team_host ? await linkTeamHostBeat(ctx, auth.userId, args.device_id, args.team_host) : null;
       const devicePatch = {
-        ...deviceLabelWrite({ deviceLabel: args.device_label, platform: args.platform, isNew: !existingDevice }),
+        ...deviceLabelWrite({ deviceLabel: teamHost?.name ?? args.device_label, platform: args.platform, isNew: !existingDevice }),
         platform: args.platform,
         last_seen: now,
         status: "online" as const,
@@ -650,6 +667,7 @@ export const daemonHeartbeat = mutation({
         ...(args.settings !== undefined ? { settings: args.settings } : {}),
         cli_version: args.version,
         ...(args.update_available !== undefined ? { update_available: args.update_available || undefined } : {}),
+        ...selfUpdateBeatPatch(existingDevice, args),
         // Hash-gated: the daemon only attaches this when it changed, but guard
         // against a resend loop (e.g. a failed-ack daemon) rewriting the ~10KB
         // field every beat anyway.
@@ -658,6 +676,7 @@ export const daemonHeartbeat = mutation({
           ? { model_inventory: args.model_inventory }
           : {}),
       };
+      deviceRow = existingDevice ? { ...existingDevice, ...devicePatch } : null;
       // Coalesce the per-device write, mirroring the user-doc throttle above.
       // `last_seen: now` alone made every 30s beat a real write, so every
       // listDevices and routing subscription in the fleet re-ran on it. Skip the
@@ -687,7 +706,7 @@ export const daemonHeartbeat = mutation({
       // rows parked on this user's cloud hosts whose cloud_spawn expired while
       // no laptop was around get re-issued, preferably to this laptop
       // (cloudPlacement.reissueStrandedCloudSpawns). Only the transition beat
-      // pays for the scan, and a catch-up failure never fails the beat.
+      // schedules it, and it runs as its own mutation (catchUpCameOnline).
       const localDevice = !(args.is_remote_device ?? existingDevice?.is_remote ?? false);
       // New meters from a machine on the fleet store: see whether the fleet
       // should leave its account before it runs out (switchAheadCheck).
@@ -699,56 +718,34 @@ export const daemonHeartbeat = mutation({
         await ctx.scheduler.runAfter(0, internal.accountSwitch.switchAheadCheck, { user_id: auth.userId });
       }
       if (cameOnline && localDevice) {
-        try {
-          await reissueStrandedCloudSpawns(ctx, auth.userId, args.device_id);
-        } catch (err) {
-          console.warn("[cloud] re-issue on heartbeat failed", err instanceof Error ? err.message : String(err));
-        }
-        // Migrations planned onto this machine while it was offline run now.
-        try {
-          await reissueWaitingMigrations(ctx, auth.userId, args.device_id, now);
-        } catch (err) {
-          console.warn("[migrate] re-issue on heartbeat failed", err instanceof Error ? err.message : String(err));
-        }
+        await ctx.scheduler.runAfter(0, internal.users.catchUpCameOnline, { user_id: auth.userId, device_id: args.device_id });
       }
     }
 
-    const allPendingCommands = await ctx.db
+    const updateRequest = updateRequestFor(deviceRow);
+
+    // Expire this user's commands that outlived the TTL. Only the stale range
+    // is read (the index ends in _creationTime): a heartbeat that read every
+    // pending command conflicted with each claim and result write on any of
+    // the user's machines, and failed on most beats once a user ran dozens.
+    // The commands themselves reach the daemon through getMyPendingCommands,
+    // a query, which the /cli/heartbeat route attaches to this result.
+    const staleCommands = await ctx.db
       .query("daemon_commands")
       .withIndex("by_user_pending", (q) =>
-        q.eq("user_id", auth.userId).eq("executed_at", undefined)
+        q.eq("user_id", auth.userId).eq("executed_at", undefined).lt("_creationTime", now - DAEMON_COMMAND_TTL_MS)
       )
-      .collect();
-
-    const COMMAND_TTL_MS = DAEMON_COMMAND_TTL_MS;
-    const pendingCommands = allPendingCommands.filter(
-      (c) => now - c._creationTime < COMMAND_TTL_MS
-    );
-    for (const stale of allPendingCommands) {
-      if (now - stale._creationTime >= COMMAND_TTL_MS) {
-        await ctx.db.patch(stale._id, {
-          executed_at: now,
-          error: "expired_ttl",
-          // Never leave an unconsumed encrypted key ciphertext lying in the row
-          // (pl-207) — even expired, it's decryptable with the device's key file.
-          ...(stale.command === "set_provider_key" ? { args: undefined } : {}),
-        });
-      }
+      .take(50);
+    for (const stale of staleCommands) {
+      if (!(now - stale._creationTime >= DAEMON_COMMAND_TTL_MS)) continue;
+      await ctx.db.patch(stale._id, {
+        executed_at: now,
+        error: "expired_ttl",
+        // Never leave an unconsumed encrypted key ciphertext lying in the row
+        // (pl-207) — even expired, it's decryptable with the device's key file.
+        ...(stale.command === "set_provider_key" ? { args: undefined } : {}),
+      });
     }
-
-    // Device routing: a command with a target_device_id is delivered ONLY to that
-    // daemon. This is what stops every daemon from racing a session command —
-    // start_session/resume go to the one machine that owns the checkout. Untargeted
-    // commands (status/restart, or sessions with no resolvable owner) broadcast to
-    // all daemons. Rollout-safe: a daemon that doesn't identify itself (pre-routing
-    // CLI) sees everything, so new sessions still start before the fleet upgrades.
-    const visibleCommands = (
-      args.device_id === undefined
-        ? pendingCommands
-        : pendingCommands.filter(
-            (c) => c.target_device_id === undefined || c.target_device_id === args.device_id,
-          )
-    ).filter((c) => commandVisibleToClaimer(c, args.boot_id, args.device_id, now));
 
     // Reuse the doc read above for the return payload — these fields are sticky
     // (untouched by the heartbeat patch), so the pre-patch snapshot is correct and
@@ -787,12 +784,9 @@ export const daemonHeartbeat = mutation({
         );
 
     return {
-      commands: visibleCommands.map((c) => ({
-        id: c._id,
-        command: c.command,
-        args: c.args,
-      })),
       wake_devices: wakeDevices,
+      // The device row's open update request (Settings > Daemon's Update).
+      update_request: updateRequest,
       sync_mode: user?.sync_mode ?? "all",
       sync_projects: user?.sync_projects ?? [],
       sync_excluded: user?.sync_excluded ?? [],
@@ -817,6 +811,24 @@ export const daemonHeartbeat = mutation({
       capability_desired_revision: (user as any)?.capability_revision ?? 0,
       capabilities_mode: (globalCapMode?.value as string | undefined) ?? (user as any)?.capabilities_mode ?? "dry",
     };
+  },
+});
+
+/**
+ * A laptop's offline→online catch-up, scheduled by its first beat back. It
+ * reads every conversation the user's cloud hosts own and every pending
+ * command, which busy hosts write many times a second. Inside the beat that
+ * read set made the beat lose its conflict retries and fail, so the device
+ * stayed offline and every next beat was again a "came online" beat: the laptop
+ * never came back while its hosts were busy. Here a conflict costs only the
+ * catch-up.
+ */
+export const catchUpCameOnline = internalMutation({
+  args: { user_id: v.id("users"), device_id: v.string() },
+  handler: async (ctx, { user_id, device_id }) => {
+    await reissueStrandedCloudSpawns(ctx, user_id, device_id);
+    // Migrations planned onto this machine while it was offline run now.
+    await reissueWaitingMigrations(ctx, user_id, device_id, Date.now());
   },
 });
 
@@ -2039,11 +2051,17 @@ export const getUserActivityPunchcard = query({
 
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
+    // The send and usage counters are pre-summed per team, so the membership
+    // gate loadUserActivity applies to the day rows must hold for them too:
+    // anyone else reads one team they belong to, never the cross-team total.
+    const isOwner = String(userId) === String(args.user_id);
+    if (!isOwner && !(args.team_id && (await isTeamMember(ctx, userId, args.team_id)))) return [];
+    const seesSpend = await canSeeMemberSpend(ctx, userId, args.user_id, args.team_id);
 
     const [{ days, live }, sendDays, usageDays] = await Promise.all([
       loadUserActivity(ctx, userId, args),
       fetchUserSendDays(ctx, args.user_id, args.team_id, args.days ?? 365),
-      fetchUserUsageDays(ctx, args.user_id, args.team_id, args.days ?? 365),
+      seesSpend ? fetchUserUsageDays(ctx, args.user_id, args.team_id, args.days ?? 365) : undefined,
     ]);
     return bucketPunchcardRows(live, args.tz_offset_minutes ?? 0, sendDays, usageDays, days);
   },
@@ -3752,232 +3770,7 @@ export const adminSetTeamMemberVisibility = internalMutation({
 
 export const deleteAccount = mutation({
   args: {},
-  handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error("Not authenticated");
-    }
-
-    const user = await ctx.db.get(userId);
-    if (!user) {
-      throw new Error("User not found");
-    }
-
-    let totalDeleted = 0;
-
-    const conversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .take(50);
-
-    for (const conv of conversations) {
-      const messages = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .take(500);
-      for (const msg of messages) {
-        await ctx.db.delete(msg._id);
-        totalDeleted++;
-      }
-
-      const fileTouches = await ctx.db
-        .query("file_touches")
-        .withIndex("by_conversation", (q) => q.eq("conversation_id", conv._id))
-        .take(200);
-      for (const ft of fileTouches) {
-        await ctx.db.delete(ft._id);
-        totalDeleted++;
-      }
-
-      const comments = await ctx.db
-        .query("comments")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .take(100);
-      for (const comment of comments) {
-        if (await deleteCommentWithRevision(ctx, comment, conv)) totalDeleted++;
-      }
-
-      const publicComments = await ctx.db
-        .query("public_comments")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .take(100);
-      for (const pc of publicComments) {
-        await ctx.db.delete(pc._id);
-        totalDeleted++;
-      }
-
-      const pendingPermissions = await ctx.db
-        .query("pending_permissions")
-        .withIndex("by_conversation_status", (q) => q.eq("conversation_id", conv._id))
-        .take(50);
-      for (const pp of pendingPermissions) {
-        await ctx.db.delete(pp._id);
-        totalDeleted++;
-      }
-
-      await ctx.db.delete(conv._id);
-      totalDeleted++;
-    }
-
-    const hasMoreConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .first();
-
-    if (hasMoreConversations) {
-      return {
-        completed: false,
-        message: "Partial deletion complete. Run again to continue deleting account data.",
-        deleted: totalDeleted,
-      };
-    }
-
-    const bookmarks = await ctx.db
-      .query("bookmarks")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .take(100);
-    for (const b of bookmarks) {
-      await deleteBookmarkWithRevision(ctx, b);
-      totalDeleted++;
-    }
-
-    const decisions = await ctx.db
-      .query("decisions")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .take(100);
-    for (const d of decisions) {
-      await ctx.db.delete(d._id);
-      totalDeleted++;
-    }
-
-    const patterns = await ctx.db
-      .query("patterns")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .take(100);
-    for (const p of patterns) {
-      await ctx.db.delete(p._id);
-      totalDeleted++;
-    }
-
-    const syncCursors = await ctx.db
-      .query("sync_cursors")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .take(100);
-    for (const sc of syncCursors) {
-      await ctx.db.delete(sc._id);
-      totalDeleted++;
-    }
-
-    const rateLimits = await ctx.db
-      .query("rate_limits")
-      .withIndex("by_user_endpoint", (q) => q.eq("user_id", userId))
-      .take(100);
-    for (const rl of rateLimits) {
-      await ctx.db.delete(rl._id);
-      totalDeleted++;
-    }
-
-    const apiTokens = await ctx.db
-      .query("api_tokens")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .take(50);
-    for (const at of apiTokens) {
-      await ctx.db.delete(at._id);
-      totalDeleted++;
-    }
-
-    const pendingMessages = await ctx.db
-      .query("pending_messages")
-      .withIndex("by_user_status", (q) => q.eq("from_user_id", userId))
-      .take(100);
-    for (const pm of pendingMessages) {
-      await ctx.db.delete(pm._id);
-      totalDeleted++;
-    }
-
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .take(50);
-    for (const ms of managedSessions) {
-      await ctx.db.delete(ms._id);
-      totalDeleted++;
-    }
-
-    const notifications = await ctx.db
-      .query("notifications")
-      .withIndex("by_recipient", (q) => q.eq("recipient_user_id", userId))
-      .take(200);
-    for (const n of notifications) {
-      await ctx.db.delete(n._id);
-      totalDeleted++;
-    }
-
-    const daemonLogs = await ctx.db
-      .query("daemon_logs")
-      .withIndex("by_user_timestamp", (q) => q.eq("user_id", userId))
-      .take(500);
-    for (const dl of daemonLogs) {
-      await ctx.db.delete(dl._id);
-      totalDeleted++;
-    }
-
-    const messageShares = await ctx.db
-      .query("message_shares")
-      .filter((q) => q.eq(q.field("user_id"), userId))
-      .take(100);
-    for (const ms of messageShares) {
-      await ctx.db.delete(ms._id);
-      totalDeleted++;
-    }
-
-    const reviews = await ctx.db
-      .query("reviews")
-      .withIndex("by_reviewer", (q) => q.eq("reviewer_user_id", userId))
-      .take(100);
-    for (const r of reviews) {
-      await ctx.db.delete(r._id);
-      totalDeleted++;
-    }
-
-    const teamActivityEvents = await ctx.db
-      .query("team_activity_events")
-      .withIndex("by_actor", (q) => q.eq("actor_user_id", userId))
-      .take(200);
-    for (const tae of teamActivityEvents) {
-      await ctx.db.delete(tae._id);
-      totalDeleted++;
-    }
-
-    // @ts-ignore - authAccounts is from @convex-dev/auth
-    const authAccounts = await ctx.db
-      .query("authAccounts")
-      .withIndex("userIdAndProvider", (q: any) => q.eq("userId", userId))
-      .take(10);
-    for (const aa of authAccounts) {
-      await ctx.db.delete(aa._id);
-      totalDeleted++;
-    }
-
-    // @ts-ignore - authSessions is from @convex-dev/auth
-    const authSessions = await ctx.db
-      .query("authSessions")
-      .withIndex("userId", (q: any) => q.eq("userId", userId))
-      .take(50);
-    for (const as of authSessions) {
-      await ctx.db.delete(as._id);
-      totalDeleted++;
-    }
-
-    await ctx.db.delete(userId);
-    totalDeleted++;
-
-    return {
-      completed: true,
-      message: "Account permanently deleted",
-      deleted: totalDeleted,
-    };
-  },
+  handler: async (ctx) => startAccountDeletion(ctx),
 });
 
 export const getMyPendingCommands = query({
@@ -4484,6 +4277,8 @@ export const getCommandResult = query({
     if (!cmd || cmd.user_id !== userId) return null;
     return {
       executed_at: cmd.executed_at,
+      // null while no daemon has picked it up, so a caller can tell waiting from working.
+      claimed_at: cmd.claimed_at ?? null,
       result: cmd.result,
       error: cmd.error,
     };

@@ -431,6 +431,7 @@ describe("comment discussion gating", () => {
     expect(noKey.error).toContain("owner");
     const wrongKey = await (deliverPendingComments as any)._handler(ctx, { slug: artRow.slug, owner_key: "wrong" });
     expect(wrongKey.error).toContain("owner");
+    expect(wrongKey.outcome).toEqual({ kind: "failed", reason: wrongKey.error });
   });
 });
 
@@ -696,7 +697,7 @@ describe("send to agent: who may steer the page's session", () => {
       { ...base, _id: "c3", author_name: "Rando", text: "anon", created_at: 3 },
     ]);
     const r = await (deliverPendingComments as any)._handler(ctx, { slug: artRow.slug, owner_key: "sekrit" });
-    expect(r).toEqual({ delivered: true, count: 2 });
+    expect(r).toMatchObject({ delivered: true, count: 2 });
     expect(sends[0].body).toContain("mine");
     expect(sends[0].body).toContain("theirs");
     expect(sends[0].body).not.toContain("anon");
@@ -712,12 +713,44 @@ describe("send to agent: who may steer the page's session", () => {
       { ...base, _id: "p1", author_name: "Pat", author_user_id: "u9", text: "outsider", created_at: 3 },
     ]);
     const r = await (deliverPendingComments as any)._handler(ctx, { slug: artRow.slug, owner_key: "sekrit" });
-    expect(r).toEqual({ delivered: true, count: 2 });
+    expect(r).toMatchObject({ delivered: true, count: 2 });
     expect(sends[0].body).toContain("From your user, the page's owner:\nold mine");
     expect(sends[0].body).toContain("From Sam, a verified codecast teammate of your user.");
     expect(sends[0].body).not.toContain("outsider");
     expect(patches.map((p) => p.id).sort()).toEqual(["o1", "t1"]);
     expect(patches[0].patch).toMatchObject({ delivered: true, delivered_version: 3 });
+  });
+
+  test("send all reports its outcome; resolve settles exactly the comments sent", async () => {
+    const base = { _table: "artifact_comments", artifact_id: "a1", batch_id: "b", version: 3, status: "open", delivered: false };
+    const fixture = () => [
+      ...rows(),
+      { ...base, _id: "c1", author_name: "Owner", author_role: "owner", text: "mine", created_at: 1 },
+      { ...base, _id: "c3", author_name: "Rando", text: "anon", created_at: 3 },
+    ];
+    // An old client's call: no resolve, the comment stays open.
+    const plain = makeCtx(fixture());
+    const r1 = await (deliverPendingComments as any)._handler(plain.ctx, { slug: artRow.slug, owner_key: "sekrit" });
+    expect(r1.outcome).toEqual({ kind: "queued", sent_ids: ["c1"], waiting: "offline" });
+    expect(plain.patches[0].patch.status).toBeUndefined();
+
+    const resolving = makeCtx([
+      ...fixture(),
+      { _table: "managed_sessions", _id: "ms1", conversation_id: "conv1", last_heartbeat: Date.now(), agent_status: "idle" },
+    ]);
+    const r2 = await (deliverPendingComments as any)._handler(resolving.ctx, { slug: artRow.slug, owner_key: "sekrit", resolve: true });
+    expect(r2).toMatchObject({ delivered: true, count: 1, outcome: { kind: "sent_and_resolved", sent_ids: ["c1"] } });
+    expect(resolving.patches.map((p) => [p.id, p.patch.status])).toEqual([["c1", "resolved"]]);
+  });
+
+  test("a send all that cannot reach the session fails with why, and keeps the comments pending", async () => {
+    commentDelivery.send = (async () => { throw new Error("session was released"); }) as never;
+    const base = { _table: "artifact_comments", artifact_id: "a1", batch_id: "b", version: 3, status: "open", delivered: false };
+    const { ctx, patches } = makeCtx([...rows(), { ...base, _id: "c1", author_name: "Owner", author_role: "owner", text: "mine", created_at: 1 }]);
+    const r = await (deliverPendingComments as any)._handler(ctx, { slug: artRow.slug, owner_key: "sekrit", resolve: true });
+    expect(r.error).toContain("comments stay pending");
+    expect(r.outcome).toEqual({ kind: "failed", reason: "session was released; the comments stay pending" });
+    expect(patches).toEqual([]);
   });
 
   test("a page with no session delivers nothing and stores the comment unsent", async () => {

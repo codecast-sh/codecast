@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import { create, listForPR, pendingReview, discardPendingReview, recordSubmittedReview } from "./codeComments";
-import { submitPending, getCommentsForPR, deliverSubmittedReview } from "./reviews";
+import { submitPending, getCommentsForPR, deliverSubmittedReview, handPendingToSession } from "./reviews";
 import { threads, findComment } from "./prCli";
 
 const USER = "user_1" as any;
@@ -248,7 +248,58 @@ describe("delivering a submitted review to the owning session", () => {
       user_id: USER, pull_request_id: PR, conversation_ref: CONV, note_ids: ["n1"], state: "commented", body: "hi",
     });
     expect(out.error).toMatch(/No session matches|cannot send/);
+    expect(out.outcome).toEqual({ kind: "failed", reason: out.error });
     expect(ctx.db._tables.pending_messages.length).toBe(0);
+  });
+
+  test("a delivered review carries its outcome beside the old fields", async () => {
+    const ctx = seeded();
+    const out = await (deliverSubmittedReview as any)._handler(ctx, {
+      user_id: USER, pull_request_id: PR, conversation_ref: CONV, note_ids: ["n1"], state: "commented", body: "hi",
+    });
+    // No live process behind the session: the message waits for it.
+    expect(out.outcome).toEqual({ kind: "queued", sent_ids: ["n1"], waiting: "offline" });
+  });
+});
+
+describe("handing pending notes to a session", () => {
+  const CONV = "conv_1" as any;
+  function seeded() {
+    return context(USER, {
+      conversations: [{ _id: CONV, user_id: USER, is_private: true, session_id: "sess-1", short_id: "jx7abcd", title: "Shepherd" }],
+      pending_messages: [],
+      managed_sessions: [{ _id: "ms1", conversation_id: CONV, user_id: USER, session_id: "sess-1", pid: 1, started_at: 0, last_heartbeat: Date.now(), agent_status: "idle" }],
+      review_comments: [
+        { _id: "a", pull_request_id: PR, repository: "codecast-sh/codecast", file_path: "src/foo.ts", line_number: 4, author_user_id: USER, pending_review: true, content: "1", created_at: 1, resolved: false },
+        { _id: "b", pull_request_id: PR, repository: "codecast-sh/codecast", file_path: "src/foo.ts", line_number: 9, author_user_id: USER, pending_review: true, content: "2", created_at: 2, resolved: false },
+        { _id: "c", pull_request_id: PR, repository: "codecast-sh/codecast", file_path: "src/foo.ts", line_number: 9, author_user_id: OTHER, pending_review: true, content: "theirs", created_at: 3, resolved: false },
+        // A published thread on the same line is not part of a private draft.
+        { _id: "d", pull_request_id: PR, repository: "codecast-sh/codecast", file_path: "src/foo.ts", line_number: 9, author_user_id: OTHER, content: "public", created_at: 4, resolved: false },
+      ],
+    });
+  }
+
+  test("an old client's call sends, keeps the notes pending, and reports sent", async () => {
+    const ctx = seeded();
+    const out = await (handPendingToSession as any)._handler(ctx, { pull_request_id: PR, conversation_ref: CONV });
+    expect(out).toMatchObject({ sent: 2, conversation_id: CONV, short_id: "jx7abcd" });
+    expect(out.outcome).toEqual({ kind: "sent", sent_ids: ["a", "b"] });
+    expect((await (pendingReview as any)._handler(ctx, { pull_request_id: PR })).map((r: any) => r._id)).toEqual(["a", "b"]);
+  });
+
+  test("send and resolve: the sent notes resolve and leave the pending review; a teammate's stays", async () => {
+    const ctx = seeded();
+    const out = await (handPendingToSession as any)._handler(ctx, { pull_request_id: PR, conversation_ref: CONV, resolve: true });
+    expect(out.outcome).toEqual({ kind: "sent_and_resolved", sent_ids: ["a", "b"] });
+    const byId = Object.fromEntries(ctx.db._tables.review_comments.map((r: any) => [r._id, r]));
+    expect(byId.a.resolved).toBe(true);
+    expect(byId.b.resolved).toBe(true);
+    expect(byId.c.resolved).toBe(false);
+    expect(byId.d.resolved).toBe(false);
+    expect(ctx.db._tables.pending_messages.length).toBe(1);
+    // They never go to GitHub, and discard still clears them.
+    expect(await (pendingReview as any)._handler(ctx, { pull_request_id: PR })).toEqual([]);
+    expect(await (discardPendingReview as any)._handler(ctx, { pull_request_id: PR })).toEqual({ discarded: 2 });
   });
 });
 

@@ -26,6 +26,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { performSessionSend } from "./pendingMessages";
 import { classifyNamedWorkState } from "./conversations";
 import { describePageAnchor, pageAgentChip, parsePageAnchor } from "@codecast/shared/contracts";
+import { deliveredOutcome, failedOutcome, type SendWaiting } from "@codecast/shared/comments";
+import { sessionWaiting } from "./lib/sendOutcome";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { isVisibilityShareable } from "./privacy";
 import { computeWorkspaceKey, resolveWorkspaceKey, type WorkspaceKey } from "./lib/accessKeys";
@@ -1056,16 +1058,27 @@ async function deliverCommentsToSession(
   artifact: Doc<"artifacts">,
   list: DeliverableComment[],
 ): Promise<boolean> {
-  if (!artifact.session_conversation_id || !list.length) return false;
+  return (await sendCommentsToSession(ctx, artifact, list)).ok;
+}
+
+// The same send, with why it failed and whether the message waits.
+async function sendCommentsToSession(
+  ctx: MutationCtx,
+  artifact: Doc<"artifacts">,
+  list: DeliverableComment[],
+): Promise<{ ok: true; waiting: SendWaiting | null } | { ok: false; reason: string }> {
+  if (!artifact.session_conversation_id) return { ok: false, reason: "The page has no session" };
+  if (!list.length) return { ok: false, reason: "Nothing to send" };
   const body = commentDeliveryBody(artifact, list);
   try {
+    const waiting = await sessionWaiting(ctx, artifact.session_conversation_id);
     await commentDelivery.send(ctx, artifact.user_id, {
       to: artifact.session_conversation_id.toString(),
       body,
     });
-    return true;
-  } catch {
-    return false;
+    return { ok: true, waiting };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -1450,15 +1463,17 @@ function sendableRole(c: Doc<"artifact_comments">, ownerId: Id<"users">, teammat
 }
 
 export const deliverPendingComments = mutation({
-  args: { slug: v.string(), owner_key: v.optional(v.string()) },
+  // `resolve`: resolve exactly the comments sent, once the session has them.
+  args: { slug: v.string(), owner_key: v.optional(v.string()), resolve: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const artifact = await ctx.db
       .query("artifacts")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
-    if (!artifact) return { error: "Not found" };
+    const refuse = (error: string) => ({ error, outcome: failedOutcome(error) });
+    if (!artifact) return refuse("Not found");
     if (!artifact.owner_key || args.owner_key !== artifact.owner_key) {
-      return { error: "Only the page owner can send comments to the session" };
+      return refuse("Only the page owner can send comments to the session");
     }
     const rows = await ctx.db
       .query("artifact_comments")
@@ -1472,15 +1487,27 @@ export const deliverPendingComments = mutation({
       // for the next send.
       .slice(0, 40);
     if (!pending.length) return { delivered: false, count: 0 };
-    const ok = await deliverCommentsToSession(
+    const sent = await sendCommentsToSession(
       ctx,
       artifact,
       pending.map((c) => ({ text: c.text, anchor: c.anchor, author_name: c.author_name, author_email: c.author_email, author_role: sendableRole(c, artifact.user_id, teammates)! })),
     );
-    if (!ok) return { error: "Could not reach the author's session — comments stay pending" };
+    if (!sent.ok) {
+      return { error: "Could not reach the author's session — comments stay pending", outcome: failedOutcome(`${sent.reason}; the comments stay pending`) };
+    }
     const now = Date.now();
-    for (const c of pending) await ctx.db.patch(c._id, { delivered: true, delivered_at: now, delivered_version: artifact.version });
-    return { delivered: true, count: pending.length };
+    for (const c of pending) {
+      await ctx.db.patch(c._id, {
+        delivered: true,
+        delivered_at: now,
+        delivered_version: artifact.version,
+        ...(args.resolve ? { status: "resolved" } : {}),
+      });
+    }
+    // The resolve rides the same write as the delivery stamp, so it cannot
+    // half land: nothing stays open that was sent.
+    const outcome = deliveredOutcome(pending.map((c) => String(c._id)), sent.waiting, args.resolve ? { open_ids: [] } : undefined);
+    return { delivered: true, count: pending.length, outcome };
   },
 });
 

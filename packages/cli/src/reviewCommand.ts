@@ -17,7 +17,7 @@ import path from "path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { readLocalGitContext } from "./prCommand.js";
-import { buildReviewBatchPrompt, placementLabel, reviewNoteLocation, type AnchorPlacement, type CodeAnchorText } from "@codecast/shared/comments";
+import { buildReviewBatchPrompt, describeSendOutcome, placementLabel, reviewNoteLocation, type AnchorPlacement, type CodeAnchorText, type SendOutcome } from "@codecast/shared/comments";
 import { captureLocalAnchor, placeComments, readFileLines } from "./codeAnchorLocal.js";
 
 export type ReviewNoteRow = {
@@ -198,6 +198,7 @@ export function registerReviewCommand(program: Command, deps: PublishDeps): void
   cast review ls                       the batch, with stale notes flagged
   cast review send jx7abcd             deliver the batch to a session
   cast review send --dry-run           print exactly what would be sent
+  cast review send jx7abcd --resolve   deliver, then resolve the notes sent
   cast review rm 2                     drop a note by its number in ls
 
 Notes live with the repository's other comments, so the web diff view shows the
@@ -261,8 +262,9 @@ and editing one puts it back in the batch.
     .description("Hand the batch to a session, in one message")
     .argument("[session]", "session short id, uuid or conversation id (default: this session)")
     .option("--dry-run", "print the message instead of sending it")
+    .option("--resolve", "resolve the notes once the session has them")
     .option("--json", "as JSON")
-    .action(async (session: string | undefined, options: { dryRun?: boolean; json?: boolean }) => {
+    .action(async (session: string | undefined, options: { dryRun?: boolean; resolve?: boolean; json?: boolean }) => {
       const repoRoot = requireRepoRoot(realCwd());
       const notes = await loadBatch(deps, repoRoot, false);
       if (notes.length === 0) {
@@ -296,12 +298,24 @@ and editing one puts it back in the batch.
         git_root: repoRoot,
         conversation_ref: target,
         stale_ids: [...stale],
+        // Sent only when asked, so a plain send still reaches an older backend.
+        ...(options.resolve ? { resolve: true } : {}),
       });
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
         return;
       }
-      console.log(`ok sent ${result.sent} ${result.sent === 1 ? "note" : "notes"} to ${target}`);
+      const outcome: SendOutcome | undefined = result.outcome;
+      if (!outcome) {
+        console.log(`ok sent ${result.sent} ${result.sent === 1 ? "note" : "notes"} to ${target}`);
+        return;
+      }
+      const line = describeSendOutcome(outcome, { to: result.short_id ?? target });
+      if (outcome.kind === "resolve_failed") {
+        console.error(`partial ${line}\nStill open: ${outcome.open_ids.join(", ")}`);
+        process.exit(1);
+      }
+      console.log(`ok ${line.charAt(0).toLowerCase()}${line.slice(1)}`);
     });
 
   review

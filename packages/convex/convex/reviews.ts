@@ -9,6 +9,7 @@ import { githubSentence } from "./prCli";
 import { pendingRowsFor, withoutOthersPending } from "./codeComments";
 import { sendNotesToSession } from "./reviewNotes";
 import { codecastPrUrl } from "@codecast/shared/contracts";
+import { failedOutcome } from "@codecast/shared/comments";
 
 async function requireReviewAccess(ctx: any, userId: any, reviewId: any) {
   const review = await ctx.db.get(reviewId);
@@ -500,9 +501,10 @@ export const deliverSubmittedReview = internalMutation({
           .first();
         if (row) await ctx.db.patch(row._id, { session_delivered_at: Date.now() });
       }
-      return { conversation_id: String(sent.conversation_id), short_id: sent.short_id ?? null, notes: sent.sent };
+      return { conversation_id: String(sent.conversation_id), short_id: sent.short_id ?? null, notes: sent.sent, outcome: sent.outcome };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
+      const outcome = failedOutcome(error);
+      return { error: outcome.kind === "failed" ? outcome.reason : String(error), outcome };
     }
   },
 });
@@ -529,6 +531,9 @@ export const handPendingToSession = mutation({
     pull_request_id: v.id("pull_requests"),
     // Defaults to the pull request's shepherd.
     conversation_ref: v.optional(v.string()),
+    // Resolve the notes once the session has them: they leave the pending
+    // batch and never go to GitHub.
+    resolve: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -541,6 +546,7 @@ export const handPendingToSession = mutation({
       repository: pr.repository,
       ref: pr.head_sha ?? undefined,
       pullRequest: { number: pr.number, url: codecastPrUrl(pr.repository, pr.number) },
+      resolve: args.resolve,
     });
   },
 });

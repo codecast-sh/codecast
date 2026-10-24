@@ -110,6 +110,10 @@ let dir = "";
 let envBackup: Record<string, string | undefined> = {};
 let rows: any[] = [];
 let logged: string[] = [];
+let sendBodies: any[] = [];
+// What the fake send answers beyond the old fields; null answers the way a
+// backend from before send outcomes did.
+let sendExtra: ((ids: string[]) => Record<string, unknown>) | null = null;
 const realLog = console.log;
 
 function git(args: string[], cwd: string) {
@@ -131,9 +135,11 @@ function fakeBackend() {
       return new Response(JSON.stringify(mine), { status: 200 });
     }
     if (route === "send") {
+      sendBodies.push(body);
       const mine = rows.filter((r) => r.git_root === body.git_root && !r.sent_at);
       for (const r of mine) r.sent_at = 99;
-      return new Response(JSON.stringify({ sent: mine.length, stale_ids: body.stale_ids }), { status: 200 });
+      const extra = sendExtra ? sendExtra(mine.map((r) => r._id)) : {};
+      return new Response(JSON.stringify({ sent: mine.length, stale_ids: body.stale_ids, ...extra }), { status: 200 });
     }
     if (route === "rm") {
       rows = rows.filter((r) => r._id !== body.comment_id);
@@ -178,6 +184,8 @@ beforeEach(() => {
   git(["add", "-A"], dir);
   git(["commit", "-qm", "init"], dir);
   rows = [];
+  sendBodies = [];
+  sendExtra = null;
   fakeBackend();
 });
 
@@ -219,6 +227,39 @@ describe("cast review lifecycle", () => {
 
     await run("rm", "1");
     expect(rows).toHaveLength(1);
+  });
+
+  test("a plain send carries no resolve flag, so an older backend accepts it", async () => {
+    await run("add", "api.ts:2", "one");
+    await run("send", "jx7abcd");
+    expect("resolve" in sendBodies[0]).toBe(false);
+  });
+
+  test("--resolve asks for it and prints the outcome", async () => {
+    sendExtra = (ids) => ({ short_id: "jx7abcd", outcome: { kind: "sent_and_resolved", sent_ids: ids, waiting: "busy" } });
+    await run("add", "api.ts:2", "one");
+    await run("add", "api.ts:3", "two");
+    const out = await run("send", "jx7abcd", "--resolve");
+    expect(sendBodies[0].resolve).toBe(true);
+    expect(out).toBe("ok 2 notes sent to jx7abcd, queued until its turn ends and resolved");
+  });
+
+  test("--resolve that leaves notes open names them and exits non-zero", async () => {
+    sendExtra = (ids) => ({ outcome: { kind: "resolve_failed", sent_ids: ids, open_ids: [ids[0]], reason: "Comment not found" } });
+    await run("add", "api.ts:2", "one");
+    const errors: string[] = [];
+    const realError = console.error;
+    const realExit = process.exit;
+    console.error = (...parts: any[]) => { errors.push(parts.join(" ")); };
+    process.exit = ((code?: number) => { throw new Error(`exit ${code}`); }) as any;
+    try {
+      await expect(run("send", "jx7abcd", "--resolve")).rejects.toThrow("exit 1");
+    } finally {
+      console.error = realError;
+      process.exit = realExit;
+    }
+    expect(errors.join("\n")).toContain("1 note still open: Comment not found");
+    expect(errors.join("\n")).toContain("Still open: id1");
   });
 
   test("editing a note puts it back in the batch", async () => {

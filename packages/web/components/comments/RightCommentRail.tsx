@@ -7,6 +7,7 @@ import { useMessageComments } from "../../hooks/useConversationComments";
 import { CommentCard } from "./CommentCard";
 import { CommentComposer } from "./CommentComposer";
 import { PingAgentButton } from "./PingAgentButton";
+import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 // This message's teammate comments, rendered to the RIGHT of the message — the
@@ -34,7 +35,8 @@ function RightCommentRailImpl({ conversationId, messageId, mode }: { conversatio
   const composeOpen = composing && isAuthenticated;
   const agentBusy = thread.comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));
 
-  const nameById = new Map(thread.comments.map((c) => [c._id, commentAuthorName(c, currentUserId)]));
+  const agentName = useConversationSpeaker(conversationId, agentType).name;
+  const nameById = new Map(thread.comments.map((c) => [c._id, commentAuthorName(c, currentUserId, agentName)]));
 
   const startReply = (c: Comment) => { setReplyTo(c); setComposing(true); };
   const closeComposer = () => {
@@ -48,6 +50,7 @@ function RightCommentRailImpl({ conversationId, messageId, mode }: { conversatio
       <div className="cc-rright-cards">
         {thread.comments.map((c) => (
           <CommentCard
+            conversationId={conversationId}
             key={c._id}
             comment={c}
             currentUserId={currentUserId}
@@ -56,6 +59,7 @@ function RightCommentRailImpl({ conversationId, messageId, mode }: { conversatio
             onReply={startReply}
             onEdit={editComment}
             onDelete={deleteComment}
+            onRetryAgent={() => askAgent(messageId)}
           />
         ))}
       </div>
@@ -86,7 +90,7 @@ function RightCommentRailImpl({ conversationId, messageId, mode }: { conversatio
             </button>
           )}
           {isAuthenticated && !agentBusy && (
-            <PingAgentButton agentType={agentType} onClick={() => askAgent(messageId)} />
+            <PingAgentButton conversationId={conversationId} agentType={agentType} onClick={() => askAgent(messageId)} />
           )}
         </div>
       )}
