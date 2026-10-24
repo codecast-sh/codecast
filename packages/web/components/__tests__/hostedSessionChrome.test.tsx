@@ -5,7 +5,7 @@ import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { sessionDisconnected } from "../conversation/agentStatusPill";
 import { LANE_COPY } from "../simple/lane";
 import { renderToStaticMarkup } from "react-dom/server";
-import { HostedAnswerStrip } from "../DecisionAnswerFooter";
+import { HostedAnswerStrip } from "../DecisionAnswerQuote";
 
 describe("hosted conversations show no machine status", () => {
   const gone = { active: true, isConnected: false, recentlyMoved: false };
