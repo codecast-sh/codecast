@@ -8,7 +8,10 @@ export function MintTokenHarness({ publicKey = "", initiallyPending = true, star
   const [flow, setFlow] = useState<MintFlow | null>(initiallyPending ? {
     status: "pending", profile: "work", email: "work@example.com", started_at: Date.now(), url: "https://claude.ai/oauth/authorize?fixture=1",
   } : null);
-  const profiles = [{ name: "work", email: "work@example.com" }, { name: "home", email: "home@example.com" }];
+  // The machine's heartbeat: which profiles have a minted token on file.
+  const [onFile, setOnFile] = useState<Record<string, number>>({});
+  const profiles = [{ name: "work", email: "work@example.com" }, { name: "home", email: "home@example.com" }]
+    .map(p => onFile[p.name] ? { ...p, setup_token: { stored_at: onFile[p.name], expires_at: onFile[p.name] + 365 * 86_400_000 } } : p);
   const client = {
     mutation: async (ref: any, args: any) => {
       const name = getFunctionName(ref);
@@ -20,7 +23,11 @@ export function MintTokenHarness({ publicKey = "", initiallyPending = true, star
         return { started_at };
       }
       if (name === "accountSwitch:cancelMintToken") setFlow(current => current ? { ...current, status: "cancelled" } : null);
-      if (name === "accountSwitch:submitMintCode") setFlow(current => current ? { ...current, status: "confirmed", finished_at: Date.now() } : null);
+      if (name === "accountSwitch:submitMintCode") {
+        setFlow(current => current ? { ...current, status: "confirmed", finished_at: Date.now() } : null);
+        setOnFile(current => ({ ...current, work: Date.now() }));
+      }
+      if (name === "accountSwitch:removeSetupToken") setOnFile(({ [args.profile]: _, ...rest }) => rest);
       return {};
     },
   } as unknown as ConvexReactClient;

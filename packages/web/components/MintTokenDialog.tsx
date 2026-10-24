@@ -48,6 +48,12 @@ type MintProfile = {
 };
 
 const DAY_MS = 86_400_000;
+// The token file's stamp is the machine's clock and the attempt's is the
+// server's; this much drift still counts the file as this attempt's.
+const CLOCK_SLACK_MS = 60_000;
+// How long a confirmed mint waits for the machine to report the token on file
+// before the dialog stops claiming it was stored.
+const REPORT_WAIT_MS = 60_000;
 
 function expiryDate(expiresAt: number): string {
   return new Date(expiresAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -165,6 +171,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
   // stamp arrives a moment later, and an earlier confirmed/rejected outcome
   // for the same profile must not show as this attempt's result meanwhile.
   const [startedAt, setStartedAt] = useState<number | null>(null);
+  const watched = useRef<number | null>(null);
   const now = useCoarseNow(5_000);
   const who = profile.email ?? profile.name;
 
@@ -172,7 +179,15 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
   const fresh = !!flow && (startedAt === null || flow.started_at === startedAt);
   const pending = busy === "start" || (fresh && flow?.status === "pending" && now - flow.started_at < MINT_FLOW_STALE_MS);
   const rejected = fresh && flow?.status === "rejected" && !!flow.finished_at && now - flow.finished_at < 30 * 60 * 1000;
-  const confirmed = fresh && flow?.status === "confirmed" && !!flow.finished_at && now - flow.finished_at < 30 * 60 * 1000;
+  const minted = fresh && flow?.status === "confirmed" && !!flow.finished_at && now - flow.finished_at < 30 * 60 * 1000;
+  // A confirmed outcome is only true while this attempt's token is still on
+  // file: removed or replaced since, the dialog shows the account as it is now.
+  const onFile = !!flow && !!profile.setup_token && profile.setup_token.stored_at >= flow.started_at - CLOCK_SLACK_MS;
+  const confirmed = minted && onFile;
+  // Only a dialog that watched the attempt run waits for the report; one
+  // opened afterwards reads a missing token as removed.
+  if (flow?.status === "pending") watched.current = flow.started_at;
+  const reporting = minted && !onFile && watched.current === flow!.started_at && now - flow!.finished_at! < REPORT_WAIT_MS;
   const url = pending && busy !== "start" ? flow?.url : undefined;
   const has = profileHasSetupToken(profile, now);
   const expired = !!profile.setup_token && !has;
@@ -246,7 +261,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
 
   const step1: "todo" | "active" | "done" = confirmed || pending ? "done" : "todo";
   const step2: "todo" | "active" | "done" = confirmed ? "done" : pending ? "active" : "todo";
-  const step3: "todo" | "active" | "done" = confirmed ? "done" : "todo";
+  const step3: "todo" | "active" | "done" = confirmed ? "done" : reporting ? "active" : "todo";
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) void (pending ? cancel() : onClose()); }}>
@@ -327,6 +342,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
             </Step>
             <Step n={3} state={step3}>
               Codecast checks the token belongs to {who} and stores it here. If the browser approved another saved account, the token is stored with that account and the result names it.
+              {reporting && <Spinner label={`saving on ${device.label ?? "this machine"}`} className="mt-1" />}
             </Step>
           </ol>
 
@@ -349,13 +365,12 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
           )}
           {confirmed && (
             <p className="rounded-md border border-sol-green/30 bg-sol-green/10 p-2.5 text-sol-green">
-              Token stored for {flow?.email ?? who}
-              {profile.setup_token ? `, expires ${expiryDate(profile.setup_token.expires_at)}` : ""}. New sessions pinned to
-              this account launch with it.
+              Token stored for {flow?.email ?? who}, expires {expiryDate(profile.setup_token!.expires_at)}. New sessions
+              pinned to this account launch with it.
               {flow?.reason ? <span className="mt-1 block text-amber-500">Note: {flow.reason}.</span> : null}
             </p>
           )}
-          {!pending && !confirmed && (has || expired) && (
+          {!pending && !confirmed && !reporting && (has || expired) && (
             <p className="text-[11px] text-sol-text-dim">
               {expired
                 ? "The token on file is past its year. Minting again replaces it."
@@ -381,7 +396,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
             <Button size="sm" variant="ghost" onClick={() => pending ? cancel() : onClose()} className="h-7 px-2 text-[11px]">
               {busy === "cancel" ? "Cancelling…" : pending ? "Cancel mint" : confirmed ? "Done" : "Close"}
             </Button>
-            {!pending && !confirmed && (
+            {!pending && !confirmed && !reporting && (
               <Button size="sm" disabled={busy !== null} onClick={() => start(false)} className="h-7 px-3 text-[11px]">
                 {rejected ? "Try again" : has || expired ? "Mint a new token" : "Start, open the sign in"}
               </Button>

@@ -71,6 +71,14 @@ test("approval code is sealed to the device and success replaces waiting", async
   expect(JSON.stringify(sent.args)).not.toContain("fixture_code");
   expect(document.body.textContent).toContain("Token stored");
   expect(button("Done")).toBeDefined();
+  expect(button("Remove token")).toBeDefined();
+
+  // Removing it and reopening shows the account as it is now, not the old success.
+  await click("Remove token");
+  expect(mintCalls.at(-1)).toMatchObject({ name: "accountSwitch:removeSetupToken", args: { profile: "work" } });
+  await click("mint token");
+  expect(document.body.textContent).not.toContain("Token stored");
+  expect(button("Start, open the sign in")).toBeDefined();
 });
 
 
