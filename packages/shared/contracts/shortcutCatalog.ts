@@ -82,9 +82,6 @@ export type ShortcutAction =
   | 'review.nextFile'
   | 'review.prevFile'
   | 'review.comment'
-  | 'review.approveBlock'
-  | 'review.cutBlock'
-  | 'review.undoVerdict'
   | 'compose.focus'
   | 'compose.richToggle'
   | 'sidebar.toggleLeft'
@@ -448,12 +445,6 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },
   { key: 'c', action: 'review.comment', when: 'review', description: 'Comment on line' },
-  // Typed verdicts on the focused block of a message or plan under review
-  // (MessageReview reads them with matchesAction). Each one joins the reply's
-  // review batch and is sent to the agent as "Verdict: ...".
-  { key: 'a', action: 'review.approveBlock', when: 'review', description: 'Approve this block' },
-  { key: 'd', action: 'review.cutBlock', when: 'review', description: 'Mark this block to cut' },
-  { key: 'z', action: 'review.undoVerdict', when: 'review', description: 'Undo the last verdict' },
 
 
   { key: '[', action: 'diff.prevChange', when: 'diff', description: 'Previous change' },
