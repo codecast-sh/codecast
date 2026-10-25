@@ -502,103 +502,7 @@ export function verdictLabel(verdict: ChangeVerdict | "" | undefined): string {
   return verdict === "ship" ? "Ship" : verdict === "revise" ? "Revise" : verdict === "drop" ? "Drop" : "No recommendation";
 }
 
-/** The line template's decide gate (LE11): the node whose decision is the card. */
-export const CARD_GATE_NODE_ID = "decide";
-
-/** What a line run did to its cause (LE12, LE16), read from its stations:
- *  the watch station runs only after the change landed (ship, or merge), so a
- *  completed watch is the ship record; drop, dissolve and park each end the
- *  run at their own station. A line run is told apart from a run of another
- *  workflow with a station of the same name by its graph (isLineRun). */
-export type LineRunEnd = "shipped" | "dropped" | "dissolved" | "parked";
-/** The stations that end a line run, and the end each means. */
-export const LINE_END_NODES: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped", dissolve: "dissolved", park: "parked" };
-
-/** A run as isLineRun and lineRunOutcome read it: the stations it visited, and its graph's stations (LE14). */
-export type LineRunStations = {
-  node_statuses?: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null; started_at?: number; completed_at?: number }>;
-  graph_nodes?: ReadonlyArray<{ id: string }>;
-};
-
-/** Whether a run is a line run: its graph puts a change to a person on the card gate and watches it after it
- *  ships, which the shipped line and every variant of its spine (agentwatch starts at bind) share and no segment
- *  or other workflow has; or it visited ground, where the shipped line starts, which is all a run recorded before
- *  runs carried their graph shows. */
-export function isLineRun(run: LineRunStations | null | undefined): boolean {
-  if (!run) return false;
-  if (run.node_statuses?.some((n) => n.node_id === "ground")) return true;
-  const ids = new Set(run.graph_nodes?.map((n) => n.id));
-  return ids.has(CARD_GATE_NODE_ID) && ids.has("watch");
-}
-
-/** A run that went on past a card nobody answered (its decide gate failed)
- *  and still reached ship. Nothing approved it, so nothing after the card is
- *  a ship, on any graph. */
-export function passedUnansweredCard(nodes: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null }> | undefined, gate?: AnsweredGate | null): boolean {
-  // An answered gate records the chosen key as its outcome ("s"); only a gate
-  // that came back with no answer records "failure". The gate's decision is
-  // the record of the answer: a gate that gave up waiting while its card stayed
-  // open, and that a person then answered, was answered (ct-57444, answered
-  // Ship by a teammate 7 minutes after its node failed).
-  if (cardAnswered(gate)) return false;
-  const decide = nodes?.find((n) => n.node_id === CARD_GATE_NODE_ID);
-  const ship = nodes?.find((n) => n.node_id === "ship");
-  return decide?.outcome === "failure" && ship?.status === "completed";
-}
-
-/** The run row's record of its newest gate's decision (workflow_runs gate_*). */
-export type AnsweredGate = { gate_node_id?: string | null; gate_decision_status?: string | null; gate_answer?: string | null };
-
-/** The run's card decision was answered, whatever its gate node recorded. */
-export const cardAnswered = (gate: AnsweredGate | null | undefined): boolean =>
-  !!gate && gate.gate_node_id === CARD_GATE_NODE_ID && (gate.gate_decision_status === "answered" || !!gate.gate_answer?.trim());
-
-/** The ends every graph shares: a completed watch shipped, a completed drop dropped. */
-const SHARED_ENDS: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped" };
-
-/** Another graph's own close stations, by name: AgentWatch closes a cause at
- *  `dissolved_at_investigate` (no fix needed, found at Investigate) and parks
- *  it at `park_built`. The step it closed at is the name's tail. */
-function foreignEnd(id: string): LineRunEnd | null {
-  if (/^(?:dissolved|released)_at_\w+$/.test(id)) return "dissolved";
-  if (/^park(?:_|$)/.test(id)) return "parked";
-  return null;
-}
-
-/** Whether the run went on from its i-th station: a station other than the exit started after it completed (in the run's order, for stations with no times). */
-function wentOn(nodes: ReadonlyArray<{ node_id: string; started_at?: number; completed_at?: number }>, i: number): boolean {
-  const done = nodes[i].completed_at ?? nodes[i].started_at;
-  return nodes.some((m, j) => j !== i && m.node_id !== "exit" && (done !== undefined && m.started_at !== undefined ? m.started_at >= done : j > i));
-}
-
-/** The latest end station a run completed, the end it means and when, or null when it reached none: on a line run
- *  the line's own end stations, on every graph the ends all graphs share and another graph's close stations. An end
- *  station is where the run stopped. AgentWatch's spine passes through a `dissolve` step on its way to Investigate and
- *  closes at its own `dissolved_at_<step>`; read as an end, that step called 25 of Union's 48 AgentWatch runs dissolved
- *  while they ran, waited on a card or had stopped at Refine (2026-10-25). */
-function endStation(run: LineRunStations, gate: AnsweredGate | null | undefined): { kind: LineRunEnd; at: number; node: string } | null {
-  const nodes = run.node_statuses;
-  if (!nodes || passedUnansweredCard(nodes, gate)) return null;
-  const line = isLineRun(run);
-  let best: { kind: LineRunEnd; at: number; node: string } | null = null;
-  nodes.forEach((n, i) => {
-    const kind = (line ? LINE_END_NODES[n.node_id] : SHARED_ENDS[n.node_id]) ?? foreignEnd(n.node_id);
-    if (!kind || n.status !== "completed" || wentOn(nodes, i)) return;
-    const at = n.completed_at ?? n.started_at ?? 0;
-    if (!best || at >= best.at) best = { kind, at, node: n.node_id };
-  });
-  return best;
-}
-
-/** How a run ended, in any graph, so a run of another graph that merged and started its watch reads as shipped and
- *  one that closed its cause reads as dissolved, never by a gate it passed on the way. `node` is the end station it
- *  reached. The run row carries its own gate's record. */
-export const runEnd = (run: LineRunStations & AnsweredGate) => endStation(run, run);
-
-/** How a line run ended (runEnd), or null for a run of any other workflow. */
-export function lineRunOutcome(run: LineRunStations | null | undefined, gate?: AnsweredGate | null): { kind: LineRunEnd; at: number; node: string } | null {
-  return run && isLineRun(run) ? endStation(run, gate) : null;
-}
+export { CARD_GATE_NODE_ID, LINE_END_NODES, cardAnswered, isLineRun, lineRunOutcome, passedUnansweredCard, runEnd, type AnsweredGate, type LineRunEnd, type LineRunStations } from "./lineRunEnd";
 
 /** The verdict a gate option names ("Revise", "[R] Revise", "Drop the change"), or null. */
 export function verdictOfOption(label: string | undefined): ChangeVerdict | null {
@@ -814,10 +718,13 @@ export function checksPassWords(rows: ReadonlyArray<{ ok: boolean }>): { text: s
   return { text: red ? `${n - red}/${n} pass, ${red} red` : `${n}/${n} pass`, bad: red > 0 };
 }
 
+/** The word that opens the Eval check of a change no eval judged. */
+const UNSCORED = "Unscored:";
 /** The Eval check of a prompt or line change no eval judged. */
-export const UNSCORED_DETAIL = "Unscored: this project's line has no eval command, so no eval replayed the changed prompt";
-/** A check that never ran (the unscored Eval): it fails nothing, and it passed nothing either, so a card draws it neither green nor red. */
-export const checkNotRun = (c: CardCheck): boolean => c.detail === UNSCORED_DETAIL;
+export const UNSCORED_DETAIL = `${UNSCORED} this project's flow has no eval command, so no eval replayed the changed prompt`;
+/** A check that never ran (the unscored Eval): it fails nothing, and it passed nothing either, so a card draws it neither green nor red.
+ *  Read by its opening word: a card keeps the detail its run wrote, and cards written before 2026-10-25 say "line" where this says "flow". */
+export const checkNotRun = (c: CardCheck): boolean => !!c.detail?.startsWith(UNSCORED);
 /** Whether the card owes an eval nobody scored: a Ship it recommends then reads "Ship after evals". */
 export const evalsOwed = (card: Pick<ChangeCard, "checks">): boolean => card.checks.some(checkNotRun);
 

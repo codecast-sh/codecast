@@ -13,7 +13,7 @@
 // "merged, deploy not recorded", never assumed live. A regression is measured
 // from the deploy that carried the fix when one is known, else from the merge,
 // else from the ship step, and says which.
-import { CARD_GATE_NODE_ID, passedUnansweredCard, runEnd, type AnsweredGate, type LineRunEnd } from "./changeCard";
+import { CARD_GATE_NODE_ID, passedUnansweredCard, runEnd, type AnsweredGate, type LineRunEnd } from "./lineRunEnd";
 import { parsePrRef } from "./prRefs";
 
 /** What a step is handed when its problem has no earlier attempt (runner and line try alike). */

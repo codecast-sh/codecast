@@ -19,6 +19,8 @@ import {
   riskLabel,
   SUITE_GATE_CHECK,
   UNSCORED_DETAIL,
+  checkNotRun,
+  evalsOwed,
   validateChangeCard,
   type CardAssemblyInput,
   type ChangeCard,
@@ -87,6 +89,13 @@ describe("assembleChangeCard", () => {
     expect(evalOf("line")?.detail).toBe(UNSCORED_DETAIL);
     expect(evalOf("prompt")?.detail).toBe(UNSCORED_DETAIL);
     expect(evalOf("code")).toBeUndefined();
+  });
+
+  it("a card stored before the unscored check's rewording still reads its Eval as never run", () => {
+    const stored = { name: "Eval", ok: true, detail: "Unscored: this project's line has no eval command, so no eval replayed the changed prompt" };
+    expect(checkNotRun(stored)).toBe(true);
+    expect(evalsOwed({ checks: [stored] })).toBe(true);
+    expect(checkNotRun({ name: "Eval", ok: true, detail: "2 of 2 surfaces even or better" })).toBe(false);
   });
 
   it("takes the author's real cases when no eval flipped any, at most three; eval flips win", () => {

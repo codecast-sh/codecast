@@ -171,8 +171,8 @@ packages/mobile/components/session/NewSessionSheet.tsx 850
 packages/shared/contracts/agentClients.ts 1500
 packages/shared/contracts/capabilities.ts 900
 packages/shared/contracts/capabilityResolver.test.ts 900
-packages/shared/contracts/causeHistory.ts 950
-packages/shared/contracts/changeCard.ts 900
+packages/shared/contracts/causeHistory.ts 900
+packages/shared/contracts/changeCard.ts 850
 packages/shared/contracts/fleetDiff.ts 850
 packages/shared/contracts/inboxProjection.test.ts 1100
 packages/shared/contracts/inboxProjection.ts 1700
