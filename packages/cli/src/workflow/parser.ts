@@ -305,6 +305,7 @@ class Parser {
     if (attrs.category) node.category = String(attrs.category);
     if (attrs.card) node.card = String(attrs.card);
     if (attrs.asker) node.asker = String(attrs.asker);
+    if (attrs.answerer) node.answerer = String(attrs.answerer);
     if (attrs.stop) node.stop = String(attrs.stop);
     if (attrs.max_tokens !== undefined) node.max_tokens = Number(attrs.max_tokens);
     if (attrs.system) node.system = String(attrs.system);
@@ -549,7 +550,7 @@ const shapeOf = (a: Record<string, Attr>) => String(a.shape ?? "box");
 const isStopExit = (a: Record<string, Attr>) => shapeOf(a) === "Msquare" && !!a.stop;
 const mentionsFailure = (e: WorkflowEdge) => /\boutcome\s*=\s*failure\b/.test(e.condition ?? "");
 const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal"];
-const ID_FIELDS = ["asker", "retry_target"];
+const ID_FIELDS = ["asker", "answerer", "retry_target"];
 
 /**
  * Every `flow="<slug>"` node replaced by that segment's stations, named
@@ -612,6 +613,8 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
         copy[f] = rewrite(text);
       }
       for (const f of ID_FIELDS) if (typeof copy[f] === "string" && inner.includes(String(copy[f]))) copy[f] = rename(String(copy[f]));
+      // The graph that composes the segment knows which of its stations answers the segment's gates.
+      if (attrs.answerer && shapeOf(a) === "hexagon" && !copy.asker && !copy.answerer) copy.answerer = attrs.answerer;
       if (shapeOf(a) === "Msquare" && !(isStopExit(a) && !routesFailure)) {
         // An exit the node's own edges leave from: a step that says which exit it took.
         const failing = isStopExit(a);

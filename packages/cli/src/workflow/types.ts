@@ -77,6 +77,10 @@ export interface WorkflowNode {
   // The station whose session asks the gate: the decision lives in that
   // session's thread (its own, when it posted one; else asked from it).
   asker?: string;
+  // A station that answers a question typed at this gate without presenting
+  // the decision: the run goes back to it with the question, and the gate asks
+  // again from what it writes. A flow node names it for its segment's gates.
+  answerer?: string;
   // An exit that ends the run on purpose: the run fails with these words
   // ($vars expand) as "Stopped: ...", its task goes back to open, and nobody
   // is asked anything.

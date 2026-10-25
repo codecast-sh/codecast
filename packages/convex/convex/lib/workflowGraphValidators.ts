@@ -30,6 +30,7 @@ export const workflowNodeValidator = v.object({
   category: v.optional(v.string()),
   card: v.optional(v.string()),
   asker: v.optional(v.string()),
+  answerer: v.optional(v.string()),
 });
 
 export const workflowEdgeValidator = v.object({

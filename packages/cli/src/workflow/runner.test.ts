@@ -3,7 +3,8 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, runRegistrationIsFatal, type RunOptions } from "./runner.js";
+import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, runRegistrationIsFatal, buildNodePrompt, PRESENTER_BASE, type RunOptions } from "./runner.js";
+import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1341,6 +1342,39 @@ describe("workflow/runner (typed text at a ship gate)", () => {
     expect(ran()).toEqual(["present", "present", "ship"]);
     expect(gates).toHaveLength(2);
   }, 20000);
+
+  test("a typed question goes back to the answering station, which is not a presenter, and the gate asks again", async () => {
+    replies = ["does this touch billing?", "S"];
+    const g = parseWorkflowSource(`digraph change {
+      start [shape=Mdiamond]
+      review [shape=parallelogram, ${mark("review")}]
+      decide [label="Decide", shape=hexagon, answerer=review, prompt="Ship it?", doc="the review"]
+      ship [shape=parallelogram, ${mark("ship")}]
+      revise [shape=Msquare, label="Revise"]
+      exit [shape=Msquare]
+      start -> review -> decide
+      decide -> ship   [label="[S] Ship :: Land the change"]
+      decide -> revise [label="[R] Revise :: Your note goes back"]
+      ship -> exit
+    }`);
+    expect(await runWorkflow(g, { cwd: tmpDir, runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions)).toBe("completed");
+    expect(ran()).toEqual(["review", "review", "ship"]);
+    expect(gates).toHaveLength(2);
+    // The answering station reads the question, and no presenter brief.
+    const brief = buildNodePrompt({ ...g.nodes.get("review")!, prompt: "Review it." }, g, { "human.gate.question": "does this touch billing?" });
+    expect(brief).toContain("# The person's question at the card\ndoes this touch billing?");
+    expect(brief).not.toContain(PRESENTER_BASE);
+  }, 20000);
+
+  test("the change flow names its reviewer as the answerer of the decide segment's gate", () => {
+    const g = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change);
+    const gate = g.nodes.get("decide__decide")!;
+    expect(gate.answerer).toBe("review__review");
+    expect(g.nodes.get("review__review")?.backend).toBe("session");
+    expect(gate.asker).toBeUndefined();
+    // Decide alone names nobody: a question there is asked again with the question on top.
+    expect(parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.decide).nodes.get("decide")!.answerer).toBeUndefined();
+  });
 
   test("a chosen option still routes, a note beside it included", async () => {
     replies = ["S: looks right"];
