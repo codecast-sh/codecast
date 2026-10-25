@@ -11,7 +11,7 @@ import { graphExtends, parseWorkflowSource, validateWorkflow } from "./parser.js
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
 import type { WorkflowGraph } from "./types.js";
-import { codecastPath } from "../codecastDir.js";
+import { defaultFlowsCache, writeTeamFlowIndex } from "./teamFlowIndex.js";
 
 export type PoolWhere = "shipped" | "repo" | "pushed" | "team";
 export type PoolStation = FlowStation;
@@ -54,7 +54,7 @@ export type PushedPoolRow = {
  * checkout. A path that would leave the directory is not written. Returns the
  * graph file.
  */
-export function materializePushedFlow(row: PushedPoolRow, cacheRoot = codecastPath("flows"), base?: PushedPoolRow): string {
+export function materializePushedFlow(row: PushedPoolRow, cacheRoot = defaultFlowsCache(), base?: PushedPoolRow): string {
   const dir = path.resolve(cacheRoot, row._id.replace(/[^\w-]/g, ""));
   const write = (rel: string, text: string): string | null => {
     const abs = path.resolve(dir, rel);
@@ -94,9 +94,14 @@ export function repoFlowsDir(cwd: string): string | null {
  * published ones (`pushed`) neither names, each slug once. A draft (an import its session has not made general yet)
  * is offered only to that session (`session`, its id or short id).
  */
-export function poolFlows(cwd: string, session?: string | null, pushed: ReadonlyArray<PushedPoolRow> = [], cacheRoot?: string): PoolFlow[] {
+export function poolFlows(cwd: string, session?: string | null, pushed: ReadonlyArray<PushedPoolRow> = [], cacheRoot = defaultFlowsCache()): PoolFlow[] {
   const out: PoolFlow[] = [];
   const dir = repoFlowsDir(cwd);
+  // Every team flow the repo and the shipped flows do not name is written and indexed before any flow is read, so a
+  // flow here (or another team flow) can use one as a segment (teamFlowIndex.ts).
+  const repoSlugs = new Set((dir ? fs.readdirSync(dir) : []).filter((f) => f.endsWith(".cast")).map((f) => f.replace(/\.cast$/, "")));
+  const team = pushed.filter((row) => row.source && !repoSlugs.has(row.slug) && !Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, row.slug));
+  writeTeamFlowIndex(new Map(team.map((row) => [row.slug, materializePushedFlow(row, cacheRoot)] as const)), cacheRoot);
   const own = new Set<string>();
   if (dir) {
     for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".cast")).sort()) {
