@@ -1642,6 +1642,96 @@ export async function listForSessionCore(
   return { decisions: rows.map((r) => cliRowShape(r, own(r))) };
 }
 
+/** Rows one `cast decide ls --answered-since` page aims for; it reads through a tie at its last millisecond. */
+const ANSWERED_PAGE_MAX = 100;
+
+/**
+ * `cast decide ls --answered-since <t> --team <t>`: the cards answered on one
+ * team's work since a moment, oldest answer first, so a reader outside
+ * codecast can follow what people ruled with a cursor (Union's ops agent
+ * reads it into her feed, ct-70247). A card counts when it is bound to a task
+ * in the team's workspace that the caller may read. Read member by member
+ * through by_user_status_resolved (a card's user_id is the asking session's
+ * owner, a member of the team its task routes to), never the deployment's
+ * newest rows. Rows are lean, the question, the answer and the task, so a
+ * page fits a small transport.
+ */
+export async function listAnsweredSinceCore(
+  ctx: Ctx,
+  userId: Id<"users">,
+  args: { answered_since: number; team_id: string; limit?: number },
+): Promise<any> {
+  const teamId = ctx.db.normalizeId("teams", args.team_id);
+  if (!teamId) return { error: `Unknown team: ${args.team_id}` };
+  if (!(await isTeamMember(ctx, userId, teamId))) return { error: "Not a member of that team" };
+  const workspace = `team:${teamId}`;
+  const limit = Math.max(1, Math.min(ANSWERED_PAGE_MAX, Math.floor(args.limit ?? 50)));
+  const members = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect();
+  // The cursor is a bare resolved_at read with gt, so a page never ends inside
+  // one millisecond: every card answered at the cursor's time is on the page
+  // that returns it. A member whose page came back full may hold more answers
+  // at or after its last one, so this page reads only what came before that
+  // millisecond, or that millisecond itself when the whole page sits in it.
+  const answered: DecisionRow[] = [];
+  let bound = { at: Infinity, inclusive: true };
+  for (const m of members) {
+    const page: DecisionRow[] = await ctx.db
+      .query("session_decisions")
+      .withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", m.user_id).eq("status", "answered").gt("resolved_at", args.answered_since))
+      .take(limit);
+    answered.push(...page);
+    if (page.length < limit) continue;
+    const last = page[page.length - 1].resolved_at ?? 0;
+    const inclusive = (page[0].resolved_at ?? 0) === last;
+    if (last < bound.at || (last === bound.at && !inclusive)) bound = { at: last, inclusive };
+  }
+  const withinBound = (at: number) => at < bound.at || (bound.inclusive && at === bound.at);
+  answered.sort((a, b) => (a.resolved_at ?? 0) - (b.resolved_at ?? 0) || String(a._id).localeCompare(String(b._id)));
+  const tasks = new Map<string, any>();
+  const names = new Map<string, string | undefined>();
+  const nameOf = async (table: "users" | "projects" | "org_roles", id: string | undefined) => {
+    if (!id) return undefined;
+    const key = `${table}:${id}`;
+    if (!names.has(key)) {
+      const normalized = ctx.db.normalizeId(table, id);
+      const row: any = normalized ? await ctx.db.get(normalized) : null;
+      names.set(key, row?.name ?? row?.title ?? undefined);
+    }
+    return names.get(key);
+  };
+  const out = [];
+  let cursor = args.answered_since;
+  for (const r of answered) {
+    const at = r.resolved_at ?? 0;
+    if (!withinBound(at) || (out.length >= limit && at !== cursor)) break;
+    cursor = at;
+    if (!r.task_id) continue;
+    const key = String(r.task_id);
+    if (!tasks.has(key)) {
+      const task = await ctx.db.get(r.task_id);
+      tasks.set(key, task && task.workspace === workspace && (await canAccessTask(ctx, userId, task)) ? task : null);
+    }
+    const task = tasks.get(key);
+    if (!task) continue;
+    const by = r.answered_by;
+    out.push({
+      id: r._id,
+      short_id: r.short_id,
+      question: r.question,
+      options: r.options.map((o) => o.label),
+      ...resolvedSummary(r),
+      answered_by: by
+        ? { kind: by.kind, name: by.kind === "role" ? await nameOf("org_roles", by.id) : by.kind === "user" ? await nameOf("users", by.id) : undefined }
+        : r.resolved_by
+          ? { kind: "user", name: await nameOf("users", String(r.resolved_by)) }
+          : undefined,
+      resolved_at: r.resolved_at,
+      task: { short_id: task.short_id, title: task.title, status: task.status, project: await nameOf("projects", task.project_id ? String(task.project_id) : undefined) },
+    });
+  }
+  return { decisions: out, cursor };
+}
+
 export const listForSession = mutation({
   args: {
     api_token: v.string(),
@@ -1649,10 +1739,17 @@ export const listForSession = mutation({
     stack: v.optional(v.string()),
     task: v.optional(v.string()),
     mine: v.optional(v.boolean()),
+    answered_since: v.optional(v.number()),
+    team_id: v.optional(v.string()),
+    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) return { error: "Unauthorized" };
+    if (args.answered_since !== undefined) {
+      if (!args.team_id) return { error: "--answered-since needs --team" };
+      return listAnsweredSinceCore(ctx, auth.userId, { answered_since: args.answered_since, team_id: args.team_id, limit: args.limit });
+    }
     return listForSessionCore(ctx, auth, args);
   },
 });

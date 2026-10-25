@@ -16,6 +16,7 @@ import {
   personMayResolve,
   guardClientResolution,
   listForSessionCore,
+  listAnsweredSinceCore,
   userMayRead,
   agreementHistoryForCategory,
   agreementFor,
@@ -828,6 +829,87 @@ describe("review wave 1 regressions", () => {
     expect(withSession.decisions[0].messages_since).toBe(0);
     // A bare list still needs the session it lists for.
     expect((await listForSessionCore(ctx, { userId: HOST }, {})).error).toBe("Missing session_id");
+  });
+
+  test("ls --answered-since pages a team's answered cards oldest first, with a cursor that never skips a card", async () => {
+    const OTHER_TEAM = "teams_other" as any;
+    const card = (id: string, user: any, task: string | undefined, at: number, extra: Record<string, any> = {}) => ({
+      _id: id, short_id: `sd-${id.slice(-1)}`, user_id: user, conversation_id: "conversations_ask", session_id: "sess-ask",
+      question: `Q ${id}`, options: twoOptions, status: "answered", answer_index: 1, answer_text: "note", task_id: task,
+      answered_by: { kind: "user", id: BOSS }, created_at: at - 10, resolved_at: at, ...extra,
+    });
+    const { ctx } = seed({
+      projects: [{ _id: "projects_p1", team_id: TEAM, title: "People & Deals" }],
+      tasks: [
+        { _id: "tasks_t1", short_id: "ct-7", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, title: "Fee policy", status: "in_review", project_id: "projects_p1", task_type: "task", priority: "medium" },
+        { _id: "tasks_x", short_id: "ct-9", user_id: HOST, team_id: OTHER_TEAM, workspace: `team:${OTHER_TEAM}`, title: "Elsewhere", status: "open", task_type: "task", priority: "medium" },
+      ],
+      session_decisions: [
+        card("session_decisions_1", HOST, "tasks_t1", NOW + 1),
+        card("session_decisions_2", BOSS, "tasks_t1", NOW + 2),
+        card("session_decisions_3", HOST, "tasks_x", NOW + 3),
+        card("session_decisions_4", HOST, undefined, NOW + 4),
+        card("session_decisions_5", HOST, "tasks_t1", NOW + 5),
+        card("session_decisions_6", HOST, "tasks_t1", NOW + 6, { status: "pending", resolved_at: undefined }),
+        card("session_decisions_7", HOST, "tasks_t1", NOW - 100),
+      ],
+    });
+
+    const all = await listAnsweredSinceCore(ctx, HOST, { answered_since: NOW, team_id: TEAM });
+    expect(all.decisions.map((d: any) => d.short_id)).toEqual(["sd-1", "sd-2", "sd-5"]);
+    expect(all.decisions[0]).toMatchObject({
+      question: "Q session_decisions_1", answer_label: "Switch to upstream", answer_text: "note",
+      answered_by: { kind: "user", name: "Boss" }, resolved_at: NOW + 1,
+      task: { short_id: "ct-7", title: "Fee policy", status: "in_review", project: "People & Deals" },
+    });
+    expect(all.cursor).toBe(NOW + 5);
+
+    // Page of 1: HOST's full page stops the read at its last card, so BOSS's
+    // later card waits for the next page instead of being stepped over.
+    const first = await listAnsweredSinceCore(ctx, HOST, { answered_since: NOW, team_id: TEAM, limit: 1 });
+    expect(first.decisions.map((d: any) => d.short_id)).toEqual(["sd-1"]);
+    const seen: string[] = [];
+    let cursor = NOW;
+    for (let i = 0; i < 10; i++) {
+      const page = await listAnsweredSinceCore(ctx, HOST, { answered_since: cursor, team_id: TEAM, limit: 1 });
+      seen.push(...page.decisions.map((d: any) => d.short_id));
+      if (page.cursor === cursor) break;
+      cursor = page.cursor;
+    }
+    expect(seen).toEqual(["sd-1", "sd-2", "sd-5"]);
+
+    expect((await listAnsweredSinceCore(ctx, "users_stranger" as any, { answered_since: NOW, team_id: TEAM })).error).toBe("Not a member of that team");
+  });
+
+  test("ls --answered-since never ends a page inside one millisecond, so a tie across a page boundary is not lost", async () => {
+    const T = NOW + 10;
+    const card = (id: string, user: any, at: number) => ({
+      _id: id, short_id: id.replace("session_decisions_", "sd-"), user_id: user, conversation_id: "conversations_ask", session_id: "sess-ask",
+      question: id, options: twoOptions, status: "answered", answer_index: 0, task_id: "tasks_t1",
+      answered_by: { kind: "user", id: BOSS }, created_at: at - 10, resolved_at: at,
+    });
+    const page = async (since: number, limit: number) => {
+      const r = await listAnsweredSinceCore(ctx, HOST, { answered_since: since, team_id: TEAM, limit });
+      return { ids: r.decisions.map((d: any) => d.short_id), cursor: r.cursor };
+    };
+    const { ctx } = seed({
+      session_decisions: [
+        // Two members answer in the same millisecond.
+        card("session_decisions_a", HOST, T),
+        card("session_decisions_b", BOSS, T),
+        // One member's full page ends inside a tie it shares with a card past the page.
+        card("session_decisions_c", HOST, T + 1),
+        card("session_decisions_d", HOST, T + 2),
+        card("session_decisions_e", HOST, T + 2),
+      ],
+    });
+
+    // A page of one reads through the tie at its last millisecond.
+    expect(await page(NOW, 1)).toEqual({ ids: ["sd-a", "sd-b"], cursor: T });
+    // HOST's page of two ends at T + 2 with more there, so this page stops before T + 2.
+    expect(await page(T, 2)).toEqual({ ids: ["sd-c"], cursor: T + 1 });
+    expect(await page(T + 1, 2)).toEqual({ ids: ["sd-d", "sd-e"], cursor: T + 2 });
+    expect(await page(T + 2, 2)).toEqual({ ids: [], cursor: T + 2 });
   });
 
   test("removeFromStack refuses a decision that is a member of another stack", async () => {

@@ -192,6 +192,7 @@ post it, then end your turn.
 
 Subcommands:
   cast decide ls [--mine]             This session's decisions, with ids and answers; --mine: every pending decision you hold
+  cast decide ls --answered-since <t> Cards answered on a team's tasks since t, oldest first, with a cursor (--team, -n; no session)
   cast decide edit [id] [flags]       Change the open decision in place; every ask flag applies (question, -o, --context, --report, --doc, --kind, --task, --station, --stack, --category, --option-page, --advisory/--blocking)
   cast decide cancel [id]             Withdraw the open decision
   cast decide show <sd>               One decision with its document, ladder and holder

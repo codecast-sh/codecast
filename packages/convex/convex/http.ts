@@ -1475,13 +1475,13 @@ http.route({
       if (action === "ls") {
         // A task, stack or --mine list needs no session: `cast task show`
         // reads a task's decisions from a plain shell (the-line.md L10).
-        if (!session_id && !body.task && !body.stack && !body.mine) {
+        if (!session_id && !body.task && !body.stack && !body.mine && body.answered_since === undefined) {
           return new Response(JSON.stringify({ error: "Missing session_id" }), {
             status: 400,
             headers: { "Content-Type": "application/json", ...corsHeaders },
           });
         }
-        result = await ctx.runMutation(api.sessionDecisions.listForSession, { api_token, session_id: session_id || undefined, stack: body.stack, task: body.task, mine: body.mine });
+        result = await ctx.runMutation(api.sessionDecisions.listForSession, { api_token, session_id: session_id || undefined, stack: body.stack, task: body.task, mine: body.mine, answered_since: typeof body.answered_since === "number" ? body.answered_since : undefined, team_id: typeof body.team_id === "string" ? body.team_id : undefined, limit: typeof body.limit === "number" ? body.limit : undefined });
       } else if (action === "edit" || action === "cancel") {
         if (!body.decision_id) {
           return new Response(JSON.stringify({ error: "Missing decision_id" }), {

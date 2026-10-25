@@ -41,6 +41,7 @@ import { DECISION_KIT_GUIDE, DECISION_KIT_LINE, previewDecisionPage, usesDecisio
 // What a decision put to a person is, on any line: the brief a presenting station reads first.
 import presenterBrief from "./workflow/presenter.md" with { type: "text" };
 import { cliFetch } from "./cliHttp.js";
+import { loadWorkspaceRoster, resolveWorkspaceForRead } from "./resolveWorkspace.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
 import { readTaskPulseFor } from "./taskPulse.js";
@@ -414,6 +415,57 @@ function explainResolved(err: unknown, result: any): never {
   fail(err instanceof Error ? err.message : String(err));
 }
 
+/** An `--answered-since` value: epoch ms, an ISO time, or a span back from now (30m, 24h, 7d). */
+export function parseAnsweredSince(value: string, now: number = Date.now()): number | null {
+  const v = value.trim();
+  if (/^\d{11,}$/.test(v)) return Number(v);
+  const span = v.match(/^(\d+)(m|h|d)$/);
+  if (span) return now - Number(span[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[span[2] as "m" | "h" | "d"];
+  const at = Date.parse(v);
+  return Number.isFinite(at) ? at : null;
+}
+
+/** One line per answered card: when, which card, the answer, the task it rules on. */
+export function formatAnsweredList(rows: AnsweredRow[]): string {
+  if (rows.length === 0) return "No cards answered in that window.";
+  return rows
+    .map((r) => {
+      const answer = [r.answer_label, r.answer_text].filter(Boolean).join(" — ");
+      const by = r.answered_by?.name ? ` (${r.answered_by.name})` : "";
+      return `${new Date(r.resolved_at ?? 0).toISOString()}  ${r.short_id ?? r.id}  ${r.question}\n    → ${answer || "(answered)"}${by}\n    ${r.task.short_id}  ${r.task.title}${r.task.project ? `  [${r.task.project}]` : ""}`;
+    })
+    .join("\n");
+}
+
+export interface AnsweredRow {
+  id: string;
+  short_id?: string;
+  question: string;
+  options: string[];
+  answer_label?: string;
+  answer_text?: string;
+  answered_by?: { kind: string; name?: string };
+  resolved_at?: number;
+  task: { short_id: string; title: string; status: string; project?: string };
+}
+
+// `cast decide ls --answered-since`: needs no session, so a plain shell (a
+// product's box reading rulings into its own agent) can page through a
+// team's answers with the cursor the reply carries.
+async function listAnsweredSince(deps: PublishDeps, options: any): Promise<void> {
+  const since = parseAnsweredSince(String(options.answeredSince));
+  if (since === null) fail(`--answered-since ${options.answeredSince}: give epoch ms, an ISO time, or 30m/24h/7d.`);
+  const roster = await loadWorkspaceRoster(() => decideApi(deps, {}, "/cli/teams"));
+  const ws = resolveWorkspaceForRead(roster, typeof options.team === "string" ? options.team : undefined);
+  if (ws.kind !== "team") fail("--answered-since reads a team's cards: pass --team <name|id>.");
+  const limit = options.limit !== undefined ? Number(options.limit) : undefined;
+  if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) fail("--limit must be a positive whole number.");
+  const result = await decideApi(deps, { action: "ls", answered_since: since, team_id: ws.teamId, limit });
+  const rows: AnsweredRow[] = result.decisions ?? [];
+  if (options.json) console.log(JSON.stringify({ decisions: rows, cursor: result.cursor ?? since }, null, 2));
+  else console.log(formatAnsweredList(rows));
+}
+
 // POST to /cli/decide (the ask/edit/cancel/ls verbs) or one of the
 // /cli/decide/<verb> routes.
 async function decideApi(deps: PublishDeps, body: Record<string, unknown>, route = "/cli/decide"): Promise<any> {
@@ -566,6 +618,9 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       [] as string[]
     )
     .option("--mine", "ls: every pending decision you hold, across sessions")
+    .option("--answered-since <time>", "ls: the cards answered on a team's tasks after a time (epoch ms, ISO time, or 30m/24h/7d ago), oldest first; no session needed")
+    .option("--team <name|id>", "ls --answered-since: the team (default: the active one)")
+    .option("-n, --limit <n>", "ls --answered-since: rows per page (default 50, at most 100)")
     .option("--note <text>", stdinText("recommend / pass: what the person should know that the card does not say"))
     .option("--form <k=v>", "answer: a form field value (repeatable)", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--for-human", "answer: from a session, answer as your human. Only when they explicitly told you in this conversation to answer this decision, or agreed to this choice; never on your own judgment")
@@ -579,6 +634,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       // The decision page kit needs no session: it prints its guide, or writes a page as it will be served.
       if (question === "kit") return runDecisionKit(rest, !!options.serve);
       if (question === "brief") return void console.log(presenterBrief.trim());
+      if ((question === "ls" || question === "list") && options.answeredSince !== undefined) return listAnsweredSince(deps, options);
       const sessionId: string | null = options.session || deps.detectCurrentSessionId();
       if (!sessionId && question !== "answer") fail("No session detected. Run inside a codecast session or pass --session <id>.");
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, formatSpan, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, parseOptionPageArg, pageRefToSlug, attachOptionPages, type DecideOption, type DecisionRow } from "./decideCommand.js";
+import { parseDecideOption, pickDecisionTarget, looksLikeDecisionId, describeResolution, formatDecisionList, formatAge, formatSpan, isStaleDecision, parseAnswerSpec, parseDecideSpec, parseOptionBodyArg, parseOptionPageArg, pageRefToSlug, attachOptionPages, parseAnsweredSince, formatAnsweredList, type DecideOption, type DecisionRow } from "./decideCommand.js";
 
 describe("cast decide option parsing", () => {
   it("keeps a bare label as a label", () => {
@@ -337,5 +337,27 @@ describe("cast decide answer from a plain shell on the wire", () => {
     expect(answer).toBeDefined();
     expect("session_id" in answer!.body).toBe(false);
     expect(answer!.body.answer_index).toBe(0);
+  });
+});
+
+describe("cast decide ls --answered-since", () => {
+  const now = Date.parse("2026-10-24T12:00:00Z");
+  it("takes epoch ms, a span back from now, or an ISO time", () => {
+    expect(parseAnsweredSince("1792800000000", now)).toBe(1792800000000);
+    expect(parseAnsweredSince("30m", now)).toBe(now - 30 * 60_000);
+    expect(parseAnsweredSince("24h", now)).toBe(now - 86_400_000);
+    expect(parseAnsweredSince("7d", now)).toBe(now - 7 * 86_400_000);
+    expect(parseAnsweredSince("2026-10-23T00:00:00Z", now)).toBe(Date.parse("2026-10-23T00:00:00Z"));
+    expect(parseAnsweredSince("soon", now)).toBeNull();
+  });
+
+  it("prints the card, its answer and the task it rules on", () => {
+    const out = formatAnsweredList([
+      { id: "x", short_id: "sd-9", question: "Raise the fee?", options: ["Yes", "No"], answer_label: "Yes", answer_text: "before the intro", answered_by: { kind: "user", name: "Cam" }, resolved_at: now, task: { short_id: "ct-1", title: "Fee", status: "done", project: "People & Deals" } },
+    ]);
+    expect(out).toContain("sd-9  Raise the fee?");
+    expect(out).toContain("→ Yes — before the intro (Cam)");
+    expect(out).toContain("ct-1  Fee  [People & Deals]");
+    expect(formatAnsweredList([])).toBe("No cards answered in that window.");
   });
 });
