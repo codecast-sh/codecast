@@ -36,7 +36,7 @@ packages/cli/src/daemon.machine-prompt-safety.test.ts 1100
 packages/cli/src/daemon.tmux-classify.test.ts 1200
 packages/cli/src/daemon.ts 33100
 packages/cli/src/daemon.waiting-tasks.test.ts 900
-packages/cli/src/decideCommand.ts 900
+packages/cli/src/decideCommand.ts 950
 packages/cli/src/doctor.ts 950
 packages/cli/src/execution/coordinator.ts 1000
 packages/cli/src/formatter.ts 2550
@@ -57,7 +57,7 @@ packages/cli/src/secrets/command.ts 850
 packages/cli/src/snippets.sections.test.ts 950
 packages/cli/src/syncService.ts 2700
 packages/cli/src/test-helpers/messagingHarness.ts 950
-packages/cli/src/workflow/runner.test.ts 1350
+packages/cli/src/workflow/runner.test.ts 1400
 packages/cli/src/workflow/runner.ts 2250
 packages/cli/src/workflow/templates.test.ts 1050
 packages/cli/src/workspace/lifecycle.test.ts 1000
@@ -90,7 +90,7 @@ packages/convex/convex/cleanup.ts 900
 packages/convex/convex/cloud.ts 1150
 packages/convex/convex/codeComments.ts 1100
 packages/convex/convex/comments.ts 1450
-packages/convex/convex/comments.v2.test.ts 1250
+packages/convex/convex/comments.v2.test.ts 1300
 packages/convex/convex/composerSuggestions.ts 1050
 packages/convex/convex/conversations.projection.test.ts 1000
 packages/convex/convex/conversations.ts 14200
@@ -137,8 +137,8 @@ packages/convex/convex/repos.ts 1600
 packages/convex/convex/schema.ts 9200
 packages/convex/convex/secrets.test.ts 1050
 packages/convex/convex/secrets.ts 1550
-packages/convex/convex/sessionDecisions.test.ts 1350
-packages/convex/convex/sessionDecisions.ts 2600
+packages/convex/convex/sessionDecisions.test.ts 1400
+packages/convex/convex/sessionDecisions.ts 2700
 packages/convex/convex/sessionInsights.ts 900
 packages/convex/convex/sessionMigrations.ts 1300
 packages/convex/convex/sessionOwnership.ts 1200
@@ -179,7 +179,7 @@ packages/shared/contracts/inboxProjection.ts 1700
 packages/shared/contracts/machineMessages.ts 900
 packages/shared/contracts/orgProposal.test.ts 1250
 packages/shared/contracts/orgProposal.ts 1950
-packages/shared/contracts/secrets.ts 1050
+packages/shared/contracts/secrets.ts 950
 packages/shared/contracts/snippets.ts 1850
 packages/shared/entities/index.ts 1250
 packages/shared/render/toolCall.ts 900

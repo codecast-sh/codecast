@@ -71,8 +71,10 @@ import { join } from "node:path";
 // secrets.test.ts and secrets/command.ts, and conversation/classify.ts), and
 // PIN rose to 263. The growth is split work owed: daemon.ts +250, chat.test.ts
 // +200 and schema.ts +200 lead it. The same ship's later passes that day grew
-// 12 more listed files by one step (MessageReview.tsx by two), re-pinned under
-// the same decision.
+// 12 more listed files by one step (MessageReview.tsx by two), and its last
+// pass five more (sessionDecisions.ts by two, decideCommand.ts, the runner and
+// comments.v2 and sessionDecisions tests), re-pinned under the same decision.
+// contracts/secrets.ts fell to 950 when its pure rules moved to secretRules.ts.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
