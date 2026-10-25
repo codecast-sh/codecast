@@ -20,7 +20,7 @@ cd "$root/packages/web"
 # window a slow machine can only miss); but a ship runs this on a laptop
 # carrying dozens of agents, where importing the composer alone outlasts bun's
 # 5s default and fails the setup, not the budget.
-bun test --isolate --timeout 30000 \
+bun test --isolate --timeout 120000 \
   components/__tests__/composerTypingBudget.mount.test.tsx \
   store/__tests__/storeWriteBudget.mount.test.tsx \
   components/__tests__/listRowsHoldStill.test.tsx \
