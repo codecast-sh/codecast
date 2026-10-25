@@ -15,7 +15,7 @@
     "components/decisions/StackChecklist.tsx",
     "components/decisions/StackPage.tsx",
     "components/decisions/TaskDecisions.tsx",
-    "components/DecisionAnswerFooter.tsx",
+    "components/DecisionAnswerQuote.tsx",
     "components/CommandPalette.tsx",
     "components/RoutePane.tsx",
     "hooks/useSyncDecisionDetail.ts",
