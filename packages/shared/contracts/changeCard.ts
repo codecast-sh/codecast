@@ -553,18 +553,51 @@ export type AnsweredGate = { gate_node_id?: string | null; gate_decision_status?
 export const cardAnswered = (gate: AnsweredGate | null | undefined): boolean =>
   !!gate && gate.gate_node_id === CARD_GATE_NODE_ID && (gate.gate_decision_status === "answered" || !!gate.gate_answer?.trim());
 
-/** The latest end station a line run completed and when, or null when it reached none. */
-export function lineRunOutcome(run: LineRunStations | null | undefined, gate?: AnsweredGate | null): { kind: LineRunEnd; at: number } | null {
-  const nodes = run?.node_statuses;
-  if (!nodes || !isLineRun(run) || passedUnansweredCard(nodes, gate)) return null;
-  let best: { kind: LineRunEnd; at: number } | null = null;
-  for (const n of nodes) {
-    const kind = LINE_END_NODES[n.node_id];
-    if (!kind || n.status !== "completed") continue;
+/** The ends every graph shares: a completed watch shipped, a completed drop dropped. */
+const SHARED_ENDS: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped" };
+
+/** Another graph's own close stations, by name: AgentWatch closes a cause at
+ *  `dissolved_at_investigate` (no fix needed, found at Investigate) and parks
+ *  it at `park_built`. The step it closed at is the name's tail. */
+function foreignEnd(id: string): LineRunEnd | null {
+  if (/^(?:dissolved|released)_at_\w+$/.test(id)) return "dissolved";
+  if (/^park(?:_|$)/.test(id)) return "parked";
+  return null;
+}
+
+/** Whether the run went on from its i-th station: a station other than the exit started after it completed (in the run's order, for stations with no times). */
+function wentOn(nodes: ReadonlyArray<{ node_id: string; started_at?: number; completed_at?: number }>, i: number): boolean {
+  const done = nodes[i].completed_at ?? nodes[i].started_at;
+  return nodes.some((m, j) => j !== i && m.node_id !== "exit" && (done !== undefined && m.started_at !== undefined ? m.started_at >= done : j > i));
+}
+
+/** The latest end station a run completed, the end it means and when, or null when it reached none: on a line run
+ *  the line's own end stations, on every graph the ends all graphs share and another graph's close stations. An end
+ *  station is where the run stopped. AgentWatch's spine passes through a `dissolve` step on its way to Investigate and
+ *  closes at its own `dissolved_at_<step>`; read as an end, that step called 25 of Union's 48 AgentWatch runs dissolved
+ *  while they ran, waited on a card or had stopped at Refine (2026-10-25). */
+function endStation(run: LineRunStations, gate: AnsweredGate | null | undefined): { kind: LineRunEnd; at: number; node: string } | null {
+  const nodes = run.node_statuses;
+  if (!nodes || passedUnansweredCard(nodes, gate)) return null;
+  const line = isLineRun(run);
+  let best: { kind: LineRunEnd; at: number; node: string } | null = null;
+  nodes.forEach((n, i) => {
+    const kind = (line ? LINE_END_NODES[n.node_id] : SHARED_ENDS[n.node_id]) ?? foreignEnd(n.node_id);
+    if (!kind || n.status !== "completed" || wentOn(nodes, i)) return;
     const at = n.completed_at ?? n.started_at ?? 0;
-    if (!best || at >= best.at) best = { kind, at };
-  }
+    if (!best || at >= best.at) best = { kind, at, node: n.node_id };
+  });
   return best;
+}
+
+/** How a run ended, in any graph, so a run of another graph that merged and started its watch reads as shipped and
+ *  one that closed its cause reads as dissolved, never by a gate it passed on the way. `node` is the end station it
+ *  reached. The run row carries its own gate's record. */
+export const runEnd = (run: LineRunStations & AnsweredGate) => endStation(run, run);
+
+/** How a line run ended (runEnd), or null for a run of any other workflow. */
+export function lineRunOutcome(run: LineRunStations | null | undefined, gate?: AnsweredGate | null): { kind: LineRunEnd; at: number; node: string } | null {
+  return run && isLineRun(run) ? endStation(run, gate) : null;
 }
 
 /** The verdict a gate option names ("Revise", "[R] Revise", "Drop the change"), or null. */

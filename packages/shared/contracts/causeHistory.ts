@@ -13,7 +13,7 @@
 // "merged, deploy not recorded", never assumed live. A regression is measured
 // from the deploy that carried the fix when one is known, else from the merge,
 // else from the ship step, and says which.
-import { CARD_GATE_NODE_ID, LINE_END_NODES, isLineRun, passedUnansweredCard, type AnsweredGate, type LineRunEnd } from "./changeCard";
+import { CARD_GATE_NODE_ID, passedUnansweredCard, runEnd, type AnsweredGate, type LineRunEnd } from "./changeCard";
 import { parsePrRef } from "./prRefs";
 
 /** What a step is handed when its problem has no earlier attempt (runner and line try alike). */
@@ -59,17 +59,7 @@ export function reportFieldWords(result: unknown): string | null {
   return v?.trim() ?? null;
 }
 
-/** The ends every graph shares: a completed watch shipped, a completed drop dropped. */
-const SHARED_ENDS: Readonly<Record<string, LineRunEnd>> = { watch: "shipped", drop: "dropped" };
-
-/** Another graph's own close stations, by name: AgentWatch closes a cause at
- *  `dissolved_at_investigate` (no fix needed, found at Investigate) and parks
- *  it at `park_built`. The step it closed at is the name's tail. */
-function foreignEnd(id: string): LineRunEnd | null {
-  if (/^(?:dissolved|released)_at_\w+$/.test(id)) return "dissolved";
-  if (/^park(?:_|$)/.test(id)) return "parked";
-  return null;
-}
+export { runEnd };
 
 /** The step a run closed at, from its end station: "dissolved_at_investigate" is Investigate; the line's own end stations name themselves. */
 export const closedAtStep = (endNode: string): string => /^(?:dissolved|released|failed|escalated)_at_(\w+)$/.exec(endNode)?.[1] ?? endNode;
@@ -79,24 +69,6 @@ export const closedAtStep = (endNode: string): string => /^(?:dissolved|released
 export function failedAtStation(nodes: ReadonlyArray<{ node_id: string; status: string }> | undefined): string | null {
   const failed = [...(nodes ?? [])].reverse().find((n) => typeof n.node_id === "string" && n.node_id.startsWith("failed_at_") && n.status === "completed");
   return failed ? failed.node_id.slice("failed_at_".length) : null;
-}
-
-/** How a run ended, in any graph: the line's own end stations, else the
- *  ends every graph shares and another graph's close stations, so a run of
- *  another graph (AgentWatch) that merged and started its watch reads as
- *  shipped, and one that dissolved the cause reads as dissolved, never by a
- *  gate it passed on the way. `node` is the end station it reached. */
-export function runEnd(run: { node_statuses?: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null; started_at?: number; completed_at?: number }> } & AnsweredGate): { kind: LineRunEnd; at: number; node: string } | null {
-  if (passedUnansweredCard(run.node_statuses, run)) return null;
-  const line = isLineRun(run);
-  let best: { kind: LineRunEnd; at: number; node: string } | null = null;
-  for (const n of run.node_statuses ?? []) {
-    const kind = line ? LINE_END_NODES[n.node_id] : SHARED_ENDS[n.node_id] ?? foreignEnd(n.node_id);
-    if (!kind || n.status !== "completed") continue;
-    const at = n.completed_at ?? n.started_at ?? 0;
-    if (!best || at >= best.at) best = { kind, at, node: n.node_id };
-  }
-  return best;
 }
 
 /** Where a run's fix went, for the history: its end (runEnd), or, for a run
