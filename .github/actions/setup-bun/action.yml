@@ -12,13 +12,12 @@ inputs:
 runs:
   using: composite
   steps:
-    # The version the release workflows build the shipped binaries with, so the
-    # tests run what ships. 1.3.14 also stopped losing Linux child exits when
-    # several children exit at once, one candidate for test-cli's synchronous
-    # spawns that outlive their timeout (ct-71000).
+    # Not yet 1.3.14, which the release workflows build with: under --isolate it
+    # runs a test preload once instead of in every file, so a mock the web
+    # preload installs hands each file the first file's modules (ct-71000).
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       with:
-        bun-version: 1.3.14
+        bun-version: 1.3.13
 
     - if: inputs.deps != 'none'
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
