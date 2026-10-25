@@ -7,7 +7,7 @@
 // agent's tab) every reader and writer here answers from the sample instead,
 // and no query or action runs.
 
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { FunctionReturnType } from "convex/server";
@@ -20,6 +20,7 @@ import { useWorkspacesCollection } from "./useWorkspaceCollection";
 import { useInboxStore } from "../store/inboxStore";
 import { syncMetaKey } from "./syncMetaKeys";
 import { useWatchEffect } from "./useWatchEffect";
+import { useSwitchWorkspace } from "./useSwitchWorkspace";
 
 /** Stamped when the feeder's first answer lands; syncMeta persists and replicates, so every window reads it. */
 const SECRETS_FED = syncMetaKey("secrets", "viewer");
@@ -76,6 +77,33 @@ export function useHeldSecrets(): SecretMeta[] {
   const personal = useInboxStore((s) => (s.currentUser?._id ? `user:${s.currentUser._id}` : null));
   const keys = useMemo(() => [...(teamKeys ? teamKeys.split("\n") : []), personal], [teamKeys, personal]);
   return useWorkspacesCollection<SecretMeta>("secrets", secretSig, keys);
+}
+
+const byId = (rows: SecretMeta[], ref: string) => rows.find((r) => r.short_id === ref || r._id === ref);
+
+/**
+ * The secret a Vault link names (?s=sec-N, by short id or id, or by name for
+ * one just created here). A row the page shows opens as it is. One the viewer
+ * holds in another team switches the active team to it, once per link, so the
+ * page opens it there; a team picked by hand while the link is open stays.
+ * `missing` once the Vault has loaded and no workspace of theirs holds it.
+ */
+export function useLinkedSecret(rows: SecretMeta[], ref: string | null): { row: SecretMeta | undefined; missing: boolean } {
+  const sample = !!useSampleVault();
+  const held = useHeldSecrets();
+  const loaded = useSecretsLoaded();
+  const switchWorkspace = useSwitchWorkspace();
+  const row = ref ? byId(rows, ref) ?? rows.find((r) => r.name === ref) : undefined;
+  const elsewhere = ref && !row && !sample ? byId(held, ref) : undefined;
+  const team = elsewhere?.workspace.startsWith("team:") ? elsewhere.workspace.slice("team:".length) : null;
+  const switchedFor = useRef<string | null>(null);
+  useWatchEffect(() => {
+    if (!ref) switchedFor.current = null;
+    if (!ref || !team || switchedFor.current === ref) return;
+    switchedFor.current = ref;
+    void switchWorkspace(team);
+  }, [ref, team]);
+  return { row, missing: !!ref && !row && !elsewhere && loaded };
 }
 
 export type SecretEvent = Extract<FunctionReturnType<typeof api.secrets.events>, unknown[]>[number];

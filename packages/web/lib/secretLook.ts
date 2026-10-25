@@ -16,6 +16,10 @@ export const KIND = Object.fromEntries(
 export const FIELD = "w-full min-w-0 rounded-md border border-sol-border bg-sol-bg px-2 py-1.5 text-[12.5px] text-sol-text outline-none placeholder:text-sol-text-dim focus:border-sol-yellow";
 export const FIELD_MONO = `${FIELD} font-mono`;
 
+/** The Vault's one filled press (Add, Save, Confirm with Touch ID); callers add its size. Disabled and held presses go grey and stop moving. */
+export const VAULT_PRIMARY =
+  "bg-sol-yellow font-semibold text-sol-bg transition-transform duration-150 ease-out hover:brightness-110 active:scale-[0.97] disabled:cursor-not-allowed disabled:bg-sol-border disabled:text-sol-text-dim disabled:active:scale-100";
+
 /** A field's border while a file is dragged over it. */
 export const DROP_OVER = "!border-sol-yellow/60";
 

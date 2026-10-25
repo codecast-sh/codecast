@@ -6,13 +6,14 @@
 // the enrollment email, the phone notice and the banner point here for.
 import { useState } from "react";
 import { useConvex, useMutation } from "convex/react";
-import { Fingerprint, Loader2, Plus, Trash2 } from "lucide-react";
+import { Fingerprint, Loader2, Lock, Plus, Trash2 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { inProbation, type PasskeyMeta } from "@codecast/shared/contracts/secrets";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
 import { addPasskey } from "../../lib/passkeyPresence";
+import { VAULT_PRIMARY } from "../../lib/secretLook";
 import { probationHours, useRemovePasskey } from "../../hooks/useRemovePasskey";
 import { Button } from "../ui/button";
 import { SettingsSection } from "./ui";
@@ -96,21 +97,38 @@ export function PasskeysSection() {
       setAdding(false);
     }
   };
+  const addProps = { onClick: () => void add(), disabled: adding || passkeys === undefined || agentTab, title: agentTab ? PERSON_ONLY.enroll : undefined, "data-passkey-add": true };
+  const addIcon = adding ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : agentTab ? <Lock className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />;
   return (
     <SettingsSection
       title="Touch ID"
       icon={Fingerprint}
       actions={
-        <Button variant="outline" size="sm" onClick={() => void add()} disabled={adding || passkeys === undefined || agentTab} title={agentTab ? PERSON_ONLY.enroll : undefined} data-passkey-add>
-          {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <Plus className="h-3.5 w-3.5" />}
-          Add Touch ID
-        </Button>
+        passkeys?.length ? (
+          <Button variant="outline" size="sm" {...addProps}>
+            {addIcon}
+            Add Touch ID
+          </Button>
+        ) : null
       }
     >
       {passkeys === undefined ? (
         <div className={`px-4 py-3 text-sm sm:px-5 ${error ? "text-sol-red" : "text-sol-text-dim"}`}>{error ? "Could not load Touch ID" : "Loading"}</div>
       ) : passkeys.length === 0 ? (
-        <div className="px-4 py-3 text-sm text-sol-text-muted sm:px-5" data-passkeys-empty>No Touch ID set up</div>
+        <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-5" data-passkeys-empty>
+          <div className="flex min-w-0 items-center gap-3">
+            <Fingerprint className="h-4 w-4 shrink-0 text-sol-text-dim" />
+            <span className="text-sm text-sol-text-muted">Not set up</span>
+          </div>
+          <button
+            type="button"
+            {...addProps}
+            className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] ${VAULT_PRIMARY}`}
+          >
+            {addIcon}
+            Add Touch ID
+          </button>
+        </div>
       ) : (
         passkeys.map((p) => <PasskeyRow key={p._id} passkey={p} count={passkeys.length} />)
       )}

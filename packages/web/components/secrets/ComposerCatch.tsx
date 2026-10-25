@@ -13,7 +13,7 @@ import type { FoundSecret } from "@codecast/shared/contracts/secretShapes";
 import { KeyCap } from "../KeyCap";
 import { useSecrets, useVaultScope } from "../../hooks/useSyncSecrets";
 import { ScopePicker } from "./AddSecretDialog";
-import { defaultWhere } from "../../lib/secretLook";
+import { VAULT_PRIMARY, defaultWhere } from "../../lib/secretLook";
 import { useCreate } from "../../hooks/useCreateSecret";
 import { nameIssue, namesIn, saveRemaining, withVaultReferences } from "./vaultModel";
 
@@ -111,7 +111,7 @@ export function ComposerCatch({
             type="button"
             onClick={() => void save()}
             disabled={!canSave}
-            className="inline-flex h-7 items-center gap-1.5 rounded-md bg-sol-yellow px-2.5 font-semibold text-sol-bg transition-transform duration-150 ease-out hover:brightness-110 active:scale-[0.97] disabled:cursor-not-allowed disabled:bg-sol-border disabled:text-sol-text-dim disabled:active:scale-100"
+            className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 ${VAULT_PRIMARY}`}
             data-composer-catch-save
           >
             {/* Both labels share one cell, so the button keeps the width of the longer one while saving. */}

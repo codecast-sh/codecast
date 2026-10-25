@@ -3,6 +3,7 @@ import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress } from "@codecast/shared/contracts";
 import { cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
+import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
 import { crawlScopesClearedBy, crawlWatermarkScope } from "../hooks/syncMetaKeys";
@@ -12586,7 +12587,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // DRAFTS
   // =====================
 
+  // A stored draft never holds a credential: IndexedDB, the server's
+  // client_state and teammates' presence all read this copy. The composer
+  // keeps the real text in its own state until the send's catch
+  // (ComposerCatch) settles it. Every caller writes here on a debounce, so
+  // the scan never runs per keystroke.
   setDraft: sync(function (this: Draft, id: string, fields: Record<string, any>) {
+    if (typeof fields.draft_message === "string") fields = { ...fields, draft_message: withoutSecrets(fields.draft_message) };
     this.drafts[id] = fields;
     if (!this.clientState.drafts) this.clientState.drafts = {};
     this.clientState.drafts[id] = fields;

@@ -10,7 +10,7 @@ import { type SecretKind, type SecretMeta } from "@codecast/shared/contracts/sec
 import { useFillRequest, useSwapValue, useVaultActions } from "../../hooks/useSyncSecrets";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { Row, SecretInput } from "./parts";
-import { FIELD_MONO } from "../../lib/secretLook";
+import { FIELD_MONO, VAULT_PRIMARY } from "../../lib/secretLook";
 import { declineLedger } from "../../lib/secretLedgers";
 import { useFileDrop } from "../../hooks/useFileDrop";
 import { SigninRequestFill } from "./SaveSignin";
@@ -194,7 +194,7 @@ function TypedValueEditor({ row, mode, review, onStart, onDone, onCancel, autoFo
       <button
         type="submit"
         disabled={!ready || busy}
-        className="h-[30px] shrink-0 rounded-md bg-sol-yellow px-3 text-[12.5px] font-semibold text-sol-bg hover:brightness-110 disabled:cursor-not-allowed disabled:bg-sol-border disabled:text-sol-text-dim"
+        className={`h-[30px] shrink-0 rounded-md px-3 text-[12.5px] ${VAULT_PRIMARY}`}
       >
         {busy ? "Saving" : mode === "fulfill" ? "Save" : "Replace"}
       </button>

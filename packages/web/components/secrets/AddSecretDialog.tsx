@@ -14,7 +14,7 @@ import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { FieldProblem, Row } from "./parts";
-import { DROP_OVER, FIELD, FIELD_MONO, KIND, VAULT_DIALOG, defaultWhere } from "../../lib/secretLook";
+import { DROP_OVER, FIELD, FIELD_MONO, KIND, VAULT_DIALOG, VAULT_PRIMARY, defaultWhere } from "../../lib/secretLook";
 import { useFileDrop } from "../../hooks/useFileDrop";
 import { useCreate } from "../../hooks/useCreateSecret";
 import { ValueFields } from "./ValueForm";
@@ -91,7 +91,7 @@ function Footer({ onClose, submit, label, disabled }: { onClose: () => void; sub
         type="button"
         disabled={disabled}
         onClick={submit}
-        className="inline-flex h-8 items-center gap-2 rounded-md bg-sol-yellow px-3.5 text-[12.5px] font-semibold text-sol-bg transition-transform duration-150 ease-out hover:brightness-110 active:scale-[0.97] disabled:cursor-not-allowed disabled:bg-sol-border disabled:text-sol-text-dim disabled:active:scale-100"
+        className={`inline-flex h-8 items-center gap-2 rounded-md px-3.5 text-[12.5px] ${VAULT_PRIMARY}`}
         data-vault-add-submit
       >
         {label}

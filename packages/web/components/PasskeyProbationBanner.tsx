@@ -24,7 +24,7 @@ function ProbationRow({ passkey, count }: { passkey: PasskeyMeta; count: number 
       <div className="flex flex-wrap items-center gap-3 px-4 py-2 text-sm">
         <Fingerprint className="h-4 w-4 shrink-0 text-sol-orange" />
         <span className="text-sol-text">
-          New passkey <span className="font-medium">{passkey.name}</span>
+          New Touch ID <span className="font-medium">{passkey.name}</span>
         </span>
         <span className="text-sol-text-muted">confirms in {probationHours(passkey)}h</span>
         <button type="button" onClick={() => useInboxStore.getState().openSettingsModal("accounts")} className="font-medium text-sol-text-muted hover:text-sol-text">

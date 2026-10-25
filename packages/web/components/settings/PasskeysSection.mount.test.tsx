@@ -113,7 +113,7 @@ describe("PasskeysSection", () => {
     passkeys = [{ _id: "pk-3", name: "Chrome on Mac", created_at: Date.now() - 60_000, probation_until: Date.now() + 3_600_000 }];
     const m = await mount(<PasskeyProbationBanner />);
     const banner = m.container.querySelector("[data-passkey-probation-banner]")!;
-    expect(banner.textContent).toContain("New passkey Chrome on Mac");
+    expect(banner.textContent).toContain("New Touch ID Chrome on Mac");
     expect(banner.querySelector("[aria-label='Dismiss']")).toBeNull();
     await click(banner.querySelector("[data-passkey-probation-remove]"));
     expect(calls).toEqual([{ name: "passkeys:remove", args: { id: "pk-3", grant: undefined } }]);

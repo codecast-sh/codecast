@@ -1642,6 +1642,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (catchPassRef.current) return false;
     const found = findSecrets(text);
     if (found.length === 0) return false;
+    // setDraft scrubs credentials, so rewriting the stored draft clears a
+    // value an older build or another surface left there.
+    const store = useInboxStore.getState();
+    const stored = store.getDraft(conversationId);
+    if (typeof stored?.draft_message === "string" && findSecrets(stored.draft_message).length > 0) store.setDraft(conversationId, stored);
     setCaught({ text, found, resume });
     submitRefusedRef.current = true;
     return true;

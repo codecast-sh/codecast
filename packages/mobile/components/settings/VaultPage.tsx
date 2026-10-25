@@ -7,7 +7,7 @@ import { Modal, ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 
 import { useLocalSearchParams } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { type SecretKind, type SecretMeta } from '@codecast/shared/contracts/secrets';
-import { useFillRequest, useSecretHistory, useSecrets, useVaultScope } from '@codecast/web/hooks/useSyncSecrets';
+import { useFillRequest, useLinkedSecret, useSecretHistory, useSecrets, useVaultScope } from '@codecast/web/hooks/useSyncSecrets';
 import { EMPTY_DRAFT, EVENT_TONE, EVENT_VERB, KIND_LOOK, checkedPayload, envVars, isStub, whereUsed, type ValueDraft } from '@codecast/web/components/secrets/vaultModel';
 import { Text as RNText, TextInput } from '@/components/Themed';
 import { EntityPill } from '@/components/EntityPill';
@@ -33,13 +33,13 @@ export function VaultPage() {
   const { team: teamScope, personal } = useVaultScope();
   const team = teamScope?.key ?? null;
   const teamName = teamScope?.name ?? 'Team';
-  // A request notification links /vault?s=sec-N, which opens here (lib/linkRoutes).
+  // A request notification links /vault?s=sec-N, which opens here (lib/linkRoutes); one in another team switches to it.
   const { s } = useLocalSearchParams<{ s?: string }>();
   // A pick holds only while the param it was made under stays; a new ?s= wins.
   const [pick, setPick] = useState<{ ref: string | null; s?: string }>({ ref: s ?? null, s });
   const openRef = pick.s === s ? pick.ref : s ?? null;
   const setOpenRef = (ref: string | null) => setPick({ ref, s });
-  const open = openRef ? rows.find((r) => r.short_id === openRef || r._id === openRef || r.name === openRef) : undefined;
+  const { row: open, missing } = useLinkedSecret(rows, openRef);
 
   // A request being filled reads ready at once, but its card (and the typed
   // draft) stays until fulfill answers, so a refusal can be shown and retried.
@@ -77,7 +77,7 @@ export function VaultPage() {
           </SettingsGroup>
         )}
       </SettingsScroll>
-      <SecretSheet row={open} scope={open ? (open.workspace === personal ? 'Only me' : teamName) : ''} onClose={() => setOpenRef(null)} />
+      <SecretSheet row={open} missing={missing ? openRef : null} scope={open ? (open.workspace === personal ? 'Only me' : teamName) : ''} onClose={() => setOpenRef(null)} />
     </>
   );
 }
@@ -210,11 +210,24 @@ function SecretField({ value, onChange, placeholder, plain, multiline, contentTy
 }
 
 /** A secret's metadata and its latest activity, in a sheet over the list. */
-function SecretSheet({ row, scope, onClose }: { row: SecretMeta | undefined; scope: string; onClose: () => void }) {
+/** A secret's details, or for a link no workspace of the viewer's holds (`missing`), its name and that it is not there. */
+function SecretSheet({ row, missing, scope, onClose }: { row: SecretMeta | undefined; missing: string | null; scope: string; onClose: () => void }) {
   const Theme = useTheme();
   return (
-    <Modal visible={!!row} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      {row ? (
+    <Modal visible={!!row || !!missing} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      {missing && !row ? (
+        <RNView style={styles.sheet}>
+          <RNView style={styles.sheetHead}>
+            <RNText style={styles.sheetTitle} numberOfLines={1}>{missing}</RNText>
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityLabel="Close">
+              <Feather name="x" size={20} color={Theme.textMuted} />
+            </TouchableOpacity>
+          </RNView>
+          <RNView style={styles.sheetBody}>
+            <RNText style={settingsStyles.muted}>Not in your workspaces</RNText>
+          </RNView>
+        </RNView>
+      ) : row ? (
         <RNView style={styles.sheet}>
           <RNView style={styles.sheetHead}>
             <KindGlyph kind={row.kind} />

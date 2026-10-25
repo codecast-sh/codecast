@@ -10,9 +10,9 @@
 
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Check, ChevronDown, FileUp, Globe, Plus, Search, ShieldCheck } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, FileUp, Globe, Plus, Search, ShieldCheck, UserRound, X } from "lucide-react";
 import { type SecretKind, type SecretMeta } from "@codecast/shared/contracts/secrets";
-import { useSecrets, useSecretsLoaded, useVaultScope } from "../../hooks/useSyncSecrets";
+import { useLinkedSecret, useSecrets, useSecretsLoaded, useVaultScope } from "../../hooks/useSyncSecrets";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useDerivedSize } from "../../hooks/useDerivedSize";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -28,8 +28,8 @@ import { AddSecretDialog, type AddMode } from "./AddSecretDialog";
 import { SaveSigninDialog } from "./SaveSignin";
 import { SecretDetail } from "./SecretDetail";
 import { DeclineRequest, ValueEditor } from "./ValueForm";
-import { CommandDisclosure, KindGlyph, RequestHead, ScopeMark, ScopeTag } from "./parts";
-import { KIND } from "../../lib/secretLook";
+import { CommandDisclosure, KindGlyph, RequestHead, ScopeMark } from "./parts";
+import { KIND, VAULT_PRIMARY } from "../../lib/secretLook";
 import { HEALTH, envPairLabel, filterSecrets, formatIn, isStub, secretHealth, whereUsed, type Scope } from "./vaultModel";
 import { useSampleVault } from "./sampleVault";
 import { VaultSource } from "./VaultSource";
@@ -52,7 +52,7 @@ function AddMenu({ onPick, compact }: { onPick: (m: AddMode) => void; compact?: 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" aria-label="Add to Vault" className="inline-flex h-7 items-center gap-1.5 rounded-md bg-sol-yellow pl-2.5 pr-2 text-[12.5px] font-semibold text-sol-bg transition-transform duration-150 ease-out hover:brightness-110 active:scale-[0.97]" data-vault-add-menu>
+        <button type="button" aria-label="Add to Vault" className={`inline-flex h-7 items-center gap-1.5 rounded-md pl-2.5 pr-2 text-[12.5px] ${VAULT_PRIMARY}`} data-vault-add-menu>
           <Plus size={14} />
           {compact ? null : "Add"}
           <ChevronDown size={13} className="opacity-70" />
@@ -103,21 +103,19 @@ function ScopeFilter({ value, onChange, counts }: { value: Scope; onChange: (s: 
   );
 }
 
-/** Show only the secrets whose health needs a look; the count says how many before it is pressed. `compact`, the dot stands for the words. */
-function AttentionFilter({ on, count, onChange, compact }: { on: boolean; count: number; onChange: (on: boolean) => void; compact?: boolean }) {
+/** Show only the secrets whose health needs a look; the count says how many before it is pressed. */
+function AttentionFilter({ on, count, onChange }: { on: boolean; count: number; onChange: (on: boolean) => void }) {
   if (!count && !on) return null;
   return (
     <button
       type="button"
       aria-pressed={on}
       onClick={() => onChange(!on)}
-      aria-label={compact ? "Needs attention" : undefined}
-      title={compact ? "Needs attention" : undefined}
       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-[3px] text-[12px] transition-colors ${on ? "border-sol-orange/60 bg-sol-orange/10 text-sol-text" : "border-sol-border/60 text-sol-text-muted hover:text-sol-text"}`}
       data-vault-attention={on ? "on" : "off"}
     >
       <span className="size-1.5 rounded-full bg-sol-orange" />
-      {compact ? null : "Needs attention"}
+      Needs attention
       <span className="tabular-nums text-sol-text-dim">{count}</span>
     </button>
   );
@@ -144,7 +142,7 @@ function Grow({ as: Tag = "div", arrives, leaving, children, ...rest }: { as?: "
 }
 
 /** An agent asked for a secret: who, why, where it lands, and the field to fill it, right here. */
-function RequestCard({ row, active, filled, arrives, onOpen, onStart, onSent }: { row: SecretMeta; active: boolean; filled?: Filled; arrives: boolean; onOpen: () => void; onStart: () => void; onSent: (delivered: boolean) => void }) {
+function RequestCard({ row, active, compact, filled, arrives, onOpen, onStart, onSent }: { row: SecretMeta; active: boolean; compact: boolean; filled?: Filled; arrives: boolean; onOpen: () => void; onStart: () => void; onSent: (delivered: boolean) => void }) {
   const sent = filled?.sent;
   return (
     <Grow as="li" arrives={arrives} leaving={filled?.leaving}>
@@ -156,6 +154,7 @@ function RequestCard({ row, active, filled, arrives, onOpen, onStart, onSent }: 
       <RequestHead
         row={row}
         kind={row.kind}
+        compact={compact}
         name={
           <button type="button" onClick={onOpen} className="-mx-1 min-w-0 px-1 text-left font-mono text-[13px] font-semibold [overflow-wrap:anywhere] text-sol-text outline-none hover:underline underline-offset-2 focus-visible:bg-sol-bg-alt/70 focus-visible:shadow-[inset_2px_0_0_var(--sol-yellow)]">
             {row.name}
@@ -216,9 +215,8 @@ function UsedCell({ row, fit, now, detailOpen }: { row: SecretMeta; fit: Fit; no
           ) : null}
           <span className={`shrink-0 tabular-nums ${health === "stale" ? "text-sol-yellow" : ""}`} title={formatFullTimestamp(at)}>{formatRelativeTime(at, now)}</span>
         </>
-      ) : fit === "narrow" ? null : (
-        // Narrow, the unused dot says it (its title); the words would crowd the name's marks.
-        <span className="shrink-0">Never used</span>
+      ) : (
+        <span className="shrink-0">{fit === "narrow" ? "never" : "Never used"}</span>
       )}
     </>
   );
@@ -232,10 +230,10 @@ const moreWidth = (n: number) => 8 + Math.ceil(6.7 * (1 + String(n).length));
 
 /**
  * What a row fills and opens, as whole chips in order: as many as the column
- * holds, the rest behind +N. A chip's width never changes, so each is measured
- * once with every chip laid out, before paint; a resize only recounts.
+ * holds, the rest behind +N. Each chip is measured with every chip laid out,
+ * before paint: per chip set, and again once the webfont is in; a resize only recounts.
  */
-function RowChips({ chips }: { chips: Chip[] }) {
+function RowChips({ chips, cols }: { chips: Chip[]; cols: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const widths = useRef<number[]>([]);
   const sig = chips.map((c) => c.x).join("\n");
@@ -251,16 +249,36 @@ function RowChips({ chips }: { chips: Chip[] }) {
   };
   const recountRef = useRef(recount);
   recountRef.current = recount;
+  // Measuring lays every chip out again (fit unset) and reads them before paint.
+  const [epoch, setEpoch] = useState(0);
+  const remeasure = () => {
+    setFit(null);
+    setEpoch((n) => n + 1);
+  };
+  const remeasureRef = useRef(remeasure);
+  remeasureRef.current = remeasure;
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     widths.current = Array.from(el.querySelectorAll<HTMLElement>("[data-vault-chip]"), (c) => c.offsetWidth);
     recount();
-  }, [sig]);
+  }, [sig, epoch]);
+  // Widths taken before the webfont arrives are the fallback face's.
+  useLayoutEffect(() => {
+    if (!document.fonts || document.fonts.status === "loaded") return;
+    let live = true;
+    void document.fonts.ready.then(() => live && remeasureRef.current());
+    return () => {
+      live = false;
+    };
+  }, []);
+  // A new grid template (the fit changing after the first layout) resizes the column in this same pass, where a hidden tab would deliver no ResizeObserver callback.
+  useLayoutEffect(() => recountRef.current(), [cols]);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => recountRef.current());
+    // A width of 0 was taken while the row was hidden: unmeasured.
+    const ro = new ResizeObserver(() => (widths.current.includes(0) ? remeasureRef.current() : recountRef.current()));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -294,7 +312,10 @@ function SecretRow({ row, teamName, showScope, onlyMe, cols, detailOpen, active,
   // A login's username and password vars share their prefix, so it is said once.
   const pair = row.kind === "login" ? envPairLabel(env.map((c) => c.x)) : null;
   const envChips: Chip[] = pair ? [{ x: pair, look: env[0]!.look, title: env.map((c) => c.x).join(", ") }] : env;
-  const chips: Chip[] = [...envChips, ...sites.map((x) => ({ x, look: "site" as const }))];
+  // A login is known by its site, so the site leads; a key or file by the vars it fills.
+  const groups: Chip[][] = [envChips, sites.map((x) => ({ x, look: "site" as const }))];
+  if (row.kind === "login") groups.reverse();
+  const chips = groups.flat();
   return (
     <li>
       <button
@@ -310,7 +331,11 @@ function SecretRow({ row, teamName, showScope, onlyMe, cols, detailOpen, active,
         {/* The note takes only what is left; narrow, the name gives way next, so its marks never run into the last column. */}
         <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
           <span className={`max-w-[60%] truncate font-mono text-[13px] text-sol-text ${fit === "narrow" ? "min-w-[4ch]" : "shrink-0"}`}>{row.name}</span>
-          {onlyMe ? <ScopeTag row={row} /> : null}
+          {onlyMe ? (
+            <span className="shrink-0 text-sol-text-dim" title="Only me" data-vault-scope-mark="personal">
+              <UserRound size={12} />
+            </span>
+          ) : null}
           {row.has_otp ? (
             <span className="shrink-0 rounded border border-sol-border/70 px-1 text-[10px] font-medium leading-[14px] text-sol-text-muted" title="Has a 2FA code" data-vault-otp-mark>
               2FA
@@ -325,11 +350,11 @@ function SecretRow({ row, teamName, showScope, onlyMe, cols, detailOpen, active,
             <span className="ml-0.5 min-w-0 flex-[1_1_0%] truncate text-[11.5px] text-sol-text-dim">{row.note}</span>
           ) : fit === "narrow" && chips.length ? (
             // No column for them when narrow: what it fills or opens takes the note's place.
-            <span className="ml-0.5 min-w-0 flex-[1_1_0%] truncate font-mono text-[11px] text-sol-text-dim" data-vault-row-where>{[env.map((c) => c.x).join(" "), sites.join(" ")].filter(Boolean).join(" · ")}</span>
+            <span className="ml-0.5 min-w-0 flex-[1_1_0%] truncate font-mono text-[11px] text-sol-text-dim" data-vault-row-where>{groups.map((g) => g.map((c) => c.x).join(" ")).filter(Boolean).join(" · ")}</span>
           ) : null}
         </span>
-        {fit !== "narrow" && <RowChips chips={chips} />}
-        {showScope && <ScopeMark row={row} teamName={teamName} />}
+        {fit !== "narrow" && <RowChips chips={chips} cols={cols} />}
+        {showScope && <ScopeMark row={row} teamName={teamName} quietTeam />}
         <span className="flex min-w-0 items-center justify-end gap-1.5 text-[11.5px] text-sol-text-dim">
           <UsedCell row={row} fit={fit} now={now} detailOpen={detailOpen} />
         </span>
@@ -351,7 +376,7 @@ function EmptyVault({ onPick }: { onPick: (m: AddMode) => void }) {
         <button
           type="button"
           onClick={() => onPick({ kind: "key" })}
-          className="inline-flex h-9 items-center gap-2 rounded-md bg-sol-yellow px-4 text-[13px] font-semibold text-sol-bg transition-transform duration-150 ease-out hover:brightness-110 active:scale-[0.97]"
+          className={`inline-flex h-9 items-center gap-2 rounded-md px-4 text-[13px] ${VAULT_PRIMARY}`}
           data-vault-empty-primary
         >
           <Plus size={15} /> Add key
@@ -399,6 +424,34 @@ function DetailSlot({ fit, children }: { fit: Fit; children: ReactNode }) {
   return <div className={`${fit === "wide" ? "w-[min(440px,40%)]" : "w-[440px]"} shrink-0 min-h-0`}>{children}</div>;
 }
 
+/** A link named a secret that no workspace of the viewer's holds: deleted, or in a team they are not in. */
+function SecretMissing({ refName, over, onClose }: { refName: string; over: boolean; onClose: () => void }) {
+  return (
+    <aside className="flex h-full min-h-0 flex-col border-l border-sol-border/50 bg-sol-bg" data-vault-detail-missing={refName}>
+      {over && (
+        <button type="button" onClick={onClose} className="flex h-9 shrink-0 items-center gap-1 border-b border-sol-border/50 px-2.5 text-[12.5px] text-sol-text-muted hover:text-sol-text">
+          <ChevronLeft size={15} />
+          All secrets
+        </button>
+      )}
+      <header className="flex items-start gap-3 border-b border-sol-border/50 px-4 pb-3 pt-3.5">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-mono text-[15px] font-semibold text-sol-text">{refName}</div>
+          <div className="mt-0.5 text-[11.5px] text-sol-text-muted">Not in your workspaces</div>
+        </div>
+        {!over && (
+          <button type="button" onClick={onClose} aria-label="Close" className="inline-flex shrink-0 items-center gap-1 rounded p-1 text-sol-text-dim hover:text-sol-text">
+            <span className="hidden sm:inline-flex">
+              <KeyCap size="xs">esc</KeyCap>
+            </span>
+            <X size={15} />
+          </button>
+        )}
+      </header>
+    </aside>
+  );
+}
+
 export function VaultPage() {
   const rootRef = useRef<HTMLDivElement>(null);
   const fit = useDerivedSize(rootRef, (w) => fitFor(w), () => fitFor(typeof window === "undefined" ? 1400 : window.innerWidth));
@@ -426,6 +479,7 @@ function VaultBody({ fit }: { fit: Fit }) {
   const vaultScope = useVaultScope();
   const keys = { team: vaultScope.team?.key ?? null, personal: vaultScope.personal };
   const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
   const [scope, setScope] = useState<Scope>("all");
   const [attention, setAttention] = useState(false);
   const now = useCoarseNow(60_000);
@@ -464,11 +518,12 @@ function VaultBody({ fit }: { fit: Fit }) {
     if (!scopeFilterUseful) setScope("all");
   }, [scopeFilterUseful]);
 
-  // ?s= names the open secret by short id; a just-created one is named by its name until its short id lands.
+  // ?s= names the open secret by short id; a just-created one is named by its name until its short id lands. One in another team switches to it.
   const openKey = params.get("s");
-  const open = openKey ? rows.find((r) => r.short_id === openKey || r._id === openKey) ?? rows.find((r) => r.name === openKey) : undefined;
+  const { row: open, missing } = useLinkedSecret(rows, openKey);
+  const panelOpen = !!open || missing;
   // Below wide, the detail takes 440px beside the list, so the rows take the narrow grid in what is left.
-  const listFit: Fit = open && fit !== "wide" ? "narrow" : fit;
+  const listFit: Fit = panelOpen && fit !== "wide" ? "narrow" : fit;
   // The scope column shows while the rows span both workspaces and there is room for it.
   const scopeColumn = mixedScopes && listFit !== "narrow";
   const cols = rowCols({ fit: listFit, scoped: scopeColumn });
@@ -537,12 +592,14 @@ function VaultBody({ fit }: { fit: Fit }) {
     } else if (e.key === "Enter" && order[cursor] && !target?.closest?.("button, a[href]")) {
       e.preventDefault();
       openRow(order[cursor]!);
-    } else if (e.key === "Escape" && open) {
+    } else if (e.key === "Escape" && panelOpen) {
       e.preventDefault();
       go(null);
     }
   });
 
+  // Narrow, the filters keep their words and Search waits as an icon until it is focused (a click or /), then takes a line of its own.
+  const searchShut = fit === "narrow" && !searching && !query;
   const header = (
     <div ref={titlebarRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-sol-border/40 px-5 pb-2.5 pt-4">
       <h1 className="text-xl font-semibold text-sol-text">Vault</h1>
@@ -553,26 +610,29 @@ function VaultBody({ fit }: { fit: Fit }) {
       )}
       {loaded || rows.length > 0 ? <span className="pt-1 text-[13px] tabular-nums text-sol-text-dim">{stored.length}</span> : null}
       {rows.length > 0 && (
-        <div className={`flex items-center gap-2 ${listFit === "narrow" ? "order-last basis-full" : "ml-auto"}`}>
-          <AttentionFilter on={attention} count={attentionCount} onChange={setAttention} compact={listFit === "narrow"} />
+        <div className={`flex items-center gap-2 ${fit === "narrow" ? "flex-wrap" : ""} ${listFit === "narrow" ? "order-last basis-full" : "ml-auto"}`}>
+          <AttentionFilter on={attention} count={attentionCount} onChange={setAttention} />
           {scopeFilterUseful && <ScopeFilter value={scope} onChange={setScope} counts={counts} />}
-          <label className={`relative ${listFit === "narrow" ? "min-w-0 flex-1" : "w-56"}`}>
+          <label className={`relative ${searchShut ? "w-7 shrink-0 cursor-pointer" : fit === "narrow" ? "min-w-[12rem] flex-1" : listFit === "narrow" ? "min-w-0 flex-1" : "w-56"}`} title={searchShut ? "Search" : undefined}>
             <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sol-text-dim" />
             <input
               ref={searchRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search"
+              onFocus={() => setSearching(true)}
+              onBlur={() => setSearching(false)}
+              aria-label="Search"
+              placeholder={searchShut ? undefined : "Search"}
               // A search box, so the browser never mistakes it for the username of a password field on the page.
               type="search"
               name="vault-search"
               autoComplete="off"
               data-1p-ignore
               spellCheck={false}
-              className="w-full rounded-md border border-sol-border/60 bg-sol-bg py-1 pl-8 pr-7 text-[13px] text-sol-text outline-none transition-colors placeholder:text-sol-text-dim focus:border-sol-yellow"
+              className={`w-full rounded-md border border-sol-border/60 bg-sol-bg py-1 text-[13px] text-sol-text outline-none transition-colors placeholder:text-sol-text-dim focus:border-sol-yellow ${searchShut ? "cursor-pointer pl-7 pr-0 hover:border-sol-border" : "pl-8 pr-7"}`}
               data-vault-search
             />
-            {!query && (
+            {!query && !searchShut && (
               <span className="pointer-events-none absolute right-1.5 top-1/2 hidden -translate-y-1/2 sm:block">
                 <KeyCap size="xs">/</KeyCap>
               </span>
@@ -581,12 +641,16 @@ function VaultBody({ fit }: { fit: Fit }) {
         </div>
       )}
       <div className={listFit === "narrow" || rows.length === 0 ? "ml-auto" : ""}>
-        <AddMenu onPick={setAdding} compact={listFit === "narrow"} />
+        <AddMenu onPick={setAdding} compact={fit === "narrow"} />
       </div>
     </div>
   );
 
-  const detail = open && <SecretDetail key={open._id} row={open} rows={rows} team={vaultScope.team ? { id: vaultScope.team.id, name: vaultScope.team.name } : null} over={fit === "narrow"} onClose={() => go(null)} />;
+  const detail = open ? (
+    <SecretDetail key={open._id} row={open} rows={rows} team={vaultScope.team ? { id: vaultScope.team.id, name: vaultScope.team.name } : null} over={fit === "narrow"} onClose={() => go(null)} />
+  ) : missing ? (
+    <SecretMissing refName={openKey!} over={fit === "narrow"} onClose={() => go(null)} />
+  ) : null;
 
   return (
     <div className="relative flex h-full min-h-0" data-vault-page>
@@ -616,6 +680,7 @@ function VaultBody({ fit }: { fit: Fit }) {
                         key={r._id}
                         row={r}
                         active={open?._id === r._id || (keyed && cursor === i)}
+                        compact={panelOpen || fit === "narrow"}
                         filled={held(r) ? filled! : undefined}
                         arrives={!openedWith.current?.has(r._id)}
                         onOpen={() => openRow(r)}
@@ -640,7 +705,7 @@ function VaultBody({ fit }: { fit: Fit }) {
                   )}
                   <ul>
                     {ready.map((r, i) => (
-                      <SecretRow key={r._id} row={r} teamName={vaultScope.team?.name ?? "Team"} showScope={scopeColumn} onlyMe={markOnlyMe(r)} cols={cols} detailOpen={!!open} fit={listFit} now={now} active={open?._id === r._id} cursor={keyed && cursor === requests.length + i} flash={flashId === r._id} onOpen={() => openRow(r)} />
+                      <SecretRow key={r._id} row={r} teamName={vaultScope.team?.name ?? "Team"} showScope={scopeColumn} onlyMe={markOnlyMe(r)} cols={cols} detailOpen={panelOpen} fit={listFit} now={now} active={open?._id === r._id} cursor={keyed && cursor === requests.length + i} flash={flashId === r._id} onOpen={() => openRow(r)} />
                     ))}
                   </ul>
                 </section>
@@ -649,11 +714,11 @@ function VaultBody({ fit }: { fit: Fit }) {
             </div>
           )}
           {/* Over the rows only, so the header (filters, search, Add) stays whole. */}
-          {open && fit === "narrow" && <DetailSlot fit={fit}>{detail}</DetailSlot>}
+          {detail && fit === "narrow" && <DetailSlot fit={fit}>{detail}</DetailSlot>}
         </div>
       </div>
 
-      {open && fit !== "narrow" && <DetailSlot fit={fit}>{detail}</DetailSlot>}
+      {detail && fit !== "narrow" && <DetailSlot fit={fit}>{detail}</DetailSlot>}
 
       {adding && ("kind" in adding && adding.kind === "signin" ? (
         <SaveSigninDialog scope={vaultScope} rows={rows} onClose={() => setAdding(null)} onSaved={(shortId) => (setAdding(null), go(shortId))} />

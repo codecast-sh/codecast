@@ -4,7 +4,7 @@
 // note edited in place, a new value typed into the field it replaces, Ask
 // first, previous values with Restore, who used it from which session, and Delete.
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, Fingerprint, Loader2, Lock, X } from "lucide-react";
 import { envNameIssue, isExpiring, siteProblem, type EnvNameIssue, type FilePayload, type KeyPayload, type LoginPayload, type SecretMeta, type SecretMetaEdit, type SecretVersionMeta, type SigninPayload } from "@codecast/shared/contracts/secrets";
 import { peopleOf } from "@codecast/shared/team/memberKind";
@@ -17,7 +17,7 @@ import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { KeyCap } from "../KeyCap";
 import { Switch } from "../ui/switch";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
-import { FieldProblem, KindGlyph, MaskedField, ReplaceButton, Row, ScopeMark, TotpCode, type Replace } from "./parts";
+import { FieldProblem, KindGlyph, MaskedField, ReplaceButton, RevealButton, Row, ScopeMark, TotpCode, type Replace } from "./parts";
 import { KIND } from "../../lib/secretLook";
 import { useCopy } from "../../hooks/useCopy";
 import { useReveal } from "../../hooks/useReveal";
@@ -32,6 +32,7 @@ function ChipEditor({ items, implied, onChange, problemOf, placeholder, mono = t
   const [text, setText] = useState("");
   const [problem, setProblem] = useState<string | EnvNameIssue | null>(null);
   const [focused, setFocused] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const showImplied = !items.length && !!implied?.length;
   // Beside the vars in use by default, the field stays a quiet slot until it is focused.
   const quiet = showImplied && !focused && !text;
@@ -45,7 +46,7 @@ function ChipEditor({ items, implied, onChange, problemOf, placeholder, mono = t
   };
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-1">
+      <div className="flex cursor-text flex-wrap items-center gap-1" onClick={() => inputRef.current?.focus()}>
         {items.map((x) => (
           <span key={x} className={`inline-flex items-center gap-1 rounded border border-sol-border bg-sol-bg-alt/60 py-[1px] pl-1.5 pr-0.5 text-[11px] text-sol-text ${mono ? "font-mono" : ""}`}>
             {x}
@@ -62,6 +63,7 @@ function ChipEditor({ items, implied, onChange, problemOf, placeholder, mono = t
             </span>
           ))}
         <input
+          ref={inputRef}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
@@ -82,7 +84,8 @@ function ChipEditor({ items, implied, onChange, problemOf, placeholder, mono = t
           aria-label={placeholder}
           spellCheck={false}
           // Beside chips the field takes what is left of their line ("Add" needs 3rem), so it wraps under them only when the line is full.
-          className={`${items.length ? "min-w-[3rem]" : quiet ? "min-w-[2rem]" : "min-w-[7rem]"} flex-1 bg-transparent px-1 py-0.5 text-[12px] text-sol-text outline-none placeholder:text-sol-text-dim ${mono ? "font-mono" : ""}`}
+          // Quiet, it has no width at all, so it never opens a blank line under the defaults; a click on the row focuses it.
+          className={`${quiet ? "w-0 min-w-0 flex-none p-0" : `${items.length ? "min-w-[3rem]" : "min-w-[7rem]"} flex-1 px-1 py-0.5`} bg-transparent text-[12px] text-sol-text outline-none placeholder:text-sol-text-dim ${mono ? "font-mono" : ""}`}
         />
       </div>
       <FieldProblem issue={problem} />
@@ -170,7 +173,13 @@ function Activity({ row }: { row: SecretMeta }) {
   const events = (data === undefined ? [] : withPendingAskFirst(data, askFirstLock, me)) as SecretEvent[];
   return (
     <section className="border-t border-sol-border/50 px-4 pb-4 pt-3" data-vault-activity>
-      <h3 className="mb-1.5 text-[12px] font-medium text-sol-text-muted">Activity</h3>
+      {/* The count is the one number Activity's lines do not give; its first line is the latest use and its session. */}
+      <h3 className="mb-1.5 text-[12px] font-medium text-sol-text-muted">
+        Activity{" "}
+        <span className="font-normal tabular-nums text-sol-text-dim" data-vault-use>
+          · {!row.use_count && !row.last_used_at ? "never used" : `${row.use_count ?? 0} ${row.use_count === 1 ? "read" : "reads"}`}
+        </span>
+      </h3>
       {error && data === undefined ? (
         <NotLoaded retry={retry} />
       ) : data === undefined && !isStub(row) ? (
@@ -179,28 +188,37 @@ function Activity({ row }: { row: SecretMeta }) {
         <div className="text-[12px] text-sol-text-dim">Nothing yet</div>
       ) : (
         <ol className="flex flex-col">
-          {events.map((e) => (
-            // The time stays whole. A pill takes only the width left over (basis 0), so it gives way before the words, down to a few letters of its title.
-            <li key={e._id} className="flex min-w-0 items-center gap-2 py-1 text-[12px]" data-vault-event={e.kind} data-vault-event-pending={isStaged(e) || undefined}>
-              <span className="size-1.5 shrink-0 rounded-full" style={{ background: EVENT_TONE[e.kind] ? `var(--sol-${EVENT_TONE[e.kind]})` : "var(--sol-text-dim)" }} />
-              <span className="min-w-0 truncate text-sol-text">{e.actor_name ?? "Someone"}</span>
-              <span className="min-w-0 truncate text-sol-text-muted">
-                {EVENT_VERB[e.kind] ?? e.kind}
-                {e.purpose && e.kind === "read" ? ` · ${e.purpose}` : ""}
-              </span>
-              {e.conversation_id ? (
-                <span className="min-w-[7ch] flex-1 truncate">
-                  <EntityIdPill id={e.conversation_id} type="session" label={e.session_title ?? e.session_short_id} wide />
-                </span>
-              ) : null}
-              {e.kind === "approval_requested" && e.decision_short_id ? (
-                <span className="min-w-[7ch] flex-1 truncate">
-                  <EntityIdPill id={e.decision_short_id} type="decision" wide />
-                </span>
-              ) : null}
-              {isStaged(e) ? <Saving /> : <span className="ml-auto shrink-0 tabular-nums text-sol-text-dim" title={formatFullTimestamp(e.at)}>{formatRelativeTime(e.at)}</span>}
-            </li>
-          ))}
+          {events.map((e) => {
+            const purpose = e.kind === "read" ? e.purpose : undefined;
+            const decision = e.kind === "approval_requested" ? e.decision_short_id : undefined;
+            const detail = !!(purpose || e.conversation_id || decision);
+            // The why and the session get a line of their own, so actor, verb and time read whole above them.
+            return (
+              <li key={e._id} className="flex min-w-0 flex-col py-1 text-[12px]" data-vault-event={e.kind} data-vault-event-pending={isStaged(e) || undefined}>
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="size-1.5 shrink-0 rounded-full" style={{ background: EVENT_TONE[e.kind] ? `var(--sol-${EVENT_TONE[e.kind]})` : "var(--sol-text-dim)" }} />
+                  <span className="min-w-0 truncate text-sol-text">{e.actor_name ?? "Someone"}</span>
+                  <span className="shrink-0 text-sol-text-muted">{EVENT_VERB[e.kind] ?? e.kind}</span>
+                  {isStaged(e) ? <Saving /> : <span className="ml-auto shrink-0 tabular-nums text-sol-text-dim" title={formatFullTimestamp(e.at)}>{formatRelativeTime(e.at)}</span>}
+                </div>
+                {detail ? (
+                  <div className="flex min-w-0 items-center gap-2 pl-3.5 text-[11.5px] text-sol-text-dim" data-vault-event-detail>
+                    {purpose ? <span className="min-w-0 truncate">{purpose}</span> : null}
+                    {e.conversation_id ? (
+                      <span className="min-w-0 truncate">
+                        <EntityIdPill id={e.conversation_id} type="session" label={e.session_title ?? e.session_short_id} wide />
+                      </span>
+                    ) : null}
+                    {decision ? (
+                      <span className="min-w-0 truncate">
+                        <EntityIdPill id={decision} type="decision" wide />
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
         </ol>
       )}
     </section>
@@ -351,6 +369,10 @@ function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
     const expiring = exp !== undefined && !expired && isExpiring(exp, Date.now());
     // Expired or about to be, capturing again is the one thing to do, so it sits on the line that says so, in its color.
     const recapture = replace && !replace.editor && (expired || expiring);
+    const capturedAt = row.value_updated_at ?? row.created_at;
+    const replaceCaptured = replace && !replace.editor && !recapture && <ReplaceButton onClick={replace.start} saving={replace.saving} />;
+    // Where and as whom it was captured is in the value, so showing it is a read, behind the same eye as any field.
+    const showCaptured = !s && !replace?.editor && <RevealButton label="Show captured details" onClick={() => void load()} disabled={loading} held={held} gated={gated} data-vault-reveal />;
     body = (
       <>
         <Row
@@ -367,7 +389,11 @@ function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
             {exp === undefined ? "When the browser closes" : expired ? `Expired ${formatRelativeTime(exp)}` : expiring ? formatIn(exp, Date.now()) : formatFullTimestamp(exp)}
           </span>
         </Row>
-        <Row label="Captured" align={replace?.editor ? "input" : undefined} actions={replace && !replace.editor && !recapture ? <ReplaceButton onClick={replace.start} saving={replace.saving} /> : undefined}>
+        <Row
+          label="Captured"
+          align={replace?.editor ? "input" : undefined}
+          actions={replaceCaptured || showCaptured ? <>{replaceCaptured}{showCaptured}</> : undefined}
+        >
           {replace?.editor ? (
             replace.editor
           ) : s ? (
@@ -377,10 +403,9 @@ function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
               <span className="text-sol-text-dim"> · {s.cookies.length} cookies</span>
             </span>
           ) : (
-            <button type="button" onClick={() => void load()} disabled={loading || !!held} title={held ?? (gated ? "Show with Touch ID" : undefined)} className="inline-flex items-center gap-1 rounded-md border border-sol-border px-2 py-0.5 text-[12px] text-sol-text-muted hover:text-sol-text disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:text-sol-text-muted">
-              {held ? <Lock size={11} /> : gated ? <Fingerprint size={11} /> : null}
-              {loading ? "Loading" : "Show"}
-            </button>
+            <span className="text-[12.5px] text-sol-text" title={formatFullTimestamp(capturedAt)}>
+              {formatRelativeTime(capturedAt)}
+            </span>
           )}
         </Row>
       </>
@@ -517,34 +542,6 @@ export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMe
           </Row>
           {row.status === "ready" && <AskFirst row={row} team={ledgerTeam} />}
           {(row.version_count ?? 0) > 0 && <Versions row={row} team={ledgerTeam} />}
-        </section>
-
-        <section className="border-t border-sol-border/50 px-4 py-2 text-[12.5px]">
-          {/* Who added or replaced it, and when, is Activity's first lines. */}
-          <Row label="Use">
-            <span className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-sol-text-muted" data-vault-use>
-              {!row.use_count && !row.last_used_at ? (
-                <span className="text-sol-text-dim">Never used</span>
-              ) : (
-                <>
-                  <span className="shrink-0">
-                    <span className="tabular-nums text-sol-text">{row.use_count ?? 0}</span> {row.use_count === 1 ? "read" : "reads"}
-                  </span>
-                  {row.last_used_at ? (
-                    <>
-                      <span className="shrink-0 text-sol-text-dim">·</span>
-                      <span className="shrink-0" title={formatFullTimestamp(row.last_used_at)}>last {formatRelativeTime(row.last_used_at, now)}</span>
-                    </>
-                  ) : null}
-                </>
-              )}
-              {row.last_used_by_conversation ? (
-                <span className="min-w-0 truncate">
-                  <EntityIdPill id={row.last_used_by_conversation} type="session" wide />
-                </span>
-              ) : null}
-            </span>
-          </Row>
         </section>
 
         <Activity row={row} />

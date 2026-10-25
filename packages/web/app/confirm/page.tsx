@@ -15,6 +15,7 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useEventListener } from "../../hooks/useEventListener";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
 import { finishPresence, finishRegistration } from "../../lib/passkeyPresence";
+import { VAULT_PRIMARY } from "../../lib/secretLook";
 
 function Frame({ icon, title, sub, children }: { icon: React.ReactNode; title: string; sub?: string; children?: React.ReactNode }) {
   return (
@@ -68,12 +69,12 @@ export default function ConfirmPage() {
         onClick={() => void run()}
         disabled={busy || !!held}
         title={held}
-        className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-sol-cyan/15 px-4 py-2.5 text-sm font-medium text-sol-text hover:bg-sol-cyan/25 disabled:cursor-not-allowed disabled:opacity-50"
+        className={`mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm ${VAULT_PRIMARY}`}
         data-confirm-run
       >
         {held ? <Lock className="h-4 w-4" /> : busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Fingerprint className="h-4 w-4" />}
         {held ?? (register ? "Set up Touch ID" : "Confirm with Touch ID")}
-        {!held && !busy && <KeyCap size="xs">return</KeyCap>}
+        {!held && !busy && <KeyCap size="xs" tone="onAccent">return</KeyCap>}
       </button>
     </Frame>
   );

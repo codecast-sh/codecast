@@ -85,7 +85,7 @@ export function CommandDisclosure({ label, text, ...rest }: { label: string; tex
 const DOTS = "••••••••••••";
 
 /** The eye that shows a value, or hides it again; a fingerprint where showing it asks for Touch ID (`gated`); where `held` says who reveals it instead, a disabled lock. */
-function RevealButton({ shown, label, onClick, held, gated, disabled, ...rest }: { shown?: boolean; label: string; onClick: () => void; held?: string; gated?: boolean; disabled?: boolean } & Record<`data-${string}`, unknown>) {
+export function RevealButton({ shown, label, onClick, held, gated, disabled, ...rest }: { shown?: boolean; label: string; onClick: () => void; held?: string; gated?: boolean; disabled?: boolean } & Record<`data-${string}`, unknown>) {
   return (
     <button
       type="button"
@@ -388,10 +388,11 @@ export function FieldProblem({ issue, className = "mt-0.5" }: { issue: string | 
 }
 
 /** Where a secret lands, said the same on a request card and a row: every agent in the team, or only yours. */
-export function ScopeMark({ row, teamName, className = "" }: { row: SecretMeta; teamName?: string; className?: string }) {
+/** `quietTeam` dims team rows, for a list where most rows are the team's and the personal ones are the exceptions to notice. */
+export function ScopeMark({ row, teamName, className = "", quietTeam = false }: { row: SecretMeta; teamName?: string; className?: string; quietTeam?: boolean }) {
   const team = row.workspace.startsWith("team:");
   return (
-    <span className={`inline-flex min-w-0 items-center gap-1 text-[11px] text-sol-text-muted ${className}`} title={team ? "Every agent in the team" : "Only you and your agents"} data-vault-scope-mark={team ? "team" : "personal"}>
+    <span className={`inline-flex min-w-0 items-center gap-1 text-[11px] ${team && quietTeam ? "text-sol-text-dim" : "text-sol-text-muted"} ${className}`} title={team ? "Every agent in the team" : "Only you and your agents"} data-vault-scope-mark={team ? "team" : "personal"}>
       {team ? <Users size={11} className="shrink-0" /> : <UserRound size={11} className="shrink-0" />}
       <span className="truncate">{team ? teamName ?? "Team" : "Only me"}</span>
     </span>
@@ -408,36 +409,44 @@ export function ScopeTag({ row }: { row: SecretMeta }) {
  * where it lands, the env vars it fills, and who asked when. The name is what
  * a person reads to decide, so it keeps its whole width (a name longer than
  * the line wraps, never truncates); the rest goes under it when the line is short. Before the row has synced only the glyph, name
- * and kind show, and `fallback` takes the asker's place.
+ * and kind show, and `fallback` takes the asker's place. `compact`, for a
+ * column too short for one line: the env vars go, and the asker moves under
+ * the head where its session pill reads whole.
  */
-export function RequestHead({ row, kind, name, fallback }: { row?: SecretMeta; kind: SecretKind; name: ReactNode; fallback?: ReactNode }) {
-  return (
-    <div className="flex min-w-0 items-start gap-2">
-      <KindGlyph kind={kind} />
-      <div className="flex min-h-6 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5" data-vault-request-head>
-        {name}
-        <span className="flex min-w-0 flex-[1_1_15rem] items-center gap-2">
-          <span className="shrink-0 text-[11.5px] text-sol-text-dim">{KIND[kind].short}</span>
-          {row ? (
-            <>
-              <ScopeTag row={row} />
-              {row.env?.length ? <span className="hidden min-w-0 truncate font-mono text-[11px] text-sol-text-dim sm:inline">{row.env.join(" ")}</span> : null}
-              <span className="ml-auto flex min-w-0 shrink items-center gap-1.5 text-[11.5px] text-sol-text-muted">
-                {row.requested_from_conversation ? (
-                  <span className="min-w-0 truncate">
-                    <EntityIdPill id={row.requested_from_conversation} type="session" wide />
-                  </span>
-                ) : (
-                  <span className="truncate">{row.requested_by_name ?? "Someone"}</span>
-                )}
-                <span className="shrink-0 tabular-nums text-sol-text-dim" title={formatFullTimestamp(row.updated_at)}>{formatRelativeTime(row.updated_at)}</span>
-              </span>
-            </>
-          ) : fallback ? (
-            <span className="ml-auto shrink-0">{fallback}</span>
-          ) : null}
+export function RequestHead({ row, kind, name, fallback, compact = false }: { row?: SecretMeta; kind: SecretKind; name: ReactNode; fallback?: ReactNode; compact?: boolean }) {
+  const asker = row && (
+    <span className={`flex min-w-0 shrink items-center gap-1.5 text-[11.5px] text-sol-text-muted ${compact ? "mt-0.5 pl-[34px]" : "ml-auto"}`} data-vault-request-asker>
+      {row.requested_from_conversation ? (
+        <span className="min-w-0 truncate">
+          <EntityIdPill id={row.requested_from_conversation} type="session" wide />
         </span>
+      ) : (
+        <span className="truncate">{row.requested_by_name ?? "Someone"}</span>
+      )}
+      <span className="shrink-0 tabular-nums text-sol-text-dim" title={formatFullTimestamp(row.updated_at)}>{formatRelativeTime(row.updated_at)}</span>
+    </span>
+  );
+  return (
+    <>
+      <div className="flex min-w-0 items-start gap-2">
+        <KindGlyph kind={kind} />
+        <div className="flex min-h-6 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5" data-vault-request-head>
+          {name}
+          <span className="flex min-w-0 flex-[1_1_15rem] items-center gap-2">
+            <span className="shrink-0 text-[11.5px] text-sol-text-dim">{KIND[kind].short}</span>
+            {row ? (
+              <>
+                <ScopeTag row={row} />
+                {row.env?.length && !compact ? <span className="hidden min-w-0 truncate font-mono text-[11px] text-sol-text-dim sm:inline">{row.env.join(" ")}</span> : null}
+                {compact ? null : asker}
+              </>
+            ) : fallback ? (
+              <span className="ml-auto shrink-0">{fallback}</span>
+            ) : null}
+          </span>
+        </div>
       </div>
-    </div>
+      {compact ? asker : null}
+    </>
   );
 }
