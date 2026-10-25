@@ -237,7 +237,7 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
 
   test("a role's standing session carries a snapshot of the role it wears", async () => {
     const tables = {
-      org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active", tenure: { kind: "program", ends: { date: 1 }, then: "review" } }],
+      org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", given_name: "Rowan", status: "active", tenure: { kind: "program", ends: { date: 1 }, then: "review" } }],
       conversations: [
         conv("a", { updated_at: EPOCH - MIN, standing_role_id: "org_roles_infra", character_avatar: "fox" }),
         conv("hand", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra" }),
@@ -246,7 +246,7 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
     const standing = sessions.find((s: any) => s._id === "conversations_a");
     expect(standing.standing_role_id).toBe("org_roles_infra");
-    expect(standing.role).toEqual({ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active", tenure_kind: "program" });
+    expect(standing.role).toEqual({ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active", tenure_kind: "program", given_name: "Rowan" });
     // the character fields still travel; the web resolver decides the role wins
     expect(standing.character_avatar).toBe("fox");
     const hand = sessions.find((s: any) => s._id === "conversations_hand");

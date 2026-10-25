@@ -49,7 +49,7 @@ const restoreGlobals = replaceGlobals({
 const { confirmPresence, withPresence, useApproveGate, deviceName, confirmPath } = await import("./passkeyPresence");
 const { ConvexProvider } = await import("convex/react");
 const { createRoot } = await import("react-dom/client");
-const { useReveal } = await import("../components/secrets/parts");
+const { useReveal } = await import("../hooks/useReveal");
 
 afterAll(() => {
   closeDomWindow(dom);

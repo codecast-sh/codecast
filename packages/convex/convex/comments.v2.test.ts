@@ -17,6 +17,8 @@ import {
 import { applyPatches } from "./dispatch";
 import { mergeDuplicateUser } from "./admin_mergeUser";
 import { deleteAccount } from "./users";
+import { purgeAccountPass } from "./accountDelete";
+import { purgeConversationRows } from "./sessionDelete";
 import { runCommentViewTransition } from "./commentViewWrites";
 import { backfillPullRequestSessions } from "./pull_requests";
 
@@ -1191,7 +1193,10 @@ describe("comments write-choke coverage", () => {
     expect(receipts(ctx)[0].principal_id).toBe(surviving);
   });
 
-  test("account deletion routes comment removal through the same view transition", async () => {
+  test("account deletion removes the conversation, then its comments in the conversation's purge", async () => {
+    // The conversation goes first and its delete reaches every client through
+    // the sync log, so no comment view is left to advance; its rows, comments
+    // among them, go in purgeConversationRows (accountDelete.ts).
     const ctx = context(OWNER, {
       conversations: [conversation()],
       comments: [{
@@ -1204,8 +1209,12 @@ describe("comments write-choke coverage", () => {
     });
     const result = await (deleteAccount as any)._handler(ctx, {});
     expect(result).toMatchObject({ completed: true });
+    while (await purgeAccountPass(ctx, OWNER as any));
+    expect(ctx.db._tables.conversations).toHaveLength(0);
+    const purges = ctx._scheduledCalls.map((call: any) => call.args).filter((args: any) => args?.conversation_id);
+    expect(purges).toEqual([{ conversation_id: CONVERSATION }]);
+    for (const args of purges) await (purgeConversationRows as any)._handler(ctx, args);
     expect(ctx.db._tables.comments).toHaveLength(0);
-    expect(heads(ctx)[0]).toMatchObject({ principal_id: OWNER, revision: 1 });
   });
 
   test("a comment finds its session's pull request by index, never by reading every pull request", async () => {

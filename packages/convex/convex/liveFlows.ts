@@ -214,7 +214,8 @@ export const forTeam = query({
   handler: async (ctx, { team_id }): Promise<LiveFlowRow[]> => {
     const userId = await getAuthUserId(ctx as any);
     if (!userId || !(await isMember(ctx, userId, team_id))) return [];
-    const flows: any[] = await ctx.db.query("live_flows").withIndex("by_team", (q: any) => q.eq("team_id", team_id)).collect();
+    // Read by the workspace key, never team_id: team_id routes and grants nothing.
+    const flows: any[] = await ctx.db.query("live_flows").withIndex("by_workspace", (q: any) => q.eq("workspace", `team:${team_id}`)).collect();
     const now = Date.now();
     return Promise.all(flows.map(async (f) => plainRow(await liveFlowView(ctx, f, now))));
   },

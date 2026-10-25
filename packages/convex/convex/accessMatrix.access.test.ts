@@ -9,7 +9,9 @@
 //  removed   was a member of T, removed before the reads
 //  outsider  signed in, in no team
 // Each identity must receive exactly its expected rows, whatever workspace
-// arguments it sends. A row outside that set is a leak.
+// arguments it sends. A row outside that set is a leak. A collection whose
+// rows cannot take some placement (a live flow is always a team's) seeds only
+// the placements it can, plus any its access rule must refuse (EXPECTED_FOR).
 //
 // The feed list comes from CLIENT_SYNC_REGISTRY: every feed of a
 // workspaceScoped key is either exercised here (FEED_CASES) or named in
@@ -75,6 +77,17 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "docs.webGetByIds": byIdsArgs,
   "plans.webGetByIds": byIdsArgs,
   "projects.webGetByIds": byIdsArgs,
+  "liveFlows.forTeam": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
+  "flowLibrary.sessionFlows": (ids) => [{}, { team_id: ids.T }, { team_id: ids.O }],
+  // Every workspace a placement names, the owner's personal one and the viewer's own.
+  "flowMap.forTeam": (ids) => [...new Set([...Object.values(ids.rows.flowMaps), ...WHO.map((w) => `user:${ids[w]}`)])].map((workspace) => ({ workspace })),
+};
+
+// A feed whose answer is not a list of rows: what the web feeder hands the
+// store, so the matrix reads the rows the store would hold.
+const SELECT: Record<string, (res: any) => unknown> = {
+  // useFlowMap: one row keyed by its workspace.
+  "flowMap.forTeam": (m) => (m ? [{ _id: m.workspace }] : []),
 };
 
 function registeredFeeds(): Map<string, string> {
@@ -114,12 +127,19 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {} };
     for (const [place, p] of Object.entries(placements)) {
       rows.tasks[place] = await db.insert("tasks", { ...p, ...base(place), short_id: `ct-${++n}`, task_type: "task", priority: "medium", source: "human", status: "open" });
       rows.docs[place] = await db.insert("docs", { ...p, ...base(place), content: "body", doc_type: "note", source: "human" });
       rows.plans[place] = await db.insert("plans", { ...p, ...base(place), short_id: `pl-${++n}`, status: "active", source: "human" });
       rows.projects[place] = await db.insert("projects", { ...p, ...base(place), status: "active" });
+      const workflow_id = await db.insert("workflows", { ...p, name: `${place} flow`, slug: `${place}-flow`, nodes: [], edges: [], created_at: now, updated_at: now } as any);
+      const run = await db.insert("workflow_runs", { ...p, workflow_id, workflow_name: `${place} flow`, status: "completed", node_statuses: [], created_at: now, updated_at: now } as any);
+      rows.sessionFlows[place] = await db.insert("session_flows", { ...p, graph_hash: `g-${place}`, from: "graph", name: `${place} flow`, source: "", nodes: [], edges: [], file: "flow.cast", files: [], graph_nodes: [], first_run_id: run, last_run_at: now, created_at: now });
+      // A live flow is a team's (createLiveFlowCore); the private one is the row its access rule must refuse.
+      if (place !== "personal") rows.liveFlows[place] = await db.insert("live_flows", { ...p, workflow_id, on: false, changed_by: p.user_id, changed_at: now, created_at: now });
+      // A flow map is one per workspace, so the private and personal placements share one.
+      if (place !== "private") rows.flowMaps[place] = p.workspace;
     }
     return { owner, teammate, stranger, removed, outsider, T, O, rows };
   });
@@ -132,6 +152,12 @@ const EXPECTED: Record<Who, string[]> = {
   stranger: ["other"],
   removed: [],
   outsider: [],
+};
+
+// Collections whose expected set differs from EXPECTED, by the placements they seed.
+const EXPECTED_FOR: Record<string, Record<Who, string[]>> = {
+  liveFlows: { ...EXPECTED, owner: ["team"] },
+  flowMaps: { ...EXPECTED, owner: ["personal", "team"] },
 };
 
 function rowIdsOf(result: unknown): string[] {
@@ -171,12 +197,12 @@ describe("access matrix", () => {
         const seen: string[] = [];
         for (const args of argsFor(ids)) {
           const res = await t.withIdentity({ subject: ids[who] }).query(fnRef(feed), args).catch(() => null);
-          seen.push(...rowIdsOf(res));
+          seen.push(...rowIdsOf(SELECT[feed] ? SELECT[feed](res) : res));
         }
         got[who] = placementsOf(ids, table, seen);
       }
       // Owner rows may be split across workspaces; the union must be exact.
-      expect(got).toEqual(EXPECTED);
+      expect(got).toEqual(EXPECTED_FOR[table] ?? EXPECTED);
     });
   }
 

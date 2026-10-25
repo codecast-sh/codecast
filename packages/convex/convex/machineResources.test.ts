@@ -72,7 +72,7 @@ test("daemon bearer report reaches the authenticated dashboard and rejects inval
   });
   const report = makeFunctionReference<"mutation">("machineResources:report");
   await expect(t.mutation(report, { api_token: "invalid", snapshot: sample(now) })).rejects.toThrow("Authentication");
-  expect(await t.mutation(report, { api_token: token, snapshot: sample(now) })).toEqual({ accepted: true, background_sessions: [] });
+  expect(await t.mutation(report, { api_token: token, snapshot: sample(now) })).toEqual({ accepted: true, background_sessions: [], unattended_sessions: [] });
   expect((await t.withIdentity({ subject: user }).query(listMine, {}))[0].snapshot).toEqual(sample(now));
 });
 
