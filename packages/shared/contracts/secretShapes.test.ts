@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findSecrets, replaceSecrets, vaultReference } from "./secretShapes";
+import { findSecrets, replaceSecrets, vaultReference, withoutSecrets } from "./secretShapes";
 
 // Built at runtime so no credential-shaped literal sits in the source.
 const body = (n: number) => "a1B2c3D4e5F6g7H8".repeat(4).slice(0, n);
@@ -99,5 +99,10 @@ describe("replaceSecrets", () => {
 
   test("vaultReference names the command and the vars", () => {
     expect(vaultReference("stripe-test", ["STRIPE_SECRET_KEY"])).toBe("[vault secret stripe-test: `cast vault run stripe-test -- <command>` sets STRIPE_SECRET_KEY]");
+  });
+
+  test("withoutSecrets puts the redaction marker where each value was", () => {
+    expect(withoutSecrets(`a ${github} b ${stripeTest} c`)).toBe("a [redacted:github-token] b [redacted:stripe-secret-key] c");
+    expect(withoutSecrets("nothing secret here")).toBe("nothing secret here");
   });
 });

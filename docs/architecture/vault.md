@@ -552,6 +552,12 @@ use it.
   active, not to the process holding it: another live session of the same
   user can name an approved session's id. Closing that needs a per-session
   proof the backend can check (the daemon's launch tokens are local today).
+- The composer keeps a pasted credential out of the stored draft and the
+  typing preview (both carry its `[redacted:<id>]` marker), but a shared
+  draft (`useSharedDraft`) syncs the box's live text to everyone in it before
+  send, since that text is the shared state. The old server copy
+  `conversations.draft_message`, written only by older mobile builds, is not
+  scrubbed when the catch fires.
 - `cast dev` resolves only the `[vault]` map. A dev server that reads `.env`
   itself sees a `vault://` reference as a literal string.
 - A token-scoped sign-in (`sites_by_token`) carries no mark on the Vault page

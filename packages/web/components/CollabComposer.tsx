@@ -1,5 +1,6 @@
 "use client";
 
+import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useMutation, useConvexAuth } from "convex/react";
@@ -52,9 +53,12 @@ function useComposerPresence(
   // Where I am reading this transcript rides the same row, so the others can
   // draw my face in their scroll gutter (ReadingMarks).
   const anchor = useInboxStore((s) => (s.viewAnchor?.conversationId === conversationId ? s.viewAnchor : null));
+  // The preview is the one copy of my words that leaves this box before send;
+  // a credential in it shows as its marker, the way the stored draft does.
+  const previewText = useMemo(() => (shared.active ? "" : withoutSecrets(draftText)), [shared.active, draftText]);
   const present = useDocPresence({
     docId: `compose:${conversationId}`,
-    draftText: shared.active ? "" : draftText,
+    draftText: previewText,
     cursor: shared.active ? shared.caret : null,
     anchor: anchor ? { message_id: anchor.messageId, offset: anchor.offset } : null,
     enabled: opts.enabled,

@@ -140,9 +140,9 @@ test("a typed key never reaches the stored draft, and Cancel keeps it in the box
     },
   });
   expect(r.barShown).toBe(true);
-  expect(afterTyping).toBe("use [redacted:stripe-key] for checkout");
+  expect(afterTyping).toBe("use [redacted:stripe-secret-key] for checkout");
   expect(boxAfterCancel).toBe(`use ${KEY} for checkout`);
-  expect(storedAfterCancel).toBe("use [redacted:stripe-key] for checkout");
+  expect(storedAfterCancel).toBe("use [redacted:stripe-secret-key] for checkout");
   expect(r.sent).toEqual([]);
 });
 
@@ -150,7 +150,7 @@ test("the catch scrubs a draft stored with the value before", async () => {
   let stored: unknown;
   const r = await submit("", async (ctx) => { stored = ctx.stored(); }, { stored: `use ${KEY} for checkout` });
   expect(r.barShown).toBe(true);
-  expect(stored).toBe("use [redacted:stripe-key] for checkout");
+  expect(stored).toBe("use [redacted:stripe-secret-key] for checkout");
 });
 
 test("Save to Vault and send sends a reference in place of the value", async () => {
