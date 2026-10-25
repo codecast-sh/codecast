@@ -244,7 +244,8 @@ describe("signals.ingest", () => {
   test("reopen: a signal on a cause in watch reopens it, with history and a note", async () => {
     const { add, task, t } = await setup();
     const first = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart" });
-    await t.run(async (ctx) => { await ctx.db.patch(first.task_id, { status: "done", closed_at: Date.now(), watch_until: Date.now() + 86_400_000 } as any); });
+    // Closed a second ago: only evidence after the close reopens it, and a fast runner can add the signal in the close's own millisecond.
+    await t.run(async (ctx) => { await ctx.db.patch(first.task_id, { status: "done", closed_at: Date.now() - 1_000, watch_until: Date.now() + 86_400_000 } as any); });
     const again = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart" });
     expect(again).toMatchObject({ attach: "fingerprint", task_id: first.task_id, reopened: true, signal_count: 2 });
     const cause = await task(first.task_id);
