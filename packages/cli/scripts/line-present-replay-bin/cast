@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# `cast` for a presenter replay (scripts/line-present-replay.ts passes this
+# directory as prompt-dry-run.ts --guard). It adds one thing to the dry run's
+# own guard (../prompt-dry-run-bin/cast), which still classifies, logs and
+# answers every call: a write is RECORDED before it is refused, whole, so the
+# replay can show the decision the station would have posted.
+#
+# Each write lands in $RUN_DIR/writes/<n>/:
+#   argv        the arguments, each followed by a NUL
+#   stdin       the piped body, when an argument is a bare `-` (a heredoc for
+#               --context -; calls.log holds the argv only)
+#   files/<i>   a copy of every argument that names a file (--report page.html,
+#               --option-page 2=alt.html), taken now: the station writes them
+#               under its temp dir, which is gone when the run ends
+#   files.tsv   <i> TAB <the path as the argument gave it>
+#
+# Nothing here runs a write. `cast decide` and `cast state` are answered as
+# recorded (exit 0), because the station posts and pins as its last acts and a
+# refusal there sends it looking for another way to deliver; every other write
+# gets the dry run's refusal.
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+std="$here/../prompt-dry-run-bin/cast"
+# The dry run's guard finds the real CLI as the first `cast` on PATH outside
+# its own directory, so this directory leaves PATH before it runs.
+path=""; IFS=: read -ra dirs < <(printf '%s\n' "$PATH")
+for d in "${dirs[@]}"; do [ "$d" = "$here" ] || path="${path:+$path:}$d"; done
+export PATH="$path"
+
+wants_help() { local a; for a in "$@"; do [ "$a" = "--" ] && return 1; [ "$a" = "--help" ] && return 0; done; return 1; }
+if [ -n "${DRY_RUN_CLASSIFY:-}" ] || [ -n "${DRY_RUN_LIVE_READ:-}" ] || wants_help "$@" \
+  || [ "$(DRY_RUN_CLASSIFY=1 bash "$std" "$@")" != write ]; then
+  exec bash "$std" "$@"
+fi
+
+# Plain mkdir first: the dry run's sandbox refuses even a stat of the run
+# dir's parents under /tmp, so -p alone fails there. A mkdir that fails for any
+# reason but an existing slot stops here instead of counting up forever.
+root="${RUN_DIR:-$PWD}/writes"; [ -d "$root" ] || mkdir "$root" 2>/dev/null || mkdir -p "$root" || { echo "replay guard: cannot create $root" >&2; exit 1; }
+n=1; until mkdir "$root/$n" 2>/dev/null; do
+  [ -e "$root/$n" ] || { echo "replay guard: cannot create $root/$n" >&2; exit 1; }
+  n=$((n + 1))
+done
+dir="$root/$n"; mkdir "$dir/files"
+printf '%s\0' "$@" > "$dir/argv"
+piped=""; for a in "$@"; do [ "$a" = "-" ] && piped=1; done
+[ -n "$piped" ] && [ ! -t 0 ] && cat > "$dir/stdin"
+i=0
+for a in "$@"; do
+  i=$((i + 1))
+  for f in "$a" "${a#*=}"; do
+    if [ -f "$f" ]; then cp "$f" "$dir/files/$i" && printf '%s\t%s\n' "$i" "$f" >> "$dir/files.tsv"; break; fi
+  done
+done
+
+case "${1:-}" in
+  decide|state)
+    bash "$std" "$@" >/dev/null 2>&1 </dev/null
+    echo "Replay: 'cast ${1}' was recorded (write $n) and not sent. Nothing reached anyone; carry on as if it had gone through."
+    exit 0 ;;
+esac
+exec bash "$std" "$@" </dev/null
