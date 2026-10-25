@@ -5,7 +5,7 @@
 // wallet), and the seat sync sets the quantity to the members with proration.
 // With no seat price nothing is limited. The failure policy (fail open on an
 // unconfirmed plan, block on a confirmed lapse) is the pure `decideSeat`.
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { ConvexError } from "convex/values";
 import { signWebhook } from "@platform/billing";
@@ -42,6 +42,7 @@ afterEach(() => {
     else process.env[name] = savedEnv[name];
   }
   globalThis.fetch = savedFetch;
+  setSystemTime();
 });
 
 // ---------------------------------------------------------------------------
@@ -345,6 +346,8 @@ describe("seat sync", () => {
     await t.mutation(internal.teamBilling.applyTeamSubscription, { subscription_json: JSON.stringify(seatSub(team, "canceled", 3)), read_at: Date.now() + 1, sync: false });
     expect(await admin.mutation(api.teams.sendInviteEmail, { team_id: team, email: "x@acme.test" })).toMatchObject({ sent: false, upgrade_required: { code: "subscription_lapsed" } });
     stripe.unreachable = true;
+    // The failure must come after the canceled read; a fast runner can land both in one millisecond.
+    setSystemTime(Date.now() + 1000);
     expect(await t.action(internal.teamBilling.syncSeats, { team_id: team, reason: "member_joined" })).toBe("refresh_failed");
     expect((await row())?.refresh_failed_at).toBeNumber();
     expect(await admin.mutation(api.teams.sendInviteEmail, { team_id: team, email: "x@acme.test" })).toEqual({ sent: true });
