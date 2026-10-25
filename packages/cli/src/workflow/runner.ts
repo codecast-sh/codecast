@@ -1054,6 +1054,7 @@ export function graphToPushPayload(graph: WorkflowGraph) {
     ...(n.category ? { category: n.category } : {}),
     ...(n.card ? { card: n.card } : {}),
     ...(n.asker ? { asker: n.asker } : {}),
+    ...(n.answerer ? { answerer: n.answerer } : {}),
   }));
   const edges = graph.edges.map((e) => ({
     from: e.from, to: e.to,
@@ -1137,7 +1138,8 @@ async function executeRemoteHumanGate(
     // Otherwise it is a question back: the station that presents the decision
     // answers it and the gate asks again; a gate with no presenter asks again
     // itself, the question on top of its document.
-    const asker = node.asker ? graph.nodes.get(node.asker) : undefined;
+    const answerer = node.asker || node.answerer;
+    const asker = answerer ? graph.nodes.get(answerer) : undefined;
     if (asker) {
       context["human.gate.question"] = trimmed;
       context["human.gate.target"] = asker.id;
@@ -1210,6 +1212,12 @@ export function presentsDecision(node: Pick<WorkflowNode, "id">, graph: Workflow
   return false;
 }
 
+/** Whether `node` answers questions typed at some gate of its graph (`answerer=<node>`) without presenting its decision. */
+export function answersGate(node: Pick<WorkflowNode, "id">, graph: WorkflowGraph): boolean {
+  for (const n of graph.nodes.values()) if (n.type === "human" && n.answerer === node.id) return true;
+  return false;
+}
+
 export function buildNodePrompt(
   node: WorkflowNode,
   graph: WorkflowGraph,
@@ -1234,6 +1242,8 @@ export function buildNodePrompt(
   // decision it posts again is the answer.
   if (context["human.gate.question"] && presentsDecision(node, graph)) {
     parts.push(`\n# The person's question about your decision\n${context["human.gate.question"]}\n\nThey asked instead of choosing. Answer it in the decision you post again.`);
+  } else if (context["human.gate.question"] && answersGate(node, graph)) {
+    parts.push(`\n# The person's question at the card\n${context["human.gate.question"]}`);
   } else if (context["human.message"]) {
     // Surface human message prominently if present
     parts.push(`\n# Human Instructions\n${context["human.message"]}`);

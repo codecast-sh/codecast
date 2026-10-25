@@ -3,7 +3,8 @@
 // Each station is a segment from the pool, so a fix to one reaches every flow
 // that uses it. Check is a slot: a flow that extends this one may prove its
 // change with steps of its own (subgraph check { ... }); the project's checks
-// run when nothing fills it.
+// run when nothing fills it. A question typed at Decide goes back to the
+// reviewer, whose verdict note the card is made from, and Decide asks again.
 //
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
@@ -13,7 +14,7 @@ digraph change {
   start [shape=Mdiamond]
   check  [flow="check", slot="Prove the change does what it should"]
   review [flow="review"]
-  decide [flow="decide"]
+  decide [flow="decide", answerer="review__review"]
   ship   [flow="ship"]
   exit [shape=Msquare, label="Done"]
   start -> check -> review -> decide -> ship -> exit

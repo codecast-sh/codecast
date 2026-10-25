@@ -31,6 +31,7 @@
 }
 .decision-doc .decision-body :where(p, li) { line-height: 1.6; }
 .decision-doc .decision-body :where(h1, h2, h3) { color: var(--sol-text); margin-top: 1.25em; }
+.decision-doc .decision-body :where(:not(pre) > code) { font-size: 0.9em; font-weight: 400; padding: 1px 5px; border-radius: 4px; background: var(--sol-bg-alt); color: var(--sol-text); }
 .decision-doc .decision-option-body :where(p) { margin: 0.25em 0; }
 .decision-doc .decision-ladder {
   position: relative;
