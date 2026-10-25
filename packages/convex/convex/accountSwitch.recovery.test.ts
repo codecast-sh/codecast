@@ -169,7 +169,7 @@ describe("auth recovery through the backend handler", () => {
 // drive the real handler to prove the park now arrives AND that it is decided
 // against Codex's own account rather than the Claude one sitting next to it.
 describe("Codex limit parks through the backend handler", () => {
-  function codexFixture(opts: { credit?: number; optIn?: boolean; codexResetsAt?: number } = {}) {
+  function codexFixture(opts: { credit?: number; optIn?: boolean; codexResetsIn?: number } = {}) {
     const f = fixture();
     (f.device as any).codex_accounts = {
       active_email: "codex@example.com",
@@ -179,7 +179,8 @@ describe("Codex limit parks through the backend handler", () => {
         email: "codex@example.com",
         usage: {
           fetched_at: f.now - 1_000,
-          session: { percent: 100, resets_at: opts.codexResetsAt ?? f.now + 3_600_000 },
+          // Read off the fixture's own clock: a time taken apart from it can land a millisecond later.
+          session: { percent: 100, resets_at: f.now + (opts.codexResetsIn ?? 3_600_000) },
           ...(opts.credit ? { reset_credits: { available: opts.credit } } : {}),
         },
       }],
@@ -250,7 +251,7 @@ describe("Codex limit parks through the backend handler", () => {
     expect(pegged.db._inserted.filter((i: any) => i.table === "pending_messages")).toHaveLength(0);
 
     // Same machine, codex's own window has now rolled: continue for free.
-    const rolled = codexFixture({ codexResetsAt: Date.now() - 10_000 });
+    const rolled = codexFixture({ codexResetsIn: -10_000 });
     const park = rolled.park();
     rolled.tables.conversations.push(park);
     expect(await rolled.run()).toMatchObject({ acted: "codex_continue", conversations: 1 });
@@ -262,14 +263,14 @@ describe("Codex limit parks through the backend handler", () => {
 
   test("the two providers' free continues are independent", async () => {
     // A Claude continue moments ago must not consume Codex's one free continue.
-    const f = codexFixture({ codexResetsAt: Date.now() - 10_000 });
+    const f = codexFixture({ codexResetsIn: -10_000 });
     f.device.cc_auto_switch_state = { attempts: [{ profile: AUTO_SWITCH_CONTINUE_KEY, at: f.now }] } as any;
     f.tables.conversations.push(f.park());
     expect(await f.run()).toMatchObject({ acted: "codex_continue" });
     expect(f.device.cc_auto_switch_state.attempts).toContainEqual({ profile: AUTO_SWITCH_CODEX_CONTINUE_KEY, at: expect.any(Number) });
 
     // And its own key does hold it back, so the codex continue is once per park.
-    const already = codexFixture({ codexResetsAt: Date.now() - 10_000 });
+    const already = codexFixture({ codexResetsIn: -10_000 });
     already.device.cc_auto_switch_state = { attempts: [{ profile: AUTO_SWITCH_CODEX_CONTINUE_KEY, at: already.now }] } as any;
     already.tables.conversations.push(already.park());
     expect(await already.run()).toMatchObject({ acted: "wait" });
@@ -279,7 +280,7 @@ describe("Codex limit parks through the backend handler", () => {
     // Codex resets in 30 minutes, Claude in three hours, and neither can act
     // yet. Sleeping the Codex park on Claude's clock is the 2026-09-03 "booked
     // at the wrong account's reset" gap one provider over.
-    const f = codexFixture({ codexResetsAt: Date.now() + 30 * 60_000 });
+    const f = codexFixture({ codexResetsIn: 30 * 60_000 });
     f.device.cc_accounts.profiles[0].usage = { fetched_at: f.now, session: { percent: 100, resets_at: f.now + 3 * 3_600_000 } } as any;
     f.tables.conversations.push(f.park(), f.conversation("conversations_claude", "limit", { cc_account: undefined }));
     const res = await f.run();
