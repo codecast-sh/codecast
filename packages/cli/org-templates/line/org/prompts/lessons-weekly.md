@@ -14,7 +14,7 @@ it in its proposing mode: the table and the signals are the deliverable, and
 the instruction lines, decisions and principles it suggests are proposals for a
 person, not edits you make.
 
-Record in the line ledger how many corrections you read, the clusters, and the
+Record in the flow ledger how many corrections you read, the clusters, and the
 signal and cause each reached. A week with no corrections is a result too:
 record it, and say whether the search could see this project's sessions at
 all, because an empty week and a blind search look the same.

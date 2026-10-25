@@ -41,7 +41,7 @@ type Ctx = { db: any };
 export const MAX_STARTS_PER_SWEEP = 10;
 
 
-export const LINE_STARTED_PREFIX = "the line started: run ";
+export const LINE_STARTED_PREFIX = "the flow started: run ";
 
 export const agentAssignee = (role: { handle: string }) => `agent:${role.handle}`;
 

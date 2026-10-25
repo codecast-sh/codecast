@@ -18,7 +18,7 @@ const groundFailed = run("r_ground", "t1", {
   status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome failure, review_verdict none)",
   node_statuses: [n("start", T0, 0), failed("ground", T0 + MIN, 7, "failure"), failed("analyze", T0 + 2 * MIN, 8, "failure"), failed("prove", T0 + 3 * MIN, 26)],
 });
-// Prove finished its work and the line had no next step for it (real: ct-58737).
+// Prove finished its work and the flow had no next step for it (real: ct-58737).
 const proveDeadEnd = run("r_dead", "t2", {
   status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)",
   node_statuses: [n("start", T0, 0), n("ground", T0 + MIN, 2, "completed", { session_id: "s1" }), n("analyze", T0 + 4 * MIN, 3, "completed", { session_id: "s2" }), n("prove", T0 + 8 * MIN, 6, "failed", { session_id: "s3", session: { _id: "s3", state: "Proved it. This fix still needs Cameron's yes before it ships." } } as never)],

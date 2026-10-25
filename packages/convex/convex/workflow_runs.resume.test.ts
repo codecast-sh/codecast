@@ -111,7 +111,7 @@ describe("reaskRunCore", () => {
     const closed = await waiting({}, { status: "done" });
     await expect(reaskRunCore(closed.ctx, HOST, RUN)).rejects.toThrow("closed problem");
     const trial = await waiting({}, { project_id: "projects_trial" });
-    await expect(reaskRunCore(trial.ctx, HOST, RUN)).rejects.toThrow("cast line trial rerun ct-9 --reask");
+    await expect(reaskRunCore(trial.ctx, HOST, RUN)).rejects.toThrow("cast flow trial rerun ct-9 --reask");
     const checked = await waiting();
     expect(await reaskRunCore(checked.ctx, HOST, RUN, { asker: "card_write", check: true })).toMatchObject({ resumed_at: "card_write", replaced: null });
     expect(checked.tables.workflow_runs[0]).toMatchObject({ status: "paused", gate_decision_id: SD });
@@ -145,7 +145,7 @@ describe("resumeFailedRunCore (cast workflow resume)", () => {
     const closed = await failed({}, { status: "done" });
     await expect(resumeFailedRunCore(closed.ctx, HOST, RUN, "verify")).rejects.toThrow("closed problem");
     const trial = await failed({}, { project_id: "projects_trial" });
-    await expect(resumeFailedRunCore(trial.ctx, HOST, RUN, "verify")).rejects.toThrow("cast line trial rerun ct-9 --at <station>");
+    await expect(resumeFailedRunCore(trial.ctx, HOST, RUN, "verify")).rejects.toThrow("cast flow trial rerun ct-9 --at <station>");
     const blank = await failed();
     await expect(resumeFailedRunCore(blank.ctx, HOST, RUN, " ")).rejects.toThrow("Name the station");
     const checked = await failed();

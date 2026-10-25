@@ -13,7 +13,7 @@ import type { Id } from "./_generated/dataModel";
 import { resolveAssigneeToUserId, roleAssigneeOf } from "./tasks";
 import { roleRunner } from "./lib/seatPlace";
 
-const LINE_SENDER = "The line";
+const LINE_SENDER = "The flow";
 
 /** The person a task's assignee names: a user, or the host of the role it names. */
 async function assigneePerson(ctx: any, task: any): Promise<Id<"users"> | null> {

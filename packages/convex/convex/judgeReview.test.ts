@@ -65,7 +65,7 @@ describe("marking a finding wrong", () => {
     const s = await setup();
     const review = await s.mark(s.f1, { note: "There was no scheduled meeting; the rep's voicemail only said so." });
     expect(review).toMatchObject({ trigger: "label", state: "waiting", attempts: 0, note: "There was no scheduled meeting; the rep's voicemail only said so." });
-    expect(review.waiting_on).toMatch(/^The line for .* is off; the diagnosis starts once "Start problems on their own" is on\.$/);
+    expect(review.waiting_on).toMatch(/^The flow for .* is off; the diagnosis starts once "Start problems on their own" is on\.$/);
     expect(await s.t.run(async (ctx) => await ctx.db.query("workflow_runs").collect())).toHaveLength(0);
 
     await s.lineOn();
@@ -88,7 +88,7 @@ describe("marking a finding wrong", () => {
     await s.t.run(async (ctx) => { await ctx.db.patch(s.project, { line_trial: { since: Date.now() } } as any); });
     await s.lineOn();
     const review = await s.mark(s.f1, { trigger: "dissolve", sentence: "The close note is the one the founder asked for." });
-    expect(review.waiting_on).toMatch(/is a trial, so its line never starts a diagnosis; the run that ruled it wrong records one with cast signal diagnosis\.$/);
+    expect(review.waiting_on).toMatch(/is a trial, so its flow never starts a diagnosis; the run that ruled it wrong records one with cast signal diagnosis\.$/);
     expect(await s.t.run(async (ctx) => await sweepJudgeReviews(ctx, Date.now()))).toMatchObject({ started: 0 });
     const out: any = await s.diagnose("sg-101", "misread", "The note is the founder-requested close.", "ex-3: no line of comms.md covers the close note.");
     expect(out.case_short_id).toBeTruthy();
@@ -282,7 +282,7 @@ describe("the dissolve hand off and the sweep", () => {
     const f1 = await s.get(s.f1);
     expect(f1.task_id).toBeUndefined();
     expect(f1.retired).toMatchObject({ task_id: s.problem });
-    expect(f1.retired.reason).toContain("found wrong by a line run's proof: The reply reports no problem");
+    expect(f1.retired.reason).toContain("found wrong by a flow run's proof: The reply reports no problem");
     const held = await s.t.run(async (ctx) => await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", s.problem)).collect());
     expect(held.map((r: any) => r.short_id)).not.toContain("sg-101");
     expect(held.map((r: any) => r.short_id)).not.toContain("sg-102");

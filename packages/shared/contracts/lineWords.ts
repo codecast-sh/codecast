@@ -7,16 +7,16 @@ import { groundedNoteWords } from "./goalsBrief";
 
 const stepWords = (id: string) => id.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 
-/** A station finished (or failed) and the graph had no route after it: "Prove finished, and the line had no next step for it. The problem is open again." */
+/** A station finished (or failed) and the graph had no route after it: "Prove finished, and the flow had no next step for it. The problem is open again." */
 export function deadEndWords(step: string, outcome?: string | null): string {
-  return `${step} ${outcome && /^fail/i.test(outcome) ? "failed" : "finished"}, and the line had no next step for it. The problem is open again.`;
+  return `${step} ${outcome && /^fail/i.test(outcome) ? "failed" : "finished"}, and the flow had no next step for it. The problem is open again.`;
 }
 
 /** A run that failed for another reason: its reason, then where the problem is. */
 export const runFailedWords = (reason: string): string => `The run stopped: ${reason.replace(/\.$/, "")}. The problem is open again.`;
 
 /** A station that ran as many rounds as the line allows. */
-export const roundsOutWords = (step: string): string => `${step} ran the most rounds this line allows. The problem waits in review, marked blocked.`;
+export const roundsOutWords = (step: string): string => `${step} ran the most rounds this flow allows. The problem waits in review, marked blocked.`;
 
 /** A session that handed the problem back. */
 export const handedBackWords = (step: string, handoff: string): string =>

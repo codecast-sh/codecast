@@ -681,7 +681,7 @@ describe("a role proposal with a line", () => {
     const change = { kind: "role", name: "Line lead", handle: "codecast-line", scope: { projects: ["Codecast"] }, caps: { hands_per_day: 6, cards: 5 }, line: "line" } as const;
     expect(orgChangeError(change)).toBeNull();
     const [ask] = deriveAsks([{ seq: 1, change: change as OrgChange }]);
-    expect(ask!.effect).toContain("runs the project's line on the line workflow, starting new work only while fewer than 5 change cards wait on a person");
+    expect(ask!.effect).toContain("runs the project's flow on the line steps, starting new work only while fewer than 5 change cards wait on a person");
     const plain = deriveAsks([{ seq: 1, change: { kind: "role", name: "Ops", handle: "ops" } as OrgChange }]);
     expect(plain[0]!.effect).not.toContain("workflow");
   });

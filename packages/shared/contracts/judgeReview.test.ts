@@ -42,7 +42,7 @@ describe("caseRoute (learning-loop.md LL11)", () => {
       trigger: "dissolve", sentence: "The reply reports no problem about a call reaching voicemail.", answer: "missing", fact: "No call was scheduled.",
     });
     expect(text).toContain("The comms judge (version 7) found: Voicemail on a scheduled call (sg-4)");
-    expect(text).toContain("A line run's proof found the system behaved well");
+    expect(text).toContain("A flow run's proof found the system behaved well");
     expect(text).toContain("What a correct judgment of this moment does: The reply reports no problem about a call reaching voicemail.");
     expect(text).toContain("missing from what it saw");
     expect(text).toContain("The fact: No call was scheduled.");

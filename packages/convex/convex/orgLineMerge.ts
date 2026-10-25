@@ -52,7 +52,7 @@ export async function performSetLineMerge(
   userId: Id<"users">,
   args: { role_id: string; on: boolean; per_day?: number; from_session?: string; api_token?: string; human_decision?: string },
 ): Promise<any> {
-  await refuseUnlessHuman(ctx, args, "The line's merge step");
+  await refuseUnlessHuman(ctx, args, "The flow's merge step");
   let role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
   const now = Date.now();

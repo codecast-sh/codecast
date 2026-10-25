@@ -1518,7 +1518,7 @@ export async function reaskRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wor
   if (String(run.user_id) !== String(userId)) throw new ConvexError("Only the run's owner asks its decision again");
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task && isTerminalTaskStatus(task.status)) throw new ConvexError(`${task.short_id} is ${task.status}: a closed problem is not asked again`);
-  if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast line trial rerun ${task.short_id} --reask asks it again under the trial's budget`);
+  if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast flow trial rerun ${task.short_id} --reask asks it again under the trial's budget`);
   const wf = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
   const isGate = (id?: string) => !!id && ((wf as any)?.nodes ?? []).some((n: { id?: string; type?: string }) => n.id === id && n.type === "human");
   const gate = run.status === "paused" ? run.gate_node_id : run.status === "failed" && isGate(run.current_node_id) ? run.current_node_id : undefined;
@@ -1556,7 +1556,7 @@ export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: 
   if (String(run.user_id) !== String(userId)) throw new ConvexError("Only the run's owner resumes it");
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task && isTerminalTaskStatus(task.status)) throw new ConvexError(`${task.short_id} is ${task.status}: a closed problem is not resumed`);
-  if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast line trial rerun ${task.short_id} --at <station> resumes it under the trial's budget`);
+  if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast flow trial rerun ${task.short_id} --at <station> resumes it under the trial's budget`);
   if (run.status !== "failed") throw new ConvexError(`The run is ${run.status}: only a failed run is resumed at a station (a run waiting on a decision is asked again with cast workflow reask)`);
   const node = at.trim();
   if (!node) throw new ConvexError("Name the station to resume at");

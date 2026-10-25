@@ -6,7 +6,7 @@
 import { countersFor } from "./orgCaps";
 
 export const MERGE_AUTHORITY_ID = "merge";
-export const MERGE_AUTHORITY_LABEL = "Merge the line's approved branches into the project's default branch when their checks pass; the daily limit counts merges only";
+export const MERGE_AUTHORITY_LABEL = "Merge the flow's approved branches into the project's default branch when their checks pass; the daily limit counts merges only";
 
 type Grant = { id: string; kind: string; label: string; limit?: { per_day?: number }; expires_at?: number };
 
@@ -34,7 +34,7 @@ export function mergeAllowance(role: { line_merge?: boolean | null; authority?: 
   const used = countersFor(role, now).merges ?? 0;
   const limit = grant?.limit?.per_day ?? null;
   const base = { on, used, limit, grant };
-  if (!on) return { ...base, allowed: false, reason: "merge is off for this line; a person turns it on with cast role line --merge on" };
+  if (!on) return { ...base, allowed: false, reason: "merge is off for this flow; a person turns it on with cast role line --merge on" };
   if (role.status && role.status !== "active") return { ...base, allowed: false, reason: `the role is ${role.status}` };
   if (!grant) {
     const expired = (role.authority ?? []).some((a) => a.id === MERGE_AUTHORITY_ID);

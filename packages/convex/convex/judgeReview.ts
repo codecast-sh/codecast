@@ -189,16 +189,16 @@ export async function labelFinding(
 /** Why the finding's project cannot diagnose it now, or the role that can. */
 async function diagnosingRole(ctx: any, finding: Doc<"signals">, now: number): Promise<{ role: any } | { waiting_on: string }> {
   const project: Doc<"projects"> | null = finding.project_id ? await ctx.db.get(finding.project_id) : null;
-  if (!project) return { waiting_on: "The finding is in no project, so no line diagnoses it." };
+  if (!project) return { waiting_on: "The finding is in no project, so no flow diagnoses it." };
   // A trial's line never starts on its own (LL12): the run that ruled the
   // finding wrong records the diagnosis itself.
-  if (project.line_trial) return { waiting_on: `${project.title} is a trial, so its line never starts a diagnosis; the run that ruled it wrong records one with cast signal diagnosis.` };
+  if (project.line_trial) return { waiting_on: `${project.title} is a trial, so its flow never starts a diagnosis; the run that ruled it wrong records one with cast signal diagnosis.` };
   const role = await leadRoleOf(ctx, project);
-  if (!role) return { waiting_on: `No role leads ${project.title}, so no line diagnoses its findings.` };
+  if (!role) return { waiting_on: `No role leads ${project.title}, so no flow diagnoses its findings.` };
   if (!roleMayStartHands(role, now)) {
     return { waiting_on: role.status === "active" && lineStartsOn(role)
       ? `@${role.handle} has started all the sessions it may today; the diagnosis starts tomorrow.`
-      : `The line for ${project.title} is off; the diagnosis starts once "Start problems on their own" is on.` };
+      : `The flow for ${project.title} is off; the diagnosis starts once "Start problems on their own" is on.` };
   }
   return { role };
 }
@@ -437,7 +437,7 @@ export const defectsForCli = mutation({
         now,
         loads,
       });
-      if (!finding.retired) await retireSignals(ctx, [finding], { reason: `found wrong by a line run's proof${d.sentence ? `: ${d.sentence.slice(0, 300)}` : ""}`, actor: userId });
+      if (!finding.retired) await retireSignals(ctx, [finding], { reason: `found wrong by a flow run's proof${d.sentence ? `: ${d.sentence.slice(0, 300)}` : ""}`, actor: userId });
       out.push({ finding: d.finding, short_id: finding.short_id, state: review.state, ...(review.waiting_on ? { waiting_on: review.waiting_on } : {}) });
     }
     return out;

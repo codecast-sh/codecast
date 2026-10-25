@@ -51,7 +51,7 @@ if [ "$(git rev-list --count "$upstream..HEAD")" = 0 ]; then
     for f in $touched; do [ "$(git rev-parse -q --verify "$c:$f")" = "$(git rev-parse -q --verify "$was:$f")" ] || { same=0; break; }; done
     [ "$same" = 1 ] && { echo "$c"; break; }
   done)"
-  cast task comment $task_id "Already on $target${landed:+ as ${landed:0:10}}: nothing of $br is left to ship, so the line goes on to watch." -t progress > /dev/null
+  cast task comment $task_id "Already on $target${landed:+ as ${landed:0:10}}: nothing of $br is left to ship, so the flow goes on to watch." -t progress > /dev/null
   answer true true "already on $upstream${landed:+ as ${landed:0:10}}"
   exit 0
 fi

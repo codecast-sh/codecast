@@ -223,5 +223,5 @@ export function roleHandoffPrompt(receivers: HandoffReceiverSpec[], reason: "ret
 // The line's merge step records each merge on the role's standing session so
 // the role reports it to the person it reports to in its own words.
 export function mergeReportLine(args: { task_short_id: string; task_title: string; branch: string; sha: string; into: string; used: number; limit: number }): string {
-  return `The line merged ${args.task_short_id} (${args.task_title}) from ${args.branch} into ${args.into} at ${args.sha.slice(0, 10)}: merge ${args.used} of ${args.limit} today. Report it in one line to the person you report to, with the task's id, and end the turn.`;
+  return `The flow merged ${args.task_short_id} (${args.task_title}) from ${args.branch} into ${args.into} at ${args.sha.slice(0, 10)}: merge ${args.used} of ${args.limit} today. Report it in one line to the person you report to, with the task's id, and end the turn.`;
 }

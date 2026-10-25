@@ -11,4 +11,4 @@ esac
 note=$prove.output
 [ -n "$note" ] || note=$prove_line.output
 [ -n "$note" ] || note=$last_error
-cast task comment $task_id "Parked at prove: Prove wrote no proof, so the miss was neither shown nor ruled out. Rerun the line once it can be shown.${note:+ What Prove tried: $note}" -t blocker
+cast task comment $task_id "Parked at prove: Prove wrote no proof, so the miss was neither shown nor ruled out. Rerun the flow once it can be shown.${note:+ What Prove tried: $note}" -t blocker

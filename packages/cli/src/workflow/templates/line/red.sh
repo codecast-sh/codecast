@@ -37,7 +37,7 @@ if [ $category = prompt ]; then
   # only when every miss moment fails on the base and every guard passes.
   cmd=$line.commands.prove
   if [ -z "$cmd" ]; then
-    cast task comment $task_id "This project's line profile names no prove command, so the prove station passed without showing the miss." -t progress
+    cast task comment $task_id "This project's flow profile names no prove command, so the prove station passed without showing the miss." -t progress
     answer true "no prove command; passed with a note"
     exit 0
   fi
@@ -55,7 +55,7 @@ fi
 # can rerun (repro.sh, for the line's graph, profile or a script), that check
 # must fail on the base as well, the way a code cause's does.
 if [ $category = line ]; then
-  cast line proof-check "$dir/line-proof.json" > "$dir/line-proof.log" 2>&1 || { answer false "the line proof does not hold: $(clean "$dir/line-proof.log")"; exit 0; }
+  cast line proof-check "$dir/line-proof.json" > "$dir/line-proof.log" 2>&1 || { answer false "the flow proof does not hold: $(clean "$dir/line-proof.log")"; exit 0; }
   [ -f "$dir/repro.sh" ] || { answer true "$(clean "$dir/line-proof.log")"; exit 0; }
 fi
 [ -f "$dir/repro.sh" ] || { answer false "no repro.sh"; exit 0; }

@@ -29,14 +29,14 @@ export const LINE_WIDGET_NEEDS: Record<LineWidgetKind, ReadonlyArray<"step" | "r
 
 /** What each widget shows, and the optional fields it reads, as an agent writing one needs to know it. */
 const LINE_WIDGET_WORDS: Record<LineWidgetKind, string> = {
-  graph: "the line's steps as a graph; `run` lights one run's path, `step` marks one step",
+  graph: "the flow's steps as a graph; `run` lights one run's path, `step` marks one step",
   step: "one step: who does it, its job, where it sends work and how often, its recent decisions",
   prompt: "a step's prompt as it reads today, shared sections folded",
   diff: "a proposed change to a step's prompt: `after` is the whole new text, `before` defaults to today's",
   decision: "what one step received and decided on one run, with its reasoning",
   decisions: "a step's decisions as a list; `limit` and `outcome` narrow it",
   "before-after": "a table of cases: `rows` is [{case, before, after, ref?}], what the step said and what it says now",
-  run: "one run's path through the line, step by step",
+  run: "one run's path through the flow, step by step",
   problem: "one cause over time (`case` is its task id or ref): how often it happened, every earlier attempt and how it ended (dissolved, dropped, shipped), what came back after each, and what was already tried",
 };
 
@@ -52,7 +52,7 @@ export function lineFenceGuide(project: string, graph: string | null): string {
     return `- \`${w}\`${needs ? ` (needs ${needs})` : ""}: ${LINE_WIDGET_WORDS[w]}`;
   });
   return [
-    "A fenced block in the language `line` holding one JSON object draws a live widget from the line itself, wherever your reply renders:",
+    "A fenced block in the language `line` holding one JSON object draws a live widget from the flow itself, wherever your reply renders:",
     "",
     "```line",
     `{"widget":"step",${base},"step":"<step id>"}`,
@@ -66,7 +66,7 @@ export function lineFenceGuide(project: string, graph: string | null): string {
 /** The fence in one sentence, for a frame about the line that is not a chat (a line decision's discussion). */
 export function lineFenceHint(project: string): string {
   const widgets = LINE_WIDGETS.map((w) => (LINE_WIDGET_NEEDS[w].length ? `${w} (${LINE_WIDGET_NEEDS[w].join(", ")})` : w)).join(", ");
-  return `Your reply can draw live widgets of this line: a \`\`\`line fenced block holding JSON such as {"widget":"step","project":"${project}","step":"<step id>"}; widgets and what each needs: ${widgets}.`;
+  return `Your reply can draw live widgets of this flow: a \`\`\`line fenced block holding JSON such as {"widget":"step","project":"${project}","step":"<step id>"}; widgets and what each needs: ${widgets}.`;
 }
 
 // ── the <line-chat> frame ────────────────────────────────────────────────────

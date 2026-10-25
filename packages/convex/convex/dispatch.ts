@@ -1816,7 +1816,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // the project's checkout, and that machine's republish makes it the
       // line's. The daemon admits only a checkout it tracks.
       const checkout = project.project_path;
-      if (lp || !checkout) throw new ConvexError("No machine has uploaded this line's settings yet, and the project does not name its folder: run one session in the project's folder, then change it here");
+      if (lp || !checkout) throw new ConvexError("No machine has uploaded this flow's settings yet, and the project does not name its folder: run one session in the project's folder, then change it here");
       const last = await ctx.db.query("conversations")
         .withIndex("by_user_git_root", (q: any) => q.eq("user_id", userId).eq("git_root", checkout))
         .order("desc")

@@ -8,7 +8,7 @@ cd "$(cast ws path $worktree)" || exit 1
 dir=$run_dir
 cmd=$line.commands.eval
 if [ -z "$cmd" ]; then
-  cast task comment $task_id "This project's line profile names no eval command, so the eval station passed without evals and the change is unscored." -t progress
+  cast task comment $task_id "This project's flow profile names no eval command, so the eval station passed without evals and the change is unscored." -t progress
   echo "no eval command: passed with a note"
   echo '{"why": "no evals ran: the project names no eval command"}'
   exit 0

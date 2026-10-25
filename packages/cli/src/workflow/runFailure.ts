@@ -89,7 +89,7 @@ export function taskStopCard(graph: WorkflowGraph, state: WorkflowRunState, task
     const sentBack = from && from !== at ? from : undefined;
     const edgeLabel = sentBack ? graph.edges.find((e) => e.from === sentBack && e.to === at)?.label : undefined;
     const says = sentBack ? `${label(sentBack)} still says “${edgeLabel || state.context[`${sentBack}.outcome`] || "failed"}”` : "";
-    const lead = `**${label(at)} ran ${visits} times, the most this line allows${sentBack ? `, and ${label(sentBack)} sent the last round back` : ""}.** The task is parked in review as blocked.`;
+    const lead = `**${label(at)} ran ${visits} times, the most this flow allows${sentBack ? `, and ${label(sentBack)} sent the last round back` : ""}.** The task is parked in review as blocked.`;
     const detail = !sentBack ? ""
       : state.context[`${sentBack}.outcome`] === "failure" ? `\n\n**${label(sentBack)}**\n\n${stationFailureMarkdown(state.context, sentBack)}`
       : state.context["review_note"] ? `\n\n**${label(sentBack)}**\n\n${state.context["review_note"]}` : "";

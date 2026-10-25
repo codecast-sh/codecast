@@ -135,7 +135,7 @@ export function caseDetail(c: {
   if (c.finding_detail) lines.push("", c.finding_detail.slice(0, 2000));
   lines.push("", c.trigger === "label"
     ? `A person marked this finding wrong${c.note ? `: "${c.note}"` : "."}`
-    : "A line run's proof found the system behaved well and the judge scored it as a break.");
+    : "A flow run's proof found the system behaved well and the judge scored it as a break.");
   if (c.sentence) lines.push(`What a correct judgment of this moment does: ${c.sentence}`);
   lines.push("", c.answer === "missing"
     ? "Diagnosis: the fact the judge needed was missing from what it saw."
@@ -166,7 +166,7 @@ const AGAINST_WORDS: Record<NonNullable<JudgeReviewView["against"]>, string> = {
 
 /** One line on where a wrong finding's diagnosis stands. */
 export function judgeReviewLine(r: JudgeReviewView): string {
-  const how = r.trigger === "label" ? "marked wrong" : "found wrong by a line run";
+  const how = r.trigger === "label" ? "marked wrong" : "found wrong by a flow run";
   if (r.state === "diagnosed" && r.answer === "upheld") return `${how}; the records show the finding holds${r.why ? `: ${r.why}` : ""}`;
   if (r.state === "diagnosed") {
     return `${how}; ${r.answer === "missing" ? "the fact the judge needed was missing from what it saw" : "the judge misread what it saw"}; filed against ${AGAINST_WORDS[r.against ?? "judge"]}${r.fact ? `. Fact: ${r.fact}` : ""}`;

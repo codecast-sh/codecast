@@ -1108,7 +1108,7 @@ export const runTarget = query({
     const running = await runningIn(ctx, project);
     const route = routeOf(task);
     const judge = project.line_trial?.judge;
-    if (route === "judge" && !judge) throw new Error(`${task.short_id} holds cases against a judge, and ${project.title} names no judge route: cast line trial on --project "${project.title}" --judge-graph <file>`);
+    if (route === "judge" && !judge) throw new Error(`${task.short_id} holds cases against a judge, and ${project.title} names no judge route: cast flow trial on --project "${project.title}" --judge-graph <file>`);
     const graph = route === "judge" ? judge!.graph : project.line_trial?.graph ?? null;
     const cwd = route === "judge" ? judge!.cwd : project.line_trial?.cwd ?? null;
     return { task: task.short_id, title: task.title, status: task.status, live_run: live, project: project.title, route, graph, cwd, running, cap: TRIAL_RUNNING_CAP };
@@ -1128,7 +1128,7 @@ export async function answerTrialCardCore(ctx: Ctx, userId: Id<"users">, ref: st
   if (!row || !project || !(await canAccessProject(ctx, userId, project))) throw new Error("Trial card not found");
   if (row.status !== "waiting") throw new Error(`${row.short_id} is already ${row.status}`);
   if (standIn && row.kind === "card") throw new Error(`${row.short_id} is the change card: only a person answers it, not an agent session or a browser tab one drives`);
-  if (await staleGateOf(ctx, row, await ctx.db.get(row.run_id))) throw new Error(`${row.short_id} waits at ${row.node_id}, a step its line no longer has: pick the run up with cast line trial rerun <task> --reask --at <station>`);
+  if (await staleGateOf(ctx, row, await ctx.db.get(row.run_id))) throw new Error(`${row.short_id} waits at ${row.node_id}, a step its flow no longer has: pick the run up with cast flow trial rerun <task> --reask --at <station>`);
   if (row.decision_id) return answerTrialDecision(ctx, userId, row, key, note, now, standIn, via);
   // A proposal's answer is recorded in the words the card showed, whatever labels its run's graph gave the gate.
   const options = row.kind === "gate" && row.proposal ? proposalOptions(row.options ?? []) : row.options ?? [];
@@ -1325,7 +1325,7 @@ export function rerunRefusal(r: Awaited<ReturnType<typeof trialRoom>>, newRun: b
   if (r.running >= TRIAL_RUNNING_CAP) return `${r.running} trial runs are running; the cap is ${TRIAL_RUNNING_CAP}`;
   if (r.quotaHold) return r.quotaHold;
   if (runsAffordable(r.room, r.perRun) < 1) return capHold(r.spend.billed.usd, r.cap_usd!, r.perRun);
-  if (newRun && r.runsLeft <= 0) return `${r.spend.runs} of ${r.max_runs} runs used: the trial starts no more (cast line trial dispatch on --cap <usd> --max-runs <n>)`;
+  if (newRun && r.runsLeft <= 0) return `${r.spend.runs} of ${r.max_runs} runs used: the trial starts no more (cast flow trial dispatch on --cap <usd> --max-runs <n>)`;
   return null;
 }
 
@@ -1522,7 +1522,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
       await reopenProblem(ctx, userId, task, run, waiting!, `Asked again (${waiting!.short_id}): ${route.why}. The fix is set aside on its branch and the problem is due a new run from main.`, now);
       return { task: task.short_id, run_id: run._id, resumed_at: null as string | null, rebuild: "main" as const, why: route.why };
     }
-    if (route.to === "investigate" && !entry?.trim()) throw new Error(`${task.short_id}: ${route.why}, so its run goes back to work on them, and the caller names the graph's first station for that (cast line trial rerun ${task.short_id} --reask does)`);
+    if (route.to === "investigate" && !entry?.trim()) throw new Error(`${task.short_id}: ${route.why}, so its run goes back to work on them, and the caller names the graph's first station for that (cast flow trial rerun ${task.short_id} --reask does)`);
     const refused = rerunRefusal(await trialRoom(ctx, project, now, undefined, run.runner_device ? [run.runner_device] : []), false);
     if (refused) throw new Error(refused);
     // A gate whose station asks it (`asker=`, read from the graph by the CLI) is asked again by that station, which writes its decision anew.
@@ -1548,7 +1548,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
   // A run no machine ever claimed (the daemon took it and its runner died first) is started the way the dispatcher
   // starts one: from its route's newest run that names a machine.
   const from = run.runner_device ? run : (await dueProblems(ctx, project)).like[routeOf(task)];
-  if (!from?.runner_device) throw new Error(`${task.short_id}'s run names no machine, nor does any earlier run on its route: start it with cast line trial run ${task.short_id}`);
+  if (!from?.runner_device) throw new Error(`${task.short_id}'s run names no machine, nor does any earlier run on its route: start it with cast flow trial run ${task.short_id}`);
   const lost = await gateLossOf(ctx, run);
   const refused = rerunRefusal(await trialRoom(ctx, project, now, undefined, [from.runner_device]), !lost);
   if (refused) throw new Error(refused);
@@ -1579,7 +1579,7 @@ export async function rerunFromMainCore(ctx: Ctx, userId: Id<"users">, ref: stri
   if (isTerminalTaskStatus(task.status)) throw new Error(`${task.short_id} is ${task.status}: a closed problem is not run again`);
   const run: Doc<"workflow_runs"> | null = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
   const from = run?.runner_device ? run : (await dueProblems(ctx, project)).like[routeOf(task)];
-  if (!from?.runner_device) throw new Error(`${task.short_id}'s run names no machine, nor does any earlier run on its route: start it with cast line trial run ${task.short_id}`);
+  if (!from?.runner_device) throw new Error(`${task.short_id}'s run names no machine, nor does any earlier run on its route: start it with cast flow trial run ${task.short_id}`);
   // Ended before the room is counted, so the run it replaces holds no place; a refusal below rolls this back.
   if (run && isLiveRunStatus(run.status)) await cancelCore(ctx as any, run, now, "Stopped: the problem was started again from main");
   const refused = rerunRefusal(await trialRoom(ctx, project, now, undefined, [from.runner_device]), true);
@@ -1587,7 +1587,7 @@ export async function rerunFromMainCore(ctx: Ctx, userId: Id<"users">, ref: stri
   const cards: Doc<"trial_cards">[] = run ? await ctx.db.query("trial_cards").withIndex("by_run", (q: any) => q.eq("run_id", run._id)).collect() : [];
   for (const c of cards) if (c.status === "waiting") await ctx.db.patch(c._id, { status: "closed", updated_at: now });
   const card = cards.filter((c) => c.kind === "card").sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-  await reopenProblem(ctx, userId, task, run, card, `Started again from main on the line as it is now${card ? ` (${card.short_id} closed)` : ""}. The earlier run's fix is set aside on its branch.`, now);
+  await reopenProblem(ctx, userId, task, run, card, `Started again from main on the flow as it is now${card ? ` (${card.short_id} closed)` : ""}. The earlier run's fix is set aside on its branch.`, now);
   const run_id = await queueTrialRun(ctx, userId, (await ctx.db.get(task._id))!, from, from.runner_device, now);
   return { task: task.short_id, run_id, resumed_at: null as string | null, set_aside: run?._id ?? null };
 }
@@ -1762,7 +1762,7 @@ async function endOrphaned(ctx: Ctx, orphaned: Array<{ task: Doc<"tasks">; run: 
  */
 export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: number, dry = false) {
   const dispatch = project.line_trial?.dispatch;
-  if (!dispatch) throw new Error(`${project.title} does not dispatch: cast line trial dispatch on --project "${project.title}" --cap <usd>`);
+  if (!dispatch) throw new Error(`${project.title} does not dispatch: cast flow trial dispatch on --project "${project.title}" --cap <usd>`);
   const { due, running, like, lost, orphaned } = await dueProblems(ctx, project);
   const ended = dry ? orphaned.map((o) => o.task.short_id) : await endOrphaned(ctx, orphaned, now);
   const devices = Object.values(like).flatMap((r) => (r?.runner_device ? [r.runner_device] : []));
@@ -1786,7 +1786,7 @@ export async function dispatchPass(ctx: Ctx, project: Doc<"projects">, now: numb
   const n = Math.max(0, Math.min(slots - r - g, startable.length, affordable - r - g, runsLeft));
   let held: string | undefined;
   const unstarted = [...new Set(due.filter((d) => !like[d.route]).map((d) => d.route))];
-  if (unstarted.length) held = `no earlier ${unstarted.map((r) => (r === "judge" ? "judge-route" : "product")).join(" or ")} run names a machine: start one with cast line trial run`;
+  if (unstarted.length) held = `no earlier ${unstarted.map((r) => (r === "judge" ? "judge-route" : "product")).join(" or ")} run names a machine: start one with cast flow trial run`;
   else if (waitQuota && (startable.length || lost.length || waits.length)) held = waitQuota;
   else if (startable.length > n && n === runsLeft) held = `${spend.runs} of ${dispatch.max_runs} runs used: the trial starts no more`;
   else if (startable.length > n && n < slots) held = capHold(spend.billed.usd, dispatch.cap_usd, perRun);
@@ -2011,7 +2011,7 @@ export const removeOutsideSpend = mutation({
     const { project } = await trialProjectForCli(ctx, args);
     const was = project.line_trial.outside ?? [];
     const gone = was.find((o) => o.at === args.at);
-    if (!gone) throw new Error(`No outside spend recorded at ${args.at} (cast line trial --json lists spend.outside)`);
+    if (!gone) throw new Error(`No outside spend recorded at ${args.at} (cast flow trial --json lists spend.outside)`);
     const outside = was.filter((o) => o !== gone);
     const now = Date.now();
     await ctx.db.patch(project._id, { line_trial: { ...project.line_trial, outside }, updated_at: now });

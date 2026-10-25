@@ -1,16 +1,16 @@
 Implement task $task_id: $task_title
 
-You are changing this project's line itself, the pipeline that takes every cause from a signal to a shipped change, so the change reaches every run after it. The person who decides on it sees the proof (the recorded runs the line checked, and the failing check red before and green after when there is one), the eval verdicts and the review, so a change that does more than the cause needs, or less, costs them the decision.
+You are changing this project's flow itself, the pipeline that takes every cause from a signal to a shipped change, so the change reaches every run after it. The person who decides on it sees the proof (the recorded runs the flow checked, and the failing check red before and green after when there is one), the eval verdicts and the review, so a change that does more than the cause needs, or less, costs them the decision.
 
 Facts
-- Task: $task_id. Read `cast task context $task_id` first: its subject names the part of the line (`line:station:<id>`, `line:finder:<source>`, `line:profile:<key>` or `line:whole`), the plan, when the cause was planned first, is in the comments, and review comments hold the verdict from the last round. The person may have attached the text they propose: it is their draft to weigh, not a patch to paste.
+- Task: $task_id. Read `cast task context $task_id` first: its subject names the part of the flow (`line:station:<id>`, `line:finder:<source>`, `line:profile:<key>` or `line:whole`), the plan, when the cause was planned first, is in the comments, and review comments hold the verdict from the last round. The person may have attached the text they propose: it is their draft to weigh, not a patch to paste.
 - You are in this run's dedicated git worktree on branch $branch; work there.
-- The miss, as the prove station left it in `$run_dir`: `line-proof.json` names the recorded runs that show it, and `repro.sh` is the failing check when the line's files could be checked directly.
-- The line's own files are the change: the profile in `.codecast/line.toml`, the graph in `.codecast/line/line.cast`, and each station's prompt or script in its own file beside it. When this repo has no line of its own yet, `cast line station set <id> --prompt-file <file> --no-publish` writes the shipped line out there first; the change is published only when it ships. When this repo is where the shipped line itself is built, its template is the change, since every project's line runs it. Expectations are never edited by hand: propose them with `cast expectations propose`.
-- The project's check command, which the line runs after you: `$line.commands.check`
+- The miss, as the prove station left it in `$run_dir`: `line-proof.json` names the recorded runs that show it, and `repro.sh` is the failing check when the flow's files could be checked directly.
+- The flow's own files are the change: the profile in `.codecast/line.toml`, the graph in `.codecast/line/line.cast`, and each station's prompt or script in its own file beside it. When this repo has no steps of its own yet, `cast flow station set <id> --prompt-file <file> --no-publish` writes the shipped line out there first; the change is published only when it ships. When this repo is where the shipped line itself is built, its template is the change, since every project's flow runs it. Expectations are never edited by hand: propose them with `cast expectations propose`.
+- The project's check command, which the flow runs after you: `$line.commands.check`
 - The principles, which the reviewer cites by id: $line.principles
 - The prompting standard a station prompt follows, by P-section: $line.prompting
-- What earlier attempts on this cause did, from the line's records (what each found, proposed and built, what shipped, and whether the problem came back): $cause_history
+- What earlier attempts on this cause did, from the flow's records (what each found, proposed and built, what shipped, and whether the problem came back): $cause_history
 - What sent this round back to you, empty on a first round: the station that routed here and what it found. $sent_back
 - A note from the person who read the finished change and sent it back, when there is one, appears under Human Instructions below.
 

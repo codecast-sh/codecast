@@ -522,7 +522,7 @@ async function askForDeploy(
   const { waiting, open } = await waitingFor(ctx, project, workspace, now);
   if (open) throw new Error(`${open.short_id} is already going out (${open.status}); wait for it to finish`);
   if (!waiting.length) throw new Error("Nothing is waiting to go out: every shipped fix is live");
-  if (!opts.here && (!profile.device_id || !profile.root)) throw new Error("No machine publishes this line's profile, so nothing can run its deploy path");
+  if (!opts.here && (!profile.device_id || !profile.root)) throw new Error("No machine publishes this flow's profile, so nothing can run its deploy path");
 
   const shortId = await nextShortId(ctx.db, DEPLOY_SHORT_ID_PREFIX);
   const startedBy = asker.kind === "role"
@@ -559,7 +559,7 @@ async function askForDeploy(
     try {
       await enqueueConfigCommand(ctx, runner, "line_deploy", JSON.stringify({ deploy: shortId, root: profile.root }), profile.device_id, opts.requestId);
     } catch (err) {
-      throw new Error(`The deploy runs on the machine that publishes this line, which is not yours: ask its owner, or run \`cast line deploy --go\` there (${err instanceof Error ? err.message : String(err)})`);
+      throw new Error(`The deploy runs on the machine that publishes this flow, which is not yours: ask its owner, or run \`cast flow deploy --go\` there (${err instanceof Error ? err.message : String(err)})`);
     }
   }
   return { _id: String(id), short_id: shortId, carries: waiting.length };
@@ -630,7 +630,7 @@ export async function autoDeployCore(ctx: any, now = Date.now()): Promise<AutoDe
     await ctx.db.patch(role._id, { counters: { ...counters, deploys: used }, updated_at: now });
     const target = normalizeDeployTarget((project as any).line_profile.deploy.target) ?? "deploy";
     await tellRole(ctx, role._id, {
-      content: `[line] I asked for ${asked.short_id}: ${asked.carries} shipped fix${asked.carries === 1 ? "" : "es"} of ${project.title ?? "the line"} going out to ${target}, deploy ${used} of ${allowance.limit} today. Its steps run as the line's deploy stations; a step that fails comes back as a problem on the line.`,
+      content: `[flow] I asked for ${asked.short_id}: ${asked.carries} shipped fix${asked.carries === 1 ? "" : "es"} of ${project.title ?? "the flow"} going out to ${target}, deploy ${used} of ${allowance.limit} today. Its steps run as the line's deploy stations; a step that fails comes back as a problem on the line.`,
       client_id: `line-deploy:${asked.short_id}`,
     });
     out.asked.push({ project_id: projectId, deploy: asked.short_id, role: role.handle });

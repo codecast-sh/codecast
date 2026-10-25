@@ -12,7 +12,7 @@ cast workflow run flow.cast --task ct-N     # or --plan pl-N
 cast workflow list | runs | push
 \`\`\`
 
-Flows are the team's library of these graphs: lines that take a change to done, and segments (check, review, eval, decide, ship) that do one part. A finished change goes through one before it ships, its run drawn live in the conversation.
+Flows are the team's library of these graphs: whole flows that take a change to done, and segments (check, review, eval, decide, ship) that do one part. A finished change goes through one before it ships, its run drawn live in the conversation.
 
 Run a library flow that fits as it stands. When one fits as a backbone but a step needs this change's own work, extend it and fill its slots. Write a whole flow only when nothing in the library has the shape of the work.
 
@@ -34,9 +34,9 @@ cast workflow list                          # available templates
 cast workflow push                          # push a workflow to the web UI
 cast workflow runs [--task ct-N|--plan pl-N] # status, task, current node, gate
 cast role line @handle [--set <slug>]       # read or set the workflow a role's tasks run on (default: line)
-cast line profile                           # this repo's line: commands, finders, limits, where each value comes from
-cast line set <key> <value> | unset <key>   # edit .codecast/line.toml in place: checked, then published to the app
-cast line finder set <id> --source … | rm <id>   # the sources that file signals into the line
+cast flow profile                           # this repo's flow: commands, finders, limits, where each value comes from
+cast flow set <key> <value> | unset <key>   # edit .codecast/line.toml in place: checked, then published to the app
+cast flow finder set <id> --source … | rm <id>   # the sources that file signals into the flow
 \`\`\`
 
 \`\`\`dot
@@ -65,7 +65,7 @@ cast flow import <wf_id>            # a Workflow-tool run becomes a flow: your d
 cast flow publish <flow>            # a repo flow into the team's pool, on the Line page's Flows view
 \`\`\`
 
-A prompt or script can live in its own file: \`prompt="@flow/implement.md"\`, relative to the graph. Lines that share most of a flow share it rather than copy it: a variant names its base with \`extends\` and writes only how it differs. A node it writes overrides the attributes it names, \`[removed]\` takes one out, and a node it gives edges keeps exactly those, so each node's routing is read in one file. A station's prompt takes in a shared part at a line that is only \`@include <file>\`. An edit to the base or a part reaches every line on it; \`cast workflow validate <file>\` prints what a variant changes, adds, removes and routes.
+A prompt or script can live in its own file: \`prompt="@flow/implement.md"\`, relative to the graph. Flows that share most of their steps share them rather than copy them: a variant names its base with \`extends\` and writes only how it differs. A node it writes overrides the attributes it names, \`[removed]\` takes one out, and a node it gives edges keeps exactly those, so each node's routing is read in one file. A station's prompt takes in a shared part at a line that is only \`@include <file>\`. An edit to the base or a part reaches every line on it; \`cast workflow validate <file>\` prints what a variant changes, adds, removes and routes.
 
 \`\`\`dot
 digraph trial {

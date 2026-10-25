@@ -117,17 +117,17 @@ export function resolveShipPlan(facts: ShipFacts): ShipPlan {
   const why = via === "pr"
     ? "Ship on a pull request's page merges it once its checks pass. From a task or a session it would stop at the open pull request."
     : via === "auto"
-      ? "The project's line profile sets merge.auto, so it merges once its checks pass."
+      ? "The project's flow profile sets merge.auto, so it merges once its checks pass."
       : via === "role"
-        ? `The role that owns this line, @${role!.handle}, holds a merge grant (${today}), so it merges once its checks pass.`
+        ? `The role that owns this flow, @${role!.handle}, holds a merge grant (${today}), so it merges once its checks pass.`
         : command
           ? "The command decides how the change lands; Ship adds no merge of its own."
           : role
-            ? `The role that owns this line, @${role.handle}, cannot merge now: ${role.reason}. The pull request stays open and shepherded.`
-            : "The pull request stays open and shepherded. Only Ship on the pull request's page merges, unless the line profile sets merge.auto or the line's role holds a merge grant.";
+            ? `The role that owns this flow, @${role.handle}, cannot merge now: ${role.reason}. The pull request stays open and shepherded.`
+            : "The pull request stays open and shepherded. Only Ship on the pull request's page merges, unless the flow profile sets merge.auto or the flow's owner holds a merge grant.";
   const merge: ShipPlan["merge"] = { will, method, why, via, ...(via === "role" ? { runId: facts.line!.runId, role: role!.handle } : {}) };
   const mergeStep = via === "role"
-    ? `Merges through @${role!.handle}'s merge grant once the checks are green (\`cast line merge\`, counted in its daily limit).`
+    ? `Merges through @${role!.handle}'s merge grant once the checks are green (\`cast flow merge\`, counted in its daily limit).`
     : `Merges with ${method} once the checks are green.`;
 
   // A line run's change card: Ship answers it and the line's ship station
@@ -146,8 +146,8 @@ export function resolveShipPlan(facts: ShipFacts): ShipPlan {
       steps: [
         `Answers Ship on the change card ${facts.taskShortId ? `for ${facts.taskShortId} ` : ""}waiting on you.`,
         command
-          ? `The line's ship station runs \`${command}\` and posts what it printed on the task.`
-          : `The line's ship station starts a ship session that runs ${checks.map((c) => `\`${c}\``).join(" and ")}, ${prStep}.`,
+          ? `The flow's ship station runs \`${command}\` and posts what it printed on the task.`
+          : `The flow's ship station starts a ship session that runs ${checks.map((c) => `\`${c}\``).join(" and ")}, ${prStep}.`,
         ...(lineMerge.will ? [mergeStep] : []),
         "The task enters watch for the profile's watch days.",
       ],
@@ -201,7 +201,7 @@ export function shipBrief(plan: ShipPlan, facts: Pick<ShipFacts, "projectPath" |
     lines.push(`${n++}. Push any commits to ${plan.branch}, then \`cast pr shepherd on ${plan.pr.repository}#${plan.pr.number}\`. Pin \`cast state "Shepherding ${plan.pr.repository}#${plan.pr.number}"\`.`);
   }
   if (plan.merge.will && plan.merge.via === "role") {
-    lines.push(`${n++}. When its checks are green, merge under the line's merge grant: \`cast line merge --run ${plan.merge.runId} --branch ${plan.branch} --into ${plan.base}${facts.taskShortId ? ` --task ${facts.taskShortId}` : ""}\`. It checks @${plan.merge.role}'s allowance again, merges and counts it; if it leaves the merge to a person, pin that line with \`cast state --status blocked\`. Otherwise \`cast state --status done "Merged"\`. ${plan.merge.why}`);
+    lines.push(`${n++}. When its checks are green, merge under the flow's merge grant: \`cast flow merge --run ${plan.merge.runId} --branch ${plan.branch} --into ${plan.base}${facts.taskShortId ? ` --task ${facts.taskShortId}` : ""}\`. It checks @${plan.merge.role}'s allowance again, merges and counts it; if it leaves the merge to a person, pin that line with \`cast state --status blocked\`. Otherwise \`cast state --status done "Merged"\`. ${plan.merge.why}`);
   } else if (plan.merge.will) {
     lines.push(`${n++}. When its checks are green, \`cast pr merge --${plan.merge.method}\`, then \`cast state --status done "Merged"\`. ${plan.merge.why}`);
   } else {

@@ -100,7 +100,7 @@ describe("recordMergeCore", () => {
     expect(comment).toMatchObject({ author: "@growth", comment_type: "review" });
     expect(comment.text).toBe("merged codecast/line-ct-7 into main at abc123def4 (https://github.com/o/r/pull/5): merge 1 of 2 today");
     const told = tables.pending_messages.find((p) => p.conversation_id === STANDING);
-    expect(String(told.content)).toContain("The line merged ct-7 (Add the thing) from codecast/line-ct-7 into main at abc123def4: merge 1 of 2 today");
+    expect(String(told.content)).toContain("The flow merged ct-7 (Add the thing) from codecast/line-ct-7 into main at abc123def4: merge 1 of 2 today");
     expect(String(told.content)).toContain("Report it in one line to the person you report to");
     // The second merge of the day fills the limit; the allowance then refuses the next.
     await recordMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", sha: "bbb", branch: "b2", into: "main" }, NOW + 1);

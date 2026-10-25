@@ -1030,7 +1030,7 @@ export async function performSetLine(
   userId: Id<"users">,
   args: { role_id: string; slug: string; from_session?: string; api_token?: string; human_decision?: string },
 ): Promise<any> {
-  await refuseUnlessHuman(ctx, args, "Line");
+  await refuseUnlessHuman(ctx, args, "Flow steps");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
   const slug = normalizeLineSlug(args.slug);

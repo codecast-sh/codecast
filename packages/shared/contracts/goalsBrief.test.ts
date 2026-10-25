@@ -53,9 +53,9 @@ Teams that try it keep using it.
 ### pj-a Sync (planning)
 - goal: No lost writes
 
-## The line
+## The flow
 
-- \`line\` the line doing its job: fewer expectation breaks a day, most new findings joining a problem it already knows, the fixes it ships holding, and every station working. Only a change to the line itself serves it.
+- \`line\` the flow doing its job: fewer expectation breaks a day, most new findings joining a problem it already knows, the fixes it ships holding, and every station working. Only a change to the flow itself serves it.
 `);
   });
 
@@ -89,7 +89,7 @@ Teams that try it keep using it.
   test("an empty workspace says so in one line, and still offers the line's own goal", () => {
     const out = renderGoalsBrief({ workspace: "user:u", initiatives: [], projects: [] });
     expect(out).toStartWith("# Goals\n\nNo active initiatives and no project charters in this workspace.\n");
-    expect(out).toContain("\n- `line` the line doing its job");
+    expect(out).toContain("\n- `line` the flow doing its job");
   });
 
   test("one project's brief names the project before the workspace", () => {
@@ -127,7 +127,7 @@ describe("goalRefLabel", () => {
     expect(goalRefLabel(brief, "in-12:week4_retention")).toEqual({ name: "Retention: Week 4 retention", why: "target 40%" });
     expect(goalRefLabel(brief, "none")).toBeNull();
     // A change to the line itself serves the line's own health (LM8), which every brief offers.
-    expect(goalRefLabel(brief, "line")?.name).toBe("The line");
+    expect(goalRefLabel(brief, "line")?.name).toBe("The flow");
     expect(briefGoalRefs(brief).has("line")).toBe(true);
     expect(goalRefLabel(brief, "pj-zz")).toBeNull();
   });

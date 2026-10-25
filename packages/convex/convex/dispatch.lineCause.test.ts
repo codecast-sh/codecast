@@ -61,7 +61,7 @@ describe("fileLineCause", () => {
 
   test("refuses a subject outside the line, a project the viewer cannot see, and a project not saved yet", async () => {
     const { ana, eve, project, dispatch } = await seed();
-    await expect(dispatch(String(ana), "fileLineCause", ["lc1", String(project), { ...FIELDS, subject: "web/checkout" }])).rejects.toThrow(/names a node of the line/);
+    await expect(dispatch(String(ana), "fileLineCause", ["lc1", String(project), { ...FIELDS, subject: "web/checkout" }])).rejects.toThrow(/names a node of the flow/);
     await expect(dispatch(String(eve), "fileLineCause", ["lc1", String(project), FIELDS])).rejects.toThrow(/Project not found/);
     await expect(dispatch(String(ana), "fileLineCause", ["lc1", "temp_project_x", FIELDS])).rejects.toThrow(/not saved yet/);
   });

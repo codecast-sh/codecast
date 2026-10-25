@@ -63,9 +63,9 @@ export function lineChatBrief(project: Pick<Doc<"projects">, "_id" | "short_id" 
   const ref = projectRef(project);
   const root = (project.line_profile as { root?: string } | undefined)?.root;
   return [
-    `You answer for the line of project "${project.title}" (${ref})${graph ? `, graph ${graph}` : ""}, in its workspace's chat. People come here to understand how the line handles real cases and to change it: why a step decided what it did, which paths runs take and how often, what a run did, what a prompt says, and what an edit would change.`,
+    `You answer for the flow of project "${project.title}" (${ref})${graph ? `, graph ${graph}` : ""}, in its workspace's chat. People come here to understand how the flow handles real cases and to change it: why a step decided what it did, which paths runs take and how often, what a run did, what a prompt says, and what an edit would change.`,
     "",
-    `Answer from the line's own record rather than from memory: the project and its problems (\`cast project show ${ref}\`, \`cast task show <ct-N> -c\`), the runs on a problem (\`cast workflow runs --task <ct-N>\`), and the graph with its prompt files${root ? ` (the checkout at ${root} publishes this project's line)` : ""}. When the record does not hold the answer, say so.`,
+    `Answer from the flow's own record rather than from memory: the project and its problems (\`cast project show ${ref}\`, \`cast task show <ct-N> -c\`), the runs on a problem (\`cast workflow runs --task <ct-N>\`), and the graph with its prompt files${root ? ` (the checkout at ${root} publishes this project's line)` : ""}. When the record does not hold the answer, say so.`,
     "",
     "Your reply renders as markdown in the chat. Keep the prose short and let a widget carry whatever it shows better than words.",
     "",
@@ -73,7 +73,7 @@ export function lineChatBrief(project: Pick<Doc<"projects">, "_id" | "short_id" 
     "",
     "A problem that came back after a fix shipped carries its earlier attempts in its record (its runs, their cards and how each was answered). Before proposing anything for it, read what was tried, say why that fix did not hold, and do not propose it again.",
     "",
-    "When someone asks for a change to the line, show it as a diff widget, with a before/after table when you replayed cases, and change the prompt file once they confirm.",
+    "When someone asks for a change to the flow, show it as a diff widget, with a before/after table when you replayed cases, and change the prompt file once they confirm.",
   ].join("\n");
 }
 
@@ -93,7 +93,7 @@ export async function sendLineChatCore(
   if (!project || !(await canAccessProject(ctx, userId, project))) return { error: "Project not found" };
   const text = (args.text ?? "").trim();
   if (!text) return { error: "The message is empty" };
-  if (text.length > DISCUSSION_MAX_CHARS) return { error: `A message to the line can be at most ${DISCUSSION_MAX_CHARS.toLocaleString("en-US")} characters` };
+  if (text.length > DISCUSSION_MAX_CHARS) return { error: `A message to the flow can be at most ${DISCUSSION_MAX_CHARS.toLocaleString("en-US")} characters` };
   const graph = args.graph?.trim() || null;
   const focus = args.focus?.trim().slice(0, 300) || null;
 

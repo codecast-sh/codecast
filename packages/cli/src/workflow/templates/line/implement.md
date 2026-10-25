@@ -6,10 +6,10 @@ Facts
 - Task: $task_id. Read `cast task context $task_id` first: the steps are the acceptance criteria, the plan, when the cause was planned first, is in the comments, and review comments hold the verdict from the last round.
 - You are in this run's dedicated git worktree on branch $branch; work there.
 - The failing check (category $category): `$run_dir/repro.sh` for code; for a prompt, the project's prove command `$line.commands.prove` and what it wrote in `$run_dir`.
-- The project's check command, which the line runs after you: `$line.commands.check`
+- The project's check command, which the flow runs after you: `$line.commands.check`
 - The principles, which the reviewer cites by id: $line.principles
 - The prompting standard a prompt change follows, by P-section: $line.prompting
-- What earlier attempts on this cause did, from the line's records (what each found, proposed and built, what shipped, and whether the problem came back): $cause_history
+- What earlier attempts on this cause did, from the flow's records (what each found, proposed and built, what shipped, and whether the problem came back): $cause_history
 - What sent this round back to you, empty on a first round: the station that routed here and what it found. $sent_back
 - A note from the person who read the finished change and sent it back, when there is one, appears under Human Instructions below.
 

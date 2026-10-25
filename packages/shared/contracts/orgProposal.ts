@@ -1048,7 +1048,7 @@ function askWords(names?: OrgAskNames) {
     switch (c.kind) {
       case "role": {
         const scope = [projects(c.scope?.projects ?? []), plans(c.scope?.plans ?? [])].filter(Boolean).join(" and ");
-        const runsLine = c.line || c.caps?.cards !== undefined ? ` It runs the project's line on the ${c.line ?? DEFAULT_LINE_SLUG} workflow${c.caps?.cards !== undefined ? `, starting new work only while fewer than ${c.caps.cards} change cards wait on a person` : ""}.` : "";
+        const runsLine = c.line || c.caps?.cards !== undefined ? ` It runs the project's flow on the ${c.line ?? DEFAULT_LINE_SLUG} steps${c.caps?.cards !== undefined ? `, starting new work only while fewer than ${c.caps.cards} change cards wait on a person` : ""}.` : "";
         const line = `reporting to ${parent(c.reports_to)}${scope ? ` and looking after ${scope}` : ""}.${runsLine}${tenure(c.tenure)}${riders.map(rider).join("")}`;
         return c.seat ? `${seatSentence(c.seat)} It becomes a role, ${line}` : `A new agent, ${c.name}, ${line}`;
       }

@@ -86,13 +86,13 @@ describe("resolveShipPlan", () => {
     expect(auto.steps).toContain("Merges with rebase once the checks are green.");
   });
 
-  test("a line card on a project with no ship command merges when the line's role holds a merge grant", () => {
+  test("a line card on a project with no ship command merges when the flow's owner holds a merge grant", () => {
     const granted = { runId: "r1", role: { handle: "release", on: true, allowed: true, reason: null, used: 1, limit: 3 } };
     const plan = resolveShipPlan({ ...base, lineGate: { decisionId: "d1" }, line: granted });
     expect(plan.merge).toMatchObject({ will: true, via: "role", runId: "r1", role: "release" });
-    expect(plan.merge.why).toContain("The role that owns this line, @release, holds a merge grant (1 of 3 merges today)");
-    expect(plan.steps.join(" ")).toContain("cast line merge");
-    expect(shipBrief(plan, base)).toContain("cast line merge --run r1 --branch fix-login --into main --task ct-42");
+    expect(plan.merge.why).toContain("The role that owns this flow, @release, holds a merge grant (1 of 3 merges today)");
+    expect(plan.steps.join(" ")).toContain("cast flow merge");
+    expect(shipBrief(plan, base)).toContain("cast flow merge --run r1 --branch fix-login --into main --task ct-42");
     // The station's own cast ship run, after the card is answered, merges the same way.
     expect(resolveShipPlan({ ...base, line: granted }).merge.via).toBe("role");
     // A switch that is on but out of allowance, or off, does not merge.

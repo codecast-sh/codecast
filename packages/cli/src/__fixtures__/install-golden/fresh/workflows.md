@@ -8,7 +8,7 @@ cast workflow run flow.cast --task ct-N     # or --plan pl-N
 cast workflow list | runs | push
 ```
 
-Flows are the team's library of these graphs: lines that take a change to done, and segments (check, review, eval, decide, ship) that do one part. A finished change goes through one before it ships, its run drawn live in the conversation.
+Flows are the team's library of these graphs: whole flows that take a change to done, and segments (check, review, eval, decide, ship) that do one part. A finished change goes through one before it ships, its run drawn live in the conversation.
 
 Run a library flow that fits as it stands. When one fits as a backbone but a step needs this change's own work, extend it and fill its slots. Write a whole flow only when nothing in the library has the shape of the work.
 

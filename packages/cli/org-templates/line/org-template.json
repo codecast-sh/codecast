@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "id": "line",
   "version": "1.2.0",
-  "name": "Line lead",
-  "description": "Owns one project's line: grounds the causes its finders raise in the project's goals, lets work start only as fast as a person answers cards, keeps every declared finder honest and filing, keeps the project's expectations current with what the team says, and runs the project's weekly lessons. It answers no protected decision.",
+  "name": "Flow lead",
+  "description": "Owns one project's flow: grounds the causes its finders raise in the project's goals, lets work start only as fast as a person answers cards, keeps every declared finder honest and filing, keeps the project's expectations current with what the team says, and runs the project's weekly lessons. It answers no protected decision.",
   "role": {
-    "name": "Line lead",
+    "name": "Flow lead",
     "handle": "{{instance}}-line",
     "charter": "org/charter.md",
     "caps": { "cards": 5 },
@@ -23,13 +23,13 @@
     { "key": "finders.silent_days", "label": "Days without a signal before a declared finder counts as silent", "kind": "number", "default": 3, "help": "A finder that runs less often than this is judged by its own schedule instead." }
   ],
   "setup": [
-    { "id": "line-profile", "title": "Read the repository's line profile, or offer a starter .codecast/line.toml when it has none", "who": "role", "unlocks": ["finder-health"], "how": "org/setup/line-profile.md", "price": "the line reads this project's commands, cap and finders instead of guessing; a few minutes" }
+    { "id": "line-profile", "title": "Read the repository's flow profile, or offer a starter .codecast/line.toml when it has none", "who": "role", "unlocks": ["finder-health"], "how": "org/setup/line-profile.md", "price": "the flow reads this project's commands, cap and finders instead of guessing; a few minutes" }
   ],
   "evidence": [
-    { "id": "profile", "title": "cast line profile resolved in {{project.dir}} with this project, and its finders were published so /line can show them", "max_age": "30d", "required_for": ["finder-health"] }
+    { "id": "profile", "title": "cast flow profile resolved in {{project.dir}} with this project, and its finders were published so /flows can show them", "max_age": "30d", "required_for": ["finder-health"] }
   ],
   "ledgers": [
-    { "id": "line", "title": "Line ledger: causes grounded, admissions held and finder health for {{project.name}}" }
+    { "id": "line", "title": "Flow ledger: causes grounded, admissions held and finder health for {{project.name}}" }
   ],
   "scoreboard": [
     { "key": "causes_open", "label": "Open causes in the project" },

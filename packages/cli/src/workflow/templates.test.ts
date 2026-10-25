@@ -429,7 +429,7 @@ describe("line.cast station scripts", () => {
     const missing = run("red", { category: "line" });
     expect(missing.code).toBe(0);
     expect(missing.json.red).toBe(false);
-    expect(missing.json.why).toStartWith("the line proof does not hold: no ");
+    expect(missing.json.why).toStartWith("the flow proof does not hold: no ");
     fs.mkdirSync(runDir(), { recursive: true });
     fs.writeFileSync(path.join(runDir(), "line-proof.json"), '{"runs":[]}');
     expect(run("red", { category: "line" }).json).toEqual({ red: true, dir: runDir(), why: "holds: 1 recorded run shows it" });
@@ -450,7 +450,7 @@ describe("line.cast station scripts", () => {
     expect(calls()).toEqual([]);
     const none = run("red", { category: "prompt" });
     expect(none.json).toEqual({ red: true, dir: runDir(), why: "no prove command; passed with a note" });
-    expect(calls()).toEqual([["task", "comment", "ct-1", "This project's line profile names no prove command, so the prove station passed without showing the miss.", "-t", "progress"]]);
+    expect(calls()).toEqual([["task", "comment", "ct-1", "This project's flow profile names no prove command, so the prove station passed without showing the miss.", "-t", "progress"]]);
   });
 
   test("red for a prompt on a rerun: the branch carries the last round's fix, so the miss is shown on the merge base and the branch comes back", () => {
@@ -547,7 +547,7 @@ describe("line.cast station scripts", () => {
     expect(crashed.out).toContain(`the eval command exited 2 and wrote no ${dir}/reps.json`);
     expect(calls()).toEqual([]);
     expect(run("eval", {}).code).toBe(0);
-    expect(calls()).toEqual([["task", "comment", "ct-1", "This project's line profile names no eval command, so the eval station passed without evals and the change is unscored.", "-t", "progress"]]);
+    expect(calls()).toEqual([["task", "comment", "ct-1", "This project's flow profile names no eval command, so the eval station passed without evals and the change is unscored.", "-t", "progress"]]);
   });
 
   test("ship runs the project's ship command and puts the one line it prints on the task; without one it runs Ship, which never merges on its own", () => {
@@ -593,7 +593,7 @@ describe("line.cast station scripts", () => {
     expect(run("unproven", { handoff: "needs_context", "prove.output": "" }).code).toBe(0);
     // A hand that never spawned leaves no output: the run's last error stands in.
     expect(run("unproven", { handoff: "none", last_error: "spawn failed" }).code).toBe(0);
-    const parked = "Parked at prove: Prove wrote no proof, so the miss was neither shown nor ruled out. Rerun the line once it can be shown.";
+    const parked = "Parked at prove: Prove wrote no proof, so the miss was neither shown nor ruled out. Rerun the flow once it can be shown.";
     expect(calls()).toEqual([
       ["task", "update", "ct-1", "-s", "open"],
       ["task", "comment", "ct-1", `${parked} What Prove tried: No test could reach the daemon's socket.`, "-t", "blocker"],
@@ -825,7 +825,7 @@ describe("line.cast offline run through the session path", () => {
       ["task", "update", "ct-7", "-s", "open"],
       ["task", "comment", "ct-7", expect.stringContaining(tried), "-t", "blocker"],
     ]);
-    expect(castCalls[1][3]).toStartWith("Parked at prove: Prove wrote no proof, so the miss was neither shown nor ruled out. Rerun the line once it can be shown. What Prove tried: ");
+    expect(castCalls[1][3]).toStartWith("Parked at prove: Prove wrote no proof, so the miss was neither shown nor ruled out. Rerun the flow once it can be shown. What Prove tried: ");
     // Parked, never closed: no done or drop reached the task.
     expect(castCalls.some((c) => c[1] === "done" || c[1] === "drop")).toBe(false);
     expect(calls.some((c) => c.route === "/cli/work/done" || c.route === "/cli/work/drop")).toBe(false);
@@ -888,7 +888,7 @@ describe("line.cast offline run through the session path", () => {
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
     const comment = calls.find((c) => c.route === "/cli/work/comment")?.body;
     expect(comment?.comment_type).toBe("blocker");
-    expect(comment?.text).toContain("the line had no next step for it");
+    expect(comment?.text).toContain("the flow had no next step for it");
   });
 
   test("a run that fails on a problem closed meanwhile leaves the close standing: no reopen, no blocker (ct-59242, ct-59534)", async () => {
@@ -1038,7 +1038,7 @@ describe("line.cast offline run through the session path", () => {
     expect(calls.filter((c) => c.route === "/cli/work/update").map((c) => c.body.status)).toEqual(["in_progress", "in_progress", "open"]);
     const blocker = calls.find((c) => c.route === "/cli/work/comment")?.body;
     expect(blocker?.comment_type).toBe("blocker");
-    expect(blocker?.text).toContain("ran the most rounds this line allows");
+    expect(blocker?.text).toContain("ran the most rounds this flow allows");
     expect(blocker?.text).toContain("Verify sent the last round back");
     expect(blocker?.text).toContain("- ✗ typecheck: exit 1\n- ✓ tripwires");
     expect(blocker?.text).not.toContain('{"ok"');

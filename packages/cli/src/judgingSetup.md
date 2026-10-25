@@ -34,8 +34,8 @@ decides the work:
   codecast runs.
 
 Learn it from the record, not the names: the repository's
-`.codecast/line.toml` and docs, `cast line profile`, `cast sources ls`,
-`cast line moments ls`, `.codecast/judges/` and `.codecast/moments/`, and the
+`.codecast/line.toml` and docs, `cast flow profile`, `cast sources ls`,
+`cast flow moments ls`, `.codecast/judges/` and `.codecast/moments/`, and the
 product's own judging code if it has any.
 
 ## Expectations first
@@ -55,7 +55,7 @@ Every line carries the words of the person who said it. Propose; never apply.
   can break an expectation. For each, find the place in the product's code
   where it happens and draft the one-line event it would post, without
   shipping it.
-- **One extractor per kind** (`.codecast/moments/<kind>.ts`; `cast line
+- **One extractor per kind** (`.codecast/moments/<kind>.ts`; `cast flow
   judges try --help` shows both file shapes). It reads the product's read-only
   data and prints everything a judge needs to decide and nothing it does not:
   what each side said, when, through which channel, whether it was delivered,
@@ -81,7 +81,7 @@ repository.
 
 Run what you drafted on a sample of recent real cases, enough to see both
 what it catches and how often it is wrong, with ordinary cases that went well
-among them. Run an extractor with `bun` on an event on stdin. `cast line
+among them. Run an extractor with `bun` on an event on stdin. `cast flow
 judges try <judge> <moment.json>...` runs a judge exactly as codecast will,
 on the team's model budget; when the budget is off it says so and names the
 most one call can cost. For a product that judges itself, use its own way of
