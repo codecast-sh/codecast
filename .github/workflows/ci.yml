@@ -173,7 +173,9 @@ jobs:
     needs: [code_paths]
     if: needs.code_paths.outputs.run_test_web == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The four shards below run one after another: 19.5 minutes together on
+    # 2026-10-25, when the old 20 minute cap cancelled a run whose shards all passed.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
