@@ -137,6 +137,8 @@
     "./changes": "./changes/index.ts",
     "./contracts/mods": "./contracts/mods.ts",
     "./contracts/secrets": "./contracts/secrets.ts",
+    "./contracts/teamHosts": "./contracts/teamHosts.ts",
+    "./contracts/secretRules": "./contracts/secretRules.ts",
     "./contracts/secretShapes": "./contracts/secretShapes.ts",
     "./contracts/theme": "./contracts/theme.ts",
     "./mods/sdk": "./mods/sdk.ts",

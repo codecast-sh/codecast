@@ -1,6 +1,6 @@
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
-import { TEAM_HOST_MEMBER_STATUSES } from "@codecast/shared/contracts";
+import { TEAM_HOST_MEMBER_STATUSES } from "@codecast/shared/contracts/teamHosts";
 
 /**
  * Team machines (docs/architecture/team-machines.md): a Linux box a team owns,

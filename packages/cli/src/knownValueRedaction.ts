@@ -36,7 +36,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { SECRET_REDACTION_MAX, SECRET_REDACTION_MIN, isCredentialName, parseDotenv } from "@codecast/shared/contracts/secrets";
+import { SECRET_REDACTION_MAX, SECRET_REDACTION_MIN, isCredentialName, parseDotenv } from "@codecast/shared/contracts/secretRules";
 
 /** `vault`: a Vault value, held to SECRET_REDACTION_MIN only (qualifiesAsKnownValue). */
 export type KnownValue = { value: string; name?: string; vault?: true };

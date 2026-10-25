@@ -272,3 +272,8 @@ export function replaceSecrets(text: string, swaps: { start: number; end: number
   for (const s of [...swaps].sort((a, b) => b.start - a.start)) out = out.slice(0, s.start) + s.with + out.slice(s.end);
   return out;
 }
+
+/** `text` with every credential replaced by the redaction marker transcripts use, `[redacted:<id>]`. */
+export function withoutSecrets(text: string): string {
+  return replaceSecrets(text, findSecrets(text).map((f) => ({ start: f.start, end: f.end, with: `[redacted:${f.id}]` })));
+}

@@ -1,7 +1,7 @@
 // Team machines (docs/architecture/team-machines.md): the rows teamHosts.list
 // returns, and what a surface derives from them. One home: the teamMachines
 // store key; nothing here keeps a second copy.
-import { TEAM_HOST_JOIN_STEPS, TEAM_HOST_JOIN_STEP_LABELS, type TeamHostJoinStep, type TeamHostMemberStatus } from "@codecast/shared/contracts";
+import { TEAM_HOST_JOIN_STEPS, TEAM_HOST_JOIN_STEP_LABELS, type TeamHostJoinStep, type TeamHostMemberStatus } from "@codecast/shared/contracts/teamHosts";
 
 export type TeamMachineMember = {
   _id: string;

@@ -57,6 +57,10 @@ describe("org history commands", () => {
 
   test("prints shared sentences, actor and door, newest first, with undo attribution", async () => {
     const lines = output();
+    // Local noon, so the fixture's newest entry (24 minutes old) is today however late the run starts.
+    const noon = new Date();
+    noon.setHours(12, 0, 0, 0);
+    spyOn(Date, "now").mockReturnValue(noon.getTime());
     const entries = orgLogFixture(Date.now()).entries;
     await showOrgLog(deps, {}, async () => ({ entries: [...entries].reverse(), has_more: true }));
     const text = lines.join("\n");

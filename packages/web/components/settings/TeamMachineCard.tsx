@@ -9,7 +9,7 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { Check, Loader2, Pencil, Server } from "lucide-react";
-import { pickLinuxUser } from "@codecast/shared/contracts";
+import { pickLinuxUser } from "@codecast/shared/contracts/teamHosts";
 import { useInboxStore } from "../../store/inboxStore";
 import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
 import { teamMachineJoinLedger } from "../consequential/ledgers";

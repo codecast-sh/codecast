@@ -9,7 +9,8 @@
  */
 import { v } from "convex/values";
 import { mintSetupToken, splitPresentedToken } from "@platform/auth/convex";
-import { TEAM_HOST_JOIN_STALE_MS, cpuBusy, isLinuxUserName, pickLinuxUser, type MachineResourceSnapshot } from "@codecast/shared/contracts";
+import { cpuBusy, type MachineResourceSnapshot } from "@codecast/shared/contracts";
+import { TEAM_HOST_JOIN_STALE_MS, isLinuxUserName, pickLinuxUser } from "@codecast/shared/contracts/teamHosts";
 import { mutation, query } from "./functions";
 import { requireUserOrToken } from "./lib/auth";
 import { verifyApiToken } from "./apiTokens";

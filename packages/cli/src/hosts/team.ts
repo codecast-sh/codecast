@@ -13,13 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
-import {
-  TEAM_HOST_JOIN_STEP_LABELS,
-  TEAM_HOST_JOIN_STEPS,
-  formatTeamHostMarker,
-  isLinuxUserName,
-  type TeamHostJoinStep,
-} from "@codecast/shared/contracts";
+import { TEAM_HOST_JOIN_STEP_LABELS, TEAM_HOST_JOIN_STEPS, formatTeamHostMarker, isLinuxUserName, type TeamHostJoinStep } from "@codecast/shared/contracts/teamHosts";
 import { readTeamHostMarker } from "./teamMarker.js";
 import { fmt, icons } from "../colors.js";
 import { convexClient } from "../remote/convexClient.js";

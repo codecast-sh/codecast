@@ -8,7 +8,7 @@
  */
 
 import * as fs from "node:fs";
-import { envNameProblem, secretNameProblem } from "@codecast/shared/contracts/secrets";
+import { envNameProblem, secretNameProblem } from "@codecast/shared/contracts/secretRules";
 import type {
   BrowserSpec,
   HostSpec,

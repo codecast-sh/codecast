@@ -16,7 +16,7 @@ import { REMOTE_BUNDLE_DIR } from "./castBundle.js";
 import { agentCliInstallScript } from "./provisionAgents.js";
 import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 import { DAEMON_WANTED_FILE } from "../systemdDaemonUnit.js";
-import { isLinuxUserName } from "@codecast/shared/contracts";
+import { isLinuxUserName } from "@codecast/shared/contracts/teamHosts";
 
 export { isLinuxUserName };
 

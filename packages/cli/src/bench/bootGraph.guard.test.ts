@@ -225,6 +225,13 @@ describe("command groups stay off the boot graph", () => {
     // to contracts/snippetsWorkflow.ts to keep snippets.ts under its max-lines
     // pin. snippets.ts composes it, and the barrel carries snippets.ts, so any
     // split of that file adds one here until the barrel is gone.
+    // Held at 325 on 2026-10-24 when the ship of that day brought 8 files: the
+    // workspace manifest and transcript redaction took the Vault contract
+    // (secrets.ts with productView.ts) for a name check and two size limits, so
+    // those pure rules moved to the leaf contracts/secretRules.ts, and the new
+    // contracts/teamHosts.ts left the barrel for a subpath import. What stays is
+    // directoryTeam.ts (stableContext), loginShellPath.ts, shellQuote.ts
+    // (launchCommand), secretShapes.ts (redaction) and render/structuredResult.ts.
     expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(325);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
@@ -241,7 +248,12 @@ describe("command groups stay off the boot graph", () => {
     // 4343 with the pinned state rows: threadStateRows, the ask split and the
     // new card line in contracts/threadState.ts (+2.6 KB), and the longer
     // Thread state section in snippets.ts (+0.6 KB). No new file.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4343);
+    // 4360 on 2026-10-24: that day's ship added 68.7 KB here after the Vault
+    // contract and contracts/teamHosts.ts were taken off (see the count above).
+    // The Vault's redaction leads it (secretShapes.ts +10.8, secretRules.ts +7,
+    // knownValueRedaction.ts +4.4), then installed guidance in snippets.ts
+    // (+8.3), render/structuredResult.ts (+7.8) and handoffPrompt.ts (+4.8).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4360);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -345,7 +357,13 @@ describe("command groups stay off the boot graph", () => {
     // worktreeLegacy.ts (split out of daemon.ts for its line pin) and
     // workflow/runDirs.ts, which the daemon now reads to release finished runs'
     // worktrees.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(497);
+    // 510 on 2026-10-24, the daemon's own work from that day's ship: the Vault's
+    // redaction source (secrets/redactionSource.ts with the secrets contract,
+    // productView.ts, secretShapes.ts and the secretRules.ts leaf), the team
+    // host marker (hosts/teamMarker.ts, contracts/teamHosts.ts), the agent
+    // preflight's loginShellPath.ts and shellQuote.ts, permissionHookWait.ts,
+    // loadGovernor.ts, directoryTeam.ts and render/structuredResult.ts.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(510);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

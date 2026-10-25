@@ -171,7 +171,7 @@
   "decide": {
     "config": {
       "decide_enabled": true,
-      "decide_version": "3"
+      "decide_version": "4"
     },
     "stdout": "* Decision queue — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
