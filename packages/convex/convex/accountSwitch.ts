@@ -31,8 +31,6 @@ import {
   splitAuthParks,
   AUTO_SWITCH_CONTINUE_KEY,
   AUTO_SWITCH_CODEX_CONTINUE_KEY,
-  hostContinueAttemptKey,
-  hostOwnAccount,
   AUTO_SWITCH_PROBE_RETRY_MS,
   resetCreditAttemptKey,
   authRestartAttemptKey,
@@ -1885,23 +1883,7 @@ export const autoSwitchCheck = internalMutation({
     // cooldown, forever), and could spend a Claude account's week on sessions
     // a Claude switch cannot reach.
     const codexLimit = limitBlocked.filter((c) => c.agent_type === "codex");
-    // The account the fleet runs on: the keychain login, or the launch profile
-    // after a token switch (fleetAccount). Every "active" read below means this.
-    const activeEmail = fleetAccount(primary.cc_accounts, now).email;
-    const activeProfiles = primary.cc_accounts?.profiles ?? [];
-    const onlineById = new Map(online.map((d) => [d.device_id, d]));
-    // A cloud host on a setup token of its own runs THAT account
-    // (hostOwnAccount), so its parks are evidence about that account alone,
-    // read from the laptop's meters for it. Judged on the laptop's account
-    // instead, a host out for the week got a "continue" every few minutes
-    // into the same wall (jx75sbx, 2026-10-24). A host account the laptop does
-    // not track has no meters to read and stays with the laptop's decision.
-    const hostAccountOf = (c: Doc<"conversations">): string | undefined => {
-      const email = hostOwnAccount(c.owner_device_id ? onlineById.get(c.owner_device_id) : undefined, now);
-      return email && email !== activeEmail && activeProfiles.some((p) => p.email === email) ? email : undefined;
-    };
-    const hostLimit = limitBlocked.filter((c) => c.agent_type !== "codex" && hostAccountOf(c));
-    const claudeLimit = limitBlocked.filter((c) => c.agent_type !== "codex" && !hostAccountOf(c));
+    const claudeLimit = limitBlocked.filter((c) => c.agent_type !== "codex");
     const authParks = blocked.filter((c) => c.pending_api_error_kind === "auth" && recentEnough(c) &&
       (!c.owner_device_id || c.owner_device_id === primary.device_id));
     const { restart: authRestart, dead: authDead } = splitAuthParks(
@@ -1913,7 +1895,7 @@ export const autoSwitchCheck = internalMutation({
     const activeDead = authDead.length > 0;
     const authSwitch = allowSwitch && activeDead ? authParks : [];
     const targets = [...claudeLimit, ...authSwitch];
-    if (targets.length === 0 && authRestart.length === 0 && codexLimit.length === 0 && hostLimit.length === 0) {
+    if (targets.length === 0 && authRestart.length === 0 && codexLimit.length === 0) {
       if (authParks.length > 0 && !activeDead) {
         const retryAt = now + AUTO_SWITCH_PROBE_RETRY_MS;
         if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
@@ -1964,6 +1946,10 @@ export const autoSwitchCheck = internalMutation({
     // What the human sees on the meter that closed, and where the loop would
     // move — the reason every switch/proposal is recorded with, so the park
     // card can explain the account change instead of it happening silently.
+    const activeProfiles = primary.cc_accounts?.profiles ?? [];
+    // The account the fleet runs on: the keychain login, or the launch profile
+    // after a token switch (fleetAccount). Every "active" read below means this.
+    const activeEmail = fleetAccount(primary.cc_accounts, now).email;
     const activeProfile = activeProfiles.find((p) => p.email && p.email === activeEmail);
     const buildDecision = (kind: RecoveryDecisionKind, target?: DecisionTarget) =>
       recoveryDecision(primary, kind, claudeLimit.length + authSwitch.length, now, target);
@@ -2017,7 +2003,7 @@ export const autoSwitchCheck = internalMutation({
     // decide; when Codex is all that is parked it always answers, so the
     // caller never reaches decideAutoSwitch with an empty target list.
     const runCodexPass = async () => {
-      const soleParks = targets.length === 0 && hostLimit.length === 0;
+      const soleParks = targets.length === 0;
       const codexDecision = decideAutoSwitch({
         now,
         resetCredit: codexResetCreditOffer(primary, codexLimit),
@@ -2112,49 +2098,13 @@ export const autoSwitchCheck = internalMutation({
       codexRetryAt = viaCodex.retry_at;
     }
 
-    // The host pass: each host account's parks get the same decision on that
-    // account's meters, switching OFF. Moving a host to another account means
-    // a token for it on the host, which no command delivers, so a spent host
-    // account waits for its own reset rather than taking the laptop's.
-    let hostRetryAt: number | undefined;
-    for (const email of new Set(hostLimit.map(hostAccountOf))) {
-      const parks = hostLimit.filter((c) => hostAccountOf(c) === email);
-      const key = hostContinueAttemptKey(email!);
-      const hostDecision = decideAutoSwitch({
-        now,
-        parkedAt: Math.max(...parks.map(blockedAt)),
-        activeEmail: email,
-        profiles: activeProfiles,
-        attempts,
-        allowSwitch: false,
-        continueKey: key,
-        models: parks.flatMap((c) => (c.model ? [c.model] : [])),
-      });
-      if (hostDecision.action === "continue") {
-        const res = await continueLimitParks(ctx, args.user_id, { blocked: parks, online, primary, now });
-        if (res.probe) state = { ...state, limit_probe: res.probe, throttle_check_at: res.throttle_check_at };
-        await recordAction(`host_continue:${email}`, [key], await bookCodexFollowUp());
-        console.log(`autoSwitchCheck: continuing ${res.probe ? 1 : parks.length} of ${parks.length} conversation(s) parked on host account ${email}`);
-        return { acted: "host_continue", conversations: parks.length, restarted: res.restarted };
-      }
-      const retryAt = hostDecision.action === "wait" || hostDecision.action === "exhausted" ? hostDecision.retry_at : now + AUTO_SWITCH_PROBE_RETRY_MS;
-      hostRetryAt = Math.min(retryAt, hostRetryAt ?? retryAt);
-    }
-
-    // The soonest any other account is worth another look.
-    const withCodexRetry = (at: number): number => Math.min(at, codexRetryAt ?? at, hostRetryAt ?? at);
-    if (targets.length === 0) {
-      const retryAt = withCodexRetry(hostRetryAt!);
-      if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
-        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
-        await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, next_check_at: retryAt } });
-      }
-      return { acted: "host_wait", next_check_at: retryAt };
-    }
+    // The soonest either provider is worth another look.
+    const withCodexRetry = (at: number): number => Math.min(at, codexRetryAt ?? at);
 
     // A park is read as a fact about the account the session ran on: the
     // owning device's active login unless the row pins another account's
     // token. Only the former can wait on the active account's windows.
+    const onlineById = new Map(online.map((d) => [d.device_id, d]));
     const parksOnActive = targets.filter((c) =>
       parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary, now),
     );

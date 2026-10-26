@@ -278,20 +278,6 @@ export function continueNeedsRestart(
   return conv.cc_account !== continueTargetPin(device, now);
 }
 
-/** The account a cloud host runs on when it carries a setup token of its own
- * (its cc-launch.json names a profile with a live token): the laptop's
- * credential pushes never override it, so the host's sessions run there
- * whatever the laptop runs. Undefined for a local device and for a host that
- * runs the pushed login. */
-export function hostOwnAccount(
-  device: { is_remote?: boolean; cc_accounts?: FleetAccounts } | undefined,
-  now: number,
-): string | undefined {
-  if (device?.is_remote !== true) return undefined;
-  const fleet = fleetAccount(device.cc_accounts, now);
-  return fleet.viaToken ? fleet.email : undefined;
-}
-
 /** Whether a parked session's banner says anything about the device's ACTIVE
  * login. A session pinned to a profile with another identity ran on THAT
  * account's credential store: its limit is that account's limit. The active
@@ -637,12 +623,6 @@ export const AUTO_SWITCH_CONTINUE_KEY = "__continue__";
 // would ever get its own free continue while the other was recovering.
 export const AUTO_SWITCH_CODEX_CONTINUE_KEY = "__continue_codex__";
 export const AUTO_SWITCH_AUTH_RESTART_KEY = "__auth_restart__";
-
-// The same key for a cloud host's own account (hostOwnAccount): one per
-// account, so a continue on one host's account is not taken for another's.
-export function hostContinueAttemptKey(email: string): string {
-  return `__continue_host__:${email}`;
-}
 
 export function authRestartAttemptKey(conversationId: string): string {
   return `${AUTO_SWITCH_AUTH_RESTART_KEY}:${conversationId}`;
