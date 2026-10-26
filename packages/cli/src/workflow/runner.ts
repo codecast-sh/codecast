@@ -12,7 +12,7 @@ import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition"
 import { planReadiness } from "../planReadiness.js";
 import { readGateCard } from "../cardFile.js";
 import { agentResultPreview, resultPreview } from "./chainWorkflow.js";
-import { spawnSync } from "../proc.js";
+import { spawn, spawnSync } from "../proc.js";
 import { argvOnLaunchAccount } from "../ccAccounts.js";
 import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
@@ -163,32 +163,46 @@ async function executeCommand(
   console.log(`${c.dim}  $ ${script.split('\n')[0]}${script.includes('\n') ? '...' : ''}${c.reset}`);
 
   try {
-    const result = spawnSync("bash", ["-c", script], {
-      cwd,
-      // A project's line command (line-profile.md LP2) names run values
-      // ($run_dir, $task_id, ...) that its own shell expands.
-      env: { ...process.env, ...lineCommandEnv(context) },
-      stdio: ["pipe", "pipe", "pipe"],
-      encoding: "utf-8",
-      // A repo's check command (the line's verify station) outruns the old
-      // two minute cap on most repos; a timeout read as a failed check and
-      // burned an implement visit. Per node, in seconds.
-      timeout: (node.timeout ?? 120) * 1000,
+    // A repo's check command (the line's verify station) outruns the old two
+    // minute cap on most repos; a timeout read as a failed check and burned an
+    // implement visit. Per node, in seconds.
+    const timeoutMs = (node.timeout ?? 120) * 1000;
+    const result = await new Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolve, reject) => {
+      const child = spawn("bash", ["-c", script], {
+        cwd,
+        // A project's line command (line-profile.md LP2) names run values
+        // ($run_dir, $task_id, ...) that its own shell expands.
+        env: { ...process.env, ...lineCommandEnv(context) },
+        stdio: ["ignore", "pipe", "pipe"],
+        // Its own process group, so the timeout takes the script's children
+        // with it. spawnSync's timeout sent one SIGTERM to bash alone, and on
+        // CI the script sometimes ran to its end and passed anyway.
+        detached: process.platform !== "win32",
+      });
+      let stdout = "", stderr = "", timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); }
+      }, timeoutMs);
+      child.stdout!.on("data", (d) => { stdout += d; });
+      child.stderr!.on("data", (d) => { stderr += d; });
+      child.on("error", (err) => { clearTimeout(timer); reject(err); });
+      child.on("close", (status) => { clearTimeout(timer); resolve({ status, stdout, stderr, timedOut }); });
     });
 
-    const output = (result.stdout || "") + (result.stderr || "");
+    const output = result.stdout + result.stderr + (result.timedOut ? `\ntimed out after ${timeoutMs / 1000}s` : "");
     if (output.trim()) {
       console.log(c.dim + output.slice(0, 2000) + c.reset);
     }
 
-    recordNodeOutput(context, node.id, output.trim(), result.stdout || "");
+    recordNodeOutput(context, node.id, output.trim(), result.stdout);
     context[`${node.id}.exit_code`] = String(result.status ?? 0);
 
-    if (result.status === 0) {
+    if (result.status === 0 && !result.timedOut) {
       console.log(`  ${c.green}✓ success${c.reset}`);
       return "success";
     } else {
-      console.log(`  ${c.red}✗ failed (exit ${result.status})${c.reset}`);
+      console.log(`  ${c.red}✗ failed (${result.timedOut ? "timed out" : `exit ${result.status}`})${c.reset}`);
       context["last_error"] = output.trim().slice(0, 2000);
       return "failure";
     }
