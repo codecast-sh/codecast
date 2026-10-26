@@ -1000,3 +1000,21 @@ test("an Ask first value its user already holds stays in their feed until a new 
   expect((await read(t, ["stripe-live"])).secrets[0].payload).toEqual({ value: "sk_" + "test_rotatedVALUE000111222333" });
   expect((await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN })).values).toContainEqual({ name: "stripe-live", value: "sk_" + "test_rotatedVALUE000111222333" });
 });
+
+test("a value the feed sent in the millisecond of a rotate counts for the value it sent, not the new one", async () => {
+  const { t, as, ana, acme } = await seed();
+  await as(ana).action(api.secrets.create, { name: "stripe-tie", kind: "key", payload: { value: STRIPE }, team_id: acme });
+  expect((await read(t, ["stripe-tie"])).secrets).toHaveLength(1);
+  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-tie", ask_first: true });
+  const realNow = Date.now;
+  const frozen = realNow() + 60_000;
+  Date.now = () => frozen;
+  try {
+    await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN });
+    await as(ana).action(api.secrets.rotate, { ref: "stripe-tie", payload: { value: "sk_" + "test_tieVALUE000111222333" } });
+    const after = (await t.action(api.secrets.redactionValues, { api_token: ANA_TOKEN })).values.map((x: any) => x.value);
+    expect(after).toEqual([STRIPE]);
+  } finally {
+    Date.now = realNow;
+  }
+});

@@ -306,8 +306,13 @@ async function clearApprovals(ctx: any, row: SecretRow, which: "approved" | "all
 /** The version of a row's value a write-back names; a row stored before value_updated_at existed falls back to updated_at. */
 const valueVersion = (row: SecretRow) => row.value_updated_at ?? row.updated_at;
 
-/** The version a new value gets: the time, but always past the one it replaces, so two writes in one millisecond still differ. */
-const nextValueVersion = (row: SecretRow, now: number) => Math.max(now, valueVersion(row) + 1);
+/**
+ * The version a new value gets: past the millisecond it is written in and past
+ * the one it replaces. An event stamped in that millisecond (a feed sync just
+ * before the rotate) belongs to the value it replaced, so reachedUser never
+ * counts it as the new value reaching anyone.
+ */
+const nextValueVersion = (row: SecretRow, now: number) => Math.max(now + 1, valueVersion(row) + 1);
 
 /**
  * The fields a metadata write patches: who and when, for display. A row from
@@ -1392,7 +1397,7 @@ async function reachedUser(
       .query("secret_events")
       .withIndex("by_secret_actor_kind_at", (q: any) => {
         const at = q.eq("secret_id", row._id).eq("actor_user_id", userId).eq("kind", kind);
-        return before === undefined ? at.gte("at", valueVersion(row)) : at.lt("at", before);
+        return before === undefined ? at.gte("at", valueVersion(row)) : at.lte("at", before);
       })
       .first();
     if (hit) return true;
