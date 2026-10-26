@@ -76,6 +76,7 @@ import { askLineAgentCore, editLineGraphCore, reaskTrialRunCore, tryLineStepCore
 import { cancelRunByPerson, landAgainCore, resumeRunCore } from "./workflow_runs";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
+import { dismissGuestSuggestionFor, sendGuestSuggestionFor, writeGuestSuggestions } from "./guestSuggestions";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
 
 type TableConfig =
@@ -1591,6 +1592,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // is not a dispatchable field, so this is its only web write path.
   setShareLink: async (ctx, userId, [convId, token]: [string, string | null]) => {
     await writeShareLink(ctx, userId, convId, token ?? null);
+  },
+
+  // Guest suggestions on a shared session (guestSuggestions.ts), owner only.
+  // The client already shows the switch flipped and the decided card gone.
+  setGuestSuggestions: async (ctx, userId, [convId, enabled]: [string, boolean]) => {
+    await writeGuestSuggestions(ctx, userId, convId, !!enabled);
+  },
+  sendGuestSuggestion: async (ctx, userId, [suggestionId, body]: [string, string?]) => {
+    return await sendGuestSuggestionFor(ctx, userId, suggestionId, body);
+  },
+  dismissGuestSuggestion: async (ctx, userId, [suggestionId]: [string]) => {
+    return await dismissGuestSuggestionFor(ctx, userId, suggestionId);
   },
 
   // The same switch for docs, plans, tasks and calls (publicShare.ts).

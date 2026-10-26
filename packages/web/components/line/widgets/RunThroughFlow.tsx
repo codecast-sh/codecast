@@ -15,6 +15,7 @@ import { runThroughMessage } from "../../../lib/line/flowMessages";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { FlowDiagram } from "./FlowDiagram";
+import { HEADER_CHIP } from "../../conversation/ConversationHeaderBar";
 import "../workspace/workspace.css";
 
 /** A command step that only looks (the project's check, a proof going red or green, the evals), not one that acts. */
@@ -37,7 +38,7 @@ export function RunThroughFlow({ conversationId, sessionTitle }: { conversationI
     <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <button type="button" className="cq-sq6 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-sol-blue/10 text-sol-blue border border-sol-blue/30 hover:bg-sol-blue/20 transition-colors" title="Run this session's change through a flow" data-run-through>
+          <button type="button" className={`cq-sq6 ${HEADER_CHIP}`} title="Run this session's change through a flow" data-run-through>
             <Route className="w-3 h-3" />
             <span className="cq-sq2">Run through</span>
           </button>

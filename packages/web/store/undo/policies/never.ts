@@ -102,6 +102,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   trialReask: never("machine control: it stops the run's runner and asks its card again; the new decision is the way on"),
   startShip: never("send: Ship starts a session that commits, pushes and opens a pull request; stopping it is the way back"),
   resolvePermission: never("send: the agent acts on an approved or denied tool call the moment it lands"),
+  sendGuestSuggestion: never("send: the message is in the session the moment it lands"),
+  dismissGuestSuggestion: never("decision: the guest sees it dismissed at once; they can suggest it again"),
   respondToGate: never("send: a gate answer resumes the run and posts into its session"),
 
   // Local echoes of sends (sync creators a component calls)
@@ -267,6 +269,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   deleteCallFrameShare: SHARING,
   setObjectShareLink: SHARING,
   setShareLink: SHARING,
+  setGuestSuggestions: SHARING,
   setTeamMembershipVisibility: SHARING,
 
   // The project's line.toml, written on the checkout's machine by the daemon

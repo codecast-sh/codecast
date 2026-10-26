@@ -2438,6 +2438,7 @@ export const getConversationWithMeta = query({
       // Explicit null, never an absent key: the client merges rows, so a link
       // turned off on another device would otherwise stay "on" in an open tab.
       share_token: (conversationLight as any).share_token ?? null,
+      guest_suggestions: (conversationLight as any).guest_suggestions ?? null,
       // The same for the header's git line: a field can be unset (a cloud
       // agent's branch its provider no longer names, a local stamp cleared).
       git_branch: (conversationLight as any).git_branch ?? null,
@@ -3137,6 +3138,9 @@ export const listConversations = query({
           is_active: isActive,
           author_name: authorName,
           author_avatar: authorAvatar,
+          acting_user_id: c.acting_user_id ?? null,
+          is_anchor: !!c.anchor_id,
+          anchor_id: c.anchor_id ?? null,
           is_own: c.user_id.toString() === userId.toString(),
           parent_conversation_id: visibilityMode === "full" ? parentConversationId : null,
           spawned_by_conversation_id: visibilityMode === "full" ? (c.spawned_by_conversation_id || null) : null,

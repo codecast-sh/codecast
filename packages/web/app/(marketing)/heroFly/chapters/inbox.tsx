@@ -18,7 +18,7 @@ import { ViewerFaces } from "@/components/presence/ViewerFaces";
 import { SearchField } from "@/components/search/SearchField";
 import { TeamSwitcherButton } from "@/components/TeamSwitcher";
 import { TopbarButton } from "@/components/TopbarButton";
-import { InboxViewTabs } from "@/components/InboxViewTabs";
+import { InboxViewPickerStill } from "@/components/InboxViewPicker";
 import { SectionHeader } from "@/components/inbox/SectionHeader";
 import { SessionCardView, type SessionCardChrome } from "@/components/inbox/SessionCardView";
 import { InboxNavRow, NeedsInputCount } from "@/components/sidebar/navPrimitives";
@@ -38,7 +38,6 @@ const CHROME: SessionCardChrome = { showModelBadge: false, showAgentIcon: true, 
 const IDLE = { isLive: false, pendingSend: false, restarting: false, draft: "" };
 const LIVE = { ...IDLE, isLive: true };
 const noop = () => {};
-const HERO_VIEW_MODES = ["grouped", "recent", "time", "bucket"] as const;
 /** How long before a spawned worker's row lands its room starts to open (s): the room is open by the time the row drops into it, so it never draws over the row under it. */
 const ROW_ROOM = 0.5;
 
@@ -215,8 +214,9 @@ function InboxListAt({ now }: PartProps) {
 
   return (
     <div data-sv-rail className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden border-x border-sol-border/30">
-      <div className="cc-panel__head min-w-0" />
-      <InboxViewTabs value="grouped" onChange={noop} modes={HERO_VIEW_MODES} />
+      <div className="cc-panel__head min-w-0">
+        <InboxViewPickerStill value="grouped" />
+      </div>
       <div data-hero-live className="flex flex-col">
         {INBOX_SECTIONS.map((sec) => {
           const working = sec.key === "working";
