@@ -55,6 +55,12 @@ describe("queue order", () => {
     expect(headOfEachQueue(rows)[0]._id).toBe("b");
   });
 
+  test("a poll answer goes ahead of a message held behind the open menu", () => {
+    const poll = JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Cap at 2 full suites" });
+    const rows = [row("typed", "uAnn", "Sorry typo I meant do all your suggestions", 1), row("q", "uAnn", "?", 2), row("answer", "uAnn", poll, 3), row("again", "uAnn", poll, 4)];
+    expect(headOfEachQueue(rows).map((r) => r._id)).toEqual(["answer"]);
+  });
+
   test("nothing jumps ahead of a row the session is already taking", () => {
     expect(queueAtBefore([row("a", "uAnn", "x", 1, "injected")], "a")).toBeNull();
   });

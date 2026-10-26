@@ -1670,13 +1670,23 @@ export async function collectDeliverableForOwner(
 // old, on 2026-10-05), and claiming those on every push was 44 mutations a
 // second, a tenth of all backend time (ct-56547). The next row arrives the
 // moment the head leaves "pending", the same reactive turn as before.
-export function headOfEachQueue<T extends { conversation_id: unknown; created_at?: number; queue_at?: number; _creationTime?: number }>(rows: T[]): T[] {
+//
+// A poll answer goes ahead of every ordinary row. The daemon holds an ordinary
+// message while the pane shows a menu, and the answer is what closes that
+// menu: queued behind the held message, it never reached the daemon and the
+// session sat stuck until someone answered in the terminal (Alex Green's
+// jx78ys8, 2026-10-25: a typed message sent while the card was open, then
+// three card answers and two messages, none delivered).
+export function headOfEachQueue<T extends { conversation_id: unknown; content?: string; created_at?: number; queue_at?: number; _creationTime?: number }>(rows: T[]): T[] {
   const head = new Map<string, T>();
-  const at = (r: T) => queueOrder(r);
+  const ahead = (a: T, b: T) => {
+    const pollA = isControlMessage(a.content ?? ""), pollB = isControlMessage(b.content ?? "");
+    return pollA !== pollB ? pollA : queueOrder(a) < queueOrder(b);
+  };
   for (const row of rows) {
     const key = String(row.conversation_id);
     const held = head.get(key);
-    if (!held || at(row) < at(held)) head.set(key, row);
+    if (!held || ahead(row, held)) head.set(key, row);
   }
   return rows.filter((r) => head.get(String(r.conversation_id)) === r);
 }
