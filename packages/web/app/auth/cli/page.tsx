@@ -1,4 +1,6 @@
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { ConvexError } from "convex/values";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { reportSignupConversion } from "../../../lib/googleAds";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -26,7 +28,7 @@ function CliAuthContent() {
   const depositCliAuth = useMutation(api.cliAuth.deposit);
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { signIn } = useAuthActions();
+  const { signIn, signOut } = useAuthActions();
   const [status, setStatus] = useState<"waiting" | "sending" | "success" | "error">("waiting");
   const [viaRelay, setViaRelay] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>("");
@@ -48,10 +50,24 @@ function CliAuthContent() {
   // and works only from that machine. Absent (an older CLI, the desktop sign
   // in, whose token is consumed by the exchange anyway), the token is unbound.
   const deviceIdParam = searchParams.get("device_id");
+  // A managed device (MDM profile) enrolling into its team: the CLI sends the
+  // enrollment POST /cli/enroll answered and the person its profile names.
+  // Authorize then completes the enrollment and mints the same device-bound
+  // token (managedDevices.completeEnrollment) instead of createToken.
+  const enrollmentId = searchParams.get("enroll");
+  const loginHint = searchParams.get("login_hint");
+  const completeEnrollment = useMutation(api.managedDevices.completeEnrollment);
+  const enrollment = useQueryNoThrow(
+    api.managedDevices.enrollmentPreview,
+    isAuthenticated && enrollmentId ? { enrollment_id: enrollmentId } : "skip",
+  ).data;
 
   // The person's next stop is the terminal's setup questions, then their
   // sessions. Land this tab in the inbox, where those sessions appear as the
   // daemon syncs them, instead of leaving it on a page that says to close it.
+  const loginPath = (returnPath: string) =>
+    `/login?return_to=${encodeURIComponent(returnPath)}${loginHint ? `&login_hint=${encodeURIComponent(loginHint)}` : ""}`;
+
   const handOffToInbox = () => {
     markCliConnected();
     setTimeout(() => router.replace("/inbox"), 1500);
@@ -62,12 +78,16 @@ function CliAuthContent() {
 
     let tokenResult: { token: string };
     try {
-      tokenResult = await createToken({ name: deviceName, ...(deviceIdParam ? { device_id: deviceIdParam } : {}) });
+      tokenResult = enrollmentId
+        ? await completeEnrollment({ enrollment_id: enrollmentId, name: deviceName, device_id: deviceIdParam ?? "" })
+        : await createToken({ name: deviceName, ...(deviceIdParam ? { device_id: deviceIdParam } : {}) });
     } catch (err) {
       console.error("Auth token mint error:", err);
       setStatus("error");
+      // An enrollment refusal (wrong account, revoked device) says what to do.
+      const refusal = err instanceof ConvexError ? (err.data as { message?: string } | undefined)?.message : undefined;
       setErrorMessage(
-        "Couldn't create an API token for this device. Please reload this page and try again."
+        refusal ?? "Couldn't create an API token for this device. Please reload this page and try again."
       );
       return;
     }
@@ -157,7 +177,7 @@ function CliAuthContent() {
       if (provider && !oauthStarted.current) {
         oauthStarted.current = true;
         signIn(provider.id, { redirectTo: returnPath }).catch(() => {
-          router.push(`/login?return_to=${encodeURIComponent(returnPath)}`);
+          router.push(loginPath(returnPath));
         });
         return;
       }
@@ -170,7 +190,7 @@ function CliAuthContent() {
       // Most people running `cast auth` already have an account — send them to
       // sign-in (which links to sign-up), not the other way around. /login
       // preserves return_to and bounces back here once the session exists.
-      router.push(`/login?return_to=${encodeURIComponent(returnPath)}`);
+      router.push(loginPath(returnPath));
       return;
     }
 
@@ -211,23 +231,44 @@ function CliAuthContent() {
   // so both modes get a real consent step showing which account is about to
   // be handed over — never an auto-fire on page load.
   if (status === "waiting") {
+    const wrongAccount = !!(enrollmentId && enrollment?.email && currentUser?.email && enrollment.email.toLowerCase() !== currentUser.email.toLowerCase());
     return (
       <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
           <div className="text-center">
             <h1 className="text-2xl font-semibold text-sol-text mb-2">
-              {isDesktopMode ? "Sign in to the desktop app" : "Connect your terminal"}
+              {enrollmentId ? `Enroll this device into ${enrollment?.team_name ?? "your team"}` : isDesktopMode ? "Sign in to the desktop app" : "Connect your terminal"}
             </h1>
             <p className="text-sol-text-muted mb-6">
-              {deviceName} will be {isDesktopMode ? "signed in" : "connected"} as{" "}
-              <span className="text-sol-text">{currentUser?.email ?? "your account"}</span>.
+              {wrongAccount ? (
+                <>
+                  {deviceName} belongs to <span className="text-sol-text">{enrollment!.email}</span>. You're signed in as{" "}
+                  <span className="text-sol-text">{currentUser!.email}</span>.
+                </>
+              ) : (
+                <>
+                  {deviceName} will be {isDesktopMode ? "signed in" : "connected"} as{" "}
+                  <span className="text-sol-text">{currentUser?.email ?? "your account"}</span>.
+                </>
+              )}
             </p>
-            <button
-              onClick={deliverAuth}
-              className="w-full py-3 px-4 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg"
-            >
-              Authorize
-            </button>
+            {wrongAccount ? (
+              // The profile names another person: the server would refuse this
+              // account, so the one action is signing in as that person.
+              <button
+                onClick={() => void signOut()}
+                className="w-full py-3 px-4 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg"
+              >
+                Sign in as {enrollment!.email}
+              </button>
+            ) : (
+              <button
+                onClick={deliverAuth}
+                className="w-full py-3 px-4 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg"
+              >
+                Authorize
+              </button>
+            )}
             <p className="text-sol-text-dim text-sm mt-4">
               Didn&apos;t request this from {isDesktopMode ? "the Codecast app" : "cast auth"}? Close this page.
             </p>

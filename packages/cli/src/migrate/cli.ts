@@ -33,6 +33,7 @@ import { humanizeConvexError } from "@codecast/shared/contracts/convexErrors";
 import { createRunnerIo } from "./io.js";
 import { hostResolver } from "./hosts.js";
 import { matchDevices } from "./pickDevice.js";
+import { exitIfPolicyBlocks } from "../config/managedPolicy.js";
 import { formatBytes, rehearseMove, unreachableRehearsal } from "./rehearse.js";
 import { awaitCommand, runBatch } from "./runner.js";
 
@@ -108,6 +109,7 @@ export function registerMigrateCommand(program: Command): void {
       const { client, token, api } = await convexClient();
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
       const to = pickDevice(devices, opts.to, "--to");
+      if (to.is_remote) exitIfPolicyBlocks("cloud_hosts_disabled");
       const from = opts.from ? pickDevice(devices, opts.from, "--from") : undefined;
       const selector = (opts.label || from || opts.project || opts.all)
         ? { ...(opts.label ? { label: opts.label } : {}), ...(from ? { from_device_id: from.device_id } : {}), ...(opts.project ? { project: opts.project } : {}), ...(opts.all ? { all: true } : {}) }
@@ -162,6 +164,7 @@ export function registerMigrateCommand(program: Command): void {
       const { client, token, api } = await convexClient();
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
       const to = pickDevice(devices, opts.to, "--to");
+      if (to.is_remote) exitIfPolicyBlocks("cloud_hosts_disabled");
       const name = deviceName(devices, to.device_id);
       if (to.is_remote) {
         console.error(`${name} is a cloud host: its files must be transferred, so use \`cast migrate start --to ${opts.to} ${session}\``);
@@ -295,6 +298,7 @@ export function registerMigrateCommand(program: Command): void {
       if (!opts.to || !sessions.length) { console.error("name sessions and --to <device> (or --request <id>)"); process.exit(1); }
       const devices: any[] = await client.query(api.devices.listDevices, { api_token: token });
       const to = pickDevice(devices, opts.to, "--to");
+      if (to.is_remote) exitIfPolicyBlocks("cloud_hosts_disabled");
       const plan = await client.mutation(api.sessionMigrations.createBatch, { api_token: token, conversation_ids: sessions, to_device_id: to.device_id, dry_run: true });
       for (const s of plan.skipped) console.error(`skip ${s.conversation_id}: ${s.reason}`);
       const { cloud, host } = await resolve(to.device_id);

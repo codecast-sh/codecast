@@ -1,0 +1,182 @@
+name: Build MDM installer (Codecast.pkg)
+
+# Builds Codecast.pkg, the one installer an IT admin uploads to their MDM
+# (docs/mdm.md), from what is already live: the desktop app named by
+# dl.codecast.sh/desktop/latest-mac.yml and the darwin-arm64 CLI named by
+# dl.codecast.sh/latest.json, each checked against the digest its manifest
+# records. The pkg's own pieces (enroll LaunchAgent, postinstall) come from this
+# checkout. packages/electron/scripts/build-mdm-pkg.sh does the assembly, the
+# signing, notarization and stapling.
+#
+# Secrets:
+#   MACOS_INSTALLER_CERT_P12, MACOS_INSTALLER_CERT_PASSPHRASE
+#     base64 .p12 of "Developer ID Installer: Ashot Petrosian (WRG9THCK9Q)"
+#     (certificate + private key). Distinct from the Application identity the
+#     CLI release uses: Installer certs sign pkgs, Application certs sign code.
+#   ASC_API_KEY_P8
+#     base64 of the App Store Connect "Agent" key AuthKey_KR5Y6LS448.p8, the
+#     one packages/electron/notarize.js uses.
+# Without the Installer secrets the pkg builds unsigned; a dry run keeps it as
+# a workflow artifact, and a real run refuses to upload it.
+#
+# Uploads go to R2 under desktop/mdm/ (dl.codecast.sh/desktop/mdm/...): the
+# versioned pkg, immutable, and Codecast.pkg, the stable name admins point at.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, sign and verify only. Upload nothing.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mdm-pkg-builder
+  cancel-in-progress: false
+
+env:
+  R2_BUCKET: codecast
+  INSTALLER_IDENTITY: "Developer ID Installer: Ashot Petrosian (WRG9THCK9Q)"
+  APPLE_API_KEY_ID: KR5Y6LS448
+  APPLE_API_ISSUER: 69a6de76-856e-47e3-e053-5b8c7c11a4d1
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - name: Download the live desktop app and CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          in="$RUNNER_TEMP/inputs"
+          mkdir -p "$in"
+          curl -fsSL https://dl.codecast.sh/desktop/latest-mac.yml -o "$in/latest-mac.yml"
+          zip_name=$(awk '/^path:/ {print $2; exit}' "$in/latest-mac.yml")
+          zip_sha512=$(awk '/^sha512:/ {print $2; exit}' "$in/latest-mac.yml")
+          curl -fsSL "https://dl.codecast.sh/desktop/$zip_name" -o "$in/app.zip"
+          actual=$(openssl dgst -sha512 -binary "$in/app.zip" | base64)
+          [[ "$actual" == "$zip_sha512" ]] || { echo "::error::$zip_name sha512 mismatch"; exit 1; }
+          ditto -x -k "$in/app.zip" "$in/app"
+
+          curl -fsSL https://dl.codecast.sh/latest.json -o "$in/latest.json"
+          cli_url=$(jq -r '.binaries["darwin-arm64"].url' "$in/latest.json")
+          cli_sha=$(jq -r '.binaries["darwin-arm64"].sha256' "$in/latest.json")
+          curl -fsSL "$cli_url" -o "$in/codecast"
+          echo "$cli_sha  $in/codecast" | shasum -a 256 -c -
+          chmod 755 "$in/codecast"
+
+          echo "APP=$in/app/Codecast.app" >> "$GITHUB_ENV"
+          echo "CLI=$in/codecast" >> "$GITHUB_ENV"
+          echo "Desktop: $zip_name; CLI: $(jq -r .version "$in/latest.json")"
+
+      - name: Import the Installer identity and notarization key
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_P12 }}
+          CERT_PASSPHRASE: ${{ secrets.MACOS_INSTALLER_CERT_PASSPHRASE }}
+          APP_CERT_P12_BASE64: ${{ secrets.MACOS_SIGN_CERT_P12 }}
+          APP_CERT_PASSPHRASE: ${{ secrets.MACOS_SIGN_CERT_PASSPHRASE }}
+          ASC_KEY_BASE64: ${{ secrets.ASC_API_KEY_P8 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$CERT_P12_BASE64" || -z "$CERT_PASSPHRASE" ]]; then
+            echo "::warning::MACOS_INSTALLER_CERT_P12/_PASSPHRASE not set: building an unsigned pkg"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/codecast-installer.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          cert="$RUNNER_TEMP/installer.p12"
+          printf '%s' "$CERT_P12_BASE64" | base64 --decode > "$cert"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert" -k "$keychain" -P "$CERT_PASSPHRASE" -T /usr/bin/productsign
+          # The Application identity re-signs the CLI with the hardened runtime, which notarization needs.
+          printf '%s' "$APP_CERT_P12_BASE64" | base64 --decode > "$cert"
+          security import "$cert" -k "$keychain" -P "$APP_CERT_PASSPHRASE" -T /usr/bin/codesign
+          rm -f "$cert"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          existing=$(security list-keychains -d user | tr -d '"')
+          security list-keychains -d user -s "$keychain" $existing
+          echo "SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          security find-identity -v -p basic | grep -F "$INSTALLER_IDENTITY" >/dev/null \
+            || { echo "::error::imported keychain does not contain: $INSTALLER_IDENTITY"; exit 1; }
+
+          if [[ -n "$ASC_KEY_BASE64" ]]; then
+            key="$RUNNER_TEMP/AuthKey_$APPLE_API_KEY_ID.p8"
+            printf '%s' "$ASC_KEY_BASE64" | base64 --decode > "$key"
+            echo "APPLE_API_KEY=$key" >> "$GITHUB_ENV"
+          else
+            echo "::error::ASC_API_KEY_P8 is not set: a signed pkg must be notarized"
+            exit 1
+          fi
+
+      - name: Build Codecast.pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/electron
+          OUT_DIR="$RUNNER_TEMP/out" MDM_INSTALLER_IDENTITY="$INSTALLER_IDENTITY" ./scripts/build-mdm-pkg.sh
+          pkg=$(ls "$RUNNER_TEMP"/out/Codecast-*.pkg)
+          echo "PKG=$pkg" >> "$GITHUB_ENV"
+          if pkgutil --check-signature "$pkg" >/dev/null 2>&1; then echo "PKG_SIGNED=1" >> "$GITHUB_ENV"; fi
+
+      - name: Inspect the pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkgutil --payload-files "$PKG" | grep -E '^\./(usr/local/bin/(codecast|cast)|Library/LaunchAgents/sh\.codecast\.enroll\.plist|Codecast\.app/Contents/MacOS/Codecast)$'
+          pkgutil --check-signature "$PKG" || true
+          spctl -a -vv -t install "$PKG" || true
+          {
+            echo "### $(basename "$PKG")"
+            echo
+            echo "- sha256: \`$(shasum -a 256 "$PKG" | awk '{print $1}')\`"
+            echo "- signed: ${PKG_SIGNED:-no}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the signing keychain
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${SIGN_KEYCHAIN:-}" && -f "$SIGN_KEYCHAIN" ]]; then security delete-keychain "$SIGN_KEYCHAIN"; fi
+          rm -f "${APPLE_API_KEY:-/nonexistent}"
+
+      - name: Keep the pkg for inspection
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codecast-mdm-pkg
+          retention-days: 7
+          if-no-files-found: error
+          path: ${{ env.PKG }}
+
+      - name: Upload to R2
+        if: ${{ !inputs.dry_run }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${PKG_SIGNED:-}" != "1" ]]; then
+            echo "::error::refusing to publish an unsigned pkg"
+            exit 1
+          fi
+          command -v aws >/dev/null 2>&1 || brew install awscli
+          name=$(basename "$PKG")
+          aws s3 cp "$PKG" "s3://$R2_BUCKET/desktop/mdm/$name" --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/octet-stream --cache-control "public, max-age=31536000, immutable" --no-progress
+          aws s3 cp "$PKG" "s3://$R2_BUCKET/desktop/mdm/Codecast.pkg" --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/octet-stream --cache-control "no-cache" --no-progress
+          echo "- Published https://dl.codecast.sh/desktop/mdm/$name and /desktop/mdm/Codecast.pkg" >> "$GITHUB_STEP_SUMMARY"
