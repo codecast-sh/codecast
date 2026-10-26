@@ -28,7 +28,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { ComposeHost } from "./ComposeHost";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { SquarePen, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
+import { SquarePen, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight, Maximize2 } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TeamDomainBanner } from "./TeamDomainBanner";
 import { PasskeyProbationBanner } from "./PasskeyProbationBanner";
@@ -88,7 +88,7 @@ import { agentFleetCounts } from "../lib/liveness";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
-import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
+import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, useShortcuts } from "../shortcuts";
 import { useFollowMode } from "../hooks/useFollowMode";
 import { FollowPill } from "./presence/FollowPill";
 import { usePrefetch } from "../hooks/usePrefetch";
@@ -575,6 +575,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const prevWasInboxRef = useRef(false);
   const prevPathnameRef = useRef(pathname);
   const tipActions = useTipActions();
+  const { dispatchAction } = useShortcuts();
 
   useMountEffect(() => {
     setDesktopClass(desktopHeaderClass());
@@ -1416,6 +1417,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </TopbarButton>
               </ShortcutTooltip>
             )}
+            {/* The bar hides in zen, so it only ever enters; the exit is the
+                conversation header's button (ConversationView). */}
+            <ShortcutTooltip label="Enter zen mode" action="ui.zenToggle">
+              <TopbarButton
+                onClick={(e) => { dispatchAction("ui.zenToggle"); tipActions.whisper('ui.zenToggle', e); }}
+                aria-label="Enter zen mode"
+                desktopOnly
+              >
+                <Maximize2 />
+              </TopbarButton>
+            </ShortcutTooltip>
             {/* Detached tab window only: merge this surface back into the
                 main window as a tab (renders null everywhere else). */}
             <AttachTabButton />

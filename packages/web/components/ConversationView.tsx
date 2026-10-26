@@ -133,7 +133,7 @@ import { useAskSession } from "../hooks/useAskSession";
 import { openSessionAtMessage } from "../lib/openSessionAtMessage";
 import type { MentionItem } from "./editor/MentionList";
 import { HeaderPinMenuItem } from "./anchor/AnchorPanel";
-import { MessageSquare, Maximize2, Minimize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree, ChevronLeft } from "lucide-react";
+import { MessageSquare, Minimize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree, ChevronLeft } from "lucide-react";
 import { filesHref } from "../lib/vault/vaultHref";
 import { openFiles } from "../lib/filesPane";
 import { openForwardToChat } from "../lib/forwardToChat";
@@ -3951,15 +3951,16 @@ const ConversationViewInner = (
         squeezeRowRef={squeezeRowRef}
         className={`${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}
         lead={<>
-            {!embedded && (
-              <ShortcutTooltip label={isZenMode ? "Exit zen mode" : "Enter zen mode"} action="ui.zenToggle" side="bottom">
+            {/* Zen hides the top bar and its enter button, so the way out
+                sits here. */}
+            {!embedded && isZenMode && (
+              <ShortcutTooltip label="Exit zen mode" action="ui.zenToggle" side="bottom">
                 <button
                   onClick={() => dispatchAction("ui.zenToggle")}
-                  aria-label={isZenMode ? "Exit zen mode" : "Enter zen mode"}
-                  aria-pressed={isZenMode}
-                  className="p-1 rounded text-sol-text-dim/30 hover:text-sol-text-dim/70 transition-colors"
+                  aria-label="Exit zen mode"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text transition-colors"
                 >
-                  {isZenMode ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+                  <Minimize2 className="w-3.5 h-3.5" />
                 </button>
               </ShortcutTooltip>
             )}
