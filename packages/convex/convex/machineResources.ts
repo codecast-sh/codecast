@@ -45,23 +45,34 @@ export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users"
   if (existing) await ctx.db.patch(existing._id, { ...data, ...stamp });
   else await ctx.db.insert("machine_resources", { ...data, ...stamp });
   if (alert) await notifyOverload(ctx, userId, device, snapshot, alert, now);
-  return { accepted: true, background_sessions, unattended_sessions: await unattendedSessions(ctx, snapshot) };
+  return { accepted: true, background_sessions, unattended_sessions: await unattendedSessions(ctx, snapshot, now) };
 }
 
+/** A person who wrote to a session this recently is watching it, whatever its flags say. */
+export const ATTENDED_AFTER_MESSAGE_MS = 30 * 60_000;
+
 /**
- * The sessions on this machine nobody is watching (isUnattendedConversation).
- * The daemon's load governor runs them at background priority while the
- * machine is over its budget. Sent with accepted reports only; the daemon
- * keeps the last answer between them.
+ * The sessions on this machine nobody is watching (isUnattendedConversation)
+ * and no person has written to lately. The daemon's load governor runs them at
+ * background priority while the machine is over its budget, where a busy Mac
+ * can leave them without CPU for an hour, so a session a person is talking to
+ * never goes there. Sent with accepted reports only; the daemon keeps the last
+ * answer between them.
  */
-async function unattendedSessions(ctx: MutationCtx, snapshot: MachineResourceSnapshot): Promise<string[]> {
+async function unattendedSessions(ctx: MutationCtx, snapshot: MachineResourceSnapshot, now: number): Promise<string[]> {
   const ids = new Set<string>();
   for (const p of snapshot.processes) if (p.sessionId) ids.add(p.sessionId);
   const out: string[] = [];
   for (const sessionId of ids) {
     const managed = await ctx.db.query("managed_sessions").withIndex("by_session_id", q => q.eq("session_id", sessionId)).first();
     const conv = managed?.conversation_id ? await ctx.db.get(managed.conversation_id) : null;
-    if (isUnattendedConversation(conv)) out.push(sessionId);
+    if (!conv || !isUnattendedConversation(conv)) continue;
+    const recent = await ctx.db.query("pending_messages")
+      .withIndex("by_conversation_id", q => q.eq("conversation_id", conv._id))
+      .order("desc")
+      .take(5);
+    if (recent.some(m => m.human && now - m._creationTime < ATTENDED_AFTER_MESSAGE_MS)) continue;
+    out.push(sessionId);
   }
   return out;
 }

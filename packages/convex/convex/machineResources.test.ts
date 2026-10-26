@@ -4,7 +4,7 @@ import schema from "./schema";
 import { makeFunctionReference } from "convex/server";
 const listMine = makeFunctionReference<"query">("machineResources:listMine");
 import { hashToken } from "./apiTokens";
-import { OVERLOAD_REALERT_MS, overloadAlertDue, overloadMessage, storeResourceSnapshot } from "./machineResources";
+import { ATTENDED_AFTER_MESSAGE_MS, OVERLOAD_REALERT_MS, overloadAlertDue, overloadMessage, storeResourceSnapshot } from "./machineResources";
 import type { MachineResourceSnapshot } from "@codecast/shared/contracts";
 
 const modules = {
@@ -144,4 +144,34 @@ test("a laptop's sustained overload rings once from the sample that confirms it"
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({ type: "machine_overloaded", entity_type: "machine", entity_id: "mac" });
   expect(rows[0].message).toStartWith("MacBook-Pro-182 is overloaded. CPU use has stayed above 90%");
+});
+
+test("the governor's unattended set leaves out a person's session that hosts a workflow, and a session a person wrote to in the last half hour", async () => {
+  const t = convexTest(schema, modules);
+  const now = Date.now();
+  const user = await t.run(async ctx => {
+    const id = await ctx.db.insert("users", {});
+    await ctx.db.insert("devices", { user_id: id, device_id: "mac", label: "Mac", platform: "darwin", last_seen: now });
+    const run = await ctx.db.insert("workflow_runs", { user_id: id, name: "deals-build", status: "running", started_at: now, updated_at: now } as any);
+    const session = async (session_id: string, fields: Record<string, unknown>) => {
+      const conversation_id = await ctx.db.insert("conversations", {
+        user_id: id, agent_type: "claude_code", session_id, status: "active", message_count: 0, started_at: now, updated_at: now, is_private: true, ...fields,
+      } as any);
+      await ctx.db.insert("managed_sessions", { session_id, conversation_id, user_id: id, pid: 1, started_at: now, last_heartbeat: now, agent_status: "working" });
+      return conversation_id;
+    };
+    await session("host", { workflow_run_id: run });
+    await session("station", { workflow_run_id: run, is_workflow_sub: true });
+    await session("worker", { is_subagent: true });
+    const talkedTo = await session("talked-to", { unattended: true });
+    await ctx.db.insert("pending_messages", { conversation_id: talkedTo, from_user_id: id, content: "continue", status: "delivered", created_at: now, human: true } as any);
+    return id;
+  });
+  const report = (at: number) => t.run(ctx => storeResourceSnapshot(ctx, user, {
+    ...sample(at),
+    processes: ["host", "station", "worker", "talked-to"].map((sessionId, i) => ({ pid: 100 + i, name: "claude", cpu: 1, rss: 1, sessionId })),
+  } as MachineResourceSnapshot, at));
+  expect([...((await report(now)).unattended_sessions ?? [])].sort()).toEqual(["station", "worker"]);
+  const later = now + ATTENDED_AFTER_MESSAGE_MS + 60_000;
+  expect([...((await report(later)).unattended_sessions ?? [])].sort()).toEqual(["station", "talked-to", "worker"]);
 });

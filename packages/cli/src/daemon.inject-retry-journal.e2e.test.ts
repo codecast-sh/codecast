@@ -127,6 +127,44 @@ test.skipIf(!Bun.which("tmux"))("a paste that never reached the prompt is pasted
   }
 }, 120_000);
 
+// 2026-10-26: an agent at background priority on an overloaded Mac got no CPU
+// for 80 minutes. Its stale frame never showed the write, so each settled
+// receipt wrote "continue" again, and the agent woke to
+// "continuecontinuecontinue". A fixture holding its input unread stands in.
+test.skipIf(!Bun.which("tmux"))("a starved agent keeps the one write it was given and takes it when it wakes", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "codecast-starved-pane-"));
+  const statePath = join(cwd, "state.json");
+  const release = join(cwd, "release");
+  const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
+  const pane = spawnHarness({ cwd, jsonlPath: statePath,
+    command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude", release].map(shellQuote).join(" ")}` });
+  const target = `${pane.tmuxSession}:0.0`;
+  const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
+  const delivery = { messageId: "starved-pane", conversationId: "fixture" };
+  const state = () => JSON.parse(readFileSync(statePath, "utf8"));
+  try {
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    // The earlier attempt's write, still unread in the agent's terminal.
+    const exec = async (args: string[]) => ({ stdout: tmuxRun(args).stdout });
+    const prepared = await prepareTmuxDelivery(target, delivery, exec, async () => false, journal);
+    journal.begin(delivery, prepared.generation, "continue");
+    tmuxRun(["send-keys", "-t", target, "-l", "continue"]);
+    await expect(injectViaTmux(target, "continue", "claude", {
+      delivery, journal, gateBudgetMs: 500, receiptSettleMs: 0, agentStarved: async () => true,
+    })).rejects.toThrow("getting no CPU");
+    expect(journal.writesOf(delivery.messageId)).toBe(1);
+    writeFileSync(release, "ready");
+    await waitFor(() => pane.capturePane().includes("❯ continue"));
+    await injectViaTmux(target, "continue", "claude", { delivery, journal, gateBudgetMs: 5_000, receiptSettleMs: 0 });
+    expect(state().queued).toEqual(["Existing worker report.", "continue"]);
+    expect(journal.get(delivery.messageId)?.phase).toBe("verified");
+  } finally {
+    journal.close();
+    pane.tearDown();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);
+
 // The same incident's other half: the verifier recorded a message as taken
 // while the pane never ran a turn, so every retry skipped the paste and
 // reported success. An idle agent and no echo after the settle window prove

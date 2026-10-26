@@ -22,13 +22,18 @@ export function applyUnattended(prompt: string, startedBy?: string): string {
  * run started unattended (`cast spawn --unattended`, a role's hand). The load
  * governor runs these at background priority while a machine is over its
  * budget, and cloud placement sends their starts off the laptop.
+ *
+ * A workflow station is `is_workflow_sub` (or a hand started unattended), never
+ * a bare `workflow_run_id`: that pointer also lands on the person's own session
+ * that runs the workflow (workflow_runs.ts stamps the host), and throttling it
+ * starved a live conversation for 80 minutes (2026-10-26).
  */
 export function isUnattendedConversation(conv: {
   unattended?: boolean;
   is_subagent?: boolean;
-  workflow_run_id?: unknown;
+  is_workflow_sub?: boolean;
   agent_task_id?: unknown;
   anchor_id?: unknown;
 } | null | undefined): boolean {
-  return !!conv && !!(conv.unattended || conv.is_subagent || conv.workflow_run_id || conv.agent_task_id || conv.anchor_id);
+  return !!conv && !!(conv.unattended || conv.is_subagent || conv.is_workflow_sub || conv.agent_task_id || conv.anchor_id);
 }
