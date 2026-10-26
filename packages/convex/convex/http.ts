@@ -4248,6 +4248,7 @@ cliRoute("/cli/org/template/learn/pass", async (ctx, body) => ctx.runAction((api
 cliRoute("/cli/org/template/learn/status", async (ctx, body) => ctx.runQuery((api as any).orgTemplateLearning.learnStatusOf, body));
 cliRoute("/cli/org/template/learn/due", async (ctx, body) => ctx.runQuery((api as any).orgTemplateLearning.learnDue, body));
 cliRoute("/cli/org/template/learn/rollout", async (ctx, body) => ctx.runMutation((api as any).orgTemplateLearning.rollout, body));
+cliRoute("/cli/org/template/learn/promote", async (ctx, body) => ctx.runMutation((api as any).orgTemplateLearning.promote, body));
 
 // Session read marks: `cast read <id> --ack` and `cast unread <id>`. Both
 // resolve the ref (id or short id) and check conversation access inside the

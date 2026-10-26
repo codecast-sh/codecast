@@ -114,6 +114,9 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
   learn.command("rollout <template>").description("Move the instances that follow canary to the canary release: each gets the upgrade and its host step queued on its machine")
     .option("--json", "Machine-readable output")
     .action(async (id: string) => output(await (await import("./orgTemplateRun.js")).learnRollout(deps, id)));
+  learn.command("promote <template>").description("Make the canary release stable once learn status says it ran clean: the published release itself, whatever the template folder holds now")
+    .option("--json", "Machine-readable output")
+    .action(async (id: string) => output(await (await import("./orgTemplateRun.js")).learnPromote(deps, id)));
   template.command("publish <folder...>").description("Publish release folders as templates under a workspace, or as Codecast for every workspace; several folders publish in one run (a gallery: packs/*)")
     .option("--team <name|id>", "Publishing team workspace").option("--personal", "Publish under your personal workspace").option("--codecast", "Publish as Codecast (its admins only)")
     .option("--status <draft|canary|stable>", "Release status", "draft").option("--changelog <text>", "What changed in this version; '-' reads stdin; default: the folder's CHANGELOG.md")

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
-import { learningEnabled, performDigest, performFileLearned, performLearnDue, performLearnStatus, performLearning, performPassPlan, performRollout, performSetLearning } from "./orgTemplateLearning";
+import { learningEnabled, performDigest, performFileLearned, performLearnDue, performLearnStatus, performLearning, performPassPlan, performPromote, performRollout, performSetLearning } from "./orgTemplateLearning";
 import { performListLessons, performUpsertInstance } from "./orgTemplates";
 
 // The learning loop (org-hire.md H12), through the perform functions the
@@ -281,5 +281,20 @@ describe("canary rollout", () => {
     await db.delete("devices_mbp");
     expect(await performRollout(ctx(db), ME, { template_id: "growth" })).toMatchObject({ queued: 0, unreachable: 1 });
     expect((await db.get(INSTANCE)).pending_upgrade).toMatchObject({ to: "2.0.1" });
+  });
+});
+
+describe("canary promote", () => {
+  test("promote waits for a clean canary, then makes that very release stable and latest", async () => {
+    const canary = release("2.0.1", D2, "canary", NOW - 4 * DAY);
+    const db = fixtures({ org_templates: [template([release("2.0.0", D1, "stable"), canary])], org_template_instances: [instance({ update_policy: "canary" })] });
+    await expect(performPromote(ctx(db), DANA, { template_id: "growth", now: NOW })).rejects.toThrow(/Forbidden/);
+    await expect(performPromote(ctx(db), ME, { template_id: "growth", now: NOW })).rejects.toThrow(/has not run clean yet: no canary instance has taken/);
+    await db.patch(INSTANCE, { version: "2.0.1", digest: D2, version_at: NOW - 12 * 3_600_000 });
+    await db.patch("agent_tasks_seo", { last_run_at: NOW - 3_600_000, last_run_failed: false });
+    expect(await performPromote(ctx(db), ME, { template_id: "growth", now: NOW })).toEqual({ template_id: "growth", version: "2.0.1", status: "stable" });
+    const status = await performLearnStatus(ctx(db), ME, { template_id: "growth", now: NOW });
+    expect(status).toMatchObject({ stable: "2.0.1", latest: "2.0.1", canary: null, due: { promote: false } });
+    await expect(performPromote(ctx(db), ME, { template_id: "growth", now: NOW })).rejects.toThrow(/No canary release/);
   });
 });

@@ -24,7 +24,7 @@ import { compareVersions, type OrgTemplate } from "@codecast/shared/contracts/or
 import { readiness } from "@codecast/shared/contracts/orgTemplateState";
 import { LEARNING, canaryVerdict, draftDue, learningRequest, lessonLeaks, nextPatch, parseLessons, playbookRuleSignals, structuralSignals, workspaceTerms, type CanaryInstance, type LeakKind, type LearningDigest, type Redirect, type WorkspaceFacts } from "@codecast/shared/contracts/orgTemplateLearning";
 import { parsePlaybook } from "@codecast/shared/contracts/rolePlaybook";
-import { CODECAST_TEMPLATE_ACCESS, callerWorkspace, enqueueBind, fileLessonRow, requireCaller, requireCodecastPublisher, routineRows, stateOf, templateRow, visibleTemplate, type Ctx } from "./orgTemplates";
+import { CODECAST_TEMPLATE_ACCESS, callerWorkspace, enqueueBind, fileLessonRow, performPublish, requireCaller, requireCodecastPublisher, routineRows, stateOf, templateRow, visibleTemplate, type Ctx } from "./orgTemplates";
 import { standingConversationOf } from "./orgRoles";
 
 /** The model a pass asks. Generalizing a correction without carrying its specifics is judgment, not summary. */
@@ -299,6 +299,22 @@ export async function performRollout(ctx: Ctx, userId: Id<"users">, args: { temp
   return result;
 }
 
+/**
+ * Promote the release in trial to stable once its canary ran clean: the same
+ * manifest and digest published again as stable, so the template folder,
+ * which may already hold the next draft, plays no part.
+ */
+export async function performPromote(ctx: Ctx, userId: Id<"users">, args: { template_id: string; now?: number }) {
+  await requireCodecastPublisher(ctx, userId);
+  const template = await codecastTemplate(ctx, args.template_id);
+  const { canary } = await learnStatus(ctx, template, args.now ?? Date.now());
+  if (!canary) throw new Error(`No canary release of ${args.template_id} to promote`);
+  if (!canary.clean) throw new Error(`${args.template_id}@${canary.version} has not run clean yet: ${canary.why}`);
+  const release = template.releases.find((r: any) => r.version === canary.version && r.digest === canary.digest);
+  await performPublish(ctx, userId, { as_codecast: true, manifest: release.manifest, digest: release.digest, status: "stable" });
+  return { template_id: args.template_id as string, version: canary.version, status: "stable" as const };
+}
+
 // ── Wrappers ────────────────────────────────────────────────────────────────
 
 export const learning = query({
@@ -323,6 +339,10 @@ export const learnDue = query({
 export const rollout = mutation({
   args: { api_token: v.optional(v.string()), template_id: v.string() },
   handler: async (ctx, { api_token, ...args }): Promise<any> => performRollout(ctx, await requireCaller(ctx, api_token), args),
+});
+export const promote = mutation({
+  args: { api_token: v.optional(v.string()), template_id: v.string() },
+  handler: async (ctx, { api_token, ...args }): Promise<any> => performPromote(ctx, await requireCaller(ctx, api_token), args),
 });
 
 export const passPlan = internalQuery({
