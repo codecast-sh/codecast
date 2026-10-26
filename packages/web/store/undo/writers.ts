@@ -104,6 +104,7 @@ const INITIATIVE_WIRE: WireTable = {
   priority: null,
   labels: [],
   parent_initiative_id: null,
+  position: null,
   metrics: [],
   why: null,
   done_when: null,

@@ -623,6 +623,8 @@ export type InitiativeRow = {
   project_ids: string[];
   /** One level of nesting: a row that has a parent is never a parent itself. The parent is the top level goal this one feeds. */
   parent_initiative_id?: string;
+  /** Where it reads among its siblings, set by hand: lower first, and a goal without one after those that have one. */
+  position?: number;
   /** One or two numbers the goal is measured by, each with a target (at most INITIATIVE_METRICS_MAX). */
   metrics?: InitiativeMetric[];
   /** The reported values by metric key, with a source and a date each (the template scoreboard's shape). The latest of `score_history`. */

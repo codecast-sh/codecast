@@ -65,10 +65,15 @@ export function topLevelInitiatives(rows: readonly InitiativeRow[]): InitiativeR
   return rows.filter((r) => !r.parent_initiative_id || !ids.has(r.parent_initiative_id));
 }
 
-/** The one order every surface lists initiatives in: what is being driven now,
- *  then the nearest target, then the oldest. */
+export const initiativeEnded = (s: InitiativeStatus): boolean => s === "completed" || s === "cancelled";
+
+/** The one order every surface lists initiatives in: open ones before ended
+ *  ones; among those, the order set by hand (`position`) first, then what is
+ *  being driven now, then the nearest target, then the oldest. */
 export function byListOrder(a: InitiativeRow, b: InitiativeRow): number {
-  return statusRank(a.status) - statusRank(b.status)
+  return Number(initiativeEnded(a.status)) - Number(initiativeEnded(b.status))
+    || (a.position ?? Infinity) - (b.position ?? Infinity)
+    || statusRank(a.status) - statusRank(b.status)
     || (a.target_date ?? Infinity) - (b.target_date ?? Infinity)
     || a.created_at - b.created_at;
 }
@@ -98,7 +103,7 @@ export function projectInitiativeIndex(rows: readonly InitiativeRow[]): Map<stri
 /** The wake signature of the rows a list paints: a heartbeat on `updated_at`
  *  alone changes nothing a person reads, so it is left out. */
 export const initiativeSig = (r: InitiativeRow): string =>
-  [r._id, r.short_id, r.title, r.status, r.health, r.health_at ?? "", r.target_date ?? "", ownerId(r.owner) ?? "", r.priority ?? "", r.parent_initiative_id ?? "", r.project_ids.join(","), r.description ?? "", recordSig(r)].join("|");
+  [r._id, r.short_id, r.title, r.status, r.health, r.health_at ?? "", r.target_date ?? "", ownerId(r.owner) ?? "", r.priority ?? "", r.parent_initiative_id ?? "", r.position ?? "", r.project_ids.join(","), r.description ?? "", recordSig(r)].join("|");
 
 /** The numbers and the intent record (I4, I5): a list row paints the metric
  *  with its trend and the next milestone, and the page paints all of it. */

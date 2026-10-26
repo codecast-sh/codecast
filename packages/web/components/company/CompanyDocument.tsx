@@ -113,10 +113,7 @@ export function CompanyDocumentView({ doc, now, filter = "everything", selected 
   const showGoals = filter === "everything" || filter === "goals";
   const showPeople = (filter === "everything" || filter === "people") && people;
   const { state } = doc;
-  // On the Goals page a single goal every other one serves is the mission: it
-  // reads as one line under the title, and the goals it carries are the list.
-  const mission = filter === "goals" && doc.goals.length === 1 && doc.goals[0].goals.length > 0 ? doc.goals[0] : null;
-  const listed = mission ? mission.goals : doc.goals;
+  const listed = doc.goals;
   const title = filter === "goals" ? "Goals" : filter === "projects" ? "Projects" : doc.name;
   const told = filter === "goals" ? { ...state, projects: { ...state.projects, total: 0 }, people: 0, roles: 0 }
     : filter === "projects" ? { ...state, goals: { ...state.goals, total: 0 }, people: 0, roles: 0 }
@@ -133,7 +130,6 @@ export function CompanyDocumentView({ doc, now, filter = "everything", selected 
       <article className={cn("mx-auto w-full max-w-[920px] px-5 pt-7 pb-20 text-[13px] leading-[1.5]", LINE_SCOPE)} data-company-article>
         <header className="company-part px-1.5" data-company-section="company">
           <h1 className="text-[26px] font-medium leading-[1.2] tracking-[-0.01em]" style={SERIF} data-company-name>{title}</h1>
-          {mission && <p className="mt-1 text-[13.5px]" style={{ color: "var(--sol-text-muted)" }} data-company-mission>All serve <a href={mission.short_id ? `/goals/${mission.short_id}` : undefined} className="hover:underline" style={{ color: "var(--sol-text)" }}>{mission.title}</a></p>}
           <StateLine clauses={stateClauses(told)} />
         </header>
 

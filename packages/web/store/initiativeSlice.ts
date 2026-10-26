@@ -27,6 +27,8 @@ export type InitiativeFields = {
   priority?: InitiativePriority | null;
   labels?: string[];
   parent_initiative_id?: string | null;
+  /** Where it reads among its siblings; lower first. */
+  position?: number | null;
   /** Replaces the list; keys in the server's order (key, name, target) so the echo reconciles. */
   metrics?: InitiativeMetric[];
   /** Why it matters, and what done looks like (I5). */

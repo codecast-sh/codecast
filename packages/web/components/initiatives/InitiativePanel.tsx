@@ -35,6 +35,7 @@ import { ScopeFeed } from "../org/scope/ScopeFeed";
 import { GoalGlyph, GoalLine, LINE_COMPACT, LINE_SCOPE, ObjectLine, ProjectLine, type LineGhost } from "../org/lines";
 import { useLineOpen } from "../org/lines/lineOpen";
 import type { DocChange, DocGoal, DocProject } from "../company/companyModel";
+import { carriedProjects } from "../goals/goalsOutline";
 import { HealthChip, MetricTile, OwnerChip, SourceLink } from "./InitiativeAtoms";
 import { RecordSection as Section, Written } from "./InitiativeRecord";
 
@@ -161,11 +162,7 @@ const ghostOf = (change: DocChange | undefined): LineGhost | undefined => (chang
  *  existing project or a new one, which lands under this goal. */
 export function GoalCarriedBy({ goal, doc, now, adding, onAdding }: { goal: InitiativeRow; doc: DocGoal | undefined; now: number; /** The menu asked to add the first project. */ adding: boolean; onAdding: (on: boolean) => void }) {
   // Every project it carries, in the owner's order, those a proposal would bring last.
-  const projects = useMemo<DocProject[]>(() => {
-    if (!doc) return [];
-    const at = (p: DocProject) => { const i = goal.project_ids.indexOf(p.id); return p.ghost || i < 0 ? Infinity : i; };
-    return [...doc.projects, ...doc.refs.map((r) => r.project)].sort((a, b) => at(a) - at(b));
-  }, [doc, goal.project_ids]);
+  const projects = useMemo<DocProject[]>(() => (doc ? carriedProjects(doc, goal.project_ids).map((c) => c.project) : []), [doc, goal.project_ids]);
   const subs = doc?.goals ?? [];
   const empty = projects.length === 0 && subs.length === 0;
   if (empty && !adding) return null;

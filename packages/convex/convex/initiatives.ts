@@ -203,6 +203,7 @@ type Fields = {
   labels?: string[];
   project_ids?: string[];
   parent_initiative_id?: string | null;
+  position?: number | null;
   /** Replaces the list; an empty list clears it. */
   metrics?: Array<{ key?: string; name: string; target: string }>;
   why?: string | null;
@@ -238,6 +239,7 @@ async function fieldsPatch(ctx: Ctx, userId: Id<"users">, row: any, fields: Fiel
   if (fields.parent_initiative_id !== undefined) {
     patch.parent_initiative_id = fields.parent_initiative_id ? await requireParent(ctx, userId, row, fields.parent_initiative_id) : undefined;
   }
+  if (fields.position !== undefined) patch.position = fields.position ?? undefined;
   if (fields.metrics !== undefined) Object.assign(patch, metricsPatch(fields.metrics, row));
   if (fields.why !== undefined) patch.why = (fields.why && clean(fields.why, MAX_DESCRIPTION)) || undefined;
   if (fields.done_when !== undefined) patch.done_when = (fields.done_when && clean(fields.done_when, MAX_DESCRIPTION)) || undefined;
@@ -261,6 +263,7 @@ const fieldArgs = {
   labels: v.optional(v.array(v.string())),
   project_ids: v.optional(v.array(v.string())),
   parent_initiative_id: v.optional(v.union(v.string(), v.null())),
+  position: v.optional(v.union(v.number(), v.null())),
   why: v.optional(v.union(v.string(), v.null())),
   done_when: v.optional(v.union(v.string(), v.null())),
 };
