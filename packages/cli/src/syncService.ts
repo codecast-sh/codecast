@@ -8,6 +8,7 @@ import { countingSemaphore } from "./semaphore.js";
 import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
+import { isManagedExcludedPath, POLICY_EXCLUDED_SESSION } from "./config/managedPolicy.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
 import type { OpenTaskReport, AgentStatus, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
 import { argumentValidationProblem } from "@codecast/shared/contracts";
@@ -500,7 +501,7 @@ export class SyncService {
     default_branch?: string;
     head_sha?: string;
     rows: Array<{ kind: string; ref: string; path: string; sha?: string; content: string; size?: number; truncated?: boolean }>;
-    commits?: Array<{ sha: string; message: string; author_name: string; author_email: string; timestamp: number; files_changed: number; insertions: number; deletions: number; branch?: string; conversation_id?: string; files?: Array<{ filename: string; additions: number; deletions: number }> }>;
+    commits?: Array<{ sha: string; message: string; author_name: string; author_email: string; timestamp: number; files_changed: number; insertions: number; deletions: number; branch?: string; files?: Array<{ filename: string; additions: number; deletions: number }> }>;
   }): Promise<{ published: boolean; reason?: string; rows?: number; commits_created?: number } | undefined> {
     try {
       return await this.mutate("repos:ingestLocal", { api_token: this.apiToken, ...payload });
@@ -1064,6 +1065,9 @@ export class SyncService {
   }
 
   async createConversation(params: CreateConversationParams): Promise<string> {
+    // The backstop for every client's sync pass: a session under a folder the
+    // organization keeps on the device never reaches the server.
+    if (params.projectPath && isManagedExcludedPath(params.projectPath)) throw new Error(POLICY_EXCLUDED_SESSION);
     await this.throttle();
     const projectHash = params.projectPath
       ? hashPath(params.projectPath)

@@ -23,13 +23,19 @@ export function sharedConfigFile(configDir: string): string {
   return path.join(configDir, "config.json");
 }
 
-export function readSharedConfig(configDir: string): Config {
+/** config.json as written, or null when absent or unparseable. The one parse every config reader starts from. */
+export function readConfigFile(file: string): Config | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(sharedConfigFile(configDir), "utf-8"));
-    return parsed && typeof parsed === "object" ? (parsed as Config) : {};
+    const parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Config) : null;
   } catch {
-    return {};
+    return null;
   }
+}
+
+/** Raw, for read-modify-write: no managed policy overlay, so a write never stores a managed value. */
+export function readSharedConfig(configDir: string): Config {
+  return readConfigFile(sharedConfigFile(configDir)) ?? {};
 }
 
 // Atomic: every other field belongs to another writer and must survive a

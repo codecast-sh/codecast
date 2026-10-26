@@ -40,6 +40,7 @@
 import type { Command } from "commander";
 import type { PublishDeps } from "./castApi.js";
 import type { FlowDeps } from "./flowCommand.js";
+import type { RestrictionKey } from "./config/managedPolicy.js";
 
 /** Everything any group's register function asks for: the backend deps every
  *  command needs, plus the one lookup `cast integrations` adds. A register
@@ -66,6 +67,8 @@ export interface CommandGroup {
   description: string;
   /** The dynamic import of the real registration. Never make this static. */
   load: () => Promise<(program: Command, deps: GroupDeps) => void>;
+  /** A managed policy restriction that turns the group off, but for the verbs in `allow` (reading, tearing down). */
+  policy?: { key: RestrictionKey; allow?: readonly string[] };
 }
 
 export const COMMAND_GROUPS: readonly CommandGroup[] = [
@@ -102,6 +105,7 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     token: "remote",
     description: `Move sessions to and from cloud hosts, and mirror a cloud session's edits here`,
     load: () => import("./remote/cli.js").then((m) => m.registerRemoteCommand),
+    policy: { key: "cloud_hosts_disabled" },
   },
   {
     token: "cloud",
@@ -135,6 +139,7 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     token: "hosts",
     description: `Remote machines: what runs on them, and what they cost`,
     load: () => import("./hosts/cli.js").then((m) => m.registerHostsCommand),
+    policy: { key: "cloud_hosts_disabled", allow: ["ls", "sleep", "rm"] },
   },
   {
     token: "devices",
@@ -174,6 +179,7 @@ Subcommands:
   cast publish links <slug|path>           share / manage / edit / source / live URLs
   cast publish set <slug|path> [flags]     Change gates or title WITHOUT republishing`,
     load: () => import("./publish.js").then((m) => m.registerPublishCommand),
+    policy: { key: "public_sharing_disabled", allow: ["ls", "rm", "comments", "viewers"] },
   },
   {
     token: "cap",
@@ -549,6 +555,7 @@ Examples:
     aliases: ["br"],
     description: `Drive a real Chrome: snapshot pages, click, type, screenshot, read console`,
     load: () => import("./browser/cli.js").then((m) => m.registerBrowserCommand),
+    policy: { key: "browser_control_disabled" },
   },
   {
     token: "preview",
@@ -556,6 +563,7 @@ Examples:
     hasOptions: true,
     description: `Offer a page to your human as a pane beside this session (alias of cast browser pane)`,
     load: () => import("./browser/paneOffer.js").then((m) => m.registerPreviewCommand),
+    policy: { key: "browser_control_disabled" },
   },
   {
     token: "app",
@@ -567,6 +575,7 @@ Examples:
     token: "computer",
     description: `Drive a native app (macOS, or Linux on X11) through its accessibility tree (cast browser is still the tool for web pages)`,
     load: () => import("./computer/cli.js").then((m) => (program: Command) => m.registerComputerCommand(program)),
+    policy: { key: "computer_control_disabled" },
   },
   {
     token: "sim",
@@ -711,7 +720,19 @@ export async function activateGroup(program: Command, token: string | undefined,
   register(program, deps);
   const registered = commands.pop();
   if (registered) commands.splice(at, 0, registered);
+  if (registered && group.policy) guardWithPolicy(registered, group.policy);
   return true;
+}
+
+/** Refuse a group's verbs while its policy restriction is on. Help still prints. */
+function guardWithPolicy(cmd: Command, policy: NonNullable<CommandGroup["policy"]>): void {
+  cmd.hook("preAction", async (_root, action) => {
+    // A group like publish takes its verbs as a positional rather than a subcommand.
+    const verb = action === cmd ? action.args[0] : action.name();
+    if (verb && policy.allow?.includes(verb)) return;
+    const { exitIfPolicyBlocks } = await import("./config/managedPolicy.js");
+    exitIfPolicyBlocks(policy.key);
+  });
 }
 
 /**

@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { dirFilterByDepth } from "./fsWalk.js";
 import { checkoutRootOf } from "./fs/checkoutOf.js";
 import type { Config } from "./config/types.js";
+import { managedExcludedPaths } from "./config/managedPolicy.js";
 import { folderCovers } from "@codecast/shared/team/folderLists";
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath } from "@codecast/shared/contracts";
 
@@ -25,7 +26,11 @@ export function claudeProjectsDir(): string {
 }
 
 export function isPathExcluded(projectPath: string, excludedPaths?: string): boolean {
-  if (!excludedPaths || !projectPath) {
+  if (!projectPath) return false;
+  // Folders an organization's policy keeps on the device (config/managedPolicy.ts)
+  // are out whatever the person's own list or sync mode says, worktrees with them.
+  if (inFolderList(managedExcludedPaths(), projectPath)) return true;
+  if (!excludedPaths) {
     return false;
   }
 

@@ -15,7 +15,8 @@
  * present on disk at a given moment.
  */
 
-import type { AgentClientId, CloudSessionSyncField, VaultInfo } from "@codecast/shared/contracts";
+import type { AgentClientId, CloudSessionSyncField, HeartbeatTeamPolicy, VaultInfo } from "@codecast/shared/contracts";
+import { policyRefusal } from "./managedPolicy.js";
 
 /** How aggressively a client skips approval prompts. Codex is the only client
  *  with a distinct `full_auto`; the others use `default`/`bypass`, but the union
@@ -79,6 +80,12 @@ export interface Config extends CloudSessionSyncSettings {
   sync_projects?: string[];
   /** Mirrored from the server: with sync_mode "all", folders that never upload. */
   sync_excluded?: string[];
+
+  // --- Managed policy (config/managedPolicy.ts) ---
+  /** Mirrored from the heartbeat: the team policy that applies to this device. Absent when none does. */
+  team_policy?: HeartbeatTeamPolicy;
+  /** Written by `cast mdm enroll` once the server accepts the profile's token; token_prefix tells a rotated token apart. */
+  managed_enrollment?: { enrollment_id: string; team_id: string; team_name: string; token_prefix: string; at: string; sign_in_at?: string };
 
   // --- Stable-context mode ---
   stable_mode?: "solo" | "team";
@@ -319,8 +326,9 @@ export interface Config extends CloudSessionSyncSettings {
   updated_at?: string;
 }
 
-/** The mirror is on unless the config says otherwise (the setter stores strings). */
+/** The mirror is on unless the config says otherwise (the setter stores strings) or policy turns cloud hosts off. */
 export function isCloudMirrorEnabled(config: Config | null | undefined): boolean {
+  if (policyRefusal("cloud_hosts_disabled", config)) return false;
   const v = config?.cloud_mirror_enabled as boolean | string | undefined;
   return v !== false && v !== "false" && v !== "0";
 }

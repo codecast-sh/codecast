@@ -84,6 +84,7 @@ const { createDaemonSetup } = require("./daemonSetup");
 const { createShellAuthority, originOf, trustedShellUrl, installShellCapabilities } = require("./shellAuthority");
 const { createEditUndo } = require("./editUndo");
 const { createMenuKeys } = require("./menuKeys");
+const { recoveryPageUrl, isRecoveryUrl, attachCrashRecovery } = require("./shellRecovery");
 const { createBrowserPanes, defaultRegistryPath: defaultPaneRegistryPath } = require("./browserPanes");
 const { createShareCursors } = require("./shareCursors");
 const { attachSpellMenu } = require("./spellMenu");
@@ -342,7 +343,9 @@ function createWindow() {
 
   // Retry/watchdog for cold-start hangs: if the initial nav fails or the
   // page stalls before reaching the app shell, reload automatically instead
-  // of leaving the user on a frozen splash that only cmd-r recovers.
+  // of leaving the user on a frozen splash that only cmd-r recovers. When the
+  // retries run out, the window shows the recovery page and its Reload button
+  // rather than a bare background.
   let stallTimer = null;
   let loadAttempts = 0;
   const MAX_LOAD_ATTEMPTS = 5;
@@ -352,11 +355,20 @@ function createWindow() {
     clearTimeout(stallTimer);
     stallTimer = setTimeout(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
-      if (loadAttempts >= MAX_LOAD_ATTEMPTS) return;
+      if (loadAttempts >= MAX_LOAD_ATTEMPTS) return showRecovery("stalled", mainWindow.webContents.getURL());
       loadAttempts++;
       mainWindow.webContents.reloadIgnoringCache();
       armStallTimer();
     }, STALL_MS);
+  }
+
+  // A press of Reload there starts a fresh budget of retries.
+  function showRecovery(reason, retryUrl) {
+    clearTimeout(stallTimer);
+    stallTimer = null;
+    loadAttempts = 0;
+    const url = retryUrl && !isRecoveryUrl(retryUrl) ? retryUrl : `${currentBaseUrl}/inbox`;
+    mainWindow.loadURL(recoveryPageUrl(reason, url));
   }
 
   function startLoad() {
@@ -367,16 +379,21 @@ function createWindow() {
     mainWindow.loadURL(`${currentBaseUrl}/inbox`);
   }
 
-  mainWindow.webContents.on("did-fail-load", (_e, errorCode, _desc, _url, isMainFrame) => {
+  mainWindow.webContents.on("did-fail-load", (_e, errorCode, _desc, url, isMainFrame) => {
     if (!isMainFrame) return;
     // -3 is ABORTED (intentional nav cancel) — don't retry on that.
     if (errorCode === -3) return;
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (loadAttempts >= MAX_LOAD_ATTEMPTS) return;
+    if (loadAttempts >= MAX_LOAD_ATTEMPTS) return showRecovery("offline", url);
     setTimeout(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       startLoad();
     }, 500);
+  });
+
+  attachCrashRecovery(mainWindow, {
+    isQuitting: () => appIsQuitting,
+    fallbackUrl: () => `${currentBaseUrl}/inbox`,
   });
 
   startLoad();
@@ -388,6 +405,7 @@ function createWindow() {
   mainWindow.webContents.on("did-finish-load", () => {
     clearTimeout(stallTimer);
     stallTimer = null;
+    if (isRecoveryUrl(mainWindow.webContents.getURL())) return;
     loadAttempts = 0;
     mainWindow.webContents.setZoomFactor(getAutoZoomFactor());
     mainWindow.webContents.executeJavaScript(
@@ -3183,6 +3201,16 @@ async function checkForDesktopUpdate(opts = {}) {
     if (opts.manual) showNativeNotification("Updates unavailable", "Auto-update only runs in the installed desktop app.");
     return;
   }
+  // An organization that turns automatic updates off ships versions itself;
+  // a person asking from the menu still can.
+  if (!opts.manual && managedAutoUpdate() === "off") return;
+  // A bundle this user cannot write (root-owned, installed by Codecast.pkg)
+  // is updated by whoever installed it; the swap would only fail.
+  const bundle = installedBundlePath();
+  if (bundle && !isWritable(bundle)) {
+    if (opts.manual) showNativeNotification("Updates come from your organization", "Codecast was installed by your organization and updates when it ships a new version.");
+    return;
+  }
   if (updateRun) {
     if (!opts.userInitiated && !opts.manual) return; // background tick — one run at a time
     updateAbort?.abort();
@@ -3200,6 +3228,27 @@ async function checkForDesktopUpdate(opts = {}) {
     await run;
   } finally {
     if (updateRun === run) { updateRun = null; updateAbort = null; }
+  }
+}
+
+function isWritable(p) {
+  try {
+    fs.accessSync(p, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The effective managed policy, written by the daemon (cli config/managedPolicy.ts
+// writeEffectivePolicyFile) so the merge of profile and team policy lives in
+// one place. "on", "off", or undefined when nothing manages updates.
+function managedAutoUpdate() {
+  const dir = process.env.CODECAST_DIR || path.join(app.getPath("home"), ".codecast");
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, "managed-policy.json"), "utf-8"))?.values?.auto_update;
+  } catch {
+    return undefined;
   }
 }
 

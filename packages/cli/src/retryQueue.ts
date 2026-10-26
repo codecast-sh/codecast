@@ -31,6 +31,7 @@ import {
   parseRateLimitDelay,
 } from "@platform/cli-kit/retryQueue";
 import { SHUTDOWN_FLUSH_MS } from "./shutdownBudget.js";
+import { POLICY_EXCLUDED_SESSION } from "./config/managedPolicy.js";
 import { AsyncResource } from "node:async_hooks";
 
 export { parseRateLimitDelay };
@@ -122,7 +123,7 @@ function isStaleConversationError(error: string): boolean {
 // createConversation refusals that hold for good: the session moved to another
 // account, or its owner deleted it. No retry of the same session can succeed.
 export function isSessionRefusal(error: string): boolean {
-  return error.includes("Session moved to another account") || error.includes("Session deleted by its owner");
+  return error.includes("Session moved to another account") || error.includes("Session deleted by its owner") || error.includes(POLICY_EXCLUDED_SESSION);
 }
 
 /**
