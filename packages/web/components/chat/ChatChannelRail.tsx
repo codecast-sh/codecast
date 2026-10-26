@@ -149,7 +149,7 @@ function RailRow({
       {c.slack && (
         // The label of a mirrored channel: the name IS the Slack channel's
         // name, so the mark says where it comes from and the tooltip the rest.
-        <SlackLogo className="ch-chan-slack" muted={c.slack.state !== "live"} title={MIRROR_STATE_LABEL[c.slack.state]} />
+        <SlackLogo className={c.slack.state === "live" ? "ch-chan-slack" : "ch-chan-slack ch-chan-slack-off"} title={MIRROR_STATE_LABEL[c.slack.state]} />
       )}
       {!standalone && <OccupancyChip roomKey={roomKey} className="shrink-0 ch-chan-occ" />}
       {c.muted && <BellOff className="w-3 h-3 shrink-0 opacity-70" aria-label="Muted" />}

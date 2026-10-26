@@ -3306,8 +3306,11 @@ button.ch-search-chip:hover { color: var(--sol-text); }
 .ch-head-slack-live, .ch-head-slack-paused, .ch-head-slack-error { padding: 0 6px; gap: 4px; }
 
 /* The Slack mark as a channel row's label. Sits after the name at the size of
- * the row's other glyphs; hidden with the names in the narrow strip. */
-.ch-chan-slack { width: 10px; height: 10px; flex: 0 0 auto; }
+ * the row's other glyphs, in grey so a list of mirrored channels stays quiet;
+ * fainter still when the mirror is paused or broken. Hidden with the names in
+ * the narrow strip. */
+.ch-chan-slack { width: 10px; height: 10px; flex: 0 0 auto; filter: grayscale(1); opacity: 0.45; }
+.ch-chan-slack-off { opacity: 0.22; }
 .ch-head-slack-none { border-style: dashed; color: var(--sol-text-dim); }
 .ch-head-slack-dot {
   width: 5px;
