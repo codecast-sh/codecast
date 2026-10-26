@@ -16,6 +16,11 @@ import { parseWorkspaceKey } from "./lib/accessKeys";
 import { agentSimilarTextOf } from "@codecast/shared/contracts/agentJudges";
 
 const BATCH = 20;
+// Folding writes a problem's rows; the deployment takes 4 MiB of writes a second in all, and the pass shares it with
+// everything live (a pass that folded 20 problems in 34 s hit the limit on Oct 26). Pages wait a little; a refused
+// write waits a minute and picks up at that finding.
+const PAGE_PAUSE_MS = 5_000;
+const WRITE_RETRY_MS = 60_000;
 
 /** The scope a stored finding was filed in, as grouping reads it. */
 function rowScope(row: Doc<"signals">): Record<string, unknown> {
@@ -133,6 +138,7 @@ export const regroupRefused = internalAction({
       await ctx.runQuery(internal.findingRegroup.refusedPage, { workspace: args.workspace, source: args.source, after, until: args.until, limit: BATCH });
     for (const r of page) {
       if (args.max !== undefined && tally.compared >= args.max) break;
+      const before = after;
       after = r.created_at;
       if (r.compared || !r.signal.similar_text || !r.signal.subject) { tally.already++; continue; }
       const verdict = await groupingVerdict(ctx, { user_id: r.user_id }, r.signal, r.scope, { exclude: r.task_id ?? undefined });
@@ -140,7 +146,14 @@ export const regroupRefused = internalAction({
         console.log(`[regroupRefused] stopped: the budget refused at ${after}`, JSON.stringify(tally));
         return { ...tally, after, stopped: "the budget refused" };
       }
-      const out = await ctx.runMutation(internal.findingRegroup.regroupApply, { row_id: r._id, vector: verdict.vector!, judged_task_id: verdict.judged ?? undefined, dry_run: args.dry_run });
+      let out: { decision: string; task?: string; into?: string };
+      try {
+        out = await ctx.runMutation(internal.findingRegroup.regroupApply, { row_id: r._id, vector: verdict.vector!, judged_task_id: verdict.judged ?? undefined, dry_run: args.dry_run });
+      } catch (err) {
+        console.log(`[regroupRefused] paused before ${r.created_at}: ${String(err).slice(0, 160)}`, JSON.stringify(tally));
+        await ctx.scheduler.runAfter(WRITE_RETRY_MS, internal.findingRegroup.regroupRefused, { ...args, after: before, tally });
+        return { ...tally, after: before, paused: true };
+      }
       tally.compared++;
       if (out.decision === "folded" || out.decision === "would fold") tally.folded++;
       else tally.kept++;
@@ -148,7 +161,7 @@ export const regroupRefused = internalAction({
     }
     console.log(`[regroupRefused] ${args.dry_run ? "dry run " : ""}through ${after}:`, JSON.stringify(tally));
     const more = page.length === BATCH && (args.max === undefined || tally.compared < args.max);
-    if (more) await ctx.scheduler.runAfter(0, internal.findingRegroup.regroupRefused, { ...args, after, tally });
+    if (more) await ctx.scheduler.runAfter(PAGE_PAUSE_MS, internal.findingRegroup.regroupRefused, { ...args, after, tally });
     return { ...tally, after, more };
   },
 });
