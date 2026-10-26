@@ -59,7 +59,7 @@ import { useShortcutAction } from "../../shortcuts";
 import { MenuKeyCaps } from "../../components/KeyboardShortcutsHelp";
 import { channelDisplayName } from "../../lib/chatViews";
 import { useSwitchWorkspace } from "../../hooks/useSwitchWorkspace";
-import { useInboxStore, selectChannelReadMarker, selectNavCollapsed, type ChatNotifyLevel, type ChatRailScope } from "../../store/inboxStore";
+import { useInboxStore, selectChannelReadMarker, selectNavHidden, type ChatNotifyLevel, type ChatRailScope } from "../../store/inboxStore";
 import Link from "next/link";
 import { useAuthGate } from "@platform/auth/web";
 import { useLocalAuth } from "../../lib/localAuth";
@@ -207,20 +207,19 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
 
   const activeWorkspaceTeam = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
   const chatOn = useTeamFeature("chat");
-  const navCollapsed = useInboxStore((s) => selectNavCollapsed(s as any));
-  const zenMode = useInboxStore((s) => s.clientState.ui?.zen_mode ?? false);
+  const navHidden = useInboxStore((s) => selectNavHidden(s as any));
   const headTitlebarRef = useTitlebarHead<HTMLElement>();
   const inAppWindow = useDesktopAppWindow();
   const narrowViewport = useIsPhone();
   // One channel list on screen at a time: the app sidebar lists the channels,
   // so the page's own rail appears only when that sidebar is out of the way —
-  // collapsed, zen mode, or a phone-width viewport. Collapsing the sidebar IS
+  // collapsed, zen mode without the nav pinned open, or a phone-width viewport. Collapsing the sidebar IS
   // the "just Slack" switch; no separate preference to remember.
   // The app sidebar lists the WORKSPACE's rooms, never the public ones, so
   // the community page always carries its own rail (and a visitor has no
   // sidebar at all).
   // The Chat window draws no sidebar either, so the rail is the page's there.
-  const showInlineRail = community || navCollapsed || zenMode || narrowViewport || !!inAppWindow;
+  const showInlineRail = community || navHidden || narrowViewport || !!inAppWindow;
   // Switching workspace writes BOTH the local mirror and the canonical
   // users.active_team_id (hooks/useSwitchWorkspace) — one path for every caller.
   const switchWorkspace = useSwitchWorkspace();

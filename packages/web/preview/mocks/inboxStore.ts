@@ -117,6 +117,7 @@ export const seedTeamInboxIdsFromCache: any = () => null;
 export const selectCommentRailOpen: any = () => null;
 export const selectFavoriteSessions: any = () => null;
 export const selectNavCollapsed: any = () => null;
+export const selectNavHidden: any = () => null;
 export const selectSessionRailOpen: any = () => null;
 export const selectSessionRailUserClosed: any = () => null;
 export const sessionRowFromSummary: any = () => null;

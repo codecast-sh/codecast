@@ -52,6 +52,7 @@ import { WorkbenchSection } from "./WorkbenchSection";
 import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
 import { ShellUsageMeter } from "./plan/UsageMeter";
 import { ChatNavRow, ChatDrillList } from "./sidebar/ChatNav";
+import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { channelSignals } from "../lib/chatRowSignals";
 import { SidebarDrillStack } from "./sidebar/SidebarDrill";
 import { useSidebarDrill } from "../hooks/useSidebarDrill";
@@ -90,6 +91,9 @@ interface SidebarProps {
   /** Which groups to draw. The Work window's own rail is the pinned rail
    *  and the Work group (lib/desktopApps); the main window draws them all. */
   scope?: "work";
+  /** Drawn in the edge hover panel. The nav is hidden then, so the chat page
+   *  carries its own channel rail and the panel stays on the app nav. */
+  peek?: boolean;
 }
 
 /** Stable empty bag: a fresh {} here would rewake every reader on each render. */
@@ -429,7 +433,7 @@ function PinnedRail({
 const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${Math.floor((r.updated_at ?? 0) / 60_000)}`;
 const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
-export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope }: SidebarProps) {
+export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, peek = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
@@ -672,8 +676,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const chatAway = usePoppedOut("chat");
   const workAway = usePoppedOut("work");
   const drillOn = !isNarrow && !surfaceMode.hosted;
-  const chatDrills = drillOn && chatOn && !chatAway;
+  const chatDrills = drillOn && chatOn && !chatAway && !peek;
   const tasksDrill = drillOn && !workAway && taskViewItems.length > 0;
+  const titlebarStripRef = useTitlebarHead<HTMLDivElement>();
   const drill = useSidebarDrill(isChat ? "chat" : isTasks ? "tasks" : null, { chat: chatDrills, tasks: tasksDrill });
 
   // Pinned projects read their title from the store (PinnedRail).
@@ -1072,6 +1077,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         ${isMobileOpen ? 'shadow-xl' : 'hidden md:flex'}
       `}
     >
+      {/* Zen mode on desktop: the sidebar is the leftmost surface, so a lent
+          strip clears the traffic lights (same pattern as the chat rail). */}
+      <div ref={titlebarStripRef} className="titlebar-strip shrink-0" />
       <SidebarDrillStack
         level={drill.level}
         shown={drill.shown}

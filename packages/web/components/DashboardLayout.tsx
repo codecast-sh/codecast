@@ -79,7 +79,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, ownCheckoutPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, filterInboxScope, isSub } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, filterInboxScope, isSub } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectNotice";
 import { Surface, hiddenPageRedirect, useHostedMode, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
@@ -517,7 +517,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
   const sidebarCollapsed = selectNavCollapsed(s);
   // Zen hides the sidebar, but Ctrl+[ or the left edge peek still reach it.
-  const navHidden = isZenMode ? !s.zenNavOpen : sidebarCollapsed;
+  const navHidden = selectNavHidden(s);
   // This document is the Chat or Work window (lib/desktopApps): the app's
   // own bar stands in for the top bar, and no rail or peek is drawn around
   // its page. A hook: a window made from the warm spare becomes one after
@@ -1284,16 +1284,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 <Menu />
               </TopbarButton>
             )}
-            <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
-              <TopbarButton
-                onClick={(e) => { s.setNavCollapsed(!sidebarCollapsed); tipActions.whisper('sidebar.toggleLeft', e); }}
-                desktopOnly
-              >
-                <PanelLeft />
-              </TopbarButton>
-            </ShortcutTooltip>
             {/* The bar hides in zen, so it only ever enters; the exit is the
-                conversation header's button (ConversationView). */}
+                conversation header's button (ConversationView), in this same leftmost spot. */}
             <ShortcutTooltip label="Enter zen mode" action="ui.zenToggle">
               <TopbarButton
                 onClick={(e) => { dispatchAction("ui.zenToggle"); tipActions.whisper('ui.zenToggle', e); }}
@@ -1301,6 +1293,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 desktopOnly
               >
                 <Maximize2 />
+              </TopbarButton>
+            </ShortcutTooltip>
+            <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
+              <TopbarButton
+                onClick={(e) => { s.setNavCollapsed(!sidebarCollapsed); tipActions.whisper('sidebar.toggleLeft', e); }}
+                desktopOnly
+              >
+                <PanelLeft />
               </TopbarButton>
             </ShortcutTooltip>
             {isDesktopApp && (
@@ -1492,6 +1492,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               directoryFilter={directoryFilter}
               isMobileOpen={false}
               onMobileClose={noop}
+              peek
             />
           </ErrorBoundary>
         </EdgePeek>
