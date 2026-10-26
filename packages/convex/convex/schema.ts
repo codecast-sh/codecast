@@ -742,6 +742,9 @@ export default defineSchema({
     team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
     status: v.union(v.literal("active"), v.literal("completed")),
     share_token: v.optional(v.string()),
+    // The owner lets anonymous viewers of the share link suggest messages
+    // (guestSuggestions.ts). Each one waits for the owner to send it.
+    guest_suggestions: v.optional(v.boolean()),
     parent_message_uuid: v.optional(v.string()),
     parent_conversation_id: v.optional(v.id("conversations")),
     // A cloud agent session whose agent is archived on the provider's site
@@ -5090,6 +5093,37 @@ export default defineSchema({
     .index("by_conversation_grantee", ["conversation_id", "grantee_user_id"])
     .index("by_owner_status", ["owner_user_id", "status"]),
 
+  // An anonymous viewer of a session's share link who gave a name to suggest
+  // messages (guestSuggestions.ts). They prove it with the secret their
+  // browser was handed; only its hash is stored. A guest is bound to the
+  // share token they joined on, so turning the link off or rotating it
+  // shuts them out.
+  session_guests: defineTable({
+    conversation_id: v.id("conversations"),
+    name: v.string(),
+    secret_hash: v.string(),
+    share_token_hash: v.string(),
+    created_at: v.number(),
+  }).index("by_conversation_created", ["conversation_id", "created_at"]),
+
+  // One message a guest proposed for a session. Nothing reaches the session
+  // until its owner sends it.
+  guest_suggestions: defineTable({
+    conversation_id: v.id("conversations"),
+    guest_id: v.id("session_guests"),
+    // Snapshot of the guest's name so the owner's card renders without a join.
+    guest_name: v.string(),
+    owner_user_id: v.id("users"),
+    body: v.string(),
+    status: v.union(v.literal("pending"), v.literal("sent"), v.literal("dismissed"), v.literal("withdrawn")),
+    // What the owner actually sent, when they edited it first.
+    sent_body: v.optional(v.string()),
+    created_at: v.number(),
+    decided_at: v.optional(v.number()),
+  })
+    .index("by_conversation_status", ["conversation_id", "status"])
+    .index("by_guest", ["guest_id"]),
+
   github_webhook_events: defineTable({
     delivery_id: v.string(),
     event_type: v.string(),
@@ -6693,6 +6727,9 @@ export default defineSchema({
     // A line's breaks (the-line-model.md LM5): a judge files the expectation
     // id it breaks as the subject, and the expectations page counts them.
     .index("by_workspace_subject", ["workspace", "subject", "created_at"])
+    // One finder's findings, newest first (cast signal ls --source): a window of the whole workspace held a few
+    // hours of them once a judge filed 60 an hour (Oct 26).
+    .index("by_workspace_source_created", ["workspace", "source", "created_at"])
     .index("by_short_id", ["short_id"]),
 
   orchestration_events: defineTable({

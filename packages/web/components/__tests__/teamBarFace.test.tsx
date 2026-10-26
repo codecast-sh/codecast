@@ -309,20 +309,17 @@ describe("the header draws the model's row", () => {
     expect(h.q("[data-overflow]")?.textContent).toBe(`+${crowd.length + 2 - BAR_FACES}`);
   });
 
-  test("one rhythm for the people and one for the controls", async () => {
+  test("the row is people only, the count in their rhythm", async () => {
     // The count keeps the row's own gap (the bar's 4px and 2px of its own is
-    // the 6px between faces); every control after the roster sits 8px from
-    // its neighbour. Measured on a team of 23: 6, 8, 8, then 4 before the
-    // pop out, which alone carried no margin of its own.
+    // the 6px between faces). Starting a huddle lives in New, popping the row
+    // out in the palette: no control sits after the roster.
     const crowd = Array.from({ length: BAR_FACES + 3 }, (_, i) => entry(`u-${i}`, `Person ${i}`));
     fakeRow = rowOf([me(), entry(ANN, "Ann", { tier: "linked", state: "live-with-me" }), ...crowd], [link(ANN, "call")], liveCard);
     const h = await mount();
     expect(h.q("[data-overflow]")?.className.split(" ")).toContain("ml-0.5");
-    const controls = h.all(".people-bar > button:not([data-overflow])");
-    expect(controls.length).toBeGreaterThanOrEqual(2);
+    expect(h.all(".people-bar > button:not([data-overflow])").length).toBe(0);
     // The door to the stage is not a header control: it rides the call's card.
     expect(h.q(".engagement-card [data-open-call]")).not.toBeNull();
-    for (const el of controls) expect(el.className.split(" ")).toContain("ml-1");
   });
 
   test("with nobody on the roster the bar is only its feeder", async () => {
@@ -403,19 +400,10 @@ describe("the context menu", () => {
     expect(menu).not.toBeNull();
     expect(menu.textContent).toContain("Bo");
     expect(menu.textContent).toContain("Open profile");
-    // A right click off a face opens nothing.
-    await h.fire(h.q("[data-pop-out]")!, "contextmenu");
-    expect(h.all("[data-ctx-menu]").length).toBe(1);
   });
 });
 
 describe("the pop out", () => {
-  test("sends the row to the floating window", async () => {
-    const h = await mount();
-    await h.fire(h.q("[data-pop-out]")!, "click");
-    expect(floating.set).toEqual([true]);
-  });
-
   test("while the faces float the header keeps one chip, which docks them", async () => {
     floating.floating = true;
     const h = await mount();

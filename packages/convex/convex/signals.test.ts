@@ -334,6 +334,19 @@ describe("signals.ingest", () => {
     expect(shown.cause.signal_count).toBe(1);
   });
 
+  test("ls --source reads one finder's findings however many other findings came after them", async () => {
+    // Oct 26: a judge filing 60 findings an hour filled the window the source
+    // filter read, so every other finder looked silent past a few hours.
+    const { add, t } = await setup();
+    const evals = await add({ fingerprint: "evals:title", title: "Title surface drifts", source: "evals", kind: "prompt_miss" });
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...row } = (await ctx.db.get(evals.signal_id as any)) as any;
+      for (let i = 0; i < 501; i++) await ctx.db.insert("signals", { ...row, source: "judge:agent-review", fingerprint: `agent:${i}`, short_id: `sg-x${i}`, created_at: row.created_at + 1 + i });
+    });
+    const found = await t.query(api.signals.listForCli, { api_token: TOKEN, workspace: "personal", source: "evals" });
+    expect(found.signals.map((s: any) => s.short_id)).toEqual([evals.short_id]);
+  });
+
   test("ls --fingerprint reads one fingerprint's signals however old, newest first", async () => {
     // A finder asking which cause holds its key must not page the whole
     // workspace: Union's planner read the newest 500 and the reply outgrew

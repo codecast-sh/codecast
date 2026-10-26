@@ -18,7 +18,8 @@ import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useInboxStore, isConvexId } from "../../../store/inboxStore";
 import { isForeignSession } from "../../../lib/liveEntities";
 import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
-import { setShareTokenScope } from "../../../lib/shareTokenScope";
+import { getShareTokenScope, setShareTokenScope } from "../../../lib/shareTokenScope";
+import { GuestSuggestComposer } from "../../../components/GuestSuggestComposer";
 import { useLocalAuth } from "../../../lib/localAuth";
 import { parseMessageHash } from "../../../lib/messageHash";
 
@@ -154,11 +155,15 @@ function GuestConversationView({
   }));
 
   if (!conversation) return <ConversationLoadingSkeleton id={id} />;
+  // When the owner lets guests suggest messages, the foot of the page is
+  // where a guest writes them (convex sessionGuests.ts).
+  const shareToken = getShareTokenScope(id);
 
   return (
     <DashboardLayout>
       <ErrorBoundary name="GuestConversation" level="panel">
-        <div className="h-full">
+        <div className="h-full flex flex-col">
+          <div className="flex-1 min-h-0">
           <ConversationDiffLayout
             conversation={conversation as ConversationData}
             embedded
@@ -185,6 +190,8 @@ function GuestConversationView({
               router.replace(url.pathname + url.search);
             }}
           />
+          </div>
+          {shareToken && <GuestSuggestComposer conversation={conversation as ConversationData} shareToken={shareToken} />}
         </div>
       </ErrorBoundary>
     </DashboardLayout>

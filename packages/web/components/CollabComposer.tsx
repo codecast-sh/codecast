@@ -34,6 +34,7 @@ import { useConversationChatPeople } from "../hooks/useConversationChatPeople";
 import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 import { roleAuthorOf } from "../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../hooks/useLiveIdentityRow";
+import { useGuestSuggestions } from "../hooks/useGuestSuggestions";
 // ── Live composer co-presence ────────────────────────────────────────────────
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
@@ -476,7 +477,8 @@ export const CollabRequestBanner = memo(function CollabRequestBanner({
 
   const pending = (requests ?? []).filter((r) => r.status === "requested");
   const granted = (requests ?? []).filter((r) => r.status === "granted");
-  if (pending.length === 0 && granted.length === 0) return null;
+  const suggestions = useGuestSuggestions(conversationId);
+  if (pending.length === 0 && granted.length === 0 && suggestions.length === 0) return null;
 
   async function act(fn: () => Promise<unknown>, id: string) {
     setBusyId(id);
@@ -486,6 +488,7 @@ export const CollabRequestBanner = memo(function CollabRequestBanner({
   return (
     <div className="bg-sol-bg pt-1.5">
       <div className="mx-auto conv-col px-2 sm:px-4 pb-1.5 space-y-1.5">
+        {suggestions.map((r) => <GuestSuggestionCard key={r._id} suggestion={r} />)}
         {pending.map((r) => (
           <div key={r.grant_id} className="flex items-center gap-2.5 px-3 py-2 rounded-xl border border-sol-cyan/30 bg-sol-cyan/10 shadow-lg">
             <Avatar name={r.grantee_name} image={r.grantee_image} />
@@ -521,6 +524,62 @@ export const CollabRequestBanner = memo(function CollabRequestBanner({
     </div>
   );
 });
+
+// One message a guest suggested for this session (convex guestSuggestions.ts).
+// Nothing reaches the session until Send; Edit lets the owner fix it first.
+// The card leaves at once on either press (store send/dismissGuestSuggestion).
+function GuestSuggestionCard({ suggestion }: { suggestion: { _id: string; guest_name: string; body: string } }) {
+  const send = useInboxStore((s) => s.sendGuestSuggestion);
+  const dismiss = useInboxStore((s) => s.dismissGuestSuggestion);
+  const [draft, setDraft] = useState<string | null>(null);
+  const editing = draft !== null;
+  const submit = () => {
+    const body = editing ? draft.trim() : suggestion.body;
+    if (!body) return;
+    send(suggestion._id, body !== suggestion.body ? body : undefined);
+  };
+  return (
+    <div data-guest-suggestion className="flex items-start gap-2.5 px-3 py-2 rounded-xl border border-sol-violet/30 bg-sol-violet/10 shadow-lg">
+      <Avatar name={suggestion.guest_name} />
+      <div className="flex-1 min-w-0">
+        <div className="text-[11px] text-sol-text-muted">
+          <b className="text-sol-violet">{suggestion.guest_name}</b> <span className="text-sol-text-dim">guest</span>
+        </div>
+        {editing ? (
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+              if (e.key === "Escape") { e.preventDefault(); setDraft(null); }
+            }}
+            rows={Math.min(8, draft.split("\n").length + 1)}
+            className="mt-1 w-full bg-sol-bg rounded-lg border border-sol-border/60 px-2 py-1 text-xs text-sol-text leading-relaxed resize-none focus:outline-none focus:border-sol-violet/50"
+          />
+        ) : (
+          <div className="mt-0.5 text-xs text-sol-text whitespace-pre-wrap break-words max-h-40 overflow-y-auto leading-relaxed">{suggestion.body}</div>
+        )}
+      </div>
+      <div className="shrink-0 flex items-center gap-1.5">
+        <button
+          onClick={submit}
+          className="h-7 px-3 rounded-full text-xs font-medium border border-sol-green/50 bg-sol-green/20 text-sol-green hover:bg-sol-green/30 transition-colors inline-flex items-center gap-1"
+        ><Send className="w-3 h-3" />Send</button>
+        {!editing && (
+          <button
+            onClick={() => setDraft(suggestion.body)}
+            className="h-7 px-3 rounded-full text-xs font-medium border border-sol-border text-sol-text-muted hover:bg-sol-bg-alt transition-colors"
+          >Edit</button>
+        )}
+        <button
+          onClick={() => (editing ? setDraft(null) : dismiss(suggestion._id))}
+          className="h-7 px-3 rounded-full text-xs font-medium border border-sol-border text-sol-text-muted hover:bg-sol-bg-alt transition-colors"
+        >{editing ? "Cancel" : "Dismiss"}</button>
+      </div>
+    </div>
+  );
+}
 
 function Avatar({ name, image }: { name?: string; image?: string }) {
   const initial = (name || "?").trim().charAt(0).toUpperCase();

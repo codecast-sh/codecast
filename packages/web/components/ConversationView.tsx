@@ -35,7 +35,7 @@ import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
 import { foldHostedRetries, type RetryFoldRow } from "../lib/hostedNotice";
 import { ApprovalAnswerLine, HostedNotice, MailConnectChip, RoutineOfferChip, approvalAnswerAddsToReceipt, hostedNoticeKind, offersMailConnect, routineOffer } from "./conversation/HostedNotice";
-import { agentSupportsFork, agentForksFromAnyMessage, isHostedAgentType, isModelSwitchStdout, isForkSeedClientId, isRecoveryContinueClientId, isMidWorkReviveNotice } from "@codecast/shared/contracts";
+import { sessionRoomKey, agentSupportsFork, agentForksFromAnyMessage, isHostedAgentType, isModelSwitchStdout, isForkSeedClientId, isRecoveryContinueClientId, isMidWorkReviveNotice } from "@codecast/shared/contracts";
 import { hostedApprovalAnswer, hostedApprovalState, hostedAsks, type HostedApprovalState } from "../lib/hostedApproval";
 import { GROUP_WINDOW_MS } from "@codecast/shared/chat";
 import { useNowWhen } from "../hooks/useCoarseNow";
@@ -71,7 +71,7 @@ import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
 import { SessionCallPill } from "./calls/SessionCallPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
-import { ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
+import { ConversationHeaderBar, ConversationHeaderTitle, HEADER_CHIP } from "./conversation/ConversationHeaderBar";
 import { SessionStatusSlot } from "./conversation/SessionStatusSlot";
 import { sessionDisconnected } from "./conversation/agentStatusPill";
 import { useMutation, useConvex } from "convex/react";
@@ -133,7 +133,7 @@ import { useAskSession } from "../hooks/useAskSession";
 import { openSessionAtMessage } from "../lib/openSessionAtMessage";
 import type { MentionItem } from "./editor/MentionList";
 import { HeaderPinMenuItem } from "./anchor/AnchorPanel";
-import { MessageSquare, Minimize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree, ChevronLeft } from "lucide-react";
+import { Headphones, MessageSquare, Minimize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree, ChevronLeft } from "lucide-react";
 import { filesHref } from "../lib/vault/vaultHref";
 import { openFiles } from "../lib/filesPane";
 import { openForwardToChat } from "../lib/forwardToChat";
@@ -163,7 +163,7 @@ import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, Story
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, stickyCommand, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
-import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, SqueezedHeaderActions, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
+import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { HeaderModelControl } from "./SessionControlMenu";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
@@ -4088,7 +4088,7 @@ const ConversationViewInner = (
                       e.preventDefault();
                       navigateToSession(parentLinkId);
                     }}
-                    className="cq-sq6 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
+                    className={`cq-sq6 ${HEADER_CHIP}`}
                     title="View parent conversation"
                   >
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -4118,11 +4118,7 @@ const ConversationViewInner = (
                     <button
                       ref={treeChipRef}
                       onClick={toggleMap}
-                      className={`cq-sq6 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] border transition-colors ${
-                        treePopoverOpen
-                          ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/40"
-                          : "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
-                      }`}
+                      className={`cq-sq6 ${HEADER_CHIP} ${treePopoverOpen ? "bg-sol-bg-alt text-sol-text" : ""}`}
                       title={withShortcut(`Branch map: ${heading}`, "conv.toggleTree")}
                     >
                       <Split className="w-3 h-3" />
@@ -4162,9 +4158,8 @@ const ConversationViewInner = (
                     the roster's viewing field. A solo session shows nothing. */}
                 {conversation?._id && !guest && <ConversationViewers conversationId={String(conversation._id)} />}
 
-                {/* Huddle about this session: a live chip when occupied, a
-                    quiet start affordance otherwise (hidden when calling is
-                    unconfigured — SessionHuddleButton gates itself). */}
+                {/* A live huddle on this session. The idle start button is
+                    hidden in the header (globals.css); the menu starts one. */}
                 {conversation._id && !guest && callsAvailable && (
                   <span data-cc-keep="live" className="contents">
                     <Suspense fallback={null}>
@@ -4254,30 +4249,11 @@ const ConversationViewInner = (
 
                 {sessionGalleryItems.length > 0 && <SessionGalleryButton items={sessionGalleryItems} />}
 
-                <ShortcutTooltip label="Search in conversation" side="bottom">
-                  <button
-                    onClick={() => {
-                      if (isLocalSearchOpen) {
-                        onClearHighlight();
-                      } else {
-                        if (propHighlightQuery) propClearHighlight?.();
-                        setIsLocalSearchOpen(true);
-                        setLocalSearchQuery("");
-                        setTimeout(() => localSearchInputRef.current?.focus(), 0);
-                      }
-                    }}
-                    className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${isLocalSearchOpen ? "text-sol-cyan" : "cq-sq4 text-sol-text-dim hover:text-sol-text-secondary"}`}
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                  </button>
-                </ShortcutTooltip>
 
-                {/* Copy link, send to chat, density, images and the project's
-                    files live in the share popover (headerExtra) and in the
-                    menu below, not as bare icons: search, share and the menu
-                    are the row's only plain actions. */}
+                {/* Copy link, send to chat, search, a huddle, density and the
+                    project's files live in the share popover (headerExtra) and
+                    in the menu below, not as bare icons: share and the menu are
+                    the row's only plain actions. */}
                 {headerExtra}
 
                 <DropdownMenu>
@@ -4359,14 +4335,12 @@ const ConversationViewInner = (
                     {!guest && <CloudAgentMenuItems actions={cloudAgentActions} />}
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">View</DropdownMenuLabel>
-                    <SqueezedHeaderActions rowRef={squeezeRowRef}>
-                      <DropdownMenuItem onSelect={() => setTimeout(() => { if (propHighlightQuery) propClearHighlight?.(); setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); })}>
-                        <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                        </svg>
-                        Search in conversation
-                      </DropdownMenuItem>
-                    </SqueezedHeaderActions>
+                    <DropdownMenuItem onSelect={() => setTimeout(() => { if (propHighlightQuery) propClearHighlight?.(); setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); })}>
+                      <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                      Search in conversation
+                    </DropdownMenuItem>
                     {!guest && (
                       <DropdownMenuItem onSelect={() => setTimeout(openAskPanel)}>
                         <PaletteAsk className="w-3 h-3 mr-1.5" />
@@ -4419,6 +4393,13 @@ const ConversationViewInner = (
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">{words.conversation}</DropdownMenuLabel>
                       </>
+                    )}
+                    {/* The header shows a huddle only while one is live; starting one lives here. */}
+                    {!guest && callsAvailable && conversation?._id && (
+                      <DropdownMenuItem onSelect={() => { const roomKey = sessionRoomKey(String(conversation._id)); void import("../lib/calls/huddleStart").then((m) => m.requestHuddleStart({ roomKey, hint: "Talk to this session — what you say reaches the agent as you speak" })); }}>
+                        <Headphones className="w-3 h-3 mr-1.5" />
+                        Huddle with this session
+                      </DropdownMenuItem>
                     )}
                     {isOwner && (
                       <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.getState().openSessionRename(conversation))}>

@@ -1222,11 +1222,14 @@ export const listForCli = query({
     } else {
       const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
       const project = await resolveWorkspaceProject(ctx, db.workspaceKey, args.project);
-      rows = await (project
-        ? ctx.db.query("signals").withIndex("by_project_created", (q) => q.eq("project_id", project._id))
-        : ctx.db.query("signals").withIndex("by_workspace_created", (q) => q.eq("workspace", db.workspaceKey)))
-        .order("desc")
-        .take(source ? CANDIDATE_WINDOW : limit);
+      // A named source reads its own range: filtering a window of the workspace's newest found only its last hours.
+      rows = source && !project
+        ? await ctx.db.query("signals").withIndex("by_workspace_source_created", (q) => q.eq("workspace", db.workspaceKey).eq("source", source)).order("desc").take(limit)
+        : await (project
+          ? ctx.db.query("signals").withIndex("by_project_created", (q) => q.eq("project_id", project._id))
+          : ctx.db.query("signals").withIndex("by_workspace_created", (q) => q.eq("workspace", db.workspaceKey)))
+          .order("desc")
+          .take(source ? CANDIDATE_WINDOW : limit);
     }
     const visible: Doc<"signals">[] = [];
     for (const row of rows) {
