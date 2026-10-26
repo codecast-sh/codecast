@@ -115,6 +115,22 @@ exit 1
     expect(r.comments).toContain(`Already on main as ${landed.slice(0, 10)}`);
   });
 
+  test("a change the default branch carries with edits no review saw stops and names them, never as a plain conflict", () => {
+    // ct-70983: the commit channel committed the session's tree, which held the
+    // reviewed change and a fix written after review, in the same file.
+    const before = git(work, "rev-parse", "HEAD");
+    landOnMain("intro.txt", "say which side offers what to whom\nand a line written after review\n", "the tree, committed");
+    const landed = git(origin, "rev-parse", "main");
+    const r = station();
+    expect(r.code).toBe(1);
+    expect(r.json).toMatchObject({ rebased: false, landed: false });
+    expect(r.json.why).toContain(`already on origin/main as ${landed.slice(0, 10)} with edits no review saw in intro.txt`);
+    expect(r.comments).toContain("edits no review saw");
+    expect(r.comments).not.toContain("resolve the conflict");
+    expect(git(work, "rev-parse", "HEAD")).toBe(before);
+    expect(git(work, "status", "--porcelain")).toBe("");
+  });
+
   test("a check that fails on the rebased branch goes back to implement, and the branch returns to where it was", () => {
     const before = git(work, "rev-parse", "HEAD");
     landOnMain("other.txt", "y\n", "someone else's change");

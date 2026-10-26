@@ -772,7 +772,7 @@ describe("line.cast offline run through the session path", () => {
     expect(ended.slice(-4)).toEqual(["rebase", "ship", "watch", "exit"]);
   }, 30000);
 
-  test("the runner loads the repo's profile once: a project with a ship command ships and watches without the merge step", async () => {
+  test("the runner loads the repo's profile: a project with a ship command ships and watches without the merge step", async () => {
     spawnSync("git", ["init", "-q", tmpDir]);
     fs.mkdirSync(path.join(tmpDir, ".codecast"));
     fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), UNION_PROFILE);
