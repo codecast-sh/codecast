@@ -6,10 +6,10 @@
  * for it: on Oct 24 the trees of 35 runs waiting at their cards were removed,
  * and each failed at Eval the moment its Ship answer resumed it.
  */
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { c } from "../colors.js";
+import { execFileSync } from "../proc.js";
 
 export type RunWorktreeRestore = "present" | "restored" | "no_branch";
 
