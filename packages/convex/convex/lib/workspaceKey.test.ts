@@ -200,7 +200,7 @@ test("source-level: tasks.ts lists by the access layer's evaluators and takes a 
     expect(body.includes("resolveWorkspaceKey")).toBe(true);
     // The list's access filter goes through the layer's own evaluators.
     const listStart = src.indexOf("if (needsAccessFilter) {");
-    const listBody = src.slice(listStart, src.indexOf("\n    }\n", listStart));
+    const listBody = src.slice(listStart, src.indexOf("\n  }\n", listStart));
     expect(listBody).toMatch(/authorizedFor\(accessStampFromDoc\("tasks", t\)/);
     expect(listBody).toMatch(/canAccessTask\(ctx, auth\.userId, t\)/);
     expect(listBody.includes("team_id")).toBe(false);
