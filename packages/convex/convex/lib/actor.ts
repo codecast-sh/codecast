@@ -37,6 +37,29 @@ export async function roleOfConversation(ctx: Ctx, conversation: any): Promise<D
   return roleId ? await ctx.db.get(roleId) : null;
 }
 
+/** The role behind a run: its spawner is the role's standing session (L9). */
+export async function roleOfRun(ctx: { db: any }, run: { spawner_conversation_id?: Id<"conversations"> | null; primary_conversation_id?: Id<"conversations"> | null }): Promise<any | null> {
+  for (const id of [run.spawner_conversation_id, run.primary_conversation_id]) {
+    if (!id) continue;
+    const conv = await ctx.db.get(id);
+    if (!conv) continue;
+    const role = await roleOfConversation(ctx, conv);
+    if (role) return role;
+  }
+  return null;
+}
+
+// The role a session works for: the one it is or reports to, else the role
+// behind the workflow run it is a station of (a station has no role pointer
+// of its own; its run's spawner or primary does).
+export async function roleWorkedFor(ctx: Ctx, conversation: any): Promise<Doc<"org_roles"> | null> {
+  const own = await roleOfConversation(ctx, conversation);
+  if (own) return own;
+  const run = conversation?.workflow_run_id ? await ctx.db.get(conversation.workflow_run_id) : null;
+  if (!run) return null;
+  return (run.org_role_id ? await ctx.db.get(run.org_role_id) : null) ?? await roleOfRun(ctx, run);
+}
+
 function displayName(user: any): string | undefined {
   return user?.name || user?.github_username || user?.email?.split("@")[0] || undefined;
 }

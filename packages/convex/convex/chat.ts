@@ -26,7 +26,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId, tellRole } from "./pendingMessages";
-import { isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
+import { canOwnerOrTeamAccess, isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
 import { canAccessChannel, canReadChannelAnonymously, channelAgentRows, channelMemberIds, isChannelMember, isCommunity, isRestricted } from "./chatAccess";
 import {
@@ -36,10 +36,12 @@ import {
   isHistoryLine,
   isLiveVoiceRow,
   isSilentAgentRow,
+  isThreadMuted,
   isVisibleAgentPending,
   mentionSessions,
   mentionUserIds,
   threadFaceKey,
+  withThreadMuted,
 } from "@codecast/shared/chat";
 import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, isHostedAgentType, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
@@ -53,7 +55,7 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 // team may spend a turn on it). It is used on the wake path and NOT on
 // `replyAsAnchor`, which gates on the host — see the comment there.
 import { deliverToAnchor, userCanAccessAnchor, workspaceAnchorFor } from "./anchors";
-import { resolveActor } from "./lib/actor";
+import { resolveActor, roleWorkedFor } from "./lib/actor";
 import { queueSlackOutbound, slackLinkForChannel, slackLinksWithSendAuth } from "./lib/slackOutbound";
 import { isDesktopActivePresence } from "./pushRouter";
 import {
@@ -458,6 +460,8 @@ async function notifyChat(
   // No row means the member has never opened this channel, which reads as
   // "mentions only" — the same default the rail shows.
   if (!notifyLevelAllows(read?.notify_level ?? "mentions", opts.eventType)) return;
+  // A thread the member muted keeps its replies quiet; a mention still lands.
+  if (opts.eventType === "chat_reply" && isThreadMuted(read?.muted_threads, opts.threadRootId)) return;
   await ctx.runMutation(internal.notificationRouter.emit, {
     event_type: opts.eventType,
     actor_user_id: opts.actorUserId,
@@ -1422,9 +1426,9 @@ export const openDm = mutation({
   },
 });
 
-/** Who a session's chat lines speak as: a role's standing session is the
- *  role's bot, anything else is the caller. Same rule as insertChatMessage,
- *  including the ownership check on the caller-supplied session id. */
+/** Who a session's chat lines speak as when it opens a DM. Same rule as
+ *  postChatMessage, including the ownership check on the caller-supplied
+ *  session id. */
 async function sessionSpeaker(
   ctx: MutationCtx,
   callerId: Id<"users">,
@@ -1433,8 +1437,32 @@ async function sessionSpeaker(
   if (!sessionRef) return callerId;
   const conv = await findConversationByAnyRefWhere(ctx, sessionRef, (c) => isConversationOwner(ctx, callerId, c));
   if (!conv) return callerId;
+  return (await sessionVoice(ctx, callerId, conv, "new-dm"))?.user_id ?? callerId;
+}
+
+/** The role bot a session's lines speak as, or null to speak as the caller.
+ *  A role's standing session is its role everywhere. A session working for a
+ *  role (a hand, or a station of the role's run) is its role in direct
+ *  messages, so a person it messages
+ *  hears from the role's room, never from the host's own DM with them; it
+ *  speaks as the role only in a DM the role's bot is in ("new-dm" when the
+ *  room is being chosen). Elsewhere a hand stays its host, so its @role line
+ *  in a channel still reaches the role. */
+async function sessionVoice(
+  ctx: MutationCtx,
+  callerId: Id<"users">,
+  conv: Doc<"conversations"> | null,
+  room: Doc<"chat_channels"> | "new-dm",
+): Promise<{ user_id: Id<"users">; anchor: Doc<"anchors"> } | null> {
   const actor = await resolveActor(ctx, callerId, conv);
-  return actor.kind === "role" && actor.anchor ? actor.user_id : callerId;
+  if (actor.kind === "role") return actor.anchor ? { user_id: actor.user_id, anchor: actor.anchor } : null;
+  if (!conv || String(conv.user_id) !== String(callerId)) return null;
+  if (room !== "new-dm" && room.kind !== "dm") return null;
+  const role = await roleWorkedFor(ctx, conv);
+  const anchor = role?.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+  if (!anchor?.bot_user_id) return null;
+  if (room !== "new-dm" && !(await channelMemberIds(ctx, room._id)).some((id) => String(id) === String(anchor.bot_user_id))) return null;
+  return { user_id: anchor.bot_user_id, anchor };
 }
 
 /** The DM room of `speaker` and the people named by id or handle, found or
@@ -2207,6 +2235,30 @@ export const setNotifyLevel = mutation({
   },
 });
 
+// Silence one thread's replies for the caller (or lift it). Stored on their
+// read row for the thread's channel, which notifyChat already reads.
+export const setThreadMuted = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    root_id: v.id("chat_messages"),
+    muted: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireCaller(ctx, args.api_token);
+    const root = await ctx.db.get(args.root_id);
+    if (!root || root.thread_root_id) chatFail("NOT_FOUND", "Thread not found");
+    const channel = await loadChannel(ctx, userId, root.channel_id);
+    await upsertRead(ctx, userId, channel.team_id, channel._id, 0, undefined, undefined);
+    const read = await ctx.db
+      .query("chat_reads")
+      .withIndex("by_user_channel", (q: any) => q.eq("user_id", userId).eq("channel_id", channel._id))
+      .first();
+    const muted_threads = withThreadMuted(read!.muted_threads, String(root._id), args.muted);
+    await patchChat(ctx, read!._id, { muted_threads });
+    return { root_id: root._id, muted: args.muted };
+  },
+});
+
 // ── Sending ─────────────────────────────────────────────────────────────────
 
 
@@ -2346,6 +2398,9 @@ export const sendMessage = mutation({
     // it may do. Ignored without `origin`, and the title/agent snapshot is only
     // taken when the caller owns the session — see postChatMessage.
     origin_session_id: v.optional(v.string()),
+    // The session the sender was looking at when they wrote this (schema
+    // context_session_id). Dropped unless the sender can read it.
+    context_session_id: v.optional(v.id("conversations")),
     // Keep this one line out of the channel's Slack mirror (slackSync). Only
     // ever narrows what happens, so it is safe to accept from any caller.
     sync_local_only: v.optional(v.boolean()),
@@ -2420,6 +2475,7 @@ export const sendMessage = mutation({
       clientId: args.client_id,
       origin: args.origin,
       originSessionId: args.origin ? args.origin_session_id : undefined,
+      contextSessionId: args.context_session_id,
       broadcast: args.broadcast,
       syncLocalOnly: args.sync_local_only,
     });
@@ -2435,6 +2491,24 @@ export const sendMessage = mutation({
     const message = await ctx.db.get(messageId);
     // A session answering where it was asked: its thinking row there is done.
     if (message) await closeSessionReplyOnAnswer(ctx, message);
+    // A reply on a thread a session started goes back into that session, and
+    // a failure there never costs the message, like the wake below.
+    let relay: RelayResult = { delivered: false, skipped: null, session_short_id: null, conversation_id: null };
+    if (message) {
+      try {
+        relay = await maybeRelayToOriginSession(ctx, {
+          channel, message, root, senderId: userId, senderName: actorName,
+        });
+      } catch (error) {
+        relay = {
+          delivered: false,
+          skipped: error instanceof ConvexError ? String((error.data as any)?.code ?? "error") : "error",
+          session_short_id: null,
+          conversation_id: null,
+        };
+      }
+    }
+
     let anchor: Id<"chat_messages"> | null = null;
     let wakeSkipped: string | null = null;
     let listening = false;
@@ -2449,6 +2523,7 @@ export const sendMessage = mutation({
           senderName: actorName,
           mentions,
           roles,
+          relayedTo: relay.delivered || relay.skipped === "folded" ? relay.conversation_id : null,
         });
         anchor = woke.placeholder_id;
         wakeSkipped = woke.skipped;
@@ -2458,24 +2533,6 @@ export const sendMessage = mutation({
         wakeSkipped = error instanceof ConvexError
           ? String((error.data as any)?.code ?? "error")
           : "error";
-      }
-    }
-
-    // Same isolation as the wake: a reply on a thread a session started goes
-    // back into that session, and a failure there never costs the message.
-    let relay: RelayResult = { delivered: false, skipped: null, session_short_id: null, conversation_id: null };
-    if (message) {
-      try {
-        relay = await maybeRelayToOriginSession(ctx, {
-          channel, message, root, senderId: userId, senderName: actorName,
-        });
-      } catch (error) {
-        relay = {
-          delivered: false,
-          skipped: error instanceof ConvexError ? String((error.data as any)?.code ?? "error") : "error",
-          session_short_id: null,
-          conversation_id: null,
-        };
       }
     }
 
@@ -2560,6 +2617,8 @@ export async function postChatMessage(
     origin?: "agent";
     // The session that typed an origin:"agent" line, for personification.
     originSessionId?: string;
+    // The session the sender had open (schema context_session_id).
+    contextSessionId?: Id<"conversations">;
     // "Also send to #channel" — stored only on a real reply (root present).
     broadcast?: boolean;
     // Set when the author is an anchor's bot identity: the row renders as the
@@ -2620,15 +2679,20 @@ export async function postChatMessage(
     }
   }
 
-  // A role's standing session speaks as the role (lib/actor): the line wears
-  // the bot's name and the anchor pointer, the way sendAsAnchor's lines do.
+  const contextConv = opts.contextSessionId ? await ctx.db.get(opts.contextSessionId) : null;
+  const contextSessionId = contextConv && await canOwnerOrTeamAccess(ctx, authorId, contextConv)
+    ? contextConv._id
+    : undefined;
+
+  // A session speaking as its role (sessionVoice): the line wears the bot's
+  // name and the anchor pointer, the way sendAsAnchor's lines do.
   let authorUserId: Id<"users"> = authorId;
   let agent = opts.agent;
   if (originSession && !agent) {
-    const actor = await resolveActor(ctx, authorId, await ctx.db.get(originSession.id as Id<"conversations">));
-    if (actor.kind === "role" && actor.anchor) {
-      authorUserId = actor.user_id;
-      agent = { anchorId: actor.anchor._id };
+    const voice = await sessionVoice(ctx, authorId, await ctx.db.get(originSession.id as Id<"conversations">), channel);
+    if (voice) {
+      authorUserId = voice.user_id;
+      agent = { anchorId: voice.anchor._id };
     }
   }
 
@@ -2650,6 +2714,7 @@ export async function postChatMessage(
     origin_session_id: originSession?.id,
     origin_session_title: originSession?.title,
     origin_agent_type: originSession?.agent_type,
+    context_session_id: contextSessionId,
     external: opts.external,
     external_author: opts.externalAuthor,
     sync_local_only: opts.syncLocalOnly ? true : undefined,
@@ -4153,6 +4218,8 @@ export async function maybeWakeAnchor(
     /** Roles the line named. A role whose standing seat IS this channel's
      *  anchor (`@anchor`, `@head-of-people`) addresses the anchor. */
     roles?: Doc<"org_roles">[];
+    /** The session this line's thread relay reached, if it did. */
+    relayedTo?: string | null;
   },
 ): Promise<AnchorWake & { seat_role_id: Id<"org_roles"> | null }> {
   const no = (skipped: string | null) => ({ placeholder_id: null, skipped, seat_role_id: null });
@@ -4163,13 +4230,17 @@ export async function maybeWakeAnchor(
   // Addressed: named in the line (by its bot or by the role it seats), or
   // spoken to in a DM room it is a member of (every line in a DM is for the
   // people in it).
-  const addressed = opts.channel.kind === "dm" || !!seatRole || opts.mentions.some(
+  const named = !!seatRole || opts.mentions.some(
     (id) => id.toString() === anchor.bot_user_id.toString(),
   );
+  const addressed = opts.channel.kind === "dm" || named;
   // (6) A thread the anchor follows wakes on a plain reply too — silently. It
   // reads and decides whether the line was for it (see buildAnchorWake).
   const followUp = !addressed && !!opts.root && anchorFollowsThread(anchor, opts.root);
   if (!addressed && !followUp) return no(null);
+  // (7) A reply under a line a role's hand wrote as the role answers the hand:
+  // once the thread relay carried it there, the role wakes only when named.
+  if (!named && opts.relayedTo && opts.root && await isHandLine(ctx, opts.root)) return no(null);
 
   // (1) A line a session typed never reaches a person's machine. Checked AFTER
   // the addressed test so a skip reason only surfaces when the anchor was
@@ -4188,6 +4259,14 @@ export async function maybeWakeAnchor(
   // role's wake rail must not spend a second turn on the same line.
   const woke = await wakeAnchorTurn(ctx, opts, anchor, addressed);
   return { ...woke, seat_role_id: seatRole?._id ?? null };
+}
+
+/** A line a session working for a role (not its standing session) wrote as
+ *  the role (sessionVoice). */
+async function isHandLine(ctx: MutationCtx, row: Doc<"chat_messages">): Promise<boolean> {
+  if (row.author_kind !== "agent" || !row.origin_session_id) return false;
+  const conv = await findConversationByAnyRefWhere(ctx, row.origin_session_id, () => true);
+  return !!conv && !conv.standing_role_id;
 }
 
 type AnchorWake = { placeholder_id: Id<"chat_messages"> | null; skipped: string | null; listening?: boolean };
@@ -5050,6 +5129,7 @@ export const replyAsAnchor = mutation({
           actorName: anchorName,
           channel,
           messageId: message._id,
+          threadRootId: root._id,
           recipientId,
           message: `${anchorName} answered in #${channel.name}: ${preview}`,
           pushSubtitle: `thread · #${channel.name}`,

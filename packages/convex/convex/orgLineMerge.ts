@@ -22,25 +22,13 @@ export { MERGE_AUTHORITY_ID, MERGE_AUTHORITY_LABEL, mergeAllowance, mergeGrantOf
 import { performSetAuthority, refuseUnlessHuman } from "./orgRoles";
 import { insertTaskComment } from "./tasks";
 import { getAuthenticatedUserId, tellRole } from "./pendingMessages";
-import { roleOfConversation } from "./lib/actor";
+import { roleOfRun } from "./lib/actor";
 
 /** The pull request a handoff named in its evidence ("PR: <url>", taskClaim
  *  handoffCommentText), or null. */
 export function prUrlFromEvidence(evidence: string | null | undefined): string | null {
   const m = (evidence ?? "").match(/^PR:\s*(https?:\/\/\S+)\s*$/m);
   return m ? m[1] : null;
-}
-
-/** The role behind a run: its spawner is the role's standing session (L9). */
-export async function roleOfRun(ctx: { db: any }, run: { spawner_conversation_id?: Id<"conversations"> | null; primary_conversation_id?: Id<"conversations"> | null }): Promise<any | null> {
-  for (const id of [run.spawner_conversation_id, run.primary_conversation_id]) {
-    if (!id) continue;
-    const conv = await ctx.db.get(id);
-    if (!conv) continue;
-    const role = await roleOfConversation(ctx, conv);
-    if (role) return role;
-  }
-  return null;
 }
 
 // `cast role line <handle> --merge on|off [--per-day N]`: the line's switch

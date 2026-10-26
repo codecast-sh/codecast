@@ -18,7 +18,7 @@ import { resolveSessionLaunchDevice } from "./sessionLaunch";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { resolveTaskGitContext } from "./tasks";
 import { answerCore } from "./sessionDecisions";
-import { roleOfRun } from "./orgLineMerge";
+import { roleOfRun } from "./lib/actor";
 import { mergeAllowance } from "./lib/lineMerge";
 import { repositoryFromRemote, normalizeSubagentCaps } from "@codecast/shared/contracts";
 import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";

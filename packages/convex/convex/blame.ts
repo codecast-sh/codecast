@@ -5,7 +5,7 @@ import {
   type MutationCtx,
 } from "./functions";
 import { v } from "convex/values";
-import { roleOfRun } from "./orgLineMerge";
+import { roleWorkedFor } from "./lib/actor";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -131,11 +131,7 @@ async function sessionRefFor(
   const user = users.get(userKey)!;
   // The line run and role the session worked under (fix loop: an introducing
   // commit is traced to a run and a role through its session).
-  let role: any = conv.org_role_id ? await ctx.db.get(conv.org_role_id) : null;
-  if (!role && conv.workflow_run_id) {
-    const run = await ctx.db.get(conv.workflow_run_id);
-    if (run) role = await roleOfRun(ctx, run);
-  }
+  const role: any = await roleWorkedFor(ctx, conv);
   return {
     conversation_id: conv._id,
     short_id: conv.short_id ?? undefined,

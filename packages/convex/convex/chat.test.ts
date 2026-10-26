@@ -40,6 +40,7 @@ import {
   sendMessage,
   setAnchorFollow,
   setNotifyLevel,
+  setThreadMuted,
   toggleReaction,
   updateChannel,
 } from "./chat";
@@ -577,6 +578,32 @@ describe("the notification fan-out", () => {
     expect(quiet._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_reply"]);
     await call(sendMessage, quiet, { channel_id: CHANNEL, content: "@bob though" });
     expect(quiet._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_reply", "chat_mention"]);
+  });
+
+  test("a muted thread stops its reply notifications; a mention in it still lands", async () => {
+    const ctx = context(ALICE, { chat_reads: [readRow(BOB, "mentions")] });
+    const root = await call(sendMessage, as(ctx, BOB), { channel_id: CHANNEL, content: "root" });
+    await call(setThreadMuted, as(ctx, BOB), { root_id: root.message_id, muted: true });
+    const read = ctx.db._tables.chat_reads.find((r: any) => r.user_id === BOB);
+    expect(read.muted_threads).toEqual([String(root.message_id)]);
+
+    ctx._emitted.length = 0;
+    await call(sendMessage, as(ctx, ALICE), {
+      channel_id: CHANNEL, content: "a plain reply", thread_root_id: root.message_id,
+    });
+    expect(ctx._emitted).toEqual([]);
+    await call(sendMessage, as(ctx, ALICE), {
+      channel_id: CHANNEL, content: "@bob look", thread_root_id: root.message_id,
+    });
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_mention"]);
+
+    await call(setThreadMuted, as(ctx, BOB), { root_id: root.message_id, muted: false });
+    expect(ctx.db._tables.chat_reads.find((r: any) => r.user_id === BOB).muted_threads).toEqual([]);
+    ctx._emitted.length = 0;
+    await call(sendMessage, as(ctx, ALICE), {
+      channel_id: CHANNEL, content: "back on", thread_root_id: root.message_id,
+    });
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_reply"]);
   });
 
   test("posting in a channel does not un-mute it", async () => {
@@ -1253,6 +1280,29 @@ describe("the anchor in a thread", () => {
     const plainRow = messagesIn(ctx).find((m: any) => m._id === plain.message_id);
     expect(plainRow.origin_session_id).toBeUndefined();
     expect(plainRow.origin_session_title).toBeUndefined();
+  });
+
+  test("a line names the session it was written beside only when the sender can read it", async () => {
+    // The chat beside a conversation stamps that session on each line so the
+    // room reads which thread it is about. The id comes from the caller, so a
+    // session the sender cannot open is dropped rather than named.
+    const seed = anchorTeamSeed({
+      conversations: [
+        { _id: CONV, user_id: BOB, title: "Anchor", status: "active", updated_at: 1 },
+        { _id: "conv-alice", user_id: ALICE, title: "Fix the auth race", status: "active", updated_at: 1 },
+        { _id: "conv-bob", user_id: BOB, title: "Bob's private spike", is_private: true, status: "active", updated_at: 1 },
+      ],
+    });
+    const ctx = context(ALICE, seed);
+    const mine = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "look at this one", context_session_id: "conv-alice",
+    });
+    expect(messagesIn(ctx).find((m: any) => m._id === mine.message_id).context_session_id).toBe("conv-alice");
+
+    const theirs = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "and this?", context_session_id: "conv-bob",
+    });
+    expect(messagesIn(ctx).find((m: any) => m._id === theirs.message_id).context_session_id).toBeUndefined();
   });
 
   test("repairs a historical agent-origin row only with its author's session", async () => {
@@ -4187,6 +4237,47 @@ describe("session thinking rows", () => {
     expect(members(own.channel_id)).toEqual([String(ALICE), String(BOB)].sort());
     expect(String(plain.channel_id)).toBe(String(own.channel_id));
     expect(String(own.channel_id)).not.toBe(String(dm.channel_id));
+  });
+
+  test("a session working for a role DMs as the role, and a reply in its thread goes to the hand, not the role", async () => {
+    const ctx = context(BOB, seed({
+      conversations: [
+        ...seed().conversations,
+        { _id: "conv-hand", short_id: "jx7hand", user_id: BOB, session_id: "sess-hand", org_role_id: ROLE, title: "Build · ct-1", status: "active", updated_at: 1, team_id: TEAM, is_private: false },
+        // A station of the role's line run: no role pointer of its own.
+        { _id: "conv-station", user_id: BOB, session_id: "sess-station", workflow_run_id: "run-1", is_subagent: true, title: "Build · ct-2", status: "active", updated_at: 1 },
+      ],
+      workflow_runs: [{ _id: "run-1", user_id: BOB, org_role_id: ROLE, status: "running", node_statuses: [], created_at: 1, updated_at: 1 }],
+      session_owners: [
+        ...seed().session_owners,
+        { _id: "so-h", conversation_id: "conv-hand", user_id: BOB, added_at: 1 },
+        { _id: "so-s", conversation_id: "conv-station", user_id: BOB, added_at: 1 },
+      ],
+    }));
+    const asHand = { origin: "agent" as const, origin_session_id: "sess-hand" };
+    const members = (id: any) => ctx.db._tables.chat_channel_members
+      .filter((r: any) => String(r.channel_id) === String(id)).map((r: any) => String(r.user_id)).sort();
+
+    // The run's DM is the role's room with Alice, not its host's own DM with her.
+    const dm = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"], ...asHand });
+    expect(members(dm.channel_id)).toEqual(["user-growth-bot", String(ALICE)].sort());
+    const own = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"] });
+    expect(String(own.channel_id)).not.toBe(String(dm.channel_id));
+    const station = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"], origin: "agent", origin_session_id: "sess-station" });
+    expect(String(station.channel_id)).toBe(String(dm.channel_id));
+    const sent = await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "is this the answer you want?", ...asHand });
+    expect(messagesIn(ctx).find((m: any) => m._id === sent.message_id))
+      .toMatchObject({ user_id: "user-growth-bot", author_kind: "agent", origin_session_id: "conv-hand" });
+
+    // Alice answers in its thread: the run hears it, the role is not woken too.
+    const reply = await call(sendMessage, as(ctx, ALICE), { channel_id: dm.channel_id, content: "yes", thread_root_id: sent.message_id });
+    expect(reply.session_relay.conversation_id).toBe("conv-hand");
+    expect(reply.anchor_thinking_message_id).toBeNull();
+    expect(pending(ctx).map((p: any) => p.conversation_id)).toEqual(["conv-hand"]);
+
+    // In a channel the hand is still its host, so an @role line reaches the role.
+    const line = await call(sendMessage, ctx, { channel_id: CHANNEL, content: "filed", ...asHand });
+    expect(messagesIn(ctx).find((m: any) => m._id === line.message_id)).toMatchObject({ user_id: BOB, author_kind: "user" });
   });
 
   test("a room member thinks at channel level; its turn ending closes the row only once it read the line", async () => {
