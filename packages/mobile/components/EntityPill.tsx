@@ -13,7 +13,7 @@ import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { openWebPage } from '@/lib/links';
 import { replayTitle } from '@codecast/web/components/ops/opsModel';
 import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
-import { usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
+import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileIdentityFace } from '@/components/identity';
 
 const api = _api as any;
@@ -136,7 +136,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   const resolvedType = useQueryNoThrow(api.entities.resolveIdType, !typeProp && looksConvex && !storeType ? { id: rawId } : 'skip').data;
   const type: EntityType | null = typeProp ?? (looksConvex ? storeType ?? resolvedType ?? null : entityTypeFromId(rawId));
   const isSession = type === 'session';
-  const personifyAll = usePersonifyAll();
+  const prefs = useIdentityPrefs();
 
   // The pill reads as the object's title (the session/doc branches also need
   // the Convex _id, since mobile routes can't resolve short ids). Local-first,
@@ -192,7 +192,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   // same rule as the web pill: its face in place of the glyph, its name as the
   // label. A session nobody personified reads exactly as it did before.
   const identityRow = isSession && entity?._id ? identityRowOf(entity) : null;
-  const label = (identityRow && identityLine(identityRow, refLabel, personifyAll).name) || refLabel;
+  const label = (identityRow && identityLine(identityRow, refLabel, prefs).name) || refLabel;
 
   // A call keeps the whole reference, so the screen opens at the moment or
   // the lines it names, not at the top of the call.

@@ -1177,7 +1177,7 @@ describe("accept all chunks by cost: one takeover change a transaction", () => {
     const db = seeded();
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([change({ kind: "scope", handle: "growth", add: ["pr-2"] }), change({ kind: "role", name: "Ops", handle: "ops", scope: { projects: ["pr-1"] } })]) });
     const scheduled: any[] = [];
-    const ctx = { ...ctxOf(db), scheduler: { runAfter: async (_d: number, _f: unknown, args: any) => { scheduled.push(args); } } };
+    const ctx = { ...ctxOf(db), scheduler: { runAfter: async (_d: number, _f: unknown, args: any) => { if (Object.keys(args ?? {}).join() !== "role_id") scheduled.push(args); } } }; // a hire also schedules its icon (roleIcons)
     const first = await performAcceptAll(ctx, ME as any, { proposal: r.short_id, provision: false });
     expect(first.results).toHaveLength(1);
     expect(first.remaining).toBe(1);
@@ -1499,7 +1499,7 @@ describe("orgProposals.reply (S39)", () => {
       change({ kind: "role", name: "Ops", handle: "ops", scope: { projects: ["pr-1"] } }),
     ]);
     const scheduled: any[] = [];
-    const ctx = { ...ctxOf(db), scheduler: { runAfter: async (_d: number, _f: unknown, args: any) => { scheduled.push(args); } } };
+    const ctx = { ...ctxOf(db), scheduler: { runAfter: async (_d: number, _f: unknown, args: any) => { if (Object.keys(args ?? {}).join() !== "role_id") scheduled.push(args); } } }; // a hire also schedules its icon (roleIcons)
     const out = await performReply(ctx, ME as any, { proposal: p.short_id, provision: false, say: { client_id: "reply-chunked" }, items: [{ verdict: "approve", seqs: [1, 2] }] });
     expect(out).toMatchObject({ applied: 1, failed: 0, remaining: 1, told: true });
     expect(scheduled).toHaveLength(1);

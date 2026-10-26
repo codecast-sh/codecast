@@ -81,6 +81,8 @@
     "./contracts/expectations": "./contracts/expectations.ts",
     "./contracts/roleAutonomy": "./contracts/roleAutonomy.ts",
     "./contracts/orgAvatars": "./contracts/orgAvatars.ts",
+    "./contracts/roleIcon": "./contracts/roleIcon.ts",
+    "./contracts/roleIconExamples": "./contracts/roleIconExamples.ts",
     "./contracts/orgTemplateBind": "./contracts/orgTemplateBind.ts",
     "./contracts/orgTemplateReadiness": "./contracts/orgTemplateReadiness.ts",
     "./contracts/orgTemplateManifest": "./contracts/orgTemplateManifest.ts",

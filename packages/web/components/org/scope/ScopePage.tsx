@@ -52,6 +52,7 @@ import { ConversationWithPanel } from "./ConversationWithPanel";
 import { usePanelLayout } from "../../../hooks/usePanelLayout";
 import { briefFirstLine } from "./scopeTypes";
 import { retireToastText } from "../../../lib/retireRole";
+import { useIdentityPrefs } from "../../../hooks/useIdentityPrefs";
 
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
@@ -63,6 +64,7 @@ const todayUtc = () => new Date().toISOString().slice(0, 10);
 export function ScopePageInner({ id, session, href }: { id: string; session?: SeatSession; /** The page's own address when it is not /org/<id>: /anchor renders the root role here (S22), and its tab must not move the person off it. */ href?: string }) {
   const base = href ?? `/org/${id}`;
   const { tree, ready } = useSyncOrgTree();
+  const { characters } = useIdentityPrefs();
   // The panel's tabs paint from the store: keep the workspace's collections
   // fed here the way the project page does.
   useSyncProjects(); useSyncTasks(); useSyncPlans(); useSyncDocs();
@@ -240,7 +242,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
     );
   }
 
-  const words = role ? roleWords(role, tree.workspace.kind === "team" ? tree.workspace.name : null) : null;
+  const words = role ? roleWords(role, tree.workspace.kind === "team" ? tree.workspace.name : null, characters) : null;
   const name = words ? words.name : anchor?.name || tree.workspace.name || "Workspace";
   const handle = role ? role.handle : "workspace";
   const paused = role?.status === "paused";
@@ -302,7 +304,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           {/* The role's face (S13); the root workspace has none. */}
           {role && <RoleFace role={role} size={phone ? 24 : 28} className="shrink-0" />}
           <h1 className={cn("shrink-0 max-w-[40%] font-semibold tracking-tight leading-none truncate", phone ? "text-[15px]" : "text-[17px]")} style={{ fontFamily: "var(--font-serif)" }} title={`@${handle}`}>{name}</h1>
-          {words && <span className="shrink-0 whitespace-nowrap text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-title>{words.subtitle}</span>}
+          {words && words.subtitle !== words.name && <span className="shrink-0 whitespace-nowrap text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-scope-title>{words.subtitle}</span>}
           {!role && <span className="shrink-0 inline-flex items-center gap-1 text-[11px]" style={{ color: "var(--sol-text-dim)" }}><Network className="w-3 h-3" /> whole workspace</span>}
           {paused && <span className="shrink-0 whitespace-nowrap text-[10px] px-1.5 h-[18px] inline-flex items-center rounded-md" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }}>paused</span>}
           {/* The state line: the role's pinned line, else the first line of its notes. */}

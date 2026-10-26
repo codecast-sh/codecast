@@ -793,7 +793,7 @@ export const listAnchors = query({
         // Set once the anchor is a role's seat (the head of people, S12).
         org_role_id: a.org_role_id ?? null,
         role: role && role.status !== "retired"
-          ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, status: role.status, given_name: role.given_name ?? null, assistant: role.assistant ?? null, scope_type: role.scope_type }
+          ? { _id: role._id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: role.avatar ?? null, icon: role.icon ?? null, status: role.status, given_name: role.given_name ?? null, assistant: role.assistant ?? null, scope_type: role.scope_type }
           : null,
         // The workspace's root (org-staffing.md S22, S30): the seat of its
         // Executive Assistant when one stands, else of its Head of People. Every

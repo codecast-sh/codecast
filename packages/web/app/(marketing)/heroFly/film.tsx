@@ -6,9 +6,10 @@ import { useContext, useLayoutEffect, useRef, type ComponentProps, type CSSPrope
 import { SessionCardView } from "@/components/inbox/SessionCardView";
 import { FilmClockContext, fly, POSTER_FRAME, useFilmTime } from "./filmClock";
 import { clamp, dip, fade } from "./timeline";
+import { DEFAULT_IDENTITY_PREFS } from "@/lib/sessionIdentity";
 
 const noop = () => {};
-const LIFTED_CHROME = { showModelBadge: false, showAgentIcon: true, showBranchPill: true, personifyAll: false };
+const LIFTED_CHROME = { showModelBadge: false, showAgentIcon: true, showBranchPill: true, prefs: DEFAULT_IDENTITY_PREFS };
 const LIFTED_LIVENESS = { isLive: true, pendingSend: false, restarting: false, draft: "" };
 
 /** Text the driver types (a TextBeat), seeded with its poster-frame value. */
