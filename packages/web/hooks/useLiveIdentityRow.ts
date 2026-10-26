@@ -1,6 +1,6 @@
 // A session row with its role read from the role rows (lib/sessionIdentity
 // withLiveRole). Kept out of lib/sessionIdentity so the resolver stays a pure
-// module (see usePersonifyAll). Every identity component reads its row through
+// module (see useIdentityPrefs). Every identity component reads its row through
 // this, so a role's standing session wears the role's given name and face on
 // every surface, even when the row it was handed carries no snapshot.
 import { createContext, useContext, useMemo, useSyncExternalStore } from "react";
@@ -9,7 +9,7 @@ import { useInboxStore } from "../store/inboxStore";
 import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { identityRowOf, liveRoleSig, roleAuthorOf, roleOfUser, speakerOf, withLiveRole, type IdentityRow, type RoleRows, type SessionIdentity } from "../lib/sessionIdentity";
 import { orgRolesSig } from "./useOrgRoles";
-import { usePersonifyAll } from "./usePersonifyAll";
+import { useIdentityPrefs } from "./useIdentityPrefs";
 
 /** Answers the role rows for everything below it instead of the store; null
  *  is "no roles", so each row keeps the role snapshot it carries. The homepage
@@ -72,7 +72,7 @@ export function useAgentSpeaker(row: IdentityRow | null, agentType?: string | nu
   identity: Exclude<SessionIdentity, { kind: "plain" }> | null;
 } {
   const live = useLiveIdentityRow(row);
-  const speaker = speakerOf(live, agentType, usePersonifyAll());
+  const speaker = speakerOf(live, agentType, useIdentityPrefs());
   return { ...speaker, row: speaker.identity ? live : null };
 }
 

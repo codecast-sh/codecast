@@ -15,6 +15,7 @@ import { pagePath, palettePages } from "../lib/navPages";
 import { HOSTED_SECTION_KEYS } from "../lib/surfaceRules";
 import { useState, useCallback, useMemo, useRef, memo, lazy, Suspense } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
 import { useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
 import { useTheme } from "./ThemeProvider";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
@@ -1696,6 +1697,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // unless widened.
   const { only: scopeOnly, setEverything: setAssistantEverything } = useAssistantScope();
   const surfaceMode = useSurfaceMode();
+  const identityPrefs = useIdentityPrefs();
   // Favorites follow the scope like recents do: the empty palette's Favorites
   // group and the typed ranking both read this list, never the raw one.
   const favorites = useMemo(
@@ -2371,7 +2373,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return `${targets.length} ${targetType}s selected`;
   }, [targets, target, targetType, hasTargets, hostedMode]);
 
-  const actions = [...paletteActions(targetType, targets, currentUser?._id, chatOn, surfaceMode), ...(targetType === "session" && target && targets.length === 1 ? getPaletteSessionCommands(target._id) : [])];
+  const actions = [...paletteActions(targetType, targets, currentUser?._id, chatOn, surfaceMode, identityPrefs), ...(targetType === "session" && target && targets.length === 1 ? getPaletteSessionCommands(target._id) : [])];
 
   const rootTaskStatuses = useTeamTaskStatusList(target?.team_id);
   const pinnedAgents = usePinnedAgentIds();

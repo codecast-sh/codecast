@@ -1,6 +1,6 @@
 import type { MentionItem } from "./mentionItem";
 import type { RecentVisit } from "../store/inboxStore";
-import { identityLine } from "./sessionIdentity";
+import { DEFAULT_IDENTITY_PREFS, identityLine, type IdentityPrefs } from "./sessionIdentity";
 import { mentionContextPosition, type MentionContext } from "./mentionContext";
 
 // How the @-mention dropdown decides what to show first.
@@ -85,12 +85,12 @@ export function matchScore(text: string, query: string): number {
  * An empty query returns the same rung for everything, so recency alone
  * orders the list.
  */
-export function mentionMatchRank(item: MentionItem, query: string, personifyAll = false): number {
+export function mentionMatchRank(item: MentionItem, query: string, prefs: IdentityPrefs = DEFAULT_IDENTITY_PREFS): number {
   const q = query.trim().toLowerCase();
   if (!q) return 0;
   // A personified session is named twice over: the character's name the row
   // shows and the title behind it. Whichever the reader typed leads.
-  const persona = item.identity ? identityLine(item.identity, item.label, personifyAll).name : null;
+  const persona = item.identity ? identityLine(item.identity, item.label, prefs).name : null;
   const name = Math.min(matchScore(item.label, q), persona ? matchScore(persona, q) : Infinity);
   if (name <= 1) return item.type === "person" ? 0 : 1;
   // A session is named by any part of its title, as in ⌘K: "desk" finds
@@ -162,7 +162,7 @@ export function collapseSameTitle<T>(rows: Iterable<T>, keyOf: (row: T) => strin
 // cited session still sits below a name hit on anything.
 const CONTEXT_LIFT = 1.5;
 
-export function mergeMentionSuggestions(local: MentionItem[], remote: MentionItem[], times: Map<string, number>, perTypeLimit = Infinity, query = "", personifyAll = false, context?: MentionContext): MentionItem[] {
+export function mergeMentionSuggestions(local: MentionItem[], remote: MentionItem[], times: Map<string, number>, perTypeLimit = Infinity, query = "", prefs: IdentityPrefs = DEFAULT_IDENTITY_PREFS, context?: MentionContext): MentionItem[] {
   const byId = new Map<string, MentionItem>();
   for (const item of [...local, ...remote]) {
     const key = `${item.type}:${item.id}`;
@@ -174,7 +174,7 @@ export function mergeMentionSuggestions(local: MentionItem[], remote: MentionIte
   const ranked = [...byId.values()];
   const hasQuery = query.trim().length > 0;
   const ranks = hasQuery ? new Map<MentionItem, number>() : null;
-  if (ranks) for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, personifyAll) - (item.contextAt ? CONTEXT_LIFT : 0));
+  if (ranks) for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, prefs) - (item.contextAt ? CONTEXT_LIFT : 0));
   const counts = new Map<string, number>();
   const sorted = ranked
     .sort((a, b) => (ranks ? ranks.get(a)! - ranks.get(b)! : Number(Boolean(b.contextAt)) - Number(Boolean(a.contextAt))) || (b.contextAt ?? 0) - (a.contextAt ?? 0)

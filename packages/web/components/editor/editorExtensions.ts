@@ -28,7 +28,7 @@ import { DocTitleExtension, TitleFirstDocument } from "./DocTitleExtension";
 import { DRAFTING_MARKS } from "./DraftingExtension";
 import { splitOnImagePlaceholders } from "../../lib/imagePlaceholder";
 import { identityLine } from "../../lib/sessionIdentity";
-import { personifyAllNow } from "../../hooks/usePersonifyAll";
+import { identityPrefsNow } from "../../hooks/useIdentityPrefs";
 
 const lowlight = createLowlight(common);
 
@@ -56,7 +56,7 @@ export const MENTION_COLOR_MAP: Record<string, string> = {
  *  is named as that person, everything else keeps its own label. */
 function mentionLabel(item: MentionItem): string {
   if (item.type !== "session" || !item.identity) return item.label;
-  return identityLine(item.identity, item.label, personifyAllNow()).name ?? item.label;
+  return identityLine(item.identity, item.label, identityPrefsNow()).name ?? item.label;
 }
 
 export function createMentionSuggestion(queryFn: MentionQueryFn) {

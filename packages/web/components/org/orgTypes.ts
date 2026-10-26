@@ -4,6 +4,7 @@
 // store slice all agree on one definition.
 import type { WorkState } from "@codecast/shared/contracts";
 import type { OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
 
 export type StateCounts = Record<WorkState, number>;
 
@@ -122,6 +123,9 @@ export type OrgRole = {
   /** The person like name a person chose (org-staffing.md S30); absent, the
    *  role wears its face's character name. Read through roleWords/roleIdentity. */
   given_name?: string | null;
+  /** The role's drawn icon (roleIcon.ts), its face for a viewer with
+   *  characters off; absent until one is drawn, when it wears a monogram. */
+  icon?: RoleIcon | null;
   /** Set on an Executive Assistant (S30): what it reaches. */
   assistant?: { reach: "global" } | { reach: "team"; team_id: string } | null;
   /** The standing agent this seat replaced, when it was seated fresh (S16):
