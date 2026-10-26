@@ -558,6 +558,17 @@
   color: var(--sol-text-muted);
 }
 
+/* "from <session>": the session a line was written beside. */
+.ch-msg-context {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  max-width: 60%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .ch-msg-time:hover {
   color: var(--sol-text);
   text-decoration: underline;
@@ -1324,6 +1335,11 @@ div.ch-reaction-tip {
   gap: 6px;
   padding: 9px 10px 9px 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 30%, transparent);
+}
+
+.ch-thread-mute-on,
+.ch-thread-mute-on:hover {
+  color: var(--sol-orange);
 }
 
 .ch-thread-heading {
@@ -3305,12 +3321,10 @@ button.ch-search-chip:hover { color: var(--sol-text); }
 /* Mirrored: the pill is the mark and a dot, nothing to read twice. */
 .ch-head-slack-live, .ch-head-slack-paused, .ch-head-slack-error { padding: 0 6px; gap: 4px; }
 
-/* The Slack mark as a channel row's label. Sits after the name at the size of
- * the row's other glyphs, in grey so a list of mirrored channels stays quiet;
- * fainter still when the mirror is paused or broken. Hidden with the names in
- * the narrow strip. */
-.ch-chan-slack { width: 10px; height: 10px; flex: 0 0 auto; filter: grayscale(1); opacity: 0.45; }
-.ch-chan-slack-off { opacity: 0.22; }
+/* The Slack mark as a channel row's label (drawn quiet by SlackLogo). Sits
+ * after the name, a size under the row's other glyphs; hidden with the names
+ * in the narrow strip. */
+.ch-chan-slack { width: 9px; height: 9px; flex: 0 0 auto; }
 .ch-head-slack-none { border-style: dashed; color: var(--sol-text-dim); }
 .ch-head-slack-dot {
   width: 5px;

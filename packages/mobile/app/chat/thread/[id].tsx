@@ -12,11 +12,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useInboxStore, selectChannelReadMarker } from '@codecast/web/store/inboxStore';
+import { useInboxStore, selectChannelReadMarker, selectThreadMuted } from '@codecast/web/store/inboxStore';
 import { useThreadMessages, useThreadSync } from '@codecast/web/hooks/useChatSync';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { authorGroupKey, buildChatTimeline, memberHandle } from '@codecast/shared/chat';
+import { lineGroupKey, buildChatTimeline, memberHandle } from '@codecast/shared/chat';
 import { MessageRow, fromChatView, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { useSessionIdentityLookup } from '@/components/identity';
@@ -53,6 +53,7 @@ export default function ChatThreadScreen() {
   const channelId = (rootRow?.channel_id ?? channelParam) as string | undefined;
   const channel = useInboxStore((s) => (channelId ? s.chatChannels[channelId] : undefined)) as any;
   const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
+  const muted = useInboxStore((s) => (channelId ? selectThreadMuted(s, channelId, rootId) : false));
   const memberById = useMemo(() => {
     const map = new Map<string, any>();
     for (const m of teamMembers ?? []) if (m) map.set(String(m._id), m);
@@ -171,7 +172,7 @@ export default function ChatThreadScreen() {
       replies.map((v) => fromChatView(v, chatMessages[v.id], identityFor)).map((m) => ({
         id: m.id,
         authorId: m.author.id,
-        groupKey: authorGroupKey(m.author),
+        groupKey: lineGroupKey(m.author, m.contextSession?.id),
         createdAt: m.createdAt,
         pendingAgent: m.agentStatus === 'thinking' || m.agentStatus === 'streaming',
         deleted: !!m.deletedAt,
@@ -259,6 +260,17 @@ export default function ChatThreadScreen() {
           >
             <FontAwesome name="microchip" size={9} color={Theme.violet} />
             <RNText style={styles.armedText}>{anchorName} · on</RNText>
+          </TouchableOpacity>
+        )}
+        {!!channelId && !!currentUser && (
+          <TouchableOpacity
+            onPress={() => useInboxStore.getState().setChatThreadMuted(channelId, rootId, !muted)}
+            hitSlop={10}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: muted }}
+            accessibilityLabel="Mute notifications for replies"
+          >
+            <FontAwesome name={muted ? 'bell-slash' : 'bell-o'} size={15} color={muted ? Theme.orange : Theme.textMuted} />
           </TouchableOpacity>
         )}
       </RNView>

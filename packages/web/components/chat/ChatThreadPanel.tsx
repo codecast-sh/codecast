@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { memo } from "react";
-import { ChevronLeft, X } from "lucide-react";
+import { Bell, BellOff, ChevronLeft, X } from "lucide-react";
 import type { ChatAttachment } from "../../store/chatSlice";
+import { selectThreadMuted, useInboxStore } from "../../store/inboxStore";
 import { ChatMessage } from "./ChatMessage";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatComposer } from "./ChatComposer";
@@ -119,6 +120,7 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
               the same number in one glance. */}
           <div className="ch-thread-sub">#{channelName}</div>
         </div>
+        {viewerId && <ThreadMuteButton channelId={channelId} rootId={rootId} />}
         <button type="button" className="ch-tool ch-thread-close" title="Close thread" onClick={onClose}>
           <X className="w-3.5 h-3.5" />
         </button>
@@ -182,3 +184,21 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
     </aside>
   );
 });
+
+// Silences this thread's reply notifications for the viewer. Mentions still
+// reach them, and the unread badge stays.
+function ThreadMuteButton({ channelId, rootId }: { channelId: string; rootId: string }) {
+  const muted = useInboxStore((s) => selectThreadMuted(s, channelId, rootId));
+  const setMuted = useInboxStore((s) => s.setChatThreadMuted);
+  return (
+    <button
+      type="button"
+      className={`ch-tool ch-thread-mute${muted ? " ch-thread-mute-on" : ""}`}
+      title={muted ? "Replies muted. Turn notifications back on" : "Mute notifications for replies"}
+      aria-pressed={muted}
+      onClick={() => setMuted(channelId, rootId, !muted)}
+    >
+      {muted ? <BellOff className="w-3.5 h-3.5" /> : <Bell className="w-3.5 h-3.5" />}
+    </button>
+  );
+}

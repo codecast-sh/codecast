@@ -39,7 +39,7 @@
 
 import { threadRowId, type PageCommentRow, type PageThreadRow, type ThreadInboxRow, type ThreadKind } from "./threadTypes";
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { dmKeyFor, dmOtherIds, isLiveVoiceRow, mentionUserIds, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
+import { dmKeyFor, dmOtherIds, isLiveVoiceRow, isThreadMuted, mentionUserIds, withThreadMuted, type ChatMentionRef, type ChatVoiceStatus } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { mirrorState, mergeLinkOptions, nextSlackMembers, type SlackDirection, type SlackLinkOptions, type SlackMemberWriter, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
@@ -216,6 +216,9 @@ export type ChatMessageRow = {
   origin_session_id?: string;
   origin_session_title?: string;
   origin_agent_type?: string;
+  /** The session the sender had open when they wrote it (the chat beside a
+   *  conversation). Server-checked against what the sender can read. */
+  context_session_id?: string;
   created_at: number;
   updated_at: number;
   edited_at?: number;
@@ -246,6 +249,8 @@ export type ChatReadRow = {
   last_read_at: number;
   last_read_message_id?: string;
   notify_level: ChatNotifyLevel;
+  /** Thread roots in this channel whose replies the viewer silenced. */
+  muted_threads?: string[];
   joined_at?: number;
   updated_at: number;
 };
@@ -468,6 +473,8 @@ export type ChatSendOptions = {
   origin?: "agent";
   /** Keep this one line out of the channel's Slack mirror. */
   syncLocalOnly?: boolean;
+  /** The session this line was written beside (ChatMessageRow.context_session_id). */
+  contextSessionId?: string;
   /** Hears the server's answer to THIS send — which roles and sessions the
    *  line woke (`mention_wakes`) — so the surface can say so. Never journaled:
    *  it is stripped before the args reach the outbox, and a re-driven send
@@ -556,6 +563,8 @@ export type ChatSliceActions = {
   /** Drop local rows a fresh listMine page no longer returns (revoked access). */
   pruneThreadInbox: (keepIds: string[], teamId: string | undefined | null, floorActivityAt: number) => void;
   setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
+  /** Silence (or restore) reply notifications for one thread. */
+  setChatThreadMuted: (channelId: string, rootId: string, muted: boolean) => void;
   /** Rename or re-topic a channel. Optimistic: the rail and header rename the
    *  moment you confirm; the server enforces creator-or-admin and reconciles. */
   updateChatChannel: (channelId: string, fields: { name?: string; topic?: string }) => void;
@@ -664,6 +673,7 @@ function paintOptimisticSend(
     attachments: opts?.attachments,
     origin: opts?.origin,
     sync_local_only: opts?.syncLocalOnly ? true : undefined,
+    context_session_id: opts?.contextSessionId,
     created_at: now,
     updated_at: now,
   };
@@ -843,6 +853,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         attachments: deliverableAttachments(row.attachments),
         origin: row.origin,
         syncLocalOnly: row.sync_local_only,
+        contextSessionId: row.context_session_id,
       });
     },
 
@@ -1252,6 +1263,11 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       upsertRead(this, channelId, { notify_level: level });
     }),
 
+    setChatThreadMuted: action(function (this: ChatDraft, channelId: string, rootId: string, muted: boolean) {
+      const current = findReadRow(this, channelId)?.muted_threads;
+      upsertRead(this, channelId, { muted_threads: withThreadMuted(current, rootId, muted) });
+    }),
+
     // ── Channels ────────────────────────────────────────────────────────────
 
     createChatChannel: (name: string, opts?: ChatCreateChannelOptions) => {
@@ -1519,6 +1535,20 @@ export function selectChannelReadMarker(
     if (!newest || byCreatedAsc(newest, row) < 0) newest = row;
   }
   return newest;
+}
+
+/** Whether the viewer muted this thread's replies (their read row for the
+ *  thread's channel holds the list). */
+export function selectThreadMuted(
+  state: Pick<ChatSliceData, "chatReads">,
+  channelId: string,
+  rootId: string,
+): boolean {
+  for (const id in state.chatReads) {
+    const row = state.chatReads[id];
+    if (row?.channel_id === channelId) return isThreadMuted(row.muted_threads, rootId);
+  }
+  return false;
 }
 
 export type ChatRailChannel = ChatChannelView & {
