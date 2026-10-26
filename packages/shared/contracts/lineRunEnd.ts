@@ -100,3 +100,13 @@ export const runEnd = (run: LineRunStations & AnsweredGate) => endStation(run, r
 export function lineRunOutcome(run: LineRunStations | null | undefined, gate?: AnsweredGate | null): { kind: LineRunEnd; at: number; node: string } | null {
   return run && isLineRun(run) ? endStation(run, gate) : null;
 }
+
+/** A run that ended badly: failed, or completed through one of its graph's failure stations (agentwatch's
+ *  failed_at_build), which reads as completed because the graph walks on to its exit. */
+export function endedFailing(run: { status: string } & LineRunStations): boolean {
+  if (run.status === "failed") return true;
+  if (run.status !== "completed") return false;
+  let last: { node_id: string; completed_at?: number } | null = null;
+  for (const n of run.node_statuses ?? []) if (n.node_id !== "exit" && (!last || (n.completed_at ?? 0) >= (last.completed_at ?? 0))) last = n;
+  return /^failed(?:_|$)/.test(last?.node_id ?? "");
+}

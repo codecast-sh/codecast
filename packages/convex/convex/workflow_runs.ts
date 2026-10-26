@@ -9,7 +9,7 @@ import { killConversation } from "./conversations";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, userMayRead, withdrawCore, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
-import { CARD_GATE_NODE_ID, costParts, lineRunOutcome, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, costParts, endedFailing, lineRunOutcome, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
@@ -1561,7 +1561,7 @@ export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: 
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task && isTerminalTaskStatus(task.status)) throw new ConvexError(`${task.short_id} is ${task.status}: a closed problem is not resumed`);
   if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast flow trial rerun ${task.short_id} --at <station> resumes it under the trial's budget`);
-  if (run.status !== "failed") throw new ConvexError(`The run is ${run.status}: only a failed run is resumed at a station (a run waiting on a decision is asked again with cast workflow reask)`);
+  if (!endedFailing(run)) throw new ConvexError(`The run is ${run.status}: only a failed run is resumed at a station (a run waiting on a decision is asked again with cast workflow reask)`);
   const node = at.trim();
   if (!node) throw new ConvexError("Name the station to resume at");
   if (!run.runner_device) throw new ConvexError("The run names no machine to pick it up");

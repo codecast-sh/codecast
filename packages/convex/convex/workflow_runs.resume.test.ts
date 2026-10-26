@@ -137,6 +137,19 @@ describe("resumeFailedRunCore (cast workflow resume)", () => {
     expect(commandArgs(tables)).toEqual([{ command: "run_workflow", device: "dev-mini", args: { workflow_run_id: RUN } }]);
   });
 
+  test("a run that ended through one of its graph's failure stations resumes like a failed one; one that ended well does not", async () => {
+    // Oct 26: ct-61693's Revise ended at failed_at_build, then exit, so the run read completed and could not be resumed.
+    const ended = (last: string) => failed({
+      status: "completed", fail_reason: undefined, current_node_id: "exit",
+      node_statuses: [{ node_id: "build", status: "completed", completed_at: NOW - 2 }, { node_id: last, status: "completed", completed_at: NOW - 1 }, { node_id: "exit", status: "completed", completed_at: NOW }],
+    });
+    const stopped = await ended("failed_at_build");
+    expect(await resumeFailedRunCore(stopped.ctx, HOST, RUN, "decide", {}, NOW + 1)).toMatchObject({ resumed_at: "decide" });
+    expect(stopped.tables.workflow_runs[0]).toMatchObject({ status: "running", current_node_id: "decide", visits_reset_at: NOW + 1 });
+    const shipped = await ended("watch");
+    await expect(resumeFailedRunCore(shipped.ctx, HOST, RUN, "decide")).rejects.toThrow("only a failed run");
+  });
+
   test("refused, or only checked, writes nothing: another person, a run that is not failed, a closed problem, a trial problem, no station", async () => {
     const mate = await failed();
     await expect(resumeFailedRunCore(mate.ctx, MATE, RUN, "verify")).rejects.toThrow("owner");
