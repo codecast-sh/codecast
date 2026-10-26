@@ -28,6 +28,26 @@ source = "evals"
 kind = ["regression", "prompt_miss"]
 fingerprint = "evals:<surface>:<gate, freeze or separated-worse>"
 runs = "./evals check --signal (packages/evals/src/signals.ts), on the eval cadence"
+opens_causes = true
+
+# Codecast's own production errors (Ashot, sd-1650, Oct 26): a group that is
+# new or regressed opens a problem, like Union's errors; until then they were
+# held under their keys and reached nobody.
+[[line.finders]]
+id = "web-errors"
+source = "sdk:codecast-web"
+kind = ["bug", "regression"]
+fingerprint = "<the event group's key: error:… or replay:…>"
+runs = "codecast's event ingest, on a group that is new or regressed"
+opens_causes = true
+
+[[line.finders]]
+id = "backend-errors"
+source = "sdk:codecast-backend"
+kind = ["bug", "regression"]
+fingerprint = "<the event group's key: error:…>"
+runs = "codecast's event ingest, on a group that is new or regressed"
+opens_causes = true
 
 [[line.finders]]
 id = "insight-blockers"
