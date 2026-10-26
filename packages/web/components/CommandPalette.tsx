@@ -15,6 +15,7 @@ import { pagePath, palettePages } from "../lib/navPages";
 import { HOSTED_SECTION_KEYS } from "../lib/surfaceRules";
 import { useState, useCallback, useMemo, useRef, memo, lazy, Suspense } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
 import { useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
 import { useTheme } from "./ThemeProvider";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
@@ -719,7 +720,7 @@ export function ActionSubmenu({
         image: o.info.image,
         section: o.section,
       }));
-      const roles = assignRoles.map((o) => ({ key: o.key, label: o.label, hint: o.hint, type: "user" as const, image: undefined, face: o.info.kind === "role" ? o.info.avatar : undefined, section: o.section }));
+      const roles = assignRoles.map((o) => ({ key: o.key, label: o.label, hint: o.hint, type: "user" as const, image: undefined, role: o.info.kind === "role" ? { _id: o.info.role_id, short_id: o.info.role_short_id, handle: o.info.handle, avatar: o.info.avatar, name: o.info.name } : undefined, section: o.section }));
       return [{ key: "", label: "Unassign", type: "user" as const, image: undefined }, ...people, ...roles]
         .filter((o: { label: string; hint?: string }) => `${o.label} ${o.hint ?? ""}`.toLowerCase().includes(q));
     }
@@ -1089,7 +1090,7 @@ export function ActionSubmenu({
       } else if (mode === "assign") {
         applyTaskUpdate({ assignee: item.key });
         const member = (teamMembers || []).find((m: any) => m._id === item.key);
-        toast.success(item.key ? `Assigned to ${item.face ? item.label : memberDisplayName(member, "user")}` : "Unassigned");
+        toast.success(item.key ? `Assigned to ${item.role ? item.label : memberDisplayName(member, "user")}` : "Unassigned");
       } else if (mode === "blocker" || mode === "related") {
         const res = applyRelationPick(mode, targets as TaskItem[], item.pick);
         reportRelationPick(res);
@@ -1389,7 +1390,7 @@ export function ActionSubmenu({
             >
               {item.type === "agent" ? (
                 <AgentTypeIcon agentType={item.agentType} className={`w-4 h-4 flex-shrink-0 ${AGENT_COLORS[item.key] || "text-sol-violet"}`} />
-              ) : mode === "assign" && !item.face ? (
+              ) : mode === "assign" && !item.role ? (
                 <AvatarImg
                   src={item.image}
                   alt={item.label}
@@ -1410,6 +1411,8 @@ export function ActionSubmenu({
                 // Same shape convention as the chip row: square = manual label,
                 // round = auto-derived project.
                 <span className={`w-3 h-3 flex-shrink-0 ${item.kind === "project" ? "rounded-full" : "rounded-[3px]"} ${item.dot}`} />
+              ) : item.role ? (
+                <RoleFace role={item.role} size={18} className="flex-shrink-0" />
               ) : item.face ? (
                 <RoleAvatar avatar={item.face} size={18} className="flex-shrink-0" />
               ) : Icon ? (
@@ -1696,6 +1699,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // unless widened.
   const { only: scopeOnly, setEverything: setAssistantEverything } = useAssistantScope();
   const surfaceMode = useSurfaceMode();
+  const identityPrefs = useIdentityPrefs();
   // Favorites follow the scope like recents do: the empty palette's Favorites
   // group and the typed ranking both read this list, never the raw one.
   const favorites = useMemo(
@@ -2371,7 +2375,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return `${targets.length} ${targetType}s selected`;
   }, [targets, target, targetType, hasTargets, hostedMode]);
 
-  const actions = [...paletteActions(targetType, targets, currentUser?._id, chatOn, surfaceMode), ...(targetType === "session" && target && targets.length === 1 ? getPaletteSessionCommands(target._id) : [])];
+  const actions = [...paletteActions(targetType, targets, currentUser?._id, chatOn, surfaceMode, identityPrefs), ...(targetType === "session" && target && targets.length === 1 ? getPaletteSessionCommands(target._id) : [])];
 
   const rootTaskStatuses = useTeamTaskStatusList(target?.team_id);
   const pinnedAgents = usePinnedAgentIds();

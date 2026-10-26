@@ -27,7 +27,7 @@ import { parseProposalChangeRef, parseReplayRef, parseRepoObjectId, type EntityT
 import { docRelatesToTask } from "@codecast/shared/tasks";
 import { roleAssigneeInfo, sameAssigneeInfo, type AssigneeInfo as ResolvedAssignee, type AssigneeRole } from "@codecast/shared/contracts/orgAssignee";
 import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
-import { roleAuthorOf } from "./sessionIdentity";
+import { roleAuthorOf, type IdentityPrefs } from "./sessionIdentity";
 import type { SessionRoleSnapshot } from "../store/inboxStore";
 
 type Member = { _id: string; name?: string; email?: string; image?: string; github_avatar_url?: string; github_username?: string };
@@ -90,7 +90,9 @@ export function assigneeLabelOf(key: string, info: { name: string } | null | und
 
 /** `face` is set for a role's standing session: the role's avatar key, drawn
  *  as its face (RoleAvatar) rather than an image url. */
-type SessionAuthor = { name: string; avatar?: string | null; face?: AvatarKey } | null;
+/** `role` is set when the author is a role: draw it with RoleFace, which
+ *  picks its animal (`face`) or its icon for the viewer. */
+type SessionAuthor = { name: string; avatar?: string | null; face?: AvatarKey; role?: SessionRoleSnapshot } | null;
 
 /**
  * Is this cached session a TEAMMATE's (injected by viewing/searching), not the
@@ -192,14 +194,15 @@ export function resolveSessionAuthor(
   conv: { user_id?: string; is_own?: boolean; acting_user_id?: string | null; user?: { name?: string | null; email?: string | null; avatar_url?: string | null } | null } | null | undefined,
   currentUser: Member | null | undefined,
   teamMembers: Member[] | null | undefined,
+  prefs?: IdentityPrefs,
 ): SessionAuthor {
   const uid = session.user_id ?? conv?.user_id;
   // A role's standing session is the role: its given name and face, read from
   // the role (lib/sessionIdentity), never from the bot user minted for it,
   // whose name is the role's title. Pass the row through withLiveRole first
   // so a row with no snapshot still finds its role.
-  const roleAuthor = roleAuthorOf({ _id: "", standing_role_id: session.standing_role_id, role: session.role });
-  if (roleAuthor) return { name: roleAuthor.name, avatar: null, face: roleAuthor.face };
+  const roleAuthor = roleAuthorOf({ _id: "", standing_role_id: session.standing_role_id, role: session.role }, prefs);
+  if (roleAuthor) return { name: roleAuthor.name, avatar: null, face: roleAuthor.face, role: session.role! };
   // An anchor renders under its bot identity (acting_user_id) even when it is the
   // current user's OWN session — so resolve that BEFORE the own-session short
   // circuit. Team bots are in the roster; a personal bot isn't, but the server

@@ -13,8 +13,8 @@ import { inActiveWorkspace } from "../lib/workspaceScope";
 import { teamIdForPath } from "../lib/vault/scopeModel";
 import { matchScore, mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
 import { mergeEntityRows } from "../lib/universalSearch";
-import { identityLine, identityRowOf } from "../lib/sessionIdentity";
-import { personifyAllNow } from "./usePersonifyAll";
+import { identityLine, identityRowOf, type IdentityPrefs } from "../lib/sessionIdentity";
+import { identityPrefsNow } from "./useIdentityPrefs";
 
 // score/matchScore moved to lib/mentionRanking, which owns ranking and must not
 // import this module back. Re-exported so every existing caller is unchanged.
@@ -189,7 +189,7 @@ export function mentionItemMatches(m: MentionItem, query: string): boolean {
   // .md S3). The name it wears depends on the workspace switch, so this asks
   // the same resolver the row's own rendering asks.
   const persona = m.identity
-    ? identityLine(m.identity, m.label, personifyAllNow()).name
+    ? identityLine(m.identity, m.label, identityPrefsNow()).name
     : null;
   return (
     (!!persona && matchScore(persona, q) !== Infinity) ||
@@ -213,11 +213,11 @@ export function chatMentionOffers(m: MentionItem, query: string): boolean {
   return true;
 }
 
-const mentionFilterCache = new WeakMap<MentionItem[], { query: string; personify: boolean; chat: boolean; result: MentionItem[] }>();
+const mentionFilterCache = new WeakMap<MentionItem[], { query: string; personify: IdentityPrefs; chat: boolean; result: MentionItem[] }>();
 
 export function filterMentionItems(items: MentionItem[], query: string, chat = false): MentionItem[] {
   const q = query.trim().toLowerCase();
-  const personify = personifyAllNow();
+  const personify = identityPrefsNow();
   const previous = mentionFilterCache.get(items);
   const source = previous && previous.personify === personify && previous.chat === chat && previous.query && q.startsWith(previous.query)
     ? previous.result : items;
@@ -230,7 +230,7 @@ let previousMentionInputs: unknown[] = [];
 let previousMentionItems: MentionItem[] = [];
 
 export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, scope: MentionScope): MentionItem[] {
-  const personify = personifyAllNow();
+  const personify = identityPrefsNow();
   const inputs = [
     scope.kind, scope.kind === "team" ? scope.teamId : scope.kind === "personal" ? scope.userId : "",
     s.mentionIndex, s.tasks, s.docs, s.plans, s.sessions, s.teamMembers, s.chatSlackPeople,
@@ -301,7 +301,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     const s = useInboxStore.getState();
     return mergeMentionSuggestions(
       filterMentionItems(buildMentionItems(s, kind === "team" ? { kind, teamId } : kind === "personal" ? { kind, userId } : { kind }), rawQ),
-      [], mentionViewTimes(s), rawQ.trim() ? SEARCH_LIMIT_PER_TYPE : RECENT_LIMIT_PER_TYPE, rawQ, personifyAllNow(),
+      [], mentionViewTimes(s), rawQ.trim() ? SEARCH_LIMIT_PER_TYPE : RECENT_LIMIT_PER_TYPE, rawQ, identityPrefsNow(),
     );
   }, [kind, teamId, userId]);
 }

@@ -10,7 +10,7 @@ import { changesDayLabel, localDay } from "../../lib/changesDay";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
 import { memberAvatarUrl } from "../../lib/liveEntities";
 import { AuthorAvatar } from "../entityDisplay";
-import { RoleAvatar } from "../org/avatars";
+import { RoleFace, type RoleLike } from "../org/RoleFace";
 import { EntityIdPill, TextWithMentions } from "../EntityIdPill";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { areaColor, areaLabel, KIND_COLOR, RISK_HATCH } from "./areaColor";
@@ -291,14 +291,14 @@ export function Provenance({ story, className = "" }: { story: WhyFacts; classNa
 }
 
 type StoryPeople = Pick<StoryRow, "actor_user_ids" | "author_names">;
-type Face = { key: string; name: string; image?: string; face?: string };
+type Face = { key: string; name: string; image?: string; role?: RoleLike };
 
 /** The people behind a story, one per person (editionModel.peopleOf), each with a face from the live roster. */
 function useStoryPeople(story: StoryPeople): Face[] {
   const roster = useTeamRosterIdentity();
   return peopleOf([story], roster).map((p) => {
     const m = p.userIds.map((id) => roster.find((r) => String(r._id) === id)).find(Boolean);
-    return { key: p.key, name: p.name, image: m ? memberAvatarUrl(m) : undefined, face: m?.role?.face };
+    return { key: p.key, name: p.name, image: m ? memberAvatarUrl(m) : undefined, role: m?.role ? { _id: m.role.roleId, handle: m.role.handle, avatar: m.role.face, name: m.role.title } : undefined };
   });
 }
 
@@ -307,7 +307,7 @@ function Faces({ people, size, max }: { people: Face[]; size: number; max: numbe
     <span className="inline-flex shrink-0 items-center">
       {people.slice(0, max).map((p, i) => (
         <span key={p.key} className="inline-flex rounded-full bg-sol-bg" style={{ marginLeft: i ? -Math.round(size / 4) : 0 }}>
-          {p.face ? <RoleAvatar avatar={p.face} size={size} title={p.name} /> : <AuthorAvatar name={p.name} avatar={p.image} size={size} />}
+          {p.role ? <RoleFace role={p.role} size={size} title={p.name} /> : <AuthorAvatar name={p.name} avatar={p.image} size={size} />}
         </span>
       ))}
       {people.length > max && <span className="ml-1 font-mono text-[10px] text-sol-text/45">+{people.length - max}</span>}
