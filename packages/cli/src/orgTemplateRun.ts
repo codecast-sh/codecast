@@ -647,27 +647,6 @@ export async function templateLearning(deps: OrgInitDeps, set: "on" | "off" | un
   if (!set) return request(deps, "/cli/org/template/learning", args);
   return request(deps, "/cli/org/template/learning/set", { ...args, enabled: set === "on", from_session: options.session || sessionIdFromEnv() || undefined });
 }
-type PassResult = { template_id: string; read: number; failed: number; filed: unknown[]; refused: Record<string, number>; remaining: number };
-/**
- * The learning pass for one template (H12), Codecast's publishers only: the
- * server reads each opted-in instance, asks a model and files what passes the
- * leak check. It reads a few instances per call, so this asks again while any
- * remain and the last call got somewhere.
- */
-export async function learnPass(deps: OrgInitDeps, template: string): Promise<PassResult> {
-  const total: PassResult = { template_id: template, read: 0, failed: 0, filed: [], refused: {}, remaining: 0 };
-  for (let round = 0; round < 12; round++) {
-    const part: PassResult = await request(deps, "/cli/org/template/learn/pass", { template_id: template }, { timeoutMs: 600_000 });
-    total.read += part.read; total.failed += part.failed; total.filed.push(...part.filed); total.remaining = part.remaining;
-    for (const [kind, n] of Object.entries(part.refused)) total.refused[kind] = (total.refused[kind] ?? 0) + n;
-    if (!part.remaining || part.read === part.failed) break;
-  }
-  return total;
-}
-export const learnStatus = (deps: OrgInitDeps, template: string) => request(deps, "/cli/org/template/learn/status", { template_id: template });
-export const learnDue = (deps: OrgInitDeps) => request(deps, "/cli/org/template/learn/due", {});
-export const learnRollout = (deps: OrgInitDeps, template: string) => request(deps, "/cli/org/template/learn/rollout", { template_id: template });
-export const learnPromote = (deps: OrgInitDeps, template: string) => request(deps, "/cli/org/template/learn/promote", { template_id: template });
 
 export type PublishOptions = { team?: string; personal?: boolean; codecast?: boolean; status?: string; changelog?: string; reviewProject?: string; dryRun?: boolean };
 /** Who publishes: Codecast, else the workspace the options name. Publish, yank and retire send the same. */

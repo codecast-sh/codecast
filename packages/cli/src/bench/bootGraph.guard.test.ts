@@ -232,7 +232,9 @@ describe("command groups stay off the boot graph", () => {
     // contracts/teamHosts.ts left the barrel for a subpath import. What stays is
     // directoryTeam.ts (stableContext), loginShellPath.ts, shellQuote.ts
     // (launchCommand), secretShapes.ts (redaction) and render/structuredResult.ts.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(325);
+    // 326 on 2026-10-26: ccAdoptLogin.ts, the cloud Mac's keychain adopt job,
+    // split out of ccAccounts.ts to hold that file under its max-lines pin.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(326);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -365,7 +367,8 @@ describe("command groups stay off the boot graph", () => {
     // loadGovernor.ts, directoryTeam.ts and render/structuredResult.ts.
     // 511 on 2026-10-26: cursorDbPath.ts, the leaf every Cursor database open
     // goes through (a closed WAL workspace opens immutable).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(511);
+    // 512 on 2026-10-26: ccAdoptLogin.ts, split out of ccAccounts.ts (above).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(512);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

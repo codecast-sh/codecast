@@ -34,7 +34,8 @@ import { isConversationSafetyBlocked, type ConversationSafetyState } from "./con
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { countersFor } from "./lib/orgCaps";
 import { liveRolesByHandle } from "./lib/orgAccess";
-import { byQueueOrder, isWaitingInQueue, queueAtBefore, queueOrder } from "./lib/sessionQueue";
+import { byQueueOrder, headOfEachQueue, isControlMessage, isWaitingInQueue, queueAtBefore } from "./lib/sessionQueue";
+export { headOfEachQueue, isControlMessage };
 import { formatJointMessage, jointPartsOf, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { quotesWaiting, stampQuotesSent } from "./quoteDrafts";
 
@@ -107,23 +108,6 @@ export async function getAuthenticatedUserId(
   }
 
   return null;
-}
-
-// Interactive-prompt / poll answers (tagged __cc_poll, mirrors the daemon's parsePollMessage):
-// keystroke selections (keys/steps) and free-text answers that decline the menu and type at
-// the prompt (text). These are fire-and-forget — a successful inject IS their delivery, so the
-// content-matched ack in addMessages is bypassed and re-injecting them on the stale-injected
-// reset is suppressed. Re-injecting a keystroke poll re-sends menu keys and mis-navigates the
-// agent's prompts; re-injecting a text poll re-declines and re-types a duplicate answer. (A
-// text poll's typed answer DOES echo to the JSONL, unlike a keystroke poll, but the ack still
-// can't match it — the stored content is the JSON envelope, not the typed prose.)
-export function isControlMessage(content: string): boolean {
-  try {
-    const parsed = JSON.parse(content);
-    return parsed?.__cc_poll === true && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps) || typeof parsed.text === "string");
-  } catch {
-    return false;
-  }
 }
 
 type WakeScheduler = { runAfter: (delayMs: number, fn: any, args: any) => Promise<unknown> };
@@ -1659,36 +1643,6 @@ export async function collectDeliverableForOwner(
     }
   }
   return headOfEachQueue(owned);
-}
-
-// Only the oldest deliverable row of each conversation. A conversation takes
-// one message at a time, in queue order (the daemon serializes per
-// conversation, and the launch prompt and the web's in-flight card both read
-// the oldest row), so the rows behind the head are nothing the daemon can act
-// on yet: it claimed each one on every push only to skip it. A session that
-// stays down queues dozens (52 worker reports on one conversation, 3.5 days
-// old, on 2026-10-05), and claiming those on every push was 44 mutations a
-// second, a tenth of all backend time (ct-56547). The next row arrives the
-// moment the head leaves "pending", the same reactive turn as before.
-//
-// A poll answer goes ahead of every ordinary row. The daemon holds an ordinary
-// message while the pane shows a menu, and the answer is what closes that
-// menu: queued behind the held message, it never reached the daemon and the
-// session sat stuck until someone answered in the terminal (Alex Green's
-// jx78ys8, 2026-10-25: a typed message sent while the card was open, then
-// three card answers and two messages, none delivered).
-export function headOfEachQueue<T extends { conversation_id: unknown; content?: string; created_at?: number; queue_at?: number; _creationTime?: number }>(rows: T[]): T[] {
-  const head = new Map<string, T>();
-  const ahead = (a: T, b: T) => {
-    const pollA = isControlMessage(a.content ?? ""), pollB = isControlMessage(b.content ?? "");
-    return pollA !== pollB ? pollA : queueOrder(a) < queueOrder(b);
-  };
-  for (const row of rows) {
-    const key = String(row.conversation_id);
-    const held = head.get(key);
-    if (!held || ahead(row, held)) head.set(key, row);
-  }
-  return rows.filter((r) => head.get(String(r.conversation_id)) === r);
 }
 
 export const getPendingMessagesForDaemon = query({

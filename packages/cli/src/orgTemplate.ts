@@ -97,26 +97,26 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
   learn.command("pass <template>").description("Read each opted-in instance of the template on the server and file generalized lessons; prints what was filed and counts, never a session's words")
     .option("--json", "Machine-readable output")
     .action(async (id: string) => {
-      const result = await (await import("./orgTemplateRun.js")).learnPass(deps, id);
+      const result = await (await import("./orgTemplateLearn.js")).learnPass(deps, id);
       output(result);
       if (result.read > 0 && result.failed === result.read) { console.error("Every model call of the pass failed; nothing was learned. Check ANTHROPIC_API_KEY on the deployment."); process.exitCode = 1; }
     });
   learn.command("status <template>").description("Open lessons, whether a draft is due and its next version, the canary release with its instances and whether it ran clean")
     .option("--json", "Machine-readable output")
-    .action(async (id: string) => output(await (await import("./orgTemplateRun.js")).learnStatus(deps, id)));
+    .action(async (id: string) => output(await (await import("./orgTemplateLearn.js")).learnStatus(deps, id)));
   learn.command("due").description("Whether the loop has anything to do across Codecast's templates; exits 1 when nothing is due (a trigger's --precheck)")
     .option("--json", "Machine-readable output")
     .action(async () => {
-      const result = await (await import("./orgTemplateRun.js")).learnDue(deps);
+      const result = await (await import("./orgTemplateLearn.js")).learnDue(deps);
       output(result);
       if (!result.due) process.exitCode = 1;
     });
   learn.command("rollout <template>").description("Move the instances that follow canary to the canary release: each gets the upgrade and its host step queued on its machine")
     .option("--json", "Machine-readable output")
-    .action(async (id: string) => output(await (await import("./orgTemplateRun.js")).learnRollout(deps, id)));
+    .action(async (id: string) => output(await (await import("./orgTemplateLearn.js")).learnRollout(deps, id)));
   learn.command("promote <template>").description("Make the canary release stable once learn status says it ran clean: the published release itself, whatever the template folder holds now")
     .option("--json", "Machine-readable output")
-    .action(async (id: string) => output(await (await import("./orgTemplateRun.js")).learnPromote(deps, id)));
+    .action(async (id: string) => output(await (await import("./orgTemplateLearn.js")).learnPromote(deps, id)));
   template.command("publish <folder...>").description("Publish release folders as templates under a workspace, or as Codecast for every workspace; several folders publish in one run (a gallery: packs/*)")
     .option("--team <name|id>", "Publishing team workspace").option("--personal", "Publish under your personal workspace").option("--codecast", "Publish as Codecast (its admins only)")
     .option("--status <draft|canary|stable>", "Release status", "draft").option("--changelog <text>", "What changed in this version; '-' reads stdin; default: the folder's CHANGELOG.md")

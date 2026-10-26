@@ -18,7 +18,8 @@ describe("cursorDbOpenPath", () => {
     fs.rmSync(`${file}-wal`, { force: true });
     fs.rmSync(`${file}-shm`, { force: true });
 
-    expect(() => new Database(file, { readonly: true }).query("SELECT 1").get()).toThrow("unable to open database file");
+    // A plain read-only open throws here on macOS; Linux's SQLite opens it, so only the immutable path is asserted.
+    expect(cursorDbOpenPath(file)).toEndWith("?immutable=1");
     const opened = new Database(cursorDbOpenPath(file), { readonly: true });
     expect(opened.query("SELECT value FROM ItemTable").get()).toEqual({ value: "v" });
     opened.close();

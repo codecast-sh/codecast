@@ -1,6 +1,7 @@
 import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
 import { deliverableAttachments } from "../lib/pendingUploads";
 import { FLOW_SYNC_COLLECTIONS } from "./clientSyncRegistry.flows";
+import { ORG_SYNC_COLLECTIONS } from "./clientSyncRegistry.org";
 
 export type PersistenceKind = "collection" | "meta";
 export type DispatchTableKind = "collection" | "singleton";
@@ -271,20 +272,7 @@ export const CLIENT_SYNC_REGISTRY = {
       return rest;
     },
   },
-  // A template role's instance (org-hire.md H11) as the role page reads it
-  // (orgTemplates.instanceForRole), one row per role viewed. Delta: each role
-  // page feeds its own row. localFirst: a hire answer changed on the page
-  // lands on the draft's `config` (answerOrgTemplateInput) and the echo
-  // retires the lock. Most of the row is nested objects the identity reuse
-  // skips, so the feeder stamps `rev`, a digest of the whole row.
-  orgTemplateInstances: {
-    persistence: { kind: "collection", key: "orgTemplateInstances" },
-    hydration: { phase: "deferred" },
-    localFirst: true,
-    sync: { isDelta: true },
-    feeds: ["orgTemplates.instanceForRole"],
-    writtenBy: ["orgTemplates"],
-  },
+  ...ORG_SYNC_COLLECTIONS,
   // The decision queue (cast decide). Answering is local-first: the action
   // flips status on the draft and the resolution fields ride the generic
   // patch rail to the session_decisions table. Everything structural

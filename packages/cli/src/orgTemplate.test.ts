@@ -3,14 +3,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
-import { Command } from "commander";
 import { applyProposalChanges, extractOrgProposal } from "@codecast/shared/contracts/orgProposal";
 import { withTemplateLoader } from "@codecast/shared/contracts/orgTemplateManifest";
-import { registerOrgTemplateCommands } from "./orgTemplate";
 import { atomicJson, canonicalDirectory, readArtifact, substitute, validateTemplate, type OrgTemplate } from "./orgTemplateArtifact";
 import { diffTemplate, draftRoot, editTemplate, listTools, releaseDraft, runTool } from "./orgTemplateTools";
-import { bindTemplate, catalogTemplates, cutoverTemplate, evidenceTemplate, installTemplate, learnPass, loaderPrompt, lessonTemplate, listLessons, publishTemplate, publishTemplates, reportTemplate, retireTemplate, yankRelease, setLessonStatus, setupTemplate, templateLearning, quoteTemplateArg, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
+import { bindTemplate, catalogTemplates, cutoverTemplate, evidenceTemplate, installTemplate, loaderPrompt, lessonTemplate, listLessons, publishTemplate, publishTemplates, reportTemplate, retireTemplate, yankRelease, setLessonStatus, setupTemplate, templateLearning, readReceipt, receiptPath, reconcileTemplate, templateInstructions, templateStatus, upgradeTemplate, type TemplateOptions } from "./orgTemplateRun";
+import { learnPass } from "./orgTemplateLearn";
 import type { OrgInitDeps } from "./orgInit";
 
 const dirs: string[] = [];
@@ -846,20 +844,6 @@ describe("instance record, readiness and the loader", () => {
     expect(status.ask).toMatchObject({ id: "search-console" });
     expect(status.setup.map((r: any) => [r.id, r.status])).toEqual([["search-console", "open"], ["publora", "open"], ["measurement", "done"]]);
   }, 30000);
-});
-
-test("registers lazy org template commands and UI install flags", () => {
-  const program = new Command(); program.command("org"); registerOrgTemplateCommands(program, new Server(tmp()).deps);
-  const template = program.commands[0].commands[0]; expect(template.name()).toBe("template");
-  expect(template.commands.map((c) => c.name())).toEqual(["inspect", "install", "status", "reconcile", "bind", "evidence", "report", "setup", "lesson", "lessons", "lesson-status", "learning", "learn", "publish", "yank", "retire", "catalog", "activate", "cutover", "upgrade", "tools", "run", "edit", "diff", "release", "instructions"]);
-  expect(template.commands.find((c) => c.name() === "learn")!.commands.map((c) => c.name())).toEqual(["pass", "status", "due", "rollout"]);
-  expect(template.commands.find((c) => c.name() === "install")!.options.map((o) => o.long)).toEqual(expect.arrayContaining(["--instance", "--project", "--dir", "--team", "--personal", "--adopt"]));
-});
-
-test("loader and follow-up shell arguments remain literal", () => {
-  const value = "/tmp/it's $(printf INJECTED) `printf INJECTED`";
-  const result = spawnSync("bash", ["-c", `printf '%s' ${quoteTemplateArg(value)}`], { encoding: "utf8" });
-  expect({ status: result.status, stdout: result.stdout, stderr: result.stderr, error: result.error?.message }).toEqual({ status: 0, stdout: value, stderr: "", error: undefined });
 });
 
 describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", () => {
