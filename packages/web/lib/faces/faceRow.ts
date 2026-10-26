@@ -140,6 +140,9 @@ export type FaceCard =
       /** The call plane is still on its way in (accept, token, media): the
        *  card says so until the room is up, so a Join reads as joining. */
       joining?: boolean;
+      /** A private huddle (started private and still locked): only the people
+       *  rung in see it, join it and read its record. */
+      private: boolean;
     }
   /** Somebody stepped in: the live card, with the join said in words for a
    *  few seconds. Same controls as `live`, so nothing disappears under the notice. */
@@ -198,6 +201,8 @@ export type FaceLiveRoom = {
   /** Guests let in on a link (calls.getLiveRooms `guests`): no seat, no
    *  roster row, a LiveKit identity (`guest:<id>`) and the name they typed. */
   guests?: { identity: string; name: string; joined_at?: number }[];
+  /** Started private (calls.getLiveRooms `private`). */
+  private?: boolean;
 };
 
 export type FaceRowInput = {
@@ -239,6 +244,8 @@ export type FaceRowInput = {
   /** The engaged room's name (describeRoomLive); the named teammate's name
    *  stands in for a people room when absent. */
   roomLabel?: string;
+  /** The engaged room is a private huddle (roomIsPrivate). */
+  roomPrivate?: boolean;
   now: number;
 };
 
@@ -502,6 +509,7 @@ function cardOf(
       words: walkieHeld ? stageWordsFor(input, mode, name) : null,
       hearing,
       joining: mode === "call" && input.call.phase === "connecting" && input.call.roomKey === room,
+      private: !!input.roomPrivate,
     };
   }
   const ringOut =
@@ -712,9 +720,22 @@ function occupancySig(occ: Record<string, FaceSeat[]> | undefined): string {
 function liveRoomsSig(rooms: FaceLiveRoom[] | undefined): string {
   let s = "";
   for (const r of rooms ?? []) {
-    s += `${r.room_key}|${r.seat ?? ""}|${seatSig(r.members)}|${(r.guests ?? []).map((g) => `${g.identity}:${g.name}`).join(",")}\n`;
+    s += `${r.room_key}|${r.seat ?? ""}|${r.private ? 1 : 0}|${seatSig(r.members)}|${(r.guests ?? []).map((g) => `${g.identity}:${g.name}`).join(",")}\n`;
   }
   return s;
+}
+
+function lockedRoomsSig(rooms: Record<string, { locked?: boolean }> | undefined): string {
+  let s = "";
+  for (const k in rooms ?? {}) if (rooms![k]?.locked) s += `${k},`;
+  return s;
+}
+
+/** A huddle that started private and is still locked. Private rides the live
+ *  room from the server; the lock's home is `callRooms`, flipped locally, so
+ *  opening the door (which makes the huddle ordinary) reads at once. */
+export function roomIsPrivate(st: any, roomKey: string): boolean {
+  return !!st.callRooms?.[roomKey]?.locked && !!(st.liveRooms ?? []).find((r: FaceLiveRoom) => r.room_key === roomKey)?.private;
 }
 
 function rosterFaceSig(members: FaceMember[] | undefined): string {
@@ -838,6 +859,7 @@ export function faceRowInputSig(
     rosterFaceSig(st.teamMembers),
     occupancySig(st.callOccupancy),
     liveRoomsSig(st.liveRooms),
+    lockedRoomsSig(st.callRooms),
     walkieRowSig(walkie),
     `${call.phase}|${call.roomKey ?? ""}|${call.muted ? 1 : 0}|${call.micDenied ? 1 : 0}|${call.camera ? 1 : 0}|${call.speaking.join(",")}|${call.cameras.join(",")}|${(call.guests ?? []).map((g) => `${g.identity}:${g.muted ? 1 : 0}`).join(",")}|${st.call?.left ? `${st.call.left.roomKey}@${st.call.left.at}` : ""}`,
     st.followLeaderId ?? "",
@@ -894,6 +916,7 @@ export function faceRowInputFrom(
     unread: dmUnreadByMember(st),
     ask: EMPTY_ASK,
     roomLabel: room ? describeRoomLive(room, st).label : undefined,
+    roomPrivate: room ? roomIsPrivate(st, room) : false,
     now,
   };
 }

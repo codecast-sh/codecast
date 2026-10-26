@@ -14,6 +14,7 @@ import {
   isTalking,
   readFaceRow,
   resetFaceRow,
+  roomIsPrivate,
   type FaceMember,
   type FaceRow,
   type FaceRowInput,
@@ -249,7 +250,19 @@ describe("every state in the vocabulary", () => {
       null,
     );
     expect(states(row)).toMatchObject({ [ME]: "in-call", [ANN]: "live-with-me", [BOB]: "live-with-me", [CY]: "online" });
-    expect(row.card).toMatchObject({ kind: "live", title: "#design", words: null, mute: true });
+    expect(row.card).toMatchObject({ kind: "live", title: "#design", words: null, mute: true, private: false });
+  });
+
+  test("a private huddle says so on its card until the door opens", () => {
+    const occupancy = { "channel:c1": [seat(ME), seat(ANN)] };
+    const row = deriveFaceRow(input({ call: call("channel:c1"), occupancy, roomPrivate: true }), null);
+    expect(row.card).toMatchObject({ kind: "live", private: true });
+
+    const live = [{ room_key: "channel:c1", members: [], private: true }];
+    expect(roomIsPrivate({ liveRooms: live, callRooms: { "channel:c1": { locked: true } } }, "channel:c1")).toBe(true);
+    // Opening the door (a local flip of the lock) makes it ordinary at once.
+    expect(roomIsPrivate({ liveRooms: live, callRooms: { "channel:c1": { locked: false } } }, "channel:c1")).toBe(false);
+    expect(roomIsPrivate({ liveRooms: [{ ...live[0], private: false }], callRooms: { "channel:c1": { locked: true } } }, "channel:c1")).toBe(false);
   });
 });
 

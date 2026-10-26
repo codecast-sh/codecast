@@ -17,7 +17,7 @@ import { ENGINE_CARD_ACTIONS, sentence, type CardActions, type Incoming, type Li
 // says what in one breath. The tones and button names are the strip's
 // (calls/walkie.css) and the ring card's (calls/ringCard.css), compacted in
 // faceRow.css, so a colour still means what it meant.
-import { MicOff, Mic, PhoneOff, Video, VideoOff } from "lucide-react";
+import { Lock, MicOff, Mic, PhoneOff, Video, VideoOff } from "lucide-react";
 import type { FaceCard } from "../../lib/faces/faceRow";
 import type { FaceDensity } from "../../lib/faces/layout";
 import { WalkiePttButton } from "../calls/WalkiePtt";
@@ -246,6 +246,12 @@ export function EngagementCard({
             <Line stage="locked" hearing={card.hearing}>
               <span className="engagement-card-title">{shortName(card.title)}</span>
             </Line>
+          )}
+          {card.private && (
+            <span className="engagement-card-private" title="Private huddle: only people rung in see it, join it and read its record">
+              <Lock aria-hidden="true" />
+              private
+            </span>
           )}
           <LiveControls card={card} actions={actions} accessory={accessory} />
         </>,
