@@ -14,7 +14,10 @@ quiet=$1
 shift
 [ "${1:-}" = "--" ] && shift
 log=$(mktemp)
-trap 'rm -f "$log"' EXIT
+# Every synchronous spawn the tests make, as it starts and returns
+# (packages/cli/src/test-helpers/spawnTrace.ts): the hang sat inside one.
+export CODECAST_SPAWN_TRACE=$(mktemp)
+trap 'rm -f "$log" "$CODECAST_SPAWN_TRACE"' EXIT
 
 "$@" > >(tee -a "$log") 2>&1 &
 pid=$!
@@ -30,6 +33,8 @@ while kill -0 "$pid" 2>/dev/null; do
 
   echo "::group::quiet-watchdog: no output for ${still}s, stopping the run"
   echo "last test file: $(grep -aoE 'src/[^ ]+\.test\.tsx?' "$log" | tail -1)"
+  echo "last synchronous spawns (a start with no done is the one that never returned):"
+  tail -8 "$CODECAST_SPAWN_TRACE" 2>/dev/null | cut -c1-300
   ps -eo pid,ppid,pgid,stat,etimes,wchan:32,args --forest 2>/dev/null | grep -v ' ps -eo ' | cut -c1-220
   for p in $(pgrep -f 'bun|tmux|node|git' 2>/dev/null); do
     [ -d "/proc/$p" ] || continue
