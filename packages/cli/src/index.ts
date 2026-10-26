@@ -13832,6 +13832,62 @@ roleGroup
   });
 
 
+// The role's drawn icon (org-staffing.md S13): what it looks after, as a
+// glyph. Show it, print the brief to draw one by hand, set a hand-drawn SVG,
+// or have codecast draw it.
+roleGroup
+  .command("icon")
+  .description("A role's drawn icon: show it, --brief to draw one by hand, --svg to set yours, or --generate to have codecast draw it")
+  .argument("<handle>", "@handle, or-N, or id")
+  .option("--brief", "Print the design language, the role's charter and its siblings' icons, to draw one by hand")
+  .option("--svg <file|->", "Set a hand-drawn icon from an SVG file ('-' reads stdin); needs --concept")
+  .option("--concept <words>", "With --svg: the object it draws, in a word or two; no other role in the workspace may hold it")
+  .option("--accent <color>", "With --svg: the tile's tint, one of the theme accents (default: the role's current one, else its siblings' least used)")
+  .option("--generate", "Have codecast draw it: three drawings judged at sidebar size, a minute or so")
+  .option("--hint <text>", "With --generate: steer the drawing (\"something botanical\", \"not a wrench\")")
+  .option("--team <name|id>", "Team workspace")
+  .option("--json", "Machine-readable output")
+  .action(async (handle: string, options: any) => {
+    const role_id = await resolveRoleId(handle, options.team);
+    const at = `@${handle.replace(/^@/, "")}`;
+    if (options.svg) {
+      if (!options.concept) { console.error(`Name what the icon draws: cast role icon ${at} --svg <file> --concept "coin"`); process.exit(1); }
+      const svg = options.svg === "-" ? readStdinBody() : fs.readFileSync(options.svg.replace(/^~/, process.env.HOME || "~"), "utf8");
+      const result = await cliPost("/cli/role/icon/set", { role_id, svg, concept: options.concept, accent: options.accent });
+      if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+      console.log(`${c.green}✓${c.reset} @${result.handle} icon: ${c.bold}${result.icon.concept}${c.reset} ${c.dim}(${result.icon.accent})${c.reset}`);
+      return;
+    }
+    if (options.generate) {
+      const result = await cliPost("/cli/role/icon/generate", { role_id, hint: options.hint }, { timeoutMs: 600_000 });
+      if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+      console.log(`${c.green}✓${c.reset} ${at} icon: ${c.bold}${result.concept}${c.reset} ${c.dim}(${result.icon.accent})${c.reset}`);
+      if (result.rationale) console.log(`  ${c.dim}${result.rationale}${c.reset}`);
+      if (result.preview_url) console.log(`  ${c.dim}preview:${c.reset} ${result.preview_url}`);
+      console.log(`  ${c.dim}${result.calls} model calls · $${Number(result.cost_usd ?? 0).toFixed(2)}${c.reset}`);
+      return;
+    }
+    const info = await cliPost("/cli/role/icon", { role_id });
+    if (!info) { console.error("Role not found"); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(info, null, 2)); return; }
+    if (options.brief) {
+      console.log(info.language);
+      console.log(`\nThe role: ${info.name} (@${info.handle})`);
+      console.log(info.charter ? `Charter:\n${info.charter.slice(0, 1500)}` : "No charter yet; read its domain from the title.");
+      console.log(info.siblings.length ? `\nTaken in this workspace (draw a different concept AND silhouette):` : "\nNo other role in this workspace has an icon yet.");
+      for (const s of info.siblings) console.log(`- @${s.handle} ${s.title}: "${s.concept}"\n  ${s.svg}`);
+      console.log(`\nSet yours: cast role icon @${info.handle} --svg <file|-> --concept "<object>"`);
+      return;
+    }
+    if (!info.icon) {
+      console.log(`@${info.handle} has no icon yet ${c.dim}· cast role icon @${info.handle} --generate, or draw one: --brief${c.reset}`);
+      return;
+    }
+    console.log(`@${info.handle} icon: ${c.bold}${info.icon.concept}${c.reset} ${c.dim}(${info.icon.accent})${c.reset}`);
+    console.log(info.svg);
+    if (info.preview_url) console.log(`${c.dim}preview:${c.reset} ${info.preview_url}`);
+  });
+
 roleGroup
   .command("wake")
   .description("Send a message to a role's standing session")

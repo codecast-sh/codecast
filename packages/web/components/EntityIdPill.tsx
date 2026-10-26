@@ -6,7 +6,7 @@ import { RoleFace } from "./org/RoleFace";
 import { RoleHoverCard, RoleHoverContent, SessionFace } from "./identity";
 import { PersonHoverContent } from "./identity/PersonHoverCard";
 import { sessionIdentity } from "../lib/sessionIdentity";
-import { usePersonifyAll } from "../hooks/usePersonifyAll";
+import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
 import {
   Target,
   ArrowUpRight,
@@ -1239,8 +1239,8 @@ export function EntityIdPill({
   // place of the generic session glyph, the character's name in place of the
   // title. The title is still one hover away, and on the link's tooltip, so
   // nothing is lost from a sentence that names four sessions.
-  const personifyAll = usePersonifyAll();
-  const identity = isSession && entity ? sessionIdentity(entity, personifyAll) : null;
+  const prefs = useIdentityPrefs();
+  const identity = isSession && entity ? sessionIdentity(entity, prefs) : null;
   const persona = identity && identity.kind !== "plain" ? identity : null;
   const pillLabel = persona ? persona.name : wide ? fullLabel : refLabel;
   const Icon = isSession

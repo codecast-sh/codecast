@@ -20,6 +20,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { agentStatusAt } from "../../lib/liveness";
 import { describeRoomLive } from "../../lib/calls/roomLabels";
 import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
+import { identityPrefsNow } from "../../hooks/useIdentityPrefs";
 import { teamHasFeature } from "../../lib/teamFeatures";
 import { characterFor, identitySig } from "../../lib/sessionIdentity";
 import type { PalettePick, PalettePickTarget, PalettePickResult } from "../../lib/palettePick";
@@ -436,7 +437,7 @@ export function useAgentsInRoom(routes: Array<{ kind: string; target: string; ad
           id: String(row?._id ?? r.target),
           target: r.target,
           addedBy: r.added_by,
-          name: (row ? agentRoomName(row) : "new agent").slice(0, 40),
+          name: (row ? agentRoomName(row, identityPrefsNow()) : "new agent").slice(0, 40),
           agentType: row?.agent_type ?? "claude_code",
           working: !!row && ACTIVE_AGENT_STATUSES.has(agentStatusAt(row, now) ?? ""),
           row,

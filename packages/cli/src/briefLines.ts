@@ -14,7 +14,7 @@ import { WAKE_TUNE_HINT, playbookGuideLines, roleWakeOf, wakeWords, type RoleWak
 /** A role in one line, as every `cast role` and `cast brief` read heads it. */
 export function roleLine(r: any): string {
   const id = roleIdentity(r, { teamName: r.team_name ?? null });
-  return `${c.bold}${id.name}${c.reset} ${c.dim}${id.subtitle} · @${r.handle} · ${r.short_id} · ${r.status} · ${autonomyWords(autonomyOn(r.trust))}${r.review_backend ? ` · review on ${r.review_backend}` : ""}${c.reset}`;
+  return `${c.bold}${id.name}${c.reset} ${c.dim}${id.subtitle} · @${r.handle}${r.icon?.concept ? ` · icon: ${r.icon.concept}` : ""} · ${r.short_id} · ${r.status} · ${autonomyWords(autonomyOn(r.trust))}${r.review_backend ? ` · review on ${r.review_backend}` : ""}${c.reset}`;
 }
 
 /** The role's routine (org-staffing.md S25): when it checks its area next. */

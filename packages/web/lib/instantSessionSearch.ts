@@ -24,8 +24,8 @@ import { ownTitle } from "./conversationTitle";
 import { cleanTitle } from "./conversationProcessor";
 import { sessionCardTitle } from "./sessionCard";
 import { matchScore, textWords } from "./mentionRanking";
-import { identityLine, identityRowOf, identitySig, type IdentityRow } from "./sessionIdentity";
-import { personifyAllNow } from "../hooks/usePersonifyAll";
+import { identityLine, identityRowOf, identitySig, type IdentityPrefs, type IdentityRow } from "./sessionIdentity";
+import { identityPrefsNow } from "../hooks/useIdentityPrefs";
 
 export type SessionSearchRow = {
   conversationId: string;
@@ -80,16 +80,16 @@ function searchTitle(conv: HaystackRow): string {
 
 // Per row object: a search re-reads the same rows on every keystroke, and a row
 // that changed arrives as a new object.
-const _haystackCache = new WeakMap<object, { personify: boolean; text: string }>();
+const _haystackCache = new WeakMap<object, { personify: IdentityPrefs; text: string }>();
 export function sessionSearchHaystack(conv: HaystackRow): string {
-  const personify = personifyAllNow();
+  const personify = identityPrefsNow();
   const hit = _haystackCache.get(conv);
   if (hit && hit.personify === personify) return hit.text;
   const text = buildHaystack(conv, personify);
   _haystackCache.set(conv, { personify, text });
   return text;
 }
-function buildHaystack(conv: HaystackRow, personify: boolean): string {
+function buildHaystack(conv: HaystackRow, personify: IdentityPrefs): string {
   const who = conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, personify) : null;
   return [
     who?.name || "",
@@ -196,7 +196,7 @@ export function sessionMatchTier(conv: HaystackRow & { title?: string }, lowerQu
   // search scan the whole cache rather than only its most recent rows.
   const hay = sessionSearchHaystack(conv);
   if (!q.split(/\s+/).every((tok) => hay.includes(tok))) return null;
-  const name =conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, personifyAllNow()).name : null;
+  const name =conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, identityPrefsNow()).name : null;
   const best = Math.min(nameScore(searchTitle(conv), q), name ? nameScore(name, q) : Infinity);
   if (best <= 1) return { tier: 0, exact: best };
   if (best !== Infinity) return { tier: 1, exact: 0 };

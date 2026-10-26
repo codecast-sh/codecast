@@ -58,7 +58,7 @@ function world() {
       reparentOrgRole: () => {}, retireOrgRole: (id: string, choice?: string) => calls.push(`retire:${id}:${choice ?? ""}`),
     };
     const collections: Record<string, any[]> = { projects: [], plans: [], tasks: [], docs: [] };
-    // `subscribe` too: a hook that reads the store through useSyncExternalStore (usePersonifyAll) takes it off this object.
+    // `subscribe` too: a hook that reads the store through useSyncExternalStore (useIdentityPrefs) takes it off this object.
     const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {}, subscribe: () => () => {} });
 
     mock.module("../../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));

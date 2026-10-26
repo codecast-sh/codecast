@@ -17,7 +17,7 @@ import { MOBILE_PULSE, MOBILE_SESSION_STYLE } from '@codecast/shared/render/mobi
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ImageViewer } from '@/components/chat/ImageViewer';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
-import { PersonifyOverride, usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
+import { IdentityPrefsOverride, useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { isHostedAgentType } from '@codecast/shared/contracts';
 import { conversationState, conversationSubline, conversationTitle, titleIsAsk } from '@codecast/web/components/simple/lane';
 import { hostedRowTitle } from '@codecast/web/lib/hostedRowTitle';
@@ -145,15 +145,15 @@ export function InboxRowEnvProvider({ children }: { children: ReactNode }) {
   const showImageThumb = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
   const stashLabel = useModeWords().stash;
   // The faces and identity lines read this instead of each subscribing.
-  const personifyAll = usePersonifyAll();
+  const prefs = useIdentityPrefs();
   const env = useMemo(
     () => ({ gitChips, internals, projectFilter, showImageThumb, stashLabel }),
     [gitChips, internals, projectFilter, showImageThumb, stashLabel],
   );
   return (
-    <PersonifyOverride.Provider value={personifyAll}>
+    <IdentityPrefsOverride.Provider value={prefs}>
       <InboxRowEnvContext.Provider value={env}>{children}</InboxRowEnvContext.Provider>
-    </PersonifyOverride.Provider>
+    </IdentityPrefsOverride.Provider>
   );
 }
 
