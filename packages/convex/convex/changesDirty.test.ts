@@ -3,7 +3,7 @@
 // nothing with the team's flag off, a visibility flip or a membership change
 // takes story prose down in the same mutation, and rebuildDay, the reconcile
 // and the flag-on backfill mark and clear the right days.
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { internal } from "./_generated/api";
@@ -445,21 +445,27 @@ describe("reconcile and backfill", () => {
   });
 
   test("the reconcile marks recent days without a final edition and reschedules a dead rebuild", async () => {
-    const s = await setup({ flag: true });
-    const yesterday = new Date(daysAgo(1)).toISOString().slice(0, 10);
-    await s.commit("r0", "fix: x", daysAgo(0));
-    await s.commit("r1", "fix: x", daysAgo(1));
-    await s.commit("r5", "fix: x", daysAgo(5));
-    await s.t.run(async (ctx) => {
-      await ctx.db.insert("digests", { team_id: s.ids.team, repository: REPO, scope: "day", date: yesterday, narrative: "", generated_at: 0, status: "final" } as any);
-      // A rebuild that died an hour ago: a row with no pending run.
-      await ctx.db.insert("change_dirty", { team_id: s.ids.team, repository: "acme/old", date: "2026-01-01", since: Date.now() - 3_600_000 });
-    });
-    const result = await s.t.action(internal.changesSchedule.reconcile, {});
-    expect(result).toEqual({ teams: 1, marked: 1, weeks: 0, rescheduled: 1 });
-    const rows = await s.dirty();
-    expect(rows.map((r) => r.date).sort()).toEqual(["2026-01-01", today()]);
-    expect(rows.every((r) => r.scheduled_id)).toBe(true);
+    // A Wednesday: on a Monday yesterday closes a week, and the reconcile rightly queues that week too.
+    setSystemTime(new Date("2026-10-21T12:00:00Z"));
+    try {
+      const s = await setup({ flag: true });
+      const yesterday = new Date(daysAgo(1)).toISOString().slice(0, 10);
+      await s.commit("r0", "fix: x", daysAgo(0));
+      await s.commit("r1", "fix: x", daysAgo(1));
+      await s.commit("r5", "fix: x", daysAgo(5));
+      await s.t.run(async (ctx) => {
+        await ctx.db.insert("digests", { team_id: s.ids.team, repository: REPO, scope: "day", date: yesterday, narrative: "", generated_at: 0, status: "final" } as any);
+        // A rebuild that died an hour ago: a row with no pending run.
+        await ctx.db.insert("change_dirty", { team_id: s.ids.team, repository: "acme/old", date: "2026-01-01", since: Date.now() - 3_600_000 });
+      });
+      const result = await s.t.action(internal.changesSchedule.reconcile, {});
+      expect(result).toEqual({ teams: 1, marked: 1, weeks: 0, rescheduled: 1 });
+      const rows = await s.dirty();
+      expect(rows.map((r) => r.date).sort()).toEqual(["2026-01-01", today()]);
+      expect(rows.every((r) => r.scheduled_id)).toBe(true);
+    } finally {
+      setSystemTime();
+    }
   });
 });
 
