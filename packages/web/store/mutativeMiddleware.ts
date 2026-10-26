@@ -441,6 +441,7 @@ export const UNDO_IGNORE_KEYS: ReadonlySet<string> = new Set([
   "teamInboxIdSnapshot",
   "sessionMetricsAggregate",
   "pendingPermissions",
+  "guestSuggestions",
   "pendingMessageStatus",
   "messageFeed",
   "machineRoster",
