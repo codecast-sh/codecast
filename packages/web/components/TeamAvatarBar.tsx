@@ -3,21 +3,19 @@ import { useCallsAvailable } from "../lib/teamFeatures";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useRef } from "react";
 import { toast } from "sonner";
-import { UserRound, Filter, Link2, Headphones, PanelTop, PictureInPicture2 } from "lucide-react";
+import { UserRound, Filter, Link2, PanelTop } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useSyncTeamMembers } from "../hooks/useSyncTeamMembers";
 import { useFaceRow } from "../hooks/useFaceRow";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
-import { DOCK_FACES_TITLE, POP_OUT_PEOPLE_TITLE, useFacesFloating } from "../lib/desktop";
+import { DOCK_FACES_TITLE, useFacesFloating } from "../lib/desktop";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
 import { memberDisplayName } from "./presence/memberPresence";
-import { popOutPeople } from "./people/popOutPeople";
 import { FaceRow } from "./faces/FaceRow";
 import { EngagementCard } from "./faces/EngagementCard";
 import { isCallCard } from "../lib/faces/faceRow";
 import { CallCardAccessories } from "./calls/CallCardAccessories";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { TopbarButton } from "./TopbarButton";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { objectHref, personRefOf } from "../lib/entityLinks";
@@ -198,36 +196,6 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           </button>
         </ShortcutTooltip>
       )}
-      {/* Group huddle: the row is where the people are, so the "ring several
-          of them" gesture starts here (the new-huddle field, which also
-          reaches group threads and channels). A solid circle the size of a
-          face with a solid border: a dashed ring with a headset in it once
-          read as a seventh person. */}
-      {callsEnabled && rosterCount > 1 && (
-        <ShortcutTooltip label="Start a huddle with several teammates">
-          <TopbarButton
-            onClick={() => useInboxStore.getState().openCreateModal("huddle")}
-            data-huddle
-            className="ml-1"
-            aria-label="Start a huddle with several teammates"
-          >
-            <Headphones />
-          </TopbarButton>
-        </ShortcutTooltip>
-      )}
-      {/* POP OUT. The same row, floating over the work in the shell's
-          see-through window; the header keeps a chip while it is out. Off
-          the desktop the buddy list window is the nearest thing. */}
-      <ShortcutTooltip label={POP_OUT_PEOPLE_TITLE}>
-        <TopbarButton
-          data-pop-out
-          className="ml-1 hidden xl:flex"
-          onClick={() => (floating.available ? floating.setFloating(true) : void popOutPeople())}
-          aria-label={POP_OUT_PEOPLE_TITLE}
-        >
-          <PictureInPicture2 />
-        </TopbarButton>
-      </ShortcutTooltip>
       {selectedMember && (
         <ShortcutTooltip label="Clear filter">
           <button

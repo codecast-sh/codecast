@@ -46,8 +46,8 @@ describe("Minimal interface style", () => {
   });
 
   test("marks the rail controls for the Minimal treatment", () => {
-    expect(panel).toContain("data-sv-controls");
-    expect(css).toContain("[data-sv-rail] [data-sv-controls]");
+    expect(panel).toContain("data-sv-head-tools");
+    expect(css).toContain("[data-sv-rail] [data-sv-head-tools] button");
   });
 
   test("keeps the composer compact and conversation text readable", () => {

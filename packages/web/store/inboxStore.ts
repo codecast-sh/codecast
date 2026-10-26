@@ -5849,6 +5849,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setPrivacy: (id: string, isPrivate: boolean) => void;
   /** "Anyone with the link" on (a freshly minted token) or off (null). */
   setShareLink: (id: string, token: string | null) => void;
+  /** Let anonymous viewers of the share link suggest messages for this session. */
+  setGuestSuggestions: (id: string, enabled: boolean) => void;
+  /** Send a guest's suggestion into the session (optionally as edited); the card leaves at once. */
+  sendGuestSuggestion: (suggestionId: string, body?: string) => void;
+  dismissGuestSuggestion: (suggestionId: string) => void;
   setObjectShareLink: (kind: PublicShareKind, id: string, token: string | null) => void;
   dismissBrowserPaneOffer: (id: string, at: number) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
@@ -10741,6 +10746,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
       c.share_token = token ?? null;
       if (!token) c.profile_pinned_at = undefined;
     });
+  }),
+
+  setGuestSuggestions: action(function (this: Draft, id: string, enabled: boolean) {
+    patchConversationRows(this, id, (c) => {
+      c.guest_suggestions = enabled;
+    });
+  }),
+
+  // `guestSuggestions` is localFirst, so removing the row plants an exclude
+  // that holds over pushes racing the write. The side effects run
+  // guestSuggestions.sendGuestSuggestionFor / dismissGuestSuggestionFor.
+  sendGuestSuggestion: action(function (this: Draft, suggestionId: string, _body?: string) {
+    delete this.guestSuggestions[suggestionId];
+  }),
+  dismissGuestSuggestion: action(function (this: Draft, suggestionId: string) {
+    delete this.guestSuggestions[suggestionId];
   }),
 
   // The same switch for every other shareable kind (convex publicShare.ts),
