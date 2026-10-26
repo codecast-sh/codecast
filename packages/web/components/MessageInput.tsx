@@ -5,7 +5,7 @@ import { HostedStatusLine } from "./conversation/HostedStatusLine";
 import { useIsHostedConversation } from "../hooks/useConversationAgentType";
 import { MODE_WORDS, useSurface } from "../lib/surfaces";
 import { useAllowanceOut } from "./simple/usePlanFigures";
-import { useContext, useLayoutEffect, useRef, useState, useMemo, useCallback, memo, lazy, Suspense } from "react";
+import { useContext, useLayoutEffect, useRef, useState, useMemo, useCallback, memo, lazy, Suspense, type ReactElement } from "react";
 import { RevealInBandCtx } from "../lib/revealHost";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -2428,7 +2428,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     : undefined;
   // A session's turn at work with nothing to send: the disc stops it.
   const sessionStop = turnRunning && !canSubmit ? { label: "Stop", onStop: interruptTurn } : undefined;
-  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} stop={hostedStop ?? sessionStop} />;
+  // A session's turn at work with text in the box: a Stop square joins the
+  // disc, so stopping first is part of sending.
+  const stopAndSend = canStopAndSend && hasContent && !onGateSend && !onWorkflowLaunch ? {
+    onStopAndSend: stopAndSendComposerText,
+    wrap: (square: ReactElement) => <ShortcutTooltip label="Stop the turn, then send" action="msg.stopSend" side="top">{square}</ShortcutTooltip>,
+  } : undefined;
+  const sendButton = <ComposerSendButton canSubmit={canSubmit} bare={bareComposer} quotesOnly={quotesOnlySend} title={allowanceOut ?? undefined} label={batchWords.button ?? undefined} stop={hostedStop ?? sessionStop} stopAndSend={stopAndSend} />;
   // Expand, stash, hand off and fork: beside the text, or in the surface's foot
   // row next to send when it brings one.
   const rowActions = (
@@ -2452,19 +2458,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         >
           <Maximize2 className="w-3 h-3" />
         </button>
-      )}
-      {canStopAndSend && hasContent && !onGateSend && !onWorkflowLaunch && (
-        <ShortcutTooltip label="Stop the turn, then send" action="msg.stopSend" side="top">
-          <button
-            type="button"
-            onClick={stopAndSendComposerText}
-            className="h-7 px-2.5 rounded-full transition-colors flex items-center gap-1.5 text-xs text-sol-text-dim border border-sol-border/60 hover:text-sol-red hover:border-sol-red/50 hover:bg-sol-red/10"
-            data-cc-stop-send=""
-          >
-            <span aria-hidden className="h-2 w-2 rounded-[2px] bg-current" />
-            Stop & send
-          </button>
-        </ShortcutTooltip>
       )}
       {onSendAndDismiss && triageShown && canSubmit && !onGateSend && !onWorkflowLaunch && (
         <ShortcutTooltip label="Send and stash" action="msg.sendDismiss" hint="the agent keeps running out of the inbox" side="top">

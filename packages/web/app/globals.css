@@ -1805,7 +1805,8 @@ diffs-container {
 }
 
 /* ---- Composer: the mock's single rounded pill ---- */
-.simple-view [data-sv-composer] [class*="rounded-"]:not(.rounded-full) {
+/* Boxes only: a 2px corner is a glyph (the Stop square) and keeps its shape. */
+.simple-view [data-sv-composer] [class*="rounded-"]:not(.rounded-full):not(.rounded-\[2px\]) {
   border-radius: 14px;
 }
 

@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, type FormEventHandler, type ReactNode, type Ref, type TextareaHTMLAttributes } from "react";
+import { forwardRef, useCallback, type FormEventHandler, type ReactElement, type ReactNode, type Ref, type TextareaHTMLAttributes } from "react";
 import { ComposerFade } from "./ComposerFade";
 import { composerColumn, FIELD_SIZING_STYLE } from "./composerLayout";
 import { holdTextareaTextNode } from "../lib/holdTextareaTextNode";
@@ -183,7 +183,9 @@ export const ComposerTextarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttr
  * Send. Tinted cyan when the send is carried entirely by attached quotes, to
  * match their tray; the bare box uses a small square button. With a `label`
  * ("Send and apply 3", from batchSendWords) the button is a violet pill that
- * says what the send does; the bare box ignores it.
+ * says what the send does; the bare box ignores it. While a turn runs and
+ * there is text, `stopAndSend` joins a Stop square to the disc's left: the
+ * square stops the turn and then sends, the arrow sends into the running turn.
  */
 export function ComposerSendButton({
   canSubmit,
@@ -192,6 +194,7 @@ export function ComposerSendButton({
   title,
   label,
   stop,
+  stopAndSend,
 }: {
   canSubmit: boolean;
   bare?: boolean;
@@ -203,6 +206,8 @@ export function ComposerSendButton({
   /** While a turn runs and there is nothing to send, the disc is a Stop
    *  square: its words (the mode's stopWorking) and what it does. */
   stop?: { label: string; onStop: () => void };
+  /** Stop the running turn, then send. `wrap` puts a tooltip on the square. */
+  stopAndSend?: { onStopAndSend: () => void; wrap?: (square: ReactElement) => ReactNode };
 }) {
   if (stop && !bare) {
     return (
@@ -217,6 +222,37 @@ export function ComposerSendButton({
       >
         <span aria-hidden className="h-2.5 w-2.5 rounded-[2px] bg-current" />
       </button>
+    );
+  }
+  if (stopAndSend && !bare && !label) {
+    const square = (
+      <button
+        type="button"
+        onClick={stopAndSend.onStopAndSend}
+        className="h-full pl-3 pr-2 flex items-center justify-center text-sol-text-muted transition-colors hover:text-sol-red hover:bg-sol-red/15"
+        aria-label="Stop and send"
+        data-cc-stop-send=""
+      >
+        <span aria-hidden className="h-2.5 w-2.5 rounded-[2px] bg-current" />
+      </button>
+    );
+    return (
+      <div className="h-8 rounded-full border border-sol-blue/50 bg-sol-blue/20 flex items-stretch overflow-hidden">
+        {stopAndSend.wrap ? stopAndSend.wrap(square) : square}
+        <span aria-hidden className="w-px my-2 bg-sol-blue/30" />
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className={`h-full pl-2 pr-2.5 flex items-center justify-center text-sol-blue transition-colors ${canSubmit ? "hover:bg-sol-blue/30" : "opacity-40 cursor-not-allowed"}`}
+          aria-label="Send"
+          title={title}
+          data-cc-send=""
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+          </svg>
+        </button>
+      </div>
     );
   }
   if (label && !bare) {
