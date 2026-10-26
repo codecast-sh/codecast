@@ -5,7 +5,7 @@
 import type { StyleProp, TextStyle } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { identityLine, type IdentityRow } from '@codecast/web/lib/sessionIdentity';
-import { usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
+import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { useTheme } from '@/constants/Theme';
 import { markedRuns } from '@/components/search/highlight';
 
@@ -23,8 +23,8 @@ export function MobileSessionIdentityLine({ row, title, suffix, style, maxFontSi
   highlight?: string;
 }) {
   const Theme = useTheme();
-  const personifyAll = usePersonifyAll();
-  const line = row ? identityLine(row, title, personifyAll) : { name: null, title, handle: null };
+  const prefs = useIdentityPrefs();
+  const line = row ? identityLine(row, title, prefs) : { name: null, title, handle: null };
   if (!line.name) {
     if (!suffix) return <RNText style={style} numberOfLines={1} maxFontSizeMultiplier={maxFontSizeMultiplier}>{markedRuns(title, highlight)}</RNText>;
     return (

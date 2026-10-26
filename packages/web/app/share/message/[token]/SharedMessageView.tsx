@@ -7,6 +7,8 @@ import { MarkdownRenderer } from "@/components/tools/MarkdownRenderer";
 import { isMarkdownFile, isPlanFile } from "@/lib/markdownFiles";
 import { tryRenderHtmlMessage } from "@/components/HtmlSnippet";
 import { RoleAvatar } from "@/components/org/avatars";
+import { RoleIconTile } from "@/components/identity/RoleIconTile";
+import { useIdentityPrefs } from "@/hooks/useIdentityPrefs";
 import { identityRowOf, speakerOf, type IdentityRow } from "@/lib/sessionIdentity";
 import {
   extractNestedActions,
@@ -224,7 +226,7 @@ export function MessageBlock({ message, isTarget, now, conversation }: { message
   // Who speaks the agent's turns, from the payload's identity fields so the
   // server render and the browser agree: a role or character with its face,
   // else the agent's product name.
-  const speaker = speakerOf(identityRowOf(conversation), conversation.agent_type);
+  const speaker = speakerOf(identityRowOf(conversation), conversation.agent_type, useIdentityPrefs());
   const mounted = useMounted();
   const isUser = message.role === "user";
   const hasToolResults = message.tool_results && message.tool_results.length > 0;
@@ -262,7 +264,9 @@ export function MessageBlock({ message, isTarget, now, conversation }: { message
       ) : (
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
-            {speaker.identity ? <RoleAvatar avatar={speaker.identity.avatar} size={20} title={speaker.name} /> : <ClaudeIcon />}
+            {speaker.identity?.kind === "role" && speaker.identity.style === "icon"
+              ? <RoleIconTile tile={speaker.identity.tile} size={20} title={speaker.name} />
+              : speaker.identity ? <RoleAvatar avatar={speaker.identity.avatar} size={20} title={speaker.name} /> : <ClaudeIcon />}
             <span className="text-sol-orange text-xs font-medium">{speaker.name}</span>
             <span
               className="text-sol-text-dim text-xs"

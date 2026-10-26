@@ -36,6 +36,7 @@ import { ConsequentialSwitch } from "../../consequential/ConsequentialSwitch";
 import { roleAutonomyLedger } from "../../consequential/ledgers";
 import { hireLeewayLedger } from "../../consequential/roleOnline";
 import { useRunCost } from "../../consequential/useRunCost";
+import { RoleFaces } from "./RoleFaces";
 import { HandingOverSection, MergeStepSwitch, SplitRoleSection, SuccessionSection } from "./RoleHandoffSections";
 
 const NO_INTENTS: OrgIntent[] = [];
@@ -254,6 +255,10 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
             <InlineEdit canEdit={canEdit} value={role.handle} onSave={(v) => v && onUpdate({ handle: v.replace(/^@/, "") })} className="text-[13px]" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }} />
           </div>
         </div>
+      </Section>
+
+      <Section title="Faces" hint="Each person chooses which one they see in Settings: the character, or the icon of what it looks after.">
+        <RoleFaces role={role} canEdit={canEdit} />
       </Section>
 
       <Section title="Area" hint={isRoot ? "The projects and plans it looks after. With none picked, the Head of People covers the whole workspace." : "The projects and plans it looks after. Optional: with none picked it has no area of its own, runs its check and answers what it is asked."}>
