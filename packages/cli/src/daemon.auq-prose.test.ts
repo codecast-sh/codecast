@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
-import { extractAssistantProseAbovePrompt, sidecarMatchesScrape, resolveInteractiveQuestions, parseInteractivePrompt } from "./daemon.js";
+import { extractAssistantProseAbovePrompt, sidecarMatchesScrape, resolveInteractiveQuestions, parseInteractivePrompt, jsonlHasAssistantProse } from "./daemon.js";
 
 // A turn that ends in AskUserQuestion is buffered out of the JSONL until answered, so the
 // reasoning that motivates the question lives ONLY in the rendered pane while it waits.
@@ -170,5 +170,20 @@ describe("resolveInteractiveQuestions", () => {
     const prompt = parseInteractivePrompt(pane)!;
     const out = resolveInteractiveQuestions(prompt, { questions: [{ question: "Pick a deploy target", options: [] }] });
     expect(out[0].question).toBe(prompt.question);                // not the stale "Pick a deploy target"
+  });
+});
+
+describe("jsonlHasAssistantProse", () => {
+  const entry = (text: string) => JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+
+  test("prose from a finished turn is already in the transcript (dialog raised between turns)", () => {
+    const jsonl = [entry("Still waiting on the **audit workflow**. That notice was for an earlier `lookup` that has already finished.")].join("\n");
+    const scraped = "Still waiting on the audit workflow. That notice was for an earlier lookup\nthat has already finished.";
+    expect(jsonlHasAssistantProse(jsonl, scraped)).toBe(true);
+  });
+
+  test("prose buffered with a pending question is not", () => {
+    const jsonl = [entry("Earlier turn's reply."), JSON.stringify({ type: "user", message: { role: "user", content: "next" } })].join("\n");
+    expect(jsonlHasAssistantProse(jsonl, "Kill all is destructive, so it gets a confirm step.")).toBe(false);
   });
 });

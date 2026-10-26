@@ -25,6 +25,7 @@ import {
   CLIENT_ERROR_BANNER_PREFIX,
   CLOUD_AGENT_ACTION_SUBTYPE,
 } from "@codecast/shared/contracts";
+import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { formatJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
 import { FLOW_FENCE_LANG } from "./line/flowFence";
@@ -366,6 +367,8 @@ export function renderGalleryMessages(now: number): Row[] {
   asst("Asking before I pick the stop rule.", { tool_calls: [{ id: `${GALLERY_ID_PREFIX}ask`, name: "AskUserQuestion", input: JSON.stringify({ questions: [{ header: "410 Gone", question: "Should a 410 Gone count as a failed delivery?", multiSelect: false, options: [{ label: "Log it once", description: "Never retry" }, { label: "Retry like a 5xx", description: "Up to 5 attempts" }] }] }) }] });
   user('{"answers":{"Should a 410 Gone count as a failed delivery?":"Log it once"}}');
   asst("Logged it once and moved on.");
+  asst("", { tool_calls: [{ id: `interactive-prompt-${GALLERY_ID_PREFIX}closed`, name: "AskUserQuestion", input: JSON.stringify({ questions: [{ question: "Do you want to proceed?", options: [{ label: "Yes" }, { label: "No" }] }] }) }] });
+  user("", { tool_results: [{ tool_use_id: `interactive-prompt-${GALLERY_ID_PREFIX}closed`, content: "Closed in the terminal" }] });
   user(formatDecisionAnswer({ id: "sd-311", question: "Ship the renderer behind a flag?", answer: "Ship now" }));
 
   section("Commands and terminal");
@@ -509,6 +512,8 @@ export function renderGalleryMessages(now: number): Row[] {
   sys("scheduled_task_fire", "Claude resuming /loop wakeup (Oct 19 5:07pm)");
   sys("away_summary", "While you were away: the audit landed **diff cards** and the shared classifier.");
   sys("informational", "Usage limit reached; switching accounts.");
+  sys(DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice({ writes: 3, submitted: false, message: '<scheduled-task title="Nightly audit" trigger="tr-42">Run the audit.</scheduled-task>' }));
+  sys(DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice({ writes: 3, submitted: true, message: "Rebase on main and rerun the e2e." }));
   user("This session is being continued from a previous conversation that ran out of context.");
 
   return rows;

@@ -33,13 +33,13 @@ describe("closeSyntheticPrompt", () => {
   test("syncs a tool_result for the emitted card and clears the re-emit record", async () => {
     syntheticPromptTestSeam.lastEmittedSyntheticPrompt.set(SID, UUID);
     const calls: Added[] = [];
-    await closeSyntheticPrompt(SID, CONV, stubSync(calls), "Dismissed in the terminal");
+    await closeSyntheticPrompt(SID, CONV, stubSync(calls), "Closed in the terminal");
 
     expect(calls.length).toBe(1);
     const msg = calls[0].messages[0];
     expect(calls[0].conversationId).toBe(CONV);
     expect(msg.messageUuid).toBe(`${UUID}-closed`);
-    expect(msg.toolResults).toEqual([{ toolUseId: UUID, content: "Dismissed in the terminal" }]);
+    expect(msg.toolResults).toEqual([{ toolUseId: UUID, content: "Closed in the terminal" }]);
     expect(syntheticPromptTestSeam.lastEmittedSyntheticPrompt.has(SID)).toBe(false);
     expect(syntheticPromptTestSeam.closedSyntheticPrompts.get(UUID)).toBe(1);
   });
@@ -71,7 +71,7 @@ describe("closeSyntheticPrompt", () => {
   test("a failed sync does not throw out of the caller", async () => {
     syntheticPromptTestSeam.lastEmittedSyntheticPrompt.set(SID, UUID);
     const failing = { addMessages: async () => { throw new Error("offline"); } } as any;
-    await closeSyntheticPrompt(SID, CONV, failing, "Dismissed in the terminal");
+    await closeSyntheticPrompt(SID, CONV, failing, "Closed in the terminal");
   });
 });
 

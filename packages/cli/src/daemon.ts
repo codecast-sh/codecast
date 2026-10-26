@@ -8,6 +8,7 @@ import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, pairDeliveryAcks } from "@codecast/shared/contracts";
+import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
@@ -292,6 +293,7 @@ import {
   type PermissionHookInput,
 } from "./permissionHookWait.js";
 import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel } from "./update.js";
+import { isManagedInstall } from "./managedInstall.js";
 import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import {
@@ -414,12 +416,13 @@ import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAg
 import { CLOUD_MIRROR_LOCAL_GIT_FIELDS, cloudMirrorRepoFacts } from "./cloudAgents/poll.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, claudeSessionIdArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
-import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, ResourceProcess, StableLaunchPrefs } from "@codecast/shared/contracts";
+import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, HeartbeatTeamPolicy, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, ResourceProcess, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
 import { supervisedBySystemdUnit } from "./systemdDaemonUnit.js";
 import { teamHostHeartbeat } from "./hosts/teamMarker.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
+import { applyManagedPolicy, effectivePolicy, policySnippetAvailability, stripManagedPolicy, writeEffectivePolicyFile } from "./config/managedPolicy.js";
 import {
   CodexAppServerRuntimeDriver,
   FENCED_TMUX_TAG_NAMES,
@@ -5577,8 +5580,22 @@ async function sendHeartbeat(): Promise<void> {
     void ensureProfileStores("heartbeat");
     // Team-gated agent snippets follow the team feature flags: install when a
     // team turns chat/calls on, disable when the last team turns it off.
-    if (data.snippet_availability && typeof data.snippet_availability === "object") {
-      void reconcileGatedSnippets(data.snippet_availability as Record<string, boolean>)
+    // The team policy that applies to this device, mirrored like sync_mode;
+    // null clears it. Profile + team merge on every read (managedPolicy.ts).
+    if (data.team_policy !== undefined) {
+      const next = (data.team_policy ?? undefined) as HeartbeatTeamPolicy | undefined;
+      if (JSON.stringify(readConfig()?.team_policy ?? null) !== JSON.stringify(next ?? null)) {
+        log(next ? `Team policy from ${next.team_name}: ${JSON.stringify(next.policy)}` : "Team policy cleared");
+        patchConfig({ team_policy: next });
+        if (activeConfig) activeConfig.team_policy = next;
+      }
+    }
+    const policy = effectivePolicy(readConfig());
+    writeEffectivePolicyFile(policy);
+    // Snippets for capabilities the policy turns off ride the same reconcile.
+    const policyAvailability = policySnippetAvailability(policy, readConfig()?.snippet_availability);
+    if ((data.snippet_availability && typeof data.snippet_availability === "object") || Object.keys(policyAvailability).length > 0) {
+      void reconcileGatedSnippets({ ...(data.snippet_availability as Record<string, boolean> | undefined), ...policyAvailability })
         .catch((err) => log(`[SNIPPET] gated reconcile failed: ${String(err).slice(0, 160)}`));
     }
     if (config.user_id) {
@@ -9204,7 +9221,7 @@ function diagnoseConfig(): ConfigDiagnosis {
   }
   let config: Config;
   try {
-    config = JSON.parse(raw) as Config;
+    config = applyManagedPolicy(JSON.parse(raw) as Config);
   } catch (err) {
     return {
       ok: false,
@@ -9319,7 +9336,7 @@ function patchConfig(updates: Partial<Config>): void {
   const config = readConfig();
   if (!config) return;
   Object.assign(config, updates);
-  const toWrite = { ...config };
+  const toWrite = { ...stripManagedPolicy(config) };
   if (toWrite.auth_token) toWrite.auth_token = storedFromBearer(toWrite.auth_token);
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(toWrite, null, 2), { mode: 0o600 });
 }
@@ -14763,6 +14780,33 @@ export function jsonlHasPendingAskUserQuestion(jsonlText: string): boolean {
   return lastAskId !== null && !resultIds.has(lastAskId);
 }
 
+// Does the transcript tail already hold this prose scraped off the pane? The pane
+// draws markdown without its markers and rewraps it, so both sides are compared
+// with markers and whitespace dropped, on the scrape's opening stretch.
+export function jsonlHasAssistantProse(jsonlText: string, prose: string): boolean {
+  const flat = (s: string) => s.replace(/[`*_#>\s]+/g, "");
+  const head = flat(prose).slice(0, 120);
+  if (!head) return false;
+  for (const line of jsonlText.split("\n")) {
+    if (!line.includes('"assistant"')) continue;
+    let entry: any;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (entry?.type !== "assistant") continue;
+    const content = entry?.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (block?.type === "text" && typeof block.text === "string" && flat(block.text).includes(head)) return true;
+    }
+  }
+  return false;
+}
+
+function sessionJsonlHasAssistantProse(sessionId: string, prose: string): boolean {
+  const jsonlPath = findSessionJsonlPath(sessionId);
+  if (!jsonlPath) return false;
+  try { return jsonlHasAssistantProse(readFileTailSync(jsonlPath, 65536), prose); } catch { return false; }
+}
+
 export function sessionHasPendingAskUserQuestion(sessionId: string): boolean {
   const jsonlPath = findSessionJsonlPath(sessionId);
   if (!jsonlPath) return false;
@@ -14950,7 +14994,11 @@ async function checkForInteractivePrompt(
     // The assistant's reasoning that motivates this question is buffered out of the
     // JSONL until answered, so scrape it off the pane — without it the web user can't
     // judge the question. Empty for confirmations / bare slash menus (no preceding prose).
-    const prose = terminalDialog ? "" : extractAssistantProseAbovePrompt(paneContent);
+    // A dialog raised between turns (a background agent's permission ask) sits under
+    // the previous turn's prose, which the JSONL already holds: posting it again
+    // repeats that message in the transcript.
+    const scraped = terminalDialog ? "" : extractAssistantProseAbovePrompt(paneContent);
+    const prose = scraped && !sessionJsonlHasAssistantProse(sessionId, scraped) ? scraped : "";
 
     // Prefer the hook's full tool_input (option descriptions + headers + multiSelect,
     // which the box-art-stripped scrape loses) when it's for THIS question; else fall
@@ -17873,6 +17921,57 @@ export function tmuxComposerText(pane: string): string | null {
 // A composer with no draft has nothing to clear, so the keys there are pure
 // risk. An unreadable pane is never called empty: null is "not proven", not
 // "nothing there", so glyphless clients keep the blind drain.
+/** `ps` cumulative CPU time ("1:02.35", "01:02:03", "4-01:02:03") in ms. */
+export function parsePsCpuTime(value: string): number | null {
+  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(value.trim());
+  if (!match) return null;
+  const [, days, hours, minutes, seconds] = match;
+  return ((Number(days ?? 0) * 24 + Number(hours ?? 0)) * 60 + Number(minutes)) * 60_000 + Number(seconds) * 1000;
+}
+
+type AgentCpuSample = Map<number, { runnable: boolean; cpuMs: number | null }>;
+
+/** The agent: the leader of the terminal's foreground group (its MCP servers sleep beside it), from `ps -o pid=,pgid=,tpgid=,stat=,time=`. */
+export function parseForegroundCpu(stdout: string): AgentCpuSample {
+  return new Map(stdout.split("\n").map(line => line.trim().split(/\s+/)).filter(f => f.length >= 5 && f[0] === f[1] && f[1] === f[2])
+    .map(([pid, , , stat, time]) => [Number(pid), { runnable: stat.startsWith("R"), cpuMs: parsePsCpuTime(time) }]));
+}
+
+/** The agent was runnable at both samples and got no CPU between them. */
+export function starvedAcross(before: AgentCpuSample, after: AgentCpuSample): boolean {
+  if (!before.size) return false;
+  for (const [pid, a] of before) {
+    const b = after.get(pid);
+    if (!a.runnable || !b?.runnable || a.cpuMs === null || b.cpuMs === null || b.cpuMs - a.cpuMs > 20) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether the agent in this pane is runnable yet given no CPU (background
+ * priority on an overloaded Mac, 2026-10-26: 80 minutes). Such a client still
+ * holds every byte written to it and shows the frame from before them. When it
+ * wakes it reads them in one burst, which Claude takes as a paste: clearing
+ * keys inside it are dropped and the text kept, so each further write lands as
+ * another copy ("continuecontinuecontinue"). macOS only: Linux ps counts whole
+ * seconds, too coarse to tell a starved second from a quiet one, and the
+ * governor there only renices. Anything unreadable answers false.
+ */
+export async function tmuxAgentStarved(target: string, sampleMs = 1_000): Promise<boolean> {
+  if (process.platform !== "darwin") return false;
+  try {
+    const tty = (await tmuxExec(["display-message", "-p", "-t", target, "#{pane_tty}"])).stdout.trim().replace(/^\/dev\//, "");
+    if (!tty) return false;
+    const sample = async () => parseForegroundCpu((await _execFileAsync("ps", ["-t", tty, "-o", "pid=,pgid=,tpgid=,stat=,time="], { timeout: 2_000 })).stdout);
+    const before = await sample();
+    if (![...before.values()].every(p => p.runnable) || !before.size) return false;
+    await new Promise(resolve => setTimeout(resolve, sampleMs));
+    return starvedAcross(before, await sample());
+  } catch {
+    return false;
+  }
+}
+
 export const DRAIN_MAX_CYCLES = 40;
 export async function drainTmuxComposer(
   target: string,
@@ -18155,7 +18254,11 @@ export async function awaitTmuxComposerPayload(
   throw new Error("AGENT_STDIN_NOT_READY: composer never showed the pasted payload, leaving message pending for retry");
 }
 
-type TmuxInjectionOptions = { readTranscript?: () => Promise<string>; delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number; receiptSettleMs?: number };
+type TmuxInjectionOptions = {
+  readTranscript?: () => Promise<string>; delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number; receiptSettleMs?: number;
+  /** Probe for an agent getting no CPU; tests stand in for a starved one. */
+  agentStarved?: (target: string) => Promise<boolean>;
+};
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
   try {
@@ -18398,6 +18501,11 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!settled || !/paste has not appeared intact|^AGENT_STDIN_NOT_READY: composer never showed/.test(message)) throw error;
+        // A starved agent's prompt is a stale picture: the write is still in
+        // its terminal, and another would land behind it (tmuxAgentStarved).
+        if (await (opts?.agentStarved ?? tmuxAgentStarved)(target)) {
+          throw new TmuxDeliveryUncertainError("the agent is getting no CPU and has not read the earlier write yet");
+        }
         // The write after this one is counted and capped by journal.begin
         // (TMUX_PASTE_WRITE_CAP): a payload that reaches the agent and comes
         // back changed must not be typed forever.
@@ -21480,7 +21588,7 @@ async function sweepGitPlaneFleet(sessionIds: string[]): Promise<void> {
     return new Map<string, boolean>();
   });
   await syncGitActivityTailers(byRoot).catch((e) => log(`[GITACTIVITY] tailer sync error: ${(e as Error)?.message ?? e}`));
-  await publishLocalRepos([...byRoot.keys()], byRoot).catch((e) => log(`[REPOMIRROR] pass error: ${(e as Error)?.message ?? e}`));
+  await publishLocalRepos([...byRoot.keys()]).catch((e) => log(`[REPOMIRROR] pass error: ${(e as Error)?.message ?? e}`));
   await publishWorktreeMirrors(targets.map((t) => ({ ...t, dirty: dirtyByCwd.get(t.cwd) }))).catch((e) => log(`[WORKTREES] pass error: ${(e as Error)?.message ?? e}`));
 }
 
@@ -21594,7 +21702,7 @@ async function pollGitActivity(onlyRoot?: string): Promise<void> {
     }
     log(`[GITACTIVITY] ${path.basename(root)}: ${events.map((e) => e.kind).join(", ")}`);
     if (events.some((e) => e.kind !== "checkout")) {
-      await publishLocalRepos([root], new Map([[root, { conversationIds: sessions }]])).catch((e) => log(`[REPOMIRROR] publish after activity failed: ${(e as Error)?.message ?? e}`));
+      await publishLocalRepos([root]).catch((e) => log(`[REPOMIRROR] publish after activity failed: ${(e as Error)?.message ?? e}`));
     }
   }
 }
@@ -21686,10 +21794,7 @@ const repoMirrorPushed = new Map<string, { fingerprint: string; at: number }>();
 /** Roots the server declined as private: not asked again this lifetime. */
 const repoMirrorPrivate = new Set<string>();
 
-async function publishLocalRepos(
-  roots: string[],
-  byRoot: Map<string, { conversationIds: string[] }> = new Map(),
-): Promise<void> {
+async function publishLocalRepos(roots: string[]): Promise<void> {
   if (!syncServiceRef) return;
   const now = Date.now();
   for (const root of roots) {
@@ -21700,14 +21805,9 @@ async function publishLocalRepos(
 
     const mirror = await buildRepoMirror(root);
     if (!mirror) continue;
-    // Attribution, only when it is certain: one live session in this checkout,
-    // and only commits made since the last publish (the first publish carries
-    // history nobody here wrote). Two sessions in one checkout name nobody.
-    const sessions = byRoot.get(root)?.conversationIds ?? [];
-    const since = last?.at;
-    const commits = sessions.length === 1 && since
-      ? mirror.commits.map((c) => (c.timestamp >= since ? { ...c, conversation_id: sessions[0] } : c))
-      : mirror.commits;
+    // The mirror's commits name no session: a pull or fetch brings in commits
+    // written elsewhere, newer than any publish. The reflog tailer
+    // (pollGitActivity) attributes the commits this checkout made itself.
     const result = await syncServiceRef.ingestLocalRepo({
       root,
       repository: mirror.repository,
@@ -21716,7 +21816,7 @@ async function publishLocalRepos(
       default_branch: mirror.default_branch,
       head_sha: mirror.head_sha,
       rows: mirror.rows,
-      commits,
+      commits: mirror.commits,
     });
     if (!result) continue;
     if (result.published) {
@@ -23385,7 +23485,7 @@ async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record
             // The menu resolved in the terminal without an answer flowing through
             // us (Esc, a local keypress, a dialog superseded by the next render).
             // Retire the scraped card too, or it stays an open question forever.
-            await closeSyntheticPrompt(sessionId, convId, syncServiceRef, "Dismissed in the terminal");
+            await closeSyntheticPrompt(sessionId, convId, syncServiceRef, "Closed in the terminal");
           } else {
             pending.timestamp = Date.now();
           }
@@ -24066,8 +24166,8 @@ const latestSessionResources = new Map<string, SessionResources>();
 const RESOURCE_MONITOR_INTERVAL_MS = 30_000;
 
 // The load governor (loadGovernor.ts). The server names this machine's
-// unattended sessions with each accepted resource report; while the machine
-// is "over", those run at background priority.
+// unattended sessions with each accepted resource report; the governor picks
+// which of them to confine to background priority from their last measured CPU.
 // Seeded from the last daemon's state file, so a restart under load throttles
 // at once instead of waiting a report cycle for the server's answer.
 let unattendedHere: string[] = (() => {
@@ -24076,17 +24176,19 @@ let unattendedHere: string[] = (() => {
 })();
 
 async function applyGovernorBackground(): Promise<void> {
-  await setGovernorBackground(governor.level === "over" ? unattendedHere : []);
+  await setGovernorBackground(governor.confined);
 }
 
 async function governorTick(): Promise<void> {
-  const { before, after } = sampleLoad();
+  const confinedBefore = governor.confined.length;
+  const { before, after } = sampleLoad(unattendedHere.map((id) => ({ id, cpu: latestSessionResources.get(id)?.cpu ?? 0 })));
   writeGovernorState(unattendedHere);
-  if (before === after) return;
-  log(`[GOVERNOR] ${before} -> ${describeLoad()}${after === "over" ? `; ${unattendedHere.length} unattended sessions to background priority, starts held` : ""}`);
+  const confined = governor.confined.length;
+  if (before === after && confined === confinedBefore) return;
+  log(`[GOVERNOR] ${before} -> ${describeLoad()}; ${confined} of ${unattendedHere.length} unattended sessions at background priority${after === "over" ? ", starts held" : ""}`);
   await applyGovernorBackground();
   // A fresh process list, so the change reaches agents started since the last tick.
-  if (after === "over" || before === "over") await collectResourceSnapshot();
+  if (confined > confinedBefore) await collectResourceSnapshot();
 }
 
 // Sleep-aware idle accounting. We accumulate idle time per session only across
@@ -28349,9 +28451,10 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
     if (compareVersions(currentVersion, minVersion) < 0) {
       // The user turned automatic updates off: the device page shows that an
       // update is required, and the update waits for someone to ask for it.
-      if (readConfig()?.auto_update === false) {
+      // A managed install (Codecast.pkg) waits for the MDM to ship a newer pkg.
+      if (readConfig()?.auto_update === false || isManagedInstall()) {
         if (forcedUpdateDeclinedFor !== minVersion) {
-          log(`[UPDATE] v${currentVersion} is below the minimum v${minVersion}; automatic update is off, so waiting for a manual update`);
+          log(`[UPDATE] v${currentVersion} is below the minimum v${minVersion}; ${isManagedInstall() ? "installed by the organization's MDM, so waiting for a newer Codecast.pkg" : "automatic update is off, so waiting for a manual update"}`);
           forcedUpdateDeclinedFor = minVersion;
         }
         return false;
@@ -29855,6 +29958,17 @@ async function main(): Promise<void> {
   // common case near-instant; this tick is the backfill/safety net.
   setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000 * bootPacing.fanoutOffsetScale);
   setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+  // The team's shared account pool (ccPool.ts): seal this machine's shared
+  // accounts for teammates, and keep the copies sealed to it.
+  if (!isRemoteDevice()) {
+    void import("./ccPool.js").then(({ startPoolPasses }) => startPoolPasses({
+      client: () => syncService.getClient(),
+      token: () => readConfig()?.auth_token,
+      deviceId: deviceId(),
+      configDir: CONFIG_DIR,
+      log,
+    }));
+  }
   // Home mirror (cloud/mirror) in its own process, started after the first
   // minute like the other remote fan-outs; it exits when the mirror is turned
   // off and is retried every minute while it is on.
@@ -32294,20 +32408,21 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${err.holdReason}: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, err.holdReason, err.recheckMs);
           } else if (err instanceof TmuxDeliveryExhaustedError) {
-            // The pane took this payload TMUX_PASTE_WRITE_CAP times and the
-            // transcript never echoed it exactly. The agent most likely ran it
-            // each time (a client that rewrites what it echoes), so a further
-            // write is harm, not recovery. Terminal on the server (cancelled
-            // never re-pends), and said in the conversation itself, where the
-            // person reading the session sees it.
-            logDelivery(`EXHAUSTED: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} ${errMsg}`);
+            // The pane took this payload TMUX_PASTE_WRITE_CAP times with no
+            // exact echo. A submitted write may have run (a client that
+            // rewrites what it echoes), so a further write is harm, not
+            // recovery; writes that never got an Enter never reached the agent.
+            // Terminal on the server (cancelled never re-pends), and said in
+            // the conversation with the whole message, so the person reading
+            // the session can send it again.
+            logDelivery(`EXHAUSTED: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} submitted=${err.submitted} ${errMsg}`);
             syncService.cancelPendingMessage(msg._id).catch(logConvexFailure);
             syncService.addMessage({
               conversationId: msg.conversation_id,
               role: "system",
-              subtype: "delivery_failed",
+              subtype: DELIVERY_FAILED_SUBTYPE,
               timestamp: Date.now(),
-              content: `A message to this session was written into its terminal ${err.writes} times and its transcript never echoed it exactly, so delivery stopped and the message was cancelled. The agent may have taken it each time. Message: ${messageContent.slice(0, 200).replace(/\s+/g, " ")}${messageContent.length > 200 ? "…" : ""}`,
+              content: formatDeliveryFailedNotice({ writes: err.writes, submitted: err.submitted, message: messageContent }),
             }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|TMUX_SERVER_BUSY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
@@ -32957,8 +33072,8 @@ export async function runWatchdog(): Promise<void> {
 
   // 3b. Check min_cli_version -- if daemon binary is outdated, update it
   // This catches cases where the daemon's own checkForForcedUpdate failed or killed the daemon
-  if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0 && config.auto_update === false) {
-    logLine(`Binary outdated: current=${version} min=${minCliVersion}; automatic update is off, leaving it`);
+  if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0 && (config.auto_update === false || isManagedInstall())) {
+    logLine(`Binary outdated: current=${version} min=${minCliVersion}; ${isManagedInstall() ? "managed install, the MDM ships updates" : "automatic update is off"}, leaving it`);
   } else if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);

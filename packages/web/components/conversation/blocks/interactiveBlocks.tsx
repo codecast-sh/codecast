@@ -11,7 +11,7 @@ import { MessageReview } from "../../MessageReview";
 import { fmtDuration } from "../../triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, type MonitorStatus } from "../../monitorRows";
 import { OptionPreview } from "../../tools/AskUserQuestionToolView";
-import { buildPollPayload, parsePollAnswers, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../../../lib/pollPayload";
+import { buildPollPayload, parsePollAnswers, pollClosedLabel, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../../../lib/pollPayload";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { useInboxStore } from "../../../store/inboxStore";
 import { Radar, Terminal } from "lucide-react";
@@ -267,6 +267,7 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
   }
 
   const isInteractive = !result && !!onSendMessage && !sent;
+  const closedLabel = pollClosedLabel(result, answers);
   const allAnswered = needsSubmit && questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
   const buildPayload = (sels: typeof selections) => buildPollPayload(questions, sels);
@@ -523,6 +524,9 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
           </div>
         );
       })}
+      {closedLabel && (
+        <div className="text-[11px] text-sol-text-dim">{closedLabel}</div>
+      )}
       {isInteractive && needsSubmit && (
         <div className="pt-0.5">
           <Button

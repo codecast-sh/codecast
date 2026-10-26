@@ -139,6 +139,13 @@ export function parsePollAnswers(
 ): Record<string, string> {
   const answers: Record<string, string> = {};
   if (!content) return answers;
+  // A question scraped from the terminal is closed by the daemon
+  // (closeSyntheticPrompt) with its own result, naming the app's answer.
+  const fromApp = content.match(/^Answered from the app: ([^]+)$/)?.[1];
+  if (fromApp !== undefined && questions.length === 1) {
+    answers[questions[0].question] = fromApp;
+    return answers;
+  }
   for (const q of questions) {
     const marker = `"${q.question}"="`;
     const at = content.indexOf(marker);
@@ -163,4 +170,20 @@ export function parsePollAnswers(
     }
   }
   return answers;
+}
+
+/**
+ * What a question card shows once it closed with no answer anyone can see: the
+ * terminal timed the dialog out, someone pressed Esc there, or the agent got a
+ * rejection. Null while it is open or when an answer lights up an option. A
+ * short single-line result ("Closed in the terminal") is the daemon's own
+ * resolution and reads as is; anything longer is Claude Code's prose to the agent.
+ */
+export function pollClosedLabel(
+  result: { content?: string } | undefined,
+  answers: Record<string, string>
+): string | null {
+  if (!result || Object.keys(answers).length > 0) return null;
+  const text = (result.content ?? "").trim();
+  return text && text.length <= 48 && !text.includes("\n") ? text : "Closed without an answer";
 }
