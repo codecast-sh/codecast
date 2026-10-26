@@ -179,6 +179,60 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     expect(handedOff).toBe(false);
   }, 30000);
 
+  // A run's line commands are the repo's profile as it is when a station runs, not as it was when the
+  // run started: union-shared's runs started before a7d2cb4090 kept evaluating in place, on scratch, for days.
+  describe("a line profile changed while a run waits", () => {
+    const evalGraph = () => parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      decide [label="Decide", shape=hexagon]
+      eval [label="Eval", shape=parallelogram, script="bash -c $line.commands.eval"]
+      exit [shape=Msquare]
+      start -> decide
+      decide -> eval [label="[S] Ship"]
+      eval -> exit
+    }`);
+    const profile = (cmd: string) => {
+      fs.mkdirSync(path.join(tmpDir, ".codecast"), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), `[line.commands]\neval = ${JSON.stringify(`mkdir -p $run_dir && echo ${cmd} >> $run_dir/eval.log`)}\n`);
+    };
+    const evalLog = () => fs.readFileSync(path.join(lineRunDir(tmpDir, `line-${runId}`), "eval.log"), "utf-8").trim();
+    const atGate = (over: Partial<ResumeRow> = {}) => ({ status: "paused" as const, current_node_id: "decide", gate_node_id: "decide", gate_card: "tc-41", node_statuses: [{ node_id: "start", status: "completed", outcome: "success", completed_at: 1 }], ...over });
+
+    test("a run resumed by a fresh runner runs the profile's command as it is now", async () => {
+      profile("old");
+      hangOn = "/cli/workflow-runs/gate";
+      void runWorkflow(evalGraph(), options());
+      await until(() => calls.some((c) => c.route === "/cli/workflow-runs/gate"));
+      hangOn = null;
+      expect(readCheckpoint(lineRunDir(tmpDir, `line-${runId}`), runId)?.context["line.commands.eval"]).toContain("echo old");
+      profile("new");
+      const outcome = await runWorkflow(evalGraph(), options({ resume: atGate({ status: "running", gate_card: undefined, gate_response: "S" }) }));
+      expect(outcome).toBe("completed");
+      expect(evalLog()).toBe("new");
+    }, 30000);
+
+    test("a runner waiting at a gate when the profile changes runs the new command once answered", async () => {
+      profile("old");
+      const run = runWorkflow(evalGraph(), options({ resume: atGate() }));
+      await until(() => calls.some((c) => c.route === "/cli/workflow-runs/poll-gate"));
+      profile("new");
+      gateAnswer = "S";
+      expect(await run).toBe("completed");
+      expect(evalLog()).toBe("new");
+    }, 30000);
+
+    test("a profile broken while the run waited fails the run the way a fresh start does", async () => {
+      profile("old");
+      const run = runWorkflow(evalGraph(), options({ resume: atGate() }));
+      await until(() => calls.some((c) => c.route === "/cli/workflow-runs/poll-gate"));
+      fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), "[line.commands\neval = ");
+      gateAnswer = "S";
+      expect(await run).toBe("failed");
+      expect(progress().at(-1)?.body.fail_reason).toContain("the line profile could not be read");
+      expect(fs.existsSync(path.join(lineRunDir(tmpDir, `line-${runId}`), "eval.log"))).toBe(false);
+    }, 30000);
+  });
+
   test("a gate picked up on a graph that grew a station before it makes that station first (ct-59267: proposal_words)", () => {
     const grown = parseWorkflowSource(`digraph line {
       start [shape=Mdiamond]
