@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Installed by Codecast.pkg to /Library/LaunchAgents. launchd loads it into
+  every person's login session and runs `codecast mdm enroll` as that person:
+  at login, and again whenever the configuration profile lands or changes
+  (an MDM often delivers the profile after the pkg). Enrollment is idempotent,
+  so the repeat runs cost nothing once a person is set up. Output goes to
+  ~/.codecast/mdm-enroll.log; launchd cannot expand ~ in StandardOutPath, so
+  a /bin/sh line does the redirect.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.codecast.enroll</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>mkdir -p "$HOME/.codecast" &amp;&amp; exec /usr/local/bin/codecast mdm enroll &gt;&gt;"$HOME/.codecast/mdm-enroll.log" 2&gt;&amp;1</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>WatchPaths</key>
+  <array>
+    <string>/Library/Managed Preferences/sh.codecast.plist</string>
+  </array>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CODECAST_NO_AUTO_UPDATE</key>
+    <string>1</string>
+  </dict>
+</dict>
+</plist>

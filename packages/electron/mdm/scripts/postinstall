@@ -1,0 +1,36 @@
+#!/bin/sh
+# Codecast.pkg postinstall. Runs as root after the payload is in place:
+#   /Applications/Codecast.app, /usr/local/bin/codecast (+ cast), and
+#   /Library/LaunchAgents/sh.codecast.enroll.plist.
+#
+# launchd loads the enroll agent by itself at each person's next login. A
+# person who is logged in while the MDM installs the pkg should not have to
+# log out, so the agent is loaded into their session now. Reinstalling is
+# harmless: the agent is booted out and loaded again, which reruns the
+# idempotent `codecast mdm enroll`.
+
+TARGET="${3:-/}"
+LABEL="sh.codecast.enroll"
+PLIST="/Library/LaunchAgents/$LABEL.plist"
+
+chown root:wheel "$TARGET$PLIST" "$TARGET/usr/local/bin/codecast" 2>/dev/null
+chmod 644 "$TARGET$PLIST"
+chmod 755 "$TARGET/usr/local/bin/codecast"
+
+# Only the running system has a login session to load into.
+[ "$TARGET" = "/" ] || exit 0
+
+user=$(/usr/bin/stat -f %Su /dev/console 2>/dev/null)
+case "$user" in
+  ""|root|loginwindow|_mbsetupuser) echo "codecast: no one logged in; the enroll agent loads at the next login"; exit 0 ;;
+esac
+uid=$(/usr/bin/id -u "$user") || exit 0
+
+/bin/launchctl bootout "gui/$uid/$LABEL" 2>/dev/null
+if /bin/launchctl bootstrap "gui/$uid" "$PLIST"; then
+  echo "codecast: enroll agent loaded for $user"
+else
+  # Older launchd or an odd session: the legacy verb, run inside the user's context.
+  /bin/launchctl asuser "$uid" /bin/launchctl load -w "$PLIST" && echo "codecast: enroll agent loaded for $user (asuser)"
+fi
+exit 0

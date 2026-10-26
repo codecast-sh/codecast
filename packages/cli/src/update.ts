@@ -21,6 +21,7 @@ import {
 import { execFileSync, spawnSync } from "./proc.js";
 import { getVersion } from "./cliVersion.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { isManagedInstall } from "./managedInstall.js";
 
 export * from "./snippetVersions.js";
 export { getVersion };
@@ -153,11 +154,12 @@ export function installChannel(
   execPath = process.execPath,
   devMode = isDevMode(),
   writable = (dir: string) => { try { fs.accessSync(dir, fs.constants.W_OK); return true; } catch { return false; } },
+  managed: (execPath: string) => boolean = isManagedInstall,
 ): { distribution: Distribution; can_self_update: boolean } {
   if (devMode) return { distribution: "source", can_self_update: false };
   const distribution: Distribution = /\/Cellar\/|\/homebrew\//i.test(execPath) ? "brew" : /\/node_modules\//.test(execPath) ? "npm" : "installer";
   const dir = execPath.slice(0, Math.max(execPath.lastIndexOf("/"), 1));
-  return { distribution, can_self_update: writable(dir) };
+  return { distribution, can_self_update: writable(dir) && !managed(execPath) };
 }
 
 export function updateRecentlyFailed(version: string): boolean {
@@ -168,7 +170,16 @@ export function recordUpdateFailure(version: string): void {
   updater.recordUpdateFailure(version);
 }
 
+/** Printed where an update was asked for on a managed install. */
+export const MANAGED_UPDATE_NOTE = `cast was installed by your organization (${process.execPath}); it updates when your MDM installs a newer Codecast.pkg.`;
+
 export async function performUpdate(): Promise<{ success: boolean; error?: string }> {
+  // A root-owned binary (Codecast.pkg from an MDM) is not this user's to
+  // replace; the organization ships the next version (managedInstall.ts).
+  if (!isDevMode() && isManagedInstall()) {
+    console.error(MANAGED_UPDATE_NOTE);
+    return { success: false, error: "managed_install" };
+  }
   const result = await updater.performUpdate();
   // Callers print their own "Update failed" line without the reason, so name it
   // here. Dev mode is a refusal, not a failure, and stays quiet.
