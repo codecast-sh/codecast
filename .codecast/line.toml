@@ -62,3 +62,11 @@ runs = "convex lineLearn on a card answered Revise or Drop; the cast-lessons ski
 # one way to read issues is a signed-in browser tab, and a finder scraping a
 # person's tab is not one the line can rely on. A Sentry finder starts with
 # an org auth token (scope event:read) kept as a Convex env var.
+
+# The deploy stage (docs/architecture/deploys.md DP2): Deploy on the Line page
+# sends every shipped fix waiting to go out in one deploy. Run from the repo
+# root; deploy.sh deploys the checkout as it stands, so it takes no $sha.
+[line.deploy]
+command = "packages/convex/deploy.sh"
+target = "backend"                   # what codecast's deploy markers name
+trigger = "person"                   # a person presses Deploy
