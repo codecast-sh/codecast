@@ -23,7 +23,7 @@ import { CODECAST_BASE_URL, sharePath } from '@codecast/shared/entities';
 import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
-import { parsePollAnswers } from '@codecast/web/lib/pollPayload';
+import { parsePollAnswers, pollClosedLabel } from '@codecast/web/lib/pollPayload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { ImageGallery } from '@/components/ImageGallery';
 import { isTrustedImageSrc } from '@/lib/convex';
@@ -82,7 +82,8 @@ import { useLinkDown } from '@/hooks/useLinkDown';
 import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
-import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, sessionEscalationCaption, stripPastedContent, isPollResponsePayload, type VaultReadyMessage } from '@codecast/shared/contracts';
+import { agentDisplayName, agentSupportsFork, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, sessionEscalationCaption, stripPastedContent, isPollResponsePayload, type VaultReadyMessage } from '@codecast/shared/contracts';
+import { DELIVERY_FAILED_SUBTYPE, parseDeliveryFailedNotice } from '@codecast/shared/contracts/deliveryFailed';
 import { MarkdownContent, CodeBlockWithCopy, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { AnsiText } from '@/components/CodeText';
 import { stripAnsiCodes } from '@codecast/web/lib/ansi';
@@ -519,6 +520,7 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
   // (matches web's poll-key contract that drives the live /poll picker).
   const isConfirmation = questions[0]?.isConfirmation;
   const isInteractive = !result && !!conversationId && sentLabel === undefined;
+  const closedLabel = pollClosedLabel(result, answers);
 
   const handlePick = (j: number, cleanLabel: string) => {
     if (!conversationId) return;
@@ -625,6 +627,7 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
           </RNView>
         );
       })}
+      {closedLabel && <RNText style={styles.optionDescription}>{closedLabel}</RNText>}
     </RNView>
   );
 }
@@ -1898,7 +1901,39 @@ function ThinkingBlock({ content }: { content: string }) {
   );
 }
 
-function SystemMessage({ message }: { message: Message }) {
+// Mobile port of web's DeliveryFailedBlock: a message the daemon stopped
+// delivering, whether the agent can have seen it, and the action that puts it
+// back (a trigger runs again, anything else is sent again).
+function DeliveryFailedRail({ notice, conversationId, timestamp }: { notice: ReturnType<typeof parseDeliveryFailedNotice> & {}; conversationId?: string; timestamp?: number }) {
+  const Theme = useTheme();
+  const [done, setDone] = useState(false);
+  const frame = parseScheduledTask(notice.message);
+  const neverReached = notice.submitted === false;
+  const color = neverReached ? Theme.red : Theme.orange;
+  const cause = neverReached ? 'never reached the agent' : 'may have run';
+  const what = frame ? frame.title : notice.message.trim().split('\n')[0];
+  const action = frame?.task_id
+    ? { label: 'Run again', doneLabel: 'Run queued', run: () => useInboxStore.getState().triggerAction(frame.task_id!, 'runNow') }
+    : notice.complete && conversationId
+      ? { label: 'Send again', doneLabel: 'Sent', run: () => useInboxStore.getState().sendMessage(conversationId, notice.message) }
+      : null;
+  return (
+    <RNView style={[styles.systemRail, { borderLeftColor: color + '99', backgroundColor: color + '0d', alignItems: 'center' }]}>
+      <Feather name="alert-triangle" size={12} color={color} />
+      <RNView style={{ flex: 1, minWidth: 0 }}>
+        <RNText style={[styles.systemRailKicker, { color }]}>Not delivered · {notice.writes} writes · {cause}</RNText>
+        <RNText style={styles.systemRailText} numberOfLines={1}>{frame?.trigger ? `${frame.trigger} · ` : ''}{what}</RNText>
+      </RNView>
+      {action ? (
+        <Pressable disabled={done} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); action.run(); setDone(true); }} hitSlop={8}>
+          <RNText style={[styles.systemRailText, { color: done ? Theme.textDim : Theme.text }]}>{done ? action.doneLabel : action.label}</RNText>
+        </Pressable>
+      ) : timestamp ? <RNText style={styles.commitTime}>{formatRelativeTime(timestamp)}</RNText> : null}
+    </RNView>
+  );
+}
+
+function SystemMessage({ message, conversationId }: { message: Message; conversationId?: string }) {
   const Theme = useTheme();
   if (isHiddenSystemNotice(message.content, message.subtype)) return null;
 
@@ -1930,6 +1965,11 @@ function SystemMessage({ message }: { message: Message }) {
         <RNText style={styles.commitTime}>{formatRelativeTime(message.timestamp)}</RNText>
       </RNView>
     );
+  }
+
+  if (message.subtype === DELIVERY_FAILED_SUBTYPE) {
+    const notice = parseDeliveryFailedNotice(message.content);
+    if (notice) return <DeliveryFailedRail notice={notice} conversationId={conversationId} timestamp={message.timestamp} />;
   }
 
   if (message.subtype === 'scheduled_task_prompt' && message.content) {
@@ -2383,7 +2423,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   };
 
   if (message.role === 'system') {
-    return <SystemMessage message={message} />;
+    return <SystemMessage message={message} conversationId={conversationId} />;
   }
 
   const isUser = message.role === 'user';
