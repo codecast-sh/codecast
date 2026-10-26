@@ -2438,6 +2438,7 @@ export const getConversationWithMeta = query({
       // Explicit null, never an absent key: the client merges rows, so a link
       // turned off on another device would otherwise stay "on" in an open tab.
       share_token: (conversationLight as any).share_token ?? null,
+      guest_suggestions: (conversationLight as any).guest_suggestions ?? null,
       // The same for the header's git line: a field can be unset (a cloud
       // agent's branch its provider no longer names, a local stamp cleared).
       git_branch: (conversationLight as any).git_branch ?? null,

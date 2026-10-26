@@ -8,6 +8,7 @@ import { abbrevModel } from "../../lib/entityDisplay";
 import { formatAgentType } from "../AgentTypeIcon";
 import type { SessionHandoffPrompt } from "../../lib/sessionHandoff";
 import type { HandoffLinkDetails } from "./types";
+import { HEADER_CHIP } from "./ConversationHeaderBar";
 import { MessageMarkdown } from "./markdown";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 
@@ -55,7 +56,7 @@ export function HandoffLinkChip({ details, direction, ...navigation }: HandoffNa
 }) {
   return (
     <span data-handoff-chip={direction} className="cq-sq6 min-w-0 max-w-[240px]">
-      <HandoffSessionLink details={details} compact {...navigation} className="inline-flex max-w-full items-center gap-1 rounded-full border border-sol-cyan/30 bg-sol-cyan/10 px-2 py-0.5 text-[10px] text-sol-cyan transition-colors hover:bg-sol-cyan/20">
+      <HandoffSessionLink details={details} compact {...navigation} className={`max-w-full ${HEADER_CHIP}`}>
         <ArrowRightLeft className="h-3 w-3 shrink-0" />
         <span className="cq-sq2 shrink-0">{direction === "from" ? "From" : "Continued in"}</span>
       </HandoffSessionLink>

@@ -46,11 +46,11 @@ test("two physical Macs: only the authenticated local daemon affects global noti
   globalThis.fetch = (async (input, init) => { await held; return healthProbe(input, init); }) as typeof fetch;
   await mount();
   expect(globalPill()).toBeUndefined();
-  expect(syncLabel()).toBe("Sync status: Up to date");
+  expect(syncLabel()).toBeUndefined();
   await settle(450);
   await act(async () => { release(); await held; }); await settle();
   expect(globalPill()).toBeUndefined();
-  expect(syncLabel()).toBe("Sync status: Up to date");
+  expect(syncLabel()).toBeUndefined();
   expect(useStatusNoticeStore.getState().notices.size).toBe(0);
   expect(pillLabel('[data-session="mini"]')).toContain("Mac-mini: daemon quiet");
   expect(sessionText("mini")).toContain("quiet");
@@ -59,7 +59,7 @@ test("two physical Macs: only the authenticated local daemon affects global noti
   expect(sessionText("missing")).toBe("Session delivery controls");
   expect(sessionText("unassigned")).toBe("Session delivery controls");
   await act(() => useInboxStore.getState().setMachineRoster(healthRows(Date.now()).reverse()));
-  expect(syncLabel()).toBe("Sync status: Up to date");
+  expect(syncLabel()).toBeUndefined();
 });
 
 test("local quiet, offline, overloaded, stalled and draining states surface and recover", async () => {
@@ -95,19 +95,19 @@ test("local quiet, offline, overloaded, stalled and draining states surface and 
   expect(syncLabel()).toBe("Sync status: syncing · 904 messages");
   await update({});
   expect(globalPill()).toBeUndefined();
-  expect(syncLabel()).toBe("Sync status: Up to date");
+  expect(syncLabel()).toBeUndefined();
 });
 
 test("missing identity, missing local row, empty roster and changed viewer never borrow another daemon", async () => {
   globalThis.fetch = (async () => Response.json({}, { status: 401 })) as typeof fetch;
   await mount(); await settle(450);
   expect(globalPill()).toBeUndefined();
-  expect(syncLabel()).toBe("Sync status: Up to date");
+  expect(syncLabel()).toBeUndefined();
   cache(); globalThis.fetch = healthProbe as typeof fetch;
   await act(() => window.dispatchEvent(new dom.window.Event("focus"))); await settle();
   await act(() => useInboxStore.getState().setMachineRoster(healthRows(Date.now()).filter(d => d.device_id !== "laptop")));
   expect(globalPill()).toBeUndefined();
-  expect(syncLabel()).toBe("Sync status: Up to date");
+  expect(syncLabel()).toBeUndefined();
   await act(() => useInboxStore.getState().setMachineRoster([]));
   expect(globalPill()).toBeUndefined();
   await act(() => {

@@ -15,6 +15,7 @@ import { HeaderModelControl } from "../SessionControlMenu";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { DropdownMenuItem, DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { OwnerAvatar, type HandoffInfo } from "../OwnersBadge";
+import { HEADER_CHIP } from "./ConversationHeaderBar";
 import { copyToClipboard } from "../../lib/utils";
 import { useImageGallery } from "../ImageGallery";
 import { PageFavicon } from "../PublishedPageEmbed";
@@ -61,22 +62,14 @@ export function DensityMenuOptions({ density, setDensity, guest }: { density: Co
     </>
   );
 }
-// Children render only while the header row is squeezed past level 4 (see
-// useSqueezeToFit and the .cq-sq4 tier): the overflow menu mounts its content
-// on open, so reading the row's attribute here sees the level at that moment.
-export function SqueezedHeaderActions({ rowRef, children }: { rowRef: React.RefObject<HTMLElement | null>; children: React.ReactNode }) {
-  if (!rowRef.current?.matches('[data-squeeze~="4"]')) return null;
-  return <>{children}</>;
-}
-
 // Header entries to the session gallery: one pill for the images in the
 // transcript, one for the pages the session published, each opening the
 // lightbox over its own explicit list (openList) — the register() channel only
 // knows images the virtualized feed has actually mounted. Rendered inside
 // ImageGalleryProvider (a child, not the ConversationView body, which sits
-// outside the provider). They stay colored pills, unlike the dim icon actions
-// beside them: what a session produced is one of its most important artifacts,
-// and the header should make it easy to spot.
+// outside the provider). The image pill stays magenta, unlike the quiet chips
+// beside it: a session's images are one of its most important artifacts, and
+// the header should make them easy to spot.
 export function SessionGalleryButton({ items }: { items: GalleryItem[] }) {
   const pages = useMemo(() => items.filter(isGalleryPage), [items]);
   const images = useMemo(() => items.filter(item => !isGalleryPage(item)), [items]);
@@ -98,7 +91,7 @@ export function SessionGalleryButton({ items }: { items: GalleryItem[] }) {
         <GalleryPill
           items={pages}
           label={pages.length === 1 ? "1 published page" : `${pages.length} published pages`}
-          className="bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
+          className={HEADER_CHIP}
           icon={<PageFavicon className="h-3 w-3" />}
         />
       )}

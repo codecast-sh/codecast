@@ -212,6 +212,10 @@
    stretches to the tallest one, so the seams meet and nothing sits a pixel
    low. A segment keeps its own tint (blue for the machine, green for a live
    pane, orange for a stalled daemon) and its own click. */
+/* A huddle on this session shows in the header only while it is live; the
+   session menu starts one. */
+[data-sv-convhead] [data-cc-conv-actions] [data-huddle-idle] { display: none; }
+
 [data-sv-convhead] [data-cc-runner] {
   gap: 0;
   align-items: stretch;
@@ -4082,17 +4086,15 @@ diffs-container {
 
 /* The top bar sheds by measurement (TopbarRow's useSqueezeToFit), lowest
    value first, so nothing in it ever lands on top of its neighbour:
-   1. huddle and pop out, reachable from New and the people row's float;
-   2. the call card's words: its dot, faces and controls already say it;
-   3. idle faces and their count, keeping me and whoever I am engaged with;
-   4. the workspace's name, keeping its crest;
-   5. recently viewed, which the palette also lists. */
-[data-cc-topbar-row][data-squeeze~="1"] .people-bar :is([data-huddle], [data-pop-out]),
-[data-cc-topbar-row][data-squeeze~="2"] .people-bar :is(.walkie-stage .engagement-card-words, .walkie-strip-end-label),
-[data-cc-topbar-row][data-squeeze~="3"] .people-bar [data-overflow],
-[data-cc-topbar-row][data-squeeze~="3"] .people-bar .face-seat:has(> [data-face-hit]:not([data-me]):is([data-state="offline"], [data-state="away"], [data-state="idle"], [data-state="online"], [data-state="busy"])),
-[data-cc-topbar-row][data-squeeze~="4"] [data-cc-team-label],
-[data-cc-topbar-row][data-squeeze~="5"] [data-cc-recents] {
+   1. the call card's words: its dot, faces and controls already say it;
+   2. idle faces and their count, keeping me and whoever I am engaged with;
+   3. the workspace's name, keeping its crest;
+   4. recently viewed, which the palette also lists. */
+[data-cc-topbar-row][data-squeeze~="1"] .people-bar :is(.walkie-stage .engagement-card-words, .walkie-strip-end-label),
+[data-cc-topbar-row][data-squeeze~="2"] .people-bar [data-overflow],
+[data-cc-topbar-row][data-squeeze~="2"] .people-bar .face-seat:has(> [data-face-hit]:not([data-me]):is([data-state="offline"], [data-state="away"], [data-state="idle"], [data-state="online"], [data-state="busy"])),
+[data-cc-topbar-row][data-squeeze~="3"] [data-cc-team-label],
+[data-cc-topbar-row][data-squeeze~="4"] [data-cc-recents] {
   display: none !important;
 }
 
@@ -4666,14 +4668,6 @@ diffs-container {
   line-height: 1.35;
 }
 
-.minimal-style [data-sv-rail] [data-sv-controls] {
-  gap: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
 .minimal-style [data-sv-rail] [data-sv-fade] {
   background-image: linear-gradient(to right, transparent, var(--sol-bg) 58%);
 }
@@ -4995,8 +4989,7 @@ diffs-container {
   min-height: var(--cc-panel-head-h);
   padding-inline: var(--cc-inset) 10px;
 }
-.minimal-style [data-sv-rail] [data-sv-head-tools] button,
-.minimal-style [data-sv-rail] [data-sv-controls] button {
+.minimal-style [data-sv-rail] [data-sv-head-tools] button {
   min-width: 28px;
   height: 28px;
   padding: 0 6px;
@@ -5009,21 +5002,18 @@ diffs-container {
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
-.minimal-style [data-sv-rail] [data-sv-head-tools] button svg,
-.minimal-style [data-sv-rail] [data-sv-controls] button svg {
+.minimal-style [data-sv-rail] [data-sv-head-tools] button svg {
   width: 14px;
   height: 14px;
   stroke-width: 1.7;
 }
-.minimal-style [data-sv-rail] [data-sv-head-tools] button:hover,
-.minimal-style [data-sv-rail] [data-sv-controls] button:hover {
+.minimal-style [data-sv-rail] [data-sv-head-tools] button:hover {
   background: color-mix(in srgb, var(--sol-text) 5%, transparent) !important;
   color: var(--sol-text);
 }
 /* The pressed one gets the fill alone: no tint, no box, no colour. */
 .minimal-style [data-sv-rail] [data-sv-head-tools] button[aria-pressed="true"],
-.minimal-style [data-sv-rail] [data-sv-head-tools] button[data-state="open"],
-.minimal-style [data-sv-rail] [data-sv-controls] button[class*=" bg-sol-"] {
+.minimal-style [data-sv-rail] [data-sv-head-tools] button[data-state="open"] {
   background: var(--sol-bg-highlight) !important;
   color: var(--sol-text);
 }

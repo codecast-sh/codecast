@@ -19,7 +19,7 @@ import { TopbarDivider } from "./TopbarButton";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 
 /** How many shedding levels the top bar has; globals.css names each one. */
-const TOPBAR_SQUEEZE_LEVELS = 5;
+const TOPBAR_SQUEEZE_LEVELS = 4;
 
 export function TopbarRow({
   nav,

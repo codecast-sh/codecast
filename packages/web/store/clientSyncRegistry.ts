@@ -1378,6 +1378,18 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["permissions.getPendingPermissions"],
   },
+  // Messages guests suggested for one of the owner's shared sessions
+  // (guestSuggestions.listPending), the cards above the owner's composer.
+  // localFirst like pendingPermissions: Send or Dismiss removes the row, and
+  // the exclude it plants keeps a racing push from bringing the card back.
+  guestSuggestions: {
+    persistence: { kind: "collection", key: "guestSuggestions" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    indexes: "_id, conversation_id",
+    sync: { isDelta: true },
+    feeds: ["guestSuggestions.listPending"],
+  },
   // Delivery status of the viewer's in-flight message per conversation
   // (getConversationPendingMessage). One row keyed by conversation id;
   // transient — never persisted (a reload re-derives it).
@@ -2045,6 +2057,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessionCommands: "local",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",
+  guestSuggestions: "shared",
   pendingMessageStatus: "shared",
   messageFeed: "shared",
   machineRoster: "shared",

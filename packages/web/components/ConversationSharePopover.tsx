@@ -6,11 +6,13 @@ import { useTeamShareActions } from "../hooks/useTeamShareActions";
 import { useInboxStore } from "../store/inboxStore";
 import { shareOrigin } from "../lib/utils";
 import { SharePopover } from "./SharePopover";
+import { Switch } from "./ui/switch";
 
 export function ConversationSharePopover({ conversation, canManage }: { conversation: any; canManage: boolean }) {
   const convId = conversation._id as Id<"conversations">;
   const { setPrivate, shareWithTeam } = useTeamShareActions(convId);
   const setShareLink = useInboxStore((s) => s.setShareLink);
+  const setGuestSuggestions = useInboxStore((s) => s.setGuestSuggestions);
   const pageUrl = `${shareOrigin()}/conversation/${convId}`;
   // The link that works for anyone must PRESENT the token (?share=): a bare
   // conversation id grants nothing to anonymous viewers or link unfurlers
@@ -37,6 +39,18 @@ export function ConversationSharePopover({ conversation, canManage }: { conversa
       forwardLabel="session"
       // The repo whose team mapping shared this session, so the popover can say why.
       sharedVia={conversation.auto_shared ? (conversation.git_root || conversation.project_path || null) : null}
+      // Guests without an account can suggest messages; each one waits above
+      // the owner's composer until they send it (convex guestSuggestions.ts).
+      linkExtra={conversation.share_token ? (
+        <label className="flex items-center justify-between gap-3 pt-1 cursor-pointer">
+          <span className="text-xs text-sol-text-secondary">Guests can suggest messages</span>
+          <Switch
+            checked={!!conversation.guest_suggestions}
+            onCheckedChange={(on) => setGuestSuggestions(convId, on)}
+            aria-label="Guests can suggest messages"
+          />
+        </label>
+      ) : null}
     />
   );
 }
