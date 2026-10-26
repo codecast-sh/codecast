@@ -14,6 +14,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { authRenderDecision, localBootTrust, shouldClearMemoryFor, shouldReleaseSplash } from './authTrust';
 import { bootMark } from './bootProfile';
 import { STORE_SHOTS } from './storeShots/flag';
+import { setCatchUpToken } from './foregroundResume';
 
 const TOKEN_KEY = 'convex_auth_token';
 const BIOMETRIC_ENABLED_KEY = 'biometric_enabled';
@@ -68,6 +69,7 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
   const { signIn, signOut: convexSignOut } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
   const accessToken = useAuthToken();
+  useEffect(() => setCatchUpToken(accessToken ?? null), [accessToken]);
   const accessIdentity = parseAccessIdentity(accessToken);
   const currentUser = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
   const currentUserId = currentUser?._id?.toString() ?? null;

@@ -10,6 +10,7 @@ import { chatPushIsOnScreen } from '@/lib/chatFocus';
 import { useNotificationCatchUp } from '@/hooks/useNotificationCatchUp';
 import { acceptInvite, declineInvite, joinCall } from '@/lib/calls/callManager';
 import { useAuth } from '@/lib/auth';
+import { catchUpConversation } from '@/lib/foregroundResume';
 import {
   CALL_PUSH_ACTION_DECLINE,
   CALL_PUSH_ACTION_JOIN,
@@ -153,6 +154,8 @@ export function usePushNotifications() {
         return;
       }
       if (data.conversationId) {
+        // Its new rows start over HTTPS now, beside the socket's reconnect.
+        void catchUpConversation(String(data.conversationId));
         // A hosted conversation opens as its own screen there, with its approval card.
         router.push(`/session/${data.conversationId}` as never);
       } else if (data.channelId) {

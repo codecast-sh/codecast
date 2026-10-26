@@ -28,6 +28,8 @@ import { STORE_SHOTS } from '@/lib/storeShots/flag';
 import { bootMark } from '@/lib/bootProfile';
 import { BOOT_FONTS } from '@/lib/bootFonts';
 import { PERF_PROBE, probeTouchEnd, setProbeRoute } from '@/lib/perfProbe';
+import { startForegroundSyncTrace } from '@/lib/foregroundSyncTrace';
+import { setForegroundRoute, startForegroundResume } from '@/lib/foregroundResume';
 import * as Font from 'expo-font';
 import { Alert } from 'react-native';
 import { setTaskErrorReporter } from '@codecast/web/lib/taskActions';
@@ -202,8 +204,15 @@ function RootLayout() {
 function RouteTracker() {
   const pathname = usePathname();
   useEffect(() => {
+    if (STORE_SHOTS) return;
+    // The trace listens first so it reads the socket as the return found it.
+    startForegroundSyncTrace();
+    startForegroundResume();
+  }, []);
+  useEffect(() => {
     if (pathname) trackScreen(pathname);
     if (PERF_PROBE) setProbeRoute(pathname);
+    setForegroundRoute(pathname);
   }, [pathname]);
   return null;
 }

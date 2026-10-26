@@ -2,6 +2,20 @@
 export const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 15_000;
 export const MAX_CONCURRENT_MUTATIONS = 8;
 
+/** Live counters across every socket the wrapper makes, read by the phone's
+ *  foreground trace: whether anything arrived, how often, and how many
+ *  mutations the concurrency cap is holding back. Frame data is never read
+ *  for these. */
+export const socketStats = {
+  lastConnectAt: 0,
+  opens: 0,
+  lastOpenAt: 0,
+  lastMessageAt: 0,
+  messagesIn: 0,
+  heldMutations: 0,
+  activeMutations: 0,
+};
+
 export function recoveringWebSocket({
   Native = globalThis.WebSocket,
   timeoutMs = WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
@@ -33,11 +47,20 @@ export function recoveringWebSocket({
         this.pendingMutations.delete(id);
         this.activeMutations.add(id);
       }
+      this.countMutations();
+    }
+
+    private countMutations() {
+      socketStats.heldMutations = this.pendingMutations.size;
+      socketStats.activeMutations = this.activeMutations.size;
     }
 
     constructor(url: string | URL, protocols?: string | string[]) {
       super(url, protocols);
+      socketStats.lastConnectAt = Date.now();
       this.addEventListener("message", (event) => {
+        socketStats.lastMessageAt = Date.now();
+        socketStats.messagesIn++;
         if (this.activeMutations.size === 0) return;
         const message = JSON.parse(event.data);
         if (message.type !== "MutationResponse") return;
@@ -55,7 +78,11 @@ export function recoveringWebSocket({
         }, 1_000);
         this.close();
       }, timeoutMs);
-      this.addEventListener("open", () => clearTimeout(timeout), { once: true });
+      this.addEventListener("open", () => {
+        clearTimeout(timeout);
+        socketStats.opens++;
+        socketStats.lastOpenAt = Date.now();
+      }, { once: true });
       this.addEventListener("close", (event) => {
         if (closed) {
           event.stopImmediatePropagation();
@@ -64,6 +91,7 @@ export function recoveringWebSocket({
         closed = true;
         this.pendingMutations.clear();
         this.activeMutations.clear();
+        this.countMutations();
         clearTimeout(timeout);
         clearTimeout(closeTimeout);
       });
