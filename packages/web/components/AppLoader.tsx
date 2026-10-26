@@ -65,9 +65,11 @@ const SLOW_BOOT_MS = 8_000;
 
 /**
  * Said under the boot loader once a cold load has run long (a slow device,
- * a busy machine, a large cache): one calm line and a way out, so a loader
- * that will not finish never reads as a dead site. Fixed below the mark, so
- * the loader itself does not move.
+ * a busy machine, a large cache, offline): its state and two ways out, so a
+ * loader that will not finish never reads as a dead site. Fixed below the
+ * mark, so the loader itself does not move. The markup, styles and button
+ * behavior are the static #boot-shell's `.boot-stuck` in index.html (which
+ * covers a bundle that never runs), so both look and act the same.
  */
 export function SlowBootNote() {
   const [slow, setSlow] = useState(false);
@@ -77,11 +79,15 @@ export function SlowBootNote() {
   });
   if (!slow) return null;
   return (
-    <div className="fixed inset-x-0 top-[calc(50%+56px)] flex flex-col items-center gap-2 text-center" data-slow-boot>
-      <p className="text-sm text-sol-text-dim">Still loading your conversations…</p>
-      <button type="button" onClick={() => window.location.reload()} className="text-sm text-sol-text-muted underline decoration-sol-border underline-offset-4 hover:text-sol-text">
-        Reload
-      </button>
+    <div className="boot-stuck text-sol-text-dim" data-slow-boot>
+      <span className="state">
+        <span className="state-slow">Taking longer than usual</span>
+        <span className="state-offline">Offline · reloads when back</span>
+      </span>
+      <div className="actions">
+        <button type="button" className="primary" data-boot-action="reload">Reload</button>
+        <button type="button" data-boot-action="clear">Clear cache &amp; reload</button>
+      </div>
     </div>
   );
 }

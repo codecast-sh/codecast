@@ -49,6 +49,7 @@
       "spellMenu.js",
       "editUndo.js",
       "menuKeys.js",
+      "shellRecovery.js",
       "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",
