@@ -40,6 +40,11 @@ while kill -0 "$pid" 2>/dev/null; do
     sudo -n cat "/proc/$p/stack" 2>/dev/null | head -12
   done
   echo "::endgroup::"
+  # The first dump (Oct 26) found bun's main thread running, no wait and no
+  # child, in a 27-line file. Its crash handler prints a bun.report link that
+  # decodes to the native stack it was spinning in, so it gets a SIGSEGV first.
+  for p in $(pgrep -x bun 2>/dev/null); do kill -SEGV "$p" 2>/dev/null; done
+  sleep 5
   pkill -TERM -P "$pid" 2>/dev/null
   kill -TERM "$pid" 2>/dev/null
   sleep 5

@@ -712,6 +712,15 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(2);
   }, 30000);
 
+  // Oct 26: restarted outside the daemon, a hand's statuses were refused and its row read needs input while it worked.
+  test("a hand whose transcript is still growing is at work, whatever its status reads", async () => {
+    const asking = (message_count: number) => ({ id: "conv_hand", work_state: "needs_input", is_live: true, message_count });
+    inboxReads = [asking(4), asking(6), asking(9), asking(9)];
+    workState = "working";
+    expect(await run()).toBe("completed");
+    expect(calls.filter(c => c.route === "/cli/inbox").length).toBe(4);
+  }, 30000);
+
   test("a hand parked on its own background work is not taken as settled", async () => {
     // ct-59925, 2026-10-14: the Prove hand ended turns on an open replay and
     // Monitor. A settle that reads "waiting" (or a declared dormant) files the

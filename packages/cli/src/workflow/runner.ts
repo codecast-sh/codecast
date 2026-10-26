@@ -499,6 +499,7 @@ async function waitOnStation(
     await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "in_progress" });
   }
   let askedForHandoffAt = 0;
+  let seenMessages = -1;
   // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
   const clock = new ParkedClock(startMs);
   while (clock.elapsed() < timeout) {
@@ -569,8 +570,12 @@ async function waitOnStation(
     // next tool call; one such reading ended a prove station three minutes in,
     // with the hand still working. A live hand settles on needs_input only
     // when two reads in a row say so. One that stopped needs no second read.
+    // A transcript still growing is a hand at work, whatever its status reads: a process restarted outside the daemon
+    // posts statuses the daemon refuses (no launch token), and three Revise builds settled 15 s into their work (Oct 26).
+    const grew = seenMessages >= 0 && (row.message_count ?? 0) > seenMessages;
+    seenMessages = row.message_count ?? seenMessages;
     const asking = state === "needs_input" && row.is_live && !row.is_killed;
-    if (asking && !askedOnce) {
+    if (asking && (!askedOnce || grew)) {
       askedOnce = true;
       continue;
     }
