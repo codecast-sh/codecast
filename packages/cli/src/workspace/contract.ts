@@ -194,7 +194,7 @@ export async function validateContract(ws: Workspace): Promise<ContractResult> {
     const probes = depsProbes(ws.manifest);
     if (probes.length === 0) return null; // nothing to verify
     for (const probe of probes) {
-      const p = path.join(ws.path, probe);
+      const p = path.resolve(ws.path, probe);
       if (fs.existsSync(p)) return null;
     }
     return `none of expected dep dirs found: ${probes.join(", ")}`;
@@ -262,16 +262,29 @@ function check(name: string, fn: () => string | null): ContractCheck {
  * exited 0 — that's the strong signal.
  */
 function depsProbes(m: WorkspaceManifest): string[] {
-  const cmds = [...m.setup.install].join(" ");
-  const probes: string[] = [];
-  if (/\b(bun|npm|pnpm|yarn)\b/.test(cmds)) probes.push("node_modules");
-  if (/\bcargo\s+build\b/.test(cmds)) probes.push("target");
-  if (/\bpoetry\s+install\b/.test(cmds)) probes.push(".venv");
-  if (/\buv\s+sync\b/.test(cmds)) probes.push(".venv");
-  if (/\b(pip|pipenv)\b/.test(cmds)) probes.push(".venv");
-  if (/\bbundle\s+install\b/.test(cmds)) probes.push("vendor/bundle");
-  // Intentionally NOT probed:
-  //   cargo fetch — writes to ~/.cargo/registry/cache, no worktree marker
-  //   go mod download — writes to $GOPATH/pkg/mod, no worktree marker
-  return probes;
+  const probes = new Set<string>();
+  for (const install of m.setup.install) {
+    // Each marker sits in the directory the install runs in (`cd outreach && bun install`).
+    const { dir, cmd } = installDir(install);
+    const markers: string[] = [];
+    if (/\b(bun|npm|pnpm|yarn)\b/.test(cmd)) markers.push("node_modules");
+    if (/\bcargo\s+build\b/.test(cmd)) markers.push("target");
+    if (/\bpoetry\s+install\b/.test(cmd)) markers.push(".venv");
+    if (/\buv\s+sync\b/.test(cmd)) markers.push(".venv");
+    if (/\b(pip|pipenv)\b/.test(cmd)) markers.push(".venv");
+    if (/\bbundle\s+install\b/.test(cmd)) markers.push("vendor/bundle");
+    // Intentionally NOT probed:
+    //   cargo fetch — writes to ~/.cargo/registry/cache, no worktree marker
+    //   go mod download — writes to $GOPATH/pkg/mod, no worktree marker
+    for (const marker of markers) probes.add(path.join(dir, marker));
+  }
+  return [...probes];
+}
+
+/** The directory an install command runs in, relative to the workspace, after its leading `cd <dir> &&` (or `;`) steps. */
+function installDir(install: string): { dir: string; cmd: string } {
+  const step = /^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&]+)\s*(?:&&|;)\s*([\s\S]*)$/.exec(install);
+  if (!step) return { dir: ".", cmd: install };
+  const rest = installDir(step[2]);
+  return { dir: path.join(step[1].replace(/^(["'])(.*)\1$/, "$2"), rest.dir), cmd: rest.cmd };
 }

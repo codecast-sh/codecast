@@ -222,6 +222,22 @@ describe("validateContract", () => {
     expect(r.ok).toBe(false);
   });
 
+  test("an install that runs in a subdirectory is probed there, not at the root", async () => {
+    // Union's install is `cd outreach && bun install`: its node_modules is outreach/node_modules.
+    const ws = makeReadyWorkspace("m3b");
+    ws.manifest.setup.install = ["cd outreach && bun install --frozen-lockfile"];
+    fs.rmSync(path.join(ws.path, "node_modules"), { recursive: true, force: true });
+    fs.mkdirSync(path.join(ws.path, "outreach/node_modules"), { recursive: true });
+    expect((await validateContract(ws)).checks.find((c) => c.name === "deps-installed")?.ok).toBe(true);
+
+    // node_modules at the root says nothing about the subdirectory's install.
+    fs.rmSync(path.join(ws.path, "outreach/node_modules"), { recursive: true, force: true });
+    fs.mkdirSync(path.join(ws.path, "node_modules"), { recursive: true });
+    const missing = (await validateContract(ws)).checks.find((c) => c.name === "deps-installed");
+    expect(missing?.ok).toBe(false);
+    expect(missing?.reason).toContain("outreach/node_modules");
+  });
+
   test("missing manifest env var → broken", async () => {
     const ws = makeReadyWorkspace("m4");
     ws.env = { PORT_WEB: "39000" }; // dropped NODE_ENV

@@ -1,7 +1,7 @@
 // codecast's prove command (scripts/line.ts, line-profile.md LP4): the replay
 // JSON it reads, and the majority rule a miss and a guard are held to.
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -64,6 +64,35 @@ describe("scripts/line.ts ship", () => {
       writeFileSync(path.join(repo, "tree/a.txt"), "a\n");
       expect(ship(path.join(repo, "tree"))).toStartWith("applied to the working tree");
       expect(readFileSync(path.join(repo, "tree/a.txt"), "utf8")).toBe("a\nchanged\n");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("a tree whose copy of a shipped file holds edits made after review is refused, never landed as the change", () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "line-ship-"));
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+    const ship = (tree: string) => spawnSync("bun", [path.join(import.meta.dir, "line.ts"), "ship", "--base", "main", "--tree", tree], { cwd: repo, encoding: "utf8" });
+    try {
+      git("init", "-q", "-b", "main");
+      writeFileSync(path.join(repo, "a.txt"), "a\nb\nc\nd\ne\nf\ng\n");
+      git("add", "a.txt");
+      git("commit", "-qm", "a");
+      git("worktree", "add", "-q", "--detach", "tree", "main");
+      git("checkout", "-q", "-b", "work");
+      writeFileSync(path.join(repo, "a.txt"), "a\nreviewed\nc\nd\ne\nf\ng\n");
+      git("commit", "-qam", "session edits");
+      // The session kept working after its change went to review (ct-70983's tie-cursor fix).
+      const tree = path.join(repo, "tree");
+      writeFileSync(path.join(tree, "a.txt"), "a\nreviewed\nc\nd\ne\nf\nwritten after review\n");
+      const after = ship(tree);
+      expect(after.status).toBe(1);
+      expect(after.stderr).toContain("holds edits the reviewed branch does not, in a.txt");
+      expect(readFileSync(path.join(tree, "a.txt"), "utf8")).toBe("a\nreviewed\nc\nd\ne\nf\nwritten after review\n");
+      // The same holds when the tree has none of the change but its own edits in the file.
+      writeFileSync(path.join(tree, "a.txt"), "a\nb\nc\nd\ne\nf\nsomeone's edit\n");
+      expect(ship(tree).status).toBe(1);
+      expect(readFileSync(path.join(tree, "a.txt"), "utf8")).toBe("a\nb\nc\nd\ne\nf\nsomeone's edit\n");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

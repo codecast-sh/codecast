@@ -33,6 +33,23 @@ was="$(git rev-parse HEAD)"
 if ! git rebase --autostash "$upstream" > "$dir/rebase.log" 2>&1; then
   files="$(git diff --name-only --diff-filter=U | head -20 | tr '\n' ' ')"
   git rebase --abort > /dev/null 2>&1
+  # The default branch can already carry the change, reworked by edits made
+  # after review (the shared tree committed while the card waited): a commit
+  # after the fork whose copies of the touched files read nearer the reviewed
+  # branch than the fork did. What landed is not what was reviewed, so the run
+  # stops and names the files that differ, rather than asking for a conflict
+  # to be resolved in favour of a change that is already there.
+  fork="$(git merge-base "$was" "$upstream")"
+  touched="$(git diff --name-only --no-renames "$fork" "$was")"
+  apart() { git diff --numstat "$1" "$was" -- $touched | awk '{ n += $1 + $2 } END { print n + 0 }'; }
+  whole="$(apart "$fork")"
+  landed="$(git log --reverse --format=%H "$fork..$upstream" -- $touched | while read -r c; do [ "$(apart "$c")" -lt "$whole" ] && { echo "$c"; break; }; done)"
+  if [ -n "$landed" ]; then
+    differ="$(for f in $touched; do [ "$(git rev-parse -q --verify "$upstream:$f")" = "$(git rev-parse -q --verify "$was:$f")" ] || echo "$f"; done | head -20 | tr '\n' ' ')"
+    cast task comment $task_id "$upstream already carries $br as ${landed:0:10}, with edits no review saw in ${differ}: \`git diff ${was:0:10} $upstream -- ${differ}\` shows them. Nothing is left to ship; review those edits before the task is done." -t review > /dev/null
+    answer false false "already on $upstream as ${landed:0:10} with edits no review saw in $differ"
+    exit 1
+  fi
   said="$(tail -n 5 "$dir/rebase.log" | tr '\n' ' ')"
   cast task comment $task_id "Rebasing $br onto $upstream conflicted${files:+ in $files}. The branch is as it was before the rebase. Rebase it onto $upstream, resolve the conflict keeping the approved change, run the check, and hand off again. Git said: $said" -t review > /dev/null
   answer false false "rebase onto $upstream conflicted${files:+ in $files}"
