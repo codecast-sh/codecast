@@ -4,6 +4,7 @@ import { boundSessionsOf } from "./lib/taskOwner";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
+import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { resolveCreationPrivacy } from "./privacy";
 import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagentFleet";
 import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
@@ -444,6 +445,12 @@ export const createSessionFromCli = mutation({
       fleet: subagentFields && args.subagent_caps !== undefined ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
       mergeBackOnDone: !!subagentFields && !!asDef.isolated && (args.merge_back ?? asDef.mergeBack ?? false),
     });
+    // A cloud spawn (`cast spawn --cloud`) under a team policy with cloud
+    // hosts off: refused after the insert, which the throw rolls back, so the
+    // row's own workspace (resolved by the core) decides alongside the device.
+    if (args.cloud_device_id || args.cloud_seed) {
+      await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf("conversations", await ctx.db.get(conversationId)), apiToken: args.api_token }, "cloud_hosts_disabled");
+    }
     if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
     if (roleGate || args.unattended) await ctx.db.patch(conversationId, { unattended: true });
     if (review) {

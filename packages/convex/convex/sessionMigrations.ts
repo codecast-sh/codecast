@@ -40,6 +40,7 @@ import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceO
  * Nothing here moves files; that is the CLI (packages/cli/src/migrate).
  */
 
+import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -431,6 +432,8 @@ export async function performCreateBatch(
     bring_paths?: string[];
     /** Plan only: report rows and skips, write nothing. */
     dry_run?: boolean;
+    /** The CLI request's token, so a device enrolled in a team with cloud hosts off is refused a move to one. */
+    api_token?: string;
   },
   now: number = Date.now(),
 ): Promise<{
@@ -463,6 +466,14 @@ export async function performCreateBatch(
     const picked = await resolveSelector(ctx, userId, devices, args.selector);
     if ("error" in picked) throw new Error(picked.error);
     conversations.push(...picked.conversations);
+  }
+  // A move to a cloud host under a team policy with cloud hosts off: refused
+  // for a request from an enrolled device and for any row in the team's workspace.
+  if (devices.find((d: any) => d.device_id === args.to_device_id)?.is_remote) {
+    await requireTeamPolicyAllows(ctx, { apiToken: args.api_token }, "cloud_hosts_disabled");
+    for (const conv of conversations) {
+      await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf("conversations", conv) }, "cloud_hosts_disabled");
+    }
   }
   if (conversations.length > MAX_BATCH_ROWS) throw new Error(`At most ${MAX_BATCH_ROWS} sessions per batch (${conversations.length} matched) — narrow the selection`);
   const plan = planMigration({ conversations: await annotateHeld(ctx, userId, conversations), devices, targetDeviceId: args.to_device_id, now });

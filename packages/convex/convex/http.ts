@@ -17,6 +17,7 @@ import { cliErrorReply } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
+import { ENROLL_PATH, enrollHttp } from "./managedDevices";
 import { REPLAY_CHUNK_PATH, REPLAY_FRAME_ADMIT_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayFrameAdmit, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./replays";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
@@ -185,6 +186,10 @@ http.route({
     });
   }),
 });
+
+// A managed device presents its MDM profile's enrollment token
+// (managedDevices.enrollHttp).
+http.route({ path: ENROLL_PATH, method: "POST", handler: enrollHttp });
 
 // The install callback lives in githubApp.ts beside the intents it spends, so
 // a test can drive the real handler.

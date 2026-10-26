@@ -45,6 +45,7 @@ import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValida
 import { normalizeProjectPath, pathWithinLocalRoots } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
+import { activeEnrollmentTeam, heartbeatTeamPolicy } from "./lib/teamPolicyGuard";
 import { agentCommentLevelValidator } from "./threadReads";
 import { gatedSnippetAvailability } from "./teamFeatures";
 import { startAccountDeletion } from "./accountDelete";
@@ -607,6 +608,9 @@ export const daemonHeartbeat = mutation({
     // Per-device row upsert (multi-machine): the stable, non-clobbered source the
     // read paths consume via getOnlineLocalRoots (union across online devices).
     let deviceRow: any = null;
+    // The team this machine is enrolled in through its MDM profile; its policy
+    // rides back on this beat (team_policy).
+    let enrolledTeamId: Id<"teams"> | undefined;
     if (args.device_id) {
       const existingDevice = await ctx.db
         .query("devices")
@@ -677,6 +681,7 @@ export const daemonHeartbeat = mutation({
           : {}),
       };
       deviceRow = existingDevice ? { ...existingDevice, ...devicePatch } : null;
+      enrolledTeamId = existingDevice?.enrolled_team_id;
       // Coalesce the per-device write, mirroring the user-doc throttle above.
       // `last_seen: now` alone made every 30s beat a real write, so every
       // listDevices and routing subscription in the fleet re-ran on it. Skip the
@@ -693,9 +698,13 @@ export const daemonHeartbeat = mutation({
           await ctx.db.patch(existingDevice._id, devicePatch);
         }
       } else {
+        // An enrollment that completed before this machine's first beat had
+        // no row to record its team on.
+        enrolledTeamId = await activeEnrollmentTeam(ctx, auth.userId, args.device_id);
         await ctx.db.insert("devices", {
           user_id: auth.userId,
           device_id: args.device_id,
+          ...(enrolledTeamId ? { enrolled_team_id: enrolledTeamId } : {}),
           // deviceLabelWrite ran with isNew, so devicePatch always carries a
           // label here — the schema requires one on insert.
           label: args.device_label || args.platform,
@@ -810,6 +819,9 @@ export const daemonHeartbeat = mutation({
       snippet_availability: await gatedSnippetAvailability(ctx, auth.userId),
       capability_desired_revision: (user as any)?.capability_revision ?? 0,
       capabilities_mode: (globalCapMode?.value as string | undefined) ?? (user as any)?.capabilities_mode ?? "dry",
+      // The managed policy of the team this device is enrolled in (one point
+      // read of the team row); null for an unmanaged device.
+      team_policy: await heartbeatTeamPolicy(ctx, enrolledTeamId),
     };
   },
 });

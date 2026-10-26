@@ -9,7 +9,7 @@
 // `api.apiTokens.*` and `internal.apiTokens.*` from them, and ~50 files import
 // `hashToken` / `verifyApiToken` from here, so they must not move.
 import { mutation, query, internalMutation, internalQuery } from "./functions";
-import { makeApiTokenFunctions } from "@platform/auth/convex";
+import { makeApiTokenFunctions, type ApiTokenDefinitionParams } from "@platform/auth/convex";
 import type { RegisteredMutation, RegisteredQuery } from "convex/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -100,6 +100,18 @@ type ApiTokenFunctions = {
   >;
 };
 
+// Funnel: the callers of createToken are the /auth/cli authorize page (and
+// managedDevices.completeEnrollment, the same page for a managed device), so a
+// mint there IS a completed browser-based `cast auth`; a setup-token exchange
+// is a completed `cast login <token>`.
+export const apiTokenEvents: NonNullable<ApiTokenDefinitionParams["onEvent"]> = async (ctx, event) => {
+  await ctx.scheduler.runAfter(0, internal.analytics.capture, {
+    event: event.name,
+    distinctId: event.userId,
+    ...(event.name === "cli_authed" ? { properties: { method: event.method } } : {}),
+  });
+};
+
 export const {
   createToken,
   createSetupToken,
@@ -114,16 +126,7 @@ export const {
   query,
   internalMutation,
   internalQuery,
-  // Funnel: the only caller of createToken is the /auth/cli authorize page, so
-  // a mint there IS a completed browser-based `cast auth`; a setup-token
-  // exchange is a completed `cast login <token>`.
-  onEvent: async (ctx, event) => {
-    await ctx.scheduler.runAfter(0, internal.analytics.capture, {
-      event: event.name,
-      distinctId: event.userId,
-      ...(event.name === "cli_authed" ? { properties: { method: event.method } } : {}),
-    });
-  },
+  onEvent: apiTokenEvents,
   // `cast login` needs the team and the deployment it just joined, alongside
   // the token it exchanged for.
   exchangeExtras: async (ctx, userId) => {

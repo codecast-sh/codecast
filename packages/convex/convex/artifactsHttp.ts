@@ -360,6 +360,8 @@ export const publish = httpAction(async (ctx, request) => {
 
     const who = await ctx.runQuery(internal.artifacts.verify, { api_token });
     if (!who) return json({ error: "Unauthorized" }, 401);
+    const refusal = await ctx.runQuery(internal.managedDevices.publishRefusal, { api_token });
+    if (refusal) return json({ error: refusal }, 403);
 
     // Resolve the row this publish updates (slug is the password-hash salt, so
     // it must exist before hashing). Create path: pre-mint slug + owner_key.

@@ -1,6 +1,7 @@
 import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { claimShareToken } from "./publicShare";
+import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
 import { addRoleTokens } from "./lib/orgCaps";
 import { calibrationSlot } from "./usageCalibration";
@@ -2383,6 +2384,7 @@ export const generateMessageShareLink = mutation({
     }
 
     const shareToken = generateShareToken();
+    await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf("conversations", conversation) }, "public_sharing_disabled");
     await ctx.db.insert("message_shares", {
       share_token: shareToken,
       message_id: args.message_id,

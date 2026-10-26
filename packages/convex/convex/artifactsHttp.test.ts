@@ -161,7 +161,7 @@ describe("applyEditVersion", () => {
 import { getFunctionName } from "convex/server";
 import { publish } from "./artifactsHttp";
 
-function makePublishCtx(resolveEvidence: (args: Record<string, any>) => Record<string, any>) {
+function makePublishCtx(resolveEvidence: (args: Record<string, any>) => Record<string, any>, policyRefusal: string | null = null) {
   const stored: Blob[] = [];
   const queries: Array<{ name: string; args: Record<string, any> }> = [];
   const mutations: Array<{ name: string; args: Record<string, any> }> = [];
@@ -174,6 +174,7 @@ function makePublishCtx(resolveEvidence: (args: Record<string, any>) => Record<s
       const name = getFunctionName(fn as never);
       queries.push({ name, args });
       if (name === "artifacts:verify") return { user_id: "users_owner" };
+      if (name === "managedDevices:publishRefusal") return policyRefusal;
       if (name === "artifacts:byUserPath") return null;
       if (name === "artifacts:slugTaken") return false;
       if (name === "artifacts:resolveSessionRef") return { short_id: "jx1", conversation_id: "conversations_s1" };
@@ -208,6 +209,15 @@ describe("publish route evidence binding", () => {
     expect(mutations[0].args).toMatchObject({ task_id: "tasks_t1", plan_id: "plans_p1", station: "in_progress", session_conversation_id: "conversations_s1" });
     expect(stored).toHaveLength(1);
     expect(await res.json()).toMatchObject({ url: "https://codecast.sh/a/fresh", evidence: { task: "ct-1", plan: null, station: "in_progress" } });
+  });
+
+  test("a device enrolled in a team that turned public sharing off is a 403 before any blob is stored", async () => {
+    const { ctx, stored, mutations } = makePublishCtx(() => ({ binding: {}, error: null }), "Publishing and public share links is turned off by Acme's admins.");
+    const res = await (publish as any)._handler(ctx, publishRequest({}));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toContain("Acme's admins");
+    expect(stored).toHaveLength(0);
+    expect(mutations).toHaveLength(0);
   });
 
   test("a task the publisher cannot read is a 404 before any blob is stored", async () => {

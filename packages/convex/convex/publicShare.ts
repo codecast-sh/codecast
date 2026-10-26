@@ -11,6 +11,7 @@
 // one, so an old link never comes back to life.
 import { v } from "convex/values";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
+import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { internalQuery, query } from "./functions";
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
@@ -44,6 +45,9 @@ export async function claimShareToken(
   row: { _id: Id<ShareTable>; share_token?: string | null },
   token: string | null,
   by?: Id<"users">,
+  // The api token of a CLI request, so a device enrolled in a team that
+  // turned public sharing off is refused too (lib/teamPolicyGuard).
+  apiToken?: string,
 ): Promise<void> {
   // A call's link may also carry its video (callRecordings.setCallShareVideo).
   // That choice belongs to the link it was made for: a link cleared or
@@ -70,6 +74,7 @@ export async function claimShareToken(
   }
   if (row.share_token === token) return;
   if (!SHARE_TOKEN_SHAPE.test(token)) throw new Error("Invalid share token");
+  await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf(table, row), apiToken }, "public_sharing_disabled");
   const taken = await (ctx.db.query(table) as any)
     .withIndex("by_share_token", (q: any) => q.eq("share_token", token))
     .first();

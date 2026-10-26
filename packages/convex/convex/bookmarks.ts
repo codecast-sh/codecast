@@ -179,7 +179,7 @@ export const createFromCLI = mutation({
     let shareToken = conversation.share_token;
     if (!shareToken) {
       shareToken = generateShareToken();
-      await claimShareToken(ctx, "conversations", conversation, shareToken, result.userId);
+      await claimShareToken(ctx, "conversations", conversation, shareToken, result.userId, args.api_token);
     }
     const bookmarkUrl = `https://codecast.sh/share/${shareToken}#msg-${args.message_index}`;
 

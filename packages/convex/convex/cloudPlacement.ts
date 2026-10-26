@@ -12,7 +12,7 @@
  * cloudPlacementFor predicate), and the catch-up a laptop runs when it comes
  * back online (reissueStrandedCloudSpawns).
  *
- * Imports only deviceRouting, sessionRelease and the shared contracts, so
+ * Imports only deviceRouting, sessionRelease, the policy guard and the shared contracts, so
  * devices.ts / conversations.ts / dispatch.ts can all import it.
  */
 import { v } from "convex/values";
@@ -20,6 +20,7 @@ import { DAEMON_COMMAND_TTL_MS } from "@codecast/shared/contracts";
 import { Id } from "./_generated/dataModel";
 import { DEVICE_ONLINE_MS, pathUnderRoot } from "./deviceRouting";
 import { releasePreviousOwner } from "./sessionRelease";
+import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import {
   CLOUD_START_RUN_MS,
   cloudHostManaged,
@@ -311,6 +312,8 @@ export async function parkOnCloudHost(
   cloudDeviceId: string,
   opts: { projectPath?: string | null; gitRoot?: string | null; force?: boolean; workspace?: CloudWorkspaceMode; startFrom?: CloudStartFrom; leaveOut?: string[] } = {},
 ): Promise<Id<"daemon_commands"> | null> {
+  // Every cloud park passes here (web creates, dispatch, moves, re-parks).
+  await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf("conversations", conv) }, "cloud_hosts_disabled");
   const projectPath = opts.projectPath ?? conv.project_path ?? null;
   const gitRoot = opts.gitRoot ?? conv.git_root ?? null;
   // The mode the row was created with rides every re-park (a folder re-pick,

@@ -140,6 +140,8 @@ export const getUserTeams = query({
           icon_color: team.icon_color,
           task_statuses: team.task_statuses,
           features: team.features,
+          // Managed policy (Team settings > Managed devices).
+          policy: team.policy,
           role: m.role,
           joined_at: m.joined_at,
           visibility: m.visibility || "summary",

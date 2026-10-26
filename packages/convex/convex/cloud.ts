@@ -14,6 +14,7 @@ import { action, internalQuery, mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { internal } from "./_generated/api";
 import { grantsContentsWrite, installationForRepo } from "./githubApp";
 import { Id } from "./_generated/dataModel";
@@ -155,6 +156,7 @@ export const placeConversation = mutation({
       .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
       .first();
     if (!device) throw new Error(`Unknown device ${args.device_id}`);
+    await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf("conversations", conv), apiToken: args.api_token }, "cloud_hosts_disabled");
 
     const fence = placementFence(conv, args.expect_token);
     if (fence) return { placed: false as const, reason: fence, command_id: null, owner_device_id: conv.owner_device_id ?? null };

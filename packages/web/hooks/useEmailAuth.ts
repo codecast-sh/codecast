@@ -32,8 +32,8 @@ export const leaveTo = (redirectTo: string) => {
   window.location.href = redirectTo;
 };
 
-export function useEmailAuth(flow: EmailAuthFlow, redirectTo: string) {
-  const [email, setEmail] = useState("");
+export function useEmailAuth(flow: EmailAuthFlow, redirectTo: string, initialEmail = "") {
+  const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");

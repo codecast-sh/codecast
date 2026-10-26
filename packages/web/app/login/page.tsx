@@ -21,7 +21,10 @@ function LoginForm() {
   const reason = searchParams.get("reason");
   const returnTo = searchParams.get("return_to");
   const redirectTo = returnTo || "/inbox";
-  const { email, setEmail, password, setPassword, error, loading, submit: handleSubmit, pendingVerification, verified, startOver } = useEmailAuth("signIn", redirectTo);
+  // The address a sign-in is meant for (a managed device's profile names its
+  // person): prefilled, and named in the subtitle.
+  const loginHint = searchParams.get("login_hint")?.trim() || "";
+  const { email, setEmail, password, setPassword, error, loading, submit: handleSubmit, pendingVerification, verified, startOver } = useEmailAuth("signIn", redirectTo, loginHint);
 
   useWatchEffect(() => {
     if (localAuthed || (!isLoading && isAuthenticated)) {
@@ -47,7 +50,9 @@ function LoginForm() {
         <div className="text-center mb-8 flex flex-col items-center">
           <Logo size="xl" className="text-sol-text" />
           <p className="text-sol-text-muted mt-3 text-sm">
-            {reason === "slack"
+            {loginHint
+              ? <>Sign in as <span className="text-sol-text">{loginHint}</span></>
+              : reason === "slack"
               ? "Sign in with the Codecast account that started this Slack connection."
               : reason === "whisk"
                 ? "Sign in with the Codecast account that started connecting your mail and calendar."

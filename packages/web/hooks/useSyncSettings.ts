@@ -26,6 +26,8 @@ const queries = {
   agentBoxes: api.devices.listAgentBoxes,
   // The team's monthly model budget (learning-loop.md LL10), for its settings section. Read on demand.
   teamBudget: api.modelCalls.budgetForTeam,
+  // Team settings > Managed devices: enrollment tokens and enrolled devices (admins only). Read on demand.
+  managedDevices: api.managedDevices.adminOverview,
 };
 
 export type SettingsDataName = keyof typeof queries;
