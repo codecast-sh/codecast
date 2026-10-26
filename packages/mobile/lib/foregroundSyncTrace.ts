@@ -12,7 +12,7 @@
 // long the JS thread was stalled in between.
 import { AppState, type AppStateStatus } from 'react-native';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { socketStats } from '@codecast/shared/network';
+import { socketStats } from '@/lib/socketStats';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { convex } from '@/lib/convex';
 import { track } from '@/lib/analytics';

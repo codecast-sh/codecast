@@ -104,34 +104,6 @@ export const CODECAST_EVENTS = defineCatalog({
   synclog_apply: { direct: COUNT, refetch: COUNT, ratio: COUNT },
   synclog_crawl_healed: { namespace: { type: "string", values: ["tasks", "docs"] }, count: COUNT },
 
-  // One phone return from the background: how long until the open
-  // conversation showed what the server already had, and where the time went.
-  // Durations are ms from the return; -1 means the step never happened.
-  mobile_foreground_sync: {
-    outcome: { type: "string", values: ["caught_up", "up_to_date", "backgrounded", "timeout"] },
-    on_session: { type: "boolean" },
-    away_ms: COUNT,
-    ws_up_at_start: { type: "boolean" },
-    ws_state_at_start: { type: "string", values: ["ready", "connecting", "disconnected", "stopped", "terminated", "unknown"] },
-    socket_idle_ms: COUNT,
-    reconnect_ms: COUNT,
-    first_msg_ms: COUNT,
-    probe_ms: COUNT,
-    behind_rows: COUNT,
-    first_rows_ms: COUNT,
-    http_rows_ms: COUNT,
-    http_rows: COUNT,
-    store_ms: COUNT,
-    paint_ms: COUNT,
-    duration_ms: COUNT,
-    max_stall_ms: COUNT,
-    stall_ms: COUNT,
-    msgs_in: COUNT,
-    held_mutations_max: COUNT,
-    active_mutations_max: COUNT,
-    pending_sends: COUNT,
-  },
-
   // Inbox digest compare: does the client's own projection agree with the
   // server's? Counters only — no ids, no titles.
   inbox_digest_heartbeat: {

@@ -17,7 +17,7 @@
 import { AppState, type AppStateStatus } from 'react-native';
 import { ConvexHttpClient } from 'convex/browser';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { socketStats } from '@codecast/shared/network';
+import { socketStats } from '@/lib/socketStats';
 import { readForward } from '@codecast/web/hooks/inboxWarm';
 import { isConvexId, useInboxStore } from '@codecast/web/store/inboxStore';
 import { convex, CONVEX_URL } from '@/lib/convex';

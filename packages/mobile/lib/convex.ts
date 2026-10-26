@@ -1,5 +1,5 @@
 import { ConvexReactClient } from "convex/react";
-import { recoveringWebSocket } from "@codecast/shared/network";
+import { countingWebSocket } from "./socketStats";
 import { STORE_SHOTS } from "./storeShots/flag";
 
 // Fall back to production, never to "": build 28 shipped with a stale
@@ -28,5 +28,5 @@ export const convex: ConvexReactClient = STORE_SHOTS
   ? require("./storeShots/convexStub").storeShotsConvex
   : new ConvexReactClient(CONVEX_URL, {
       unsavedChangesWarning: false,
-      webSocketConstructor: recoveringWebSocket(),
+      webSocketConstructor: countingWebSocket(),
     });
