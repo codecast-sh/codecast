@@ -8,7 +8,7 @@
 // is the boundary that makes rendering a stranger's README safe. Relative
 // links and images resolve against the file in the repository, at the ref the
 // page is showing.
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -17,10 +17,30 @@ import rehypeSanitize from "rehype-sanitize";
 import { MD_COMPONENTS } from "../../lib/markdownComponents";
 import { MD_REMARK_PLUGINS } from "../../lib/markdownPlugins";
 import { VAULT_HTML_SCHEMA } from "../../lib/vault/htmlPolicy";
-import { resolveRepoMarkdownUrl } from "../../lib/repoContent";
+import { githubHeadingSlugger, resolveRepoMarkdownUrl } from "../../lib/repoContent";
 import { useRepoBlob, useRepoMeta, useRepoReadme } from "../../hooks/useRepoBrowse";
 import { useRepoTransport } from "../../lib/repoTransport";
 import { repoBlobHref, type RepoRouteFamily } from "../../lib/repoView";
+
+const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
+
+function hastText(node: any): string {
+  if (node?.type === "text") return node.value ?? "";
+  return Array.isArray(node?.children) ? node.children.map(hastText).join("") : "";
+}
+
+/** Stamps every heading with its GitHub anchor id. It runs after the sanitizer,
+ *  so the ids are ours and a README's own HTML cannot set one. */
+function rehypeReadmeHeadingIds() {
+  return (tree: any) => {
+    const slug = githubHeadingSlugger();
+    const walk = (node: any) => {
+      if (node?.type === "element" && HEADING_TAGS.has(node.tagName)) node.properties = { ...node.properties, id: slug(hastText(node)) };
+      if (Array.isArray(node?.children)) node.children.forEach(walk);
+    };
+    walk(tree);
+  };
+}
 
 // ORDER IS THE SECURITY PROPERTY: rehypeRaw parses the README's inline HTML and
 // rehypeSanitize reduces it to the allowlist before anything else runs. See the
@@ -28,6 +48,7 @@ import { repoBlobHref, type RepoRouteFamily } from "../../lib/repoView";
 const README_REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [
   rehypeRaw,
   [rehypeSanitize, VAULT_HTML_SCHEMA],
+  rehypeReadmeHeadingIds,
   rehypeHighlight,
 ];
 
@@ -56,11 +77,25 @@ function RepoImage({ repository, refName, path, alt, width, height }: { reposito
   return <img src={src} alt={alt ?? ""} {...size} className="inline-block max-w-full h-auto" loading="lazy" />;
 }
 
-/** `<h1 align="center">` is how a README centers its name; the shared heading drops the attribute. */
-function alignedHeading(Tag: "h1" | "h2" | "h3", className: string) {
-  return function AlignedHeading({ children, align }: { children?: ReactNode; align?: string }) {
-    return <Tag className={className} style={align ? { textAlign: align as "center" } : undefined}>{children}</Tag>;
+/** `<h1 align="center">` is how a README centers its name; the shared heading drops the attribute.
+ *  Each heading carries its anchor, and a `#` on hover links to it. */
+function readmeHeading(Tag: "h1" | "h2" | "h3" | "h4", className: string) {
+  return function ReadmeHeading({ children, align, id }: { children?: ReactNode; align?: string; id?: string }) {
+    return <Tag id={id} className={`${className} readme-heading scroll-mt-4`} style={align ? { textAlign: align as "center" } : undefined}>
+      {children}
+      {id && <a href={`#${id}`} aria-label="Link to this section" className="readme-anchor">#</a>}
+    </Tag>;
   };
+}
+
+/** The README arrives after the page, so the browser's own jump to `#section` finds nothing; jump once it renders. */
+function useScrollToHash(ready: boolean) {
+  useEffect(() => {
+    if (!ready || !window.location.hash) return;
+    let id: string;
+    try { id = decodeURIComponent(window.location.hash.slice(1)); } catch { return; }
+    document.getElementById(id)?.scrollIntoView();
+  }, [ready]);
 }
 
 export function RepoReadme({ repository, refName, family }: { repository: string; refName: string; family: RepoRouteFamily }) {
@@ -79,10 +114,12 @@ export function RepoReadme({ repository, refName, family }: { repository: string
         : <RepoImage repository={repository} refName={refName} path={url} alt={alt} width={width} height={height} />;
     },
     code: ({ children, ...props }: any) => <code {...props}>{children}</code>,
-    h1: alignedHeading("h1", "text-2xl font-serif mt-0 mb-3 text-sol-text"),
-    h2: alignedHeading("h2", "text-lg font-semibold mt-6 mb-2 text-sol-text"),
-    h3: alignedHeading("h3", "text-sm font-semibold mt-4 mb-1 text-sol-text-muted"),
+    h1: readmeHeading("h1", "text-2xl font-serif mt-0 mb-3 text-sol-text"),
+    h2: readmeHeading("h2", "text-lg font-semibold mt-6 mb-2 text-sol-text"),
+    h3: readmeHeading("h3", "text-sm font-semibold mt-4 mb-1 text-sol-text-muted"),
+    h4: readmeHeading("h4", "text-sm font-medium mt-3 mb-1 text-sol-text-muted"),
   }), [repository, refName, path, family]);
+  useScrollToHash(!!readme.data?.content);
   if (readme.error) return <p className="p-4 text-sol-text-muted text-xs">README could not be loaded.</p>;
   if (!readme.data?.found) return null;
   return <section className="border border-sol-border/60 rounded-lg overflow-hidden">

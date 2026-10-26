@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { resolveRepoMarkdownUrl, safeRepoUrl } from "../repoContent";
+import { githubHeadingSlugger, resolveRepoMarkdownUrl, safeRepoUrl } from "../repoContent";
 
 test("README links and images resolve from their file directory at the selected ref", () => {
   const link = resolveRepoMarkdownUrl("../src/main.ts#L20", "o/r", "feature/one", "docs/README.md", "standalone");
@@ -15,4 +15,9 @@ test("README URLs reject dangerous schemes and malformed escapes", () => {
   expect(resolveRepoMarkdownUrl("%ZZ", "o/r", "main", "README.md", "app")).toBeUndefined();
   expect(safeRepoUrl("https://example.com")).toBe("https://example.com");
   expect(safeRepoUrl("mailto:a@example.com", true)).toBeUndefined();
+});
+test("README heading anchors match GitHub's, repeats numbered in document order", () => {
+  const slug = githubHeadingSlugger();
+  expect(["Install", "Privacy & Security", "Memory", "Memory", "Memory", "Org (early)", "Tasks, plans and docs", "snake_case 2.0", "日本語 見出し"].map(slug))
+    .toEqual(["install", "privacy--security", "memory", "memory-1", "memory-2", "org-early", "tasks-plans-and-docs", "snake_case-20", "日本語-見出し"]);
 });

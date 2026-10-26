@@ -25,6 +25,23 @@ export function resolveRepoMarkdownUrl(value: string, repository: string, ref: s
   return `${href}${resolved.hash}`;
 }
 
+/**
+ * Heading anchors the way GitHub writes them, so a `#install` link inside a
+ * README, or one copied from github.com, lands on the same heading here:
+ * lowercase, punctuation dropped, spaces to hyphens, and a repeated heading
+ * numbered `-1`, `-2` in document order. One slugger per document.
+ */
+export function githubHeadingSlugger(): (text: string) => string {
+  const seen = new Set<string>();
+  return (text) => {
+    const base = text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "").replace(/ /g, "-");
+    let slug = base;
+    for (let n = 1; seen.has(slug); n++) slug = `${base}-${n}`;
+    seen.add(slug);
+    return slug;
+  };
+}
+
 export function repoShortcutAllowed(root: HTMLElement | null, event: KeyboardEvent): boolean {
   if (!root?.isConnected || root.getClientRects().length === 0 || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return false;
   const target = event.target instanceof HTMLElement ? event.target : null;

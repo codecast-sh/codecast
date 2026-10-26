@@ -257,3 +257,21 @@
   vertical-align: middle;
   margin: 0 0.25rem;
 }
+
+/* A heading's `#` link, shown while the heading is hovered or the link focused. */
+.repo-readme .readme-anchor {
+  margin-left: 0.4em;
+  color: var(--sol-text-dim);
+  text-decoration: none;
+  font-weight: 400;
+  opacity: 0;
+}
+
+.repo-readme .readme-heading:hover .readme-anchor,
+.repo-readme .readme-anchor:focus-visible {
+  opacity: 1;
+}
+
+.repo-readme .readme-anchor:hover {
+  color: var(--sol-blue);
+}
