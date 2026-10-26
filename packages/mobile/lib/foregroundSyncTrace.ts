@@ -16,7 +16,7 @@ import { socketStats } from '@/lib/socketStats';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { convex } from '@/lib/convex';
 import { track } from '@/lib/analytics';
-import { currentRoute, lastCatchUp, socketState, newestLocalTimestamp as lastTimestamp, sessionIdFromRoute } from '@/lib/foregroundResume';
+import { currentRoute, lastCatchUp, lastPrefetch, socketState, newestLocalTimestamp as lastTimestamp, sessionIdFromRoute } from '@/lib/foregroundResume';
 
 const TICK_MS = 200;
 const WS_STATES = ['ready', 'connecting', 'disconnected', 'stopped', 'terminated', 'unknown'] as const;
@@ -75,6 +75,7 @@ function beginTrace(awayMs: number): Trace {
       first_rows_ms: since(firstRowsAt),
       http_rows_ms: http ? http.at - t0 : -1,
       http_rows: http ? http.rows : -1,
+      prefetch_rows: lastPrefetch.at >= t0 ? lastPrefetch.rows : -1,
       store_ms: since(storeAt),
       paint_ms: since(paintAt),
       duration_ms: Date.now() - t0,

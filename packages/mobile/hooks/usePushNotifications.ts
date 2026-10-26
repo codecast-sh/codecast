@@ -22,6 +22,14 @@ import {
   parseRecordingSummaryPush,
 } from '@codecast/shared/contracts';
 
+// Dev-only, for simulator e2e harnesses driven over the Hermes inspector: this
+// device's Expo push token, without registering it anywhere (simulators never
+// register one). Never bundled in release.
+if (__DEV__) {
+  (globalThis as any).__devExpoPushToken = async () =>
+    (await Notifications.getExpoPushTokenAsync({ projectId: Constants.expoConfig?.extra?.eas?.projectId })).data;
+}
+
 Notifications.setNotificationHandler({
   // The NEW field names. `shouldShowAlert` is the pre-SDK-53 API: on current
   // expo-notifications it is ignored, which silently disabled every FOREGROUND

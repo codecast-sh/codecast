@@ -14,18 +14,27 @@
 //   its new rows over plain HTTPS, beside the socket rather than behind it, and
 //   merges them into the store; the live subscription takes over once the
 //   socket is back.
+// - The push. On binaries with the notification service extension
+//   (targets/notification-service), a push about a conversation has already
+//   read its new rows before the phone showed it; they are merged first.
 import { AppState, type AppStateStatus } from 'react-native';
 import { ConvexHttpClient } from 'convex/browser';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { socketStats } from '@/lib/socketStats';
 import { readForward } from '@codecast/web/hooks/inboxWarm';
-import { isConvexId, useInboxStore } from '@codecast/web/store/inboxStore';
+import { ensureHydrated, isConvexId, useInboxStore } from '@codecast/web/store/inboxStore';
 import { convex, CONVEX_URL } from '@/lib/convex';
+import { pushPrefetchNative } from '@/modules/codecast-push-prefetch';
 
 // A live socket answers the return's probe query well inside this.
 const PROOF_WINDOW_MS = 5_000;
 // A connect attempt older than this when the app comes back is restarted.
 const STALLED_CONNECT_MS = 3_000;
+// Conversations whose newest row the extension may read from, newest first.
+const WATERMARK_LIMIT = 300;
+// How long saved rows wait for the disk cache on a cold launch; past it they
+// stay on disk for the next return.
+const CACHE_WAIT_MS = 30_000;
 
 let route = '';
 let token: string | null = null;
@@ -44,9 +53,82 @@ export function currentRoute(): string {
   return route;
 }
 
-/** The signed-in user's access token, for the HTTPS reads. */
+/** The last merge of the extension's saved rows, read by the foreground trace. */
+export const lastPrefetch = { at: 0, rows: 0 };
+
+/** The signed-in user's access token, for the HTTPS reads and the extension. */
 export function setCatchUpToken(next: string | null) {
+  const signedIn = !token && !!next;
   token = next;
+  try {
+    pushPrefetchNative?.setToken(next);
+  } catch {}
+  // A cold launch from a push: the rows the extension read wait for sign-in.
+  if (signedIn) void mergePrefetched();
+}
+
+// What the extension needs to read a pushed conversation: the backend and the
+// newest row this phone holds for each conversation it has loaded.
+function writePrefetchState() {
+  if (!pushPrefetchNative) return;
+  const marks: [string, number][] = [];
+  for (const [id, rows] of Object.entries(useInboxStore.getState().messages)) {
+    const ts = rows?.length ? (rows[rows.length - 1] as { timestamp?: number })?.timestamp : 0;
+    if (ts && isConvexId(id)) marks.push([id, ts]);
+  }
+  marks.sort((a, b) => b[1] - a[1]);
+  try {
+    pushPrefetchNative.writeState(JSON.stringify({ url: CONVEX_URL, watermarks: Object.fromEntries(marks.slice(0, WATERMARK_LIMIT)) }));
+  } catch {}
+}
+
+// A cold launch signs in before the disk cache is loaded, and a conversation
+// read before then looks empty. The saved rows wait for the cache.
+function cacheLoaded(): Promise<boolean> {
+  if (useInboxStore.getState().clientStateInitialized) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      unsubscribe();
+      resolve(false);
+    }, CACHE_WAIT_MS);
+    const unsubscribe = useInboxStore.subscribe((state) => {
+      if (!state.clientStateInitialized) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(true);
+    });
+  });
+}
+
+/** Merges the rows the extension read for pushed conversations. */
+export async function mergePrefetched(): Promise<void> {
+  if (!pushPrefetchNative || !(await cacheLoaded())) return;
+  let saved: string[] = [];
+  try {
+    saved = pushPrefetchNative.takeAll();
+  } catch {
+    return;
+  }
+  let merged = 0;
+  for (const text of saved) {
+    try {
+      const entry = JSON.parse(text) as { conversation_id?: string; after_timestamp?: number; messages?: any[] };
+      const convId = entry.conversation_id;
+      if (!convId || !isConvexId(convId) || !entry.messages?.length) continue;
+      const hydrated = await ensureHydrated(convId);
+      const local = newestLocalTimestamp(convId);
+      // Rows that start past the window this phone holds would leave a gap;
+      // the screen's own open reads those.
+      if (local < (entry.after_timestamp ?? Infinity)) {
+        if (__DEV__) console.log(`[foreground-resume] prefetch skipped ${convId}: hydrated=${hydrated} local=${local} after=${entry.after_timestamp}`);
+        continue;
+      }
+      useInboxStore.getState().mergeMessages(convId, entry.messages, 'append', { initialized: true });
+      merged += entry.messages.length;
+      if (__DEV__) console.log(`[foreground-resume] prefetch merged ${entry.messages.length} rows into ${convId}; newest now ${newestLocalTimestamp(convId)}`);
+    } catch {}
+  }
+  if (saved.length) Object.assign(lastPrefetch, { at: Date.now(), rows: merged });
 }
 
 export function sessionIdFromRoute(path: string): string | null {
@@ -158,12 +240,15 @@ export function startForegroundResume() {
   AppState.addEventListener('change', (next: AppStateStatus) => {
     if (next === 'background') {
       wasBackground = true;
+      writePrefetchState();
       return;
     }
     if (next !== 'active' || !wasBackground) return;
     wasBackground = false;
     nudgeSocket();
     const convId = sessionIdFromRoute(route);
-    if (convId) void catchUpConversation(convId);
+    // The extension's rows first: the HTTPS read then asks only for what is
+    // newer than them.
+    void mergePrefetched().then(() => (convId ? catchUpConversation(convId) : undefined));
   });
 }

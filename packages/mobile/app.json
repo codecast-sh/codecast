@@ -45,7 +45,14 @@
         "NSSupportsLiveActivitiesFrequentUpdates": true
       },
       "entitlements": {
-        "com.apple.developer.usernotifications.time-sensitive": true
+        "com.apple.developer.usernotifications.time-sensitive": true,
+        "com.apple.security.application-groups": [
+          "group.com.ashotp.codecast"
+        ],
+        "keychain-access-groups": [
+          "$(AppIdentifierPrefix)com.ashotp.codecast",
+          "$(AppIdentifierPrefix)com.ashotp.codecast.shared"
+        ]
       }
     },
     "android": {

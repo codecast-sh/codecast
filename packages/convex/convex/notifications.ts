@@ -79,6 +79,11 @@ export const sendPushNotification = internalAction({
       ...(args.channel_id ? { channelId: args.channel_id } : {}),
       ...(args.interruption_level ? { interruptionLevel: args.interruption_level } : {}),
       ...(args.badge !== undefined ? { badge: args.badge } : {}),
+      // A push about a conversation passes through the app's notification
+      // service extension first, which reads the conversation's new rows into
+      // the app's shared container so opening it shows them at once. A binary
+      // without the extension shows the push unchanged.
+      ...(args.data?.conversationId ? { mutableContent: true } : {}),
     };
 
     try {
