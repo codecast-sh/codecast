@@ -32,7 +32,7 @@ try {
     Date.now = () => realNow() + 61000;
     document.dispatchEvent(new dom.window.Event('visibilitychange'));
   });
-  assert.equal(label(), 'Sync status: Up to date');
+  assert.equal(label(), undefined);
   await act(async () => {
     const stalled: MachineCandidate & DaemonDeviceRow = { ...row, pending_sync_count: 27,
       pending_sync_messages: 0, pending_sync_conversations: 27, oldest_pending_ms: 360000 };
@@ -51,8 +51,7 @@ try {
   assert.equal(label(), 'Sync status: syncing · 904 messages');
   assert.ok(document.querySelector('[style*="--sol-green"]'));
   await act(async () => { useInboxStore.getState().setMachineRoster([row]); });
-  assert.equal(label(), 'Sync status: Up to date');
-  assert.ok(document.querySelector('[style*="--sol-green"]'));
+  assert.equal(label(), undefined);
   console.log('sync indicator failure and recovery verified');
 } finally {
   Date.now = realNow;

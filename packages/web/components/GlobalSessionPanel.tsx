@@ -74,8 +74,9 @@ import { animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { latestSessionCommand, requestAccountSwitchCommand, requestSessionRestart, switchPending } from "../lib/sessionCommands";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsRight, ChevronRight, ChevronDown, GitFork, History, Star, Workflow, Play, Pause, Settings2, Users, ArrowUpRight, Zap, ZapOff, Copy, ArrowUp, ArrowDown } from "lucide-react";
-import { InboxViewTabs } from "./InboxViewTabs";
+import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Pause, Settings2, ArrowUpRight, Zap, Copy, ArrowUp, ArrowDown } from "lucide-react";
+import { InboxViewPicker } from "./InboxViewPicker";
+import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { SessionCard, hostedRowTitle } from "./inbox/SessionCard";
 import { SectionHeader } from "./inbox/SectionHeader";
@@ -1139,10 +1140,9 @@ function BlockedSessionsBanner({
 // accent so the strip still says what kind of machinery the card runs.
 // Clicking opens the one trigger's row the way its full row would; with several
 // triggers it opens the session on its whole trigger set (the header strip
-// arrives expanded on all of them), and with none, the session itself. The pill's ⚡ toggle unfolds
-// every strip into full rows (or hides them); nothing here is a second way to
-// expand.
-type CardBarsMode = "strip" | "full" | "hidden";
+// arrives expanded on all of them), and with none, the session itself. The
+// rail's view menu unfolds every strip into full rows (or hides them); nothing
+// here is a second way to expand.
 const SCHED_ACCENT_RANK: Record<SchedAccent, number> = { running: 0, attention: 1, normal: 2, paused: 3 };
 function primaryTriggerRow(rows: TriggerRow[]): TriggerRow {
   return rows.reduce((best, r) => {
@@ -3672,27 +3672,31 @@ function SessionListPanelImpl({
       <div ref={titlebarRef} className="cc-panel__head min-w-0">
         {hostedMode && !favoritesView && <HostedInboxHead outOfScope={outOfScope} />}
         {favoritesView && (
-          <div className="flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5" title="Kept sessions — your long-term shelf">
+          <button
+            type="button"
+            onClick={() => useInboxStore.getState().setShowFavorites(false)}
+            className="group flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5"
+            title="Back to inbox"
+          >
             <Star className="w-3.5 h-3.5 fill-current" />
             <span className="text-[11px] font-semibold uppercase tracking-wider">Favorites</span>
             {favoriteGroups && favoriteGroups.count > 0 && (
               <span className="text-[10px] text-sol-text-dim font-medium">{favoriteGroups.count}</span>
             )}
-          </div>
+            <X className="w-3 h-3 text-sol-text-dim group-hover:text-sol-text" />
+          </button>
         )}
+        {showViewTabs && <InboxViewPicker value={viewMode} onChange={s.setInboxViewMode} modes={viewModes} />}
         {labelStrip && <LabelChipsRow
           bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
           projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
           projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
           dropSessionOnLabel={dropSessionOnLabel}
         />}
-        {/* One pill: the independent show/hide toggles (team, subagents,
-            bars, old), then at the far end the favorites mode toggle. Even
-            spacing throughout, no rules between groups — the icons read as
-            one row of controls. The grouping has its own tab row under this
-            header (InboxViewTabs). In favorites view the toggles hide
-            (favorites is always project-grouped) and the pill collapses to
-            just the amber star, which stays put. */}
+        {/* The rail header's tools: the blocked-fleet alert when there is
+            one, then one menu for how the list is shown (team scope,
+            subagents, old sessions, the bars under cards, favorites). The
+            menu's dot says something is set away from its default. */}
         <div data-sv-head-tools className="flex items-center flex-shrink-0 ml-auto gap-1.5">
           {/* Permanent trigger for the blocked-fleet actions: visible whenever
               ANY session is parked on a limit/login banner, no matter how the
@@ -3711,106 +3715,25 @@ function SessionListPanelImpl({
               {blockedSessions.length}
             </button>
           )}
-          {(!hostedMode || !assistantOnly || favoritesView) && <div data-sv-controls className="flex items-center flex-shrink-0 gap-0.5 rounded-md border border-sol-border/40 p-px">
-          {!favoritesView && <>
-          {/* Inbox scope: Mine ⇄ Team. Team turns the inbox into a shared board
-              of every team-visible session across the active team (a superset of
-              Mine). Blue when active so it reads as a mode, not a filter toggle. */}
-          {panelInternals && <ShortcutTooltip label={inboxScope === "team" ? "Team inbox — everyone's visible sessions" : "Show the whole team's inbox"} side="bottom">
-            <button
-              onClick={() => s.updateClientUI({ inbox_scope: inboxScope === "team" ? "mine" : "team" })}
-              className={`flex items-center gap-0.5 px-1 py-[3px] rounded-[5px] transition-colors ${
-                inboxScope === "team"
-                  ? "bg-sol-blue/15 text-sol-blue"
-                  : "text-sol-text-dim/70 hover:text-sol-text"
-              }`}
-            >
-              <Users className="w-3 h-3" />
-              {inboxScope === "team" && <span className="text-[10px] font-semibold leading-none">Team</span>}
-            </button>
-          </ShortcutTooltip>}
-          {rowInternals && totalSubagentCount > 0 && (
-            <button
-              onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}
-              title={showSubagents ? `Hide ${totalSubagentCount} subagent sessions` : `Show ${totalSubagentCount} subagent sessions`}
-              className={`cc-panel__btn ${
-                showSubagents
-                  ? "bg-sol-violet/15 text-sol-violet"
-                  : "text-sol-text-dim/70 hover:text-sol-text"
-              }`}
-            >
-              <GitFork className="w-3 h-3" />
-            </button>
-          )}
-          {/* The bars under cards — triggers, workflow runs, monitors and
-              background commands — behind one three-way pill: strip (the
-              default, one folded line per card) → full (a row per bar) →
-              hidden (nothing at all, the same gesture the subagent toggle
-              offers). Same idiom as that toggle beside it, in schedule-amber
-              when expanded; ZapOff says "deliberately off", not just resting. */}
-          {rowInternals && (scheduleRowsView.length > 0 || anyLiveBars) && (
-            <button
-              onClick={() =>
-                s.updateClientUI({
-                  card_bars: cardBars === "strip" ? "full" : cardBars === "full" ? "hidden" : "strip",
-                })
-              }
-              title={
-                cardBars === "strip"
-                  ? "Triggers and tasks folded to strips — click for full rows under cards"
-                  : cardBars === "full"
-                    ? "Full trigger and task rows under cards — click to hide them"
-                    : "Triggers and tasks hidden — click to show them as strips"
-              }
-              className={`cc-panel__btn ${
-                cardBars === "full"
-                  ? "bg-sol-amber/15 text-sol-amber"
-                  : cardBars === "hidden"
-                    ? "text-sol-text-dim/40 hover:text-sol-text"
-                    : "text-sol-text-dim/70 hover:text-sol-text"
-              }`}
-            >
-              {cardBars === "hidden" ? <ZapOff className="w-3 h-3" /> : <Zap className="w-3 h-3" />}
-            </button>
-          )}
-          {panelInternals && oldCount > 0 && (
-            <button
-              onClick={() => s.setShowOldSessions(!showAllSessions)}
-              title={showAllSessions ? `Hide ${oldCount} old session${oldCount === 1 ? "" : "s"}` : `Show ${oldCount} old session${oldCount === 1 ? "" : "s"}`}
-              aria-label={showAllSessions ? `Hide ${oldCount} old session${oldCount === 1 ? "" : "s"}` : `Show ${oldCount} hidden old session${oldCount === 1 ? "" : "s"}`}
-              aria-pressed={showAllSessions}
-              className={`cc-panel__btn relative ${
-                showAllSessions
-                  ? "bg-sol-cyan/15 text-sol-cyan"
-                  : "text-sol-text-dim/70 hover:text-sol-text"
-              }`}
-            >
-              <History className="w-3 h-3" />
-              {!showAllSessions && (
-                <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-sol-cyan ring-1 ring-sol-bg" />
-              )}
-            </button>
-          )}
-          </>}
-          {/* Favorites is a MODE of this panel — toggled at the END of the
-              group, after the old-sessions toggle. Amber when active. */}
-          {(panelInternals || favoritesView) && <button
-            onClick={() => useInboxStore.getState().setShowFavorites(!favoritesView)}
-            title={favoritesView ? "Back to inbox" : "Show favorites"}
-            className={`cc-panel__btn ${
-              favoritesView
-                ? "bg-amber-400/15 text-amber-400"
-                : "text-sol-text-dim/70 hover:text-amber-400"
-            }`}
-          >
-            <Star className="w-3 h-3" fill={favoritesView ? "currentColor" : "none"} />
-          </button>}
-        </div>}
+          {(!hostedMode || !assistantOnly || favoritesView) && <InboxViewOptions
+            showTeam={!favoritesView && panelInternals}
+            teamScope={inboxScope === "team"}
+            onTeamScope={(on) => s.updateClientUI({ inbox_scope: on ? "team" : "mine" })}
+            subagentCount={!favoritesView && rowInternals ? totalSubagentCount : 0}
+            showSubagents={showSubagents}
+            onShowSubagents={(on) => s.updateClientUI({ show_subagents: on })}
+            oldCount={!favoritesView && panelInternals ? oldCount : 0}
+            showOld={showAllSessions}
+            onShowOld={(on) => s.setShowOldSessions(on)}
+            showCardBars={!favoritesView && rowInternals && (scheduleRowsView.length > 0 || anyLiveBars)}
+            cardBars={cardBars}
+            onCardBars={(value) => s.updateClientUI({ card_bars: value })}
+            showFavorites={panelInternals || favoritesView}
+            favorites={favoritesView}
+            onFavorites={(on) => useInboxStore.getState().setShowFavorites(on)}
+          />}
         </div>
       </div>
-      {showViewTabs && (
-        <InboxViewTabs value={viewMode} onChange={s.setInboxViewMode} modes={viewModes} />
-      )}
       {/* Relative wrapper so the out-of-view beacon can float over the list
           edges without joining the scroll flow. */}
       <div className="relative flex-1 min-h-0">
