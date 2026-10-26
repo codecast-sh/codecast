@@ -12,7 +12,7 @@ import { compressImage } from "../../lib/compressImage";
 import { threadStateView } from "../../lib/threadState";
 import { sessionIdleAt, sessionLiveAt } from "../../lib/liveness";
 import { sessionPanePath, startPaneDrag } from "../../lib/stage";
-import { identityRowOf, identitySig, roleLookingAfter } from "../../lib/sessionIdentity";
+import { identityPrefsOf, identityRowOf, identitySig, roleLookingAfter } from "../../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 import { clickBucketChip, clickProjectChip } from "../../store/chipFilterClicks";
 import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
@@ -45,7 +45,7 @@ function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
   // In the Assistant scope every row is the assistant's, so its mark says
   // nothing there; Everything keeps it to tell the assistant from people.
-  return `${ui?.show_model_badge === true ? 1 : 0}${showsAgentIcon(ui) && !assistantScopeOnly(ui) ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}${ui?.show_device_icon !== false ? 1 : 0}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${showsAgentIcon(ui) && !assistantScopeOnly(ui) ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}${ui?.show_device_icon !== false ? 1 : 0}${ui?.show_characters === false ? 0 : 1}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that
@@ -209,7 +209,7 @@ export const SessionCard = memo(function SessionCard({
   const chrome = useMemo<SessionCardChrome>(() => ({
     showModelBadge: chromeSig[0] === "1",
     showAgentIcon: chromeSig[1] === "1",
-    personifyAll: chromeSig[3] === "1",
+    prefs: identityPrefsOf({ personify_sessions: chromeSig[3] === "1", show_characters: chromeSig[6] === "1" }),
     showBranchPill: chromeSig[4] === "1",
     showDeviceIcon: chromeSig[5] === "1",
     showGitChips,
@@ -262,8 +262,8 @@ export const SessionCard = memo(function SessionCard({
   // A role's own card names the role on its title line, so the meta row adds
   // no author chip repeating it.
   const author = useMemo(
-    () => identity.standing_role_id && identity.role ? null : resolveSessionAuthor({ ...session, standing_role_id: identity.standing_role_id, role: identity.role }, convMeta, currentUser, teamMembers),
-    [session.user_id, session.author_name, session.author_avatar, session.acting_user_id, identity, convMeta, currentUser, teamMembers], // eslint-disable-line react-hooks/exhaustive-deps
+    () => identity.standing_role_id && identity.role ? null : resolveSessionAuthor({ ...session, standing_role_id: identity.standing_role_id, role: identity.role }, convMeta, currentUser, teamMembers, identityPrefsOf({ show_characters: chromeSig[6] === "1" })),
+    [session.user_id, session.author_name, session.author_avatar, session.acting_user_id, identity, convMeta, currentUser, teamMembers, chromeSig], // eslint-disable-line react-hooks/exhaustive-deps
   );
   // An anchor's own row is marked as such — the glyph in place of the agent
   // icon, and the scope pill (Personal / team name) beside the title — so a

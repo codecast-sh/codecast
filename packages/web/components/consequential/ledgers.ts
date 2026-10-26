@@ -444,3 +444,24 @@ export function teamMachineJoinLedger(r: {
     keep: "Cancel",
   };
 }
+
+/** Redrawing a role's icon (roleIcon.ts, roleIcons.generate): three drawings
+ *  and a judge on Claude Opus, replacing the icon every viewer with characters
+ *  off sees. A second round runs only when the judge rejects all three. */
+export function redrawIconLedger(r: { title: string; handle: string; concept: string | null; hint: string | null }): SwitchLedger {
+  return {
+    name: r.concept ? "Redraw icon" : "Draw icon",
+    subject: `${r.title} · @${r.handle}`,
+    shift: null,
+    figures: [{ value: "$0.20", label: "about, $0.40 at most" }, { value: "~30 s", label: "to draw" }],
+    rows: [
+      { k: "Draws", v: "3 options, Claude Opus picks one" },
+      { k: "Replaces", v: r.concept ?? "The letter tile" },
+      { k: "Hint", v: r.hint ?? "None" },
+      { k: "Seen by", v: "Everyone with Characters off" },
+      { k: "Undo", v: "Redraw again" },
+    ],
+    confirm: r.concept ? "Redraw" : "Draw",
+    keep: "Cancel",
+  };
+}

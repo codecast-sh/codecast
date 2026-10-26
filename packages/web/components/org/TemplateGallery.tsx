@@ -6,8 +6,7 @@
 // An empty catalog says so in plain words; nothing here invents a template.
 import { useState } from "react";
 import { ArrowRight, Search } from "lucide-react";
-import { RoleAvatar } from "./avatars";
-import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
+import { RoleFace } from "./RoleFace";
 import type { TemplateRoutine } from "@codecast/shared/contracts/orgTemplateManifest";
 import { humanSetupCount, isDefaultLeadTemplate, requiredInputs } from "./orgTemplateSpec";
 import { cadenceWords, cannotHireReason, displayTitle, templateTools, type BuiltinHire, type CatalogTemplate } from "./templateCatalog";
@@ -89,7 +88,7 @@ function BuiltinCard({ hire, onPick }: { hire: BuiltinHire; onPick: () => void }
       data-hireable="true"
     >
       <header className="flex items-start gap-3">
-        <RoleAvatar avatar={avatarOf({ handle: hire.handle })} size={44} className="shrink-0 rounded-full ring-2 ring-sol-bg" />
+        <RoleFace role={{ handle: hire.handle, name: hire.name, icon: null }} size={44} className="shrink-0 rounded-full ring-2 ring-sol-bg" />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <h3 className="truncate text-[15px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{hire.name}</h3>
@@ -124,7 +123,7 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
       data-hireable={reason ? "false" : "true"}
     >
       <header className="flex items-start gap-3">
-        <RoleAvatar avatar={avatarOf({ avatar: t.avatar, handle: t.template_id })} size={44} className="shrink-0 rounded-full ring-2 ring-sol-bg" />
+        <RoleFace role={{ avatar: t.avatar, handle: t.template_id, name: t.name, icon: null }} size={44} className="shrink-0 rounded-full ring-2 ring-sol-bg" />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <h3 className="truncate text-[15px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{t.name}</h3>

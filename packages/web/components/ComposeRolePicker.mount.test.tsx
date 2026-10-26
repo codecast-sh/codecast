@@ -26,7 +26,7 @@ async function verifyPicker() {
     { ...base, _id: "r-docs", short_id: "or-4", handle: "docs", name: "Docs lead", given_name: "Ada", reports_to: { kind: "role", role_id: "r-plat" }, standing: null },
     { ...base, _id: "r-people", short_id: "or-2", handle: "head-of-people", name: "Head of People", given_name: "Rowan", reports_to: { kind: "user", user_id: ME }, standing: { conversation_id: "conv-people" } },
   ];
-  mock.module("../store/inboxStore", () => ({ ...realInboxStore, useInboxStore: Object.assign((sel: any) => sel({ currentUser: { _id: ME } }), { getState: () => ({ currentUser: { _id: ME } }) }) }));
+  mock.module("../store/inboxStore", () => ({ ...realInboxStore, useInboxStore: Object.assign((sel: any) => sel({ currentUser: { _id: ME } }), { getState: () => ({ currentUser: { _id: ME } }), subscribe: () => () => {} }) }));
   mock.module("../hooks/useOrgRoles", () => ({ useOrgRoles: () => ({ roles, workspace: { kind: "team", id: "t1", name: "Fernhill" }, roleBotUserIds: new Set() }) }));
   mock.module("../hooks/useSyncOrgTree", () => ({ useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry() {} }) }));
   mock.module("../hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { _id: ME }, isLoading: false, isAuthenticated: true }) }));

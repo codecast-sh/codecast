@@ -15,7 +15,7 @@ import { useTrackedStore } from "../../store/inboxStore";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { cn } from "../../lib/utils";
-import { RoleAvatar } from "./avatars";
+import { RoleFace } from "./RoleFace";
 import { RoleHoverCard } from "../identity/RoleHoverCard";
 import type { OrgProposalAuthor, OrgProposalListRow } from "./orgStaffingTypes";
 import { proposalRefInContext } from "./staffingModel";
@@ -58,7 +58,7 @@ export function ProposalAuthorPill({ author, onOpenSession, className, size = "s
   if (view.kind === "role") {
     const inner = (
       <>
-        <RoleAvatar avatar={view.avatar} size={size === "md" ? 18 : 15} />
+        <RoleFace role={{ _id: view.roleId, handle: view.handle ?? view.name, avatar: view.avatar, name: view.name }} size={size === "md" ? 18 : 15} />
         <span className="truncate font-medium">{view.name}</span>
         {withHandle && view.handle && <span className="shrink-0 hidden sm:inline" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }}>@{view.handle}</span>}
       </>

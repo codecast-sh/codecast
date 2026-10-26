@@ -150,7 +150,7 @@ describe("a scope change takes over the sessions in it", () => {
     const scanned: string[] = [];
     const query = db.query.bind(db);
     db.query = (table: string) => { scanned.push(table); return query(table); };
-    const ctx = { db, scheduler: { runAfter: async (...a: any[]) => { scheduled.push(a); } }, runMutation: async () => { throw new Error("no nested mutation here"); } } as any;
+    const ctx = { db, scheduler: { runAfter: async (...a: any[]) => { if (Object.keys(a[2] ?? {}).join() !== "role_id") scheduled.push(a); } }, runMutation: async () => { throw new Error("no nested mutation here"); } } as any;
     const res = await applyRole(ctx, ME as any, BOUNDARY, { kind: "role", name: "Growth", handle: "growth", scope: { projects: ["pr-1"] } } as any, undefined, OPTS);
     expect([res.status, (res as any).note]).toEqual(["applied", expect.not.stringContaining("now report")]);
     expect(scanned).not.toContain("messages");
@@ -193,7 +193,7 @@ describe("a takeover and the sessions that wait", () => {
       conv(6, { inbox_killed_at: NOW }),
     );
     const scheduled: any[] = [];
-    const ctx = { db, scheduler: { runAfter: async (...a: any[]) => { scheduled.push(a); } } } as any;
+    const ctx = { db, scheduler: { runAfter: async (...a: any[]) => { if (Object.keys(a[2] ?? {}).join() !== "role_id") scheduled.push(a); } } } as any;
     const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } });
     const dry = await takeOverSessions(ctx, ME as any, role._id, { dry: true });
     expect([...(dry?.sessions ?? [])].sort()).toEqual(["jx70001", "jx70002"]);

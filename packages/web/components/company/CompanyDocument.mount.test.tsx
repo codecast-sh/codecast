@@ -59,7 +59,7 @@ async function verifyCompany() {
     state.orgProposals = Object.fromEntries(fx.COMPANY_FIXTURE_PROPOSALS.map(({ changes: _changes, ...row }) => [row._id, row]));
     state.orgProposalChanges = Object.fromEntries(fx.COMPANY_FIXTURE_CHANGES.map((c) => [c._id, { ...c }]));
   };
-  const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
+  const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {}, subscribe: () => () => {} });
 
   mock.module("../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
   const realOrgTree = { ...(await import("../../hooks/useSyncOrgTree")) };

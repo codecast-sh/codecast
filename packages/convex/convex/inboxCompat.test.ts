@@ -246,7 +246,7 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
     const standing = sessions.find((s: any) => s._id === "conversations_a");
     expect(standing.standing_role_id).toBe("org_roles_infra");
-    expect(standing.role).toEqual({ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active", tenure_kind: "program", given_name: "Rowan" });
+    expect(standing.role).toEqual({ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active", tenure_kind: "program", given_name: "Rowan", icon: null });
     // the character fields still travel; the web resolver decides the role wins
     expect(standing.character_avatar).toBe("fox");
     const hand = sessions.find((s: any) => s._id === "conversations_hand");
