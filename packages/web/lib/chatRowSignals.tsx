@@ -35,7 +35,8 @@ export function channelSignals(
             the Slack channel's name, so the mark says where the name is from. */}
         {channel.slack && (
           <SlackLogo
-            className="nav-slack-mark w-2.5 h-2.5 flex-shrink-0"
+            className="nav-slack-mark w-2 h-2 flex-shrink-0"
+            quiet
             muted={channel.slack.state !== "live"}
             title={`${MIRROR_STATE_LABEL[channel.slack.state]} · #${channel.slack.name}`}
           />
