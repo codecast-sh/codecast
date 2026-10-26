@@ -8340,6 +8340,8 @@ export default defineSchema({
     // the-line.md L8: one equality per read for the workspace, and the
     // task page / scope feed lookups.
     .index("by_workspace_updated", ["workspace", "updated_at"])
+    // A status asked of a workspace reads that status's runs, never the newest few filtered.
+    .index("by_workspace_status_updated", ["workspace", "status", "updated_at"])
     .index("by_task", ["task_id"])
     .index("by_plan", ["plan_id"])
     // LE6: a role's line runs still in flight hold its card slots.

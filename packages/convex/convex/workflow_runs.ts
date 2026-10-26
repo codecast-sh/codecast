@@ -1668,9 +1668,9 @@ export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRuns
       : await ctx.db.query("workflow_runs").withIndex("by_plan", (q: any) => q.eq("plan_id", item._id)).order("desc").take(limit * 4);
     for (const r of all) if (await canReadRun(ctx, userId, r)) rows.push(r);
   } else {
-    rows = await ctx.db
-      .query("workflow_runs")
-      .withIndex("by_workspace_updated", (q: any) => q.eq("workspace", key))
+    rows = await (args.status
+      ? ctx.db.query("workflow_runs").withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", key).eq("status", args.status))
+      : ctx.db.query("workflow_runs").withIndex("by_workspace_updated", (q: any) => q.eq("workspace", key)))
       .order("desc")
       .take(limit * 2);
     if (!args.team_id) {

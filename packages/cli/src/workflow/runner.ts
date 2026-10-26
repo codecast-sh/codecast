@@ -28,6 +28,7 @@ import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { frozenChangeContext } from "./flowChangeFile.js";
 import { lineRunsRoot } from "./runDirs.js";
+import { restoreResumedWorktree } from "./runWorktree.js";
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -1844,6 +1845,8 @@ async function driveRun(
       state.context["worktree"] = runSlug(graph, state.context, isolated.id);
       state.context["branch"] = `codecast/${state.context["worktree"]}`;
     }
+    // A run waiting days at its card can lose its checkout; its branch puts it back.
+    if (!options.dryRun) await restoreResumedWorktree(cwd, state.context);
     options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hand: resumeAt.hand };
     console.log(`${c.dim}Resuming at ${graph.nodes.get(resumeAt.node_id)?.label ?? resumeAt.node_id} (state from the ${resumeAt.from})${c.reset}`);
     // The line's own text is read as it is now (line-versions.md LV4).

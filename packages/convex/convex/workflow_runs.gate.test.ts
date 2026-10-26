@@ -369,6 +369,21 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     void tables;
   });
 
+  test("a status reads every run in it, however many newer runs stand in another status", async () => {
+    // Oct 24: a run waiting at its card for a day sat behind hundreds of fresh
+    // Start failures, and `--status paused` answered as if it did not exist.
+    const run = (i: number, status: string, at: number) => ({
+      _id: `workflow_runs_${i}`, user_id: HOST, workflow_id: "workflows_line", status, node_statuses: [],
+      workspace: `team:${TEAM}`, team_id: TEAM, created_at: at, updated_at: at,
+    });
+    const failed = Array.from({ length: 450 }, (_, i) => run(i + 1, "failed", NOW + 1_000 + i));
+    const { ctx } = await seed({ workflow_runs: [run(0, "paused", NOW), ...failed] });
+    const paused = await listRunsCore(ctx, MATE, { team_id: TEAM, status: "paused", limit: 200 });
+    expect(paused.map((r: any) => r._id)).toEqual(["workflow_runs_0"]);
+    const newest = await listRunsCore(ctx, MATE, { team_id: TEAM, status: "failed", limit: 2 });
+    expect(newest.map((r: any) => r._id)).toEqual(["workflow_runs_450", "workflow_runs_449"]);
+  });
+
   test("a teammate reads a run's graph without where it lives; its owner sees the origin", async () => {
     const { ctx, tables } = await seed();
     tables.workflows[0].origin = { device_id: "dev_1", root: "/Users/owner/src/app", file: "line.cast" };
