@@ -37,6 +37,7 @@ import { seatSentence } from "@codecast/shared/contracts/orgProposal";
 import { FLAG_LABEL } from "./staffingModel";
 import { RoleWeekBody } from "./orgFlowViz";
 import type { RoleFlow } from "./orgFlow";
+import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
 
 /** Five proportional segments in state order; an empty parent draws a hairline. */
 export function StateBar({ counts, className }: { counts: StateCounts; className?: string }) {
@@ -399,6 +400,7 @@ export type RoleNodeData = CardData & {
 
 export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<RoleNodeData>>) {
   const { role: r, collapsed, hidden, overflow } = data;
+  const { characters } = useIdentityPrefs();
   const chips = [
     ...r.scope_names.projects.map((p) => ({ key: `p:${p.id}`, id: p.id, label: p.title, kind: "project" as const })),
     ...r.scope_names.plans.map((p) => ({ key: `l:${p.id}`, id: p.id, label: p.title || p.short_id, kind: "plan" as const })),
@@ -493,7 +495,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       {/* Who the role is, whether its seat is started, its sessions: whole, on its own lines. */}
       <div className="overflow-hidden text-[10.5px]" style={{ height: rows.meta, paddingTop: 6, lineHeight: `${CARD.metaLine}px`, color: "var(--sol-text-dim)", ...ink }} data-close-meta>
         <div style={clamp(rows.metaLines)}>
-          <span data-role-title>{roleMetaLine(r, !!ghost)}</span>
+          <span data-role-title>{roleMetaLine(r, !!ghost, characters)}</span>
           {ghost && <> <GhostTag quiet label={ghost.solid ? ghost.status : "proposed"} status={ghost.status === "failed" ? "failed" : ghost.solid ? "accepted" : "proposed"} className="!inline" /></>}
           {data.retire && <> <GhostTag quiet label="retire" status={data.retire.status} tone="color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" className="!inline" /></>}
         </div>

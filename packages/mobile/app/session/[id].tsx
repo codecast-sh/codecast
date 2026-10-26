@@ -17,7 +17,8 @@ import Feather from '@expo/vector-icons/Feather';
 import { mixColor } from '@/lib/solColor';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ConversationSkeleton } from '@/components/SkeletonLoader';
-import { MobileAgentSpeaker, MobileIdentityFace, MobileSessionFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
+import { MobileAgentSpeaker, MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
+import { RoleFace } from '@/components/org/RoleFace';
 import { useInboxStore, isConvexId, retryPendingSend } from '@codecast/web/store/inboxStore';
 import { CODECAST_BASE_URL, sharePath } from '@codecast/shared/entities';
 import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
@@ -4612,7 +4613,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           <RNView style={{ paddingVertical: 12, paddingHorizontal: 16 }} testID={`escalation-${esc.move}`}>
             <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
-              <MobileSessionFace size={16} row={{ _id: esc.role.short_id, standing_role_id: esc.role.short_id, role: { _id: esc.role.short_id, short_id: esc.role.short_id, name: esc.role.name, handle: esc.role.handle, avatar: esc.role.avatar ?? 'fox', status: 'active', tenure_kind: 'standing' } }} />
+              <RoleFace role={esc.role} size={16} />
               <RNText style={{ fontSize: 11, color: Theme.textDim }} numberOfLines={2}>{caption} · {formatRelativeTime(item.timestamp)}</RNText>
               <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
             </RNView>

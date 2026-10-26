@@ -1,4 +1,4 @@
-import { sessionIdentity } from "../sessionIdentity";
+import { PERSONIFY_ALL_PREFS, sessionIdentity, type IdentityPrefs } from "../sessionIdentity";
 
 // A session row in the store by any of the ids a route target can carry: the
 // conversation id, the agent's session id, or the short id. Shared by every
@@ -25,7 +25,8 @@ export const NEW_AGENT_NAME = "new agent";
  *  the name people say to address it and the name beside its lines. Every
  *  fed session is personified here whether or not anyone opted in elsewhere,
  *  because a room needs a name to call it by; a role's session is the role. */
-export function agentRoomName(row: any): string {
-  const id = sessionIdentity(row, true);
+export function agentRoomName(row: any, prefs: IdentityPrefs = PERSONIFY_ALL_PREFS): string {
+  // A viewer with characters off calls it by its title (a role by the role's).
+  const id = sessionIdentity(row, prefs.characters ? PERSONIFY_ALL_PREFS : prefs);
   return id.kind === "plain" ? row.title || NEW_AGENT_NAME : id.name;
 }

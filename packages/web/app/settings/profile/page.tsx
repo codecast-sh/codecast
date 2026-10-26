@@ -1,6 +1,7 @@
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery, useMutation } from "convex/react";
+import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import {
   Activity, Globe, LayoutList, MonitorDot, Palette, User, Volume2,
@@ -275,20 +276,21 @@ const INTERFACE_TOGGLES: Array<{
   desc: string;
   /** Keys that default ON read `!== false`; default-OFF keys read `=== true`. */
   defaultOn?: boolean;
-  /** The preference is decided elsewhere right now: the row shows ON, cannot be
-   *  switched, and says why. The stored value is kept for when that ends. */
-  lockedOn?: (ui: ClientUI | undefined) => string | undefined;
+  /** The preference is decided elsewhere right now: the row shows that value,
+   *  cannot be switched, and says why. The stored value is kept for when that ends. */
+  locked?: (ui: ClientUI | undefined) => { on: boolean; why: string } | undefined;
   /** The value when it is not a plain stored boolean (a default that depends
    *  on the style). Overrides `defaultOn`. */
   resolve?: (ui: ClientUI | undefined) => boolean;
   /** Where the switch writes in assistant mode, which keeps its own pick. */
   hostedKey?: keyof ClientUI;
 }> = [
-  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, lockedOn: (ui) => (resolveVisualStyle(ui) === "minimal" && resolveSimpleView(ui) ? "Always on in the Minimal style" : undefined) },
+  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, locked: (ui) => (resolveVisualStyle(ui) === "minimal" && resolveSimpleView(ui) ? { on: true, why: "Always on in the Minimal style" } : undefined) },
   { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact, hostedKey: "hosted_inbox_compact" },
   { prefKey: "inbox_image_thumbs", label: "Image thumbnails", desc: "Show a small thumbnail on inbox session rows when a session contains images" },
   { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", resolve: showsAgentIcon },
-  { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false },
+  { prefKey: "show_characters", label: "Characters", desc: "Roles wear an animal face and a name. Off, each role shows an icon of what it looks after and its title, and no session wears a character", defaultOn: true },
+  { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false, locked: (ui) => (ui?.show_characters === false ? { on: false, why: "Off while Characters is off" } : undefined) },
   { prefKey: "show_model_badge", label: "Model badge", desc: "Show each session's model in the inbox session list" },
   { prefKey: "show_device_icon", label: "Machine icon", desc: "Mark inbox sessions that run somewhere else: a cloud icon for a cloud machine, a small device icon for another of your machines", defaultOn: true },
   { prefKey: "show_branch_pill", label: "Branch pill", desc: "Show a pill on inbox cards when a session sits off the default branch: its branch, or the short commit when its checkout is detached", defaultOn: true },
@@ -314,12 +316,12 @@ function PrefToggleRow(t: (typeof INTERFACE_TOGGLES)[number]) {
     const v = s.clientState?.ui?.[t.prefKey];
     return t.defaultOn ? v !== false : v === true;
   });
-  const locked = useInboxStore((s) => t.lockedOn?.(s.clientState?.ui));
+  const locked = useInboxStore(useShallow((s) => t.locked?.(s.clientState?.ui)));
   const updateUI = useInboxStore((s) => s.updateClientUI);
   const key = useInboxStore((s) => (t.hostedKey && isHostedUi(s.clientState?.ui) ? t.hostedKey : t.prefKey));
   return (
-    <SettingsRow label={t.label} description={locked ? `${t.desc}. ${locked}.` : t.desc} disabled={!!locked}>
-      <Switch checked={enabled || !!locked} disabled={!!locked} onCheckedChange={(v) => updateUI({ [key]: v } as Partial<ClientUI>)} aria-label={t.label} />
+    <SettingsRow label={t.label} description={locked ? `${t.desc}. ${locked.why}.` : t.desc} disabled={!!locked}>
+      <Switch checked={locked ? locked.on : enabled} disabled={!!locked} onCheckedChange={(v) => updateUI({ [key]: v } as Partial<ClientUI>)} aria-label={t.label} />
     </SettingsRow>
   );
 }

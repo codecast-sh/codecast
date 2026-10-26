@@ -12,6 +12,8 @@
 import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { useInboxStore } from "../store/inboxStore";
 import { agentName, rootAgentOf, type AnchorRow } from "../hooks/useSyncAnchors";
+import { identityPrefsNow } from "../hooks/useIdentityPrefs";
+import type { IdentityPrefs } from "./sessionIdentity";
 
 export type HeaderPin = { kind: "role" | "session"; id: string };
 
@@ -44,12 +46,13 @@ export function globalAssistantOf(anchors: AnchorRow[]): AnchorRow | null {
 }
 
 /** The one line a role row reads as: its given name, and its title with an
- *  assistant's reach ("Ada", "Executive Assistant, global"). A row not yet seated reads
- *  as the workspace's agent. */
-export function anchorIdentityWords(a: AnchorRow | null | undefined): { name: string; subtitle: string } {
+ *  assistant's reach ("Ada", "Executive Assistant, global"). With characters
+ *  off the title is the name, and the handle takes the subtitle's place. A
+ *  row not yet seated reads as the workspace's agent. */
+export function anchorIdentityWords(a: AnchorRow | null | undefined, prefs: IdentityPrefs = identityPrefsNow()): { name: string; subtitle: string } {
   if (a?.role) {
-    const id = roleIdentity({ ...a.role, scope_type: a.scope_type }, { teamName: a.team_name });
-    return { name: id.name, subtitle: id.subtitle };
+    const id = roleIdentity({ ...a.role, scope_type: a.scope_type }, { teamName: a.team_name, characters: prefs.characters });
+    return { name: id.name, subtitle: prefs.characters ? id.subtitle : `@${a.role.handle}` };
   }
   return { name: agentName(a), subtitle: a?.scope_type === "team" ? `${a.team_name ?? "Team"}'s agent` : "Your agent" };
 }

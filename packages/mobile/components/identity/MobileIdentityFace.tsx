@@ -6,7 +6,7 @@
 import type { ReactNode } from 'react';
 import type { StyleProp, ViewStyle } from 'react-native';
 import { sessionIdentity, type IdentityRow } from '@codecast/web/lib/sessionIdentity';
-import { usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
+import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileSessionFace } from './MobileSessionFace';
 
 export function MobileIdentityFace({ row, size = 18, style, fallback = null, badge }: {
@@ -17,7 +17,7 @@ export function MobileIdentityFace({ row, size = 18, style, fallback = null, bad
   fallback?: ReactNode;
   badge?: ReactNode;
 }) {
-  const personifyAll = usePersonifyAll();
-  if (!row || sessionIdentity(row, personifyAll).kind === 'plain') return <>{fallback}</>;
+  const prefs = useIdentityPrefs();
+  if (!row || sessionIdentity(row, prefs).kind === 'plain') return <>{fallback}</>;
   return <MobileSessionFace row={row} size={size} style={style} badge={badge} />;
 }

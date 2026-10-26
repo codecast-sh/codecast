@@ -1,11 +1,11 @@
 // Who owns a task, drawn the same way everywhere an assignee shows
 // (org-roles-run-work.md R5): a person is their photo or initials and, when
-// the face knows who they are, the person hover card; a role is its painted
-// face and the role hover card one hover away. `info` is what lib/liveEntities resolveAssigneeInfo returns, so the
+// the face knows who they are, the person hover card; a role is its face
+// (RoleFace: its animal or its icon tile, as the viewer chose) and the role hover card one hover away. `info` is what lib/liveEntities resolveAssigneeInfo returns, so the
 // face follows an optimistic reassignment in the same tick.
 import { isRoleAssignee, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { AvatarImg } from "../../lib/avatarCache";
-import { RoleAvatar } from "../org/avatars";
+import { RoleFace } from "../org/RoleFace";
 import { RoleHoverCard } from "./RoleHoverCard";
 import { PersonHoverCard } from "./PersonHoverCard";
 
@@ -24,8 +24,8 @@ export function AssigneeFace({ info, size = 16, hover = true, personId, classNam
   if (isRoleAssignee(info as AssigneeInfo)) {
     const role = info as Extract<AssigneeInfo, { kind: "role" }>;
     const face = (
-      <span className={`inline-block rounded-full flex-shrink-0 ${className ?? ""}`} style={{ ...box, lineHeight: 0 }} data-assignee-role={role.role_short_id}>
-        <RoleAvatar avatar={role.avatar} size={size} title={role.name} />
+      <span className={`inline-block flex-shrink-0 ${className ?? ""}`} style={{ ...box, lineHeight: 0 }} data-assignee-role={role.role_short_id}>
+        <RoleFace role={{ _id: role.role_id, short_id: role.role_short_id, handle: role.handle, avatar: role.avatar, name: role.name }} size={size} title={role.name} />
       </span>
     );
     if (!hover) return face;

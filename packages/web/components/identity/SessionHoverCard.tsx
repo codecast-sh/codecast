@@ -7,20 +7,23 @@
 import { SessionHoverContent } from "../SessionHoverContent";
 import { HoverCard } from "../ui/HoverCard";
 import { SessionFace } from "./SessionFace";
-import { RoleAvatar } from "../org/avatars";
-import { sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
-import { isAvatarKey, defaultAvatarFor } from "@codecast/shared/contracts/orgAvatars";
+import { RoleFace } from "../org/RoleFace";
+import { PERSONIFY_ALL_PREFS, sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
+import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
 
 type HoverRow = IdentityRow & Record<string, any>;
 
 export function SessionIdentityHeader({ row: rawRow, size = 36 }: { row: HoverRow; size?: number }) {
   // Resolved as personified: this header sits under a face (the card opens
   // off one, the picker previews one), so it names the character that face
-  // belongs to even when the row itself has not opted in.
+  // belongs to even when the row itself has not opted in. With characters
+  // off there is no face but a role's: a plain row's header is its title.
   const row = useLiveIdentityRow(rawRow);
-  const id = sessionIdentity(row, true) as Exclude<ReturnType<typeof sessionIdentity>, { kind: "plain" }>;
+  const prefs = useIdentityPrefs();
+  const id = sessionIdentity(row, prefs.characters ? PERSONIFY_ALL_PREFS : prefs);
   const title = (row.title ?? "").trim();
+  if (id.kind === "plain") return title ? <div className="text-xs font-medium text-sol-text line-clamp-2">{title}</div> : null;
   const showTitle = title && !(id.kind === "role" && title === id.name);
   return (
     <div className="flex items-start gap-2.5">
@@ -35,7 +38,7 @@ export function SessionIdentityHeader({ row: rawRow, size = 36 }: { row: HoverRo
         {id.kind === "character" && id.reportsTo && (
           <div className="mt-1 flex items-center gap-1 text-[10px] text-sol-text-dim">
             reports to
-            <RoleAvatar avatar={isAvatarKey(id.reportsTo.avatar) ? id.reportsTo.avatar : defaultAvatarFor(id.reportsTo.handle)} size={12} />
+            <RoleFace role={id.reportsTo} size={12} />
             <span className="text-sol-text-muted">{id.reportsTo.name}</span>
           </div>
         )}

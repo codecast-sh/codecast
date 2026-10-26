@@ -108,9 +108,10 @@ export function charterText(charter: string | undefined, open: boolean): string 
   return open ? paras.join("\n") : paras[0];
 }
 
-/** A role's line under its title: its persona name, whether its seat is started, its sessions. */
-export const roleMetaLine = (r: OrgRole, ghost?: boolean): string =>
-  [roleWords(r).name, r.status === "paused" ? "paused" : null, ...(ghost ? [] : [r.standing ? "started" : "not started", r.total > 0 ? `${r.total} session${r.total === 1 ? "" : "s"}` : null])].filter(Boolean).join(" · ");
+/** A role's line under its title: its persona name (none with characters
+ *  off: the title is its name), whether its seat is started, its sessions. */
+export const roleMetaLine = (r: OrgRole, ghost?: boolean, characters = true): string =>
+  [characters ? roleWords(r).name : null, r.status === "paused" ? "paused" : null, ...(ghost ? [] : [r.standing ? "started" : "not started", r.total > 0 ? `${r.total} session${r.total === 1 ? "" : "s"}` : null])].filter(Boolean).join(" · ");
 
 /** The standing agent's line as the card prints it: its status word, then what it says. */
 export function standingText(r: Pick<OrgRole, "standing">): { label: string; color: string; text: string | null } | null {

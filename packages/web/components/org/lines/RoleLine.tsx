@@ -7,6 +7,7 @@ import { RoleFace } from "../RoleFace";
 import { roleWords } from "../orgStaffingTypes";
 import { roleFacts, type LineRole } from "./lineFacts";
 import { ObjectLine, type LineGhost, type ObjectLineProps } from "./ObjectLine";
+import { useIdentityPrefs } from "../../../hooks/useIdentityPrefs";
 
 export { RoleState } from "./lineAtoms";
 export type { LineRole } from "./lineFacts";
@@ -24,7 +25,7 @@ export function RoleLine({ line, now, ghost, underReportsTo, sub, ...rest }: Rol
   const facts = roleFacts(line, now);
   // Named by its title, as the map, the strip and the sheets name it; the
   // persona name is the quiet word after it unless the caller says another.
-  const words = roleWords(role);
+  const words = roleWords(role, null, useIdentityPrefs().characters);
   return (
     <ObjectLine
       kind="role"
@@ -32,7 +33,7 @@ export function RoleLine({ line, now, ghost, underReportsTo, sub, ...rest }: Rol
       target={ghost ? undefined : { kind: "role", ref: role.short_id }}
       glyph={<RoleFace role={role} size={18} />}
       title={words.subtitle}
-      sub={sub === undefined ? words.name : sub}
+      sub={sub === undefined ? (words.name !== words.subtitle ? words.name : null) : sub}
       {...facts}
       hideOwner={underReportsTo}
       ghost={ghost}

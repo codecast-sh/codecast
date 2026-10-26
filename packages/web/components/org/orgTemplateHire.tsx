@@ -19,8 +19,7 @@ import { buildOrgTemplateCommand, type TemplateDraft, type TemplateProject } fro
 import { DEFAULT_LEAD_TEMPLATE_ID, defaultInstance, askedInputs, requiredInputs, buildHireSpec, grantsToAsk, hireErrors, humanSetupCount, isDefaultLeadTemplate, resolvedConfig, secretInputs, slugOf, type HireDraft } from "./orgTemplateSpec";
 import { useTemplateActions, useTemplateCatalog, useTemplateInstance } from "../../hooks/useTemplateHire";
 import { LearningSwitch } from "./TemplateSections";
-import { RoleAvatar } from "./avatars";
-import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
+import { RoleFace } from "./RoleFace";
 import { Button } from "../ui/button";
 
 // Hiring from a template (docs/architecture/org-hire.md H3): the catalog this
@@ -115,7 +114,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
     return (
       <div className="flex flex-col gap-3" data-builtin-hire-stage={builtin}>
         <div className="flex items-center gap-3 rounded-lg border border-sol-border/50 px-3 py-2.5" style={{ background: "linear-gradient(160deg, color-mix(in srgb, var(--sol-cyan) 8%, var(--sol-card)) 0%, var(--sol-card) 60%)" }}>
-          <RoleAvatar avatar={avatarOf({ handle: hire.handle })} size={36} className="shrink-0 rounded-full" />
+          <RoleFace role={{ handle: hire.handle, name: hire.name, icon: null }} size={36} className="shrink-0 rounded-full" />
           <div className="min-w-0 flex-1">
             <p className="text-[13.5px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{hire.name} <span className="text-[10.5px] font-normal text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>@{hire.handle}</span></p>
             <p className="truncate text-[11.5px] text-sol-text-muted">{hire.description}</p>
@@ -143,7 +142,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
   return (
     <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); void submit(); }} data-template-form>
       <div className="flex items-center gap-3 rounded-lg border border-sol-border/50 px-3 py-2.5" style={{ background: "linear-gradient(160deg, color-mix(in srgb, var(--sol-violet) 7%, var(--sol-card)) 0%, var(--sol-card) 60%)" }} data-template-chosen={template.template_id}>
-        <RoleAvatar avatar={avatarOf({ avatar: template.avatar, handle: template.template_id })} size={36} className="shrink-0 rounded-full" />
+        <RoleFace role={{ avatar: template.avatar, handle: template.template_id, name: template.name, icon: null }} size={36} className="shrink-0 rounded-full" />
         <div className="min-w-0 flex-1">
           <p className="text-[13.5px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{template.name} <span className="text-[10.5px] font-normal text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>{template.latest.version}</span></p>
           <p className="truncate text-[11.5px] text-sol-text-muted">{template.description}</p>
