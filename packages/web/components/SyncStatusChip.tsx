@@ -63,6 +63,7 @@ const scopeLabel = (scope: string) => SCOPE_LABELS[scope] ?? scope;
 // spinner lit ~forever on every cold load.
 type SyncSelectorState = {
   liveLoading: Record<string, boolean>;
+  livenessHeldAt?: number | null;
   syncLogLag?: Record<string, number>;
   sessions?: Record<string, unknown>;
   tasks?: Record<string, unknown>;
@@ -113,7 +114,7 @@ export function selectSyncing(s: SyncSelectorState): boolean {
       if (lagByScope[scope] > 0) return true;
     }
   }
-  return selectColdLoad(s);
+  return selectColdLoad(s) || s.livenessHeldAt != null;
 }
 // The first-load case on its own: a live subscription still owed its first
 // payload into a collection with no cached rows. This is the only routine
@@ -127,7 +128,10 @@ export function selectColdLoad(s: SyncSelectorState): boolean {
 
 export function selectSyncFlags(s: SyncSelectorState): number {
   const coldLoad = selectColdLoad(s);
-  if (coldLoad) return 3;
+  // Held liveness (store livenessHeldAt): the inbox shows rows as they last
+  // were until a fresh read lands, which is a catch-up the dot owns like a
+  // cold load: after a launch, a wake or a reconnect.
+  if (coldLoad || s.livenessHeldAt != null) return 3;
   const lagByScope = s.syncLogLag;
   if (lagByScope) {
     for (const scope in lagByScope) {
@@ -192,22 +196,17 @@ export function SyncStatusChip() {
     return () => clearTimeout(t);
   }, [syncing]);
 
-  // A fixed 20px slot in every state. The LED never carries text, so nothing
-  // next to it shifts when sync starts, ticks through scopes, or settles: the
-  // only thing that changes is the color and its pulse ring.
+  // Up to date is the ordinary state and says nothing: the dot shows only for
+  // a cold first load, a sync dragging past STALL_MS, a lost connection, or a
+  // daemon issue (named in its label and panel).
+  // The LED never carries text, so while it shows nothing beside it shifts as
+  // sync ticks through scopes: only its color and pulse ring change.
   // A daemon issue never colours the dot: the daemon chip beside it in the
   // tray already says so, and two red marks for one fault read as two faults.
   // The panel still lists it.
   const active = mounted && (coldLoad || stalled || !!connection);
-  const color = !mounted
-    ? "var(--sol-text-dim)"
-    : connection
-      ? "var(--sol-yellow)"
-      : stalled
-      ? "var(--sol-yellow)"
-      : active
-        ? "var(--sol-cyan)"
-        : "var(--sol-green)";
+  if (!active && !daemonIssue) return null;
+  const color = connection || stalled ? "var(--sol-yellow)" : active ? "var(--sol-cyan)" : "var(--sol-green)";
   return (
     <HoverCard
       side="bottom"
@@ -225,7 +224,7 @@ export function SyncStatusChip() {
           color={color}
           ping={active}
           pingDuration="1s"
-          dotStyle={{ opacity: active ? 1 : 0.85, transition: "background-color 300ms, opacity 300ms" }}
+          dotStyle={{ transition: "background-color 300ms" }}
         />
       </button>
     </HoverCard>

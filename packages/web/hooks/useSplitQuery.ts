@@ -136,6 +136,53 @@ export async function querySplitWhole(
   return value;
 }
 
+/**
+ * The whole result a split push stands for when the cache cannot vouch for its
+ * cold rows (first load, or one changed): rebuild with the rows saved by the
+ * last launch, else fetch the whole result. Null when there is nothing to
+ * deliver (a failed fetch; the subscription's next push retries) or a newer
+ * push superseded this one.
+ *
+ * A superseded fetch still seeds the cache. Pushes arrive every second or two
+ * on a busy account, and a phone downloads the whole result slower than that:
+ * when a cancelled fetch was thrown away, every push started a fetch the next
+ * push cancelled, the cache never filled, and the replica's liveness facts
+ * froze, so heartbeat deadlines lapsed locally and rows fell into Needs Input
+ * (phone 8, web 4, 2026-10-26). Seeding is safe: every rebuild is checked
+ * against the server's hash.
+ */
+export async function settleSplitPush(
+  convex: Pick<ConvexReactClient, "query">,
+  query: FunctionReference<"query">,
+  args: Record<string, any>,
+  kind: SplitKind,
+  value: any,
+  superseded: () => boolean,
+): Promise<any | null> {
+  const name = getFunctionName(query);
+  const cache = cacheFor(name);
+  const restored = await rebuildHeld(kind, value, name);
+  noteHeldChanged(name);
+  if (superseded()) return null;
+  if (restored) return restored;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let whole: any;
+    try {
+      whole = await convex.query(query, { ...args, _probe: Date.now() } as any);
+    } catch {
+      return null;
+    }
+    seedSplitCache(kind, whole, cache);
+    noteHeldChanged(name);
+    if (superseded()) return null;
+    const again = rebuildSplitPayload(kind, value, cache);
+    // The fetch read a different moment than the push (a cold row changed
+    // in between): try once more, then take the fetch, a whole snapshot.
+    if (again || attempt === 1) return again ?? whole;
+  }
+  return null;
+}
+
 /** useQueryNoThrow for a split-capable inbox query: returns the whole result, rebuilt. */
 export function useSplitQueryNoThrow<Q extends FunctionReference<"query">>(
   query: Q,
@@ -166,37 +213,10 @@ export function useSplitQueryNoThrow<Q extends FunctionReference<"query">>(
       noteHeldChanged(name);
       return;
     }
-    // The cache cannot vouch for the cold rows (first load, or one changed):
-    // try again with the rows saved by the last launch, else fetch the whole
-    // result once. A newer push cancels this one.
     let cancelled = false;
-    void (async () => {
-      const restored = await rebuildHeld(kind, value, name);
-      if (cancelled) return;
-      noteHeldChanged(name);
-      if (restored) {
-        setData(restored);
-        return;
-      }
-      for (let attempt = 0; attempt < 2; attempt++) {
-        let whole: any;
-        try {
-          whole = await convex.query(query, { ...args, _probe: Date.now() } as any);
-        } catch {
-          return; // the subscription's next push retries
-        }
-        if (cancelled) return;
-        seedSplitCache(kind, whole, cache);
-        noteHeldChanged(name);
-        const again = rebuildSplitPayload(kind, value, cache);
-        // The fetch read a different moment than the push (a cold row changed
-        // in between): try once more, then take the fetch, a whole snapshot.
-        if (again || attempt === 1) {
-          setData(again ?? whole);
-          return;
-        }
-      }
-    })();
+    void settleSplitPush(convex, query, args, kind, value, () => cancelled).then((whole) => {
+      if (whole !== null && !cancelled) setData(whole);
+    });
     return () => {
       cancelled = true;
     };

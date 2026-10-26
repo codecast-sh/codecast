@@ -167,3 +167,19 @@ describe("placement deadline memo", () => {
     expect(bucketAt(changed, A, NOW + 1)).toBe("needs_input");
   });
 });
+
+describe("a held liveness feed (livenessHeldAt)", () => {
+  it("reads the facts at the moment they were last current, not past it", () => {
+    const running = row(A, {
+      agent_status: "working", agent_status_updated_at: NOW - MIN, updated_at: NOW - 10 * S,
+      last_heartbeat: NOW - 5 * S, daemon_alive_until: NOW + 85 * S, last_role_is_user: true,
+    });
+    const s = state({ [A]: running });
+    const resumed = NOW + 10 * MIN;
+    // Ten minutes later on the device clock, with no fresh facts, the daemon reads as gone.
+    expect(bucketAt(s, A, NOW)).toBe("working");
+    expect(bucketAt(s, A, resumed)).toBe("needs_input");
+    // Held at the moment the facts were last current, the row stays where it was.
+    expect(bucketAt({ ...s, livenessHeldAt: NOW }, A, resumed)).toBe("working");
+  });
+});

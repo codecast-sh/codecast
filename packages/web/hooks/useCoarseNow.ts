@@ -68,6 +68,18 @@ export function subscribeCoarseTick(intervalMs: number, listener: () => void): (
   };
 }
 
+// Tick every running clock now. For a change the clocks' subscribers must
+// re-read at once rather than at the next interval (the liveness hold lifting:
+// every placement memo keys on the coarse clock).
+export function tickCoarseClocks(): void {
+  const now = Date.now();
+  for (const c of _clocks.values()) {
+    if (c.timer === null) continue;
+    c.now = now;
+    c.listeners.forEach((l) => l());
+  }
+}
+
 export function useCoarseNow(intervalMs: number): number {
   const c = clockFor(intervalMs);
   // An idle clock (no listener, so no timer) froze at its last tick, which can

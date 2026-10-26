@@ -19,6 +19,8 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { querySplitWhole, useSplitQueryNoThrow } from "./useSplitQuery";
 import { useFeederError } from "./useSyncCollection";
 import { onSyncWake } from "./syncWake";
+import { startLivenessHold } from "./livenessHold";
+import { subscribeCoarseTick } from "./useCoarseNow";
 import { useWatchEffect } from "./useWatchEffect";
 import { cancelReconcileCrawl, crawlResetsFor, runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { inboxCrawlWsKey, inboxFloorStamped } from "./syncMetaKeys";
@@ -402,6 +404,36 @@ export function useSyncInboxSessions() {
     if (signal.aborted || !applyMineLivenessPayload(fresh)) return;
     lastLivenessSyncRef.current = Date.now();
   }, [convex, isSyncHost]), INBOX_RECOVERY_STALE_MS);
+
+  // The liveness hold (livenessHold.ts): after a launch from cache, a
+  // suspension or a dropped socket, placement reads the facts at the moment
+  // they were last current until one fresh read lands. Only the host holds:
+  // it is the window that runs the read that releases it.
+  useWatchEffect(() => {
+    if (!isSyncHost) return;
+    const store = useInboxStore;
+    return startLivenessHold({
+      now: Date.now,
+      hydrated: () => store.getState().clientStateInitialized,
+      sessions: () => store.getState().sessions,
+      heldAt: () => store.getState().livenessHeldAt,
+      holdSeq: () => store.getState().livenessHoldSeq,
+      hold: (at) => store.getState().holdLiveness(at),
+      release: (seq) => store.getState().releaseLiveness(seq),
+      probe: async (signal) => {
+        const fresh: any = await querySplitWhole(convex, api.conversations.sessionsLiveness, {}, "liveness", signal);
+        if (signal.aborted || !applyMineLivenessPayload(fresh)) return false;
+        lastLivenessSyncRef.current = Date.now();
+        return true;
+      },
+      connected: () => convex.connectionState().isWebSocketConnected,
+      hidden: () => typeof document !== "undefined" && document.visibilityState === "hidden",
+      onTick: (fn) => subscribeCoarseTick(15_000, fn),
+      onConnection: (fn) => convex.subscribeToConnectionState(fn),
+      onWake: onSyncWake,
+      onStore: (fn) => store.subscribe(fn),
+    });
+  }, [convex, isSyncHost]);
 
   // currentUser carries daemon_last_seen — the input to the CLI-offline banner.
   // Its subscription stalls independently of listInboxSessions (sessions can

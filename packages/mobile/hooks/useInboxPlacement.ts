@@ -30,10 +30,11 @@ export function useInboxPlacement() {
   const inboxScope = useInboxStore((s) => s.clientState.ui?.inbox_scope ?? "mine");
   const teamInboxIds = useInboxStore((s) => s.teamInboxIds);
   const meId = useInboxStore((s) => s.currentUser?._id?.toString?.() ?? null);
+  const livenessHeldAt = useInboxStore((s) => s.livenessHeldAt);
   const placed = useMemo(
     () => placeInboxRows(useInboxStore.getState(), { focusedId: currentSessionId, now: coarseNow }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig/pendingSendSig stand in for the churny refs; coarseNow drives the deadline signature
-    [sessionsSig, pendingSendSig, inboxScope, meId, teamInboxIds, showOld, currentSessionId, pendingSessionCreates, sessionsWithQueuedMessages, coarseNow],
+    [sessionsSig, pendingSendSig, inboxScope, meId, teamInboxIds, showOld, currentSessionId, pendingSessionCreates, sessionsWithQueuedMessages, coarseNow, livenessHeldAt],
   );
   return { placed, sessionsSig, pendingSendSig, coarseNow, currentSessionId, sessionsWithQueuedMessages };
 }

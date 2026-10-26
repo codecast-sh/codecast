@@ -44,6 +44,7 @@ import { openCompose } from '@/lib/compose';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { InboxLensBar } from '@/components/inbox/InboxLensBar';
 import { AreaBar } from '@/components/nav/AreaBar';
+import { LivePulse } from '@/components/calls/LiveRooms';
 
 /** How a hosted inbox section draws: its same-name suffixes, whether it
  *  waits on the person (the accent dot), and whether it never folds. */
@@ -229,6 +230,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // load: splash stays up until this is true, and the list then paints from
   // disk even if the live subscription hasn't connected yet.
   const sessionsFirstLoad = useInboxStore((s) => s.liveLoading.sessions);
+  // Liveness held after a launch, a wake or a reconnect (web livenessHold.ts):
+  // rows show as they last were until a fresh read lands, and this dot says so.
+  const catchingUp = useInboxStore((s) => s.livenessHeldAt != null);
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const stashSession = useInboxStore((s) => s.stashSession);
   const restoreSession = useInboxStore((s) => s.restoreSession);
@@ -850,6 +854,11 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
             <RNText style={styles.headerTitle} onPress={panel ? onExit : undefined}>Inbox</RNText>
             {shownCount > 0 && !isSearching && <RNText style={styles.headerCount}>{shownCount}</RNText>}
           </>
+        )}
+        {catchingUp && !isSearching && (
+          <RNView accessible accessibilityLabel="Syncing">
+            <LivePulse color={Theme.cyan} size={6} />
+          </RNView>
         )}
         {/* Title-side badges (counts that link elsewhere) sit here; the
             panel's narrow header moves them down beside the order. */}
