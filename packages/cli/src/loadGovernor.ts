@@ -4,15 +4,28 @@
 // Every few seconds the daemon reads how busy the CPUs are and turns it into
 // one level. "over" is the state the founder's Mac kept collapsing into (load
 // 400 on 16 cores, 2026-10-24): every core pinned and the run queue many times
-// the core count. At "over" two things happen at once:
-//   - sessions nobody is watching (unattended) run at macOS background
-//     priority, which confines them and every process they start afterwards to
-//     the efficiency cores (backgroundPriority.ts), so the person's own work
-//     keeps the performance cores;
+// the core count. At "over" two things happen:
 //   - work that would START more load here (a watchdog revive, a workflow
-//     resume, the warm pool, a trigger run) is held until the level drops.
-// Leaving "over" needs a sustained quieter spell, so the level does not flap at
-// the edge and undo the relief every other tick.
+//     resume, the warm pool, a trigger run) is held until the level drops;
+//   - sessions nobody is watching (unattended) are confined to macOS background
+//     priority (backgroundPriority.ts), heaviest first, as many as it takes to
+//     bring the CPUs back under the bar.
+//
+// Confinement is graduated because background priority is a cage, not a lower
+// priority: a confined process runs only on the efficiency cores and gives way
+// to everything there, so it gets almost nothing even while the performance
+// cores sit idle (measured 2026-10-26: 0.09 s of CPU in 8 s against 2.4 s for
+// its neighbours). It is also the only lever macOS gives over a running
+// process: nice and a QoS clamp applied afterwards change nothing. So the
+// governor confines only the sessions whose CPU covers the excess, and lets
+// them out, lightest first, whenever the CPUs have room. A pinned run queue on
+// busy CPUs is the one case that still confines every unattended session at
+// once.
+//
+// Room is read from the busy share alone, never the load average: confined
+// work stays runnable, so its backlog keeps the load average high, and a
+// release that waited on it never came (a whole day of 3-hour test runs on an
+// idle-looking Mac, 2026-10-26).
 import fs from "node:fs";
 import os from "node:os";
 import { codecastPath } from "./codecastDir.js";
@@ -27,24 +40,32 @@ export interface LoadSample {
   loadPerCore: number;
 }
 
+/** An unattended session the governor may confine, with its recent CPU in percent of one core. */
+export interface CageCandidate {
+  id: string;
+  cpu: number;
+}
+
 /** Busy share at or above this, held for OVER_HOLD_MS, is "over". */
 export const OVER_BUSY = 0.85;
 export const OVER_HOLD_MS = 10_000;
-/** With the CPUs busy, a run queue this deep per core is "over" at once: the
- *  machine is already behind. Load alone never counts: it also counts blocked
- *  threads, so a large idle fleet keeps it high while the CPUs sit idle. */
+/** With the CPUs busy, a run queue this deep per core is "over" at once and
+ *  confines every unattended session: the machine is already behind. Load
+ *  alone never counts: it also counts blocked threads, so a large idle fleet
+ *  keeps it high while the CPUs sit idle. */
 export const OVER_LOAD_PER_CORE = 4;
 /** Below this busy share the machine is "calm"; between the two it is "busy". */
 export const CALM_BUSY = 0.6;
-/** Leaving "over" also needs the run queue drained below this per core. At
- *  "over" the unattended work is confined to the efficiency cores, so the busy
- *  share drops while that work still waits: busy alone would read the throttle
- *  as recovery, lift it, and land straight back at "over". */
-export const RELEASE_LOAD_PER_CORE = 2;
-/** Below this busy share the queue is blocked threads, not waiting work: "over" may end. */
-export const IDLE_BUSY = 0.3;
+/** Confining aims to bring the busy share down to this, and below it confined
+ *  sessions are let out. Between it and OVER_BUSY the confined set holds, so
+ *  one session does not flap in and out at the edge. The bar is well above
+ *  CALM_BUSY because confined work keeps the efficiency cores pinned (a
+ *  quarter of a 16-core Mac) and counts toward the busy share itself. */
+export const TARGET_BUSY = 0.75;
 /** How long the machine must stay under the bar before the level steps down. */
 export const RELEASE_HOLD_MS = 60_000;
+/** How long the CPUs must have room before the next confined sessions are let out. */
+export const RELEASE_STEP_MS = 30_000;
 export const SAMPLE_INTERVAL_MS = 5_000;
 
 /** What would add load here; each is held at "over". Human messages are never held. */
@@ -54,30 +75,74 @@ export class LoadGovernor {
   level: LoadLevel = "calm";
   /** When the level last changed. */
   since = 0;
-  private highSince: number | null = null;
-  private lowSince: number | null = null;
   last: LoadSample | null = null;
+  /** Confined sessions, with the CPU each was using when it was confined. */
+  private readonly caged = new Map<string, number>();
+  private highSince: number | null = null;
+  private quietSince: number | null = null;
+  private roomSince: number | null = null;
 
-  /** Feeds one sample; returns the level after it. */
-  observe(s: LoadSample): LoadLevel {
+  constructor(private readonly cores = os.cpus().length || 1) {}
+
+  /** The unattended sessions to hold at background priority now. */
+  get confined(): string[] {
+    return [...this.caged.keys()];
+  }
+
+  /** Feeds one sample and this machine's unattended sessions; returns the level after it. */
+  observe(s: LoadSample, candidates: readonly CageCandidate[] = []): LoadLevel {
     this.last = s;
     const high = s.busy >= OVER_BUSY;
     this.highSince = high ? (this.highSince ?? s.at) : null;
+    const deep = high && s.loadPerCore >= OVER_LOAD_PER_CORE;
+    const held = high && s.at - this.highSince! >= OVER_HOLD_MS;
+    this.steer(s, candidates, deep, held);
+    if (this.level !== "over" && (deep || held)) return this.set("over", s.at);
     const target: LoadLevel = s.busy < CALM_BUSY ? "calm" : "busy";
-    if (this.level !== "over" && high && (s.loadPerCore >= OVER_LOAD_PER_CORE || s.at - this.highSince! >= OVER_HOLD_MS)) {
-      return this.set("over", s.at);
-    }
-    // Stepping down from a higher level waits out a quiet spell; stepping up to busy is immediate.
+    // Stepping down waits out a quiet spell, and "over" lasts while anything is confined; stepping up to busy is immediate.
     const rank = { calm: 0, busy: 1, over: 2 } as const;
     if (rank[target] < rank[this.level]) {
-      const behind = this.level === "over" && s.loadPerCore >= RELEASE_LOAD_PER_CORE && s.busy >= IDLE_BUSY;
-      if (high || behind) { this.lowSince = null; return this.level; }
-      this.lowSince ??= s.at;
-      if (s.at - this.lowSince >= RELEASE_HOLD_MS) return this.set(target, s.at);
+      if (high || (this.level === "over" && this.caged.size > 0)) { this.quietSince = null; return this.level; }
+      this.quietSince ??= s.at;
+      if (s.at - this.quietSince >= RELEASE_HOLD_MS) return this.set(target, s.at);
       return this.level;
     }
-    this.lowSince = null;
+    this.quietSince = null;
     return rank[target] > rank[this.level] ? this.set(target, s.at) : this.level;
+  }
+
+  /** Confines the heaviest sessions while the CPUs are pinned, and lets the lightest out while they have room. */
+  private steer(s: LoadSample, candidates: readonly CageCandidate[], deep: boolean, held: boolean): void {
+    const unattended = new Set(candidates.map((c) => c.id));
+    for (const id of this.caged.keys()) if (!unattended.has(id)) this.caged.delete(id);
+    const free = candidates.filter((c) => !this.caged.has(c.id)).sort((a, b) => b.cpu - a.cpu);
+    this.roomSince = s.busy < TARGET_BUSY ? (this.roomSince ?? s.at) : null;
+    if (deep) {
+      for (const c of free) this.caged.set(c.id, c.cpu);
+      return;
+    }
+    if (held) {
+      // Heaviest first until their CPU covers the excess; the next step waits a full hold to see the effect.
+      const excess = (s.busy - TARGET_BUSY) * this.cores * 100;
+      let shed = 0;
+      for (const c of free) {
+        if (shed > 0 && shed >= excess) break;
+        this.caged.set(c.id, c.cpu);
+        shed += Math.max(c.cpu, 1);
+      }
+      this.highSince = s.at;
+      return;
+    }
+    if (this.roomSince === null || this.caged.size === 0 || s.at - this.roomSince < RELEASE_STEP_MS) return;
+    // Lightest first while they fit the room, by the CPU they used before they were confined.
+    const room = (TARGET_BUSY - s.busy) * this.cores * 100;
+    let used = 0;
+    for (const [id, cpu] of [...this.caged].sort((a, b) => a[1] - b[1])) {
+      if (used > 0 && used + cpu > room) break;
+      this.caged.delete(id);
+      used += cpu;
+    }
+    this.roomSince = s.at;
   }
 
   /** Whether work of this kind may start here now. */
@@ -91,7 +156,7 @@ export class LoadGovernor {
   private set(level: LoadLevel, at: number): LoadLevel {
     this.level = level;
     this.since = at;
-    this.lowSince = null;
+    this.quietSince = null;
     return level;
   }
 }
@@ -122,14 +187,14 @@ export const governor = new LoadGovernor();
 let prev: CpuTimes | null = null;
 
 /** Takes one sample and feeds it in; returns the level before and after. */
-export function sampleLoad(now = Date.now()): { before: LoadLevel; after: LoadLevel } {
+export function sampleLoad(candidates: readonly CageCandidate[], now = Date.now()): { before: LoadLevel; after: LoadLevel } {
   const before = governor.level;
   const cur = readCpuTimes();
   const busy = prev ? busyBetween(prev, cur) : undefined;
   prev = cur;
   if (busy === undefined) return { before, after: before };
   const cpus = os.cpus().length || 1;
-  const after = governor.observe({ at: now, busy, loadPerCore: os.loadavg()[0] / cpus });
+  const after = governor.observe({ at: now, busy, loadPerCore: os.loadavg()[0] / cpus }, candidates);
   return { before, after };
 }
 
@@ -137,7 +202,8 @@ export function sampleLoad(now = Date.now()): { before: LoadLevel; after: LoadLe
 export function describeLoad(): string {
   const s = governor.last;
   if (!s) return governor.level;
-  return `${governor.level} (busy ${Math.round(s.busy * 100)}%, load ${s.loadPerCore.toFixed(1)}/core)`;
+  const confined = governor.confined.length;
+  return `${governor.level} (busy ${Math.round(s.busy * 100)}%, load ${s.loadPerCore.toFixed(1)}/core${confined ? `, ${confined} confined` : ""})`;
 }
 
 // ── What the CLI reads ───────────────────────────────────────────────────────
