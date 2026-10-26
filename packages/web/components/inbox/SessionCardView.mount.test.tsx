@@ -12,6 +12,7 @@ import { SectionHeader } from "./SectionHeader";
 import { InboxNavRow, NavCount, NavSection, NeedsInputCount, RailHeading, SectionRow } from "../sidebar/navPrimitives";
 import { SearchField } from "../search/SearchField";
 import { SessionHit } from "../search/SessionHit";
+import { DEFAULT_IDENTITY_PREFS } from "../../lib/sessionIdentity";
 
 const NOW = Date.UTC(2026, 8, 30, 18, 0);
 const noop = () => {};
@@ -40,7 +41,7 @@ const cardProps: SessionCardViewProps = {
   isFavorite: true,
   sessionLabel: "Payments",
   now: NOW,
-  chrome: { showModelBadge: false, showAgentIcon: true, showBranchPill: true, personifyAll: false },
+  chrome: { showModelBadge: false, showAgentIcon: true, showBranchPill: true, prefs: DEFAULT_IDENTITY_PREFS },
   liveness: { isLive: true, pendingSend: false, restarting: false, draft: "" },
   viewerId: "me",
   author: null,

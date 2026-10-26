@@ -4,7 +4,7 @@ import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "..
 import { useInboxStore } from "../../store/inboxStore";
 import type { MentionItem } from "../../lib/mentionItem";
 import { MentionMenu } from "./MentionMenu";
-import { personifyAllNow } from "../../hooks/usePersonifyAll";
+import { identityPrefsNow } from "../../hooks/useIdentityPrefs";
 
 // The row type lives in lib/mentionItem so a library file (mentionRanking,
 // useMentionQuery) and mobile's typecheck never pull this component in.
@@ -26,7 +26,7 @@ export const MentionList = forwardRef<any, MentionListProps>(
       { teamId: activeScope.kind === "team" ? activeScope.teamId : null, types: SERVER_MENTION_TYPES },
     );
     const allItems = useMemo(
-      () => datesOnly ? items : orderMentionItems(mergeMentionSuggestions(items, serverItems, mentionViewTimes(useInboxStore.getState()), Infinity, query ?? "", personifyAllNow())),
+      () => datesOnly ? items : orderMentionItems(mergeMentionSuggestions(items, serverItems, mentionViewTimes(useInboxStore.getState()), Infinity, query ?? "", identityPrefsNow())),
       [items, serverItems, datesOnly, query],
     );
     const selectedIndex = selection.query === query ? Math.min(selection.index, Math.max(0, allItems.length - 1)) : 0;

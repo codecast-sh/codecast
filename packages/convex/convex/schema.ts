@@ -28,6 +28,7 @@ import { publishedLineProfileValidator } from "./lib/lineProfileValidator";
 import { signalPlacedValidator } from "./lib/signalPlacedValidator";
 import { callGuestLeftReasonValidator, callGuestStatusValidator, guestNoticeValidator, callRecordingErrorKindValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
 import { googleOAuthTables } from "./googleOAuthSchema";
+import { roleIconValidator } from "./lib/roleIconValidator";
 import { assistantTables } from "./assistantSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
@@ -1823,6 +1824,14 @@ export default defineSchema({
     // The face (org-staffing.md S13): a key from shared/contracts/orgAvatars;
     // absent rows draw the default for their handle.
     avatar: v.optional(v.string()),
+    // The practical face (S13, shared/contracts/roleIcon): a drawn icon of
+    // what the role looks after, as validated shapes. Every role wears both
+    // faces; each viewer's setting picks one. Absent until drawn (the hire
+    // schedules roleIcons.generateForRole); readers fall back to the monogram.
+    icon: v.optional(roleIconValidator),
+    // The contact sheet the generator drew the icon on (the icon beside its
+    // siblings at sidebar sizes, both themes); absent for a hand-drawn icon.
+    icon_preview_id: v.optional(v.id("_storage")),
     created_by: v.id("users"),
     created_at: v.number(),
     updated_at: v.number(),

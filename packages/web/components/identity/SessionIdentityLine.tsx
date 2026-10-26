@@ -9,17 +9,17 @@
 // role hover card (org-roles-run-work.md R3): wherever a role is named, what
 // it looks after is one hover away.
 import type { ReactNode } from "react";
-import { identityLine, sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
-import { usePersonifyAll } from "../../hooks/usePersonifyAll";
+import { identityLine, sessionIdentity, type IdentityPrefs, type IdentityRow } from "../../lib/sessionIdentity";
+import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
 import { RoleHoverCard } from "./RoleHoverCard";
 import { highlightMatch } from "../../lib/searchHighlight";
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 
 export function SessionIdentityLine({
-  row: rawRow, title, className, nameClassName, titleClassName, after, highlight, personifyAll: inheritedPersonifyAll,
+  row: rawRow, title, className, nameClassName, titleClassName, after, highlight, prefs: inheritedPrefs,
 }: {
   row: IdentityRow;
-  personifyAll?: boolean;
+  prefs?: IdentityPrefs;
   /** The display title, already cleaned by the caller. */
   title: string | null | undefined;
   className?: string;
@@ -30,10 +30,10 @@ export function SessionIdentityLine({
   /** A search's words, marked in the name and the title. */
   highlight?: string;
 }) {
-  const personifyAll = usePersonifyAll(inheritedPersonifyAll);
+  const prefs = useIdentityPrefs(inheritedPrefs);
   const row = useLiveIdentityRow(rawRow);
-  const line = identityLine(row, title, personifyAll);
-  const id = sessionIdentity(row, personifyAll);
+  const line = identityLine(row, title, prefs);
+  const id = sessionIdentity(row, prefs);
   const who = (
     <>
       {line.name && (

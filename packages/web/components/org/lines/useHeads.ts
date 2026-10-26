@@ -16,6 +16,7 @@ import type { OrgRole } from "../orgTypes";
 import { namedLead } from "./lineData";
 import { personFacts, roleFacts, type LinePerson } from "./lineFacts";
 import { useLineTree } from "./lineTree";
+import { useIdentityPrefs } from "../../../hooks/useIdentityPrefs";
 
 type Named = { kind: OrgObjectKind; ref: string; title: string };
 const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.short_id ?? ""}|${p.owner_role_id ?? ""}|${p.color ?? ""}|${p.target_date ?? ""}`;
@@ -30,6 +31,7 @@ export function useRoleHead(role: OrgRole) {
   const tree = useLineTree();
   const projects = useWorkspaceCollection<ProjectItem>("projects", projectSig);
   const now = useCoarseNow(60_000);
+  const { characters } = useIdentityPrefs();
   return useMemo(() => {
     const live = rolesInTreeOrder(tree);
     const parentRole = role.reports_to.kind === "role" ? live.find((r) => r._id === (role.reports_to as { role_id: string }).role_id) : undefined;
@@ -45,8 +47,8 @@ export function useRoleHead(role: OrgRole) {
     const facts = roleFacts(line, now, true);
     const lineFacts = roleFacts(line, now);
     const serves: Named[] = goals.map((g) => ({ kind: "initiative", ref: g.ref || g.id, title: g.title }));
-    return { words: roleWords(role), leads, under, goals, facts, lineFacts, serves, carried, now };
-  }, [role, tree, projects, all, now]);
+    return { words: roleWords(role, null, characters), leads, under, goals, facts, lineFacts, serves, carried, now };
+  }, [role, tree, projects, all, now, characters]);
 }
 
 type MemberRow = { _id: string; name?: string; image?: string; github_avatar_url?: string; github_username?: string; joined_at?: number };

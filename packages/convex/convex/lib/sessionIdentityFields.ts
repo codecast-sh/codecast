@@ -1,4 +1,5 @@
 import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
+import { isRoleIcon } from "@codecast/shared/contracts/roleIcon";
 
 /**
  * The identity a row resolves to (docs/architecture/session-characters.md
@@ -17,7 +18,7 @@ export async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<a
     org_role_id: conv.org_role_id?.toString() ?? null,
     standing_role_id: conv.standing_role_id?.toString() ?? null,
     role: role
-      ? { _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), status: role.status, tenure_kind: role.tenure?.kind ?? "standing", given_name: role.given_name ?? null }
+      ? { _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), status: role.status, tenure_kind: role.tenure?.kind ?? "standing", given_name: role.given_name ?? null, icon: isRoleIcon(role.icon) ? role.icon : null }
       : null,
   };
 }
