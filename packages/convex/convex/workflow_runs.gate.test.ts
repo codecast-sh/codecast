@@ -185,9 +185,9 @@ describe("answering a gate resumes the run (the-line.md L4)", () => {
     expect(run.gate_response).toBe("B");
     expect(row.status).toBe("answered");
     expect(tables.pending_messages).toHaveLength(0);
-    // The runner's poll reads the run as before.
+    // The runner's poll reads the key, and the chosen option's own words for a key picked with no note.
     const poll = await (pollGateResponse as any)._handler(ctx, { api_token: TOKEN, run_id: RUN });
-    expect(poll).toEqual({ status: "running", gate_response: "B" });
+    expect(poll).toEqual({ status: "running", gate_response: "B", gate_answer: "Revise" });
   });
 
   test("respondToGate with 'B: go' answers option B and keeps the note in front of the runner", async () => {

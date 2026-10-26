@@ -202,6 +202,8 @@ export interface ResumeRow {
   node_statuses?: Array<{ node_id: string; status: string; outcome?: string | null; session_id?: string | null; completed_at?: number | null }>;
   gate_node_id?: string | null;
   gate_response?: string | null;
+  /** The chosen option's own words, when a decision answered the gate (workflow_runs answeredOptionLabel). */
+  gate_answer?: string | null;
   gate_decision_id?: string | null;
   /** A trial run's card waiting at its gate (lineTrial.ts): asked of nobody, so no decision id, but asked all the same. */
   gate_card?: string | null;
@@ -227,6 +229,26 @@ export interface ResumePoint {
   /** The hand a session node had running when its runner died, to wait on again rather than start anew. */
   hand: string | null;
   from: "checkpoint" | "row";
+}
+
+/**
+ * A bare key picked on a card hands on the option's own words: they are the
+ * instruction the card wrote for it, and a Revise answered by its key alone
+ * otherwise sent the build back with nothing to do differently (sd-1415).
+ */
+export function withOptionWords(response: string, words?: string | null): string {
+  const key = response.trim();
+  return words?.trim() && /^\[?\w{1,3}\]?$/.test(key) ? `${key}: ${words.trim()}` : response;
+}
+
+/**
+ * A new attempt: every station's visits count again. max_visits stops a loop
+ * within one attempt; a resume at a station and a person's answer at a gate
+ * each start the next attempt, so neither lands on a spent count.
+ */
+export function clearVisits(visitCounts: Record<string, number>, context: Record<string, string>): void {
+  for (const id of Object.keys(visitCounts)) delete visitCounts[id];
+  for (const key of Object.keys(context)) if (key.endsWith(".visits")) delete context[key];
 }
 
 /**
@@ -282,10 +304,7 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
     if (last) context["outcome"] = node_outcomes[last.node_id];
   }
 
-  if (newAttempt) {
-    visit_counts = {};
-    for (const key of Object.keys(context)) if (key.endsWith(".visits")) delete context[key];
-  }
+  if (newAttempt) clearVisits(visit_counts, context);
 
   const asked = !routedOn && row.gate_node_id === nodeId;
   // A gate asked again on a graph that has grown stations before it since the
@@ -294,7 +313,7 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
   const unmade = node.type === "human" && !asked ? unmadeBefore(graph, nodeId, completed) : null;
   if (unmade) return { node_id: unmade, visit_counts, completed, node_outcomes, context, gate: null, hand: null, from: atCheckpoint ? "checkpoint" : "row" };
   const gate = node.type === "human"
-    ? { node_id: nodeId, response: asked && row.gate_response ? row.gate_response : null, open: asked && row.status === "paused" && (!!row.gate_decision_id || !!row.gate_card) }
+    ? { node_id: nodeId, response: asked && row.gate_response ? withOptionWords(row.gate_response, row.gate_answer) : null, open: asked && row.status === "paused" && (!!row.gate_decision_id || !!row.gate_card) }
     : null;
   const hand = node.backend === "session" && atCheckpoint ? atCheckpoint.context[`${nodeId}.conversation_id`] ?? null : null;
   return { node_id: nodeId, visit_counts, completed, node_outcomes, context, gate, hand, from: atCheckpoint ? "checkpoint" : "row" };

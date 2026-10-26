@@ -18,7 +18,7 @@ import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
 import { LineProfileError, lineCommandEnv, lineProfileVars, loadLineProfile } from "../lineProfile.js";
 import { deadEndReason, profileFailure, quotedTitle, taskStopCard } from "./runFailure.js";
-import { claimRun, readCheckpoint, resumePoint, runnerStamp, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
+import { claimRun, clearVisits, readCheckpoint, resumePoint, runnerStamp, withOptionWords, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
 import presenterBase from "./presenter.md" with { type: "text" };
 import * as fs from "fs";
 import * as path from "path";
@@ -1703,8 +1703,8 @@ async function pollGate(options: RunOptions): Promise<string | null> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ api_token: options.apiToken, run_id: options.runId }),
       });
-      const data = await resp.json() as { status?: string; gate_response?: string | null };
-      if (data.gate_response) return data.gate_response;
+      const data = await resp.json() as { status?: string; gate_response?: string | null; gate_answer?: string | null };
+      if (data.gate_response) return withOptionWords(data.gate_response, data.gate_answer);
       // Only the run's own status ends the wait. A refused or errored poll (an
       // overloaded backend answers {error} with no status) is a poll that
       // failed, not a gate taken back: four trial gates died that way at once.
@@ -2009,7 +2009,7 @@ async function runNodeLoop(
   while (current.type !== "exit") {
     // ── Stage 1: Increment visit count, enforce max_visits ───────────────────
     // Fabro: checked first, before anything else. Exceeding limit = hard abort.
-    // Visit counts are NEVER reset (even after retry_target jumps).
+    // Within an attempt visit counts are never reset (even after retry_target jumps); a gate's answer starts the next.
     state.currentNodeId = current.id;
     const visits = (state.visitCounts[current.id] || 0) + 1;
     state.visitCounts[current.id] = visits;
@@ -2075,6 +2075,8 @@ async function runNodeLoop(
     } else {
       outcome = "success";
     }
+    // A person's answer is the next attempt: a Revise sent back to a build that spent its visits is carried out (Oct 26).
+    if (current.type === "human" && outcome !== "failure" && !options.dryRun) clearVisits(state.visitCounts, state.context);
 
     if (options.runId) {
       await reportProgress(options, {
@@ -2204,7 +2206,7 @@ async function runNodeLoop(
     // that routed here and what it said. A hand reads only what its prompt
     // names, so without this a builder sent back by a failed check could not
     // tell that round from its first and checked its own work again (ct-58757).
-    if (state.visitCounts[next.id]) state.context["sent_back"] = `${current.label}: ${state.context[`${current.id}.output`] ?? ""}`.trim();
+    if (state.completed.includes(next.id)) state.context["sent_back"] = `${current.label}: ${state.context[`${current.id}.output`] ?? ""}`.trim();
     else delete state.context["sent_back"];
 
     checkpoint(next.id);

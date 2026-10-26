@@ -269,18 +269,20 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     calls.length = 0;
     hangOn = null;
 
-    gateAnswer = "S";
-    const outcome = await runWorkflow(graph(), options({
+    const resumed = runWorkflow(graph(), options({
       resume: row({ current_node_id: "build", node_statuses: row({}).node_statuses!.slice(0, 2).concat([{ node_id: "build", status: "running", session_id: "jxbuild2" }]) }),
     }));
+    // Build ran once in the run's count, not twice: read at the gate, whose answer starts the next attempt.
+    await until(() => readCheckpoint(runDir, runId)?.node_id === "decide");
+    expect(readCheckpoint(runDir, runId)?.visit_counts.build).toBe(1);
+    gateAnswer = "S";
+    const outcome = await resumed;
     expect(outcome).toBe("completed");
     // The hand still standing finished the station; no second hand was started.
     expect(calls.some((c) => c.route === "/cli/spawn")).toBe(false);
     expect(calls.find((c) => c.route === "/cli/inbox")?.body.session_ids).toEqual(["conv_build_2"]);
     expect(progress().some((c) => c.body.node_id === "build" && c.body.node_status === "completed" && c.body.session_id === "jxbuild2")).toBe(true);
     expect(progress().some((c) => c.body.node_id === "ship" && c.body.node_status === "completed")).toBe(true);
-    // Build ran once in the run's count, not twice.
-    expect(readCheckpoint(runDir, runId)?.visit_counts.build).toBe(1);
   }, 30000);
 
   // The hand was killed with the machine: not live, never finished. Once its

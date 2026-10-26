@@ -16,6 +16,16 @@ describe("isUsageLimitDialog", () => {
     ).toBe(true);
   });
 
+  it("catches the weekly-limit menu on an account with no usage credits to switch to", () => {
+    // Oct 26: a line build's account hit its weekly limit; read as a question, the hand settled on needs_input in 90s.
+    expect(
+      isUsageLimitDialog([
+        "Stop and wait for limit to reset",
+        "Wait here, then continue automatically at Oct 28, 10pm",
+      ])
+    ).toBe(true);
+  });
+
   it("catches the monthly-spend variant the daemon converts to a banner", () => {
     expect(
       isUsageLimitDialog(["Adjust monthly spend limit", "Wait for limit to reset"])

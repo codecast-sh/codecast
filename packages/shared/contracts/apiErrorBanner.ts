@@ -459,7 +459,7 @@ export function isApiErrorBanner(content: string | null | undefined): boolean {
 // generic "What do you want to do?" — and requiring TWO matches so a real
 // question that merely mentions switching models is not swallowed.
 const USAGE_DIALOG_OPTION_RE =
-  /(?:wait (?:for|until) (?:the )?limit(?:\s+to)?\s+reset|limit (?:will )?reset|usage credits|monthly spend limit|spend limit|upgrade to (?:max|pro|team)|switch to (?:the )?(?:max|pro|team) plan|switch (?:to )?(?:a (?:different|another) )?model|\/usage-credits|\/upgrade)/i;
+  /(?:wait (?:for|until) (?:the )?limit(?:\s+to)?\s+reset|limit (?:will )?reset|wait here,? then continue automatically|usage credits|monthly spend limit|spend limit|upgrade to (?:max|pro|team)|switch to (?:the )?(?:max|pro|team) plan|switch (?:to )?(?:a (?:different|another) )?model|\/usage-credits|\/upgrade)/i;
 
 export function isUsageLimitDialog(
   optionLabels: readonly string[] | null | undefined

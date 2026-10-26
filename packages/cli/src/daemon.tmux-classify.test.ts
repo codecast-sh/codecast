@@ -1133,6 +1133,15 @@ describe("Claude Code's limit dialog (2026-10-04)", () => {
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(LIMIT_DIALOG_PANE))).toBe("limit_dialog");
   });
 
+  test("with no usage credits to offer, its two rows are still the park", () => {
+    // Oct 26: a line build read this as a question and its station settled on needs_input in 90s.
+    const twoRows = LIMIT_DIALOG_PANE
+      .replace("resets Oct 5 at 3pm (America/New_York)", "resets Oct 28, 10pm (UTC)")
+      .replace("Wait here, then continue automatically at Oct 5 at 3pm", "Wait here, then continue automatically at Oct 28, 10pm")
+      .replace("     3. Switch to usage credits\n", "");
+    expect(limitDialogOnPane(twoRows)).toBe(true);
+  });
+
   test("an ordinary numbered question is not one", () => {
     const question = LIMIT_DIALOG_PANE
       .replace("Stop and wait for limit to reset", "Keep the old schema")

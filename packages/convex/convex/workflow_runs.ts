@@ -1037,8 +1037,9 @@ export const getForDaemon = mutation({
       ? ((await ctx.db.query("trial_cards").withIndex("by_run", (q: any) => q.eq("run_id", run._id)).collect()) as any[]).find((c) => c.node_id === run.gate_node_id && c.status === "waiting")?.short_id ?? null
       : null;
 
+    const gateAnswer = run.gate_response && run.gate_decision_id ? answeredOptionLabel(await ctx.db.get(run.gate_decision_id)) : undefined;
     return {
-      run: { ...run, task_short_id: taskShortId, plan_short_id: planShortId, gate_card: gateCard },
+      run: { ...run, task_short_id: taskShortId, plan_short_id: planShortId, gate_card: gateCard, ...(gateAnswer ? { gate_answer: gateAnswer } : {}) },
       workflow: workflow ? { ...workflow, ...(await libraryOfRun(ctx, run)) } : { name: "workflow", goal: run.goal_override, nodes: [], edges: [] },
     };
   },
@@ -1414,9 +1415,12 @@ export const pollGateResponse = mutation({
     const run = await ctx.db.get(args.run_id);
     if (!run || run.user_id !== auth.userId) return { error: "Not found" };
 
+    // A key picked with no note still carries its option's words to the next hand (runResume withOptionWords).
+    const answer = run.gate_response && run.gate_decision_id ? answeredOptionLabel(await ctx.db.get(run.gate_decision_id)) : undefined;
     return {
       status: run.status,
       gate_response: run.gate_response ?? null,
+      ...(answer ? { gate_answer: answer } : {}),
     };
   },
 });
@@ -1700,6 +1704,13 @@ export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRuns
   return shaped;
 }
 
+// The option an answered gate decision chose, in its own words. On a line card
+// those words are the instruction its card wrote ("Revise it first: find why it
+// goes silent on garbled calls"), which the bare key in gate_response lacks.
+export function answeredOptionLabel(decision: any): string | undefined {
+  return decision?.status === "answered" && typeof decision.answer_index === "number" ? decision.options?.[decision.answer_index]?.label : undefined;
+}
+
 // The one shape every run feed hands the web store (the-line.md L10): the
 // list and the single run query agree, so a store row replaced by either
 // keeps its task, workflow, node label and gate decision chips.
@@ -1728,7 +1739,7 @@ export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> 
     gate_decision_status: decision?.status,
     // What the last gate was answered with, in the option's own words, and
     // what its card says the run cost (LE16 run report, LE14 versions).
-    gate_answer: decision?.status === "answered" && typeof decision.answer_index === "number" ? decision.options?.[decision.answer_index]?.label : undefined,
+    gate_answer: answeredOptionLabel(decision),
     // How a line run ended (LE16): shipped, dropped, dissolved or parked,
     // so a project reading its runs never re-derives it from station ids.
     line_outcome: lineRunOutcome(run)?.kind,
