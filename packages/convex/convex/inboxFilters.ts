@@ -19,7 +19,7 @@ export type ConversationDoc = Doc<"conversations">;
 // server scan and every replica's working-set selection (sync-convergence C4).
 // Re-exported so existing `from "./inboxFilters"` importers keep working.
 export { NOISE_TITLE_PREFIXES, isNoiseTitle, isOrphanOrSubagent, isRunLog, shouldShowInInbox } from "@codecast/shared/contracts";
-import { shouldShowInInbox } from "@codecast/shared/contracts";
+import { shouldShowInInbox, isCompactionSummaryMessage } from "@codecast/shared/contracts";
 
 // The three DISTINCT ways a session leaves the active inbox. They were reported
 // as a single "dismissed" figure back when kill was an event rather than a
@@ -222,12 +222,10 @@ export function newestSignificantMessage<T extends TurnShape & { timestamp?: num
 // full as before. Only the agent answering or a compaction that worked (its
 // summary row) proves it lifted. Counting queued messages as lifting deleted
 // the banner and cleared the park, so nothing recovered the session.
-const COMPACTION_SUMMARY_RE = /^This session is being continued from a previous conversation/;
-
 export function liftsPark(m: TurnShape, parkedKind: string | null | undefined): boolean {
   if (!isRealTurn(m)) return false;
   if (parkedKind !== "context" || m.role === "assistant") return true;
-  return COMPACTION_SUMMARY_RE.test((m.content ?? "").trimStart());
+  return isCompactionSummaryMessage(m.content);
 }
 
 /** The batch read in time order against the park it starts under: the newest

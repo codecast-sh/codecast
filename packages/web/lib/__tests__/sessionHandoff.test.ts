@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { composeContextRecoveryPrompt, composeHandoffPrompt } from "@codecast/shared/contracts";
+import { composeContextRecoveryPrompt, composeContextRebuildPrompt, composeHandoffPrompt } from "@codecast/shared/contracts";
 import { isHandoffFrom, parseContextRecovery, parseSessionHandoff } from "../sessionHandoff";
 
 const source = { short_id: "jx7fchg", title: "Landing page design", agent_type: "claude_code", model: "fable", message_count: 143 };
@@ -65,6 +65,13 @@ describe("context recovery presentation", () => {
     expect(parsed.body.startsWith("You are session jx7fchg")).toBe(true);
     expect(parsed.body).toContain("## Latest messages");
     expect(parseSessionHandoff(prompt)).toBeNull();
+  });
+
+  test("a rebuilt transcript's prompt draws the same divider", () => {
+    const parsed = parseContextRecovery(composeContextRebuildPrompt({ source, roleBrief: "You are the **Growth lead** (@growth) in Union" }))!;
+    expect(parsed.sessionId).toBe(source.short_id);
+    expect(parsed.body).toContain("rebuilt this session");
+    expect(parsed.body).toContain("## Role");
   });
 
   test("a handoff or a bare heading is not a recovery", () => {

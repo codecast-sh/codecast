@@ -1,6 +1,16 @@
 import { isContextRecoveryPrompt } from "./handoffPrompt";
 import type { AreaChange } from "./orgAreas";
 import type { SecretKind } from "./secrets";
+// The summary Claude Code writes when it compacts a conversation, synced as a
+// user-role row. It covers everything before it, so a transcript rebuilt from
+// codecast starts at the latest one (cli jsonlGenerator), a full-context park
+// lifts on one (convex inboxFilters), and a recovery quotes it (convex handoff).
+export const COMPACTION_SUMMARY_PREFIX = "This session is being continued from a previous conversation";
+
+export function isCompactionSummaryMessage(rawContent: string | null | undefined): boolean {
+  return !!rawContent && stripInjectionNoise(rawContent).trimStart().startsWith(COMPACTION_SUMMARY_PREFIX);
+}
+
 // Detection of user-role messages that machinery delivered into a session
 // rather than a human typing them: cross-session `cast send` wrappers,
 // inter-agent teammate broadcasts (Claude Code SendMessage), scheduled-task

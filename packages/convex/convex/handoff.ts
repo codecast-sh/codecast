@@ -24,7 +24,7 @@ import { verifyApiToken } from "./apiTokens";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { isSummarizableMessage } from "./idleSummary";
 import { addConversationToWorkItem } from "./conversationLinks";
-import { launchModelKeyOf, performSetThreadState } from "./conversations";
+import { enqueueKillAndResume, launchModelKeyOf, performSetThreadState } from "./conversations";
 import { briefingFor } from "./anchors";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { enqueueStartSession } from "./devices";
@@ -33,6 +33,8 @@ import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import {
   composeHandoffPrompt,
   composeContextRecoveryPrompt,
+  composeContextRebuildPrompt,
+  isCompactionSummaryMessage,
   isContextRecoveryPrompt,
   CONTEXT_RECOVERY_COOLDOWN_MS,
   describeAgentRun,
@@ -397,18 +399,40 @@ export async function applyHandoffLink(
 //
 // A session whose context fills and cannot be compacted parks on kind
 // "context" and waits for someone to type /compact or /clear. Neither helps
-// once compaction itself fails, so codecast heals it: the brief a handoff
-// would write (read from more of the transcript), the role's own opening, and
-// the latest messages verbatim become the first prompt of a fresh agent in
-// the SAME conversation. The conversation keeps its id, role, task, plan and
-// inbox place; the transcript shows the prompt as one divider. Scheduled by
-// onFreshApiErrorPark; cooled down so a session that overflows again right
-// away stays parked for a person instead of looping.
+// once compaction itself fails, so codecast heals it in the SAME conversation,
+// which keeps its id, role, task, plan and inbox place, and shows one divider.
+// Two rungs, scheduled by onFreshApiErrorPark:
+//
+// 1. "rebuild": kill the agent and resume it on its transcript rebuilt from
+//    codecast's copy, which starts at the session's own latest compaction
+//    summary and keeps the newest messages verbatim within the window (cli
+//    jsonlGenerator.applyImportTailTrim). Nothing is paraphrased, so the
+//    session carries on as if it had compacted. This is also what heals a
+//    transcript a machine move rebuilt too large.
+// 2. "brief": if the session overflows again inside the cooldown after a
+//    rebuild (an agent that cannot rebuild, or a daemon whose rebuild still
+//    overflows), start a fresh agent seeded with a brief, the role's opening,
+//    the last compaction summary and the latest messages verbatim.
+//
+// A second overflow inside the cooldown after a brief stays parked for a
+// person instead of looping.
 
 const RECOVERABLE_AGENTS = new Set(["claude_code", "codex"]);
+// Agents whose daemon rebuild trims from the latest compaction summary.
+const REBUILDABLE_AGENTS = new Set(["claude_code"]);
 /** The newest turns quoted verbatim, and the cap on each one's length. */
 export const RECOVERY_LATEST_USER = 3;
 export const RECOVERY_QUOTE_CHARS = 12_000;
+
+export type ContextRecoveryMode = "rebuild" | "brief";
+
+/** Which rung a recovery takes now: a rebuild first, a brief after a rebuild
+ *  that overflowed again inside the cooldown. Pure; read with the blocker. */
+export function contextRecoveryMode(conv: any, now: number): ContextRecoveryMode {
+  const recent = !!conv?.context_recovered_at && now - conv.context_recovered_at < CONTEXT_RECOVERY_COOLDOWN_MS;
+  if (recent || !REBUILDABLE_AGENTS.has(conv?.agent_type ?? "claude_code")) return "brief";
+  return "rebuild";
+}
 
 /** Why this conversation is not recovered now, or null when it should be. Pure. */
 export function contextRecoveryBlocker(conv: any, now: number): string | null {
@@ -418,7 +442,9 @@ export function contextRecoveryBlocker(conv: any, now: number): string | null {
   if (!RECOVERABLE_AGENTS.has(conv.agent_type ?? "claude_code")) return `codecast cannot restart a ${conv.agent_type} session`;
   if (conv.execution_protocol_state) return "runtime is owned by the execution coordinator";
   if (!(conv.project_path || conv.git_root)) return "no project folder to start in";
-  if (conv.context_recovered_at && now - conv.context_recovered_at < CONTEXT_RECOVERY_COOLDOWN_MS) return "recovered recently";
+  if (conv.context_recovered_at && now - conv.context_recovered_at < CONTEXT_RECOVERY_COOLDOWN_MS && conv.context_recovery_mode !== "rebuild") {
+    return "recovered recently";
+  }
   return null;
 }
 
@@ -430,7 +456,7 @@ function isRecoveryNoise(m: { role?: string; content?: string | null; subtype?: 
   if (m.subtype) return true;
   if (m.role === "assistant") return isBannerTurn(m as any);
   return t.startsWith("<command-name>") || t.startsWith("<local-command") || /^\/[a-z][\w-]*(\s|$)/i.test(t) ||
-    t.startsWith("This session is being continued from a previous conversation") || isContextRecoveryPrompt(t);
+    isCompactionSummaryMessage(t) || isContextRecoveryPrompt(t);
 }
 
 /** The newest exchange to quote exactly, oldest first: everything readable
@@ -449,8 +475,11 @@ export function pickLatestMessages(
 }
 
 export interface ContextRecoveryInput extends HandoffBriefPayload {
+  mode: ContextRecoveryMode;
   latest: RecoveryMessage[];
   role_brief: string | null;
+  /** The newest compaction summary in the scanned rows, quoted by a brief. */
+  last_summary: string | null;
   parked_at: number | null;
 }
 
@@ -458,7 +487,8 @@ export const recoveryInput = internalQuery({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, args): Promise<ContextRecoveryInput | null> => {
     const conv: any = await ctx.db.get(args.conversation_id);
-    const blocked = contextRecoveryBlocker(conv, Date.now());
+    const now = Date.now();
+    const blocked = contextRecoveryBlocker(conv, now);
     if (blocked) {
       console.log(`[context recovery] ${args.conversation_id}: skipped, ${blocked}`);
       return null;
@@ -472,7 +502,9 @@ export const recoveryInput = internalQuery({
     const plan: any = conv.active_plan_id ? await ctx.db.get(conv.active_plan_id) : null;
     const anchor: any = conv.anchor_id ? await ctx.db.get(conv.anchor_id) : null;
     const readable = (rows as any[]).filter((m) => !isRecoveryNoise(m));
+    const summary = (rows as any[]).find((m) => m.role === "user" && isCompactionSummaryMessage(m.content));
     return {
+      mode: contextRecoveryMode(conv, now),
       source: {
         conversation_id: conv._id,
         short_id: conv.short_id ?? conv._id.toString().slice(0, 7),
@@ -490,6 +522,7 @@ export const recoveryInput = internalQuery({
       messages: shapeHandoffTranscript(readable, RECOVERY_BUDGET),
       latest: pickLatestMessages(rows as any[]),
       role_brief: anchor && anchor.status !== "decommissioned" ? await briefingFor(ctx, anchor) : null,
+      last_summary: summary?.content ?? null,
       parked_at: conv.pending_api_error_at ?? null,
     };
   },
@@ -500,39 +533,57 @@ export const recoverContext = internalAction({
   handler: async (ctx, args): Promise<void> => {
     const input: ContextRecoveryInput | null = await ctx.runQuery(internal.handoff.recoveryInput, args);
     if (!input) return;
-    const briefInputs: HandoffBriefInput = { ...handoffBriefInput(input.source, input.messages), recovery: true };
-    const modelBrief = input.messages.length ? await askForBrief(briefInputs) : null;
-    const prompt = composeContextRecoveryPrompt({
-      source: input.source,
-      brief: modelBrief ?? fallbackHandoffBrief(briefInputs),
-      roleBrief: input.role_brief,
-      latest: input.latest,
-    });
+    let prompt: string;
+    if (input.mode === "rebuild") {
+      prompt = composeContextRebuildPrompt({ source: input.source, roleBrief: input.role_brief });
+    } else {
+      const briefInputs: HandoffBriefInput = { ...handoffBriefInput(input.source, input.messages), recovery: true };
+      const modelBrief = input.messages.length ? await askForBrief(briefInputs) : null;
+      prompt = composeContextRecoveryPrompt({
+        source: input.source,
+        brief: modelBrief ?? fallbackHandoffBrief(briefInputs),
+        roleBrief: input.role_brief,
+        latest: input.latest,
+        lastSummary: input.last_summary,
+      });
+    }
     await ctx.runMutation(internal.handoff.applyContextRecovery, {
       conversation_id: args.conversation_id,
       prompt,
+      mode: input.mode,
       parked_at: input.parked_at ?? undefined,
     });
   },
 });
 
-// The restart itself, in one transaction: re-check the park the brief was
+// The restart itself, in one transaction: re-check the park the prompt was
 // written for (a /compact typed meanwhile, or a person's own restart, wins),
-// lift it, queue the prompt, and start a fresh agent in this conversation.
-// start_session tears the old pane down first and carries the waiting
-// prompt as the agent's launch argument.
+// lift it, queue the prompt, and restart the agent in this conversation. A
+// rebuild kills the pane and resumes on the transcript rebuilt from the
+// server copy, and the daemon redelivers the queued prompt to the new pane;
+// a brief's start_session tears the old pane down first and carries the
+// prompt as the fresh agent's launch argument.
 export const applyContextRecovery = internalMutation({
-  args: { conversation_id: v.id("conversations"), prompt: v.string(), parked_at: v.optional(v.number()) },
+  args: {
+    conversation_id: v.id("conversations"),
+    prompt: v.string(),
+    mode: v.optional(v.union(v.literal("rebuild"), v.literal("brief"))),
+    parked_at: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const conv: any = await ctx.db.get(args.conversation_id);
     const now = Date.now();
     const blocked = contextRecoveryBlocker(conv, now);
-    if (blocked || (conv.pending_api_error_at ?? undefined) !== args.parked_at) {
-      console.log(`[context recovery] ${args.conversation_id}: not applied, ${blocked ?? "a newer park replaced the one briefed"}`);
+    const mode = args.mode ?? "brief";
+    const stale = blocked ?? ((conv.pending_api_error_at ?? undefined) !== args.parked_at ? "a newer park replaced the one briefed"
+      : contextRecoveryMode(conv, now) !== mode ? "the rung changed since the prompt was written" : null);
+    if (stale) {
+      console.log(`[context recovery] ${args.conversation_id}: not applied, ${stale}`);
       return { recovered: false };
     }
     await ctx.db.patch(conv._id, {
       context_recovered_at: now,
+      context_recovery_mode: mode,
       pending_api_error: false,
       pending_api_error_kind: undefined,
       pending_api_error_at: undefined,
@@ -542,6 +593,11 @@ export const applyContextRecovery = internalMutation({
       content: args.prompt,
       client_id: `context-recovery:${conv._id}:${args.parked_at ?? now}`,
     });
+    if (mode === "rebuild") {
+      await enqueueKillAndResume(ctx, conv.user_id, conv, { forceReconstitute: true, cause: "context-recovery" });
+      console.log(`[context recovery] ${args.conversation_id}: rebuilding the transcript from the server copy`);
+      return { recovered: true, mode };
+    }
     const agentType = fromConvexAgentType(conv.agent_type);
     const model = launchModelKeyOf(conv.agent_type, conv.model);
     await enqueueStartSession(ctx, conv.user_id, {
@@ -554,6 +610,6 @@ export const applyContextRecovery = internalMutation({
       ...(conv.cc_account ? { ccAccount: conv.cc_account } : {}),
     });
     console.log(`[context recovery] ${args.conversation_id}: restarted in a fresh context`);
-    return { recovered: true };
+    return { recovered: true, mode };
   },
 });

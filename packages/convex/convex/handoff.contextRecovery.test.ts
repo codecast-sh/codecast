@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { applyContextRecovery, contextRecoveryBlocker, pickLatestMessages, recoveryInput } from "./handoff";
+import { applyContextRecovery, contextRecoveryBlocker, contextRecoveryMode, pickLatestMessages, recoveryInput } from "./handoff";
 import { onFreshApiErrorPark } from "./accountSwitch";
 import { parkWalk } from "./inboxFilters";
 import { makeFakeDb } from "./testDb";
-import { composeContextRecoveryPrompt, CONTEXT_RECOVERY_COOLDOWN_MS, CONTEXT_RECOVERY_DELAY_MS } from "@codecast/shared/contracts";
+import { composeContextRebuildPrompt, composeContextRecoveryPrompt, CONTEXT_RECOVERY_COOLDOWN_MS, CONTEXT_RECOVERY_DELAY_MS } from "@codecast/shared/contracts";
 
 const USER = "users_owner";
 const CONV = "conversations_full";
@@ -31,6 +31,7 @@ function seed(extra: Record<string, unknown> = {}) {
       ...extra,
     }],
     messages: [
+      { _id: "m0", conversation_id: CONV, role: "user", content: "This session is being continued from a previous conversation that ran out of context. Summary: grow a market.", timestamp: 0 },
       { _id: "m1", conversation_id: CONV, role: "user", content: "Why has no market grown?", timestamp: 1 },
       { _id: "m2", conversation_id: CONV, role: "assistant", content: "Reading the cold engine logs.", timestamp: 2 },
       { _id: "m3", conversation_id: CONV, role: "user", content: "Also check the grading backlog.", timestamp: 3 },
@@ -45,10 +46,34 @@ function seed(extra: Record<string, unknown> = {}) {
 }
 
 describe("context recovery", () => {
-  test("restarts the same conversation fresh, with the brief as its launch prompt", async () => {
+  test("first rebuilds the same session from the server copy, prompt queued for the new pane", async () => {
     const db = seed();
     const input = await (recoveryInput as any)._handler({ db }, { conversation_id: CONV });
+    expect(input.mode).toBe("rebuild");
+
+    const prompt = composeContextRebuildPrompt({ source: input.source });
+    const ctx = { db, scheduler: { runAfter: async () => {} } };
+    const res = await (applyContextRecovery as any)._handler(ctx, { conversation_id: CONV, prompt, mode: "rebuild", parked_at: PARKED_AT });
+    expect(res).toEqual({ recovered: true, mode: "rebuild" });
+
+    const conv = await db.get(CONV as any);
+    expect(conv.pending_api_error).toBe(false);
+    expect(conv.context_recovery_mode).toBe("rebuild");
+    expect((await db.query("pending_messages").collect()).map((p: any) => p.content)).toEqual([prompt]);
+
+    const commands = await db.query("daemon_commands").collect();
+    expect(commands.map((c: any) => c.command)).toEqual(["kill_session", "resume_session"]);
+    const args = JSON.parse(commands[1].args);
+    expect(args.force_reconstitute).toBe(true);
+    expect(args.session_id).toBe("4b1c2d3e-0000-4000-8000-000000000001"); // the same session, rebuilt
+  });
+
+  test("an overflow right after a rebuild falls back to a fresh agent with the brief as its launch prompt", async () => {
+    const db = seed({ context_recovered_at: Date.now() - 60_000, context_recovery_mode: "rebuild" });
+    const input = await (recoveryInput as any)._handler({ db }, { conversation_id: CONV });
+    expect(input.mode).toBe("brief");
     expect(input.source.short_id).toBe("jx7full");
+    expect(input.last_summary).toContain("Summary: grow a market.");
     // The overflow banner and the slash command are not the work.
     expect(input.latest.map((m: any) => m.content)).toEqual([
       "Why has no market grown?",
@@ -56,16 +81,18 @@ describe("context recovery", () => {
       "Also check the grading backlog.",
     ]);
 
-    const prompt = composeContextRecoveryPrompt({ source: input.source, brief: "## Goal\n\nGrow a market.", latest: input.latest });
+    const prompt = composeContextRecoveryPrompt({ source: input.source, brief: "## Goal\n\nGrow a market.", latest: input.latest, lastSummary: input.last_summary });
+    expect(prompt).toContain("## Your last compaction summary");
     const scheduled: any[] = [];
     const ctx = { db, scheduler: { runAfter: async (...a: any[]) => { scheduled.push(a); } } };
-    const res = await (applyContextRecovery as any)._handler(ctx, { conversation_id: CONV, prompt, parked_at: PARKED_AT });
+    const res = await (applyContextRecovery as any)._handler(ctx, { conversation_id: CONV, prompt, mode: "brief", parked_at: PARKED_AT });
     expect(res.recovered).toBe(true);
 
     const conv = await db.get(CONV as any);
     expect(conv.pending_api_error).toBe(false);
     expect(conv.pending_api_error_kind).toBeUndefined();
     expect(typeof conv.context_recovered_at).toBe("number");
+    expect(conv.context_recovery_mode).toBe("brief");
 
     const pending = await db.query("pending_messages").collect();
     expect(pending.map((p: any) => p.content)).toEqual([prompt]);
@@ -89,16 +116,32 @@ describe("context recovery", () => {
     expect(await db.query("daemon_commands").collect()).toEqual([]);
   });
 
+  test("a prompt written for one rung is not applied once the rung changed", async () => {
+    const db = seed();
+    const ctx = { db, scheduler: { runAfter: async () => {} } };
+    expect((await (applyContextRecovery as any)._handler(ctx, { conversation_id: CONV, prompt: "x", mode: "brief", parked_at: PARKED_AT })).recovered).toBe(false);
+  });
+
   test("blockers: cooldown, finished, non-local agents", () => {
     const parked = { pending_api_error: true, pending_api_error_kind: "context", project_path: "/repo", agent_type: "claude_code" };
     const now = PARKED_AT;
     expect(contextRecoveryBlocker(parked, now)).toBeNull();
     expect(contextRecoveryBlocker({ ...parked, agent_type: "codex" }, now)).toBeNull();
     expect(contextRecoveryBlocker({ ...parked, context_recovered_at: now - 60_000 }, now)).toBe("recovered recently");
+    expect(contextRecoveryBlocker({ ...parked, context_recovered_at: now - 60_000, context_recovery_mode: "brief" }, now)).toBe("recovered recently");
+    expect(contextRecoveryBlocker({ ...parked, context_recovered_at: now - 60_000, context_recovery_mode: "rebuild" }, now)).toBeNull();
     expect(contextRecoveryBlocker({ ...parked, context_recovered_at: now - CONTEXT_RECOVERY_COOLDOWN_MS - 1 }, now)).toBeNull();
     expect(contextRecoveryBlocker({ ...parked, status: "completed" }, now)).not.toBeNull();
     expect(contextRecoveryBlocker({ ...parked, agent_type: "cursor" }, now)).not.toBeNull();
     expect(contextRecoveryBlocker({ ...parked, pending_api_error_kind: "limit" }, now)).not.toBeNull();
+  });
+
+  test("rungs: rebuild first, brief after a recent rebuild, brief always for an agent that cannot rebuild", () => {
+    const now = PARKED_AT;
+    expect(contextRecoveryMode({ agent_type: "claude_code" }, now)).toBe("rebuild");
+    expect(contextRecoveryMode({ agent_type: "claude_code", context_recovered_at: now - 60_000, context_recovery_mode: "rebuild" }, now)).toBe("brief");
+    expect(contextRecoveryMode({ agent_type: "claude_code", context_recovered_at: now - CONTEXT_RECOVERY_COOLDOWN_MS - 1, context_recovery_mode: "brief" }, now)).toBe("rebuild");
+    expect(contextRecoveryMode({ agent_type: "codex" }, now)).toBe("brief");
   });
 
   test("latest messages: the exchange from the third newest user turn on, oldest first", () => {

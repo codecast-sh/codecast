@@ -60,8 +60,9 @@ export function parseSessionHandoff(content: string): SessionHandoffPrompt | nul
   };
 }
 
-/** The prompt a context recovery seeds the fresh agent with
- *  (composeContextRecoveryPrompt), read back into its parts. */
+/** The prompt a context recovery queues (composeContextRecoveryPrompt for a
+ *  fresh agent, composeContextRebuildPrompt for a rebuilt transcript), read
+ *  back into its parts. */
 export interface ContextRecoveryPrompt {
   sessionId: string;
   /** Everything after the header line: the role, brief, latest messages and commands. */
@@ -72,8 +73,6 @@ export function parseContextRecovery(content: string): ContextRecoveryPrompt | n
   const text = content.trim().replace(/\r\n/g, "\n");
   const header = text.match(/^# Context recovered: ([\w-]+) · [^\n]*\n/);
   if (!header) return null;
-  const headings = headingsOutsideFences(text, /^## (Brief|Read more)$/);
-  const brief = headings.find(h => h.name === "Brief");
-  if (!brief || !headings.some(h => h.name === "Read more" && h.start > brief.end)) return null;
+  if (!headingsOutsideFences(text, /^## (Read more)$/).length) return null;
   return { sessionId: header[1], body: text.slice(header[0].length).trim() };
 }

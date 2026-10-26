@@ -135,6 +135,9 @@ export interface ContextRecoveryPromptInput {
   roleBrief?: string | null;
   /** The newest turns, oldest first, quoted exactly. */
   latest: RecoveryMessage[];
+  /** The session's own latest compaction summary, written by its model while
+   *  it still had the whole context: quoted whole, never paraphrased. */
+  lastSummary?: string | null;
 }
 
 /** A fence longer than any backtick run inside the text, so quoted content
@@ -166,6 +169,18 @@ export function composeContextRecoveryPrompt(input: ContextRecoveryPromptInput):
     lines.push("");
     lines.push(role);
   }
+  const summary = (input.lastSummary ?? "").trim();
+  if (summary) {
+    lines.push("");
+    lines.push("## Your last compaction summary");
+    lines.push("");
+    lines.push("Written by you when you last compacted. Exact; the brief below covers what came after it.");
+    lines.push("");
+    const fence = fenceFor(summary);
+    lines.push(fence);
+    lines.push(summary);
+    lines.push(fence);
+  }
   lines.push("");
   lines.push("## Brief");
   lines.push("");
@@ -184,6 +199,34 @@ export function composeContextRecoveryPrompt(input: ContextRecoveryPromptInput):
       lines.push(m.content.trim());
       lines.push(fence);
     }
+  }
+  lines.push("");
+  pushReadMore(lines, source, true);
+  return lines.join("\n") + "\n";
+}
+
+/** The prompt a recovery queues when it rebuilt the session's own transcript
+ *  from codecast (the first rung, convex handoff.applyContextRecovery): the
+ *  agent resumes on its latest compaction summary plus the newest messages
+ *  verbatim, so the prompt only says what happened and points at the rest. */
+export function composeContextRebuildPrompt(input: { source: HandoffSourceRef; roleBrief?: string | null }): string {
+  const { source } = input;
+  const lines: string[] = [];
+  lines.push(`${CONTEXT_RECOVERY_HEADING}: ${source.short_id} · ${sessionTitle(source)}`);
+  lines.push("");
+  lines.push(
+    `You are session ${source.short_id}. Your context filled up and could not be compacted, so codecast rebuilt this session ` +
+    "from codecast's copy of this conversation: your latest compaction summary when there is one, the instructions since it, " +
+    "and the newest messages verbatim (the notice at the top of the rebuilt transcript says what was kept). " +
+    "Same session, same role, same work, same people. Carry on from where the work stopped, without announcing the restart; " +
+    "the newest message from the person that has no answer yet is what you owe.",
+  );
+  const role = (input.roleBrief ?? "").trim();
+  if (role) {
+    lines.push("");
+    lines.push("## Role");
+    lines.push("");
+    lines.push(role);
   }
   lines.push("");
   pushReadMore(lines, source, true);
