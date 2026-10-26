@@ -290,6 +290,31 @@ describe("the host step from the web (org-hire.md H3, H4)", () => {
   });
 });
 
+describe("a hire's answers after the hire (org-hire.md H3)", () => {
+  beforeEach(() => { process.env.CODECAST_TEMPLATES_TEAM_ID = CODECAST; });
+  afterEach(() => { delete process.env.CODECAST_TEMPLATES_TEAM_ID; });
+  test("a changed answer on a ready instance queues the host step; the same answer queues nothing; no machine keeps the answer", async () => {
+    const db = fixtures();
+    const person = { db, auth: { getUserIdentity: async () => ({ subject: ME }) } } as any;
+    await performPublish(ctx(db), ME, { as_codecast: true, manifest: manifest(), digest: D1, status: "stable", storage_id: "st-1" as any });
+    const row = await performUpsertInstance(ctx(db), ME, { instance_key: "receipt-1", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: D1, project_id: P as any, role_id: "role-1" as any, phase: "ready", config: { "product.domain": "acme.io" } });
+    // No machine can take the step: the answer stands and the reason comes back for the page.
+    const stranded = await performAnswerInput(person, ME, { instance_key: row.instance_key, key: "product.domain", value: "acme.dev" });
+    expect(stranded.bind).toMatchObject({ error: expect.stringMatching(/Start the codecast app/) });
+    expect((await performInstanceStatus(ctx(db), ME, { instance_key: row.instance_key })).config).toMatchObject({ "product.domain": "acme.dev" });
+    await db.insert("devices", { user_id: ME, device_id: "dev-mbp", label: "MacBook", last_seen: Date.now(), local_project_roots: ["/src/acme"], platform: "darwin", provider_key_pubkey: "PUB" });
+    await db.insert("conversations", { _id: "conv-1", user_id: ME, project_path: "/src/acme", owner_device_id: "dev-mbp" } as any);
+    await db.insert("anchors", { _id: "anchor-1", host_user_id: ME, bot_user_id: ME, conversation_id: "conv-1", org_role_id: "role-1" } as any);
+    await db.patch("role-1" as any, { anchor_id: "anchor-1" });
+    const changed = await performAnswerInput(person, ME, { instance_key: row.instance_key, key: "product.domain", value: "acme.io" });
+    expect(changed.bind).toMatchObject({ device: { device_id: "dev-mbp" }, already_pending: false });
+    expect(await db.query("daemon_commands").collect()).toMatchObject([{ command: "org_template_bind", target_device_id: "dev-mbp" }]);
+    await db.patch((changed.bind as any).command_id, { executed_at: Date.now(), result: "{}" });
+    expect((await performAnswerInput(person, ME, { instance_key: row.instance_key, key: "product.domain", value: " acme.io " })).bind).toBeUndefined();
+    expect(await db.query("daemon_commands").collect()).toHaveLength(1);
+  });
+});
+
 describe("setup guides on the record, and the role hearing about a bind (org-hire.md H3, H5; org-staffing.md S25)", () => {
   beforeEach(() => { process.env.CODECAST_TEMPLATES_TEAM_ID = CODECAST; });
   afterEach(() => { delete process.env.CODECAST_TEMPLATES_TEAM_ID; });
@@ -383,12 +408,20 @@ describe("setup guides on the record, and the role hearing about a bind (org-hir
     expect(page.setup[0]).toMatchObject({ id: "search-console", title: "Verify [Domain]", how: "org/setup/search-console.md", needs: [{ key: "product.domain", label: "Domain", kind: "string" }] });
     expect(page.ask).toMatchObject({ title: "Verify [Domain]" });
     expect(page.setup[0].guide).toBeUndefined();
-    // The answer, given on the page: refused for a secret or an unknown key, then the words fill at once.
-    await expect(performAnswerInput(ctx(db), MATE, { instance_key: "key-1", key: "accounts.ads", value: "x" })).rejects.toThrow(/Not an answer this template asks for/);
-    await expect(performAnswerInput(ctx(db), MATE, { instance_key: "key-1", key: "product.domain", value: " " })).rejects.toThrow(/Domain needs a value/);
-    await performAnswerInput(ctx(db), MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io" });
+    // The answer is the person's, given on the page in the browser: a session or a terminal token is refused,
+    // since answers set what the role may spend. Then refused for a secret or an unknown key, and the words fill at once.
+    const person = { db, auth: { getUserIdentity: async () => ({ subject: MATE }) } } as any;
+    await expect(performAnswerInput(person, MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io", from_session: "jx7agent" })).rejects.toThrow(/human only/);
+    await expect(performAnswerInput(person, MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io", api_token: "tok" })).rejects.toThrow(/human only/);
+    await expect(performAnswerInput(ctx(db), MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io" })).rejects.toThrow(/human only/);
+    expect((await performInstanceStatus(ctx(db), MATE, { instance_key: "key-1" })).config?.["product.domain"]).toBeUndefined();
+    await expect(performAnswerInput(person, MATE, { instance_key: "key-1", key: "accounts.ads", value: "x" })).rejects.toThrow(/Not an answer this template asks for/);
+    await expect(performAnswerInput(person, MATE, { instance_key: "key-1", key: "product.domain", value: " " })).rejects.toThrow(/Domain needs a value/);
+    await performAnswerInput(person, MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io" });
     page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });
     expect(page.setup[0]).toMatchObject({ title: "Verify acme.io", needs: [] });
+    // The page lists every non-secret answer to change later: the definition here, the value in `config`.
+    expect(page.inputs).toEqual([{ key: "product.domain", label: "Domain", kind: "string" }]);
     expect((await performInstanceStatus(ctx(db), MATE, { instance_key: "key-1" })).config).toMatchObject({ "product.domain": "acme.io" });
     await performUpsertInstance(ctx(db), ME, bound({ "accounts.ads": 5 }));
     page = await performInstanceForRole(ctx(db), MATE, { role_id: "role-1" as any });

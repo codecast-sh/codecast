@@ -104,6 +104,26 @@ export function writeInstanceFile(dir: string, instance: string, manifest: Pick<
   return file;
 }
 
+export type InstanceDrift = { key: string; file: unknown; receipt: unknown };
+/**
+ * The values the instance file holds now that writing `config` would change:
+ * a hand edit the next bind or upgrade overwrites, since the answers (the
+ * receipt, fed from the role page) are the authority. A key the file lacks is
+ * not drift; writing only adds it.
+ */
+export function instanceFileDrift(dir: string, instance: string, manifest: Pick<OrgTemplate, "inputs" | "instance_file">, config: Record<string, string>): InstanceDrift[] {
+  const file = instanceFilePath(dir, instance, manifest);
+  if (!fs.existsSync(file)) return [];
+  const text = fs.readFileSync(file, "utf8");
+  const current = (file.endsWith(".toml") ? Bun.TOML.parse(text) : JSON.parse(text)) as Record<string, unknown>;
+  const values = nestedConfig(manifest, config);
+  return Object.keys(config).flatMap((key) => {
+    const at = (root: Record<string, unknown>) => key.split(".").reduce<unknown>((node, part) => (node && typeof node === "object" ? (node as Record<string, unknown>)[part] : undefined), root);
+    const [held, rendered] = [at(current), at(values)];
+    return held === undefined || JSON.stringify(held) === JSON.stringify(rendered) ? [] : [{ key, file: held, receipt: rendered }];
+  });
+}
+
 function deepMerge(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(over)) {

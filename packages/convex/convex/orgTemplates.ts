@@ -384,20 +384,26 @@ export async function performMarkSetup(ctx: Ctx, userId: Id<"users">, args: { in
 }
 
 /**
- * A hire's answer given after the hire, from the setup item that names it: the
- * row's answers take it, the page's words fill from it at once, and a ready
- * instance's host step is queued so the instance file on its machine has it too.
+ * A hire's answer, given or changed after the hire on the role page: the row's
+ * answers take it, the page's words fill from it at once, and a ready
+ * instance's host step is queued so the receipt and the rendered pack on its
+ * machine have it too. Answers set what the role may spend, so they are the
+ * person's alone (refuseUnlessHuman): a session holding their token is refused.
  */
-export async function performAnswerInput(ctx: Ctx, userId: Id<"users">, args: { instance_key: string; key: string; value: string }) {
+export async function performAnswerInput(ctx: Ctx, userId: Id<"users">, args: { instance_key: string; key: string; value: string; api_token?: string; from_session?: string }) {
+  await refuseUnlessHuman(ctx, args, "Hire answer");
   const { row, manifest } = await instanceFor(ctx, userId, args.instance_key);
   const input = (manifest.inputs ?? []).find((i) => i.key === args.key);
   if (!input || input.kind === "secret") throw new Error(`Not an answer this template asks for: ${args.key}`);
   const value = args.value.trim();
   const problem = answerProblem(input, value);
   if (problem) throw new Error(problem);
+  if (row.config?.[args.key] === value) return { key: args.key, value };
   await ctx.db.patch(row._id, { config: { ...(row.config ?? {}), [args.key]: value }, updated_at: Date.now() });
-  if (row.phase === "ready") await enqueueBind(ctx, userId, { ...row, config: { ...(row.config ?? {}), [args.key]: value } });
-  return { key: args.key, value };
+  if (row.phase !== "ready") return { key: args.key, value };
+  // The answer stands even when no machine can take the host step now; the next bind or upgrade carries it.
+  const bind = await enqueueBind(ctx, userId, { ...row, config: { ...(row.config ?? {}), [args.key]: value } }).catch((e: Error) => ({ error: e.message }));
+  return { key: args.key, value, bind };
 }
 
 /** What the role page and `status` show: the row, its setup rows, the one open ask, readiness per routine. */
@@ -428,12 +434,14 @@ export async function performInstanceForRole(ctx: Ctx, userId: Id<"users">, args
   const pinned = releaseOf(template, row)?.manifest as OrgTemplate | undefined;
   const routines = await routineRows(ctx, row, pinned);
   const secrets = (pinned?.inputs ?? []).filter((i) => i.kind === "secret").map((i) => ({ key: i.key, label: i.label, bound: !!row.bindings?.[i.key] }));
+  // The hire's answers stay the person's to change on the page: each input's definition here, its value in `config`.
+  const inputs = (pinned?.inputs ?? []).filter((i) => i.kind !== "secret").map((i) => ({ key: i.key, label: i.label, kind: i.kind, ...(i.choices ? { choices: i.choices } : {}) }));
   const scoreboard = (pinned?.scoreboard ?? []).map((k) => ({ ...k, ...(row.scoreboard?.[k.key] ?? {}) }));
   // The host step from the web (H3): the machine it would run on and how the
   // last request went, so the page shows one button and its progress.
   const bind_host = await bindHostOf(ctx, userId, row);
   const host_step = await hostStepOf(ctx, row);
-  return { ...status, routines, secrets, scoreboard, bind_host: { device: bind_host.device, dir: bind_host.dir, reason: bind_host.reason }, host_step, tools: pinned?.tools ?? [], template: template ? { name: template.name, avatar: template.avatar, workspace: template.workspace, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, ...updateFields(template, row) };
+  return { ...status, routines, secrets, inputs, scoreboard, bind_host: { device: bind_host.device, dir: bind_host.dir, reason: bind_host.reason }, host_step, tools: pinned?.tools ?? [], template: template ? { name: template.name, avatar: template.avatar, workspace: template.workspace, latest_stable: latest, changelog: template.releases.find((r: any) => r.version === latest)?.changelog } : null, ...updateFields(template, row) };
 }
 /**
  * The Update card's data (sd-424: every change waits for a person's click):
@@ -743,8 +751,8 @@ export const report = mutation({
   handler: async (ctx, { api_token, ...args }) => performRecordScores(ctx, await requireCaller(ctx, api_token), args),
 });
 export const answer = mutation({
-  args: { api_token: v.optional(v.string()), instance_key: v.string(), key: v.string(), value: v.string() },
-  handler: async (ctx, { api_token, ...args }) => performAnswerInput(ctx, await requireCaller(ctx, api_token), args),
+  args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), instance_key: v.string(), key: v.string(), value: v.string() },
+  handler: async (ctx, args) => performAnswerInput(ctx, await requireCaller(ctx, args.api_token), args),
 });
 export const setup = mutation({
   args: { api_token: v.optional(v.string()), instance_key: v.string(), id: v.string(), status: v.string(), evidence: v.optional(v.string()), from_agent: v.optional(v.boolean()) },

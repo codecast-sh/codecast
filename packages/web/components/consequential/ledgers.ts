@@ -346,6 +346,23 @@ export function routineActivateLedger(r: { title: string; every: string; applies
   };
 }
 
+/** A money answer of a template hire raised after the hire (org-hire.md H3): the role may spend more once its machine has it. */
+export function answerRaiseLedger(r: { label: string; from: number; to: number; role: string; machine?: string | null }): SwitchLedger {
+  return {
+    name: `Raise ${r.label}`,
+    subject: r.role,
+    shift: [usd(r.from), usd(r.to)],
+    figures: [{ value: usd(r.to), label: r.label, tone: "warn" }, { value: `+${usd(r.to - r.from)}`, label: "more than now", tone: "warn" }],
+    rows: [
+      { k: "Spent by", v: r.role },
+      { k: "Applies", v: r.machine ? `Next host step · ${r.machine}` : "Next host step" },
+    ],
+    stop: `Lower it here`,
+    confirm: `Raise to ${usd(r.to)}`,
+    keep: `Keep ${usd(r.from)}`,
+  };
+}
+
 /** A selection of sessions ended, some of them mid-turn. */
 export function killSessionsLedger(r: { total: number; working: string[] }): SwitchLedger {
   const w = r.working.length;

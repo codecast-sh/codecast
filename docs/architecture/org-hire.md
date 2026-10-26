@@ -223,6 +223,21 @@ the server's answers, creates the routines paused (H8), binds secret inputs
 The web never asks for paths; the host step confirms the checkout it runs in,
 as install does today.
 
+**The answers stay the person's after the hire.** The role page lists every
+non-secret answer with its value, and a person who may edit the role changes
+any of them there (`orgTemplates.answer`). Only a person in the browser can:
+an agent session or an api token is refused (`refuseUnlessHuman`), because
+answers like the budget set what the role may spend, and raising a money answer
+goes through the consequential review. A changed answer on a ready instance
+queues the host step on its machine. Bind and upgrade read the server's
+answers into the receipt first (`pullSetupMarks`) and render the instance file
+from the receipt, so the receipt is the authority and every upgrade renders
+from the person's current answers. A value edited by hand in the instance file
+does not survive the next bind. The upgrade preview (`cast org template
+upgrade` without `--apply`) lists each instance file value that differs from
+what the receipt would write (`drift`), so the overwrite is seen before it
+happens. The fix for such a value is to change the answer on the page.
+
 `cast org template install <folder|template> …` remains the shell form of the
 same flow: it posts the same proposal from the terminal and prints the
 decision to answer.
@@ -541,8 +556,10 @@ template learn status`, and when a draft is due (three open lessons, or one
 older than two weeks) folds the open lessons into the folder, bumps the
 version, writes the changelog, validates (`cast org template inspect`, the
 pack's tests), publishes as canary, marks the lessons accepted and moves the
-canary instances (`learn rollout`). When the canary is clean it publishes the
-same version as stable and marks the lessons released. A lesson that would
+canary instances (`learn rollout`). When the canary is clean `learn promote`
+marks that published release stable (its own manifest and digest, so a newer
+draft already in the folder stays out of it), and the run marks the lessons
+released. A lesson that would
 widen an authority, a cap or a tool is never folded in (H9); it stays open for
 a person.
 

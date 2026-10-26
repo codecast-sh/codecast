@@ -1492,7 +1492,11 @@ export function createOrgSlice(): OrgSliceImpl {
     resetOrg: asyncAction(function (this: OrgDraft, _teamId?: string) {}),
     provisionOrgRole: asyncAction(function (this: OrgDraft, _roleId: string) {}),
     markOrgTemplateSetup: asyncAction(function (this: OrgDraft, _instanceKey: string, _id: string, _status: "done" | "open" | "skipped") {}),
-    answerOrgTemplateInput: asyncAction(function (this: OrgDraft, _instanceKey: string, _key: string, _value: string) {}),
+    // The answer shows on the role page at once; the server echo retires the lock.
+    answerOrgTemplateInput: asyncAction(function (this: OrgDraft & { orgTemplateInstances?: Record<string, any> }, instanceKey: string, key: string, value: string) {
+      const row = Object.values(this.orgTemplateInstances ?? {}).find((r) => r?.instance_key === instanceKey);
+      if (row) row.config = { ...(row.config ?? {}), [key]: value.trim() };
+    }),
     activateOrgTemplateRoutine: asyncAction(function (this: OrgDraft, _taskId: string) {}),
     requestOrgTemplateBind: asyncAction(function (this: OrgDraft, _instanceKey: string, _secrets: Parameters<OrgServerVerbs<void>["requestOrgTemplateBind"]>[1], _deviceId?: string) {}),
     setOrgTemplateLearning: asyncAction(function (this: OrgDraft, _teamId: string | undefined, _enabled: boolean) {}),

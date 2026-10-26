@@ -9,7 +9,7 @@ import type { OrgInitDeps } from "./orgInit.js";
 import { acquireFileLock } from "./lockFile.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
 import { answerProblem, artifactFromSnapshot, atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, intervalMs, noSymlink, readArtifact, releaseRoot, snapshotArtifact, templateLoaderPrompt, templateRoleFields, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
-import { writeInstanceFile } from "./orgTemplateInstance.js";
+import { DEFAULT_INSTANCE_FILE, instanceFileDrift, writeInstanceFile } from "./orgTemplateInstance.js";
 import { fill, quoteTemplateArg, receiptPath, setupText, setupWords, toolsBlock } from "./orgTemplateText.js";
 export { quoteTemplateArg, receiptPath };
 import { markSetup, nextHumanAsk, readiness, readinessHeader, recordEvidence, recordScores, setupRows, type InstanceState } from "./orgTemplateState.js";
@@ -415,17 +415,26 @@ export async function bindTemplate(deps: OrgInitDeps, instance: string, options:
       }
       receipt.ledgers[ledger.id] = { taskId: row._id ?? row.id, shortId: row.short_id };
     }
-    // The instance file carries the answers, the bound secret paths (paths,
-    // never contents) and the ledger ids, for the release's own scripts.
-    const config: Record<string, string> = { ...(receipt.config ?? {}), ...paths };
-    const ledgerInputs = Object.fromEntries(Object.entries(receipt.ledgers).map(([id, l]) => [`ledgers.${id}`, l.shortId]));
-    const file = writeInstanceFile(dir, instance, { inputs: [...(manifest.inputs ?? []), ...Object.keys(ledgerInputs).map((key) => ({ key, label: key, kind: "string" as const }))], instance_file: manifest.instance_file }, { ...config, ...ledgerInputs });
+    const rendered = instanceFileOf(manifest, receipt, paths);
+    const file = writeInstanceFile(dir, instance, rendered.shape, rendered.config);
     await registerInstance(deps, receipt, artifact, options);
     await armReadyRoutines(deps, receipt, tree);
     return { ...receipt, instanceFile: file } as TemplateReceipt & { instanceFile: string };
   });
 }
 
+/**
+ * What the host step writes into the instance file: the answers, the secret
+ * paths bound in this run (paths, never contents) and the ledger ids, for the
+ * release's own scripts. The upgrade preview reads the same to name drift.
+ */
+function instanceFileOf(manifest: OrgTemplate, receipt: TemplateReceipt, paths: Record<string, string> = {}) {
+  const ledgerInputs = Object.fromEntries(Object.entries(receipt.ledgers ?? {}).map(([id, l]) => [`ledgers.${id}`, l.shortId]));
+  return {
+    shape: { inputs: [...(manifest.inputs ?? []), ...Object.keys(ledgerInputs).map((key) => ({ key, label: key, kind: "string" as const }))], instance_file: manifest.instance_file },
+    config: { ...(receipt.config ?? {}), ...paths, ...ledgerInputs } as Record<string, string>,
+  };
+}
 
 /**
  * The server row is the record the web reads (org-hire.md H1); the receipt
@@ -658,6 +667,7 @@ export async function learnPass(deps: OrgInitDeps, template: string): Promise<Pa
 export const learnStatus = (deps: OrgInitDeps, template: string) => request(deps, "/cli/org/template/learn/status", { template_id: template });
 export const learnDue = (deps: OrgInitDeps) => request(deps, "/cli/org/template/learn/due", {});
 export const learnRollout = (deps: OrgInitDeps, template: string) => request(deps, "/cli/org/template/learn/rollout", { template_id: template });
+export const learnPromote = (deps: OrgInitDeps, template: string) => request(deps, "/cli/org/template/learn/promote", { template_id: template });
 
 export type PublishOptions = { team?: string; personal?: boolean; codecast?: boolean; status?: string; changelog?: string; reviewProject?: string; dryRun?: boolean };
 /** Who publishes: Codecast, else the workspace the options name. Publish, yank and retire send the same. */
@@ -1063,7 +1073,13 @@ export async function upgradeTemplate(deps: OrgInitDeps, instance: string, sourc
       changed: [...next.files.keys()].filter((name) => before.files.has(name) && (!before.files.get(name)!.equals(next.files.get(name)!) || before.executable.has(name) !== next.executable.has(name))),
     };
     const sharedCharterChanged = before.manifest.role.charter !== next.manifest.role.charter || !before.files.get(before.manifest.role.charter)!.equals(next.files.get(next.manifest.role.charter)!);
-    const preview = { changedFiles, sharedCharterChanged, cadenceOverrides, warnings: tree.templateWarnings, from: receipt.template, to: { id: next.manifest.id, version: next.manifest.version, hash: next.hash }, added: added.map((r) => r.id), removed: removed.map((r) => r.id), cadenceChanged: cadenceChanged.map((r) => r.id), roleChanges: JSON.stringify(before.manifest.role) !== JSON.stringify(next.manifest.role), applied: false };
+    // Answers changed on the role page reach the receipt first, then the
+    // preview names every instance file value the host step will overwrite
+    // from them (a hand edit to the pack), before anything is applied.
+    await pullSetupMarks(deps, receipt);
+    const rendered = instanceFileOf(next.manifest, receipt);
+    const drift = { file: rendered.shape.instance_file ?? DEFAULT_INSTANCE_FILE(instance), values: instanceFileDrift(receipt.project.dir, instance, rendered.shape, rendered.config) };
+    const preview = { drift, changedFiles, sharedCharterChanged, cadenceOverrides, warnings: tree.templateWarnings, from: receipt.template, to: { id: next.manifest.id, version: next.manifest.version, hash: next.hash }, added: added.map((r) => r.id), removed: removed.map((r) => r.id), cadenceChanged: cadenceChanged.map((r) => r.id), roleChanges: JSON.stringify(before.manifest.role) !== JSON.stringify(next.manifest.role), applied: false };
     if (!options.apply) return preview;
     if (next.hash === receipt.template.hash) return { ...preview, applied: true, unchanged: true, receipt };
     if (next.manifest.role.handle !== before.manifest.role.handle || next.manifest.role.name !== before.manifest.role.name || next.manifest.role.line !== before.manifest.role.line) throw new Error("Upgrade cannot alter role identity or the line it runs; use a separate human org decision");

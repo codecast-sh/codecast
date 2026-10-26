@@ -963,6 +963,41 @@ describe("the host step for a hire accepted on the web (org-hire.md H1, H3)", ()
     expect((await bindTemplate(server.deps, "acme-growth", { ...options, to: "2.0.0" })).template.hash).toBe(first.digest);
     await expect(bindTemplate(server.deps, "nothing", { ...options, to: "2.0.0" })).rejects.toThrow(/No instance nothing/);
   });
+  test("an answer changed on the role page reaches the pack on the next bind; the upgrade preview names pack values the receipt would overwrite", async () => {
+    const m = hired();
+    m.inputs.push({ key: "budget.ads_daily_usd", label: "Ads per day", kind: "money", required: true });
+    const source = folder(m);
+    const server = new Server(tmp());
+    const options: TemplateOptions = { dir: server.dir, project: "project-1", team: "team-1" };
+    const pack = path.join(server.dir, ".codecast/packs/growth.toml");
+    const first: any = await publishTemplate(server.deps, source, { team: "team-1", status: "stable" });
+    server.roles.push({ _id: "role-1", short_id: "or-1", handle: "acme-cmo", name: "CMO", scope: { project_ids: ["project-1"], plan_ids: [] }, trust: "understand", status: "active" });
+    server.instances.push({ _id: "inst-1", instance_key: "pending:project-1:acme-growth", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: first.digest, project_id: "project-1", role_id: "role-1", phase: "awaiting_host", update_policy: "stable", config: { "product.slug": "acme", "budget.ads_daily_usd": "10" }, workspace: "team:team-1" });
+    await bindTemplate(server.deps, "acme-growth", options);
+    expect(Bun.TOML.parse(fs.readFileSync(pack, "utf8"))).toMatchObject({ budget: { ads_daily_usd: 10 } });
+    // A hand edit to the pack, as the role made after the person raised the budget in a task.
+    fs.writeFileSync(pack, fs.readFileSync(pack, "utf8").replace("ads_daily_usd = 10", "ads_daily_usd = 20   # raised Oct 16"));
+    fs.writeFileSync(path.join(source, "org/ads.md"), "Run ads, next release.");
+    const next = JSON.parse(fs.readFileSync(path.join(source, "org-template.json"), "utf8")); next.version = "2.0.1"; fs.writeFileSync(path.join(source, "org-template.json"), JSON.stringify(next));
+    const second: any = await publishTemplate(server.deps, source, { team: "team-1", status: "stable" });
+    // The preview names the value the upgrade's host step would overwrite, and changes nothing.
+    const preview = await upgradeTemplate(server.deps, "acme-growth", source, options);
+    expect(preview.drift).toEqual({ file: ".codecast/packs/growth.toml", values: [{ key: "budget.ads_daily_usd", file: 20, receipt: 10 }] });
+    expect(fs.readFileSync(pack, "utf8")).toContain("ads_daily_usd = 20");
+    // Applied without a changed answer, the receipt is the authority: the pack goes back to 10.
+    server.instances[0].pending_upgrade = { to: "2.0.1", digest: second.digest };
+    expect((await bindTemplate(server.deps, "acme-growth", options)).template.version).toBe("2.0.1");
+    expect(fs.readFileSync(pack, "utf8")).toContain("ads_daily_usd = 10   # raised Oct 16");
+    // The person changes the answer on the role page (orgTemplates.answer patches the row and queues this bind):
+    // the bind pulls it into the receipt and the pack, and the preview has nothing left to name.
+    delete server.instances[0].pending_upgrade;
+    server.instances[0].config = { ...server.instances[0].config, "budget.ads_daily_usd": "20" };
+    const rebound = await bindTemplate(server.deps, "acme-growth", options);
+    expect(rebound.config).toMatchObject({ "budget.ads_daily_usd": "20" });
+    expect(readReceipt(server.dir, "acme-growth").config).toMatchObject({ "budget.ads_daily_usd": "20" });
+    expect(fs.readFileSync(pack, "utf8")).toContain("ads_daily_usd = 20   # raised Oct 16");
+    expect((await upgradeTemplate(server.deps, "acme-growth", source, options)).drift.values).toEqual([]);
+  });
   test("lessons are listed for an instance or a template, judged by the publisher; the opt-in is read and set; the pass asks again while instances remain", async () => {
     const f = await ready();
     await bindTemplate(f.server.deps, "product", f.options);

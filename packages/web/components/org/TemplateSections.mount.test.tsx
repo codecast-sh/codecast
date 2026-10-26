@@ -40,6 +40,9 @@ async function verifyTemplateSections() {
     // The host step from the web (H3): the machine that runs the role, and how the last request went.
     bind_host: { device: { device_id: "dev-mbp", label: "MacBook", online: true, can_receive_secrets: true, pubkey: "PUB" }, dir: "/src/acme", reason: null },
     host_step: { state: "idle" },
+    // The hire's answers: each input's definition, its value in `config`.
+    inputs: [{ key: "product.domain", label: "Apex domain", kind: "string" }, { key: "budget.ads_daily_usd", label: "Ads per day", kind: "money" }, { key: "voice", label: "Voice", kind: "choice", choices: ["plain", "playful"] }],
+    config: { "budget.ads_daily_usd": "10", voice: "plain" },
   };
   let shown: any = instance;
   mock.module("../../hooks/useTemplateHire", () => ({
@@ -74,6 +77,39 @@ async function verifyTemplateSections() {
   });
   await act(async () => answerForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   assert.deepEqual(answered, [["key-1", "product.domain", "acme.io"]]);
+  // Every answer is a row a person can change after the hire; a blank one says so.
+  const rowText = (key: string) => document.querySelector(`[data-template-answer-row="${key}"]`)!.textContent;
+  assert.match(rowText("product.domain")!, /Apex domain.*not set.*Set/);
+  assert.match(rowText("budget.ads_daily_usd")!, /Ads per day\$10Edit/);
+  const editAnswer = async (key: string, value: string) => {
+    await act(async () => document.querySelector<HTMLButtonElement>(`[data-template-answer-edit="${key}"]`)!.click());
+    const form = document.querySelector<HTMLFormElement>(`[data-template-answer-row="${key}"] form`)!;
+    const field = form.querySelector<HTMLInputElement | HTMLSelectElement>("input, select")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(field instanceof HTMLInputElement ? HTMLInputElement.prototype : (dom.window as any).HTMLSelectElement.prototype, "value")!.set!.call(field, value);
+      field.dispatchEvent(new Event(field instanceof HTMLInputElement ? "input" : "change", { bubbles: true }));
+    });
+    await act(async () => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  };
+  await editAnswer("voice", "playful");
+  assert.deepEqual(answered.at(-1), ["key-1", "voice", "playful"]);
+  // A number that is not one is refused in place, never sent.
+  await editAnswer("budget.ads_daily_usd", "twenty");
+  assert.equal(answered.length, 2);
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-template-answer-row="budget.ads_daily_usd"] form button[type="button"]')!.click());
+  // Raising a money answer opens the review first; only its confirm sends it.
+  await editAnswer("budget.ads_daily_usd", "20");
+  assert.equal(answered.length, 2);
+  const review = document.querySelector('[data-switch-review="Raise Ads per day"]')!;
+  assert.ok(review, "a raise opens the review");
+  assert.match(review.textContent!, /\$10.*\$20/);
+  const confirm = review.querySelector<HTMLButtonElement>("[data-switch-confirm]")!;
+  assert.equal(confirm.title, "Raise to $20");
+  await act(async () => confirm.click());
+  assert.deepEqual(answered.at(-1), ["key-1", "budget.ads_daily_usd", "20"]);
+  // Lowering it is one press.
+  await editAnswer("budget.ads_daily_usd", "5");
+  assert.deepEqual(answered.at(-1), ["key-1", "budget.ads_daily_usd", "5"]);
   // The tools it ships, by name, and whose copy of the template it runs.
   assert.deepEqual([...document.querySelectorAll("[data-template-tools] span[title], [data-template-tools] span:not(:first-child)")].map((el) => el.textContent), ["gads", "ads-daily"]);
   assert.match(text, /From Codecast's library/);

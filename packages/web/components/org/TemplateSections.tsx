@@ -1,7 +1,8 @@
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
 import { routineState } from "@codecast/shared/contracts/orgTemplateReadiness";
 import type { SetupNeed } from "@codecast/shared/contracts/orgTemplateState";
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { answerProblem } from "@codecast/shared/contracts/orgTemplateManifest";
+import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { captureException } from "@sentry/react";
 import { ChevronRight, Loader2, Lock } from "lucide-react";
@@ -14,8 +15,8 @@ import { buildUpgradeSpec } from "./orgTemplateSpec";
 import { releasesBehindLabel, updateCard, type UpdateCard } from "./templateUpdate";
 import { LEARNING_OPT_IN_LABEL, LEARNING_OPT_IN_SENTENCE } from "@codecast/shared/contracts/orgTemplateLearning";
 import { Button } from "../ui/button";
-import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
-import { routineActivateLedger } from "../consequential/ledgers";
+import { ConsequentialSwitch, SwitchReview } from "../consequential/ConsequentialSwitch";
+import { answerRaiseLedger, routineActivateLedger } from "../consequential/ledgers";
 import { Switch } from "../ui/switch";
 
 // A template role's right column, under its project card (docs/architecture/
@@ -51,6 +52,8 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
   const [error, setError] = useState<string | null>(null);
   // Which guides a person opened or closed; the one open ask starts open.
   const [guides, setGuides] = useState<Record<string, boolean>>({});
+  // A money answer raised on the page, held for the review before it is sent.
+  const [raise, setRaise] = useState<{ need: SetupNeed; from: number; to: string } | null>(null);
   if (!instance) return null;
   const act = async (key: string, run: () => Promise<unknown>) => {
     setBusy(key); setError(null);
@@ -64,6 +67,15 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
   const readiness = instance.readiness ?? {};
   const card = updateCard(instance);
   const behind = releasesBehindLabel(instance.releases_behind);
+  const config = (instance.config ?? {}) as Record<string, string>;
+  const inputs = (instance.inputs ?? []) as SetupNeed[];
+  const answerTo = (key: string, value: string) => void act(`answer:${key}`, () => answer(instance.instance_key, key, value));
+  // Raising a money answer lets the role spend more, so it goes through the review; lowering it or any other answer is one press.
+  const saveAnswer = (need: SetupNeed, value: string) => {
+    const from = Number(config[need.key]);
+    if (need.kind === "money" && config[need.key] && Number(value) > from) setRaise({ need, from, to: value });
+    else answerTo(need.key, value);
+  };
   const age = (at?: number) => at ? `${Math.max(1, Math.round((now - at) / 3_600_000))}h ago` : "";
   return (
     <div data-scope-template={instance.instance}>
@@ -97,7 +109,7 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
                       </span>
                     )}
                   </div>
-                  {canEdit && s.status === "open" && (s.needs ?? []).map((n: SetupNeed) => <AnswerField key={n.key} need={n} busy={busy === `answer:${n.key}`} onSave={(value) => void act(`answer:${n.key}`, () => answer(instance.instance_key, n.key, value))} />)}
+                  {canEdit && s.status === "open" && (s.needs ?? []).map((n: SetupNeed) => <AnswerField key={n.key} need={n} busy={busy === `answer:${n.key}`} onSave={(value) => saveAnswer(n, value)} />)}
                   {shown && (
                     <div className="mb-1.5 mt-1 rounded-lg border border-sol-border/50 bg-sol-bg-alt/60 px-2.5 py-2" data-template-guide={s.id}>
                       {s.guide
@@ -111,6 +123,20 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
           </ul>
           {open.length === 0 && <p className="px-2.5 pb-1 text-[12px] text-sol-text-dim">{setup.some((s) => s.status === "skipped") ? "Nothing is left open. A skipped step can be reopened." : "Every setup step is done."}</p>}
         </Part>
+      )}
+      {inputs.length > 0 && (
+        <Part sheet={inSheet} label="Answers" name="template-answers">
+          <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px]">
+            {inputs.map((n) => <AnswerRow key={n.key} need={n} value={config[n.key]} canEdit={canEdit} busy={busy === `answer:${n.key}`} onSave={(value) => saveAnswer(n, value)} />)}
+          </ul>
+        </Part>
+      )}
+      {raise && (
+        <SwitchReview
+          ledger={answerRaiseLedger({ label: raise.need.label, from: raise.from, to: Number(raise.to), role: instance.handle ? `@${instance.handle}` : instance.instance, machine: instance.host?.machine })}
+          onClose={() => setRaise(null)}
+          onConfirm={() => { setRaise(null); answerTo(raise.need.key, raise.to); }}
+        />
       )}
       <Part sheet={inSheet} label="What it may do" name="template-authority">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
@@ -321,17 +347,33 @@ function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: bool
   );
 }
 
-/** An answer the hire left blank, asked where the step that needs it is: one field and Save. */
-function AnswerField({ need, busy, onSave }: { need: SetupNeed; busy: boolean; onSave: (value: string) => void }) {
-  const [value, setValue] = useState("");
-  const field = "h-7 min-w-0 flex-1 rounded-md border border-sol-border/50 bg-sol-bg-alt px-2 text-[12px] text-sol-text outline-none focus:border-sol-cyan";
+/** One answer of the hire: its label and value, and Edit for a person who may change it. */
+function AnswerRow({ need, value, canEdit, busy, onSave }: { need: SetupNeed; value: string | undefined; canEdit: boolean; busy: boolean; onSave: (value: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  if (editing) return <li data-template-answer-row={need.key}><AnswerField need={need} initial={value ?? ""} busy={busy} onCancel={() => setEditing(false)} onSave={(next) => { setEditing(false); if (next !== value) onSave(next); }} /></li>;
   return (
-    <form className="mt-1 flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); if (value.trim()) onSave(value.trim()); }} data-template-answer={need.key}>
+    <li className="flex items-baseline gap-2" data-template-answer-row={need.key}>
+      <span className="w-2/5 shrink-0 truncate text-sol-text-muted" title={need.key}>{need.label}</span>
+      <span className={`min-w-0 flex-1 truncate tabular-nums ${value ? "text-sol-text" : "text-sol-yellow"}`} title={value}>{value ? (need.kind === "money" ? `$${value}` : value) : "not set"}</span>
+      {canEdit && <button type="button" disabled={busy} onClick={() => setEditing(true)} className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-sol-cyan hover:bg-sol-bg-highlight disabled:opacity-50" data-template-answer-edit={need.key}>{value ? "Edit" : "Set"}</button>}
+    </li>
+  );
+}
+
+/** An answer asked for in place: where a setup step needs a blank one, or an answer being changed. One field and Save. */
+function AnswerField({ need, initial = "", busy, onSave, onCancel }: { need: SetupNeed; initial?: string; busy: boolean; onSave: (value: string) => void; onCancel?: () => void }) {
+  const [value, setValue] = useState(initial);
+  const problem = value.trim() ? answerProblem({ ...need, required: true }, value.trim()) : null;
+  const field = `h-7 min-w-0 flex-1 rounded-md border bg-sol-bg-alt px-2 text-[12px] text-sol-text outline-none focus:border-sol-cyan ${problem ? "border-sol-red/60" : "border-sol-border/50"}`;
+  const keys = (e: KeyboardEvent) => { if (e.key === "Escape" && onCancel) { e.preventDefault(); onCancel(); } };
+  return (
+    <form className="mt-1 flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); if (value.trim() && !problem) onSave(value.trim()); }} data-template-answer={need.key}>
       <span className="shrink-0 text-sol-text-muted">{need.label}</span>
       {need.kind === "choice"
-        ? <select value={value} onChange={(e) => setValue(e.target.value)} className={field}><option value="" />{(need.choices ?? []).map((c) => <option key={c} value={c}>{c}</option>)}</select>
-        : <input value={value} onChange={(e) => setValue(e.target.value)} inputMode={need.kind === "number" || need.kind === "money" ? "decimal" : undefined} className={field} spellCheck={false} aria-label={need.label} />}
-      <button type="submit" disabled={busy || !value.trim()} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50">Save</button>
+        ? <select value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={keys} autoFocus={!!onCancel} className={field}><option value="" />{(need.choices ?? []).map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        : <input value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={keys} autoFocus={!!onCancel} inputMode={need.kind === "number" || need.kind === "money" ? "decimal" : undefined} className={field} spellCheck={false} aria-label={need.label} aria-invalid={!!problem} title={problem ?? undefined} />}
+      <button type="submit" disabled={busy || !value.trim() || !!problem} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50">Save</button>
+      {onCancel && <button type="button" onClick={onCancel} className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-sol-text-muted hover:bg-sol-bg-highlight">Cancel</button>}
     </form>
   );
 }

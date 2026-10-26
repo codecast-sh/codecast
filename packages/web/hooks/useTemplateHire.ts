@@ -4,7 +4,11 @@
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useCallback } from "react";
+import { fnv1a32 } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useSyncCollection } from "./useSyncCollection";
+import { useCollectionRows } from "./useCollectionRows";
 import { useInboxStore } from "../store/inboxStore";
 import { visibleCatalog, type CatalogTemplate } from "../components/org/templateCatalog";
 
@@ -28,14 +32,24 @@ export function useTemplateCatalog(teamId: string | undefined) {
   return { templates: visibleCatalog((data ?? []) as CatalogTemplate[]), ready: data !== undefined, error };
 }
 
-/** The instance a role was hired as, with its record and readiness; null for an ordinary role. */
+/** A digest of the whole row: its enriched fields are nested objects the store's identity reuse does not compare. */
+const stampRev = (row: any) => (row ? [{ ...row, rev: fnv1a32(JSON.stringify(row)) }] : []);
+// The rows' wake signature: the digest, and `config`, which an optimistic answer changes without changing `rev`.
+const instanceSig = (row: any) => `${row.rev}:${JSON.stringify(row.config ?? {})}`;
+
+/** The instance a role was hired as, with its record and readiness, from the store; null for an ordinary role. */
 export function useTemplateInstance(roleId: string | undefined) {
-  const { data, error } = useQueryNoThrow(api.orgTemplates.instanceForRole, roleId ? { role_id: roleId as Id<"org_roles"> } : "skip");
+  const { ready, error } = useSyncCollection("orgTemplateInstances", api.orgTemplates.instanceForRole, roleId ? { role_id: roleId as Id<"org_roles"> } : "skip", { select: stampRev });
+  const where = useCallback((row: any) => row.role_id === roleId, [roleId]);
+  const rows = useCollectionRows<any>("orgTemplateInstances", { where, sig: instanceSig });
   const fx = fixture();
   // A fixture instance stands in only for the role it names (`role_id`): one
   // left in localStorage would otherwise dress every role as a template hire.
   if (fx && "instance" in fx && fx.instance?.role_id === roleId) return { instance: fx.instance as any, ready: true, error: undefined };
-  return { instance: data as any, ready: data !== undefined, error };
+  // The role's live instance, newest first, as the server picks; a retired one only while it has no other.
+  const newest = [...rows].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  const instance = newest.find((r) => r.phase !== "retired") ?? newest[0] ?? null;
+  return { instance, ready: ready || rows.length > 0, error };
 }
 
 /** The workspace's choice to let Codecast learn from its template roles (H12): its state and whether this person may change it. */

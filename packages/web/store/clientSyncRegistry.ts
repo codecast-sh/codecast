@@ -271,6 +271,20 @@ export const CLIENT_SYNC_REGISTRY = {
       return rest;
     },
   },
+  // A template role's instance (org-hire.md H11) as the role page reads it
+  // (orgTemplates.instanceForRole), one row per role viewed. Delta: each role
+  // page feeds its own row. localFirst: a hire answer changed on the page
+  // lands on the draft's `config` (answerOrgTemplateInput) and the echo
+  // retires the lock. Most of the row is nested objects the identity reuse
+  // skips, so the feeder stamps `rev`, a digest of the whole row.
+  orgTemplateInstances: {
+    persistence: { kind: "collection", key: "orgTemplateInstances" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    sync: { isDelta: true },
+    feeds: ["orgTemplates.instanceForRole"],
+    writtenBy: ["orgTemplates"],
+  },
   // The decision queue (cast decide). Answering is local-first: the action
   // flips status on the draft and the resolution fields ride the generic
   // patch rail to the session_decisions table. Everything structural
@@ -1940,6 +1954,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   decisionStacks: "shared",
   handledDecisions: "shared",
   decisionDetails: "shared",
+  orgTemplateInstances: "shared",
   decisionDiscussions: "shared",
   taskEvidence: "shared",
   projectExpectations: "shared",
