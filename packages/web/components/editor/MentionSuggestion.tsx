@@ -10,7 +10,7 @@ import { agentDisplayName, deriveLiveAt, modelDisplayLabel } from "@codecast/sha
 import { liveFactsOf } from "../../lib/liveness";
 import { SessionFace } from "../identity";
 import { identityLine, identityRowOf, sessionIdentity } from "../../lib/sessionIdentity";
-import { usePersonifyAll } from "../../hooks/usePersonifyAll";
+import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
 
 const TYPES = {
   session: { icon: MessageSquare, label: "Session", color: "text-sol-blue" },
@@ -74,10 +74,10 @@ function useLiveMention(item: SuggestionItem) {
   // face in place of the session glyph, its name first, and the title demoted
   // to the detail (session-characters.md S3). A session nobody personified
   // reads exactly as it did before.
-  const personifyAll = usePersonifyAll();
+  const prefs = useIdentityPrefs();
   const identityRow = current.type === "session" ? current.identity ?? null : null;
-  const persona = identityRow && sessionIdentity(identityRow, personifyAll).kind !== "plain"
-    ? identityLine(identityRow, current.label, personifyAll)
+  const persona = identityRow && sessionIdentity(identityRow, prefs).kind !== "plain"
+    ? identityLine(identityRow, current.label, prefs)
     : null;
   const status = current.type === "person" || (current.type === "session" && liveJson === "{}") ? undefined : current.status;
 

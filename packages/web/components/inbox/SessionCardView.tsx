@@ -25,9 +25,9 @@ import { cleanUserMessage } from "../sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { AnchorScopePill, HeadOfPeopleFace } from "../anchor/AnchorIdentity";
 import { IdentityFace, SessionIdentityLine } from "../identity";
-import { sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
+import { sessionIdentity, type IdentityPrefs, type IdentityRow } from "../../lib/sessionIdentity";
 import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
-import { RoleAvatar } from "../org/avatars";
+import { RoleFace } from "../org/RoleFace";
 import type { AnchorIdentity } from "../../hooks/useSyncAnchors";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { BranchCodeLink } from "../repo/RepositoryLinks";
@@ -64,8 +64,8 @@ export type SessionCardChrome = {
   showBranchPill: boolean;
   /** Mark sessions on a cloud machine or on another of your machines. Absent means shown. */
   showDeviceIcon?: boolean;
-  /** The workspace asks for every session to have a face. */
-  personifyAll: boolean;
+  /** The viewer's identity prefs: characters, and every session personified. */
+  prefs: IdentityPrefs;
   /** Branch, worktree and pull request chips at all (lib/surfaces.ts
    *  "gitChips"; off in hosted mode). Absent means shown. */
   showGitChips?: boolean;
@@ -142,7 +142,7 @@ export type SessionCardViewProps = {
   viewerId: string | null;
   /** The session's author, shown only when it is not the viewer. `face` is a
    *  role's avatar key: a role's standing session is shown as its role. */
-  author: { name: string; avatar?: string | null; face?: AvatarKey } | null;
+  author: { name: string; avatar?: string | null; face?: AvatarKey; role?: SessionRoleSnapshot } | null;
   /** Who the row is (lib/sessionIdentity) with its role read live; defaults
    *  to the session row itself. */
   identity?: IdentityRow;
@@ -274,7 +274,7 @@ export function SessionCardView({
   // session to have one. A role's standing session always has one — the role
   // IS the identity.
   const identity = identityProp ?? session;
-  const isPersonified = sessionIdentity(identity, chrome.personifyAll).kind !== "plain";
+  const isPersonified = sessionIdentity(identity, chrome.prefs).kind !== "plain";
   // Row thumbnail for sessions that contain images (server-denormalized
   // image_preview_url). Clicking it zooms the image (ImageLightbox), not the
   // session. It lives on the RIGHT edge — a left thumb pushes the title column
@@ -570,7 +570,7 @@ export function SessionCardView({
               18 the painted faces were a smudge. */}
           {isPersonified ? (
             <IdentityFace
-              personifyAll={chrome.personifyAll}
+              prefs={chrome.prefs}
               row={identity as typeof session}
               size={22}
               onPick={(e) => onPickCharacter?.(session, e)}
@@ -604,7 +604,7 @@ export function SessionCardView({
           {/* Name, then the title: "Ember: Fixing the auth race". The name is
               the row's identity and never truncates; the title does. */}
           <SessionIdentityLine
-            personifyAll={chrome.personifyAll}
+            prefs={chrome.prefs}
             row={identity}
             title={displayTitle}
             className="min-w-0 flex-1"
@@ -733,8 +733,8 @@ export function SessionCardView({
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
-              {author.face ? (
-                <RoleAvatar avatar={author.face} size={14} title={author.name} />
+              {author.role ? (
+                <RoleFace role={author.role} size={14} title={author.name} prefs={chrome.prefs} />
               ) : (
                 <AvatarImg
                   src={author.avatar}
@@ -747,7 +747,7 @@ export function SessionCardView({
                   }
                 />
               )}
-              <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.face ? author.name : author.name.split(" ")[0]}</span>
+              <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.role ? author.name : author.name.split(" ")[0]}</span>
             </span>
           )}
           {viewers.length > 0 && <ViewerFaces members={viewers} size={14} max={3} />}
