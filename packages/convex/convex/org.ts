@@ -1509,19 +1509,19 @@ export const roleCard = query({
       role.anchor_id ? ctx.db.get(role.anchor_id) : Promise.resolve(null),
     ]);
     const standing: any = (anchor as any)?.conversation_id ? await ctx.db.get((anchor as any).conversation_id) : null;
-    let reports_to: { kind: "user" | "role"; name: string; short_id?: string; avatar?: string } | null = null;
+    let reports_to: { kind: "user" | "role"; name: string; short_id?: string; avatar?: string; icon?: any } | null = null;
     if (role.reports_to?.kind === "user") {
       const u: any = await ctx.db.get(role.reports_to.user_id);
       reports_to = u ? { kind: "user", name: u.name ?? u.email ?? "someone", avatar: u.image ?? u.github_avatar_url ?? undefined } : null;
     } else if (role.reports_to?.kind === "role") {
       const r: any = await ctx.db.get(role.reports_to.role_id);
-      reports_to = r ? { kind: "role", name: r.name, short_id: r.short_id, avatar: avatarOf(r) } : null;
+      reports_to = r ? { kind: "role", name: r.name, short_id: r.short_id, avatar: avatarOf(r), icon: r.icon ?? undefined } : null;
     }
     const charterText: string = ((charterDoc as any)?.content ?? role.charter ?? "").trim();
     // The first paragraph, minus a leading markdown heading, capped for a card.
     const charter = charterText.replace(/^#+[^\n]*\n+/, "").split(/\n\s*\n/)[0]?.trim().slice(0, 280) ?? "";
     return {
-      _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role),
+      _id: role._id.toString(), short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), icon: role.icon ?? null,
       status: role.status, tenure: role.tenure ?? { kind: "standing" }, trust: trustOf(role),
       charter, reports_to,
       scope: {

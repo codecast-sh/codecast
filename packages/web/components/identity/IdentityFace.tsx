@@ -2,8 +2,8 @@
 // character's face opens the session card. `onPick` (the character picker)
 // is only offered for characters; a role's identity is edited on the role.
 import type { MouseEvent, ReactNode } from "react";
-import { sessionIdentity, type IdentityRow } from "../../lib/sessionIdentity";
-import { usePersonifyAll } from "../../hooks/usePersonifyAll";
+import { sessionIdentity, type IdentityPrefs, type IdentityRow } from "../../lib/sessionIdentity";
+import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
 import { RoleHoverCard } from "./RoleHoverCard";
 import { SessionFace } from "./SessionFace";
 import { SessionHoverCard } from "./SessionHoverCard";
@@ -12,9 +12,9 @@ import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 type Side = "top" | "bottom" | "left" | "right";
 type Align = "start" | "center" | "end";
 
-export function IdentityFace({ row: rawRow, size = 18, className, hover = true, onPick, side = "bottom", align = "start", badge, personifyAll }: {
+export function IdentityFace({ row: rawRow, size = 18, className, hover = true, onPick, side = "bottom", align = "start", badge, prefs }: {
   row: IdentityRow & Record<string, unknown>;
-  personifyAll?: boolean;
+  prefs?: IdentityPrefs;
   size?: number;
   className?: string;
   hover?: boolean;
@@ -26,7 +26,7 @@ export function IdentityFace({ row: rawRow, size = 18, className, hover = true, 
   badge?: ReactNode;
 }) {
   const row = useLiveIdentityRow(rawRow);
-  const id = sessionIdentity(row, usePersonifyAll(personifyAll));
+  const id = sessionIdentity(row, useIdentityPrefs(prefs));
   // Not personified: the caller draws whatever it drew before (the agent icon),
   // so opting out costs the row nothing.
   if (id.kind === "plain") return null;
@@ -48,23 +48,23 @@ export function IdentityFace({ row: rawRow, size = 18, className, hover = true, 
   // The hover trigger is the flex item in the caller's row, not the face, and
   // its default (min-w-0) lets a crowded row squeeze it narrower than the
   // face, which then spills over its neighbour. A face has a fixed size.
-  return <IdentityHover row={row} personifyAll={personifyAll} side={side} align={align} triggerClassName="inline-flex flex-shrink-0 items-center">{face}</IdentityHover>;
+  return <IdentityHover row={row} prefs={prefs} side={side} align={align} triggerClassName="inline-flex flex-shrink-0 items-center">{face}</IdentityHover>;
 }
 
 /** Who-is-this hover over any children: a role opens the role card, a
  *  character the session card, a plain session nothing. IdentityFace wraps its
  *  face in it; a surface that names the session beside the face (a message's
  *  speaker line) wraps both, so the name opens the same card. */
-export function IdentityHover({ row: rawRow, personifyAll, side = "bottom", align = "start", triggerClassName, children }: {
+export function IdentityHover({ row: rawRow, prefs, side = "bottom", align = "start", triggerClassName, children }: {
   row: IdentityRow & Record<string, unknown>;
-  personifyAll?: boolean;
+  prefs?: IdentityPrefs;
   side?: Side;
   align?: Align;
   triggerClassName?: string;
   children: ReactNode;
 }) {
   const row = useLiveIdentityRow(rawRow);
-  const id = sessionIdentity(row, usePersonifyAll(personifyAll));
+  const id = sessionIdentity(row, useIdentityPrefs(prefs));
   if (id.kind === "plain") return <>{children}</>;
   if (id.kind === "role") return <RoleHoverCard role={id.role} side={side} align={align} triggerClassName={triggerClassName}>{children}</RoleHoverCard>;
   return <SessionHoverCard row={row} side={side} align={align} triggerClassName={triggerClassName}>{children}</SessionHoverCard>;

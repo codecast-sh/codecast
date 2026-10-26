@@ -431,6 +431,9 @@ async function performCreateRoleCore(
   });
   const created = await ctx.db.get(id);
   await noteRoleChange(ctx, userId, "role", null, created);
+  // The practical face (S13): drawn after the hire commits, so the generator
+  // sees the role and every sibling icon as they stand.
+  await (ctx as any).scheduler?.runAfter(0, internal.roleIcons.generateForRole, { role_id: id });
   if (ownersBefore) await handOverAreaMoves(ctx, userId, areaMoves(bornAreas, ownersBefore, await ownerSnapshot(ctx, boundary, bornAreas)), "scope");
   return created;
 }

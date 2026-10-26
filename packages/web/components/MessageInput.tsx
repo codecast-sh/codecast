@@ -63,7 +63,7 @@ import { parseChatDraftKey } from "../lib/chatDraftKey";
 import { inFlightPending, isAliveIdleStatus, pendingRowHoldReason, type LiveAgentStatus } from "../lib/pendingBanner";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { identityLine } from "../lib/sessionIdentity";
-import { personifyAllNow } from "../hooks/usePersonifyAll";
+import { identityPrefsNow } from "../hooks/useIdentityPrefs";
 import { ghostRestartContextFor, deriveRestartStage, restartPhaseOf } from "../hooks/useSessionRestart";
 import { useConversationCommands } from "../hooks/useSessionCommands";
 import { latestRestartRow, requestSessionRestart } from "../lib/sessionCommands";
@@ -553,7 +553,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // session is inserted as its short id (chatMentionOffers decides which
       // ones the room is offered).
       const candidates = filterMentionItems(acCandidates, acQuery, chatMentionMode);
-      const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 10 : 6, acQuery, personifyAllNow());
+      const items: AcItem[] = mergeMentionSuggestions(candidates, [], new Map(), acQuery ? 10 : 6, acQuery, identityPrefsNow());
 
       // Files this session already touched lead, then the project's own files
       // on disk (useFileSearch), both as paths relative to the folder the
@@ -624,7 +624,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // the reference reads "@[Ember jx7abcd]" and renders as its face and
       // name (session-characters.md S3). A plain session keeps its title.
       const persona = item.type === "session" && item.identity
-        ? identityLine(item.identity, item.label, personifyAllNow()).name
+        ? identityLine(item.identity, item.label, identityPrefsNow()).name
         : null;
       const refTitle = persona ?? item.label;
       const truncTitle = refTitle.length > 30 ? refTitle.slice(0, 30) + "..." : refTitle;

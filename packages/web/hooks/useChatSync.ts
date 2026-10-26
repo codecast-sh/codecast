@@ -42,8 +42,8 @@ import {
 import { channelsSig, messagesSig, railMessagesSig, railSig, reactionsSig, readsSig, seatSig, sessionOriginSig, slackLinksSig } from "../store/chatWakeSigs";
 import { memberListSig } from "./useTeamRoster";
 import { orgRolesSig } from "./useOrgRoles";
-import { identityRowOf, roleOfUser, sessionIdentity, withLiveRole, type RoleRows } from "../lib/sessionIdentity";
-import { personifyAllNow, usePersonifyAll } from "./usePersonifyAll";
+import { identityRowOf, roleOfUser, sessionIdentity, withLiveRole, type IdentityPrefs, type RoleRows } from "../lib/sessionIdentity";
+import { identityPrefsNow, useIdentityPrefs } from "./useIdentityPrefs";
 import type { SessionPersona } from "../lib/chatViews";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
@@ -488,12 +488,12 @@ export function useChatRail(scope: ChatRailScope = "team"): ChatRailChannel[] {
 /** The session that typed a chat line, as its lines show it: its title and
  *  agent, and the role or character it speaks as (the way its transcript
  *  names it). Keyed by the agent's session id, which a chat row carries. */
-export function sessionPersonasFrom(sessions: Record<string, any> | undefined, tree: RoleRows | null | undefined, personifyAll: boolean): (sessionId: string) => SessionPersona | undefined {
+export function sessionPersonasFrom(sessions: Record<string, any> | undefined, tree: RoleRows | null | undefined, prefs: IdentityPrefs): (sessionId: string) => SessionPersona | undefined {
   const map = new Map<string, SessionPersona>();
   for (const row of Object.values(sessions ?? {}) as any[]) {
     if (!row?.session_id) continue;
     const identity = withLiveRole(identityRowOf(row), tree);
-    const id = sessionIdentity(identity, personifyAll);
+    const id = sessionIdentity(identity, prefs);
     map.set(String(row.session_id), {
       title: row.display_title || row.title || undefined,
       agentType: row.agent_type,
@@ -524,7 +524,7 @@ export function roleSeatsFrom(anchors: Record<string, any> | undefined, tree: Ro
  *  render (a palette callback, a toast). */
 export function chatAuthorLookupsNow(): { sessionFor: (sessionId: string) => SessionPersona | undefined; seatFor: (botUserId: string) => RoleSeat | undefined } {
   const s = useInboxStore.getState() as any;
-  return { sessionFor: sessionPersonasFrom(s.sessions, s.orgTree, personifyAllNow()), seatFor: roleSeatsFrom(s.anchors, s.orgTree) };
+  return { sessionFor: sessionPersonasFrom(s.sessions, s.orgTree, identityPrefsNow()), seatFor: roleSeatsFrom(s.anchors, s.orgTree) };
 }
 
 /** The live lookups every surface that names a chat line's author passes to
@@ -536,10 +536,10 @@ export function useChatAuthorLookups(): { sessionFor: (sessionId: string) => Ses
   const sessionsSig = sessionOriginSig(st.sessions);
   const seatsSig = seatSig((st as any).anchors);
   const rolesSig = orgRolesSig((st as any).orgTree);
-  const personifyAll = usePersonifyAll();
+  const prefs = useIdentityPrefs();
   // The signatures are the real deps: the raw collection refs flip on every push.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const sessionFor = useMemo(() => sessionPersonasFrom(st.sessions, (st as any).orgTree, personifyAll), [sessionsSig, rolesSig, personifyAll]);
+  const sessionFor = useMemo(() => sessionPersonasFrom(st.sessions, (st as any).orgTree, prefs), [sessionsSig, rolesSig, prefs]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const seatFor = useMemo(() => roleSeatsFrom((st as any).anchors, (st as any).orgTree), [seatsSig, rolesSig]);
   return useMemo(() => ({ sessionFor, seatFor }), [sessionFor, seatFor]);
