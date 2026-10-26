@@ -3,7 +3,7 @@ import { integrationsLedeFor, useConnectAvailable } from "../simple/assistantPro
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck } from "lucide-react";
+  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -30,6 +30,7 @@ import HarnessPanel from "../../app/settings/harness/page";
 import DaemonPanel from "../../app/settings/daemon/page";
 import ProviderKeysPanel from "../../app/settings/provider-keys/page";
 import ClaudeAccountsPanel from "../../app/settings/claude-accounts/page";
+import AccountPoolPanel from "../../app/settings/account-pool/page";
 import CliPanel from "../../app/settings/cli/page";
 import DevicesPanel from "../../app/settings/devices/page";
 import MigratePanel from "../../app/settings/migrate/page";
@@ -56,6 +57,7 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "daemon": DaemonPanel,
   "provider-keys": ProviderKeysPanel,
   "claude-accounts": ClaudeAccountsPanel,
+  "account-pool": AccountPoolPanel,
   "cli": CliPanel,
   "devices": DevicesPanel,
   "migrate": MigratePanel,
@@ -107,6 +109,7 @@ const GROUPS: { label: string; sections: NavDef[]; surface?: DevSurface }[] = [
     label: "Workspace",
     sections: [
       { id: "team", label: "Team", icon: Users, desc: "Members, identity and the features your team runs", keywords: "members invite roles icon org statuses" },
+      { id: "account-pool", label: "Account pool", icon: Layers, desc: "Claude accounts your team shares, and who spends them", surface: "settings.machines", keywords: "shared pool team claude accounts usage tokens who spent" },
       { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", surface: "settings.sync", keywords: "projects sharing visibility private workspace directories" },
       { id: "privacy", label: "Privacy", icon: ShieldCheck, desc: "What happens to your data", surface: "hosted", keywords: "privacy data training delete mail read policy" },
       { id: "integrations", label: "Integrations", icon: Plug, desc: MODE_WORDS.developer.integrationsLede, hostedDesc: MODE_WORDS.hosted.integrationsLede, keywords: "whisk mail email calendar assistant chrome browser extension web store pair slack github linear google gmail notion connect oauth install repositories issues sync apps sentry posthog sdk ingest key product sources ops" },

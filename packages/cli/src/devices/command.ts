@@ -29,17 +29,17 @@ import { promptHiddenSecret } from "../hiddenSecret.js";
 import { encryptProviderKey } from "../providerKeyCrypto.js";
 import { deviceLine, pickDevice } from "./resolve.js";
 
-type Team = { _id: string; name: string; role?: string };
+export type Team = { _id: string; name: string; role?: string };
 
-type Backend = { client: any; token: string; api: any };
+export type Backend = { client: any; token: string; api: any };
 
-function die(message: string): never {
+export function die(message: string): never {
   console.error(fmt.error(message));
   process.exit(1);
 }
 
 /** The signed-in client, with every server refusal printed as its one sentence (cliErrorMessage) rather than a request id and stack. */
-async function backend(): Promise<Backend> {
+export async function backend(): Promise<Backend> {
   let b: Backend;
   try {
     b = await convexClient();
@@ -56,7 +56,7 @@ async function backend(): Promise<Backend> {
 
 const ownDevices = (b: Backend): Promise<any[]> => b.client.query(b.api.devices.listDevices, { api_token: b.token });
 const teamMachines = (b: Backend): Promise<any[]> => b.client.query(b.api.devices.listAgentBoxes, { api_token: b.token });
-const myTeams = async (b: Backend): Promise<Team[]> =>
+export const myTeams = async (b: Backend): Promise<Team[]> =>
   ((await b.client.query(b.api.teams.getUserTeams, { api_token: b.token })) ?? []).map((t: any) => ({ _id: String(t._id), name: t.name, role: t.role }));
 
 /** One of your own machines by name; exits with the candidates when the name is not exactly one. */
@@ -67,7 +67,7 @@ async function ownDevice(b: Backend, needle: string): Promise<any> {
 }
 
 /** Teams by name or id. None named: your only team, or an error naming them all. */
-function pickTeams(teams: Team[], names: string[]): Team[] {
+export function pickTeams(teams: Team[], names: string[]): Team[] {
   if (teams.length === 0) die("you are on no team");
   if (names.length === 0) {
     if (teams.length === 1) return teams;

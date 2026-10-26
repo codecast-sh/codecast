@@ -131,6 +131,9 @@ export async function refreshUsageSnapshots(
   for (const [name, meta] of Object.entries(index.profiles)) {
     const key = meta.uuid || meta.email;
     if (!key) continue;
+    // A pool copy's meter is read by its holder; probing it here would spend
+    // the shared account's tokens once per machine for a number nobody reads.
+    if (meta.pool_share_id) continue;
     knownKeys.add(key);
     if (jobs.has(key)) continue; // active covers it with the freshest token
     // The live grant was already judged above. A stale snapshot of the same

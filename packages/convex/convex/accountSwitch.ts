@@ -71,6 +71,7 @@ import {
   findFlowDevice,
 } from "./ccAccountsShared";
 import { decideSwitchAhead } from "./ccSwitchAhead";
+import { poolUsageOverlay } from "./accountPool";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
 import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS } from "@codecast/shared/contracts";
@@ -1796,7 +1797,7 @@ export const switchAheadCheck = internalMutation({
       now,
       fleetEmail: fleet.email,
       fleetSince: accounts.active_since,
-      profiles: accounts.profiles,
+      profiles: await poolUsageOverlay(ctx, args.user_id, accounts.profiles),
       attempts: state.attempts ?? [],
       lastActionAt: state.last_action_at,
       models: await runningClaudeModels(ctx, args.user_id, now),
@@ -1946,7 +1947,9 @@ export const autoSwitchCheck = internalMutation({
     // What the human sees on the meter that closed, and where the loop would
     // move — the reason every switch/proposal is recorded with, so the park
     // card can explain the account change instead of it happening silently.
-    const activeProfiles = primary.cc_accounts?.profiles ?? [];
+    // Pool copies read their holder's meter and drop out once their share
+    // stops counting (poolUsageOverlay): one ranking over own and pool alike.
+    const activeProfiles = await poolUsageOverlay(ctx, args.user_id, primary.cc_accounts?.profiles ?? []);
     // The account the fleet runs on: the keychain login, or the launch profile
     // after a token switch (fleetAccount). Every "active" read below means this.
     const activeEmail = fleetAccount(primary.cc_accounts, now).email;
@@ -2121,7 +2124,7 @@ export const autoSwitchCheck = internalMutation({
       activeParkedAt: parksOnActive.length ? Math.max(...parksOnActive.map(blockedAt)) : null,
       activeEmail,
       activeSince: primary.cc_accounts?.active_since,
-      profiles: primary.cc_accounts?.profiles ?? [],
+      profiles: activeProfiles,
       attempts,
       allowSwitch,
       // A dead login (splitAuthParks) means "continue" can't help even the
@@ -2671,13 +2674,16 @@ export const listAccountProfiles = query({
         ],
       };
     };
+    const shown = devices.filter(
+      (d) =>
+        (isDeviceOnline(d, now) && (d.cc_accounts || d.codex_accounts || d.codex_usage)) ||
+        (!d.is_remote && !!d.cc_accounts && now - d.last_seen < OFFLINE_PRIMARY_GRACE_MS),
+    );
+    // A pool copy shows its holder's meter (poolUsageOverlay), the one home.
+    const profilesOf = new Map<string, any[]>();
+    for (const d of shown) profilesOf.set(d.device_id, await poolUsageOverlay(ctx, userId, d.cc_accounts?.profiles ?? []));
     return {
-      devices: devices
-        .filter(
-          (d) =>
-            (isDeviceOnline(d, now) && (d.cc_accounts || d.codex_accounts || d.codex_usage)) ||
-            (!d.is_remote && !!d.cc_accounts && now - d.last_seen < OFFLINE_PRIMARY_GRACE_MS),
-        )
+      devices: shown
         .map((d) => ({
           device_id: d.device_id,
           label: d.label,
@@ -2695,7 +2701,7 @@ export const listAccountProfiles = query({
           session_tokens: true,
           mint_flow: d.cc_mint_flow,
           provider_key_pubkey: d.provider_key_pubkey,
-          profiles: d.cc_accounts?.profiles ?? [],
+          profiles: profilesOf.get(d.device_id) ?? [],
           codex_accounts: d.codex_accounts ?? legacyCodexAccounts(d.codex_usage),
           auto_switch: d.cc_auto_switch === true,
           auto_continue: isAutoContinueEnabled(d),

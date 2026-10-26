@@ -102,6 +102,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   trialReask: never("machine control: it stops the run's runner and asks its card again; the new decision is the way on"),
   startShip: never("send: Ship starts a session that commits, pushes and opens a pull request; stopping it is the way back"),
   resolvePermission: never("send: the agent acts on an approved or denied tool call the moment it lands"),
+  sendGuestSuggestion: never("send: the message is in the session the moment it lands"),
+  dismissGuestSuggestion: never("decision: the guest sees it dismissed at once; they can suggest it again"),
   respondToGate: never("send: a gate answer resumes the run and posts into its session"),
 
   // Local echoes of sends (sync creators a component calls)
@@ -214,6 +216,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setCloudSharedCheckout: SETTINGS,
   setDefaultModel: SETTINGS,
   setDeviceShares: SETTINGS,
+  setAccountShares: SETTINGS,
   joinTeamMachine: never("machine: a join creates a Linux user on a shared box; leaving is its own explicit control"),
   removeTeamMachineMember: never("machine: a removal stops someone's daemon on a shared box; they join again to come back"),
   renameTeamMachine: SETTINGS,
@@ -267,6 +270,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   deleteCallFrameShare: SHARING,
   setObjectShareLink: SHARING,
   setShareLink: SHARING,
+  setGuestSuggestions: SHARING,
   setTeamMembershipVisibility: SHARING,
 
   // The project's line.toml, written on the checkout's machine by the daemon
@@ -294,6 +298,9 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   unassignDecision: never("send: the decision leaves the assignee's queue and is routed again; assigning it is the way back"),
   setModLocalDevice: SETTINGS,
   setTeamBudget: SETTINGS,
+  setTeamPolicy: SETTINGS,
+  revokeEnrollmentToken: never("sharing: a revoked enrollment token stays revoked; minting a new one is the way back"),
+  revokeDeviceEnrollment: never("machine control: the device is signed out at once; enrolling it again is the way back"),
 
   // A project's expectations (LM5): every change is a version judges grade against
   editExpectations: never("send: a line or a retirement becomes a proposal a person reads, and an applied one is a version judges grade against; a later retirement takes a line back"),

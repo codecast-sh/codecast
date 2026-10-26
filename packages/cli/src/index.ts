@@ -140,6 +140,7 @@ import type { PlanStep } from "@codecast/shared/tasks";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
+import { isManagedInstall } from "./managedInstall.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
 import { type SnippetTarget, type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, MESSAGING_SECTION, PUBLISH_SECTION, REFERENCES_SECTION, MESSAGING_SNIPPET_END, installMessagingSnippet, installReferencesSnippet, REFERENCES_SNIPPET_END, installPublishSnippet, installBrowserSnippet, BROWSER_SECTION, installChatSnippet, CHAT_SECTION, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
@@ -212,6 +213,7 @@ import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRunti
 import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { type Config, getAgentArgs, isCloudMirrorEnabled } from "./config/types.js";
+import { applyManagedPolicy, exitIfPolicyBlocks, lockedConfigKey, managedByLabel, policyRefusal, readManagedProfile, snippetPolicyRefusal, stripManagedPolicy, writeEffectivePolicyFile } from "./config/managedPolicy.js";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
 import { addVault, findVault, listVaults, removeVault, setVaultMirroring } from "./vault/vaultRegistry.js";
 import {
@@ -711,7 +713,7 @@ function readConfig(): Config | null {
     return null;
   }
   const content = fs.readFileSync(CONFIG_FILE, "utf-8");
-  const config = JSON.parse(content) as Config;
+  const config = applyManagedPolicy(JSON.parse(content) as Config);
   if (config.auth_token) {
     const storedPlain = !isEncryptedToken(config.auth_token);
     try {
@@ -737,7 +739,7 @@ function writeConfig(config: Config): void {
   if (!config.created_at) {
     config.created_at = config.updated_at;
   }
-  const toWrite = { ...config };
+  const toWrite = { ...stripManagedPolicy(config) };
   if (toWrite.auth_token) toWrite.auth_token = storedFromBearer(toWrite.auth_token);
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(toWrite, null, 2), { mode: 0o600 });
   fs.chmodSync(CONFIG_FILE, 0o600);
@@ -1836,7 +1838,10 @@ async function runLogin(setupToken: string): Promise<void> {
 // Shown whenever the browser auth flow can't complete. The token path
 // (cast login) skips the localhost callback entirely, so it still works when
 // the browser <-> CLI handshake itself is what's broken.
-function authFallbackHint(): string {
+function authFallbackHint(opts: { enrolling?: boolean } = {}): string {
+  // A managed device signs in only through its enrollment; a setup token
+  // would skip it. Its login agent also retries at the next login.
+  if (opts.enrolling) return `\nTo open the sign-in page again, run:  cast mdm enroll --force`;
   return (
     `\nOr link this device with a token instead (skips the browser handshake):\n` +
     `  1. Open ${WEB_URL}/settings/cli and click "Generate Install Command"\n` +
@@ -1844,8 +1849,13 @@ function authFallbackHint(): string {
   );
 }
 
-async function runAuth(): Promise<void> {
+/** `query` rides on the sign-in page URL (an enrolling device's enroll and login_hint). */
+async function runAuth(opts: { query?: Record<string, string> } = {}): Promise<void> {
   console.log(`\n${c.bold}cast${c.reset} ${fmt.muted("Authentication")}\n`);
+  // A managed profile names the deployment this machine signs in to.
+  const profile = readManagedProfile();
+  const webUrl = profile.web_url ?? WEB_URL;
+  const convexUrl = profile.convex_url ?? CONVEX_URL;
 
   const agents = detectAgents();
   if (agents.length > 0) {
@@ -1868,14 +1878,15 @@ async function runAuth(): Promise<void> {
     port = await authServer.listen();
   } catch (err) {
     console.error(`\nCould not start the local auth listener: ${(err as Error).message}`);
-    console.error(authFallbackHint());
+    console.error(authFallbackHint({ enrolling: !!opts.query?.enroll }));
     process.exit(1);
   }
 
   // device_id, when the switch in bearerToken.ts is on, binds the minted token
   // to this machine.
   const mintDevice = mintDeviceId();
-  const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}${mintDevice ? `&device_id=${mintDevice}` : ""}`;
+  const extra = Object.entries(opts.query ?? {}).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join("");
+  const cliUrl = `${webUrl}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}${mintDevice ? `&device_id=${mintDevice}` : ""}${extra}`;
 
   // Over SSH there is no browser to open here — the user signs in on another
   // machine, and the server relay (below) carries the token back to us.
@@ -1899,14 +1910,14 @@ async function runAuth(): Promise<void> {
   // (same-machine fast path), or — when it can't reach us — it deposits the
   // token server-side and our relay poll claims it. waitForCallback owns the
   // 5-minute timeout for both.
-  const relay = startRelayPoller(CONVEX_URL.replace(".cloud", ".site"), nonce);
+  const relay = startRelayPoller(convexUrl.replace(".cloud", ".site"), nonce);
   const authResult = await Promise.race([authServer.waitForCallback(), relay.promise]);
   relay.stop();
   authServer.stop();
 
   if (!authResult || !authResult.apiToken) {
     console.error("\nAuthentication failed or timed out.");
-    console.error(authFallbackHint());
+    console.error(authFallbackHint({ enrolling: !!opts.query?.enroll }));
     process.exit(1);
   }
 
@@ -1915,8 +1926,8 @@ async function runAuth(): Promise<void> {
     ...existingConfig,
     user_id: authResult.userId,
     auth_token: authResult.apiToken,
-    convex_url: CONVEX_URL,
-    web_url: WEB_URL,
+    convex_url: convexUrl,
+    web_url: webUrl,
   };
 
   writeConfig(config);
@@ -2899,6 +2910,61 @@ program
       process.exit(1);
     }
     await runAuth();
+  });
+
+const mdm = program
+  .command("mdm")
+  .description("Device management: the policy your organization applies here, and enrolling this machine into its team");
+
+mdm
+  .command("status", { isDefault: true })
+  .description("The effective policy, where each value comes from, and enrollment state")
+  .option("--json", "Output as JSON")
+  .action(async (options: { json?: boolean }) => {
+    const { mdmStatus, formatMdmStatus } = await import("./mdm.js");
+    const status = mdmStatus(readConfig());
+    console.log(options.json ? JSON.stringify(status, null, 2) : formatMdmStatus(status));
+  });
+
+mdm
+  .command("enroll")
+  .description("Enroll this machine with the profile's enrollment token and sign in (safe to run at every login)")
+  .option("--force", "Open the sign-in page even if one was opened in the last few hours")
+  .action(async (options: { force?: boolean }) => {
+    const { nextEnrollStep, requestEnrollment, enrollRequest } = await import("./mdm.js");
+    const config = readConfig();
+    const profile = readManagedProfile();
+    const step = nextEnrollStep(config, profile, Date.now(), options.force);
+    if (step.kind === "done" || step.kind === "waiting") return;
+    if (step.kind === "unmanaged") {
+      console.log("No enrollment token in a management profile on this machine.");
+      return;
+    }
+    if (step.kind === "invalid_token") {
+      console.error("The management profile's EnrollmentToken is not a codecast enrollment token (cc_enr_...).");
+      process.exit(1);
+    }
+    const convexUrl = profile.convex_url ?? config?.convex_url ?? CONVEX_URL;
+    const result = await requestEnrollment(convexUrl.replace(".cloud", ".site"), enrollRequest(step.token, deviceId(), profile.user_email));
+    if (!result.ok) {
+      console.error(`Enrollment refused: ${result.error}`);
+      process.exit(1);
+    }
+    const enrolled = readConfig() ?? {};
+    const now = new Date().toISOString();
+    // sign_in_at keeps the next runs (every login, every profile change) from opening another page.
+    enrolled.managed_enrollment = { enrollment_id: result.enrollment_id, team_id: result.team_id, team_name: result.team_name, token_prefix: step.token.slice(0, 16), at: now, ...(step.signIn ? { sign_in_at: now } : {}) };
+    writeConfig(enrolled);
+    writeEffectivePolicyFile();
+    console.log(`${fmt.success(icons.check)} Enrolled in ${result.team_name}`);
+    // The organization's binary wins over a per-user copy before the daemon is set up on it.
+    const { adoptManagedBinary } = await import("./managedInstall.js");
+    for (const p of adoptManagedBinary(os.homedir())) console.log(fmt.muted(`${p} now runs the managed binary`));
+    if (step.signIn) {
+      await runAuth({ query: { enroll: result.enrollment_id, ...(profile.user_email ? { login_hint: profile.user_email } : {}) } });
+    } else if (!autostartDisabledByEnv() && !isDaemonRunning()) {
+      startDaemon();
+    }
   });
 
 program
@@ -4233,6 +4299,14 @@ async function publishAccountsInventory(): Promise<void> {
     });
   } catch {}
 }
+
+const poolCmd = () => import("./accountPoolCommand.js");
+accountsCmd.command("share <profile> [teams...]").description("Pool an account with a team").option("--yes", "Skip confirm")
+  .action(async (p, t, o) => (await poolCmd()).shareAccount(p, t, o, publishAccountsInventory));
+accountsCmd.command("unshare <profile> [teams...]").description("Take an account out of a team's pool")
+  .action(async (p, t) => (await poolCmd()).unshareAccount(p, t));
+accountsCmd.command("pool").description("Pooled accounts and who spent them").option("--json", "JSON")
+  .action(async (o) => (await poolCmd()).printPool(o));
 
 accountsCmd
   .command("save <name>")
@@ -5708,19 +5782,25 @@ program
     const key = verb ? rawValue : rawKey;
     const value = verb ? (cmd.args as string[])[2] : rawValue;
     const config = readConfig();
+    // A key the organization's policy decides reads as managed and refuses writes.
+    const managed = (k: string) => {
+      const lock = lockedConfigKey(k);
+      return lock ? ` (${managedByLabel(lock.source)})` : "";
+    };
 
     if (!key) {
       console.log("Configuration:");
       console.log(`  Path: ${CONFIG_FILE}`);
       if (config) {
         if (config.user_id) console.log(`  user_id: ${config.user_id}`);
-        if (config.convex_url) console.log(`  convex_url: ${config.convex_url}`);
+        if (config.convex_url) console.log(`  convex_url: ${config.convex_url}${managed("convex_url")}`);
         if (config.team_id) console.log(`  team_id: ${config.team_id}`);
         if (config.auth_token) console.log(`  auth_token: ${maskToken(config.auth_token)}`);
-        console.log(`  web_url: ${config.web_url || WEB_URL}`);
+        console.log(`  web_url: ${config.web_url || WEB_URL}${managed("web_url")}`);
         if (config.excluded_paths) console.log(`  excluded_paths: ${config.excluded_paths}`);
+        if (config.auto_update !== undefined) console.log(`  auto_update: ${config.auto_update}${managed("auto_update")}`);
         if (config.browser_capture) console.log(`  browser_capture: ${config.browser_capture}`);
-        console.log(`  cloud_mirror_enabled: ${isCloudMirrorEnabled(config)}`);
+        console.log(`  cloud_mirror_enabled: ${isCloudMirrorEnabled(config)}${managed("cloud_mirror_enabled")}`);
         if (config.cloud_mirror_exclude) console.log(`  cloud_mirror_exclude: ${config.cloud_mirror_exclude}`);
         if (config.sync_always) console.log(`  sync_always: ${config.sync_always}`);
         if (config.sync_never) console.log(`  sync_never: ${config.sync_never}`);
@@ -5904,8 +5984,14 @@ program
       const displayValue = sensitiveKeys.includes(configKey)
         ? maskToken(currentValue as string | undefined)
         : currentValue === undefined || currentValue === "" ? "(not set)" : String(currentValue);
-      console.log(`${configKey}: ${displayValue}`);
+      console.log(`${configKey}: ${displayValue}${managed(configKey)}`);
       return;
+    }
+
+    const lock = lockedConfigKey(configKey);
+    if (lock) {
+      console.error(lock.message);
+      process.exit(1);
     }
 
     const newConfig: Config = config || {};
@@ -8669,6 +8755,7 @@ program
   .option("--private", "Remove the session from your public profile")
   .option("--json", "Output as JSON")
   .action(async (ref: string | undefined, options: { public?: boolean; private?: boolean; json?: boolean }) => {
+    if (!options.private) exitIfPolicyBlocks("public_sharing_disabled");
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
@@ -10791,6 +10878,12 @@ program
         return;
       }
 
+      const policyOff = desc && snippetPolicyRefusal(desc.slug, config);
+      if (policyOff) {
+        console.error(policyOff);
+        process.exit(1);
+      }
+
       const result = await entry.install(true);
       (config as any)[entry.enabledKey] = true;
       (config as any)[entry.versionKey] = entry.getVersion();
@@ -10857,6 +10950,11 @@ program
       // Unknown (no daemon yet) still offers; only a known "off" skips.
       if (teamFeaturesForSnippet(s.slug).length > 0 && (config as any).snippet_availability?.[s.slug] === false) {
         console.log(`\n  ${c.bold}${s.name}${c.reset} — ${fmt.muted("off for your teams; a team admin can turn it on under Settings → Team")}`);
+        continue;
+      }
+      const policyOff = snippetPolicyRefusal(s.slug, config);
+      if (policyOff) {
+        console.log(`\n  ${c.bold}${s.name}${c.reset} — ${fmt.muted(policyOff)}`);
         continue;
       }
 
@@ -11779,6 +11877,7 @@ program
     // Loaded inside the one action that plans a fan-out (boot graph guard).
     const { planForkFanout } = await import("./forkFanout.js");
     const fanout = planForkFanout(directions, { allBranches: !!options.allBranches });
+    if (options.cloud) exitIfPolicyBlocks("cloud_hosts_disabled");
     if (options.cloud && directions.length === 0) {
       console.error("--cloud needs seeded branches: cast fork --cloud \"<direction>\" [...]");
       process.exit(1);
@@ -12124,6 +12223,7 @@ program
       console.error("--worktree names ONE worktree; spawn a single task with it, or drop it and let each task get its own");
       process.exit(1);
     }
+    if (options.cloud) exitIfPolicyBlocks("cloud_hosts_disabled");
     if (options.cloud && options.device) {
       console.error("--cloud already picks the machine; drop --device");
       process.exit(1);
@@ -12162,7 +12262,7 @@ program
     // machine is calm (loadGovernor.ts cloudFirstReason). `--device` or
     // `--cloud` decides by hand; a host that cannot be readied falls back here.
     let autoCloud: string | null = null;
-    if (!options.cloud && !options.local) {
+    if (!options.cloud && !options.local && !policyRefusal("cloud_hosts_disabled")) {
       const { cloudFirstReason, readGovernorState } = await import("./loadGovernor.js");
       const { isRemoteDevice } = await import("./remote/device.js");
       autoCloud = isRemoteDevice() ? null : cloudFirstReason({
@@ -12482,6 +12582,13 @@ program
   .option("--auto", "Enable auto-updates (default)")
   .action(async (options) => {
     const config = readConfig() || {};
+
+    // Commander defaults auto to true, so ask argv whether a flag was typed.
+    const autoLock = process.argv.some((a) => a === "--auto" || a === "--no-auto") ? lockedConfigKey("auto_update") : null;
+    if (autoLock) {
+      console.error(autoLock.message);
+      process.exit(1);
+    }
 
     if (options.auto === false) {
       config.auto_update = false;
@@ -14340,7 +14447,9 @@ function printChatMessage(row: any, authors?: Map<string, any>) {
     ? ` ${c.dim}[${row.agent_status}]${c.reset}`
     : "";
   const body = row.deleted_at ? `${c.dim}(deleted)${c.reset}` : row.content;
-  console.log(`  ${c.dim}${when}${c.reset} ${who}${status} ${c.dim}·${c.reset} ${String(row._id).slice(0, 10)}`);
+  // The session the human was looking at when they wrote it.
+  const from = row.context_session_id ? ` ${c.dim}from${c.reset} ${String(row.context_session_id).slice(0, 7)}` : "";
+  console.log(`  ${c.dim}${when}${c.reset} ${who}${from}${status} ${c.dim}·${c.reset} ${String(row._id).slice(0, 10)}`);
   for (const line of String(body).split("\n")) console.log(`    ${line}`);
 }
 
@@ -18543,6 +18652,7 @@ doc
   .description("Generate a public share link for a document")
   .argument("<id>", "Document ID")
   .action(async (id: string) => {
+    exitIfPolicyBlocks("public_sharing_disabled");
     const result = await cliPost("/cli/docs/share", { id });
     if (result?.error) { console.error(result.error); process.exit(1); }
     const url = `${WEB_URL}/share/doc/${result.share_token}`;
@@ -18888,6 +18998,7 @@ plan
   .description("Generate a public share link for a plan")
   .argument("<plan_id>", "Plan short ID")
   .action(async (planId: string) => {
+    exitIfPolicyBlocks("public_sharing_disabled");
     const result = await cliPost("/cli/plans/share", { short_id: planId });
     if (result?.error) { console.error(result.error); process.exit(1); }
     const url = `${WEB_URL}/share/plan/${result.share_token}`;
@@ -21580,8 +21691,9 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
   if (!available) return;
 
   // Source checkouts can't self-update (performUpdate refuses in dev mode);
-  // updating happens via git there, so don't bounce the daemon or nag.
-  if (isDevMode()) return;
+  // updating happens via git there, so don't bounce the daemon or nag. A
+  // managed install (Codecast.pkg, root-owned) is updated by the MDM.
+  if (isDevMode() || isManagedInstall()) return;
 
   const config = readConfig();
   if (config?.auto_update === false) {

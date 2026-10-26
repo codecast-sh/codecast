@@ -134,6 +134,10 @@ export const ccAccountsValidator = v.object({
       // reviews`): auto-switch never moves the machine's sessions onto it
       // (fallbackProfiles), so the job keeps the account's windows.
       reserved_for: v.optional(v.string()),
+      // A copy of a teammate's account from the team's pool (account_shares):
+      // the share it came from. Its usage is the holder's meter, never this
+      // machine's, so the profile carries none.
+      pool_share_id: v.optional(v.string()),
     }),
   ),
 });

@@ -2,6 +2,7 @@ import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
 import { deliverableAttachments } from "../lib/pendingUploads";
 import { FLOW_SYNC_COLLECTIONS } from "./clientSyncRegistry.flows";
 import { ORG_SYNC_COLLECTIONS } from "./clientSyncRegistry.org";
+import { POOL_SYNC_COLLECTIONS } from "./clientSyncRegistry.pool";
 
 export type PersistenceKind = "collection" | "meta";
 export type DispatchTableKind = "collection" | "singleton";
@@ -273,6 +274,7 @@ export const CLIENT_SYNC_REGISTRY = {
     },
   },
   ...ORG_SYNC_COLLECTIONS,
+  ...POOL_SYNC_COLLECTIONS,
   // The decision queue (cast decide). Answering is local-first: the action
   // flips status on the draft and the resolution fields ride the generic
   // patch rail to the session_decisions table. Everything structural
@@ -1378,6 +1380,18 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["permissions.getPendingPermissions"],
   },
+  // Messages guests suggested for one of the owner's shared sessions
+  // (guestSuggestions.listPending), the cards above the owner's composer.
+  // localFirst like pendingPermissions: Send or Dismiss removes the row, and
+  // the exclude it plants keeps a racing push from bringing the card back.
+  guestSuggestions: {
+    persistence: { kind: "collection", key: "guestSuggestions" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    indexes: "_id, conversation_id",
+    sync: { isDelta: true },
+    feeds: ["guestSuggestions.listPending"],
+  },
   // Delivery status of the viewer's in-flight message per conversation
   // (getConversationPendingMessage). One row keyed by conversation id;
   // transient — never persisted (a reload re-derives it).
@@ -2045,9 +2059,11 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessionCommands: "local",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",
+  guestSuggestions: "shared",
   pendingMessageStatus: "shared",
   messageFeed: "shared",
   machineRoster: "shared",
+  accountPool: "shared",
   teamMachines: "shared",
   notifications: "shared",
   // Fed in every window by useCallSync (calls are window effects, not host

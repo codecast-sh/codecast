@@ -18,6 +18,7 @@ import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceSnippet, performRequestDeviceUpdate, performSetProviderKey } from "./devices";
 import { performJoinTeamHost, performRemoveTeamHostMember, performRenameTeamHost, performUnregisterTeamHost } from "./teamHosts";
+import { performSetAccountShares } from "./accountPool";
 import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/contracts";
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
@@ -76,6 +77,7 @@ import { askLineAgentCore, editLineGraphCore, reaskTrialRunCore, tryLineStepCore
 import { cancelRunByPerson, landAgainCore, resumeRunCore } from "./workflow_runs";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
+import { dismissGuestSuggestionFor, sendGuestSuggestionFor, writeGuestSuggestions } from "./guestSuggestions";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
 
 type TableConfig =
@@ -1504,6 +1506,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // on the roster draft; device_shares is the server home of that fact.
   setDeviceShares: async (ctx, userId, [deviceId, teamIds]: [string, string[]]) =>
     performSetDeviceShares(ctx as any, userId, deviceId, teamIds),
+  // Settings > Claude Accounts' pool pill: the web writes the account's team
+  // set on the accountPool draft; account_shares is the server home.
+  setAccountShares: async (ctx, userId, [deviceId, email, teamIds]: [string, string, string[]]) =>
+    performSetAccountShares(ctx as any, userId, deviceId, email, teamIds),
   // Team machines (teamHosts.ts): the web paints the teamMachines rows; the
   // server writes the member row and queues the admin daemon's work.
   joinTeamMachine: async (ctx, userId, [hostId, opts]: [string, { linux_user?: string } | undefined]) =>
@@ -1591,6 +1597,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // is not a dispatchable field, so this is its only web write path.
   setShareLink: async (ctx, userId, [convId, token]: [string, string | null]) => {
     await writeShareLink(ctx, userId, convId, token ?? null);
+  },
+
+  // Guest suggestions on a shared session (guestSuggestions.ts), owner only.
+  // The client already shows the switch flipped and the decided card gone.
+  setGuestSuggestions: async (ctx, userId, [convId, enabled]: [string, boolean]) => {
+    await writeGuestSuggestions(ctx, userId, convId, !!enabled);
+  },
+  sendGuestSuggestion: async (ctx, userId, [suggestionId, body]: [string, string?]) => {
+    return await sendGuestSuggestionFor(ctx, userId, suggestionId, body);
+  },
+  dismissGuestSuggestion: async (ctx, userId, [suggestionId]: [string]) => {
+    return await dismissGuestSuggestionFor(ctx, userId, suggestionId);
   },
 
   // The same switch for docs, plans, tasks and calls (publicShare.ts).
@@ -2747,7 +2765,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       string,
       string,
       string,
-      { threadRootId?: string; broadcast?: boolean; attachments?: any[]; origin?: "agent"; syncLocalOnly?: boolean }?,
+      { threadRootId?: string; broadcast?: boolean; attachments?: any[]; origin?: "agent"; syncLocalOnly?: boolean; contextSessionId?: string }?,
     ],
   ) => {
     if (!isServerId(channelId)) return;
@@ -2766,6 +2784,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         : {}),
       ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}),
       ...(opts?.origin ? { origin: opts.origin } : {}),
+      ...(opts?.contextSessionId && isServerId(opts.contextSessionId)
+        ? { context_session_id: opts.contextSessionId as Id<"conversations"> }
+        : {}),
     });
   },
   dispatchChatEdit: async (ctx, _userId, [messageId, content]: [string, string]) => {
@@ -2879,6 +2900,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       notify_level: level,
     });
   },
+  setChatThreadMuted: async (
+    ctx,
+    _userId,
+    [, rootId, muted]: [string, string, boolean],
+  ) => {
+    if (!isServerId(rootId)) return;
+    return await ctx.runMutation!(api.chat.setThreadMuted, {
+      root_id: rootId as Id<"chat_messages">,
+      muted: !!muted,
+    });
+  },
   updateChatChannel: async (
     ctx,
     _userId,
@@ -2915,6 +2947,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setTeamFeature: async (ctx, _userId, [teamId, feature, enabled]: [string, string, boolean]) => {
     if (!isServerId(teamId)) return;
     return await ctx.runMutation!(api.teamFeatures.setTeamFeature, { team_id: teamId as Id<"teams">, feature: feature as any, enabled: !!enabled });
+  },
+  // A team's managed policy (store setTeamPolicy paints the teams row).
+  setTeamPolicy: async (ctx, _userId, [teamId, policy]: [string, unknown]) => {
+    if (!isServerId(teamId)) return;
+    return await ctx.runMutation!(api.managedDevices.setTeamPolicy, { team_id: teamId as Id<"teams">, policy });
+  },
+  // Revoke a managed-devices enrollment token or a device enrollment (store
+  // actions paint the settings row).
+  revokeEnrollmentToken: async (ctx, _userId, [, tokenId]: [string, string]) => {
+    if (!isServerId(tokenId)) return;
+    return await ctx.runMutation!(api.managedDevices.revokeEnrollmentToken, { token_id: tokenId as Id<"team_enrollment_tokens"> });
+  },
+  revokeDeviceEnrollment: async (ctx, _userId, [, enrollmentId]: [string, string]) => {
+    if (!isServerId(enrollmentId)) return;
+    return await ctx.runMutation!(api.managedDevices.revokeDeviceEnrollment, { enrollment_id: enrollmentId as Id<"device_enrollments"> });
   },
   // A team's monthly model budget (store setTeamBudget paints the settings row).
   setTeamBudget: async (ctx, _userId, [teamId, capUsd]: [string, number]) => {

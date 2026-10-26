@@ -555,6 +555,7 @@ const PAGE_SURFACES: Record<string, DevSurface> = {
   "/settings/agents": "settings.machines",
   "/settings/agent-library": "settings.machines",
   "/settings/claude-accounts": "settings.machines",
+  "/settings/account-pool": "settings.machines",
   "/settings/devices": "settings.machines",
   "/settings/daemon": "settings.machines",
   "/settings/migrate": "settings.machines",

@@ -35,6 +35,8 @@ import { agentTables } from "./agentSchema";
 import { expectationTables } from "./expectationsSchema";
 import { machineResourceTables } from "./machineResourcesSchema";
 import { teamHostTables } from "./teamHostsSchema";
+import { accountPoolTables } from "./accountPoolSchema";
+import { managedDeviceTables, teamPolicyValidator } from "./managedDevicesSchema";
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { momentsTables } from "./momentsSchema";
 import { lineTrialTables } from "./lineTrialSchema";
@@ -137,6 +139,8 @@ export default defineSchema({
   ...capabilityTables,
   ...machineResourceTables,
   ...teamHostTables,
+  ...accountPoolTables,
+  ...managedDeviceTables,
   ...googleOAuthTables,
   ...oauthConnectorTables,
   // External data: sources, groups, samples, replays, metric watches, app calls (external-data.md).
@@ -449,6 +453,11 @@ export default defineSchema({
     // Opt-in features; default off. Enforced server-side at each feature's
     // access chokepoint (teamFeatures.requireTeamFeature), hidden client-side.
     features: v.optional(teamFeaturesValidator),
+    // Managed policy (shared/contracts/managedPolicy.ts), set by an admin in
+    // Team settings > Managed devices. Enforced server side for the team's
+    // workspace and for every device enrolled in the team (lib/teamPolicyGuard),
+    // and sent to those devices on the heartbeat.
+    policy: v.optional(teamPolicyValidator),
     // IANA zone the team's day is cut in (Changes editions, lib/teamDay.ts).
     // Unset: the earliest admin's users.timezone, else UTC.
     timezone: v.optional(v.string()),
@@ -742,6 +751,9 @@ export default defineSchema({
     team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
     status: v.union(v.literal("active"), v.literal("completed")),
     share_token: v.optional(v.string()),
+    // The owner lets anonymous viewers of the share link suggest messages
+    // (guestSuggestions.ts). Each one waits for the owner to send it.
+    guest_suggestions: v.optional(v.boolean()),
     parent_message_uuid: v.optional(v.string()),
     parent_conversation_id: v.optional(v.id("conversations")),
     // A cloud agent session whose agent is archived on the provider's site
@@ -1022,10 +1034,13 @@ export default defineSchema({
     // cleared in lockstep with pending_api_error; the web blocked-sessions
     // banner and session rows render "Xm ago" from it.
     pending_api_error_at: v.optional(v.number()),
-    // When codecast last restarted this session in a fresh context after its
-    // context filled and could not be compacted (handoff.recoverContext). A
-    // second overflow inside the cooldown stays parked for a person.
+    // When codecast last restarted this session after its context filled and
+    // could not be compacted (handoff.recoverContext). A second overflow
+    // inside the cooldown after a brief stays parked for a person.
     context_recovered_at: v.optional(v.number()),
+    // The rung that recovery took (handoff.contextRecoveryMode): a "rebuild"
+    // that overflows again inside the cooldown falls back to a "brief".
+    context_recovery_mode: v.optional(v.union(v.literal("rebuild"), v.literal("brief"))),
     // A hosted assistant conversation whose last turn ended on a stop notice:
     // the notice's kind (NOTICE_KINDS in contracts/assistant). Written by
     // assistant/turns.ts tellStopped and cleared when the next turn starts,
@@ -3193,6 +3208,10 @@ export default defineSchema({
     update_requested_at: v.optional(v.number()),
     update_state: v.optional(updateStateValidator),
     update_error: v.optional(v.string()),
+    // The team this machine is enrolled in through its MDM profile
+    // (managedDevices.ts). Set when the enrollment completes, cleared when an
+    // admin revokes it. The heartbeat and the policy guard read it here.
+    enrolled_team_id: v.optional(v.id("teams")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),
@@ -4119,6 +4138,10 @@ export default defineSchema({
   usage_pending: defineTable({
     conversation_id: v.id("conversations"),
     day_start: v.number(),
+    // The account (email) the session's machine ran on when these turns
+    // landed, so the fold can split a person's tokens by account
+    // (account_usage_daily). Absent when the machine reports no account.
+    account: v.optional(v.string()),
     token_hours: v.array(v.number()),
     spend_hours: v.array(v.number()),
   }).index("by_conversation_day", ["conversation_id", "day_start"]),
@@ -5090,6 +5113,37 @@ export default defineSchema({
     .index("by_conversation_grantee", ["conversation_id", "grantee_user_id"])
     .index("by_owner_status", ["owner_user_id", "status"]),
 
+  // An anonymous viewer of a session's share link who gave a name to suggest
+  // messages (guestSuggestions.ts). They prove it with the secret their
+  // browser was handed; only its hash is stored. A guest is bound to the
+  // share token they joined on, so turning the link off or rotating it
+  // shuts them out.
+  session_guests: defineTable({
+    conversation_id: v.id("conversations"),
+    name: v.string(),
+    secret_hash: v.string(),
+    share_token_hash: v.string(),
+    created_at: v.number(),
+  }).index("by_conversation_created", ["conversation_id", "created_at"]),
+
+  // One message a guest proposed for a session. Nothing reaches the session
+  // until its owner sends it.
+  guest_suggestions: defineTable({
+    conversation_id: v.id("conversations"),
+    guest_id: v.id("session_guests"),
+    // Snapshot of the guest's name so the owner's card renders without a join.
+    guest_name: v.string(),
+    owner_user_id: v.id("users"),
+    body: v.string(),
+    status: v.union(v.literal("pending"), v.literal("sent"), v.literal("dismissed"), v.literal("withdrawn")),
+    // What the owner actually sent, when they edited it first.
+    sent_body: v.optional(v.string()),
+    created_at: v.number(),
+    decided_at: v.optional(v.number()),
+  })
+    .index("by_conversation_status", ["conversation_id", "status"])
+    .index("by_guest", ["guest_id"]),
+
   github_webhook_events: defineTable({
     delivery_id: v.string(),
     event_type: v.string(),
@@ -5607,6 +5661,9 @@ export default defineSchema({
     // One level: a row that has a parent is never a parent itself. The parent
     // is the top level goal this one feeds.
     parent_initiative_id: v.optional(v.id("initiatives")),
+    // Where it reads among its siblings, set by hand (the Goals document). Lower
+    // first; a goal without one reads after those that have one, by status and date.
+    position: v.optional(v.number()),
     // How the goal is measured (shared/contracts/initiative InitiativeMetric):
     // at most two numbers with a target each. The reported values live in
     // `scoreboard` by key, the template scoreboard's own shape, written by
@@ -8885,6 +8942,11 @@ export default defineSchema({
     origin_session_id: v.optional(v.string()),
     origin_session_title: v.optional(v.string()),
     origin_agent_type: v.optional(v.string()),
+    // The session the sender had open when they wrote the line (the chat
+    // beside a conversation), so the room reads which thread it is about.
+    // Kept only when the sender can read that session; readers resolve it
+    // through their own access, so it names nothing they could not open.
+    context_session_id: v.optional(v.id("conversations")),
     created_at: v.number(),
     updated_at: v.number(),
     edited_at: v.optional(v.number()),
@@ -9034,6 +9096,9 @@ export default defineSchema({
     last_read_at: v.number(),
     last_read_message_id: v.optional(v.id("chat_messages")),
     notify_level: v.union(v.literal("all"), v.literal("mentions"), v.literal("none")),
+    // Thread roots in this channel whose replies this member silenced
+    // (@codecast/shared/chat threadMute). Mentions still notify.
+    muted_threads: v.optional(v.array(v.string())),
     joined_at: v.optional(v.number()),
     updated_at: v.number(),
   })

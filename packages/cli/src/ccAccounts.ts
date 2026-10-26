@@ -72,6 +72,9 @@ export interface CcProfileMeta {
   // account's windows to itself. A person sets and clears it; a re-save of the
   // same account keeps it.
   reserved_for?: string;
+  // Pooled copy: ccPool.ts
+  pool_share_id?: string;
+  pool_contributor?: string;
   active: boolean;
 }
 
@@ -87,7 +90,7 @@ export function assertValidProfileName(name: string): void {
   }
 }
 
-function useFileStore(): boolean {
+export function useFileStore(): boolean {
   return process.platform !== "darwin" || process.env.CC_ACCOUNTS_FORCE_FILE === "1";
 }
 
@@ -962,7 +965,7 @@ export function profileStoreKeychainService(dir: string): string {
   return `${STORE_KEYCHAIN_PREFIX}${createHash("sha256").update(dir.normalize("NFC")).digest("hex").slice(0, 8)}`;
 }
 
-function storeCredentialFile(dir: string): string {
+export function storeCredentialFile(dir: string): string {
   return path.join(dir, STORE_CREDENTIAL_FILE);
 }
 
@@ -1535,7 +1538,7 @@ function fleetLaunchFile(): string {
   return path.join(defaultConfigDir(), "cc-fleet.env");
 }
 
-function fleetStatePath(): string {
+export function fleetStatePath(): string {
   return path.join(fleetStoreDir(), "state.json");
 }
 
@@ -1744,22 +1747,26 @@ export function fleetLoginDead(name: string, login: string | null, now = Date.no
  *  not dead or nothing else can carry the fleet. */
 async function failFleetOver(dead: string, login: string | null, now: number): Promise<string | null> {
   if (!fleetLoginDead(dead, login, now)) return null;
+  const state = await moveFleetToFallback(dead, now);
+  const why = readProfileIndex().profiles[dead]?.access_refused_at
+    ? `"${dead}"'s organization refuses subscription access`
+    : `"${dead}" is signed out (cast accounts signin ${dead})`;
+  return state && `${why}; moved the ${describeFleetWrite(state)}`;
+}
+
+/** Fleet onto auto-switch's pick besides `leaving`, else null. */
+export async function moveFleetToFallback(leaving: string, now: number): Promise<FleetState | null> {
   const { accounts: usage } = readUsageCache();
-  const deadEmail = readProfileIndex().profiles[dead]?.email;
   const candidates = fallbackProfiles(
     listProfiles()
-      .filter((p) => p.name !== dead)
+      .filter((p) => p.name !== leaving)
       .map((p) => ({ ...p, usage: usage[p.uuid || p.email || ""], setup_token: accountTokenInfo(p.name) })),
-    deadEmail,
+    readProfileIndex().profiles[leaving]?.email,
     now,
   );
   for (const candidate of candidates) {
     try {
-      const state = await putFleetOn(candidate.name, now);
-      const why = readProfileIndex().profiles[dead]?.access_refused_at
-        ? `"${dead}"'s organization refuses subscription access`
-        : `"${dead}" is signed out (cast accounts signin ${dead})`;
-      return `${why}; moved the ${describeFleetWrite(state)}`;
+      return await putFleetOn(candidate.name, now);
     } catch {
       // This one cannot carry either (its login lapsed since the last probe): try the next.
     }
@@ -1767,7 +1774,7 @@ async function failFleetOver(dead: string, login: string | null, now: number): P
   return null;
 }
 
-function describeFleetWrite(state: FleetState): string {
+export function describeFleetWrite(state: FleetState): string {
   return `fleet store on "${state.profile}" via ${state.via}, good until ${new Date(state.expires_at).toISOString()}`;
 }
 
@@ -3076,6 +3083,7 @@ export interface AccountsHeartbeatPayload {
     login_expired_at?: number;
     // Kept for one job: never an auto-switch target — see CcProfileMeta.
     reserved_for?: string;
+    pool_share_id?: string;
   }>;
 }
 
@@ -3128,7 +3136,7 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
       ? launch.since
       : stamp && (active?.uuid || active?.email) === stamp.key ? stamp.since : undefined;
     const usage = readUsageCache().accounts;
-    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at: expired, access_refused_at, reserved_for }]) => {
+    const profiles = Object.entries(readProfileIndex().profiles).sort(([a], [b]) => a.localeCompare(b)).map(([name, { email, uuid, tier, subscription, login_expired_at: expired, access_refused_at, reserved_for, pool_share_id }]) => {
       // The server's validator has no field for an org refusal, and its
       // auto-switch already reads a dead login with no credential behind it as
       // "never a target, its parks are dead". A refused account is exactly that.
@@ -3140,11 +3148,12 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
         email,
         tier,
         subscription,
-        usage: publishableUsage(usage[uuid || email || ""]),
+        usage: pool_share_id ? undefined : publishableUsage(usage[uuid || email || ""]),
         ...(tok ? { token: { stored_at: tok.stored_at, expires_at: tok.expires_at } } : {}),
         ...(setup ? { setup_token: { stored_at: setup.stored_at, expires_at: setup.expires_at } } : {}),
         ...(login_expired_at ? { login_expired_at } : {}),
         ...(reserved_for ? { reserved_for } : {}),
+        ...(pool_share_id ? { pool_share_id } : {}),
       };
     });
     if (active?.email || profiles.length > 0) {

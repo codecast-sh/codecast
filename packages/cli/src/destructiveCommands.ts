@@ -61,6 +61,13 @@ export const DESTRUCTIVE_COMMANDS: readonly DestructiveCommand[] = [
       warning: "Teammates on that team can then start sessions on this machine. They run as you: your agent logins, git credentials and files.",
     },
   },
+  {
+    path: ["accounts", "share"],
+    confirm: {
+      mode: "prompt",
+      warning: "Every teammate's machines get a sealed copy of this account's setup-token and can run on it. Anyone with a shell on those machines can copy the token for as long as it is valid; taking it back deletes codecast's copies, not one taken outside it.",
+    },
+  },
   { path: ["browser", "stop"] },
   { path: ["integrations", "remove"] },
   // The one `cast computer` verb that changes the machine rather than reading

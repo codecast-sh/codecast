@@ -277,6 +277,7 @@ export { isConvexId };
 export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import { feedCoverMetaKey } from "../lib/feedCatchup";
+import { tickCoarseClocks } from "../hooks/useCoarseNow";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import type { AgentChainSpec, AgentDefinitionSpec } from "@codecast/shared/contracts";
@@ -313,6 +314,7 @@ export {
   selectChatRail,
   selectChannelMessages,
   selectChannelReadMarker,
+  selectThreadMuted,
   selectThreadReplies,
   selectChatReactions,
   teamChannelPushOpts,
@@ -426,6 +428,11 @@ function readDeviceWorkspace(): any {
 // booleans — one source of truth for the right edge.
 /** Nav is folded to its hover-peek edge (the old ui.sidebar_collapsed). */
 export const selectNavCollapsed = (s: { workspace: WorkspaceState }) => s.workspace.nav.presentation === "collapsed";
+/** The app sidebar is off screen: folded to its edge, or zen mode with the
+ *  nav not pinned open. Surfaces that stand in for it (the chat page's own
+ *  rail) show exactly when this holds. */
+export const selectNavHidden = (s: { workspace: WorkspaceState; zenNavOpen: boolean; clientState: { ui?: { zen_mode?: boolean } | null } }) =>
+  s.clientState.ui?.zen_mode ? !s.zenNavOpen : selectNavCollapsed(s);
 
 export const selectSessionRailOpen = (s: { workspace: WorkspaceState }) => isSessionRailOpen(s.workspace);
 export const selectCommentRailOpen = (s: { workspace: WorkspaceState }) => isCommentRailOpen(s.workspace);
@@ -3459,6 +3466,7 @@ export type PlaceInboxState = {
   questionResolutions?: QuestionResolutions;
   pendingSessionCreates?: Record<string, unknown>;
   blockedReviveRequestedAt?: Record<string, number>;
+  livenessHeldAt?: number | null;
   currentSessionId?: string | null;
   /** NEW holds after a first send (newSessionHolds). Presentation only: filing, never placement. */
   newSessionHolds?: Record<string, number>;
@@ -3778,7 +3786,9 @@ export function placeInboxRows(
   state: PlaceInboxState,
   opts: { focusedId?: string | null; scope?: "mine" | "team"; now?: number; nowMono?: number } = {},
 ): PlacedInbox {
-  const now = opts.now ?? Date.now();
+  // While the liveness facts are held (livenessHeldAt), every time-driven term
+  // is read at the moment they were last known current, never past it.
+  const now = Math.min(opts.now ?? Date.now(), state.livenessHeldAt ?? Infinity);
   const scope = opts.scope ?? state.clientState.ui?.inbox_scope ?? "mine";
   const showOld = resolveShowOld(state.clientState.ui);
   const meId = state.currentUser?._id?.toString?.() ?? null;
@@ -5579,6 +5589,17 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // recompute scheduler (a source guard bans every other reader). Facts from
   // the same payload merge onto rows; stamps land here and nowhere else.
   sessionsProjection: Record<string, SessionsProjectionSlot>;
+  // The wall time the liveness facts are known current up to, while they may
+  // not be current now (a launch from cache, a suspension, a dropped socket);
+  // null while the feed is live. Placement reads time-driven terms (heartbeat
+  // windows, trust TTLs) at this time instead of the device clock, so a row
+  // keeps its last known section instead of decaying into Needs Input on facts
+  // the device simply has not been sent. `livenessHoldSeq` bumps on every
+  // hold: only a fresh read started after the latest hold releases it.
+  livenessHeldAt: number | null;
+  livenessHoldSeq: number;
+  holdLiveness: (at: number) => void;
+  releaseLiveness: (seq: number) => void;
   // The one applier for a sessionsLiveness / teamSessionsLiveness payload:
   // splits facts (INBOX_FACT_FIELDS → merged onto session rows) from stamps
   // (INBOX_PROJECTION_FIELDS → the scope's buffer) and records the envelope
@@ -5849,6 +5870,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setPrivacy: (id: string, isPrivate: boolean) => void;
   /** "Anyone with the link" on (a freshly minted token) or off (null). */
   setShareLink: (id: string, token: string | null) => void;
+  /** Let anonymous viewers of the share link suggest messages for this session. */
+  setGuestSuggestions: (id: string, enabled: boolean) => void;
+  /** Send a guest's suggestion into the session (optionally as edited); the card leaves at once. */
+  sendGuestSuggestion: (suggestionId: string, body?: string) => void;
+  dismissGuestSuggestion: (suggestionId: string) => void;
   setObjectShareLink: (kind: PublicShareKind, id: string, token: string | null) => void;
   dismissBrowserPaneOffer: (id: string, at: number) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
@@ -6254,6 +6280,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Open one of your machines to exactly these teams (empty = private).
    *  Settings > Machines; the server home is device_shares. */
   setDeviceShares: (deviceId: string, teamIds: string[]) => void;
+  /** Put one of the viewer's accounts in exactly these teams' pools (empty
+   *  takes it back): Settings > Claude Accounts' pool pill. Server home is
+   *  account_shares; the accountPool snapshot reconciles the draft. */
+  setAccountShares: (deviceId: string, email: string, teamIds: string[]) => void;
   setDeviceSnippet: (deviceId: string, change: DeviceSnippetChange) => Promise<unknown>;
   setProviderKey: (deviceId: string, change: ProviderKeyCommand) => Promise<{ command_id?: string } | undefined>;
   requestDeviceUpdate: (deviceId: string) => Promise<unknown>;
@@ -6732,6 +6762,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setRoomLocked: (roomKey: string, locked: boolean) => void;
   setTeamFeature: (teamId: string, feature: string, enabled: boolean) => void;
   setTeamBudget: (teamId: string, capUsd: number) => void;
+  setTeamPolicy: (teamId: string, policy: Record<string, unknown>) => void;
+  revokeEnrollmentToken: (teamId: string, tokenId: string) => void;
+  revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
   updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
@@ -9091,6 +9124,20 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // Ephemeral by design: not registered for persistence, empty on every boot —
   // a cold replica has no stamps and the compare gates on that (C6).
   sessionsProjection: {},
+  livenessHeldAt: null,
+  livenessHoldSeq: 0,
+  // Ephemeral transport state (per window, never persisted): raw set.
+  holdLiveness: (at: number) => {
+    const { livenessHeldAt, livenessHoldSeq } = get();
+    set({ livenessHeldAt: livenessHeldAt == null ? at : Math.min(livenessHeldAt, at), livenessHoldSeq: livenessHoldSeq + 1 });
+  },
+  releaseLiveness: (seq: number) => {
+    const { livenessHeldAt, livenessHoldSeq } = get();
+    if (livenessHeldAt == null || seq !== livenessHoldSeq) return;
+    set({ livenessHeldAt: null });
+    // Every placement memo keys on the coarse clock: re-place now, not at the next tick.
+    tickCoarseClocks();
+  },
   // The one applier for an overlay payload ({ liveness, projection }). sync():
   // fact merges persist through the registered sessions collection; the stamp
   // buffer itself is unregistered, so it never touches IDB.
@@ -9555,6 +9602,23 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setDeviceShares: action(function (this: Draft, deviceId: string, teamIds: string[]) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.shared_team_ids = [...teamIds].sort();
+  }),
+  setAccountShares: action(function (this: Draft, deviceId: string, email: string, teamIds: string[]) {
+    const pool = this.accountPool as Record<string, any>;
+    const key = email.toLowerCase();
+    const wanted = new Set(teamIds);
+    const mine = Object.values(pool).filter((r) => r.mine && r.email === key);
+    for (const r of mine) if (!wanted.has(String(r.team_id))) delete pool[r._id];
+    const have = new Set(mine.map((r) => String(r.team_id)));
+    for (const teamId of wanted) {
+      if (have.has(teamId)) continue;
+      const stub = `temp_pool_${key}_${teamId}`;
+      pool[stub] = {
+        _id: stub, team_id: teamId, user_id: this.currentUser?._id, contributor_name: this.currentUser?.name ?? "You",
+        mine: true, email: key, holder_device_id: deviceId, profile_name: null,
+        tier: null, subscription: null, usage: null, machines: 0, shared_at: Date.now(), split: [],
+      };
+    }
   }),
   // A snippet or machine setting on one device paints on its roster row; the
   // setDeviceSnippet side effect sends the device its apply_snippet command.
@@ -10741,6 +10805,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
       c.share_token = token ?? null;
       if (!token) c.profile_pinned_at = undefined;
     });
+  }),
+
+  setGuestSuggestions: action(function (this: Draft, id: string, enabled: boolean) {
+    patchConversationRows(this, id, (c) => {
+      c.guest_suggestions = enabled;
+    });
+  }),
+
+  // `guestSuggestions` is localFirst, so removing the row plants an exclude
+  // that holds over pushes racing the write. The side effects run
+  // guestSuggestions.sendGuestSuggestionFor / dismissGuestSuggestionFor.
+  sendGuestSuggestion: action(function (this: Draft, suggestionId: string, _body?: string) {
+    delete this.guestSuggestions[suggestionId];
+  }),
+  dismissGuestSuggestion: action(function (this: Draft, suggestionId: string) {
+    delete this.guestSuggestions[suggestionId];
   }),
 
   // The same switch for every other shareable kind (convex publicShare.ts),
@@ -14655,6 +14735,26 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const team = (this.teams as any[]).find((t) => t && String(t._id) === String(teamId));
     if (!team) return;
     team.features = { ...(team.features ?? {}), [feature]: enabled };
+  }),
+
+  // A team's managed policy (Team settings > Managed devices; admin only on
+  // the server). Paints the teams row's policy; the server keeps only the
+  // catalog's keys and its echo replaces the row.
+  setTeamPolicy: action(function (this: Draft, teamId: string, policy: Record<string, unknown>) {
+    const team = (this.teams as any[]).find((t) => t && String(t._id) === String(teamId));
+    if (team) team.policy = policy;
+  }),
+  // Revoking an enrollment token or an enrolled device paints the cached
+  // Managed devices row; the feed's next answer replaces it.
+  revokeEnrollmentToken: action(function (this: Draft, teamId: string, tokenId: string) {
+    const key = settingsDataKey("managedDevices", (this.currentUser as any)?._id, teamId);
+    const token = key ? (this.settingsData as any)[key]?.value?.tokens?.find((t: any) => String(t._id) === tokenId) : undefined;
+    if (token && !token.revoked_at) token.revoked_at = Date.now();
+  }),
+  revokeDeviceEnrollment: action(function (this: Draft, teamId: string, enrollmentId: string) {
+    const key = settingsDataKey("managedDevices", (this.currentUser as any)?._id, teamId);
+    const device = key ? (this.settingsData as any)[key]?.value?.devices?.find((d: any) => String(d._id) === enrollmentId) : undefined;
+    if (device) device.status = "revoked";
   }),
 
   // A team's monthly model budget (learning-loop.md LL10; admin only on the

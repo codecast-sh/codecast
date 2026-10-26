@@ -234,7 +234,11 @@ describe("command groups stay off the boot graph", () => {
     // (launchCommand), secretShapes.ts (redaction) and render/structuredResult.ts.
     // 326 on 2026-10-26: ccAdoptLogin.ts, the cloud Mac's keychain adopt job,
     // split out of ccAccounts.ts to hold that file under its max-lines pin.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(326);
+    // 328 on 2026-10-26: managed policy (MDM), config/managedPolicy.ts, which
+    // every config reader overlays, and the barrel's contracts/managedPolicy.ts.
+    // 329 on 2026-10-26: managedInstall.ts, whether this binary is the MDM
+    // .pkg's root-owned copy (self-update steps aside for it).
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(329);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -255,7 +259,11 @@ describe("command groups stay off the boot graph", () => {
     // The Vault's redaction leads it (secretShapes.ts +10.8, secretRules.ts +7,
     // knownValueRedaction.ts +4.4), then installed guidance in snippets.ts
     // (+8.3), render/structuredResult.ts (+7.8) and handoffPrompt.ts (+4.8).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4360);
+    // 4405 on 2026-10-26: managed policy (MDM), which every config read
+    // overlays: contracts/managedPolicy.ts (+14.5), config/managedPolicy.ts
+    // (+13.5), managedInstall.ts (+2.4), the policy guards and the enroll
+    // retry hint in index.ts (4406).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4406);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -368,7 +376,11 @@ describe("command groups stay off the boot graph", () => {
     // 511 on 2026-10-26: cursorDbPath.ts, the leaf every Cursor database open
     // goes through (a closed WAL workspace opens immutable).
     // 512 on 2026-10-26: ccAdoptLogin.ts, split out of ccAccounts.ts (above).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(512);
+    // 514 on 2026-10-26: managed policy, the same two files as index.ts's (above).
+    // 515 on 2026-10-26: managedInstall.ts (above).
+    // 516 on 2026-10-26: contracts/deliveryFailed.ts, the row the daemon writes
+    // when it stops delivering a message (a subpath import, off the barrel).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(516);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

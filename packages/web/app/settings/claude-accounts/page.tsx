@@ -43,6 +43,8 @@ import { useAccountRecoveryToggles } from "../../../hooks/useAccountRecoveryTogg
 import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/RecoveryModeSelect";
 import { useMachineAccountSwitch } from "../../../hooks/useMachineAccountSwitch";
 import { machineSwitchBlock, profileIsCurrentLogin, profileIsFleetAccount } from "../../../lib/machineAccountSwitch";
+import { AccountPoolPill } from "../../../components/settings/AccountPoolPill";
+import { useAccountPool, useSyncAccountPool } from "../../../hooks/useSyncAccountPool";
 
 type DeviceAccounts = {
   device_id: string;
@@ -66,6 +68,8 @@ type DeviceAccounts = {
     setup_token?: { stored_at: number; expires_at: number };
     login_expired_at?: number;
     reserved_for?: string;
+    // A teammate's account from the team's pool (accountPool.ts).
+    pool_share_id?: string;
   }>;
   auto_switch: boolean;
   /** Absent on servers that predate the field — treated as on. */
@@ -265,6 +269,7 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
 
 function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
   const removeProfile = useMutation(api.accountSwitch.removeAccountProfile);
+  const pool = useAccountPool();
   const now = useCoarseNow(30_000);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
@@ -338,6 +343,8 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
           const keychainLoginAside = !!device.launch_profile && !isActive && profileIsCurrentLogin(p, device.active_email);
           const onFleetStore = isActive && !!device.fleet_store;
           const plan = planLabel(p);
+          // A pool copy is a teammate's: no sign-in, token or remove of its own.
+          const pooledFrom = p.pool_share_id ? pool.find((r) => r._id === p.pool_share_id)?.contributor_name ?? "a teammate" : null;
           return (
             <div
               key={p.name}
@@ -347,6 +354,11 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                 <span className={`h-2 w-2 shrink-0 rounded-full ${isActive ? "bg-sol-green" : "bg-sol-border"}`} />
                 <span className="text-sm font-medium text-sol-text">{p.name}</span>
                 <span className="min-w-0 flex-1 truncate text-xs text-sol-text-muted">{p.email}</span>
+                {pooledFrom && (
+                  <span className="shrink-0 rounded bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan" data-pool-from>
+                    from {pooledFrom}
+                  </span>
+                )}
                 {plan && (
                   <span className="shrink-0 rounded bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan">
                     {plan}
@@ -378,17 +390,24 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                 )}
                 <LoginExpiredBadge profile={p} />
                 <ReservedBadge profile={p} />
-                <ProfileSignInButton
-                  device={device}
-                  profile={p}
-                  force={
-                    sw.outcome?.kind === "error" &&
-                    sw.outcome.profile === p.name &&
-                    /sign in again/i.test(sw.outcome.message)
-                  }
-                />
-                <SetupTokenBadge profile={p} now={now} />
-                <MintTokenButton device={device} profile={p} />
+                {!pooledFrom && (
+                  <>
+                    <ProfileSignInButton
+                      device={device}
+                      profile={p}
+                      force={
+                        sw.outcome?.kind === "error" &&
+                        sw.outcome.profile === p.name &&
+                        /sign in again/i.test(sw.outcome.message)
+                      }
+                    />
+                    <SetupTokenBadge profile={p} now={now} />
+                    <MintTokenButton device={device} profile={p} />
+                    {!device.is_remote && p.email && profileHasSetupToken(p, now) && (
+                      <AccountPoolPill deviceId={device.device_id} email={p.email} />
+                    )}
+                  </>
+                )}
                 {(() => {
                   const badge = sessionsBadge(p, now);
                   return badge ? (
@@ -457,7 +476,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                         </Button>
                       );
                     })()}
-                    <button
+                    {!pooledFrom && <button
                       onClick={() => setConfirmRemove(p.name)}
                       disabled={rowBusy !== null || !online}
                       aria-label="Remove this profile from the machine"
@@ -465,7 +484,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                       className="shrink-0 rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-red/10 hover:text-sol-red"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    </button>}
                   </>
                 )}
               </div>
@@ -505,6 +524,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
 
 export default function ClaudeAccountsSettings() {
   const { data } = useSettingsData("accountProfiles");
+  useSyncAccountPool();
 
   return (
     <SettingsPanel>

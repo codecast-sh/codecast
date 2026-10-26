@@ -3,6 +3,7 @@ import { internal } from "../_generated/api";
 import { overrideFor, usageCost } from "@platform/agent/meter";
 import { dayStartUtc, resolveCounterTeam } from "./userSend";
 import { teamHasFeature } from "./teamFeatureGuard";
+import { accountOfSession } from "./sessionAccount";
 
 // Per-day token and spend counters behind the "Tokens" and "Spend" chart
 // metrics. conversations.usage_totals is a lifetime total per session, so it
@@ -78,6 +79,9 @@ export async function recordUsageDays(
     acc.spend_hours[hour] += turnCost(t.model ?? conversation.model, t.usage);
   }
   if (byDay.size === 0) return;
+  // The account these turns ran on, so the fold can split them by account
+  // (the shared pool's per-person view). A pending row holds one account.
+  const account = await accountOfSession(ctx, conversation);
   const pending = await ctx.db
     .query("usage_pending")
     .withIndex("by_conversation_day", (q: any) => q.eq("conversation_id", conversation._id))
@@ -86,11 +90,11 @@ export async function recordUsageDays(
     await ctx.scheduler.runAfter(FOLD_DELAY_MS, internal.usageDays.fold, { conversation_id: conversation._id });
   }
   for (const add of byDay.values()) {
-    const row = pending.find((p: any) => p.day_start === add.day_start);
+    const row = pending.find((p: any) => p.day_start === add.day_start && p.account === account);
     if (row) {
       await ctx.db.patch(row._id, { token_hours: addHours(row.token_hours, add.token_hours), spend_hours: addHours(row.spend_hours, add.spend_hours) });
     } else {
-      await ctx.db.insert("usage_pending", { conversation_id: conversation._id, ...add });
+      await ctx.db.insert("usage_pending", { conversation_id: conversation._id, ...add, ...(account ? { account } : {}) });
     }
   }
 }
@@ -117,9 +121,21 @@ export async function foldUsage(ctx: { db: any }, conversationId: Id<"conversati
       const row = { token_hours, spend_hours, updated_at: Date.now() };
       if (existing) await ctx.db.patch(existing._id, row);
       else await ctx.db.insert("user_usage_daily", { user_id: conversation.user_id, team_id: teamId, day_start: p.day_start, ...row });
+      if (p.account) await addAccountDay(ctx, p.account, conversation.user_id, p.day_start, p.token_hours.reduce((a: number, b: number) => a + b, 0));
     }
   }
   for (const p of pending) await ctx.db.delete(p._id);
+}
+
+// A person's tokens on one account for one day (account_usage_daily).
+async function addAccountDay(ctx: { db: any }, email: string, userId: Id<"users">, dayStart: number, tokens: number) {
+  if (tokens <= 0) return;
+  const existing = await ctx.db
+    .query("account_usage_daily")
+    .withIndex("by_email_user_day", (q: any) => q.eq("email", email).eq("user_id", userId).eq("day_start", dayStart))
+    .first();
+  if (existing) await ctx.db.patch(existing._id, { tokens: existing.tokens + tokens, updated_at: Date.now() });
+  else await ctx.db.insert("account_usage_daily", { email, user_id: userId, day_start: dayStart, tokens, updated_at: Date.now() });
 }
 
 export type UsageDayRow = DayHours;

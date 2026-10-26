@@ -28,6 +28,7 @@ export type SettingsSectionId =
   | "daemon"
   | "provider-keys"
   | "claude-accounts"
+  | "account-pool"
   | "cli"
   | "devices"
   | "migrate"
@@ -56,6 +57,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/daemon": "daemon",
   "/settings/provider-keys": "provider-keys",
   "/settings/claude-accounts": "claude-accounts",
+  "/settings/account-pool": "account-pool",
   "/settings/cli": "cli",
   "/settings/devices": "devices",
   "/settings/migrate": "migrate",
