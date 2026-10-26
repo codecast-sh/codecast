@@ -3627,11 +3627,12 @@ diffs-container {
 /* One resize handle everywhere: a hairline that thickens into the accent on
    hover, with a generous invisible grab area. Three hand-rolled variants
    (1px black/10, 1px sol-border, 1.5px sol-border/50) collapse into this.
-   It sits above the panes' sticky headers (z-10), which would otherwise paint
-   over the half of the accent band that reaches into the next pane. */
+   It sits above every sticky layer inside a pane (headers at z-20, the
+   decision card at z-40), which would otherwise paint over the half of the
+   accent band that reaches into the next pane, and below overlays (z-50). */
 .cc-split {
   position: relative;
-  z-index: 20;
+  z-index: 45;
   width: 1px;
   background: var(--cc-panel-rule);
   cursor: col-resize;
