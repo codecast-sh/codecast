@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { router } from 'expo-router';
 import { StyleSheet, TouchableOpacity, View as RNView, Image, Linking, useWindowDimensions } from 'react-native';
 import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
 import { attachmentKind, type ChatAttachmentKind, type ChatMessageView } from '@codecast/web/components/chat/chatTypes';
@@ -95,6 +96,9 @@ export type MobileChatMessage = {
    *  the bridge pulled in, "Also in Slack" for one it posted out. */
   slack?: { direction: 'inbound' | 'outbound'; permalink?: string };
   content: string;
+  /** The session the sender had open when they wrote it; its title when the
+   *  viewer's store holds that session. */
+  contextSession?: { id: string; title?: string };
   createdAt: number;
   editedAt?: number;
   deletedAt?: number;
@@ -140,6 +144,9 @@ export function fromChatView(
         }
       : { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent, slack: a.slack as ChatAuthorLite['slack'] },
     content: view.content,
+    contextSession: view.contextSessionId
+      ? { id: view.contextSessionId, title: identityFor(view.contextSessionId)?.title ?? undefined }
+      : undefined,
     createdAt: view.createdAt,
     editedAt: view.editedAt,
     deletedAt: view.deletedAt,
@@ -303,6 +310,18 @@ export const MessageRow = memo(function MessageRow({
                 <RNText style={styles.agentChipText}>APP</RNText>
               </RNView>
             )}
+            {message.contextSession && (
+              <TouchableOpacity
+                onPress={() => router.push(`/session/${message.contextSession!.id}`)}
+                accessibilityRole="link"
+                accessibilityLabel="Open the session this was sent from"
+                style={styles.context}
+              >
+                <RNText style={styles.time} numberOfLines={1}>
+                  from <RNText style={styles.contextTitle}>{message.contextSession.title || message.contextSession.id.slice(0, 7)}</RNText>
+                </RNText>
+              </TouchableOpacity>
+            )}
             {message.slack && <SlackMark slack={message.slack} />}
             <RNText style={styles.time}>{clock(message.createdAt)}</RNText>
           </RNView>
@@ -461,6 +480,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   agentChipText: { fontSize: 7.5, fontWeight: '700', color: Theme.violet, letterSpacing: 0.8 },
   time: { fontSize: 10, color: Theme.textMuted0 },
+  context: { flexShrink: 1, minWidth: 0 },
+  contextTitle: { color: Theme.textMuted },
   // The head aligns on text baselines; a bare glyph has none, so it centers.
   slackMark: { alignSelf: 'center' },
   deleted: { fontSize: 12.5, fontStyle: 'italic', color: Theme.textMuted0 },

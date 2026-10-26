@@ -462,6 +462,7 @@ export function toMessageView(row: ChatMessageRow, ctx: ViewContext): ChatMessag
       : undefined,
     localOnly: row.sync_local_only || undefined,
     threadRootId: row.thread_root_id,
+    contextSessionId: row.context_session_id,
     content: row.content,
     createdAt: row.created_at,
     editedAt: row.edited_at,

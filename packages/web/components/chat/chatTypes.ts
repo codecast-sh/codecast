@@ -96,6 +96,8 @@ export type ChatMessageView = {
    *  broadcast reply ("also send to #channel"), where it drives the small
    *  "replied to a thread" context line that opens the thread. */
   threadRootId?: string;
+  /** The session the sender had open when they wrote this line. */
+  contextSessionId?: string;
   /** Thread rollup, present only on a root message that has replies. */
   replyCount?: number;
   lastReplyAt?: number;

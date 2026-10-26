@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { memo, useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 import { useBottomAnchoredList, prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
-import { authorGroupKey, buildChatTimeline, type TimelineRow } from "../../lib/chatTimeline";
+import { lineGroupKey, buildChatTimeline, type TimelineRow } from "../../lib/chatTimeline";
 import { ChatMessage, ChatDayDivider, ChatNewDivider } from "./ChatMessage";
 import type { ChatMessageView } from "./chatTypes";
 import { shouldHoldChatLanding } from "./chatLanding";
@@ -110,6 +110,8 @@ export type ChatMessageListProps = {
   targetMessageId?: string;
   /** Rendered above the first message, inside the scroll region. */
   header?: ReactNode;
+  /** The session this list sits beside: lines written from it need not say so. */
+  hereSessionId?: string;
 };
 
 export const ChatMessageList = memo(function ChatMessageList({
@@ -138,6 +140,7 @@ export const ChatMessageList = memo(function ChatMessageList({
   inThread,
   targetMessageId,
   header,
+  hereSessionId,
 }: ChatMessageListProps) {
   const hasHeader = header != null && header !== false;
   const rows = useMemo<ListRow[]>(
@@ -146,7 +149,7 @@ export const ChatMessageList = memo(function ChatMessageList({
         messages.map((m) => ({
           id: m.id,
           authorId: m.author.id,
-          groupKey: authorGroupKey(m.author),
+          groupKey: lineGroupKey(m.author, m.contextSessionId),
           createdAt: m.createdAt,
           pendingAgent: m.agentStatus === "thinking" || m.agentStatus === "streaming",
           deleted: !!m.deletedAt,
@@ -372,6 +375,9 @@ export const ChatMessageList = memo(function ChatMessageList({
                     onRetrySend={onRetrySend}
                     slackOutbound={slackOutbound}
                     onShareToSlack={onShareToSlack}
+                    contextSessionId={
+                      row.message.view.contextSessionId !== hereSessionId ? row.message.view.contextSessionId : undefined
+                    }
                   />
                 )}
               </div>

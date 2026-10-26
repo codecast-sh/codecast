@@ -54,6 +54,17 @@ export function authorGroupKey(author: {
   return author.id;
 }
 
+/** A line's grouping identity: its author, and the session it was written
+ *  beside (chat_messages.context_session_id). A line from another session
+ *  starts a new group, so its header can name that session. */
+export function lineGroupKey(
+  author: Parameters<typeof authorGroupKey>[0],
+  contextSessionId?: string | null,
+): string {
+  const key = authorGroupKey(author);
+  return contextSessionId ? `${key}|${contextSessionId}` : key;
+}
+
 /** The same identity read off a stored row, for rollups computed before the
  *  row is a rendered author (the server's thread summary, the web's local
  *  reply rollup): the Slack person behind a bridge-authored line, the session

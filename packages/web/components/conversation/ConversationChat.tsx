@@ -129,6 +129,7 @@ export const ConversationChat = memo(function ConversationChat({
         {channelId && (
           <Room
             channelId={channelId}
+            conversationId={conversationId}
             teamId={teamId}
             people={people}
             label={label}
@@ -145,6 +146,7 @@ const CLOCK_MS = 30_000;
 
 function Room({
   channelId,
+  conversationId,
   teamId,
   people,
   label,
@@ -152,6 +154,7 @@ function Room({
   onCollapse,
 }: {
   channelId: string;
+  conversationId: string;
   teamId?: string;
   people: ChatMember[];
   label: string;
@@ -167,9 +170,11 @@ function Room({
   // Read when the newest line is on screen, the way the chat page reads.
   const [atBottom, setAtBottom] = useState(false);
   useReadWhileSeen(channelId, atBottom, feed, newestId);
+  // Each line names this session, so the room (on the chat page, on a phone)
+  // reads which thread it was about.
   const send = useCallback((content: string, attachments?: ChatAttachment[]) => {
-    useInboxStore.getState().sendChatMessage(channelId, content, { attachments });
-  }, [channelId]);
+    useInboxStore.getState().sendChatMessage(channelId, content, { attachments, contextSessionId: conversationId });
+  }, [channelId, conversationId]);
 
   return (
     <div className="cc-chat-room">
@@ -207,6 +212,7 @@ function Room({
           onEdit={(id, content) => useInboxStore.getState().editChatMessage(id, content)}
           onDelete={(id) => useInboxStore.getState().deleteChatMessage(id)}
           onRetrySend={(id) => useInboxStore.getState().retryChatSend(id)}
+          hereSessionId={conversationId}
         />
       )}
       <ChatComposer

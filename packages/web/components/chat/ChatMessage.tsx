@@ -10,6 +10,7 @@ import { remarkEmojiShortcodes } from "../../lib/remarkEmojiShortcodes";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { RevealHost } from "../ObjectReveal";
 import { ChatAuthorFace } from "./ChatAuthorFace";
+import { EntityIdPill } from "../EntityIdPill";
 import Link from "next/link";
 import { remarkChatMentions, channelNameMap } from "../../lib/remarkChatMentions";
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
@@ -221,6 +222,9 @@ export type ChatMessageProps = {
    *  local can be shared and the "not in Slack" mark means something. */
   slackOutbound?: boolean;
   onShareToSlack?: (messageId: string) => void;
+  /** The session this line was written beside, when the list shows it (not
+   *  the session the reader is already in). */
+  contextSessionId?: string;
 };
 
 export const ChatMessage = memo(function ChatMessage({
@@ -241,6 +245,7 @@ export const ChatMessage = memo(function ChatMessage({
   inThread,
   slackOutbound,
   onShareToSlack,
+  contextSessionId,
 }: ChatMessageProps) {
   const { author, agentStatus } = message;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -443,6 +448,11 @@ export const ChatMessage = memo(function ChatMessage({
               author.isAgent && <span className="ch-agent-chip">agent</span>
             )}
             {author.slack?.isBot && !author.isAgent && <span className="ch-agent-chip ch-slack-chip">app</span>}
+            {contextSessionId && (
+              <span className="ch-msg-via ch-msg-context">
+                from <EntityIdPill type="session" id={contextSessionId} compact />
+              </span>
+            )}
             <SlackMark message={message} slackOutbound={slackOutbound} />
             <a
               className="ch-msg-time"

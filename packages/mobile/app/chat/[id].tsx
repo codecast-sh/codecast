@@ -16,7 +16,7 @@ import { useInboxStore, selectChannelReadMarker } from '@codecast/web/store/inbo
 import { useChannelMessages, useChannelMessagesSync, useChatRail, useSupersededChannelId } from '@codecast/web/hooks/useChatSync';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { authorGroupKey, buildChatTimeline, dmOtherIds, memberHandle } from '@codecast/shared/chat';
+import { lineGroupKey, buildChatTimeline, dmOtherIds, memberHandle } from '@codecast/shared/chat';
 import { channelHuddleMemberIds, chatRoomKey } from '@codecast/shared/contracts';
 import { HuddleButton } from '@/components/calls/SessionHuddleButton';
 import { MessageRow, DayDivider, NewDivider, ChatAvatar, fromChatView, type MobileChatMessage } from '@/components/chat/MessageRow';
@@ -195,7 +195,7 @@ export default function ChatChannelScreen() {
       all.map((msg) => ({
         id: msg.id,
         authorId: msg.author.id,
-        groupKey: authorGroupKey(msg.author),
+        groupKey: lineGroupKey(msg.author, msg.contextSession?.id),
         createdAt: msg.createdAt,
         pendingAgent: msg.agentStatus === 'thinking' || msg.agentStatus === 'streaming',
         deleted: !!msg.deletedAt,
