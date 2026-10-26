@@ -189,7 +189,9 @@ export { roleIdentity, type RoleIdentity };
 
 /** How a role is named on every web surface (S30): its given name, with its
  *  title (and an assistant's reach) as the subtitle. The tree names teams, so an
- *  assistant for a team reads "Executive Assistant, <team>". */
-export function roleWords(role: { _id: string; name: string; handle: string; avatar?: string | null; given_name?: string | null; assistant?: any; scope_type?: "team" | "user"; team_id?: string }, teamName?: string | null): RoleIdentity {
-  return roleIdentity(role, { teamName: teamName ?? null });
+ *  assistant for a team reads "Executive Assistant, <team>". `characters`
+ *  false (the viewer turned them off) names it by the subtitle alone: then
+ *  `name === subtitle`, and a surface printing both prints it once. */
+export function roleWords(role: { _id: string; name: string; handle: string; avatar?: string | null; given_name?: string | null; assistant?: any; scope_type?: "team" | "user"; team_id?: string }, teamName?: string | null, characters = true): RoleIdentity {
+  return roleIdentity(role, { teamName: teamName ?? null, characters });
 }

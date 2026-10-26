@@ -95,7 +95,7 @@ export function ProjectSummary({ project }: { project: ProjectItem }) {
 
 export function RoleSummary({ role }: { role: OrgRole }) {
   const head = useRoleHead(role);
-  return <SummaryFrame kind="role" glyph={<RoleFace role={role} size={18} />} title={head.words.subtitle} sub={head.words.name} facts={head.facts} serves={head.serves} carried={head.carried} />;
+  return <SummaryFrame kind="role" glyph={<RoleFace role={role} size={18} />} title={head.words.subtitle} sub={head.words.name !== head.words.subtitle ? head.words.name : null} facts={head.facts} serves={head.serves} carried={head.carried} />;
 }
 
 /** `person` is a user id or a handle. */

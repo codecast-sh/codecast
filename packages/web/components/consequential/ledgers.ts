@@ -444,3 +444,22 @@ export function teamMachineJoinLedger(r: {
     keep: "Cancel",
   };
 }
+
+/** Redrawing a role's icon (roleIcon.ts): one model run that replaces the
+ *  icon every viewer with characters off sees. */
+export function redrawIconLedger(r: { title: string; handle: string; concept: string | null; hint: string | null }): SwitchLedger {
+  return {
+    name: r.concept ? "Redraw icon" : "Draw icon",
+    subject: `${r.title} · @${r.handle}`,
+    shift: null,
+    figures: [{ value: "1", label: "model run" }],
+    rows: [
+      { k: "Replaces", v: r.concept ?? "The letter tile" },
+      { k: "Hint", v: r.hint ?? "None" },
+      { k: "Seen by", v: "Everyone with Characters off" },
+      { k: "Undo", v: "Redraw again" },
+    ],
+    confirm: r.concept ? "Redraw" : "Draw",
+    keep: "Cancel",
+  };
+}

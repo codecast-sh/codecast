@@ -53,7 +53,8 @@ import { ConvexProvider } from "convex/react";
 import { MemoryRouter, UNSAFE_LocationContext } from "react-router";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ThemeContext } from "@/components/ThemeProvider";
-import { PersonifyOverride } from "@/hooks/usePersonifyAll";
+import { IdentityPrefsOverride } from "@/hooks/useIdentityPrefs";
+import { DEFAULT_IDENTITY_PREFS } from "@/lib/sessionIdentity";
 import { RoleRowsOverride } from "@/hooks/useLiveIdentityRow";
 import { AgentTabOverride } from "@/lib/agentTabGuard";
 import { CommentToolsOverride } from "@/hooks/useCommentTools";
@@ -170,7 +171,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
     <ErrorBoundary name="HeroFlythrough" fallback={fallback} silent>
       <ConvexProvider client={heroConvexStub}>
         <ThemeContext.Provider value={HERO_THEME}>
-          <PersonifyOverride.Provider value={false}>
+          <IdentityPrefsOverride.Provider value={DEFAULT_IDENTITY_PREFS}>
           <RoleRowsOverride.Provider value={null}>
           <AgentTabOverride.Provider value={false}>
           <CommentToolsOverride.Provider value={false}>
@@ -224,7 +225,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
           </CommentToolsOverride.Provider>
           </AgentTabOverride.Provider>
           </RoleRowsOverride.Provider>
-          </PersonifyOverride.Provider>
+          </IdentityPrefsOverride.Provider>
         </ThemeContext.Provider>
       </ConvexProvider>
     </ErrorBoundary>

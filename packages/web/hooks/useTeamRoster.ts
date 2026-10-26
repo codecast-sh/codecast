@@ -9,7 +9,8 @@
 // rename/avatar change still re-renders.
 import { useMemo } from "react";
 import { useInboxStore } from "../store/inboxStore";
-import { roleOfUser, type RoleRows } from "../lib/sessionIdentity";
+import { roleOfUser, type IdentityPrefs, type RoleRows } from "../lib/sessionIdentity";
+import { useIdentityPrefs } from "./useIdentityPrefs";
 import { orgRolesSig } from "./useOrgRoles";
 
 export type RosterIdentity = {
@@ -74,10 +75,10 @@ export function rosterIdentity(members: any[] | null | undefined): RosterIdentit
  *  rows, read through roleOfUser). The bot user keeps its own name on the
  *  server, where chat derives its mention handle from it; the person reads the
  *  role's given name and face. Returns `list` itself when no member is a role's. */
-export function withRoleIdentities(list: RosterIdentity[], rows: RoleRows | null | undefined): RosterIdentity[] {
+export function withRoleIdentities(list: RosterIdentity[], rows: RoleRows | null | undefined, prefs?: IdentityPrefs): RosterIdentity[] {
   let out: RosterIdentity[] | null = null;
   list.forEach((m, i) => {
-    const role = m.is_bot ? roleOfUser(m._id, rows) : null;
+    const role = m.is_bot ? roleOfUser(m._id, rows, prefs) : null;
     if (!role) return;
     out ??= list.slice();
     out[i] = { ...m, name: role.name, image: undefined, role };
@@ -89,10 +90,11 @@ export function withRoleIdentities(list: RosterIdentity[], rows: RoleRows | null
 export function useTeamRosterIdentity(): RosterIdentity[] {
   const sig = useInboxStore((s) => memberListSig(s.teamMembers));
   const rolesSig = useInboxStore((s) => orgRolesSig(s.orgTree));
+  const prefs = useIdentityPrefs();
   return useMemo(() => {
     const st = useInboxStore.getState();
-    return withRoleIdentities(rosterIdentity(st.teamMembers), st.orgTree);
-  }, [sig, rolesSig]); // eslint-disable-line react-hooks/exhaustive-deps -- the sigs stand in for the churny arrays
+    return withRoleIdentities(rosterIdentity(st.teamMembers), st.orgTree, prefs);
+  }, [sig, rolesSig, prefs]); // eslint-disable-line react-hooks/exhaustive-deps -- the sigs stand in for the churny arrays
 }
 
 /** The viewer projected to the same identity fields. `s.currentUser` is the

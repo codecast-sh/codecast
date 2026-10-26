@@ -15,6 +15,8 @@ import { useInboxStore } from "../store/inboxStore";
 import { useSyncCollection } from "./useSyncCollection";
 
 import { useWatchEffect } from "./useWatchEffect";
+import { identityPrefsNow } from "./useIdentityPrefs";
+import type { IdentityPrefs } from "../lib/sessionIdentity";
 const api = _api as any;
 
 export type AnchorRow = {
@@ -75,16 +77,18 @@ export function useSyncAnchors(): { ready: boolean } {
 }
 
 /** The name a person reads for a standing agent: its role's given name
- *  (org-staffing.md S30, roleIdentity), else what the row was called. Never
- *  the word anchor. */
-export function agentName(a: Partial<AnchorRow> | null | undefined): string {
-  if (a?.role) return roleIdentity({ ...a.role, scope_type: a.scope_type }, { teamName: a.team_name }).name;
+ *  (org-staffing.md S30, roleIdentity), or its title for a viewer with
+ *  characters off, else what the row was called. Never the word anchor.
+ *  `prefs` defaults to the viewer's as the store holds them now. */
+export function agentName(a: Partial<AnchorRow> | null | undefined, prefs: IdentityPrefs = identityPrefsNow()): string {
+  if (a?.role) return roleIdentity({ ...a.role, scope_type: a.scope_type }, { teamName: a.team_name, characters: prefs.characters }).name;
   return a?.bot_name || a?.name || "Workspace agent";
 }
 
-/** The role under the name: "Executive Assistant, global", "Head of People". */
-export function agentTitle(a: Partial<AnchorRow> | null | undefined): string | null {
-  if (!a?.role) return null;
+/** The role under the name: "Executive Assistant, global", "Head of People".
+ *  Null with characters off, where the name already is the title. */
+export function agentTitle(a: Partial<AnchorRow> | null | undefined, prefs: IdentityPrefs = identityPrefsNow()): string | null {
+  if (!a?.role || !prefs.characters) return null;
   return roleIdentity({ ...a.role, scope_type: a.scope_type }, { teamName: a.team_name }).subtitle;
 }
 
