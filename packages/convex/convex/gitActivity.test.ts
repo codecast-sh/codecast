@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { linkLocalCommitToConversation, localEventTitle, recordLocal } from "./gitActivity";
+import { MIRROR_CLAIMS_SINCE, linkLocalCommitToConversation, localEventTitle, recordLocal, unlinkMirrorClaims } from "./gitActivity";
 import { makeFakeDb } from "./testDb";
 
 // Reflog lines become team activity the same way webhook pushes do: same
@@ -149,4 +149,33 @@ test("localEventTitle reads like a shell prompt would", () => {
   expect(localEventTitle({ kind: "reset", message: "moving to origin/main", ref: "origin/main", new_sha: SHA, branch: "main" })).toBe("reset main to origin/main");
   expect(localEventTitle({ kind: "merge", message: "Fast-forward", ref: "feat/x", new_sha: SHA, branch: "main" })).toBe("merged feat/x into main");
   expect(localEventTitle({ kind: "amend", message: "fix: typo", new_sha: SHA })).toBe("amended 1111111: fix: typo");
+});
+
+describe("gitActivity.unlinkMirrorClaims", () => {
+  const at = MIRROR_CLAIMS_SINCE + 1;
+  const CONV = "jx766q15896dy8bztfp7xa1f3s8gyt5n";
+  const row = (n: number, extra: Record<string, any> = {}) => ({ _id: `c${n}`, sha: String(n).repeat(40), message: `commit ${n}`, author_name: "A", author_email: "a@x", timestamp: at, files_changed: 1, insertions: 1, deletions: 0, conversation_id: CONV, ...extra });
+
+  test("keeps links the session earned and unlinks what a pull handed it", async () => {
+    const ctx = context("owner", {
+      conversations: [{ _id: CONV, user_id: "owner", team_id: "team" }],
+      commits: [
+        row(1, { message: `feat: x\n\nCodecast-Session: ${CONV}` }),
+        row(2),
+        row(3),
+        row(4),
+        row(5, { timestamp: MIRROR_CLAIMS_SINCE - 1 }),
+        row(6, { conversation_id: undefined }),
+      ],
+      file_changes: [{ _id: "fc", conversation_id: CONV, change_type: "commit", commit_hash: "2222222" }],
+      external_events: [{ _id: "e", source: "git", kind: "commit", sha: "3".repeat(40), conversation_id: CONV, dedupe_key: `commit:${"3".repeat(40)}`, created_at: at }],
+    });
+    const dry = await (unlinkMirrorClaims as any)._handler(ctx, { dry: true });
+    expect(dry).toMatchObject({ scanned: 5, linked: 4, unlinked: 1, done: true });
+    expect(ctx.db._tables.commits.find((c: any) => c._id === "c4").conversation_id).toBe(CONV);
+
+    await (unlinkMirrorClaims as any)._handler(ctx, {});
+    const linked = Object.fromEntries(ctx.db._tables.commits.map((c: any) => [c._id, c.conversation_id]));
+    expect(linked).toEqual({ c1: CONV, c2: CONV, c3: CONV, c4: undefined, c5: CONV, c6: undefined });
+  });
 });

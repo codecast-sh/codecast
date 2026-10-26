@@ -65,8 +65,6 @@ export interface MirrorCommit {
   insertions: number;
   deletions: number;
   branch?: string;
-  /** Set by the daemon when it can name the session that made the commit. */
-  conversation_id?: string;
   /** The files the commit touched, from numstat, capped (MIRROR_FILES_CAP). */
   files?: Array<{ filename: string; additions: number; deletions: number }>;
 }

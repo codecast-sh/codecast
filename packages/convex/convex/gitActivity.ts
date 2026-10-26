@@ -26,7 +26,8 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { resolveCreationPrivacy } from "./privacy";
 import { recordExternalEvent } from "./externalEvents";
-import { isHarnessScratch, resolveTaskLinksFromText, normalizeRepository } from "./lib/gitRefs";
+import { commitRecordedBy, extractSessionTrailer, isHarnessScratch, resolveTaskLinksFromText, normalizeRepository } from "./lib/gitRefs";
+import { markCommitDirty } from "./lib/changesDirty";
 import { conversationForCommit } from "./githubWebhooks";
 import { upsertLocalCommit } from "./repos";
 import { localCommitFiles } from "./lib/localCommitFiles";
@@ -229,5 +230,63 @@ export const unlinkScratchCommits = internalMutation({
       if (evt?.conversation_id === args.conversation_id) await ctx.db.patch(evt._id, { conversation_id: undefined });
     }
     return { linked: rows.length, scratch: scratch.length };
+  },
+});
+
+/** When daemons began naming a checkout's live session for every mirrored commit. */
+export const MIRROR_CLAIMS_SINCE = Date.UTC(2026, 8, 6);
+
+const MADE_LOCALLY = new Set(["commit", "amend", "cherry_pick", "revert"]);
+
+/**
+ * Whether the session linked to a commit is shown to have made it: its own
+ * trailer names it, its transcript recorded the sha, or an activity event for
+ * the session says its checkout made the commit (the reflog) or a webhook
+ * linked it. A link with none of these came from the repo mirror, which named
+ * a checkout's one live session for every commit newer than its last publish,
+ * commits a pull brought in included.
+ */
+export async function sessionMadeCommit(ctx: { db: any }, row: { sha: string; message: string }, conversationId: Id<"conversations">): Promise<boolean> {
+  const named = extractSessionTrailer(row.message);
+  if (named && String(ctx.db.normalizeId("conversations", named)) === String(conversationId)) return true;
+  if (String(await commitRecordedBy(ctx, row.sha)) === String(conversationId)) return true;
+  const evt = await ctx.db
+    .query("external_events")
+    .withIndex("by_dedupe_key", (q: any) => q.eq("dedupe_key", `commit:${row.sha}`))
+    .first();
+  if (evt && String(evt.conversation_id) === String(conversationId) && MADE_LOCALLY.has(evt.kind)) return true;
+  const local = await ctx.db
+    .query("external_events")
+    .withIndex("by_conversation_created", (q: any) => q.eq("conversation_id", conversationId))
+    .filter((q: any) => q.eq(q.field("sha"), row.sha))
+    .first();
+  return !!local && MADE_LOCALLY.has(local.kind);
+}
+
+/**
+ * Unlink commits the repo mirror claimed for a session that did not make them
+ * (sessionMadeCommit), one page of commits at a time from MIRROR_CLAIMS_SINCE.
+ * Run with dry first; pass the returned cursor until done.
+ */
+export const unlinkMirrorClaims = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())), num: v.optional(v.number()), dry: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("commits")
+      .withIndex("by_timestamp", (q: any) => q.gte("timestamp", MIRROR_CLAIMS_SINCE))
+      .paginate({ cursor: args.cursor ?? null, numItems: args.num ?? 200 });
+    const unlinked: Array<{ sha: string; conversation_id: Id<"conversations"> }> = [];
+    let linked = 0;
+    for (const row of page.page) {
+      const conversationId = row.conversation_id;
+      if (!conversationId) continue;
+      linked++;
+      if (await sessionMadeCommit(ctx, row, conversationId)) continue;
+      unlinked.push({ sha: row.sha.slice(0, 7), conversation_id: conversationId });
+      if (args.dry) continue;
+      await ctx.db.patch(row._id, { conversation_id: undefined });
+      await markCommitDirty(ctx, row._id);
+    }
+    return { scanned: page.page.length, linked, unlinked: unlinked.length, sample: unlinked.slice(0, 20), cursor: page.continueCursor, done: page.isDone };
   },
 });

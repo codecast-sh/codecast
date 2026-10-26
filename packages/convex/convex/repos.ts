@@ -631,9 +631,10 @@ export const ingestLocal = mutation({
       insertions: v.number(),
       deletions: v.number(),
       branch: v.optional(v.string()),
-      // The session that made the commit, when the daemon can say so (one live
-      // session in that checkout, commit newer than its last publish). Checked
-      // against the caller before it is written: a daemon names only its own.
+      // Sent by CLIs up to 1.1.198 and ignored: they named the checkout's one
+      // live session for every commit newer than the last publish, pulled
+      // commits included. The reflog path (gitActivity.recordLocal) names the
+      // session for commits the checkout made itself.
       conversation_id: v.optional(v.string()),
       // The files the commit touched with their line counts (git log
       // --numstat), so the activity block can read which area it landed on.
@@ -684,8 +685,8 @@ export const ingestLocal = mutation({
 
     let created = 0;
     for (const commit of args.commits ?? []) {
-      const { conversation_id: claimed, ...fields } = commit;
-      const result = await upsertLocalCommit(ctx, { userId, teamId, repository, root: args.root, commit: fields, claimedConversationId: claimed });
+      const { conversation_id: _ignored, ...fields } = commit;
+      const result = await upsertLocalCommit(ctx, { userId, teamId, repository, root: args.root, commit: fields });
       if (result.created) created++;
     }
     return { published: true, rows: args.rows.length, commits_created: created };

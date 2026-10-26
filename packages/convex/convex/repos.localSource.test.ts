@@ -75,6 +75,23 @@ describe("repos.ingestLocal", () => {
     expect(ctx.db._tables.commits).toHaveLength(1);
   });
 
+  test("a mirror commit never links a session, even the publisher's own", async () => {
+    // A pull brings teammates' commits into the checkout; an older daemon
+    // named its one live session for all of them. A webhook row that found no
+    // session must stay unlinked, and a new row must not take the claim.
+    const pushed = "d".repeat(40);
+    const ctx = context("publisher", {
+      conversations: [{ _id: "own-session", user_id: "publisher", team_id: "team" }],
+      commits: [{ _id: "webhook-row", sha: pushed, message: "teammate", author_name: "T", author_email: "t@x", timestamp: 2, files_changed: 1, insertions: 1, deletions: 0, repository: "acme/demo", team_id: "team", branch: "main" }],
+    });
+    const commit = { message: "m", author_name: "T", author_email: "t@x", timestamp: 2, files_changed: 1, insertions: 1, deletions: 0, branch: "main", conversation_id: "own-session" };
+    await (ingestLocal as any)._handler(ctx, {
+      root: "/home/p/src/demo", repository: "acme/demo", rows,
+      commits: [{ ...commit, sha: pushed }, { ...commit, sha }],
+    });
+    expect(ctx.db._tables.commits.map((c: any) => c.conversation_id)).toEqual([undefined, undefined]);
+  });
+
   test("a checkout outside every shared directory publishes nothing", async () => {
     const ctx = context("publisher");
     const result = await (ingestLocal as any)._handler(ctx, { root: "/home/p/private/demo", repository: "acme/demo", rows });
