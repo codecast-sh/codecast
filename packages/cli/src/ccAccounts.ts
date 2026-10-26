@@ -1484,6 +1484,14 @@ export function clearLaunchProfile(): boolean {
 export function launchRecordInEffect(active?: ActiveIdentity, now = Date.now()): LaunchRecord | null {
   const record = readLaunchRecord();
   if (!record) return null;
+  // A cloud host runs the login the laptop pushes, so every machine follows
+  // one account and one switch. A launch account of its own took the host out
+  // of that: recovery could neither see nor move it, and it sat on a spent
+  // week while other accounts had room (jx75sbx, 2026-10-24).
+  if (isRemoteDevice()) {
+    clearLaunchProfile();
+    return null;
+  }
   const meta = readProfileIndex().profiles[record.profile];
   // On the fleet store the record names the account the store carries. It
   // holds while that profile is saved: the keychain login is not the fleet's,

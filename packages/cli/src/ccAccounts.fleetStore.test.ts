@@ -112,6 +112,15 @@ describe("fleet store (sandboxed $HOME)", () => {
     expect(launchProfileName(now)).toBe("tok");
   });
 
+  it("a cloud host drops a launch account of its own and launches on the pushed login", () => {
+    process.env.CODECAST_REMOTE_DEVICE = "1";
+    setLaunchProfile("tok", undefined, now);
+    expect(fs.existsSync(path.join(home, ".codecast", "cc-launch.json"))).toBe(true);
+    expect(launchProfileName(now)).toBeUndefined();
+    expect(fs.existsSync(path.join(home, ".codecast", "cc-launch.json"))).toBe(false);
+    expect(launchAccountPrefix(undefined)).toEqual({ prefix: "", account: undefined });
+  });
+
   it("refuses a profile that can carry nothing, leaving the store as it was", async () => {
     await putFleetOn("tok", now);
     await expect(putFleetOn("dead", now)).rejects.toThrow();
