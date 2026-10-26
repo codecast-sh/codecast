@@ -38,6 +38,7 @@ import {
   type CcKeychainItem,
 } from "./ccKeychain.js";
 import { isRemoteDevice } from "./remote/device.js";
+import { startLaunchdJob } from "./launchdJob.js";
 import { fallbackProfiles } from "@codecast/shared/contracts";
 import type { UsageRetryState } from "./usageRetry.js";
 
@@ -261,25 +262,47 @@ export function writeActiveCredential(credentialJson: string): void {
  * A cloud Mac's login arrives as a FILE: the primary pushes
  * ~/.claude/.credentials.json over ssh, and an ssh session cannot write the
  * keychain. Claude Code on macOS reads the keychain first and falls back to the
- * file only when no item exists, so a stale or signed-out item shadows every
- * push and parks each session on the host on "Login expired". The host's
- * daemon runs in the GUI login, where the keychain is open, so it copies a
- * pushable file into the item whenever the two differ. The primary is
- * canonical: a remote never keeps a login of its own.
+ * file only when no item exists, so a stale item shadows every push: each
+ * session on the host keeps running (and parking) on whatever account the item
+ * last held. The primary is canonical: a remote never keeps a login of its own,
+ * so the pushed file is copied into the item whenever the two differ.
+ *
+ * The host's daemon is a system LaunchDaemon (hosts/provisionMac.ts), and the
+ * login keychain is closed to that session too: `security` finds no item, so a
+ * compare made here read the file twice and never copied. Panes run in the GUI
+ * login (tmux.ts starts their servers as gui-domain jobs), so the copy runs
+ * there as a one-shot job that compares and writes itself. It is submitted when
+ * the pushed file changes, and again every ADOPT_RECHECK_MS to catch an item
+ * something else rewrote. Returns true when a job was submitted.
  */
-export function adoptPushedCredential(): boolean {
+export function adoptPushedCredential(now = Date.now()): boolean {
   if (!isRemoteDevice() || useFileStore()) return false;
   const file = readCredentialFile()?.trim() ?? null;
   if (!file || !credentialHealth(file).pushable) return false;
-  if (readLocalCredential()?.trim() === file) return false;
-  try {
-    writeActiveCredential(file);
-    return true;
-  } catch {
-    // A locked keychain (a CLI run over ssh): the daemon's next tick adopts it.
-    return false;
-  }
+  const digest = createHash("sha256").update(file).digest("hex");
+  if (lastAdopt?.digest === digest && now - lastAdopt.at < ADOPT_RECHECK_MS) return false;
+  const item = ccKeychainWriteItem();
+  const dir = defaultConfigDir();
+  const submitted = startLaunchdJob({
+    label: "sh.codecast.adopt-login",
+    argv: ["/bin/bash", "-c", ADOPT_SCRIPT, "adopt-login", item.service, ccCredentialFile(), item.account],
+    plistPath: path.join(dir, "adopt-login.plist"),
+    logPath: path.join(dir, "logs", "adopt-login.log"),
+  });
+  if (submitted) lastAdopt = { digest, at: now };
+  return submitted;
 }
+
+const ADOPT_RECHECK_MS = 10 * 60_000;
+let lastAdopt: { digest: string; at: number } | undefined;
+
+// $1 service, $2 pushed file, $3 account name for a new item. -U updates the
+// existing item in place under its own account, keeping the ACL claude reads it
+// through.
+const ADOPT_SCRIPT = `new=$(cat "$2") || exit 1
+[ "$(security find-generic-password -s "$1" -w 2>/dev/null)" = "$new" ] && exit 0
+acct=$(security find-generic-password -s "$1" 2>/dev/null | sed -n 's/.*"acct"<blob>="\\([^"]*\\)".*/\\1/p' | head -1)
+security add-generic-password -U -a "\${acct:-$3}" -s "$1" -w "$new" && echo "$(date -u +%FT%TZ) adopted the pushed login"`;
 
 function claudeJsonPath(): string {
   return path.join(homeDir(), ".claude.json");
