@@ -35,6 +35,8 @@ import { pendingCancelRef, sessionMessageQueueLabel } from "../../../lib/pending
 import { cancelPendingSend } from "../../../lib/cancelPendingSend";
 import { HeldTerminalScreen } from "../HeldTerminalScreen";
 import { PlanBlock } from "./planBlock";
+import { DeliveryFailedBlock } from "./deliveryFailedBlock";
+import { DELIVERY_FAILED_SUBTYPE, parseDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { UserIcon } from "./shared";
 import { agentBorderMap, agentColorMap, agentTextMap } from "../../../lib/conversationBlockStyles";
 import { cleanCommandExpansion, cleanStickyContent, parseCommandInvocation, parseTaskNotification, parseTeammateMessages } from "../classify";
@@ -1190,6 +1192,11 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
         {timestamp && <span className="text-[10px] text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
       </div>
     );
+  }
+
+  if (subtype === DELIVERY_FAILED_SUBTYPE) {
+    const notice = parseDeliveryFailedNotice(content);
+    if (notice) return <DeliveryFailedBlock notice={notice} conversationId={conversationId} timestamp={timestamp} />;
   }
 
   if (subtype === "scheduled_task_prompt" && content) {

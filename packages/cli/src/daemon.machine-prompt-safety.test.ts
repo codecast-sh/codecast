@@ -13,6 +13,7 @@ import { clearPromptHolds, holdConversationForPrompt, isForcedPastDialog, prompt
 import { clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryExhaustedError, TmuxDeliveryJournal, TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
+import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice, parseDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { typedPollAnswer } from "./typedPollAnswer";
 import { redactSecrets } from "./redact";
 import { setKnownValuesForTest } from "./knownValueRedaction";
@@ -221,6 +222,7 @@ function fixture(transport = "tmux", cached = true) {
     autoResumeSession: fail("resume"), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
     restoreSuspendedAgent: async () => false,
     prepareTmuxDelivery: async () => hooks.prepare(), TmuxDeliveryUncertainError, TmuxDeliveryExhaustedError,
+    DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice,
     // The receipt journal the inject path opens when a delivery identity rides
     // along: a private one per fixture, so no test reads the machine's.
     tmuxDeliveryJournal: () => (journal ??= new TmuxDeliveryJournal(path.join(directory, "delivery.sqlite"))),
@@ -1049,7 +1051,7 @@ describe("machine prompt delivery safety", () => {
     test("a message the pane took the capped number of times is cancelled and said in the session", async () => {
       const f = fixture();
       f.state.menu = null;
-      f.hooks.prepare = async () => { throw new TmuxDeliveryExhaustedError("update", 3); };
+      f.hooks.prepare = async () => { throw new TmuxDeliveryExhaustedError("update", 3, false); };
       const cancelled: string[] = [];
       const rows: any[] = [];
       f.deps.syncService.cancelPendingMessage = async (id: string) => { cancelled.push(id); };
@@ -1059,8 +1061,8 @@ describe("machine prompt delivery safety", () => {
       expect(cancelled).toEqual(["update"]);
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ conversationId: "conv", role: "system", subtype: "delivery_failed" });
-      expect(rows[0].content).toContain("written into its terminal 3 times");
-      expect(rows[0].content).toContain("continue");
+      expect(parseDeliveryFailedNotice(rows[0].content)).toEqual({ writes: 3, submitted: false, message: "continue", complete: true });
+      expect(rows[0].content).toStartWith("This message never reached the agent");
       expect(f.events.filter((e: string) => /^(retry|hold):/.test(e))).toEqual([]);
       expect(f.deps.messagesInFlight.size).toBe(0);
     });

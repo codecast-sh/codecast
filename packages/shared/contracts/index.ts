@@ -57,6 +57,7 @@ export * from "./agentSwitch";
 export * from "./machineSwitch";
 export * from "./forkSeed";
 export * from "./teamFeatures";
+export * from "./managedPolicy";
 export * from "./stableContext";
 export * from "./vaultProtocol";
 export * from "./vaultMirror";

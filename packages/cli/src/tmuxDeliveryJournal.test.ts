@@ -173,8 +173,32 @@ test("a message is written at most TMUX_PASTE_WRITE_CAP times, then refused loud
   expect(error).toBeInstanceOf(TmuxDeliveryExhaustedError);
   expect((error as TmuxDeliveryExhaustedError).writes).toBe(TMUX_PASTE_WRITE_CAP);
   expect(String(error)).toMatch(/^Error: INJECT_EXHAUSTED: written into the pane 3 times/);
+  expect((error as TmuxDeliveryExhaustedError).submitted).toBe(true);
   // Nothing was written: the pane is free for the next message.
   expect(store.begin({ ...identity, messageId: "message-b" }, generation, "next").fresh).toBe(true);
+});
+
+test("a message whose writes never got an Enter is exhausted as never submitted", () => {
+  // jx7d8av, 2026-10-26: a trigger prompt never appeared intact at the prompt
+  // in three writes, so no Enter was pressed and the agent never had it.
+  const store = open();
+  for (let write = 1; write <= TMUX_PASTE_WRITE_CAP; write++) {
+    store.begin(identity, generation, "continue");
+    store.release(identity.messageId);
+  }
+  let error: unknown;
+  try { store.begin(identity, generation, "continue"); } catch (e) { error = e; }
+  expect(error).toBeInstanceOf(TmuxDeliveryExhaustedError);
+  expect((error as TmuxDeliveryExhaustedError).submitted).toBe(false);
+  // One submitted write among them is enough to say it may have run.
+  const other = { ...identity, messageId: "message-c" };
+  store.begin(other, generation, "continue");
+  store.advance(other.messageId, "submit");
+  store.release(other.messageId);
+  expect(store.submittedOnce(other.messageId)).toBe(true);
+  store.begin(other, generation, "continue");
+  store.advance(other.messageId, "verified");
+  expect(store.submittedOnce(other.messageId)).toBe(false);
 });
 
 test("a re-begin of the same write and a verified delivery spend nothing", () => {

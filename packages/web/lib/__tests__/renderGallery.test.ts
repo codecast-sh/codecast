@@ -14,6 +14,7 @@ import { parseApiErrorContent, parseCastCommand } from "../../components/convers
 import { normalizeCastCategory } from "../../components/castCommand";
 import type { UserMessageKind } from "../../components/conversation/types";
 import { CLOUD_AGENT_ACTION_SUBTYPE } from "@codecast/shared/contracts";
+import { DELIVERY_FAILED_SUBTYPE } from "@codecast/shared/contracts/deliveryFailed";
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
 import { VIEW_FENCE_LANG } from "../productViewRefs";
 import { FLOW_FENCE_LANG } from "../line/flowFence";
@@ -134,7 +135,9 @@ describe("render gallery", () => {
       ...[...web.matchAll(/subtype === "(\w+)"/g)].map((m) => m[1]),
       ...[...mobile.matchAll(/message\.subtype === '(\w+)'/g)].map((m) => m[1]),
     ]);
-    if (/subtype === CLOUD_AGENT_ACTION_SUBTYPE/.test(web)) named.add(CLOUD_AGENT_ACTION_SUBTYPE);
+    for (const [name, subtype] of Object.entries({ CLOUD_AGENT_ACTION_SUBTYPE, DELIVERY_FAILED_SUBTYPE })) {
+      if (new RegExp(`subtype === ${name}\\b`).test(web)) named.add(subtype);
+    }
     expect([...named].filter((s) => !subtypes.has(s))).toEqual([]);
   });
 

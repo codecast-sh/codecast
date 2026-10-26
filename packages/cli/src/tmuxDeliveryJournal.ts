@@ -35,7 +35,8 @@ export const TMUX_PASTE_WRITE_CAP = 3;
 
 /** The cap above is spent: the message is failed, loudly, never re-written. */
 export class TmuxDeliveryExhaustedError extends Error {
-  constructor(readonly messageId: string, readonly writes: number) {
+  /** submitted: whether any of those writes got an Enter. None did means the agent never had it. */
+  constructor(readonly messageId: string, readonly writes: number, readonly submitted = true) {
     super(`INJECT_EXHAUSTED: written into the pane ${writes} times and never acknowledged; not writing it again`);
   }
 }
@@ -54,7 +55,8 @@ export class TmuxDeliveryJournal {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS tmux_paste_pending ON tmux_pastes(generation) WHERE phase != 'verified';
       CREATE TABLE IF NOT EXISTS tmux_paste_failures (messageId TEXT PRIMARY KEY);
-      CREATE TABLE IF NOT EXISTS tmux_paste_writes (messageId TEXT PRIMARY KEY, writes INTEGER NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS tmux_paste_writes (messageId TEXT PRIMARY KEY, writes INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS tmux_paste_submits (messageId TEXT PRIMARY KEY);`);
   }
 
   get(messageId: string): TmuxPasteReceipt | null {
@@ -64,6 +66,11 @@ export class TmuxDeliveryJournal {
   /** Writes of this message into a pane so far: a receipt's history survives its release. */
   writesOf(messageId: string): number {
     return this.db.query<{ writes: number }, [string]>("SELECT writes FROM tmux_paste_writes WHERE messageId = ?").get(messageId)?.writes ?? 0;
+  }
+
+  /** Whether any write of this message got an Enter: only a submitted write can have reached the agent. */
+  submittedOnce(messageId: string): boolean {
+    return !!this.db.query("SELECT 1 FROM tmux_paste_submits WHERE messageId = ?").get(messageId);
   }
 
   pending(generation: string): TmuxPasteReceipt | null {
@@ -86,7 +93,7 @@ export class TmuxDeliveryJournal {
       }
       if (this.pending(generation)) throw new TmuxDeliveryUncertainError("an earlier message still owns the terminal input");
       const writes = this.writesOf(identity.messageId);
-      if (writes >= TMUX_PASTE_WRITE_CAP) throw new TmuxDeliveryExhaustedError(identity.messageId, writes);
+      if (writes >= TMUX_PASTE_WRITE_CAP) throw new TmuxDeliveryExhaustedError(identity.messageId, writes, this.submittedOnce(identity.messageId));
       this.db.query("INSERT INTO tmux_paste_writes VALUES (?, 1) ON CONFLICT(messageId) DO UPDATE SET writes = writes + 1").run(identity.messageId);
       const receipt: TmuxPasteReceipt = { ...identity, generation, payloadHash, phase: "paste", pasteAt: Date.now(), writes: writes + 1 };
       this.db.query("INSERT INTO tmux_pastes VALUES (?, ?, ?, ?, ?, ?)")
@@ -98,7 +105,10 @@ export class TmuxDeliveryJournal {
   advance(messageId: string, phase: "submit" | "verified"): void {
     this.db.query("UPDATE tmux_pastes SET phase = ? WHERE messageId = ? AND phase != 'verified'").run(phase, messageId);
     // A verified message spent nothing: its write history guards only the loop.
-    if (phase === "verified") this.db.query("DELETE FROM tmux_paste_writes WHERE messageId = ?").run(messageId);
+    if (phase === "verified") {
+      this.db.query("DELETE FROM tmux_paste_writes WHERE messageId = ?").run(messageId);
+      this.db.query("DELETE FROM tmux_paste_submits WHERE messageId = ?").run(messageId);
+    } else this.db.query("INSERT OR IGNORE INTO tmux_paste_submits VALUES (?)").run(messageId);
   }
 
   abandonUnsubmitted(messageId: string): void {
