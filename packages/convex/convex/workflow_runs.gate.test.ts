@@ -533,11 +533,74 @@ describe("a gate asks from the station that wrote its card", () => {
     expect(tables.session_decisions[0]).toMatchObject({ workflow_run_id: RUN, gate_node_id: "decide" });
   });
 
-  test("with no decision of its own, the gate asks from that session, not the run's spawner", async () => {
+  // A gate never asks its own Ship / Revise / Drop: the person would get a card without the change's own options, and a
+  // bare Revise on it hands the build "Send it back with what to change" (sd-1594, sd-1595, sd-1601 on Oct 26).
+  test("with no card of its station standing, the gate asks nobody and the run goes back to present one", async () => {
     const { ctx, tables } = await seed();
     tables.conversations.push(station);
+    const r = await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card" });
+    expect(r).toMatchObject({ present_again: true });
+    // Before the station ever ran, the gate knows it has one from the runner.
+    const early = await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker: "card_write" });
+    expect(early).toMatchObject({ present_again: true });
+    expect(tables.session_decisions).toHaveLength(0);
+  });
+
+  const presented = (tables: any, startedAt: number) => {
+    tables.workflow_runs[0].node_statuses = [{ node_id: "card_write", status: "completed", session_id: "sess-card", started_at: startedAt }];
+  };
+  const postCard = (ctx: any) => askCore(ctx, { userId: HOST }, {
+    session_id: "sess-card",
+    question: "Should a promise count as kept only once they got the whole thing?",
+    options: [{ label: "Fix half-sent promises first, then bring it back" }, { label: "Ship it as built" }, { label: "Drop it" }],
+    blocking: true,
+  });
+
+  // sd-1600 was answered 26 s after it was posted, 3 s before decide paused, and the gate asked sd-1601 from scratch.
+  test("a card answered before its gate paused is the gate's answer, in the card's own words", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations.push(station);
+    presented(tables, 0);
+    const card = await postCard(ctx);
+    await answerCore(ctx, { userId: HOST }, { decision_id: String(card.id), answer_index: 0 });
+
+    const r = await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card" });
+    expect((r as any)?.error).toBeUndefined();
+    expect(tables.session_decisions).toHaveLength(1);
+    // The option names no edge, so its words route as the person's note (the graph's unlabelled edge is Revise).
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "running", gate_response: "Fix half-sent promises first, then bring it back", gate_decision_id: card.id });
+    expect(tables.session_decisions[0]).toMatchObject({ workflow_run_id: RUN, gate_node_id: "decide" });
+    const poll = await (pollGateResponse as any)._handler(ctx, { api_token: TOKEN, run_id: RUN });
+    expect(poll).toMatchObject({ status: "running", gate_answer: "Fix half-sent promises first, then bring it back" });
+  });
+
+  // ct-61693: Revise on sd-1217 was lost to the build's spent visits; resumed at decide, the gate asked sd-1594 instead.
+  test("a run resumed at its gate takes the answer its card already has", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations.push(station);
+    presented(tables, 0);
+    const card = await postCard(ctx);
+    await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card" });
+    await answerCore(ctx, { userId: HOST }, { decision_id: String(card.id), answer_index: 0 });
+    const words = "Fix half-sent promises first, then bring it back";
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "running", gate_response: words });
+    Object.assign(tables.workflow_runs[0], { status: "running", gate_node_id: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined });
+
     await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card" });
     expect(tables.session_decisions).toHaveLength(1);
-    expect(String(tables.session_decisions[0].conversation_id)).toBe("conversations_card");
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "running", gate_response: words, gate_decision_id: card.id });
+  });
+
+  // A Revise sends the run back through the station, which presents a new card: the old answer is spent.
+  test("an answer from before the station last started presenting does not stand", async () => {
+    const { ctx, tables } = await seed();
+    tables.conversations.push(station);
+    presented(tables, 0);
+    const card = await postCard(ctx);
+    await answerCore(ctx, { userId: HOST }, { decision_id: String(card.id), answer_index: 0 });
+    presented(tables, Date.now() + 60_000);
+    const r = await pauseAtGateCore(ctx, { userId: HOST }, { run_id: RUN as any, node_id: "decide", prompt: "Ship this change?", choices: cardChoices, asker_session_id: "sess-card" });
+    expect(r).toMatchObject({ present_again: true });
+    expect(tables.workflow_runs[0].gate_response).toBeUndefined();
   });
 });

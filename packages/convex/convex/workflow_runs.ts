@@ -18,7 +18,7 @@ import { moveTaskStatus } from "./tasks";
 import { noticeCardWaiting, noticeChangeShipped } from "./lineNotices";
 import { createDataContext } from "./data";
 import { askTrialGate, trialProjectOf } from "./lineTrial";
-import { alignGateChoices } from "./lib/gateChoices";
+import { alignGateChoices, gateResponseOf, standingCard } from "./lib/gateChoices";
 import { runSuperseded } from "./lib/superseded";
 import { resolveOwnerDevice } from "./devices";
 import { openRunPrice } from "./lib/trialRunPrices";
@@ -163,7 +163,7 @@ export async function openDecisionOf(ctx: Ctx, conversationId: Id<"conversations
 export async function pauseAtGateCore(
   ctx: Ctx,
   auth: { userId: Id<"users"> },
-  args: { run_id: Id<"workflow_runs">; node_id: string; prompt: string; choices: GateChoice[]; doc_md?: string; category?: string; stack?: string; card?: ChangeCard; proposal?: unknown; judge_fix?: unknown; asker_session_id?: string },
+  args: { run_id: Id<"workflow_runs">; node_id: string; prompt: string; choices: GateChoice[]; doc_md?: string; category?: string; stack?: string; card?: ChangeCard; proposal?: unknown; judge_fix?: unknown; asker_session_id?: string; asker?: string },
 ) {
   const run = await ctx.db.get(args.run_id);
   if (!run || String(run.user_id) !== String(auth.userId)) return { error: "Not found" };
@@ -212,14 +212,16 @@ export async function pauseAtGateCore(
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
 
   let decision: { id: Id<"session_decisions">; short_id?: string } | null = null;
-  // The station the gate names (`asker=`) asks from its own session, so the decision lives in the thread that wrote
-  // it and a person can talk to that session before answering. When the session already posted its decision (its
-  // own question, options and page), the gate adopts it rather than asking a second time.
+  // The station the gate names (`asker=`) presents the decision from its own session, so it lives in the thread that
+  // wrote it and a person can talk to that session before answering. The gate takes the card that session posted and
+  // asks nothing of its own: an answered card is the gate's answer at once, and with no card standing nobody is asked
+  // and the run goes back to the station to present one.
   const station = await stationSession(ctx, args.asker_session_id, run._id);
-  const own = station ? await openDecisionOf(ctx, station._id) : null;
+  const own = station ? await standingCard(ctx, run, station._id, args.node_id, args.asker_session_id) : null;
+  if (!own && (station || args.asker)) return { error: `${args.asker ?? "the presenting station"} posted no card for this gate`, present_again: true };
   if (own) {
-    // It joins the gate's stack (a trial's runs gather in one the person opens when they review).
-    const stackRow = stackRef ? await ctx.db.query("decision_stacks").withIndex("by_short_id", (q: any) => q.eq("short_id", stackRef)).first() : null;
+    // A card still waiting joins the gate's stack (a trial's runs gather in one the person opens when they review).
+    const stackRow = stackRef && own.status === "pending" ? await ctx.db.query("decision_stacks").withIndex("by_short_id", (q: any) => q.eq("short_id", stackRef)).first() : null;
     await ctx.db.patch(own._id, {
       workflow_run_id: args.run_id,
       gate_node_id: args.node_id,
@@ -229,11 +231,9 @@ export async function pauseAtGateCore(
       updated_at: now,
     });
     // The session's options in its own order, each keyed to the edge it names (an answer routes by option index).
-    const aligned = alignGateChoices(own.options, args.choices);
-    await ctx.db.patch(args.run_id, {
-      gate_decision_id: own._id,
-      gate_choices: aligned.map((c, i) => (c ? { key: c.key, label: c.label, target: c.target } : { key: "", label: own.options[i].label, target: "" })),
-    });
+    const choices = alignGateChoices(own.options, args.choices).map((c, i) => (c ? { key: c.key, label: c.label, target: c.target } : { key: "", label: own.options[i].label, target: "" }));
+    const answered = own.status === "answered" ? { gate_response: gateResponseOf(choices[own.answer_index ?? -1]?.key, own.answer_text, own.options[own.answer_index ?? -1]?.label), status: "running" as const } : {};
+    await ctx.db.patch(args.run_id, { gate_decision_id: own._id, gate_choices: choices, ...answered });
     decision = { id: own._id, short_id: own.short_id };
   }
   const askerId = station?._id ?? run.spawner_conversation_id ?? run.primary_conversation_id;
@@ -1392,8 +1392,10 @@ export const pauseAtGate = mutation({
     proposal: v.optional(v.any()),
     /** The judge route's card (shared/contracts/judgeFix) for the project's reviewer: a trial card carries it; the decision rail does not read it yet. */
     judge_fix: v.optional(v.any()),
-    /** The session of the station the gate names (`asker=`): the gate adopts its open decision, else asks from it. */
+    /** The session of the station the gate names (`asker=`): the gate takes the card it posted, and asks nothing of its own. */
     asker_session_id: v.optional(v.string()),
+    /** The station the gate names (`asker=`), sent even before it ran: a gate with a presenter never asks a question of its own. */
+    asker: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);

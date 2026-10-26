@@ -30,6 +30,7 @@ import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { roleOfConversation } from "./lib/actor";
 import { projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { findDecision, userMayRead } from "./lib/decisionAccess";
+import { gateResponseOf } from "./lib/gateChoices";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
 import { artifactUrl } from "./artifacts";
 import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
@@ -827,16 +828,7 @@ async function settleGateRun(ctx: Ctx, row: DecisionRow, verdict: Verdict, now: 
     return true;
   }
   const key: string | undefined = verdict.answer_index !== undefined ? run.gate_choices?.[verdict.answer_index]?.key : undefined;
-  const text = verdict.answer_text?.trim();
-  let response: string;
-  if (!key) response = text || answerLabel(row, verdict) || "";
-  else if (!text) response = key;
-  else {
-    // A note typed beside a chosen option keeps the key in front so the
-    // runner routes on it and still hands the note to the next node.
-    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    response = new RegExp(`^\\[?${escaped}\\]?([:\\s]|$)`, "i").test(text) ? text : `${key}: ${text}`;
-  }
+  const response = gateResponseOf(key, verdict.answer_text, answerLabel(row, verdict));
   await ctx.db.patch(run._id, { gate_response: response, status: "running", updated_at: now });
   return true;
 }

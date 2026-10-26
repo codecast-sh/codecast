@@ -892,7 +892,8 @@ export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: R
     ...(card && "card" in card ? { card: card.card } : {}),
     ...(card && "proposal" in card ? { proposal: card.proposal } : {}),
     ...(card && "judge_fix" in card ? { judge_fix: card.judge_fix } : {}),
-    // The asking station's session, when the gate names one and it ran.
+    // The presenting station the gate names, and its session when it ran: such a gate asks only the card it posted.
+    ...(node.asker ? { asker: node.asker } : {}),
     ...(node.asker && context[`${node.asker}.session_id`] ? { asker_session_id: context[`${node.asker}.session_id`] } : {}),
   };
 }
@@ -967,15 +968,18 @@ async function executeRemoteHumanGate(
 
   if (choices.length === 0) {
     const response = await ask([{ key: "ok", label: "Continue", target: "" }]);
+    if (response === PRESENT_AGAIN) return presentAgain(node, graph, context);
     if (response && !resumed?.response) await continueFreshIfStale(graph, options, node);
     return response ? "success" : "failure";
   }
 
   let response = await ask(choices);
+  if (response === PRESENT_AGAIN) return presentAgain(node, graph, context);
   if (!response) return "failure";
   if (!resumed?.response) await continueFreshIfStale(graph, options, node);
   // A question the presenting station answered is spent once the gate asks again.
   delete context["human.gate.question"];
+  delete context["human.gate.no_card"];
 
   for (;;) {
     // The human's message is context for the next hand.
@@ -1111,6 +1115,9 @@ export function buildNodePrompt(
 
   // A question typed at the gate this station presents comes back here: the
   // decision it posts again is the answer.
+  if (context["human.gate.no_card"] && presentsDecision(node, graph)) {
+    parts.push(`\n# No decision of yours stands at ${context["human.gate.no_card"]}\nThe gate decides only on a decision you post in this visit: an answer given to a card from an earlier visit does not carry over. Post the decision for the change as it stands.`);
+  }
   if (context["human.gate.question"] && presentsDecision(node, graph)) {
     parts.push(`\n# The person's question about your decision\n${context["human.gate.question"]}\n\nThey asked instead of choosing. Answer it in the decision you post again.`);
   } else if (context["human.gate.question"] && answersGate(node, graph)) {
@@ -1501,6 +1508,21 @@ async function reportProgress(options: RunOptions, payload: Record<string, any>)
   } catch {}
 }
 
+// A gate with a presenting station (`asker=`) decides on the card that station
+// posted and asks no question of its own. With no card of it standing, nobody
+// is asked, and the run goes back to the station to present one.
+const PRESENT_AGAIN = "\0present again";
+
+function presentAgain(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>): NodeOutcome {
+  const asker = node.asker ? graph.nodes.get(node.asker) : undefined;
+  if (!asker) return "failure";
+  context["human.gate.target"] = asker.id;
+  // Nobody answered, so this is no new attempt: the station's visits keep counting.
+  context["human.gate.no_card"] = node.label;
+  console.log(`  ${c.yellow}no card from ${asker.label} stands at ${node.label}: back to ${asker.label}${c.reset}`);
+  return "success";
+}
+
 async function reportGate(
   options: RunOptions,
   nodeId: string,
@@ -1520,7 +1542,8 @@ async function reportGate(
         choices,
       }),
     });
-    const asked = await resp.json().catch(() => null) as { error?: string } | null;
+    const asked = await resp.json().catch(() => null) as { error?: string; present_again?: boolean } | null;
+    if (asked?.present_again) return PRESENT_AGAIN;
     // Nobody was asked: stop here so the failure path says why, rather than
     // wait on an answer that cannot come.
     if (asked?.error) {
@@ -1632,17 +1655,14 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     await loadPlanContext(options, initialContext);
   }
 
-  // The repo's line profile, read once per run (line-profile.md LP2): every
-  // value as $line.<key>, so a shipped template names no path or tool of its
-  // own. A malformed profile stops the run rather than standing in defaults.
-  try {
-    Object.assign(initialContext, lineProfileVars(loadLineProfile(cwd).profile));
-  } catch (err) {
-    if (!(err instanceof LineProfileError)) throw err;
-    console.error(`${c.red}✗ ${err.message}${c.reset}`);
-    if (options.runId && !options.dryRun) await reportProgress(options, profileFailure(startNode.id, err.message));
+  // A malformed profile stops the run before anything runs, rather than standing in defaults.
+  const profile = currentLineVars(cwd);
+  if (profile instanceof LineProfileError) {
+    console.error(`${c.red}✗ ${profile.message}${c.reset}`);
+    if (options.runId && !options.dryRun) await reportProgress(options, profileFailure(startNode.id, profile.message));
     return "invalid";
   }
+  Object.assign(initialContext, profile);
   // A run with no cause keeps its files under its own id, so a resume finds them.
   initialContext["run_dir"] = lineRunDir(cwd, !initialContext["task_id"] && options.runId ? `${slugPart(graph.name)}-${slugPart(options.runId)}` : runSlug(graph, initialContext, "run"));
   // A change frozen for this run (flows.md FL4) waits on its own branch and worktree: every station starts on it.
@@ -1863,6 +1883,19 @@ async function driveRun(
   return "completed";
 }
 
+// The repo's line profile (line-profile.md LP2), every value as $line.<key>, so a
+// shipped template names no path or tool of its own. Read at a run's start and
+// again before every station: a run started (or checkpointed) before the profile
+// changed would otherwise run the old commands through every wait and resume.
+function currentLineVars(cwd: string): Record<string, string> | LineProfileError {
+  try {
+    return lineProfileVars(loadLineProfile(cwd).profile);
+  } catch (err) {
+    if (err instanceof LineProfileError) return err;
+    throw err;
+  }
+}
+
 // Core node-execution loop, shared by the initial pass and goal-gate retries.
 // Runs from startNode until an exit node or a dead end, mutating state and
 // nodeOutcomes, and returns the terminal node.
@@ -1892,6 +1925,15 @@ async function runNodeLoop(
       state.failReason = `max_visits=${current.max_visits} exceeded on ${current.id}`;
       break;
     }
+
+    // A run that waited days at a card runs the commands the profile names now.
+    const profile = currentLineVars(cwd);
+    if (profile instanceof LineProfileError) {
+      state.failed = true;
+      state.failReason = profileFailure(current.id, profile.message).fail_reason;
+      break;
+    }
+    Object.assign(state.context, profile);
 
     // ── Stage 2: Print node header ────────────────────────────────────────────
     const icon = nodeIcon(current);
@@ -1946,7 +1988,7 @@ async function runNodeLoop(
       outcome = "success";
     }
     // A person's answer is the next attempt: a Revise sent back to a build that spent its visits is carried out (Oct 26).
-    if (current.type === "human" && outcome !== "failure" && !options.dryRun) clearVisits(state.visitCounts, state.context);
+    if (current.type === "human" && outcome !== "failure" && !options.dryRun && !state.context["human.gate.no_card"]) clearVisits(state.visitCounts, state.context);
 
     if (options.runId) {
       await reportProgress(options, {
