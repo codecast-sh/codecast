@@ -1292,6 +1292,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 <PanelLeft />
               </TopbarButton>
             </ShortcutTooltip>
+            {/* The bar hides in zen, so it only ever enters; the exit is the
+                conversation header's button (ConversationView). */}
+            <ShortcutTooltip label="Enter zen mode" action="ui.zenToggle">
+              <TopbarButton
+                onClick={(e) => { dispatchAction("ui.zenToggle"); tipActions.whisper('ui.zenToggle', e); }}
+                aria-label="Enter zen mode"
+                desktopOnly
+              >
+                <Maximize2 />
+              </TopbarButton>
+            </ShortcutTooltip>
             {isDesktopApp && (
               <div className="flex items-center gap-0.5">
                 <ShortcutTooltip label="Back" action="nav.back">
@@ -1417,17 +1428,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </TopbarButton>
               </ShortcutTooltip>
             )}
-            {/* The bar hides in zen, so it only ever enters; the exit is the
-                conversation header's button (ConversationView). */}
-            <ShortcutTooltip label="Enter zen mode" action="ui.zenToggle">
-              <TopbarButton
-                onClick={(e) => { dispatchAction("ui.zenToggle"); tipActions.whisper('ui.zenToggle', e); }}
-                aria-label="Enter zen mode"
-                desktopOnly
-              >
-                <Maximize2 />
-              </TopbarButton>
-            </ShortcutTooltip>
             {/* Detached tab window only: merge this surface back into the
                 main window as a tab (renders null everywhere else). */}
             <AttachTabButton />

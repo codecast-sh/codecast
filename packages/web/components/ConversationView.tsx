@@ -3953,7 +3953,7 @@ const ConversationViewInner = (
         lead={<>
             {/* Zen hides the top bar and its enter button, so the way out
                 sits here. */}
-            {!embedded && isZenMode && (
+            {isZenMode && (
               <ShortcutTooltip label="Exit zen mode" action="ui.zenToggle" side="bottom">
                 <button
                   onClick={() => dispatchAction("ui.zenToggle")}
