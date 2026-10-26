@@ -4,10 +4,9 @@ import { useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { Blocks, Library, MonitorSmartphone, Plug } from "lucide-react";
+import { AlertTriangle, Blocks, Library, MonitorSmartphone, Plug } from "lucide-react";
 import { AuthGuard } from "../AuthGuard";
 import { SegmentedToggle } from "../SegmentedToggle";
-import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useDevices } from "../DeviceBadge";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -22,36 +21,34 @@ import {
 } from "../../store/capabilities";
 import {
   buildFleetRows,
-  isBroken,
   catalogFromFleet,
+  needsAttention,
   FleetMatrix,
   FleetSummary,
   summarizeFleet,
   withFleetInstalls,
   type FleetFilter,
   type FleetInventoryItem,
-  type FleetGridRow,
 } from "./FleetMatrix";
 import { LibraryBrowse } from "./LibraryBrowse";
 import { AppsTab } from "./AppsTab";
 import { InstalledTab, projectChoicesFromSessions } from "./InstalledTab";
 import { EquipControl } from "./EquipControl";
+import { CapabilityReader } from "./CapabilityReader";
 import {
-  kindMeta,
-  ScopeChip,
   toCapabilityDevice,
   type CapabilityDevice,
   type CatalogEntry,
 } from "./CapabilityCard";
-import { TokenCostBadge } from "./TokenCostBadge";
-import { Cmd, LoadingMatrix } from "./EmptyStates";
+import { LoadingMatrix } from "./EmptyStates";
 
 /**
  * /capabilities — the library. Four tabs, in the order a person meets them:
  *
- *   Installed  the front door. One row per capability you have said anything
- *              about, and the equip pill on every row: everywhere / this
- *              project / this session. This is where people live.
+ *   Installed  the front door. One row per capability any machine reported,
+ *              grouped by kind; opening one reads its file and sets where it is
+ *              on (everywhere / this project / this session). Fleet problems
+ *              sit above the list as counts that open Machines filtered to them.
  *   Machines   the fleet matrix — one column per device, drift first. The ops
  *              view, one click away, for when something is wrong.
  *   Library    the store: the public registries cross-referenced against your
@@ -268,97 +265,43 @@ function useFleet(): {
   }, [devices, rosterResolved, sig, now]);
 }
 
-// -------------------------------------------------------------- the detail
+// ------------------------------------------------------------ the problems
 
-/** What one capability looks like machine by machine — the row's own story,
- *  shown under the matrix so clicking a row never navigates away from it. */
-function RowDetail({
-  row,
-  devices,
-  onClose,
+/**
+ * What on the fleet needs a person, as counts that each open the Machines view
+ * filtered to exactly those rows. Draws nothing when nothing is wrong.
+ */
+function FleetAttention({
+  counts,
+  onOpen,
 }: {
-  row: FleetGridRow;
-  devices: CapabilityDevice[];
-  onClose: () => void;
+  counts: ReturnType<typeof summarizeFleet>;
+  onOpen: (filter: FleetFilter) => void;
 }) {
-  const meta = kindMeta(String(row.kind));
-  const Icon = meta?.icon ?? Blocks;
+  type Item = { filter: FleetFilter; n: number; label: string; tone: string; title: string };
+  const items = ([
+    { filter: "broken", n: counts.broken, label: "broken", tone: "text-sol-red", title: "Switched on with nothing downloaded" },
+    ...(counts.comparable
+      ? [{ filter: "drift" as FleetFilter, n: counts.drift, label: "drift", tone: "text-sol-magenta", title: "Machines disagree about these" }]
+      : []),
+    { filter: "all", n: counts.silent, label: counts.silent === 1 ? "machine not reporting" : "machines not reporting", tone: "text-sol-yellow", title: "Never sent an inventory: run cast update on it" },
+  ] satisfies Item[]).filter((i) => i.n > 0);
+  if (items.length === 0) return null;
   return (
-    <div className="rounded-lg border border-sol-magenta/40 bg-sol-card p-3">
-      <div className="flex items-start gap-2">
-        <Icon className="w-4 h-4 mt-0.5 text-sol-magenta flex-shrink-0" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-sm text-sol-text">{row.identity}</span>
-            <span className="text-[10px] text-sol-text-dim">{meta?.label ?? String(row.kind)}</span>
-            {row.marketplace && (
-              <span className="text-[10px] font-mono text-sol-text-dim">{row.marketplace}</span>
-            )}
-            <TokenCostBadge cost={row.cost} />
-          </div>
-          {row.description && (
-            <p className="mt-1 text-xs text-sol-text-muted leading-relaxed">{row.description}</p>
-          )}
-        </div>
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <AlertTriangle className="h-3.5 w-3.5 text-sol-orange" />
+      {items.map((i) => (
         <button
+          key={i.label}
           type="button"
-          onClick={onClose}
-          className="text-[11px] text-sol-text-dim hover:text-sol-text"
+          title={i.title}
+          onClick={() => onOpen(i.filter)}
+          className="inline-flex items-center gap-1 h-6 px-2 rounded border border-sol-border bg-sol-card text-[11px] text-sol-text-muted hover:border-sol-magenta/50 hover:text-sol-text"
         >
-          close
+          <span className={`font-mono ${i.tone}`}>{i.n}</span>
+          {i.label}
         </button>
-      </div>
-
-      <div className="mt-3 grid gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">
-        {devices.map((d) => {
-          const cell = row.byDevice[d.deviceId] ?? { status: "unknown" as const };
-          return (
-            <div
-              key={d.deviceId}
-              className="flex items-center gap-2 px-2 py-1.5 rounded bg-sol-bg-alt"
-            >
-              <span className="text-[11px] text-sol-text truncate flex-1" title={d.name}>
-                {d.name}
-              </span>
-              {cell.status === "unknown" ? (
-                <span className="text-[10px] text-sol-yellow">not reported yet</span>
-              ) : cell.status === "absent" ? (
-                <span className="text-[10px] text-sol-text-dim">not installed</span>
-              ) : isBroken(cell) ? (
-                <span className="text-[10px] text-sol-red">switched on, nothing downloaded</span>
-              ) : (
-                <span className="flex items-center gap-1">
-                  {/* Scopes stack: one capability can be switched on at user and
-                      project scope at once, and each is a separate answer to
-                      "why is this here?". The matrix cell shows only the notable
-                      one because it has to stay scannable; this panel is where
-                      the question gets answered in full, so show every scope. */}
-                  {cell.scopes.map((scope) => (
-                    <ScopeChip key={scope} scope={scope} />
-                  ))}
-                  {cell.pin && (
-                    <span
-                      className={`text-[10px] font-mono ${
-                        cell.status === "pin_differs" ? "text-sol-orange" : "text-sol-text-muted"
-                      }`}
-                    >
-                      {cell.pin}
-                    </span>
-                  )}
-                  {cell.status === "disabled" && (
-                    <span className="text-[10px] text-sol-text-dim">off</span>
-                  )}
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      <p className="mt-2 text-[11px] text-sol-text-dim">
-        This page only reads. To change a machine, run <Cmd>cast cap</Cmd> on it — copying a
-        capability across the fleet lands in a later release.
-      </p>
+      ))}
     </div>
   );
 }
@@ -452,37 +395,20 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
     return withFleetInstalls(merged, rows);
   }, [props.catalog, publicCatalog.results, rows]);
 
-  const kindTally = useMemo(() => {
-    const t = new Map<string, number>();
-    for (const r of rows) t.set(String(r.kind), (t.get(String(r.kind)) ?? 0) + 1);
-    return [...t.entries()].sort((a, b) => b[1] - a[1]);
-  }, [rows]);
+  const attention = useMemo(() => rows.filter(needsAttention).length, [rows]);
 
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
       <div className="mx-auto w-full max-w-[1400px] px-4 py-5 space-y-4">
-        <header className="flex items-start gap-3 flex-wrap">
-          <div className="mt-0.5 text-sol-magenta">
-            <Blocks className="w-5 h-5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-serif text-sol-text">Capabilities</h1>
-            <p className="text-sm text-sol-text-muted mt-1 max-w-2xl leading-relaxed">
-              {tab === "installed"
-                ? "Everything on your machines. Click a skill to read it."
-                : tab === "library"
-                  ? "Things you could add, cross-referenced against what you already have."
-                  : tab === "apps"
-                    ? "Services agents act through. Connect once; tokens stay server-side."
-                    : "Every machine side by side. Drift first — the skill your laptop is missing is the thing no single-machine tool can tell you."}
-            </p>
-          </div>
+        <header className="flex items-center gap-3 flex-wrap">
+          <Blocks className="w-5 h-5 text-sol-magenta" />
+          <h1 className="text-lg font-serif text-sol-text flex-1">Capabilities</h1>
           <SegmentedToggle
             value={tab}
             onChange={setTab}
             items={[
-              { key: "installed", label: "Installed", icon: Blocks, title: "What you have on, and where" },
-              { key: "machines", label: "Machines", icon: MonitorSmartphone, title: "Compare your fleet" },
+              { key: "installed", label: "Installed", icon: Blocks, title: "What you have, and where it is on", count: rows.length },
+              { key: "machines", label: "Machines", icon: MonitorSmartphone, title: "Rows that need attention", count: attention },
               { key: "library", label: "Library", icon: Library, title: "Browse what you could add" },
               { key: "apps", label: "Apps", icon: Plug, title: "Connect services agents act through" },
             ]}
@@ -490,6 +416,14 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
         </header>
 
         {tab === "installed" ? (
+          <>
+          <FleetAttention
+            counts={counts}
+            onOpen={(f) => {
+              setFilter(f);
+              setTab("machines");
+            }}
+          />
           <InstalledTab
             rows={rows}
             devices={devices}
@@ -499,14 +433,15 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
             onSelect={setSelectedKey}
             loading={loading}
           />
+          </>
         ) : tab === "machines" ? (
           loading ? (
             <LoadingMatrix />
           ) : (
             <>
-              <FleetSummary counts={counts} filter={filter} onFilter={setFilter} />
-
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-3 flex-wrap">
+                <FleetSummary counts={counts} filter={filter} onFilter={setFilter} />
+                <div className="flex-1" />
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -516,21 +451,9 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
                       setQuery("");
                     }
                   }}
-                  placeholder="Filter capabilities"
+                  placeholder="Filter"
                   className="h-7 px-2 w-56 text-xs bg-sol-bg-alt border border-sol-border rounded text-sol-text placeholder:text-sol-text-dim outline-none focus:border-sol-magenta/60"
                 />
-                {kindTally.length > 0 && (
-                  <span className="text-[11px] text-sol-text-dim font-mono truncate">
-                    {kindTally
-                      .map(([k, n]) => `${n} ${kindMeta(k)?.plural ?? k}`)
-                      .join(" · ")}
-                  </span>
-                )}
-                <div className="flex-1" />
-                <span className="hidden md:inline-flex items-center gap-1 text-[10px] text-sol-text-dim">
-                  <KeyCap size="xs">Esc</KeyCap>
-                  clears
-                </span>
               </div>
 
               <FleetMatrix
@@ -548,15 +471,12 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
               />
 
               {selected && (
-                <RowDetail row={selected} devices={devices} onClose={() => setSelectedKey(null)} />
-              )}
-
-              {counts.silent > 0 && counts.reporting > 0 && (
-                <p className="text-[11px] text-sol-text-dim">
-                  {counts.silent} {counts.silent === 1 ? "machine has" : "machines have"} never sent
-                  an inventory, so {counts.silent === 1 ? "its" : "their"} column reads unknown
-                  rather than empty. Update the CLI there with <Cmd>cast update</Cmd>.
-                </p>
+                <CapabilityReader
+                  row={selected}
+                  devices={devices}
+                  onClose={() => setSelectedKey(null)}
+                  equip={selected.slug ? { slug: selected.slug, ...equipTarget } : undefined}
+                />
               )}
             </>
           )
@@ -564,13 +484,6 @@ function CapabilitiesContent(props: CapabilitiesPageProps) {
           <AppsTab />
         ) : (
           <>
-            {!props.catalog && catalog && (publicCatalog.results?.length ?? 0) === 0 && (
-              <p className="text-[11px] text-sol-text-dim">
-                Browsing what your own machines report. The public marketplace catalog has not been
-                ingested for this deployment yet — when it is, these rows keep their
-                cross-reference and gain everything you have not installed.
-              </p>
-            )}
             <LibraryBrowse
               entries={catalog}
               devices={devices}

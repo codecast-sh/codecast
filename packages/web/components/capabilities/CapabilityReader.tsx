@@ -8,12 +8,15 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { kindMeta, ScopeChip, type CapabilityDevice } from "./CapabilityCard";
 import { EquipControl, type EquipTarget } from "./EquipControl";
 import { TokenCostBadge } from "./TokenCostBadge";
-import { isBroken, type FleetGridRow } from "./FleetMatrix";
+import { isBroken, shortPin, type FleetGridRow } from "./FleetMatrix";
+import { DeviceDot } from "../DeviceBadge";
+import { SegmentedToggle } from "../SegmentedToggle";
 
 /**
- * Read one capability: the SKILL.md (or command, snippet, agent file) as the
- * machine last sent it, plus where it lives. MCP servers and hooks have no
- * markdown, so this shows the command line instead.
+ * One capability, opened: where it is on (the equip control, top right), what
+ * each machine holds, then the SKILL.md (or command, snippet, agent file) as a
+ * machine last sent it. MCP servers and hooks have no markdown, so they show
+ * their command line instead. Installed and Machines both open this panel.
  */
 
 function splitFrontmatter(md: string): { body: string; hadMatter: boolean } {
@@ -58,23 +61,29 @@ export function CapabilityReader({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-sm text-sol-text">{row.identity}</span>
             <span className="text-[10px] text-sol-text-dim">{meta?.label ?? String(row.kind)}</span>
+            {row.marketplace && (
+              <span className="text-[10px] font-mono text-sol-text-dim">{row.marketplace}</span>
+            )}
             <TokenCostBadge cost={row.cost} />
           </div>
           {row.description && (
-            <p className="mt-1 text-xs text-sol-text-muted leading-relaxed">{row.description}</p>
+            <p className="mt-1 text-xs text-sol-text-muted leading-relaxed line-clamp-3">{row.description}</p>
           )}
         </div>
+        {equip && <EquipControl target={equip} />}
         <button
           type="button"
           onClick={onClose}
-          className="text-sol-text-dim hover:text-sol-text"
+          className="mt-1 text-sol-text-dim hover:text-sol-text"
           aria-label="Close"
         >
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
 
-      <div className="px-3 py-2.5 space-y-3 max-h-[min(70vh,40rem)] overflow-y-auto">
+      <DeviceStatusGrid row={row} devices={devices} />
+
+      <div className="px-3 py-2.5 space-y-3 max-h-[min(70vh,40rem)] overflow-y-auto border-t border-sol-border/60">
         {row.command && (
           <pre className="text-[11px] font-mono text-sol-text bg-sol-bg-alt rounded px-2 py-1.5 overflow-x-auto">
             {row.command}
@@ -92,19 +101,20 @@ export function CapabilityReader({
           <div className="text-[11px] font-mono text-sol-text-dim break-all">{row.source}</div>
         )}
 
-        {waiting && (
-          <div className="text-xs text-sol-text-dim">Loading file…</div>
-        )}
+        {waiting && <div className="text-xs text-sol-text-dim">Loading file…</div>}
         {!waiting && body && (
           <div>
             <div className="flex items-center justify-end mb-2">
-              <button
-                type="button"
-                onClick={() => setRaw((v) => !v)}
-                className="text-[10px] text-sol-text-dim hover:text-sol-text"
-              >
-                {raw ? "Rendered" : "Raw file"}
-              </button>
+              <SegmentedToggle
+                size="sm"
+                variant="bare"
+                value={raw ? "raw" : "rendered"}
+                onChange={(v) => setRaw(v === "raw")}
+                items={[
+                  { key: "rendered", label: "Rendered" },
+                  { key: "raw", label: "Raw" },
+                ]}
+              />
             </div>
             {raw ? (
               <pre className="text-[11px] font-mono text-sol-text whitespace-pre-wrap break-words">
@@ -114,53 +124,69 @@ export function CapabilityReader({
               <MarkdownRenderer content={rendered?.body ?? body} className="!text-[13px]" />
             )}
             {content?.truncated && (
-              <p className="mt-2 text-[11px] text-sol-text-dim">This file was cut at 64KB.</p>
+              <p className="mt-2 text-[11px] text-sol-text-dim">Cut at 64KB</p>
             )}
           </div>
         )}
         {!waiting && MARKDOWN_KINDS.has(String(row.kind)) && !body && (
-          <p className="text-xs text-sol-text-muted leading-relaxed">
-            The file has not synced from a machine yet. New skills usually show
-            up within a minute of landing on disk.
-          </p>
-        )}
-
-        <div className="grid gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(160px,1fr))]">
-          {devices.map((d) => {
-            const cell = row.byDevice[d.deviceId];
-            const status = cell?.status ?? "unknown";
-            return (
-              <div key={d.deviceId} className="flex items-center gap-2 px-2 py-1.5 rounded bg-sol-bg-alt">
-                <span className="text-[11px] text-sol-text truncate flex-1" title={d.name}>
-                  {d.name}
-                </span>
-                {status === "unknown" || !cell ? (
-                  <span className="text-[10px] text-sol-yellow">not reported</span>
-                ) : status === "absent" ? (
-                  <span className="text-[10px] text-sol-text-dim">not here</span>
-                ) : isBroken(cell) ? (
-                  <span className="text-[10px] text-sol-red">broken</span>
-                ) : (
-                  <span className="flex items-center gap-1">
-                    {cell.scopes.map((scope) => (
-                      <ScopeChip key={scope} scope={scope} />
-                    ))}
-                    {status === "disabled" && (
-                      <span className="text-[10px] text-sol-text-dim">off</span>
-                    )}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {equip && (
-          <div className="flex justify-end">
-            <EquipControl target={equip} />
-          </div>
+          <p className="text-xs text-sol-text-dim">File not synced yet</p>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Where this capability is, machine by machine: the scopes beyond user, and
+ * the pin when the machines hold more than one.
+ */
+function DeviceStatusGrid({ row, devices }: { row: FleetGridRow; devices: CapabilityDevice[] }) {
+  return (
+    <div className="px-3 py-2 grid gap-x-3 gap-y-1 [grid-template-columns:repeat(auto-fill,minmax(180px,1fr))]">
+      {devices.map((d) => {
+        const cell = row.byDevice[d.deviceId];
+        const status = cell?.status ?? "unknown";
+        return (
+          <div key={d.deviceId} className="flex items-center gap-2 min-w-0 h-6">
+            <DeviceDot online={d.online} />
+            <span className="text-[11px] text-sol-text truncate flex-1" title={d.name}>
+              {d.name}
+            </span>
+            {status === "unknown" || !cell ? (
+              <span className="text-[10px] text-sol-yellow">not reported</span>
+            ) : status === "absent" ? (
+              <span className="text-[10px] text-sol-text-dim">—</span>
+            ) : isBroken(cell) ? (
+              <span className="text-[10px] text-sol-red">not downloaded</span>
+            ) : (
+              <span className="flex items-center gap-1 flex-shrink-0">
+                {status !== "disabled" && (
+                  <span
+                    className={`h-1.5 w-1.5 rounded-[2px] ${
+                      status === "pin_differs" ? "bg-sol-orange" : "bg-sol-green"
+                    }`}
+                  />
+                )}
+                {/* User scope is the default and gets no mark, as in the matrix;
+                    project and local are the answers to "why is this here?". */}
+                {cell.scopes.filter((scope) => scope !== "user").map((scope) => (
+                  <ScopeChip key={scope} scope={scope} />
+                ))}
+                {cell.pin && row.pins.length > 1 && (
+                  <span
+                    className={`text-[10px] font-mono ${
+                      status === "pin_differs" ? "text-sol-orange" : "text-sol-text-muted"
+                    }`}
+                  >
+                    {shortPin(cell.pin)}
+                  </span>
+                )}
+                {status === "disabled" && <span className="text-[10px] text-sol-text-dim">off</span>}
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -1,21 +1,22 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search, X } from "lucide-react";
+import { AlertTriangle, Search, X } from "lucide-react";
 import { SegmentedToggle } from "../SegmentedToggle";
-import { KeyCap } from "../KeyboardShortcutsHelp";
-import { kindMeta, CAPABILITY_KINDS, KIND_META, type CatalogEntry, type CapabilityKind } from "./CapabilityCard";
+import { kindMeta, CAPABILITY_KINDS, type CatalogEntry, type CapabilityKind } from "./CapabilityCard";
 import { type EquipTarget } from "./EquipControl";
 import { CapabilityReader } from "./CapabilityReader";
 import type { CapabilityDevice } from "./CapabilityCard";
-import type { FleetGridRow } from "./FleetMatrix";
+import { isBroken, type FleetGridRow } from "./FleetMatrix";
+import { LoadingMatrix, NoDevices, NoMatches, NothingInstalled, NothingReportedYet } from "./EmptyStates";
 
 /**
  * Installed — what is actually on your machines.
  *
  * The old front door listed only codecast bindings, so a skill sitting in
  * ~/.claude/skills never appeared. This list is the fleet inventory: one row
- * per capability any machine reported, click to read the file.
+ * per capability any machine reported, grouped by kind, click to read the file
+ * and set where it is on.
  */
 
 export interface InstalledTabProps {
@@ -37,6 +38,41 @@ function score(row: FleetGridRow, q: string): number {
   return 0;
 }
 
+/** Kinds in the order the library presents them; kinds this release does not
+ *  model sort last, by name. */
+function kindRank(kind: string): number {
+  const i = CAPABILITY_KINDS.indexOf(kind as CapabilityKind);
+  return i === -1 ? 99 : i;
+}
+
+/**
+ * The row's machine column, which speaks only when there is something to say:
+ * on every machine that reported is the normal case and draws nothing.
+ */
+function Coverage({ row }: { row: FleetGridRow }) {
+  const broken = row.cells.filter(isBroken).length;
+  const reporting = row.cells.filter((c) => c.status !== "unknown").length;
+  if (broken > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] text-sol-red" title={`${broken} machine${broken === 1 ? "" : "s"}: switched on, nothing downloaded`}>
+        <AlertTriangle className="h-3 w-3" />
+        {broken} broken
+      </span>
+    );
+  }
+  if (row.activeCount === 0 && row.presentCount > 0) {
+    return <span className="text-[11px] text-sol-text-dim">off</span>;
+  }
+  if (reporting > 1 && row.activeCount < reporting) {
+    return (
+      <span className="font-mono text-[11px] text-sol-text-muted" title={`On ${row.activeCount} of ${reporting} machines`}>
+        {row.activeCount}/{reporting}
+      </span>
+    );
+  }
+  return null;
+}
+
 export function InstalledTab({ rows, devices, catalog, equip, selectedKey, onSelect, loading }: InstalledTabProps) {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<CapabilityKind | string>("all");
@@ -45,21 +81,17 @@ export function InstalledTab({ rows, devices, catalog, equip, selectedKey, onSel
   const selected = selectedKey ? (rows.find((r) => r.key === selectedKey) ?? null) : null;
 
   const kindItems = useMemo(() => {
-    const present = new Set(rows.map((r) => String(r.kind)));
-    const items = [{ key: "all", label: "All" }];
-    for (const k of CAPABILITY_KINDS) {
-      if (!present.has(k)) continue;
-      items.push({ key: k, label: KIND_META[k].plural });
-    }
-    for (const k of [...present].sort()) {
-      if ((CAPABILITY_KINDS as readonly string[]).includes(k)) continue;
-      items.push({ key: k, label: k });
-    }
-    return items;
+    const tally = new Map<string, number>();
+    for (const r of rows) tally.set(String(r.kind), (tally.get(String(r.kind)) ?? 0) + 1);
+    const kinds = [...tally.keys()].sort((a, b) => kindRank(a) - kindRank(b) || a.localeCompare(b));
+    return [
+      { key: "all", label: "All", count: rows.length },
+      ...kinds.map((k) => ({ key: k, label: kindMeta(k)?.plural ?? k, count: tally.get(k) })),
+    ];
   }, [rows]);
 
+  const q = query.trim().toLowerCase();
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
     const filtered = rows.filter((r) => {
       if (kind !== "all" && String(r.kind) !== kind) return false;
       if (q && score(r, q) === 0) return false;
@@ -69,105 +101,134 @@ export function InstalledTab({ rows, devices, catalog, equip, selectedKey, onSel
       if (q) return score(b, q) - score(a, q) || a.identity.localeCompare(b.identity);
       const ka = String(a.kind);
       const kb = String(b.kind);
-      const ia = CAPABILITY_KINDS.indexOf(ka as CapabilityKind);
-      const ib = CAPABILITY_KINDS.indexOf(kb as CapabilityKind);
-      const ra = ia === -1 ? 99 : ia;
-      const rb = ib === -1 ? 99 : ib;
-      return ra - rb || a.identity.localeCompare(b.identity);
+      return kindRank(ka) - kindRank(kb) || ka.localeCompare(kb) || a.identity.localeCompare(b.identity);
     });
-  }, [rows, kind, query]);
+  }, [rows, kind, q]);
+
+  // Grouped under a kind header when the list is in kind order, so the kind is
+  // said once per group rather than on every row. A search ranks by match and
+  // mixes kinds, so its results stay one flat list.
+  const grouped = !q && kind === "all";
+
+  const renderRow = (row: FleetGridRow) => {
+    const meta = kindMeta(String(row.kind));
+    const Icon = meta?.icon;
+    const active = selectedKey === row.key;
+    const description =
+      row.description || (row.slug ? catalogBySlug.get(row.slug)?.description : undefined);
+    return (
+      <li key={row.key}>
+        <button
+          type="button"
+          onClick={() => onSelect(active ? null : row.key)}
+          className={`flex w-full items-center gap-3 px-3 py-2 text-left transition-colors ${
+            active ? "bg-sol-magenta/10" : "hover:bg-sol-bg-alt"
+          }`}
+        >
+          {Icon ? (
+            <Icon className={`h-4 w-4 shrink-0 ${active ? "text-sol-magenta" : "text-sol-text-dim"}`} strokeWidth={1.5} />
+          ) : (
+            <span className="h-4 w-4 shrink-0" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className={`truncate font-mono text-[13px] ${active ? "text-sol-magenta" : "text-sol-text"}`}>
+              {row.identity}
+            </div>
+            {description && (
+              <div className="truncate text-[11px] text-sol-text-dim">{description}</div>
+            )}
+          </div>
+          <Coverage row={row} />
+        </button>
+      </li>
+    );
+  };
+
+  const list = () => {
+    if (!grouped) {
+      return (
+        <ul className="divide-y divide-sol-border/60 overflow-hidden rounded-lg border border-sol-border bg-sol-card">
+          {shown.map(renderRow)}
+        </ul>
+      );
+    }
+    const groups: Array<[string, FleetGridRow[]]> = [];
+    for (const row of shown) {
+      const k = String(row.kind);
+      const last = groups[groups.length - 1];
+      if (last && last[0] === k) last[1].push(row);
+      else groups.push([k, [row]]);
+    }
+    return (
+      <div className="overflow-hidden rounded-lg border border-sol-border bg-sol-card">
+        {groups.map(([k, group]) => (
+          <section key={k}>
+            <h3 className="flex items-baseline gap-2 border-b border-sol-border/60 bg-sol-bg-alt px-3 py-1.5 text-[11px] text-sol-text-muted [&:not(:first-child)]:border-t">
+              {kindMeta(k)?.plural ?? k}
+              <span className="font-mono text-sol-text-dim">{group.length}</span>
+            </h3>
+            <ul className="divide-y divide-sol-border/60">{group.map(renderRow)}</ul>
+          </section>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="cq-container">
     <div className="cap-installed">
       <div className="min-w-0 flex-1 space-y-3">
-        <div className="flex items-center gap-2 rounded-lg border border-sol-border bg-sol-card px-3 py-2">
-          <Search className="h-4 w-4 text-sol-text-dim" strokeWidth={1.5} />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                e.stopPropagation();
-                setQuery("");
-              }
-            }}
-            placeholder="Filter skills, commands, plugins…"
-            className="flex-1 bg-transparent text-sm text-sol-text placeholder:text-sol-text-dim outline-none"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery("")}
-              className="text-sol-text-dim hover:text-sol-text"
-              aria-label="Clear"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative min-w-[200px] flex-1">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sol-text-dim" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setQuery("");
+                }
+              }}
+              placeholder="Filter"
+              className="h-7 w-full rounded border border-sol-border bg-sol-bg-alt pl-7 pr-7 text-xs text-sol-text placeholder:text-sol-text-dim outline-none focus:border-sol-magenta/60"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-sol-text-dim hover:text-sol-text"
+                aria-label="Clear"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {kindItems.length > 2 && (
+            <SegmentedToggle value={kind} onChange={setKind} items={kindItems} collapse />
           )}
-          <span className="hidden items-center gap-1 text-[10px] text-sol-text-dim sm:flex">
-            <KeyCap size="xs">Esc</KeyCap>
-            clears
-          </span>
         </div>
 
-        {kindItems.length > 2 && (
-          <SegmentedToggle value={kind} onChange={setKind} items={kindItems} />
-        )}
-
         {rows.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-sol-border px-4 py-8 text-center">
-            <div className="text-sm text-sol-text">
-              {loading ? "Reading machines…" : "Nothing reported yet"}
-            </div>
-            <div className="mt-1 text-xs text-sol-text-muted">
-              {loading
-                ? "Waiting on the first inventory from a daemon."
-                : "The daemon scans the skills on this machine and sends them up. A new file usually shows within a minute. The Library tab is for adding something you do not have."}
-            </div>
-          </div>
+          loading ? (
+            <LoadingMatrix cols={0} />
+          ) : devices.length === 0 ? (
+            <NoDevices />
+          ) : devices.every((d) => d.reportedAt === null) ? (
+            <NothingReportedYet deviceCount={devices.length} />
+          ) : (
+            <NothingInstalled deviceCount={devices.length} />
+          )
         ) : shown.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-sol-border px-4 py-8 text-center text-sm text-sol-text-muted">
-            Nothing matches{query ? ` “${query}”` : ""}.
-          </div>
+          <NoMatches
+            query={q || undefined}
+            onClear={() => {
+              setQuery("");
+              setKind("all");
+            }}
+          />
         ) : (
-          <ul className="divide-y divide-sol-border/60 overflow-hidden rounded-lg border border-sol-border bg-sol-card">
-            {shown.map((row) => {
-              const meta = kindMeta(String(row.kind));
-              const Icon = meta?.icon;
-              const active = selectedKey === row.key;
-              return (
-                <li key={row.key}>
-                  <button
-                    type="button"
-                    onClick={() => onSelect(active ? null : row.key)}
-                    className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors ${
-                      active ? "bg-sol-magenta/10" : "hover:bg-sol-bg-alt"
-                    }`}
-                  >
-                    {Icon ? (
-                      <Icon className="h-4 w-4 shrink-0 text-sol-text-muted" strokeWidth={1.5} />
-                    ) : (
-                      <span className="h-4 w-4 shrink-0" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="truncate text-sm text-sol-text">{row.identity}</span>
-                        <span className="text-[10px] text-sol-text-dim">{meta?.label ?? String(row.kind)}</span>
-                      </div>
-                      <div className="truncate text-[11px] text-sol-text-dim">
-                        {row.description ||
-                          (row.slug ? catalogBySlug.get(row.slug)?.description : undefined) ||
-                          (row.activeCount > 0
-                            ? `on ${row.activeCount} machine${row.activeCount === 1 ? "" : "s"}`
-                            : "present")}
-                      </div>
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          list()
         )}
       </div>
 

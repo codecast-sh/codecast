@@ -482,13 +482,18 @@ export function InstallFootprint({
           <span className="text-sol-yellow">no machine has reported</span>
         ) : present.length === 0 ? (
           "installed nowhere"
+        ) : present.length === devices.length ? (
+          <span className="text-sol-green">on all {present.length}</span>
         ) : (
           <>
             on <span className="text-sol-text">{present.length}</span> of {reporting.length}
           </>
         )}
       </span>
-      {devices.map((d) => {
+      {/* Only the machines that differ get a chip. A row of identical green
+          chips says nothing the count beside them has not; the exceptions are
+          the news. Nowhere at all keeps the count alone. */}
+      {present.length > 0 && devices.filter((d) => !present.includes(d)).map((d) => {
         const site = byDevice.get(d.deviceId);
         // A machine that never reported is unknown whatever else we hold about
         // it — nothing we could show would be something it told us.

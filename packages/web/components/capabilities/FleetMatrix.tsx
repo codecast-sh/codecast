@@ -581,14 +581,16 @@ function SummaryStat({
     tone === "accent" ? "text-sol-magenta" : tone === "warn" ? "text-sol-orange" : "text-sol-text";
   const body = (
     <div
-      className={`px-3 py-2 rounded-lg border text-left transition-colors ${
+      className={`inline-flex items-baseline gap-1.5 h-7 px-2.5 rounded-md border text-left transition-colors ${
         active
           ? "border-sol-magenta/60 bg-sol-magenta/10"
-          : "border-sol-border bg-sol-card hover:border-sol-magenta/40"
+          : onClick
+            ? "border-sol-border bg-sol-card hover:border-sol-magenta/40"
+            : "border-transparent"
       } ${onClick ? "cursor-pointer" : ""}`}
     >
-      <div className={`font-mono text-lg leading-none ${valueTone}`}>{value}</div>
-      <div className="mt-1 text-[10px] uppercase tracking-wide text-sol-text-dim">{label}</div>
+      <span className={`self-center font-mono text-[13px] ${valueTone}`}>{value}</span>
+      <span className="self-center text-[11px] text-sol-text-muted">{label}</span>
     </div>
   );
   const wrapped = onClick ? (
@@ -626,14 +628,14 @@ export function FleetSummary({
   const compared = (n: number) => (counts.comparable ? n : "—");
   const onlyOneMachine = "only one machine has reported — there is nothing to compare yet";
   return (
-    <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(112px,1fr))]">
+    <div className="flex items-center gap-1.5 flex-wrap">
       <SummaryStat
         label="machines"
         value={
           counts.silent > 0 ? (
             <span>
               {counts.reporting}
-              <span className="text-sol-yellow text-sm">/{counts.devices}</span>
+              <span className="text-sol-yellow">/{counts.devices}</span>
             </span>
           ) : (
             counts.devices
@@ -945,7 +947,7 @@ function DeviceHeader({ d, reported }: { d: CapabilityDevice; reported: boolean 
       </div>
       <div className="mt-0.5 text-[9px] text-sol-text-dim truncate">{d.kindLabel}</div>
       {!reported ? (
-        <div className="mt-0.5">
+        <div className="mt-0.5" title="Never sent an inventory. Run cast update on it.">
           <DeviceNotReported name={d.name} />
         </div>
       ) : (
@@ -1126,7 +1128,7 @@ export function FleetMatrix({
             the primary scanning surface, so it is spelled out once, in place. */}
         <div className="px-2 py-2 sticky left-0 bg-sol-card z-10">
           <div className="text-[10px] uppercase tracking-wide text-sol-text-dim">capability</div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] text-sol-text-dim">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-sol-text-dim">
             <span className="inline-flex items-center gap-0.5">
               <Minus className="w-2.5 h-2.5" /> not installed
             </span>
@@ -1137,9 +1139,8 @@ export function FleetMatrix({
               <Slash className="w-2.5 h-2.5" /> switched off
             </span>
             <span className="inline-flex items-center gap-0.5">
-              <AlertTriangle className="w-2.5 h-2.5 text-sol-red" /> nothing downloaded
+              <AlertTriangle className="w-2.5 h-2.5 text-sol-red" /> broken
             </span>
-            <span>scope named only when it is not user</span>
           </div>
         </div>
         {devices.map((d) => (

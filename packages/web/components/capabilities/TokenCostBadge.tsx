@@ -124,6 +124,9 @@ export function TokenCostBadge({
     [cost, hasRent, hasInvoke],
   );
 
+  // No number at all is not a cost worth a pill: most kinds never report one.
+  if (!hasRent && !hasInvoke) return null;
+
   return (
     <ShortcutTooltip label={tip} side="top">
       <span
