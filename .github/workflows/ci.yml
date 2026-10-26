@@ -241,9 +241,12 @@ jobs:
         # --isolate: a fresh global per file, for the same reason the web suite
         # has it — `mock.module` substitutions are permanent in one process and
         # a test that passes alone then fails in the suite depending on order.
+        # A suite whose output stands still for 4 minutes is hung (ct-71000): the
+        # watchdog prints what each process is doing and stops it, rather than
+        # the job spending the rest of its timeout with nothing said.
         env:
           DAEMON_BUILD_ID_CHECK: "1"
-        run: bun test src/ --isolate --bail=5
+        run: bash ../../scripts/ci/quiet-watchdog.sh 240 -- bun test src/ --isolate --bail=5
 
       # The eval home (packages/evals). Its tests make no network or model
       # calls; real replays run only from ./evals on a laptop.
