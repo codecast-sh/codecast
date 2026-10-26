@@ -14,6 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   processSessionFile,
+  shouldTreatClaudeFileAsStale,
   subagentParentSessionFromPath,
   TEST_SCRATCH_DIRNAME,
 } from "./daemon.js";
@@ -22,6 +23,7 @@ import type { RetryQueue } from "./retryQueue.js";
 import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
 import { strictStub } from "./test-helpers/strictStub.js";
 import { extractSidechain } from "./parser.js";
+import { getSyncRecord } from "./syncLedger.js";
 
 const PARENT_SESSION = "a4c6f0c0-4251-42de-b3f3-732eb239908b";
 const PARENT_CONV = "convParentJx74th3";
@@ -204,6 +206,43 @@ describe("a recreated subagent keeps its parent", () => {
     expect(creates.length).toBe(1);
     expect(creates[0].isSubagent).toBe(true);
     expect(creates[0].parentConversationId).toBe(PARENT_CONV);
+
+    fs.rmSync(base, { recursive: true, force: true });
+  }, 90_000);
+});
+
+// cd5e5287 (2026-10-23 to 26): a session moved to another account as jx74yqy
+// left its transcript here. Every create was refused, the rows were retained,
+// the transcript stayed stale, and the watchdog queued another doomed create on
+// every pass (226 dropped ops). A refusal consumes the bytes instead.
+describe("a session the server refuses is consumed, not retried", () => {
+  test("moved-away refusal queues nothing and leaves the transcript synced", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), TEST_SCRATCH_DIRNAME + "-refused-"));
+    const sessionId = "cd5e5287-f749-450b-9912-47a6751d1100";
+    const projDir = path.join(base, "cwd-project");
+    fs.mkdirSync(projDir, { recursive: true });
+    const filePath = path.join(base, "proj", `${sessionId}.jsonl`);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, [
+      JSON.stringify({ parentUuid: null, type: "user", cwd: projDir, sessionId, message: { role: "user", content: "Hi" }, uuid: "r1", timestamp: "2026-10-23T16:00:00.000Z" }),
+      JSON.stringify({ parentUuid: "r1", type: "assistant", cwd: projDir, sessionId, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "Hello." }] }, uuid: "r2", timestamp: "2026-10-23T16:00:01.000Z" }),
+    ].join("\n") + "\n");
+
+    let creates = 0;
+    const syncService = strictStub<SyncService>("SyncService", {
+      createConversation: async () => {
+        creates++;
+        throw new Error("[Request ID: x] Server Error\nUncaught Error: Session moved to another account as jx74yqy; run `cast pull jx74yqy` to bring it back here");
+      },
+    });
+    const retryQueue = strictStub<RetryQueue>("RetryQueue", { getPendingOperations: () => [] });
+    const pending = {};
+
+    await processSessionFile(filePath, sessionId, projDir, syncService, "user123", undefined, {}, retryQueue, pending, {}, () => {});
+
+    expect(creates).toBe(1);
+    expect(pending).toEqual({});
+    expect(shouldTreatClaudeFileAsStale(fs.statSync(filePath), getSyncRecord(filePath))).toBe(false);
 
     fs.rmSync(base, { recursive: true, force: true });
   }, 90_000);

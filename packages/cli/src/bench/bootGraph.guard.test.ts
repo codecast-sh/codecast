@@ -363,7 +363,9 @@ describe("command groups stay off the boot graph", () => {
     // host marker (hosts/teamMarker.ts, contracts/teamHosts.ts), the agent
     // preflight's loginShellPath.ts and shellQuote.ts, permissionHookWait.ts,
     // loadGovernor.ts, directoryTeam.ts and render/structuredResult.ts.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(510);
+    // 511 on 2026-10-26: cursorDbPath.ts, the leaf every Cursor database open
+    // goes through (a closed WAL workspace opens immutable).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(511);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

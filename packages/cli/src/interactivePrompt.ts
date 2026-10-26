@@ -69,6 +69,15 @@ const COMPOSER_BAR = /\?\s+for shortcuts|shift\+tab to cycle|bypass permissions|
 const SPINNER_ROW = /^[✻✶✢✳✽·]\s+(?!Waiting for API response)\S/;
 export const COMPOSER_CARET_ROW = /^\s?❯(?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
 
+// Claude's composer is the row right under its top rule. A draft whose visible
+// part starts with a numbered line paints "❯ 5) …" there, the shape of a
+// dialog's cursor row; a real dialog always has its title or question between
+// the rule and its options. Held messages for 7.5 hours behind their own
+// half-typed text on 2026-10-26.
+export function isComposerRow(lines: string[], idx: number): boolean {
+  return idx > 0 && /^\s?[❯›]/.test(lines[idx] ?? "") && SEPARATOR_LINE.test(lines[idx - 1].trim());
+}
+
 function structuralComposerBelow(lines: string[], fromIdx: number): boolean {
   const caret = /^\s?[❯›](?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
   const footerAfter = (idx: number) => lines.slice(idx + 1).some(line =>
@@ -77,7 +86,7 @@ function structuralComposerBelow(lines: string[], fromIdx: number): boolean {
     if (!SEPARATOR_LINE.test(lines[top].trim())) continue;
     let prompt = top + 1;
     while (prompt < lines.length && !lines[prompt].trim()) prompt++;
-    if (!caret.test(lines[prompt] ?? "")) continue;
+    if (!caret.test(lines[prompt] ?? "") && !isComposerRow(lines, prompt)) continue;
     for (let bottom = lines.length - 1; bottom > Math.max(prompt, fromIdx); bottom--) {
       if (SEPARATOR_LINE.test(lines[bottom].trim()) && !footerAfter(bottom)) return true;
     }

@@ -518,6 +518,21 @@ describe("RetryQueue", () => {
     expect(queue.getQueueSize()).toBe(0);
   });
 
+  it("drops a create the server refuses for good on first failure", async () => {
+    let attempts = 0;
+    queue.setExecutor(async () => {
+      attempts++;
+      throw new Error("Uncaught Error: Session moved to another account as jx74yqy; run `cast pull jx74yqy` to bring it back here");
+    });
+
+    queue.add("createConversation", { sessionId: "moved-session" });
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(attempts).toBe(1);
+    expect(queue.getQueueSize()).toBe(0);
+    expect(logs.some(l => l.startsWith("DROPPED createConversation: the server refuses session moved-session"))).toBe(true);
+  });
+
   it("splits oversized addMessages batches into 25-message chunks", () => {
     const msgs = Array.from({ length: 130 }, (_, i) => ({ uuid: `m${i}` }));
     queue.add("addMessages", { conversationId: "conv", messages: msgs });

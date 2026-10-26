@@ -883,9 +883,14 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
    * A repository Codex Cloud cannot reach, or a workspace with Codex Cloud
    * turned off (a 401 is the core's rule). Only a 403 the verdict reads as
    * the provider's refusal: the challenge page chatgpt.com's proxy answers
-   * with says nothing about the workspace.
+   * with says nothing about the workspace. Looking up the environments of a
+   * repository Codex's GitHub app cannot see answers a 400
+   * environment_repo_access_failed.
    */
   setupErrorOf(err: unknown, session?: CloudAgentSession): CloudAgentSetupError | null {
+    if (err instanceof CloudApiError && err.fromApi && err.code === "environment_repo_access_failed") {
+      return CloudAgentSetupError.repoUnreachable(this, session, "Codex's GitHub app has no access to it", `Give it access at ${CODEX.repoAccessUrl}`);
+    }
     if (!(err instanceof CloudApiError) || err.status !== 403 || cloudApiVerdict(err) !== "refused") return null;
     if (err.code === "repo_not_accessible") return CloudAgentSetupError.repoUnreachable(this, session, err.message, `Connect it to an environment at ${CODEX.repoAccessUrl}`);
     return CloudAgentSetupError.accessDenied(this, workspaceDisabled(err.message));

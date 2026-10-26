@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { type ParsedMessage } from "./parser.js";
+import { cursorDbOpenPath } from "./cursorDbPath.js";
 
 import { parseCursorChatData } from "./cursorChatParser.js";
 
@@ -9,7 +10,7 @@ export function extractMessagesFromCursorDb(
 ): { messages: ParsedMessage[]; maxRowId: number; totalCount: number } {
   let db: Database | null = null;
   try {
-    db = new Database(dbPath, { readonly: true });
+    db = new Database(cursorDbOpenPath(dbPath), { readonly: true });
 
     const row = db
       .query<{ rowid: number; value: string }, []>(

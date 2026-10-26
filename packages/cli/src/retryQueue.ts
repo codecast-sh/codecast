@@ -119,6 +119,12 @@ function isStaleConversationError(error: string): boolean {
     error.includes("Unauthorized: can only add messages to your own conversations");
 }
 
+// createConversation refusals that hold for good: the session moved to another
+// account, or its owner deleted it. No retry of the same session can succeed.
+export function isSessionRefusal(error: string): boolean {
+  return error.includes("Session moved to another account") || error.includes("Session deleted by its owner");
+}
+
 /**
  * Merge the given addMessages ops for one conversation into a single ordered,
  * de-duplicated message list and re-chunk it. Returns null when there is
@@ -356,6 +362,10 @@ export class RetryQueue {
             `DROPPED ${op.type}: stale conversation ${op.params.conversationId || "unknown"} (${error}). Will re-resolve on next sync.`,
             "warn",
           );
+          return true;
+        }
+        if (isSessionRefusal(error)) {
+          queue.drop(op, `DROPPED ${op.type}: the server refuses session ${op.params.sessionId || "unknown"} (${error})`, "warn");
           return true;
         }
         return false;

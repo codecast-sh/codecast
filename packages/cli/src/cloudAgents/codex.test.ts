@@ -443,6 +443,10 @@ describe("Codex Cloud drive", () => {
     const repo = (await cloudSetupErrorOf(a, undefined, new CloudApiError(403, "repo_not_accessible", "Repository is not accessible"), SESSION))!;
     expect(repo.kind).toBe("repo");
     expect(repo.message).toContain("acme/example");
+    // The real answer for a repository Codex's GitHub app cannot see (environments/by-repo, 2026-10-26).
+    const noApp = (await cloudSetupErrorOf(a, undefined, cloudApiErrorOf(400, { detail: { type: "environment_repo_access_failed", message: "Codex can’t access this repository. Confirm Codex has access on GitHub and try again.", repo_full_name: "acme/example" } }, "x"), SESSION))!;
+    expect(noApp.kind).toBe("repo");
+    expect(noApp.message).toContain("acme/example");
     const signIn = (await cloudSetupErrorOf(a, undefined, new CloudApiError(401, undefined, "Could not parse your authentication token."), SESSION))!;
     expect(signIn.kind).toBe("key_invalid");
     expect(cloudAgentCardOf(CLOUD_AGENT_PROVIDERS.codex, undefined, signIn.message)?.kind).toBe("credential");

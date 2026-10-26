@@ -278,7 +278,8 @@ import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { declaredSpawnParent } from "./spawnParents.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
-import { RetryQueue, flushRetryQueueForShutdown, type RetryOperation } from "./retryQueue.js";
+import { RetryQueue, flushRetryQueueForShutdown, isSessionRefusal, type RetryOperation } from "./retryQueue.js";
+import { cursorDbOpenPath } from "./cursorDbPath.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
 import { detectPermissionPrompt } from "./permissionDetector.js";
@@ -10023,6 +10024,16 @@ async function runTranscriptPass(sessionId: string, file: string, run: () => Pro
     } finally { transcriptRetries.delete(sessionId); transcriptAckWindows.delete(sessionId); }
   }));
 }
+// A session the server refuses for good (isSessionRefusal) is consumed, not
+// retained: retained rows kept the transcript stale, so every watchdog pass
+// re-read it and queued another create that could never succeed (cd5e5287,
+// moved as jx74yqy: 226 dropped creates in three days). New bytes try again, so
+// a session pulled back to this account resumes syncing.
+async function refuseTranscript(result: {messages: RawMessage[]}, pending: PendingMessages, sessionId: string, cache: ConversationCache, commit: () => void, error: string): Promise<void> {
+  log(`Not syncing session ${sessionId} here, the server refuses it: ${error.split("\n").find(line => line.includes("Session ")) ?? error}`, "warn");
+  publishPendingTranscript(pending, sessionId, []);
+  await commitTranscriptIngest(result, sessionId, undefined, cache, commit);
+}
 function queueTranscriptConversation(retryQueue: RetryQueue, params: Record<string, unknown>, error: string): string {
   const existing = retryQueue.getPendingOperations().find(op => op.type === "createConversation" && op.params.sessionId === params.sessionId);
   return existing?.id ?? retryQueue.add("createConversation", params, error);
@@ -11685,6 +11696,7 @@ async function processSessionFilePass(
       }
 
       const errMsg = err instanceof Error ? err.message : String(err);
+      if (isSessionRefusal(errMsg)) return refuseTranscript(ingest, pendingMessages, sessionId, conversationCache, () => setPosition(filePath, lastPosition + bytesConsumed), errMsg);
       log(`Failed to create conversation, queueing for retry: ${errMsg}`);
 
       await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
@@ -12351,6 +12363,7 @@ async function processCursorTranscriptFilePass(
         }
 
         const errMsg = err instanceof Error ? err.message : String(err);
+        if (isSessionRefusal(errMsg)) return refuseTranscript(ingest, pendingMessages, sessionId, conversationCache, () => setPosition(filePath, lastPosition + bytesConsumed), errMsg);
         log(`Failed to create Cursor conversation, queueing for retry: ${errMsg}`);
 
         await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
@@ -12667,6 +12680,7 @@ async function processCodexSessionPass(
         }
 
         const errMsg = err instanceof Error ? err.message : String(err);
+        if (isSessionRefusal(errMsg)) return refuseTranscript(ingest, pendingMessages, sessionId, conversationCache, () => setPosition(filePath, lastPosition + bytesConsumed), errMsg);
         log(`Failed to create Codex conversation, queueing for retry: ${errMsg}`);
 
         await retainPendingTranscript(pendingMessages, sessionId, messages, filePath, lastPosition + bytesConsumed);
@@ -14500,7 +14514,7 @@ async function findTmuxPaneForTty(tty: string, candidates: string[] = []): Promi
   return null;
 }
 
-import { COMPOSER_CARET_ROW, extractAssistantProseAbovePrompt, isMenuFooterRow, limitDialogOnPane, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner, type InteractivePrompt } from "./interactivePrompt.js";
+import { COMPOSER_CARET_ROW, extractAssistantProseAbovePrompt, isComposerRow, isMenuFooterRow, limitDialogOnPane, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner, type InteractivePrompt } from "./interactivePrompt.js";
 export { extractAssistantProseAbovePrompt, limitDialogOnPane, menuFooterBelowOptions, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner } from "./interactivePrompt.js";
 
 // A real AskUserQuestion's full tool_input (every question, header, option label AND
@@ -15212,11 +15226,15 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     for (let i = top - 1; i >= 0 && !/^⏺/.test(rows[i]); i--) {
       if (CLAUDE_TURN_STATUS_LINE.test(rows[i])) { status = [rows[i]]; break; }
     }
-    return [...status, ...rows.slice(top + 1)].join("\n");
+    // The box's top rule stays in the region: it is how the classifier tells
+    // the composer row ("❯ 5) …", a typed draft) from a dialog's cursor row
+    // (isComposerRow).
+    return [...status, ...rows.slice(top)].join("\n");
   }
   if (sepIdx.length === 1) {
-    // Modal or busy indicator: one separator, content lives below it.
-    return tail.slice(sepIdx[0] + 1).join("\n");
+    // Modal or busy indicator: one separator, content lives below it. The
+    // rule stays in, as for a box (isComposerRow).
+    return tail.slice(sepIdx[0]).join("\n");
   }
   // No separators visible — could be spinner-only or unusual UI. Use a tight tail
   // (5 lines) so transcript text from older turns can't reach the classifier.
@@ -15553,7 +15571,8 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // enter to continue" shape, but Escape here quits the resume into a bare
   // shell, and the next delivery would then paste into that shell.
   if (isResumeCwdPicker(region)) return "cwd_picker";
-  const numberedCursorRow = /^[^\S\n]*[›❯>][^\S\n]*\d+[.)][^\S\n]/m.test(region);
+  const regionLines = region.split("\n");
+  const numberedCursorRow = regionLines.some((line, i) => /^\s*[›❯>]\s*\d+[.)]\s/.test(line) && !isComposerRow(regionLines, i));
   if (numberedCursorRow && /Press enter to continue|Update available!/i.test(region)) {
     return "update_menu";
   }
@@ -24867,8 +24886,8 @@ async function relocateForeignOccupant(tmuxSession: string, sessionId: string, a
     log(`[IDENTITY] tmux ${tmuxSession} hosted ${shortId(occupant)} (pid=${agentPid}), not ${shortId(sessionId)} — renamed it to ${home}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // No such tmux is the ordinary case (nothing to relocate); only a real failure is worth a line.
-    if (!/can't find|no such session|session not found/i.test(msg)) {
+    // No such tmux is the ordinary case (nothing to relocate), its server gone included; only a real failure is worth a line.
+    if (!isTmuxSessionMissingError(err)) {
       log(`[IDENTITY] relocate check for ${tmuxSession} failed: ${msg.slice(0, 160)}`);
     }
   }
@@ -28035,7 +28054,7 @@ function getCursorWorkspaceFolderPath(workspaceStorageDir: string): string | nul
 function getCursorMaxRowId(dbPath: string): number {
   let db: Database | null = null;
   try {
-    db = new Database(dbPath, { readonly: true });
+    db = new Database(cursorDbOpenPath(dbPath), { readonly: true });
 
     const tableExists = db
       .query<{ name: string }, []>(
@@ -29815,7 +29834,7 @@ async function main(): Promise<void> {
 
   // On a cloud Mac: move each pushed login into the keychain Claude reads.
   const adoptPushedLogin = (): void => {
-    if (adoptPushedCredential()) log("[REMOTE-AUTH] adopted the pushed login into this Mac's keychain");
+    if (adoptPushedCredential()) log("[REMOTE-AUTH] copying the pushed login into this Mac's keychain from the login session (logs/adopt-login.log)");
   };
   if (isRemoteDevice()) {
     adoptPushedLogin();

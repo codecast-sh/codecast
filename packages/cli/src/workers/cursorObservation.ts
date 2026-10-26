@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ScanRow } from './scanTypes.js';
+import { cursorDbOpenPath } from '../cursorDbPath.js';
 import { readMetaJson, type MirrorMeta } from '../cloudAgents/transcript.js';
 
 export async function observeCursorDatabase(file: string): Promise<Extract<ScanRow,{type:'cursorDb'}>> {
@@ -11,12 +12,12 @@ export async function observeCursorDatabase(file: string): Promise<Extract<ScanR
     await fs.promises.access(file, fs.constants.R_OK);
     const query = typeof Bun !== 'undefined'
       ? (() => import('bun:sqlite').then(({Database}) => {
-        const db = new Database(file,{readonly:true});
+        const db = new Database(cursorDbOpenPath(file),{readonly:true});
         close = () => db.close();
         return (sql: string) => db.query(sql).get();
       }))()
       : import('node:sqlite').then(({DatabaseSync}) => {
-        const db = new DatabaseSync(file,{readOnly:true});
+        const db = new DatabaseSync(cursorDbOpenPath(file),{readOnly:true});
         close = () => db.close();
         return (sql: string) => db.prepare(sql).get();
       });
@@ -63,12 +64,12 @@ async function observeComposers(file: string, home: string): Promise<ComposerObs
   try {
     const get = typeof Bun !== 'undefined'
       ? await import('bun:sqlite').then(({Database}) => {
-        const db = new Database(file, {readonly:true});
+        const db = new Database(cursorDbOpenPath(file), {readonly:true});
         close = () => db.close();
         return (sql: string) => db.query(sql).get();
       })
       : await import('node:sqlite').then(({DatabaseSync}) => {
-        const db = new DatabaseSync(file, {readOnly:true});
+        const db = new DatabaseSync(cursorDbOpenPath(file), {readOnly:true});
         close = () => db.close();
         return (sql: string) => db.prepare(sql).get();
       });
