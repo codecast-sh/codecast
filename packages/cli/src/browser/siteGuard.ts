@@ -196,7 +196,7 @@ export function signInLandingNote(url: string, keepsOwn: (host: string) => boole
     ? "the agent browser keeps its own login for this site (never copied from your Chrome — a shared one signs both out; Chrome normally signs it in from your account on launch)"
     : "your Chrome's cookies for it were carried, so this site keeps its session elsewhere or you are signed out there too";
   const fix = realHint ? `Or ${realHint}` : "";
-  return `landed on a sign-in page (${host}) — ${why}. A person signs in once: \`cast browser login\` raises the agent browser on this tab and waits.${fix ? ` ${fix}` : ""}`;
+  return `landed on a sign-in page (${host}) — ${why}. Run \`cast browser login\` yourself now: it brings this tab to the front for the human and waits while they sign in. Report blocked only if it times out.${fix ? ` ${fix}` : ""}`;
 }
 
 // ---------------------------------------------------------------------------

@@ -139,7 +139,7 @@ async function captureJar(conn: BrowserConn, sites: string[], saved: Storage = {
 /** The site's sign-in as the agent browser on this machine holds it. */
 export async function captureFromAgentBrowser(host: string): Promise<Captured> {
   const state = readState();
-  const signIn = `sign in to ${host} in the agent browser (cast browser login ${host}), then run this again`;
+  const signIn = `run cast browser login ${host} yourself (it brings the agent browser to the front for the human and waits while they sign in), then run this again`;
   if (!state?.port) return { error: `No agent browser is running here: ${signIn}` };
   let conn: CdpConnection;
   try {

@@ -67,7 +67,7 @@ function reportSeparation(d: SeparateReport, kept: number, quiet?: boolean): voi
     const dropped = d.cookies !== null ? `dropped ${d.cookies} shared Google cookie${d.cookies === 1 ? "" : "s"}` : "no shared cookies";
     const keptNote = kept > 0 ? `; kept the agent browser's own Google login (${kept} cookies)` : kept < 0 ? "; its Google login was its own and stays" : "";
     console.log(`${OK} Google session is the agent browser's own (${dropped}${keptNote})`);
-    if (!kept) console.log(fmt.muted("  Chrome signs it in from your account on launch; if a Google page still lands on sign-in, `cast browser login`"));
+    if (!kept) console.log(fmt.muted("  Chrome signs it in from your account on launch; if a Google page still lands on sign-in, run `cast browser login` yourself"));
   }
   for (const n of d.notes) console.log(`${WARN} ${n}`);
 }

@@ -890,7 +890,7 @@ async function loginAsPerson(url: string | undefined, waitSeconds: number, choic
     }
   }
   const still = currentTab(o)?.url ?? tab.url;
-  console.log(`${fmt.warning("!")} still on a sign-in page after ${waitSeconds}s (${still}) — run \`cast browser login\` again once the person has signed in`);
+  console.log(`${fmt.warning("!")} still on a sign-in page after ${waitSeconds}s (${still}) — run \`cast browser login\` again to keep waiting, or report blocked on the sign-in`);
   return 1;
 }
 
@@ -1437,7 +1437,7 @@ frames are superseded before anyone reads them.`,
     });
 
   targetFlags(br.command("login [url]"))
-    .description("A person signs in once: raises the agent browser on the page and waits until it leaves the sign-in page")
+    .description("Run this yourself when a page needs a sign-in: raises the agent browser on the page for the human and waits until it leaves the sign-in page")
     .option("--wait <seconds>", "How long to wait for the sign-in; 0 returns at once", "300")
     .action(async (url: string | undefined, o: { wait: string } & TargetChoice) => {
       process.exit(await loginAsPerson(url, Math.max(0, parseInt(o.wait, 10) || 0), o));
