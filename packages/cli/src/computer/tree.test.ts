@@ -60,6 +60,13 @@ describe("diffTrees", () => {
   test("no change says so, in the words that fit how the action was delivered", () => {
     expect(formatDiff(diffTrees(BEFORE, BEFORE))).toContain("it was probably ignored");
     expect(formatDiff(diffTrees(BEFORE, BEFORE), { synthetic: true })).toContain("take a screenshot to be sure");
+    const same = diffTrees(BEFORE, BEFORE);
+    expect(formatDiff(same, { synthetic: true, pixels: { state: "changed", region: { x: 4, y: 8, width: 30, height: 12 } } }))
+      .toBe("No change in the window's tree, but its pixels changed at 4,8 (30x12): content the tree does not show, such as a canvas, a drawing or a terminal.");
+    expect(formatDiff(same, { synthetic: true, pixels: { state: "unchanged" } })).toContain("the input was ignored");
+    expect(formatDiff(same, { synthetic: true, pixels: { state: "unchanged" } })).not.toContain("--restore-window");
+    expect(formatDiff(same, { synthetic: true, background: true, pixels: { state: "unchanged" } })).toContain("`--restore-window`");
+    expect(formatDiff(same, { pixels: { state: "repainting", region: { x: 0, y: 0, width: 16, height: 16 } } })).toContain("repaints on its own at 0,0 (16x16)");
   });
 
   test("a focus that moved is named, and a focused field whose value changed is not repeated", () => {

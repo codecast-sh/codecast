@@ -15,6 +15,7 @@
  */
 
 import { ComputerError } from "./errors.js";
+import { describeRegion, type PixelVerdict } from "./pixels.js";
 
 export interface TreeLine {
   /** The element index, or null for a line that names no element (an omission note). */
@@ -141,17 +142,17 @@ export const DIFF_LINE_LIMIT = 60;
  * The diff as the agent reads it. `null` means the change was too large to be
  * worth a diff (a navigation, a new document): print the whole tree instead.
  */
-export function formatDiff(diff: TreeDiff, opts: { synthetic?: boolean } = {}): string | null {
+export function formatDiff(
+  diff: TreeDiff,
+  opts: { synthetic?: boolean; background?: boolean; pixels?: PixelVerdict } = {},
+): string | null {
   const changed = diff.added.length + diff.removed.length;
   // Compared by index: a focused field whose value changed is already a line above.
   const focusIndex = (f: string | null) => /is (\d+) /.exec(f ?? "")?.[1] ?? f;
   const focusMoved = focusIndex(diff.focusBefore) !== focusIndex(diff.focusAfter);
   if (changed === 0) {
-    return focusMoved && diff.focusAfter
-      ? `Only the focus changed. ${diff.focusAfter}`
-      : opts.synthetic
-        ? "No change in the window's tree. Mouse and key input can change what the tree does not show (a drawing, a canvas, a moved annotation), so take a screenshot to be sure."
-        : "No change in the window's tree. If the action should have changed something, it was probably ignored: try another element, `click --mouse`, or look at a screenshot.";
+    if (focusMoved && diff.focusAfter) return `Only the focus changed. ${diff.focusAfter}`;
+    return unchangedTreeNote(opts);
   }
   if (changed > DIFF_LINE_LIMIT) return null;
   const out = [`Changes: ${diff.added.length} added, ${diff.removed.length} removed`];
@@ -169,6 +170,23 @@ export function formatDiff(diff: TreeDiff, opts: { synthetic?: boolean } = {}): 
   for (const l of diff.added) out.push(`+ ${renderLine(l)}`);
   if (focusMoved && diff.focusAfter) out.push(diff.focusAfter);
   return out.join("\n");
+}
+
+/** The tree held still: what the pixels add, when the helper could read them. */
+function unchangedTreeNote(opts: { synthetic?: boolean; background?: boolean; pixels?: PixelVerdict }): string {
+  const pixels = opts.pixels;
+  switch (pixels?.state) {
+    case "changed":
+      return `No change in the window's tree, but its pixels changed at ${describeRegion(pixels.region)}: content the tree does not show, such as a canvas, a drawing or a terminal.`;
+    case "unchanged":
+    case "cursor":
+      return `No change in the window's tree or its pixels, so the input was ignored. Try another element or \`click --mouse\`${opts.background ? ", or `--restore-window` if the app drops input sent to a background window" : ""}.`;
+    case "repainting":
+      return `No change in the window's tree. The window repaints on its own at ${describeRegion(pixels.region)}, so its pixels cannot say whether the input landed; look at the screenshot.`;
+  }
+  return opts.synthetic
+    ? "No change in the window's tree. Mouse and key input can change what the tree does not show (a drawing, a canvas, a moved annotation), so take a screenshot to be sure."
+    : "No change in the window's tree. If the action should have changed something, it was probably ignored: try another element, `click --mouse`, or look at a screenshot.";
 }
 
 // ── filters ────────────────────────────────────────────────────────────────

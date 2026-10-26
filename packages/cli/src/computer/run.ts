@@ -458,8 +458,8 @@ function emitScreenshot(result: ComputerSnapshotResult, o: ComputerOptions, sink
 
 /** The `--json` body: the screenshot as a path, and what changed in place of
  *  the raw tree it was compared against. */
-function jsonBody(result: ComputerSnapshotResult): Record<string, unknown> {
-  const { baselineTreeText: _baseline, ...rest } = rewriteScreenshotForJson(result);
+function jsonBody(result: ComputerSnapshotResult | ComputerActionResult): Record<string, unknown> {
+  const { baselineTreeText: _baseline, pixelChange: _pixels, ...rest } = rewriteScreenshotForJson(result) as ComputerActionResult;
   const changes = jsonChanges(result);
   return (changes ? { ...rest, changes } : rest) as unknown as Record<string, unknown>;
 }

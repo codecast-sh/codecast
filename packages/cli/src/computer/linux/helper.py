@@ -338,6 +338,67 @@ def tree_envelope(app_id, pid, title, app_name, lines, focused_line):
     return "\n".join(out)
 
 
+def blocked_note(dialog_title, window_id):
+    return ('Blocked: the dialog "%s" is modal, and this window does not respond until it closes. '
+            "Target it with --window-id %d." % (sanitize(dialog_title), window_id))
+
+
+def window_match_score(ext, name, win):
+    """How well an AT-SPI window (its screen extents and name) matches an X
+    window: the share of the X window it covers, plus one for a matching title."""
+    ix = max(0, min(ext[0] + ext[2], win["x"] + win["width"]) - max(ext[0], win["x"]))
+    iy = max(0, min(ext[1] + ext[3], win["y"] + win["height"]) - max(ext[1], win["y"]))
+    score = (ix * iy) / max(1, win["width"] * win["height"])
+    title = win["title"]
+    if name and title and (name == title or title.startswith(name) or name.startswith(title)):
+        score += 1.0
+    return score
+
+
+# How long after the second capture the third one is taken: long enough for a
+# spinner or a clock to move, short enough to add little to the action.
+REPAINT_PROBE_SECONDS = 0.15
+
+
+def changed_rect(a, b):
+    """Where two raw captures of one window differ, as {x, y, width, height} in
+    window pixels, or None. Each capture is (width, height, bytes) at 4 bytes a
+    pixel. The same content captures to the same bytes, so the compare is
+    exact; a resized window differs everywhere."""
+    (aw, ah, ad), (bw, bh, bd) = a, b
+    if (aw, ah) != (bw, bh) or len(ad) != len(bd):
+        return {"x": 0, "y": 0, "width": max(aw, bw), "height": max(ah, bh)}
+    if ad == bd:
+        return None
+    row = len(ad) // max(1, ah)
+    min_x = min_y = None
+    max_x = max_y = -1
+    for y in range(ah):
+        ra, rb = ad[y * row:(y + 1) * row], bd[y * row:(y + 1) * row]
+        if ra == rb:
+            continue
+        first, last = _first_diff(ra, rb), len(ra) - 1 - _first_diff(ra[::-1], rb[::-1])
+        min_x = first // 4 if min_x is None else min(min_x, first // 4)
+        max_x = max(max_x, min(last // 4, aw - 1))
+        min_y = y if min_y is None else min_y
+        max_y = y
+    if min_y is None:
+        return None
+    return {"x": min_x, "y": min_y, "width": max_x - min_x + 1, "height": max_y - min_y + 1}
+
+
+def _first_diff(a, b):
+    """The first index where two equal-length, different byte strings differ."""
+    lo, hi = 0, len(a)
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if a[:mid] == b[:mid]:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
 MODIFIERS = {
     "cmd": "ctrl", "command": "ctrl", "cmdorctrl": "ctrl", "commandorcontrol": "ctrl",
     "ctrl": "ctrl", "control": "ctrl", "alt": "alt", "option": "alt", "shift": "shift",
@@ -649,15 +710,28 @@ class XServer:
         self.xtest.fake_input(self.d, self.X.KeyPress if down else self.X.KeyRelease, code)
         self.d.sync()
 
-    def capture(self, x, y, w, h):
+    def raw(self, x, y, w, h):
+        """The screen's BGRX bytes inside a rectangle, clipped to the screen."""
         sw, sh = self.screen.width_in_pixels, self.screen.height_in_pixels
         x0, y0 = max(0, x), max(0, y)
         x1, y1 = min(sw, x + w), min(sh, y + h)
         if x1 <= x0 or y1 <= y0:
             return None
         width, height = x1 - x0, y1 - y0
-        image = self.root.get_image(x0, y0, width, height, self.X.ZPixmap, 0xFFFFFFFF)
-        return width, height, encode_png(width, height, bgrx_to_rgb(image.data, width, height))
+        return width, height, bytes(self.root.get_image(x0, y0, width, height, self.X.ZPixmap, 0xFFFFFFFF).data)
+
+    def capture(self, x, y, w, h):
+        raw = self.raw(x, y, w, h)
+        if raw is None:
+            return None
+        width, height, data = raw
+        return width, height, encode_png(width, height, bgrx_to_rgb(data, width, height))
+
+    def window_pixels(self, win):
+        try:
+            return self.raw(win["x"], win["y"], win["width"], win["height"])
+        except Exception:
+            return None
 
 
 # ── AT-SPI ────────────────────────────────────────────────────────────────────
@@ -729,6 +803,7 @@ class Provider:
         self.snapshots = {}
         self.entries = []
         self.pre_action_tree = None
+        self.pre_pixels = None
         self._x = None
         self._atspi = None
 
@@ -915,6 +990,35 @@ class Provider:
                 return w
         return wins[0]
 
+    def modal_over(self, app, win, frame):
+        """A modal dialog of this app other than the window being read, as
+        (title, X window id): the window does not respond until it closes."""
+        Atspi = self.atspi
+        acc = app.accessible
+        if acc is None:
+            return None
+        S = Atspi.StateType
+        others = [w for w in self.windows_for(app) if w["id"] != win["id"]]
+        for i in range(acc.get_child_count()):
+            child = acc.get_child_at_index(i)
+            if child is None or child == frame:
+                continue
+            try:
+                states = child.get_state_set()
+                if not (states.contains(S.MODAL) and states.contains(S.SHOWING)):
+                    continue
+                name = child.get_name() or ""
+                ext = Atspi.Component.get_extents(child, Atspi.CoordType.SCREEN)
+            except Exception:
+                continue
+            scored = [(window_match_score((ext.x, ext.y, ext.width, ext.height), name, w), w) for w in others]
+            best = max(scored, key=lambda pair: pair[0], default=(0, None))
+            if best[1] is not None and best[0] >= 0.5:
+                # The window title is what list-windows shows; a GTK message
+                # dialog's accessible name is only its kind ("Question").
+                return best[1]["title"] or name, best[1]["id"]
+        return None
+
     def frame_for(self, app, win):
         """The AT-SPI window that is this X window: same title, else most overlap."""
         Atspi = self.atspi
@@ -934,12 +1038,7 @@ class Provider:
                 ext = Atspi.Component.get_extents(child, Atspi.CoordType.SCREEN)
             except Exception:
                 continue
-            ix = max(0, min(ext.x + ext.width, win["x"] + win["width"]) - max(ext.x, win["x"]))
-            iy = max(0, min(ext.y + ext.height, win["y"] + win["height"]) - max(ext.y, win["y"]))
-            area = max(1, win["width"] * win["height"])
-            score = (ix * iy) / area
-            if name and win["title"] and (name == win["title"] or win["title"].startswith(name) or name.startswith(win["title"])):
-                score += 1.0
+            score = window_match_score((ext.x, ext.y, ext.width, ext.height), name, win)
             if score > best_score:
                 best, best_score = child, score
         return best
@@ -970,6 +1069,9 @@ class Provider:
         # reads it, inside this very walk; the launch flag is only a fallback.
         renderer = Renderer(self.atspi, win)
         renderer.render(frame)
+        modal = self.modal_over(app, win, frame)
+        if modal is not None:
+            renderer.lines.insert(min(1, len(renderer.lines)), "\t" + blocked_note(*modal))
         if renderer.count <= 2 and app.chromium_like():
             raise ProviderError(
                 "accessibility_error",
@@ -1083,10 +1185,30 @@ class Provider:
             if expected.signature != actual.signature:
                 raise ProviderError("element_not_found", "element %d changed since the last snapshot; run get-app-state again and use a fresh element index" % index)
         self.pre_action_tree = snap.tree
+        pixels = self.x.window_pixels(snap.win)
+        self.pre_pixels = (snap.win["id"], pixels) if pixels else None
         return snap
+
+    def pixel_change(self, snap):
+        """Where the window's pixels changed across the action, and, when they
+        did, whether the window went on changing by itself a moment later (a
+        spinner, a video, a clock), which makes the first answer noise."""
+        if self.pre_pixels is None or self.pre_pixels[0] != snap.win["id"]:
+            return None
+        after = self.x.window_pixels(snap.win)
+        if after is None:
+            return None
+        changed = changed_rect(self.pre_pixels[1], after)
+        repainting = None
+        if changed is not None:
+            time.sleep(REPAINT_PROBE_SECONDS)
+            again = self.x.window_pixels(snap.win)
+            repainting = changed_rect(after, again) if again else None
+        return {"changed": changed, "repainting": repainting}
 
     def action_result(self, params, run):
         self.pre_action_tree = None
+        self.pre_pixels = None
         action = run(params)
         time.sleep(0.25 if action.get("path") in ("synthetic", "clipboard") else 0.12)
         try:
@@ -1097,6 +1219,9 @@ class Provider:
             snap = self.observe({k: v for k, v in params.items() if k not in ("windowId", "windowIndex")})
             action.setdefault("verification", {"state": "unverified", "reason": "window_changed"})
         result = self.render(snap)
+        change = None if action.get("verification", {}).get("reason") == "window_changed" else self.pixel_change(snap)
+        if change is not None:
+            result["pixelChange"] = change
         action["targetWindowId"] = snap.win["id"]
         result["action"] = action
         if self.pre_action_tree is not None:
@@ -1910,6 +2035,16 @@ def self_test():
         pass
     png = encode_png(2, 1, bgrx_to_rgb(bytes([0, 0, 255, 0, 255, 0, 0, 0]), 2, 1))
     assert png.startswith(b"\x89PNG") and zlib.decompress(png[png.index(b"IDAT") + 4:-16])[1:4] == b"\xff\x00\x00"
+    blank = (4, 2, bytes(32))
+    assert changed_rect(blank, (4, 2, bytes(32))) is None
+    dot = bytearray(32)
+    dot[1 * 16 + 2 * 4 + 1] = 9
+    assert changed_rect(blank, (4, 2, bytes(dot))) == {"x": 2, "y": 1, "width": 1, "height": 1}
+    dot[0 * 16 + 0] = 9
+    assert changed_rect(blank, (4, 2, bytes(dot))) == {"x": 0, "y": 0, "width": 3, "height": 2}
+    assert changed_rect(blank, (5, 2, bytes(40))) == {"x": 0, "y": 0, "width": 5, "height": 2}
+    assert window_match_score((0, 0, 100, 100), "Save", {"x": 0, "y": 0, "width": 100, "height": 100, "title": "Save"}) == 2.0
+    assert blocked_note("Save", 7).endswith("--window-id 7.")
     tree = tree_envelope("gedit", 42, "Doc", "Text Editor", ["0 standard window Doc"], None)
     assert tree.split("\n")[0] == "App=gedit (pid 42)" and tree.endswith("No UI element is currently focused.")
     print("self-test ok")

@@ -21,6 +21,7 @@
  */
 
 import { formatBytes } from "../browser/profile.js";
+import { pixelVerdict } from "./pixels.js";
 import { diffTrees, filterTree, formatDiff, type TreeFilter } from "./tree.js";
 import type {
   ComputerActionResult,
@@ -197,13 +198,17 @@ export function formatAction(method: string, appSelector: string, result: Comput
   }
   const body = filter.find !== undefined || filter.under !== undefined
     ? treeBody(result, filter, false)
-    : (formatDiff(diffTrees(result.baselineTreeText, result.snapshot.treeText), { synthetic: action?.path === "synthetic" }) ??
+    : (formatDiff(diffTrees(result.baselineTreeText, result.snapshot.treeText), {
+        synthetic: action?.path === "synthetic",
+        background: verification?.state === "unverified" && verification.reason === "background_input",
+        pixels: pixelVerdict(result.pixelChange),
+      }) ??
       `The window changed substantially; the whole tree:\n${result.snapshot.treeText}`);
   return `${sentence}\n${body}`;
 }
 
-/** What `--json` says changed, in place of the raw baseline tree. */
-export function jsonChanges(result: ComputerSnapshotResult): Record<string, unknown> | undefined {
+/** What `--json` says changed, in place of the raw baseline tree and pixel regions. */
+export function jsonChanges(result: ComputerSnapshotResult & Pick<ComputerActionResult, "pixelChange">): Record<string, unknown> | undefined {
   if (result.baselineTreeText === undefined) return undefined;
   const diff = diffTrees(result.baselineTreeText, result.snapshot.treeText);
   const line = (l: { index: number | null; body: string }) => (l.index === null ? l.body : `${l.index} ${l.body}`);
@@ -212,6 +217,7 @@ export function jsonChanges(result: ComputerSnapshotResult): Record<string, unkn
     removed: diff.removed.map(line),
     focus: diff.focusAfter,
     focusChanged: diff.focusBefore !== diff.focusAfter,
+    ...(result.pixelChange ? { pixels: pixelVerdict(result.pixelChange) } : {}),
   };
 }
 

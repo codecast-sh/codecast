@@ -229,6 +229,8 @@ final class Provider {
     private var preActionTree: String?
     /// The target app and its notification count just before the action ran.
     private var settleMark: (pid: pid_t, count: Int?)?
+    /// The target window's pixels just before the action, for `pixelChange`.
+    private var prePixels: (pid: pid_t, windowId: CGWindowID, frame: PixelFrame)?
 
     func handle(method: String, params: [String: JSONValue]) throws -> Any {
         switch method {
@@ -272,12 +274,16 @@ final class Provider {
     private func actionResult(params: [String: JSONValue], action runAction: () throws -> [String: Any]) throws -> [String: Any] {
         preActionTree = nil
         settleMark = nil
+        prePixels = nil
         var action = try runAction()
         // An app updates its tree on its own run loop after the event lands; a
         // read in the same instant reports the old state as "no change".
         waitForSettle(path: action["path"] as? String)
         do {
-            return renderActionResult(action: action, snapshot: try observe(params: params))
+            let snapshot = try observe(params: params)
+            var result = renderActionResult(action: action, snapshot: snapshot)
+            if let change = pixelChange(after: snapshot) { result["pixelChange"] = change }
+            return result
         } catch let error as ProviderError
             where (error.code == .windowNotFound || error.code == .windowStale) && hasRequestedWindowSelector(params) {
             var fallbackParams = params
@@ -361,8 +367,7 @@ final class Provider {
         if let cached {
             try ensureWindowStillAvailable(cached)
             if let unchanged = try unchangedSince(cached, params: params) {
-                preActionTree = unchanged.treeText
-                settleMark = (unchanged.app.pid, unchanged.eventMark)
+                markBeforeAction(unchanged, eventCount: unchanged.eventMark)
                 return unchanged
             }
         }
@@ -370,9 +375,31 @@ final class Provider {
         if cached?.readPixels == true { observeParams["readPixels"] = .bool(true) }
         let snapshot = try observe(params: observeParams)
         try validateRequestedElements(cached: cached, current: snapshot, params: params)
-        preActionTree = snapshot.treeText
-        settleMark = (snapshot.app.pid, AppEventMonitor.shared.count(pid: snapshot.app.pid))
+        markBeforeAction(snapshot, eventCount: AppEventMonitor.shared.count(pid: snapshot.app.pid))
         return snapshot
+    }
+
+    private func markBeforeAction(_ snapshot: Snapshot, eventCount: Int?) {
+        preActionTree = snapshot.treeText
+        settleMark = (snapshot.app.pid, eventCount)
+        prePixels = WindowCapture.pixels(pid: snapshot.app.pid, windowId: snapshot.windowId)
+            .map { (snapshot.app.pid, snapshot.windowId, $0) }
+    }
+
+    /// Where the window's pixels changed across the action, and, when they
+    /// did, whether the window went on changing by itself a moment later
+    /// (a spinner, a video, a clock), which makes the first answer noise.
+    private func pixelChange(after snapshot: Snapshot) -> [String: Any]? {
+        guard let before = prePixels, before.pid == snapshot.app.pid, before.windowId == snapshot.windowId,
+              let after = WindowCapture.pixels(pid: before.pid, windowId: before.windowId)
+        else { return nil }
+        let changed = PixelChange.changedRect(before.frame, after)
+        var repainting: CGRect?
+        if changed != nil {
+            usleep(PixelChange.repaintProbeMicroseconds)
+            repainting = WindowCapture.pixels(pid: before.pid, windowId: before.windowId).flatMap { PixelChange.changedRect(after, $0) }
+        }
+        return ["changed": PixelChange.json(changed), "repainting": PixelChange.json(repainting)]
     }
 
     /// The tree the agent read, when the app has posted no notification since
@@ -2589,19 +2616,43 @@ struct WindowCapture {
     /// overlap it are composited in, clipped to the target's bounds so pixel to
     /// point math is unchanged. Another document window of the same app is not
     /// one of these: composited in, it painted that window over the target.
-    private static func captureWindowImage(_ candidate: WindowCandidate, siblings: [WindowCandidate]) -> CGImage? {
+    /// The window as raw bytes at one pixel per point, for comparing across an
+    /// action. Nil without Screen Recording (the raw preflight: it never
+    /// prompts and costs nothing) or when the window is not on screen.
+    static func pixels(pid: pid_t, windowId: CGWindowID) -> PixelFrame? {
+        guard CGPreflightScreenCaptureAccess() else { return nil }
+        let siblings = candidates(pid: pid)
+        guard let candidate = siblings.first(where: { $0.windowId == windowId }),
+              let image = captureWindowImage(candidate, siblings: siblings, resolution: .nominalResolution),
+              let data = image.dataProvider?.data as Data?
+        else { return nil }
+        return PixelFrame(
+            width: image.width,
+            height: image.height,
+            bytesPerRow: image.bytesPerRow,
+            bytesPerPixel: max(1, image.bitsPerPixel / 8),
+            pointsPerPixel: Double(candidate.bounds.width) / Double(max(image.width, 1)),
+            bytes: data
+        )
+    }
+
+    private static func captureWindowImage(
+        _ candidate: WindowCandidate,
+        siblings: [WindowCandidate],
+        resolution: CGWindowImageOption = .bestResolution
+    ) -> CGImage? {
         let overlays = siblings.filter {
             $0.windowId != candidate.windowId && $0.order < candidate.order && $0.bounds.intersects(candidate.bounds) &&
                 ($0.layer != 0 || ($0.title ?? "").isEmpty)
         }
         guard !overlays.isEmpty else {
-            return CGWindowListCreateImage(.null, [.optionIncludingWindow], candidate.windowId, [.boundsIgnoreFraming, .bestResolution])
+            return CGWindowListCreateImage(.null, [.optionIncludingWindow], candidate.windowId, [.boundsIgnoreFraming, resolution])
         }
         var pointers: [UnsafeRawPointer?] = (overlays + [candidate])
             .sorted { $0.order < $1.order }
             .map { UnsafeRawPointer(bitPattern: UInt($0.windowId)) }
         guard let array = CFArrayCreate(kCFAllocatorDefault, &pointers, pointers.count, nil) else { return nil }
-        return CGImage(windowListFromArrayScreenBounds: candidate.bounds, windowArray: array, imageOption: [.bestResolution])
+        return CGImage(windowListFromArrayScreenBounds: candidate.bounds, windowArray: array, imageOption: [resolution])
     }
 
     static func candidates(pid: pid_t) -> [WindowCandidate] {

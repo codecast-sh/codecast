@@ -110,7 +110,16 @@ export type ComputerSnapshotResult = {
   baselineTreeText?: string;
 };
 
-export type ComputerActionResult = ComputerSnapshotResult & { action?: ComputerActionMetadata };
+export type ComputerRect = { x: number; y: number; width: number; height: number };
+
+/** The target window's pixels across an action, in window points: where they
+ *  changed (null when they did not), and where they changed again in a capture
+ *  a moment later (null when they held still or that capture was not needed).
+ *  Absent when the helper could not capture (no Screen Recording, an older
+ *  helper, a window that went away). `pixels.ts` decides what it means. */
+export type ComputerPixelChange = { changed: ComputerRect | null; repainting: ComputerRect | null };
+
+export type ComputerActionResult = ComputerSnapshotResult & { action?: ComputerActionMetadata; pixelChange?: ComputerPixelChange };
 
 export type ComputerProviderCapabilities = {
   platform: "darwin" | "linux";
