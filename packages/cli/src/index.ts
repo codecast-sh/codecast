@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { LOGIN_PATH_FILENAME, recordLoginShellPath } from "./loginShellPath.js";
+import { wholeBoard } from "./taskPages.js";
 import { DEFAULT_WEB_URL } from "./config/readLocalConfig.js";
 import { pickFields } from "./jsonFields.js";
 import { registerSessionParkingCommands } from "./sessionParkingCommand.js";
@@ -16712,7 +16713,8 @@ work
     if (options.plan) body.plan_id = options.plan;
     body.project_path = getRealCwd();
 
-    const tasks = await cliPost("/cli/work/list", body);
+    const whole = body.include_done && !body.status && !body.ready && !body.assignee && !body.chain && !body.project_id && !body.initiative;
+    const tasks = whole ? await wholeBoard((b) => cliPost("/cli/work/page", b), body) : await cliPost("/cli/work/list", body);
     if (options.json) {
       printJson(Array.isArray(tasks) ? tasks : []);
       return;

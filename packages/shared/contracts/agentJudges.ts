@@ -192,6 +192,16 @@ export function agentSimilarText(f: Pick<AgentFinding, "what" | "cause">): strin
 }
 
 /**
+ * A filed agent finding's grouping words again, from the signal it became
+ * (agentFindingSignal): its title is the problem's first sentence and its
+ * detail ends with the cause. For findings grouping never compared (Oct 26).
+ */
+export function agentSimilarTextOf(signal: { title: string; detail_md?: string }): string {
+  const cause = signal.detail_md?.match(/\*\*Cause \((?:checked|not checked)\):\*\* ([\s\S]*)$/)?.[1]?.trim();
+  return agentSimilarText({ what: signal.title, cause: cause ?? "" });
+}
+
+/**
  * An agent finding as the signal it files: the judge as its source and its
  * grouping scope (subject), the problem's first sentence as its title, and
  * the whole finding as its detail. Keyed by the moment and the problem's

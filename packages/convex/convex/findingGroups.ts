@@ -20,7 +20,9 @@ import { createWorkContext } from "./data";
 import { placeSignal, scopeProject } from "./lib/signalPlacement";
 import { embedText, embeddingWorstCase } from "./lib/embeddings";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { withinBudget, type CallScope } from "./modelCalls";
+import { runModelCall, withinBudget, type CallScope } from "./modelCalls";
+import { attachJudgeRequest, parseAttachJudgeReply } from "./lib/attachJudge";
+import type { SignalInput } from "./signals";
 import { latestExpectations } from "./lib/expectationsApply";
 
 /**
@@ -346,6 +348,41 @@ export async function similarCandidates(
   if (!embedded) return { scope: where, candidates: [] };
   const near = await nearCauses(ctx, where, { vector: embedded.vector, subject: signal.subject, evidence_at: evidenceAt(signal) });
   return { scope: where, vector: embedded.vector, candidates: near.same };
+}
+
+/**
+ * Where grouping places a finding that says what happened: the problem a near
+ * finding's words name outright, else the one the attach judge picks among the
+ * near ones, else none. `refused` when the finding was not compared at all (the
+ * budget had no room, or the embedding failed), which is not the same as having
+ * no neighbour: such a finding waits, held, for the sweep (findingRegroup.ts).
+ * Filed as new instead, 1,221 opened a problem each on Oct 26. Filing, the sweep
+ * and the re-group pass all decide here; `exclude` keeps a finding's own problem
+ * out of its candidates.
+ */
+export async function groupingVerdict(
+  ctx: any,
+  filer: { api_token: string } | { user_id: Id<"users"> },
+  signal: SignalInput,
+  scope: Record<string, unknown>,
+  opts: { message_hit?: boolean; exclude?: Id<"tasks"> } = {},
+): Promise<{ judged: Id<"tasks"> | null; similar: boolean; vector?: number[]; refused: boolean }> {
+  const near = await similarCandidates(ctx, filer, signal, scope);
+  if (!near.vector) {
+    // With no embedding key or no budget, grouping by meaning is off, not refused: the finding groups by its key, as
+    // before. With both, a missing embedding means the cap had no room or the call failed, and the finding waits.
+    const on = !!process.env.OPENAI_API_KEY && !!near.scope && (await ctx.runQuery(internal.modelCalls.budgetSet, { workspace: near.scope.workspace }));
+    return { judged: null, similar: false, refused: on };
+  }
+  const none = { judged: null, similar: false, vector: near.vector, refused: false };
+  if (opts.message_hit) return none;
+  const candidates = near.candidates.filter((c) => String(c.task_id) !== String(opts.exclude ?? ""));
+  if (candidates[0] && candidates[0].score >= GROUPING.attach) return { ...none, judged: candidates[0].task_id, similar: true };
+  const ask = candidates.filter((c) => c.score >= GROUPING.ask);
+  if (!ask.length || !near.scope) return none;
+  const req = attachJudgeRequest(signal, ask);
+  const reply = await runModelCall(ctx, near.scope, "grouping", { model: req.model, system: req.system, prompt: req.prompt, max_tokens: req.max_tokens, output: "json" }, "Finding attach", 20_000);
+  return { ...none, judged: reply.ok ? parseAttachJudgeReply(reply.text, ask) : null };
 }
 
 /** Embed a finding's words inside the team's grouping budget; null when there is no room or the embedding fails. */

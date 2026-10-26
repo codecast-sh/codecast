@@ -570,56 +570,19 @@ export const listForCli = query({
     const sources = source ? [source] : await ctx.db.query("event_sources").withIndex("by_workspace_name", (q: any) => q.eq("workspace", workspaceKey)).collect();
     const extractors = [];
     const judges = [];
-    const findings = [];
     for (const s of sources) {
-      const ex: Doc<"moment_extractors">[] = await ctx.db.query("moment_extractors").withIndex("by_source_kind", (q: any) => q.eq("source_id", s._id)).collect();
+      const { ex, live } = await publishedOf(ctx, s._id);
       for (const e of ex) extractors.push({ source: s.name, kind: e.kind, version: e.version, quiet_ms: e.quiet_ms, published_at: e.published_at });
-      const live: Doc<"judges">[] = (await ctx.db.query("judges").withIndex("by_source_name", (q: any) => q.eq("source_id", s._id)).collect()).filter((j: Doc<"judges">) => !j.removed_at);
       for (const j of live) judges.push({ source: s.name, name: j.name, version: j.version, moment: j.moment_kind, model: j.model, mode: j.mode, projects: j.projects, judge_on: s.config?.judge_on ?? "api" });
-      if (live.length) findings.push({ source: s.name, ...(await findingFreshness(ctx, s._id, ex, live)) });
     }
-    return { moments: moments.map((m) => momentView(m, Date.now())), extractors, judges, findings };
+    return { moments: moments.map((m) => momentView(m, Date.now())), extractors, judges };
   },
 });
 
-/**
- * How current a source's live findings are: each judge finding not retired,
- * merged or a case against its judge, in its judges' projects, against the published versions. A
- * finding is stale when the judge version that filed (or last re-found) it is
- * not its judge's published one, or a moment standing behind it (the one it
- * came from, or another showing the same evidence whose newest run still files
- * it) was read by an extractor that is not its kind's published one. Stale findings make a
- * board that shows what an older extractor or judge believed; `stale_moments`
- * are the moments to read again (`cast line moments retry --again`).
- */
-async function findingFreshness(ctx: any, sourceId: Id<"event_sources">, extractors: Doc<"moment_extractors">[], judges: Doc<"judges">[]) {
-  const judgeVersion = new Map(judges.map((j) => [j.name, j.version]));
-  const extractorVersion = new Map(extractors.map((e) => [e.kind, e.version]));
-  const projects = [...new Set(judges.flatMap((j) => j.project_ids.map(String)))] as Id<"projects">[];
-  const rows: Doc<"signals">[] = [];
-  for (const p of projects) rows.push(...(await ctx.db.query("signals").withIndex("by_project_created", (q: any) => q.eq("project_id", p)).collect()));
-  // A case against a judge (case_of, LL11) is the judge's defect, not a finding on the board.
-  const judged = rows.filter((s) => s.judge && judgeVersion.has(s.judge) && s.moment && !s.retired && !s.merged_into && !s.case_of);
-  const moments = new Map<string, Doc<"moments"> | null>();
-  // The moments standing behind a finding: the one that filed it and every other whose newest run still files it (held_by).
-  const behind = (s: Doc<"signals">) => [...new Set([s.moment!, ...(s.held_by ?? [])])];
-  for (const ref of new Set(judged.flatMap(behind))) moments.set(ref, await ctx.db.query("moments").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first());
-  const live = judged.filter((s) => { const m = moments.get(s.moment!); return !m || String(m.source_id) === String(sourceId); });
-  let staleJudge = 0;
-  let staleExtractor = 0;
-  let stale = 0;
-  const staleMoments = new Set<string>();
-  for (const s of live) {
-    const oldJudge = s.judge_version !== judgeVersion.get(s.judge!);
-    const readOld = behind(s).map((ref) => moments.get(ref)).filter((m): m is Doc<"moments"> => !!m && m.extractor_version !== extractorVersion.get(m.kind));
-    if (oldJudge) staleJudge++;
-    if (readOld.length) staleExtractor++;
-    if (oldJudge || readOld.length) stale++;
-    for (const m of readOld) staleMoments.add(m.short_id);
-    const own = moments.get(s.moment!);
-    if (oldJudge && own) staleMoments.add(own.short_id);
-  }
-  return { live: live.length, stale, stale_judge: staleJudge, stale_extractor: staleExtractor, stale_moments: [...staleMoments].sort() };
+export async function publishedOf(ctx: any, sourceId: Id<"event_sources">) {
+  const ex: Doc<"moment_extractors">[] = await ctx.db.query("moment_extractors").withIndex("by_source_kind", (q: any) => q.eq("source_id", sourceId)).collect();
+  const live: Doc<"judges">[] = (await ctx.db.query("judges").withIndex("by_source_name", (q: any) => q.eq("source_id", sourceId)).collect()).filter((j: Doc<"judges">) => !j.removed_at);
+  return { ex, live };
 }
 
 /** `cast line moments show <mo-N>`: one moment and every judge's run on it. */

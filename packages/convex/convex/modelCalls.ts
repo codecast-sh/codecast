@@ -23,6 +23,12 @@ import { modelCallProblem, parseJsonBlock, type BudgetPurpose, type BudgetSummar
 
 const purposeValidator = v.union(v.literal("judge"), v.literal("grouping"), v.literal("call"));
 
+/** Whether a workspace pays for model calls at all (a cap above zero): with none, grouping is off, never refused. */
+export const budgetSet = internalQuery({
+  args: { workspace: v.string() },
+  handler: async (ctx, args): Promise<boolean> => ((await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", args.workspace)).first())?.cap_usd ?? 0) > 0,
+});
+
 export const reserve = internalMutation({
   args: { workspace: v.string(), team_id: v.optional(v.id("teams")), amount: v.number() },
   handler: async (ctx, args): Promise<boolean> => takeBudget(ctx, args.workspace, args.team_id, args.amount, Date.now()),

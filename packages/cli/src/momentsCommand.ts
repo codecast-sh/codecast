@@ -153,19 +153,36 @@ export function registerMomentsCommands(line: Command, deps: PublishDeps): void 
       console.log(kept);
     });
 
+  type Freshness = { source: string; live: number; stale: number; stale_judge: number; stale_extractor: number; stale_moments: string[] };
+  // A judged source's findings are counted a page at a time: its projects hold more than one read can (Oct 26).
+  const findingFreshness = async (sources: string[]): Promise<Freshness[]> => {
+    const out: Freshness[] = [];
+    for (const source of sources) {
+      const sum: Freshness = { source, live: 0, stale: 0, stale_judge: 0, stale_extractor: 0, stale_moments: [] };
+      for (let at: { project: number; cursor: string | null } | null = { project: 0, cursor: null }; at;) {
+        const page = await apiPost(deps, "/cli/moments/freshness", { ...(await scope()), source, ...at }, { read: true });
+        for (const k of ["live", "stale", "stale_judge", "stale_extractor"] as const) sum[k] += page[k];
+        sum.stale_moments = [...new Set([...sum.stale_moments, ...page.stale_moments])].sort();
+        at = page.next;
+      }
+      out.push(sum);
+    }
+    return out;
+  };
+
   moments
     .command("ls")
     .description("The newest moments, and the extractors and judges each source has")
     .option("--source <name>", "One source")
     .option("--limit <n>", "How many moments", "30")
     .option("--stale", "Print only the moments whose live findings came from an older extractor or judge, one per line (feed them to retry --again)")
+    .option("--freshness", "Also count each judged source's live findings and how many came from an older extractor or judge (reads every finding, a page at a time)")
     .option("--json", "Machine-readable output")
-    .action(async (options: { source?: string; limit: string; stale?: boolean; json?: boolean }) => {
+    .action(async (options: { source?: string; limit: string; stale?: boolean; freshness?: boolean; json?: boolean }) => {
       const result = await apiPost(deps, "/cli/moments/ls", { ...(await scope()), ...(options.source ? { source: options.source } : {}), limit: Number(options.limit) || 30 }, { read: true });
-      type Freshness = { source: string; live: number; stale: number; stale_judge: number; stale_extractor: number; stale_moments: string[] };
-      const freshness: Freshness[] = result.findings ?? [];
+      const freshness = options.stale || options.freshness ? await findingFreshness([...new Set<string>(result.judges.map((j: { source: string }) => j.source))]) : [];
       if (options.stale) return console.log(freshness.flatMap((f) => f.stale_moments).join("\n"));
-      if (options.json) return console.log(JSON.stringify(result, null, 2));
+      if (options.json) return console.log(JSON.stringify({ ...result, ...(options.freshness ? { findings: freshness } : {}) }, null, 2));
       for (const e of result.extractors) console.log(`${fmt.muted("extractor")} ${e.source}/${e.kind} ${e.version.slice(0, 10)}, quiet ${durationWords(e.quiet_ms)}`);
       for (const j of result.judges) console.log(`${fmt.muted("judge")} ${j.name} reads ${j.source}/${j.moment}, ${j.mode}, ${j.model}`);
       for (const f of freshness) {

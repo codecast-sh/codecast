@@ -1,6 +1,6 @@
 import { v, type ObjectType, type Validator } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { internalMutation, mutation, query, type MutationCtx } from "./functions";
+import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { patchTask } from "./lib/taskWrite";
 import { resolveActor, roleOfConversation } from "./lib/actor";
@@ -1725,8 +1725,7 @@ export async function linkedSessionsFor(
   return out;
 }
 
-export const list = query({
-  args: {
+const listArgs = {
     api_token: v.string(),
     project_id: v.optional(v.string()),
     // `cast task ls --initiative in-N`: the tasks of the initiative's projects.
@@ -1761,200 +1760,228 @@ export const list = query({
     // as `cast task ready` sends it), else the person's.
     include_ephemeral: v.optional(v.boolean()),
     conversation_id: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token, false);
-    if (!auth) throw new Error("Unauthorized");
-    if (args.chain && args.assignee) throw new Error("Use --assignee or --chain, not both: --chain already covers the person and every role under them.");
+};
 
-    let teamIdForScope: Id<"teams"> | undefined;
-    if (args.team) {
-      const user = await ctx.db.get(auth.userId);
-      teamIdForScope = user?.active_team_id || user?.team_id;
-    }
-    const db = await createDataContext(ctx, {
-      userId: auth.userId,
-      project_path: args.project_path,
-      ...explicitWorkspace(args, args.team && teamIdForScope ? { workspace: "team" as const, team_id: teamIdForScope } : {}),
-    });
+async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & { cursor?: string | null; page_size?: number }) {
+  const auth = await verifyApiToken(ctx, args.api_token, false);
+  if (!auth) throw new Error("Unauthorized");
+  if (args.chain && args.assignee) throw new Error("Use --assignee or --chain, not both: --chain already covers the person and every role under them.");
 
-    // The assignee values to read: one for --assignee, the person and every
-    // role under them for --chain.
-    const boundary = boundaryOfWorkspace(db.workspace);
-    let assignees: string[] = [];
-    // A read names what a task holds: a retired role's tasks can still be
-    // listed by its handle or id, where a write would refuse the role.
-    if (args.assignee) {
-      const one = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundary, { read: true });
-      if (one) assignees = [one];
-    } else if (args.chain) {
-      const head = await resolveAssigneeToUserId(ctx, (await resolveAssigneeStr(ctx, args.chain, auth.userId, boundary, { read: true })) ?? "", boundary.team_id);
-      if (!head) throw new Error(`No person matches "${args.chain}". --chain takes a person: me, a name or a GitHub handle.`);
-      assignees = chainAssignees(head, await allRolesInBoundary(ctx, boundary));
-    }
+  let teamIdForScope: Id<"teams"> | undefined;
+  if (args.team) {
+    const user = await ctx.db.get(auth.userId);
+    teamIdForScope = user?.active_team_id || user?.team_id;
+  }
+  const db = await createDataContext(ctx, {
+    userId: auth.userId,
+    project_path: args.project_path,
+    ...explicitWorkspace(args, args.team && teamIdForScope ? { workspace: "team" as const, team_id: teamIdForScope } : {}),
+  });
 
-    let tasks: any[];
-    // The assignee and project_id indexes are global — they return rows the
-    // caller may not be able to see, so those two branches get an explicit
-    // owner-or-team-member filter below. The other branches are already
-    // user/workspace-scoped.
-    let needsAccessFilter = false;
-    if (assignees.length > 0) {
-      // When filtering by assignee, query the assignee index directly so
-      // tasks assigned to the user but missing team_id aren't dropped by
-      // the workspace-scoped query.
-      tasks = (await Promise.all(assignees.map((assignee) => ctx.db
-        .query("tasks")
-        .withIndex("by_assignee_updated", (q: any) => q.eq("assignee", assignee))
-        .collect()))).flat();
-      needsAccessFilter = true;
-    } else if (args.project_id || args.initiative) {
-      // A task reaches an initiative through its project. With both flags the
-      // project must be one the initiative names. projectTasks decides access
-      // from each row's workspace stamp, the way `cast initiative show`
-      // counts, so a task routed to a team but readable by its owner only is
-      // not listed to the team.
-      const inInitiative = args.initiative ? (await requireInitiative(ctx, auth.userId as Id<"users">, args.initiative)).project_ids.map(String) : null;
-      const projectIds: string[] = args.project_id ? (!inInitiative || inInitiative.includes(args.project_id) ? [args.project_id] : []) : inInitiative!;
-      tasks = (await Promise.all(projectIds.map((projectId) => projectTasks(ctx, auth.userId as Id<"users">, projectId as any)))).flat();
-    } else {
-      // The status filters below run in the database first where they can, so
-      // rows they would drop never reach JS memory: finished work is most of a
-      // team's table. A team status name ("today") is resolved per row below.
-      // Each wanted category is its own index range: a filter would still read
-      // every finished task (22k rows on a large team) to drop them. Legacy
-      // rows (no stored key) ride along on every range; the map dedupes them.
-      const categories = isTaskStatusCategory(args.status)
-        ? [args.status]
-        : !args.status && !args.include_done
-          ? TASK_STATUS_CATEGORIES.filter((s) => !TERMINAL_TASK_CATEGORIES.includes(s))
-          : null;
-      if (categories) {
-        const byId = new Map<string, any>();
-        for (const status of categories) {
-          const rows = await db.query("tasks")
-            .withIndex("by_workspace_status", (q: any) => q.eq("workspace", db.workspaceKey).eq("status", status))
-            .collect();
-          for (const row of rows) byId.set(String(row._id), row);
-        }
-        tasks = [...byId.values()];
-      } else {
-        tasks = await db.query("tasks").collect();
+  // The assignee values to read: one for --assignee, the person and every
+  // role under them for --chain.
+  const boundary = boundaryOfWorkspace(db.workspace);
+  let assignees: string[] = [];
+  // A read names what a task holds: a retired role's tasks can still be
+  // listed by its handle or id, where a write would refuse the role.
+  if (args.assignee) {
+    const one = await resolveAssigneeStr(ctx, args.assignee, auth.userId, boundary, { read: true });
+    if (one) assignees = [one];
+  } else if (args.chain) {
+    const head = await resolveAssigneeToUserId(ctx, (await resolveAssigneeStr(ctx, args.chain, auth.userId, boundary, { read: true })) ?? "", boundary.team_id);
+    if (!head) throw new Error(`No person matches "${args.chain}". --chain takes a person: me, a name or a GitHub handle.`);
+    assignees = chainAssignees(head, await allRolesInBoundary(ctx, boundary));
+  }
+
+  let tasks: any[];
+  let nextPage: string | null = null;
+  let paged = false;
+  // The assignee and project_id indexes are global — they return rows the
+  // caller may not be able to see, so those two branches get an explicit
+  // owner-or-team-member filter below. The other branches are already
+  // user/workspace-scoped.
+  let needsAccessFilter = false;
+  if (assignees.length > 0) {
+    // When filtering by assignee, query the assignee index directly so
+    // tasks assigned to the user but missing team_id aren't dropped by
+    // the workspace-scoped query.
+    tasks = (await Promise.all(assignees.map((assignee) => ctx.db
+      .query("tasks")
+      .withIndex("by_assignee_updated", (q: any) => q.eq("assignee", assignee))
+      .collect()))).flat();
+    needsAccessFilter = true;
+  } else if (args.project_id || args.initiative) {
+    // A task reaches an initiative through its project. With both flags the
+    // project must be one the initiative names. projectTasks decides access
+    // from each row's workspace stamp, the way `cast initiative show`
+    // counts, so a task routed to a team but readable by its owner only is
+    // not listed to the team.
+    const inInitiative = args.initiative ? (await requireInitiative(ctx, auth.userId as Id<"users">, args.initiative)).project_ids.map(String) : null;
+    const projectIds: string[] = args.project_id ? (!inInitiative || inInitiative.includes(args.project_id) ? [args.project_id] : []) : inInitiative!;
+    tasks = (await Promise.all(projectIds.map((projectId) => projectTasks(ctx, auth.userId as Id<"users">, projectId as any)))).flat();
+  } else if (args.cursor !== undefined) {
+    const got = await db.query("tasks")
+      .withIndex("by_workspace_updated", (q: any) => q.eq("workspace", db.workspaceKey))
+      .order("desc")
+      .paginate({ cursor: args.cursor, numItems: Math.min(Math.max(args.page_size ?? 200, 1), 500) });
+    tasks = got.page;
+    paged = true;
+    nextPage = got.isDone ? null : got.continueCursor;
+  } else {
+    // The status filters below run in the database first where they can, so
+    // rows they would drop never reach JS memory: finished work is most of a
+    // team's table. A team status name ("today") is resolved per row below.
+    // Each wanted category is its own index range: a filter would still read
+    // every finished task (22k rows on a large team) to drop them. Legacy
+    // rows (no stored key) ride along on every range; the map dedupes them.
+    const categories = isTaskStatusCategory(args.status)
+      ? [args.status]
+      : !args.status && !args.include_done
+        ? TASK_STATUS_CATEGORIES.filter((s) => !TERMINAL_TASK_CATEGORIES.includes(s))
+        : null;
+    if (categories) {
+      const byId = new Map<string, any>();
+      for (const status of categories) {
+        const rows = await db.query("tasks")
+          .withIndex("by_workspace_status", (q: any) => q.eq("workspace", db.workspaceKey).eq("status", status))
+          .collect();
+        for (const row of rows) byId.set(String(row._id), row);
       }
+      tasks = [...byId.values()];
+    } else {
+      tasks = await db.query("tasks").collect();
     }
+  }
 
-    if (needsAccessFilter) {
-      // Access is the row's workspace stamp, never the team it is routed to
-      // (CLAUDE.md): a teammate's task routed to the team but readable by its
-      // owner only is not listed to whoever asks for the role's tasks. The
-      // keys the caller holds are read once; a row with a stored key is judged
-      // in memory by the access layer's own evaluator, and a row minted before
-      // the key backfill takes the lazy path.
-      const held = await heldKeysFor(ctx, auth.userId);
-      const keep = await Promise.all(tasks.map((t: any) =>
-        t.workspace ? authorizedFor(accessStampFromDoc("tasks", t), String(auth.userId), held) : canAccessTask(ctx, auth.userId, t)));
-      tasks = tasks.filter((_: any, i: number) => keep[i]);
-    }
+  if (needsAccessFilter) {
+    // Access is the row's workspace stamp, never the team it is routed to
+    // (CLAUDE.md): a teammate's task routed to the team but readable by its
+    // owner only is not listed to whoever asks for the role's tasks. The
+    // keys the caller holds are read once; a row with a stored key is judged
+    // in memory by the access layer's own evaluator, and a row minted before
+    // the key backfill takes the lazy path.
+    const held = await heldKeysFor(ctx, auth.userId);
+    const keep = await Promise.all(tasks.map((t: any) =>
+      t.workspace ? authorizedFor(accessStampFromDoc("tasks", t), String(auth.userId), held) : canAccessTask(ctx, auth.userId, t)));
+    tasks = tasks.filter((_: any, i: number) => keep[i]);
+  }
 
-    // Each task resolves against its own team's statuses, loaded once per team.
-    const teamStatuses = new Map<string, Promise<TeamTaskStatus[]>>();
-    const statusesOf = (t: any) => {
-      const key = String(t.team_id ?? "");
-      if (!teamStatuses.has(key)) teamStatuses.set(key, loadTeamTaskStatuses(ctx, t.team_id));
-      return teamStatuses.get(key)!;
+  // Each task resolves against its own team's statuses, loaded once per team.
+  const teamStatuses = new Map<string, Promise<TeamTaskStatus[]>>();
+  const statusesOf = (t: any) => {
+    const key = String(t.team_id ?? "");
+    if (!teamStatuses.has(key)) teamStatuses.set(key, loadTeamTaskStatuses(ctx, t.team_id));
+    return teamStatuses.get(key)!;
+  };
+
+  if (args.status) {
+    // A category matches every task in it; a team status ("today") matches
+    // the tasks that render as that status.
+    const ref = args.status;
+    const keep = await Promise.all(tasks.map(async (t: any) => {
+      if (isTaskStatusCategory(ref)) return t.status === ref;
+      const statuses = await statusesOf(t);
+      return findTeamTaskStatus(statuses, ref)?.id === resolveTaskStatus(t, statuses).id;
+    }));
+    tasks = tasks.filter((_: any, i: number) => keep[i]);
+  } else if (!args.include_done) {
+    tasks = tasks.filter((t: any) => !TERMINAL_TASK_CATEGORIES.includes(t.status));
+  }
+
+  if (!args.include_derived) {
+    tasks = tasks.filter((t: any) => !t.triage_status || t.triage_status === "active");
+  }
+  if (!args.include_ephemeral && !args.ready) tasks = tasks.filter((t: any) => !t.ephemeral);
+
+  if (args.execution_status) {
+    tasks = tasks.filter((t: any) => t.execution_status === args.execution_status);
+  }
+
+  if (args.plan_id) {
+    const plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
+      .first();
+    const planTaskIds = new Set((plan?.task_ids || []).map((id: any) => String(id)));
+    tasks = tasks.filter((t: any) => planTaskIds.has(String(t._id)));
+  }
+
+  if (args.query) {
+    const q = args.query.toLowerCase();
+    tasks = tasks.filter((t: any) =>
+      (t.title || "").toLowerCase().includes(q) ||
+      (t.description || "").toLowerCase().includes(q) ||
+      (t.short_id || "").toLowerCase().includes(q),
+    );
+  }
+
+  if (args.label) {
+    const wanted = args.label.toLowerCase();
+    tasks = tasks.filter((t: any) =>
+      (t.labels || []).some((l: string) => l.toLowerCase() === wanted),
+    );
+  }
+
+  // Ready is graph.ts's rule (task-graph.md TG1). Blockers and parents the
+  // filtered page dropped are read from the database: a finished blocker is
+  // exactly what the default page leaves out. `include_subtasks` (CLI
+  // --subtasks) counts subtasks of a parent being worked.
+  const asker = args.conversation_id ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id) : null;
+  const readiness = { viewer: String(auth.userId), viewerSession: asker ? String(asker._id) : null, includeSubtasks: args.include_subtasks };
+  let lookupsFor: Awaited<ReturnType<typeof readinessLookups>> | undefined;
+  if (args.ready) ({ ready: tasks, lookupsFor } = await readyTasks(ctx, tasks, readiness));
+
+  // The frontier reads in the order work should be taken (TG7); every other
+  // list reads newest first.
+  const now = Date.now();
+  if (args.ready) tasks = await orderFrontier(ctx, tasks, now);
+  else tasks.sort((a: any, b: any) => (b.updated_at || b._creationTime || 0) - (a.updated_at || a._creationTime || 0));
+  const limit = args.limit || 300;
+  const result = paged ? tasks : tasks.slice(0, limit);
+
+  const assigneeInfo = await assigneeInfoFor(ctx, result.map((t: any) => t.assignee));
+  const statusNames = await Promise.all(result.map(async (t: any) => resolveTaskStatus(t, await statusesOf(t)).name));
+  // Every row carries its verdict and open blockers, so the CLI's "blocked"
+  // tag and counts render from the rule, never from a raw blocked_by.
+  const lookupsOf = lookupsFor ?? await readinessLookups(ctx, result);
+  const rows = result.map((t: any, i: number) => {
+    const { statusOf, parentStatusOf } = lookupsOf(t);
+    return {
+      ...t,
+      status_name: statusNames[i],
+      assignee_name: t.assignee ? (assigneeNameOf(assigneeInfo[t.assignee]) || t.assignee) : undefined,
+      // The contract's shape (orgAssignee.ts), so the CLI tells a role from a
+      // person by `kind`, never by the look of a label.
+      assignee_info: t.assignee ? (assigneeInfo[t.assignee] ?? null) : null,
+      parent_short_id: (t.parent_id ? statusOf(String(t.parent_id)) : undefined)?.short_id ?? undefined,
+      // A ready page holds only rows readyTasks already judged ready.
+      ready: args.ready ? true : readinessOf(t, { statusOf, parentStatusOf, ...readiness }).ready,
+      // Structured (TG1): the reader labels them, a time wait in its own zone.
+      // A closed task waits on nothing, so no reader marks it blocked.
+      open_blockers: isTerminalTaskStatus(t.status) ? [] : blockersHoldingBack(t, statusOf),
+      // Untouched 30+ days: the frontier folds it into a count (TG7).
+      ...(args.ready ? { stale: isStaleTask(t, now) } : {}),
     };
+  });
+  return { rows, nextPage };
+}
 
-    if (args.status) {
-      // A category matches every task in it; a team status ("today") matches
-      // the tasks that render as that status.
-      const ref = args.status;
-      const keep = await Promise.all(tasks.map(async (t: any) => {
-        if (isTaskStatusCategory(ref)) return t.status === ref;
-        const statuses = await statusesOf(t);
-        return findTeamTaskStatus(statuses, ref)?.id === resolveTaskStatus(t, statuses).id;
-      }));
-      tasks = tasks.filter((_: any, i: number) => keep[i]);
-    } else if (!args.include_done) {
-      tasks = tasks.filter((t: any) => !TERMINAL_TASK_CATEGORIES.includes(t.status));
-    }
+export const list = query({
+  args: listArgs,
+  handler: async (ctx, args) => (await listTasksCore(ctx, args)).rows,
+});
 
-    if (!args.include_derived) {
-      tasks = tasks.filter((t: any) => !t.triage_status || t.triage_status === "active");
-    }
-    if (!args.include_ephemeral && !args.ready) tasks = tasks.filter((t: any) => !t.ephemeral);
-
-    if (args.execution_status) {
-      tasks = tasks.filter((t: any) => t.execution_status === args.execution_status);
-    }
-
-    if (args.plan_id) {
-      const plan = await ctx.db
-        .query("plans")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
-        .first();
-      const planTaskIds = new Set((plan?.task_ids || []).map((id: any) => String(id)));
-      tasks = tasks.filter((t: any) => planTaskIds.has(String(t._id)));
-    }
-
-    if (args.query) {
-      const q = args.query.toLowerCase();
-      tasks = tasks.filter((t: any) =>
-        (t.title || "").toLowerCase().includes(q) ||
-        (t.description || "").toLowerCase().includes(q) ||
-        (t.short_id || "").toLowerCase().includes(q),
-      );
-    }
-
-    if (args.label) {
-      const wanted = args.label.toLowerCase();
-      tasks = tasks.filter((t: any) =>
-        (t.labels || []).some((l: string) => l.toLowerCase() === wanted),
-      );
-    }
-
-    // Ready is graph.ts's rule (task-graph.md TG1). Blockers and parents the
-    // filtered page dropped are read from the database: a finished blocker is
-    // exactly what the default page leaves out. `include_subtasks` (CLI
-    // --subtasks) counts subtasks of a parent being worked.
-    const asker = args.conversation_id ? await resolveSessionConversation(ctx, auth.userId, args.conversation_id) : null;
-    const readiness = { viewer: String(auth.userId), viewerSession: asker ? String(asker._id) : null, includeSubtasks: args.include_subtasks };
-    let lookupsFor: Awaited<ReturnType<typeof readinessLookups>> | undefined;
-    if (args.ready) ({ ready: tasks, lookupsFor } = await readyTasks(ctx, tasks, readiness));
-
-    // The frontier reads in the order work should be taken (TG7); every other
-    // list reads newest first.
-    const now = Date.now();
-    if (args.ready) tasks = await orderFrontier(ctx, tasks, now);
-    else tasks.sort((a: any, b: any) => (b.updated_at || b._creationTime || 0) - (a.updated_at || a._creationTime || 0));
-    const limit = args.limit || 300;
-    const result = tasks.slice(0, limit);
-
-    const assigneeInfo = await assigneeInfoFor(ctx, result.map((t: any) => t.assignee));
-    const statusNames = await Promise.all(result.map(async (t: any) => resolveTaskStatus(t, await statusesOf(t)).name));
-    // Every row carries its verdict and open blockers, so the CLI's "blocked"
-    // tag and counts render from the rule, never from a raw blocked_by.
-    const lookupsOf = lookupsFor ?? await readinessLookups(ctx, result);
-    return result.map((t: any, i: number) => {
-      const { statusOf, parentStatusOf } = lookupsOf(t);
-      return {
-        ...t,
-        status_name: statusNames[i],
-        assignee_name: t.assignee ? (assigneeNameOf(assigneeInfo[t.assignee]) || t.assignee) : undefined,
-        // The contract's shape (orgAssignee.ts), so the CLI tells a role from a
-        // person by `kind`, never by the look of a label.
-        assignee_info: t.assignee ? (assigneeInfo[t.assignee] ?? null) : null,
-        parent_short_id: (t.parent_id ? statusOf(String(t.parent_id)) : undefined)?.short_id ?? undefined,
-        // A ready page holds only rows readyTasks already judged ready.
-        ready: args.ready ? true : readinessOf(t, { statusOf, parentStatusOf, ...readiness }).ready,
-        // Structured (TG1): the reader labels them, a time wait in its own zone.
-        // A closed task waits on nothing, so no reader marks it blocked.
-        open_blockers: isTerminalTaskStatus(t.status) ? [] : blockersHoldingBack(t, statusOf),
-        // Untouched 30+ days: the frontier folds it into a count (TG7).
-        ...(args.ready ? { stale: isStaleTask(t, now) } : {}),
-      };
-    });
+// A page of the whole board, newest touched first, and where the next one
+// starts (`cast task ls --all`): one call holding every task of a large team
+// ran out of memory (Union, Oct 26).
+export const listPage = query({
+  args: { ...listArgs, cursor: v.union(v.string(), v.null()), page_size: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const { rows, nextPage } = await listTasksCore(ctx, args);
+    return { tasks: rows, cursor: nextPage };
   },
 });
+
 
 export const get = query({
   args: {

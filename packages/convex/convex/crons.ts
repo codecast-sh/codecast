@@ -17,6 +17,9 @@ crons.interval("prune conversation events", { hours: 6 }, (internal as any).conv
 // problems with no score or a newer finding, under a $2 daily cap
 // (problemScores.ts). The 15-minute tick collects a batch soon after it ends.
 crons.interval("score agent-review problems", { minutes: 15 }, internal.problemScores.tick, {});
+// Group the findings that came in while grouping could not compare them (the budget refused, or the embedding failed):
+// they wait held instead of opening a problem each (findingRegroup.ts).
+crons.interval("group findings grouping refused", { minutes: 10 }, internal.findingRegroup.groupAwaiting, {});
 
 crons.interval("summarize long assistant conversations", { minutes: 10 }, internal.assistant.longHistory.compress, {});
 

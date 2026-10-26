@@ -159,4 +159,24 @@ describe("scoped reads leave skipped rows in the database", () => {
     const done = await (list as any)._handler({ db, auth: browserAuth }, { api_token: "fixture-token", workspace: "team", team_id: TEAM, status: "done" });
     expect(done.map((r: any) => r._id)).toEqual(["done-row"]);
   });
+
+  // Oct 26: --all on a team with tens of thousands of tasks read them in one call and ran out of memory.
+  test("cast task ls --all reads the board a page at a time, newest touched first, each task once", async () => {
+    const { listPage } = await import("./tasks");
+    const { hashToken } = await import("./apiTokens");
+    const db = workspaceDb("tasks");
+    db._tables.api_tokens = [{ _id: "token", user_id: VIEWER, token_hash: await hashToken("fixture-token") }];
+    db._tables.teams = [{ _id: TEAM, name: "Team" }];
+    for (let i = 0; i < 5; i++) db._tables.tasks.push({ _id: `t${i}`, user_id: OTHER, team_id: TEAM, workspace: `team:${TEAM}`, title: `T${i}`, status: i % 2 ? "done" : "open", created_at: i, updated_at: 100 + i });
+    const want = db._tables.tasks.filter((t: any) => t.workspace === `team:${TEAM}`).sort((a: any, b: any) => b.updated_at - a.updated_at).map((t: any) => t._id);
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page: any = await (listPage as any)._handler({ db, auth: browserAuth }, { api_token: "fixture-token", workspace: "team", team_id: TEAM, include_done: true, include_derived: true, cursor, page_size: 2 });
+      expect(page.tasks.length).toBeLessThanOrEqual(2);
+      seen.push(...page.tasks.map((r: any) => r._id));
+      cursor = page.cursor;
+    } while (cursor);
+    expect(seen).toEqual(want);
+  });
 });

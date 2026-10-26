@@ -6660,6 +6660,9 @@ export default defineSchema({
       case_id: v.optional(v.id("signals")),
       diagnosed_at: v.optional(v.number()),
     })),
+    // Held because grouping could not compare it when it came in (the budget refused, or the embedding failed), with
+    // the words grouping reads; the sweep groups it once there is room, where filing it as new opened a problem each.
+    awaiting_grouping: v.optional(v.object({ since: v.number(), text: v.string() })),
     // On a case against a judge (LL11): the finding it was made from.
     case_of: v.optional(v.id("signals")),
     // A judge's finding withdrawn because a newer judging of its moment
@@ -6693,6 +6696,11 @@ export default defineSchema({
     // A line's breaks (the-line-model.md LM5): a judge files the expectation
     // id it breaks as the subject, and the expectations page counts them.
     .index("by_workspace_subject", ["workspace", "subject", "created_at"])
+    // One finder's findings, newest first (cast signal ls --source): a window of the whole workspace held a few
+    // hours of them once a judge filed 60 an hour (Oct 26).
+    .index("by_workspace_source_created", ["workspace", "source", "created_at"])
+    // Findings held because grouping could not compare them, oldest first, for the sweep (findingRegroup.groupAwaiting).
+    .index("by_awaiting_grouping", ["awaiting_grouping.since"])
     .index("by_short_id", ["short_id"]),
 
   orchestration_events: defineTable({

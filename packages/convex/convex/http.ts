@@ -4448,6 +4448,9 @@ cliRoute("/cli/moments/judged", async (ctx, body) => {
 cliRoute("/cli/moments/ls", async (ctx, body) => {
   return await ctx.runQuery(api.moments.listForCli, body);
 });
+cliRoute("/cli/moments/freshness", async (ctx, body) => {
+  return await ctx.runQuery(api.momentsFreshness.freshnessPage, body);
+});
 cliRoute("/cli/moments/show", async (ctx, body) => {
   return await ctx.runQuery(api.moments.showForCli, body);
 });
@@ -4562,6 +4565,9 @@ cliRoute("/cli/calls/hold", async (ctx, body) => {
 });
 cliRoute("/cli/work/list", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.list, body);
+});
+cliRoute("/cli/work/page", async (ctx, body) => {
+  return await ctx.runQuery(api.tasks.listPage, body);
 });
 cliRoute("/cli/work/get", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.get, body);
