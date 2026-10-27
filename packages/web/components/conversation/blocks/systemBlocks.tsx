@@ -940,7 +940,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
 
 // ── Team chat: the anchor's inbound wake and its outbound reply ─────────────
 // A mention in team chat wakes the anchor session with a plain-text prompt
-// (convex/chat.ts buildAnchorWake): the channel, who asked, the quoted thread,
+// (convex/chatWakePrompts.ts buildAnchorWake): the channel, who asked, the quoted thread,
 // and the `cast chat reply` it should run. The transcript shows the exchange
 // the way chat does — a channel pill, the thread's lines by speaker — and hides
 // the framing that exists only to brief the agent.

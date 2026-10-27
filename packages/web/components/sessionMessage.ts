@@ -142,7 +142,7 @@ export function parseAgentAuthoredMessage(
 }
 
 // --- Team-chat anchor wake ------------------------------------------------------------
-// The prompt convex/chat.ts buildAnchorWake hands the anchor session when a teammate
+// The prompt convex/chatWakePrompts.ts buildAnchorWake hands the anchor session when a teammate
 // mentions it in team chat. Plain text, no wrapper tag — the wire format IS the
 // user message:
 //

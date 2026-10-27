@@ -5,7 +5,8 @@ import type { ConvoMessage } from '@platform/evals';
 import { UsageError } from '@platform/evals/cli';
 
 import { bootstrapMessage } from '../../../../convex/convex/anchors';
-import { ANCHOR_REPLY_TIMEOUT_MS, buildAnchorWake } from '../../../../convex/convex/chat';
+import { ANCHOR_REPLY_TIMEOUT_MS } from '../../../../convex/convex/chat';
+import { buildAnchorWake } from '../../../../convex/convex/chatWakePrompts';
 import { splitLineRef, toConvoMessages, toRows, type CliReadMessage } from '../../adapters/convo';
 import type { Captured, CaptureCtx, SurfaceImpl } from '../../surface';
 import { standingGates, type StandingLabel } from '../roleWake/actions';

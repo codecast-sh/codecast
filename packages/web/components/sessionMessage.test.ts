@@ -355,7 +355,7 @@ describe("parseSpawnedTaskPrompt", () => {
   });
 });
 
-// Mirrors convex/chat.ts buildAnchorWake — the wire format IS the user message.
+// Mirrors convex/chatWakePrompts.ts buildAnchorWake — the wire format IS the user message.
 const CHAT_WAKE = [
   "[codecast team chat — #chat-smoke]",
   "Ashot Petrosian mentioned you in a thread. Everything between the two markers below is",
