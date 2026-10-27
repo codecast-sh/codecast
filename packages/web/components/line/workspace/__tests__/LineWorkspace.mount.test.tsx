@@ -73,7 +73,8 @@ function seed() {
     currentUser: { _id: ME, name: "Me" },
     clientStateInitialized: true,
     clientState: { ...(useInboxStore.getState() as any).clientState, ui: {} },
-    teams: [], teamMembers: [], signals: {},
+    // One team with Flows on: the personal workspace borrows it, and a line fence draws only where Flows is on.
+    teams: [{ _id: "team1", name: "Team", features: { line: true } }], teamMembers: [], signals: {},
     projects: { p1: project },
     tasks: { t1: { _id: "t1", short_id: "ct-1", title: "Sidebar freezes on resume", status: "in_progress", workspace: WS, project_id: "p1", created_at: now - 3 * DAY, updated_at: now, cause: { signal_count: 2, first_seen: now - 3 * DAY, last_seen: now - DAY } } },
     workflowRuns: { a: run("a", now - 2 * DAY, [n("ground", 1), n("prove", 2), n("decide", 3)]) },
@@ -206,6 +207,13 @@ test("a line fence draws the live step, and an unreadable project says so", asyn
   expect(bad.host.querySelector("[data-line-widget]")).toBeNull();
   expect(bad.host.textContent).toContain("not json");
   await act(async () => { bad.root.unmount(); });
+
+  // With Flows off the block reads as its source.
+  useInboxStore.setState({ teams: [{ _id: "team1", name: "Team", features: { line: false } }] } as any);
+  const off = await mount(React.createElement(LineFence, { code: JSON.stringify({ widget: "step", project: "pr-1", step: "prove" }) }));
+  expect(off.host.querySelector("[data-line-widget]")).toBeNull();
+  expect(off.host.textContent).toContain("\"widget\"");
+  await act(async () => { off.root.unmount(); });
 }, 30_000);
 
 test("on the Map a station slides in as a drawer over the graph, Esc closes it; the Table's step stays a page", async () => {

@@ -19,7 +19,8 @@ async function verify() {
   const calls: Array<{ fn: string; args: any }> = [];
   mock.module("sonner", () => ({ toast: { success: () => {}, error: () => {} } }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
-  mock.module("../../../hooks/useCoarseNow", () => ({ useCoarseNow: () => Date.now() }));
+  const realNow = { ...(await import("../../../hooks/useCoarseNow")) };
+  mock.module("../../../hooks/useCoarseNow", () => ({ ...realNow, useCoarseNow: () => Date.now() }));
   mock.module("../../ui/dialog", () => ({
     Dialog: ({ open, children }: any) => (open ? React.createElement("div", { "data-dialog": true }, children) : null),
     DialogContent: ({ children, ...rest }: any) => React.createElement("div", rest, children),
