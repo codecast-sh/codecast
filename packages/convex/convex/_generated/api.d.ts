@@ -377,6 +377,7 @@ import type * as lineGround from "../lineGround.js";
 import type * as lineLearn from "../lineLearn.js";
 import type * as lineMoments from "../lineMoments.js";
 import type * as lineNotices from "../lineNotices.js";
+import type * as linePool from "../linePool.js";
 import type * as lineRetitle from "../lineRetitle.js";
 import type * as lineStages from "../lineStages.js";
 import type * as lineTimeline from "../lineTimeline.js";
@@ -957,6 +958,7 @@ declare const fullApi: ApiFromModules<{
   lineLearn: typeof lineLearn;
   lineMoments: typeof lineMoments;
   lineNotices: typeof lineNotices;
+  linePool: typeof linePool;
   lineRetitle: typeof lineRetitle;
   lineStages: typeof lineStages;
   lineTimeline: typeof lineTimeline;

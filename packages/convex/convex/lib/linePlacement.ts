@@ -39,7 +39,7 @@ export async function holdsSlot(ctx: Ctx, run: any, waiting: Set<string>): Promi
   return !task?.waiting_since;
 }
 
-/** The runs a device's line slot takes at once: none while an operator holds the device (devices.holdLine). */
+/** The runs a device's line slot takes at once: none while an operator holds the device (linePool.holdLine). */
 export const slotRuns = (device: { line_hold?: unknown }, slot: { runs: number }): number => (device.line_hold ? 0 : slot.runs);
 
 /** The runner's devices that offer any line checkout: their runs are counted by the pool, not the runner's own cap. */

@@ -33,8 +33,6 @@ import { releasePreviousOwner } from "./sessionRelease";
 import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unparkForMove } from "./cloudPlacement";
 import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
-import { lineSlotsValidator } from "./lib/lineSlotsValidator";
-import { normalizeGitOrigin } from "@codecast/shared/contracts";
 import { queueMoveContinueIfMidTurn } from "./moveContinue";
 
 async function getAuthenticatedUserId(
@@ -2172,34 +2170,5 @@ export const fleetAdoption = internalQuery({
       current: macs.length - behind.length,
       behind: behind.map((d) => ({ hostname: d.hostname ?? null, cli_version: d.cli_version ?? null })),
     };
-  },
-});
-
-/** Holds a device out of the line (run with packages/convex/run.sh): its checkouts stay in the pool with no room, so no
- *  run starts or resumes there, whatever its heartbeat reports, until the hold is released (call again without `why`).
- *  For a machine that cannot finish a run and cannot be reached to change its own config: Cam's union-shared box had
- *  no Codex for the Review hand, so every run that reached Review there failed (2026-10-27, ct-74380). */
-export const holdLine = internalMutation({
-  args: { device_id: v.string(), why: v.optional(v.string()) },
-  handler: async (ctx, { device_id, why }) => {
-    const rows = await ctx.db.query("devices").filter((q) => q.eq(q.field("device_id"), device_id)).collect();
-    if (rows.length !== 1) throw new Error(`${rows.length} devices have device_id ${device_id}`);
-    const line_hold = why?.trim() ? { why: why.trim(), at: Date.now() } : undefined;
-    await ctx.db.patch(rows[0]._id, { line_hold });
-    return { device: device_id, hostname: rows[0].hostname ?? null, line_hold: line_hold ?? null };
-  },
-});
-
-/** Sets a device's line checkouts (lib/lineSlotsValidator) by hand, for a host
- *  whose daemon does not report them yet; the next heartbeat that carries
- *  line_slots replaces them. Origins are normalized the way the daemon's are. */
-export const setLineSlots = internalMutation({
-  args: { device_id: v.string(), line_slots: lineSlotsValidator },
-  handler: async (ctx, { device_id, line_slots }) => {
-    const rows = await ctx.db.query("devices").filter((q) => q.eq(q.field("device_id"), device_id)).collect();
-    if (rows.length !== 1) throw new Error(`${rows.length} devices have device_id ${device_id}`);
-    const slots = line_slots.map((s) => ({ ...s, ...(s.origin ? { origin: normalizeGitOrigin(s.origin) ?? s.origin } : {}) }));
-    await ctx.db.patch(rows[0]._id, { line_slots: slots });
-    return { device: device_id, user_id: rows[0].user_id, line_slots: slots };
   },
 });
