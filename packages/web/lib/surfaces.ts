@@ -9,7 +9,7 @@ import type { LaneHint } from "../components/simple/laneBoot";
 import { hasNoMachine, type DefaultAgentState } from "./defaultAgent";
 import { workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { assistantScopeOnly, inAssistantScope } from "./assistantScope";
-import { HOSTED_ACTION_WORDS as HOSTED_ACTION_WORDS_OF, MODE_WORDS, actionSurface as actionSurfaceOf, shownFor, staffGateOpen, surfaceMode, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
+import { HOSTED_ACTION_WORDS as HOSTED_ACTION_WORDS_OF, MODE_WORDS, actionSurface as actionSurfaceOf, shownFor, featureGateOpen, surfaceMode, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
 
 export { DEV_SURFACES, DEVELOPER_MODE, HOSTED_ACTION_WORDS, MODE_WORDS, actionSurface, helpContextSurface, hiddenPageRedirect, modePageLabel, pageSurface, type DevSurface, type ModeWords, type SurfaceMode } from "./surfaceRules";
 
@@ -31,13 +31,12 @@ export function isHostedMode(s: Pick<SurfaceState, "clientState"> & { laneHint?:
 
 /** Whether `name` shows for this viewer. */
 export function surfaceShown(s: SurfaceState & { laneHint?: LaneHint | null; currentUser?: { staff?: boolean } | null }, name: DevSurface): boolean {
-  return staffGateOpen(staffSurfacesOpen(s), name) && shownFor(isHostedMode(s), hasNoMachine(s), name);
+  return featureGateOpen(flowsOn(s), name) && shownFor(isHostedMode(s), hasNoMachine(s), name);
 }
 
-/** The staff-only surfaces open to staff, and to everyone in a workspace
- *  whose team turned the line feature on. */
-function staffSurfacesOpen(s: Pick<SurfaceState, "clientState" | "teams"> & { currentUser?: { staff?: boolean } | null }): boolean {
-  return s.currentUser?.staff === true || workspaceFeatureEnabled(s.teams || [], s.clientState.ui?.active_team_id, "line");
+/** Whether the workspace has the Flows feature (teams.features.line) on. */
+function flowsOn(s: Pick<SurfaceState, "clientState" | "teams">): boolean {
+  return workspaceFeatureEnabled(s.teams || [], s.clientState.ui?.active_team_id, "line");
 }
 
 /** Live: whether `name` shows. */
@@ -101,8 +100,8 @@ export function useModeWords(): ModeWords {
 export function useSurfaceMode(): SurfaceMode {
   const hosted = useHostedMode();
   const noMachine = useInboxStore(hasNoMachine);
-  const staff = useInboxStore(staffSurfacesOpen);
-  return useMemo(() => surfaceMode(hosted, noMachine, staff), [hosted, noMachine, staff]);
+  const flows = useInboxStore(flowsOn);
+  return useMemo(() => surfaceMode(hosted, noMachine, flows), [hosted, noMachine, flows]);
 }
 
 /** Outside React (palette rows, shortcut handlers): whether `name` shows now. */

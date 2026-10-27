@@ -115,7 +115,8 @@ export async function buildStableContext(
 
     // What agents must act on (the org, the mods' objects and blocks) leads;
     // the feed is background and gives up its oldest conversations to fit.
-    const lead = `${await orgBlock}${await modsBlock}${await flowsLine(opts.cwd, await poolBlock)}`.trim();
+    const pool = await poolBlock;
+    const lead = `${await orgBlock}${await modsBlock}${pool.flowsOn === false ? "" : await flowsLine(opts.cwd, pool.rows)}`.trim();
     const render = () => {
       const feed = stripAnsi(formatFeedResults({ ...result, conversations }, { projectPath }));
       return `${lead ? `${lead}\n\n` : ""}<stable-context mode="${opts.mode}">\n${instruction}\n\n${feed}\n</stable-context>`;
@@ -189,21 +190,23 @@ export async function flowsLine(cwd?: string, pushed: ReadonlyArray<PushedPoolRo
   }
 }
 
-/** The team pool's published flows for a directory: its mapped team's, else none (session start reads no other team's). */
-async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: string): Promise<PushedPoolRow[]> {
+/** The team pool's published flows for a directory: its mapped team's, else none (session start reads no other
+ *  team's). `flowsOn` says whether that workspace has the Flows feature on; undefined when the read failed or the
+ *  server predates the flag, which leaves the line as it was. */
+async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: string): Promise<{ rows: PushedPoolRow[]; flowsOn?: boolean }> {
   try {
     const team = teamForDirectory(await fetchMappedProjects(siteUrl, apiToken), cwd ?? process.cwd());
-    if (!team) return [];
     const response = await fetch(`${siteUrl}/cli/workflows/pool`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_token: apiToken, team_id: team }),
+      body: JSON.stringify({ api_token: apiToken, ...(team ? { team_id: team } : {}) }),
       signal: AbortSignal.timeout(10_000),
     });
-    const data = (await response.json()) as { flows?: PushedPoolRow[] };
-    return response.ok ? data.flows ?? [] : [];
+    const data = (await response.json()) as { flows?: PushedPoolRow[]; flows_on?: boolean };
+    if (!response.ok) return { rows: [] };
+    return { rows: team ? data.flows ?? [] : [], flowsOn: typeof data.flows_on === "boolean" ? data.flows_on : undefined };
   } catch {
-    return [];
+    return { rows: [] };
   }
 }
 

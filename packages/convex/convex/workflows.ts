@@ -1,4 +1,5 @@
 import { internalMutation, mutation, query } from "./functions";
+import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { ConvexError, v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -251,6 +252,8 @@ export const poolForCli = query({
       if (!names.has(id)) names.set(id, ((await ctx.db.get(r.user_id)) as any)?.name ?? null);
     }
     return {
+      // Whether the workspace has the Flows feature on: session start names the pool only then.
+      flows_on: await workspaceHasFeature(ctx, { team_id: args.team_id ?? null, user_id: result.userId }, "line"),
       flows: rows.map((r) => ({
         _id: r._id, slug: r.slug, name: r.name, source: r.source, workspace: r.workspace, updated_at: r.updated_at, runs_from: r.runs_from ?? null,
         nodes: r.nodes.map((n: any) => ({ id: n.id, ...(n.prompt ? { prompt: n.prompt } : {}), ...(n.script ? { script: n.script } : {}) })),

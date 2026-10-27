@@ -17,7 +17,7 @@
 import { createContext, useContext } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { activeTeamIdOf } from "./activeTeam";
-import { TEAM_FEATURES, workspaceFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
+import { TEAM_FEATURES, workspaceFeatureEnabled, workspaceFeatureState, type FeatureState, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { anyHolderHasFeature, defineFeatures, holderHasFeature } from "@platform/flags";
 
 /** codecast's catalog as a @platform/flags catalog. Shared with the off-feature
@@ -72,4 +72,11 @@ export function useWorkspaceFeature(key: TeamFeatureKey): boolean {
 export function workspaceHasFeatureNow(key: TeamFeatureKey): boolean {
   const s = useInboxStore.getState();
   return workspaceFeatureEnabled(s.teams || [], s.clientState.ui?.active_team_id, key);
+}
+
+/** The feature's state in the ACTIVE workspace: on, offered (its team never
+ *  decided, so one door stays open to it), or off. Shared rule:
+ *  workspaceFeatureState. */
+export function useWorkspaceFeatureState(key: TeamFeatureKey): FeatureState {
+  return useInboxStore((s) => workspaceFeatureState(s.teams || [], s.clientState.ui?.active_team_id, key));
 }

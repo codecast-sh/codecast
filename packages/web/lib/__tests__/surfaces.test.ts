@@ -13,11 +13,13 @@ import { paletteActions } from "../paletteActions";
 
 const ALL = Object.keys(DEV_SURFACES) as DevSurface[];
 const state = (lane: string | undefined, machines: number, live = true) => ({
-  clientState: { ui: lane ? { lane } : {} },
+  clientState: { ui: lane ? { lane, active_team_id: "t1" } : { active_team_id: "t1" } },
   machineRoster: Array.from({ length: machines }, (_, i) => ({ id: i })),
   machineRosterLive: live,
+  // A workspace with Flows on, so the feature gate opens every surface.
+  teams: [{ _id: "t1", features: { line: true } }],
   currentUser: { staff: true },
-});
+}) as any;
 
 describe("hosted mode surface registry", () => {
   test("developer mode shows every surface, with or without a machine", () => {
@@ -304,8 +306,8 @@ describe("the route guard reads the rail's rule", () => {
   });
 });
 
-describe("staff-only surfaces", () => {
-  test("the line shows to staff and to nobody else, in either mode", () => {
+describe("the Flows feature", () => {
+  test("Flows shows only where the switch is on, and an off page lands on /flows", () => {
     for (const hosted of [false, true]) {
       expect(surfaceMode(hosted, false, true).showsPage("/line")).toBe(!hosted);
       for (const path of ["/line", "/flows/settings", "/trial/x"]) {
@@ -313,8 +315,17 @@ describe("staff-only surfaces", () => {
         expect(hiddenPageRedirect(path, surfaceMode(hosted, false, false))).not.toBeNull();
       }
     }
+    for (const path of ["/line", "/flows/settings", "/flows/qa-lead", "/trial/x"]) expect(hiddenPageRedirect(path, surfaceMode(false, false, false))).toBe("/flows");
+    // The landing itself stays put: it says what Flows is and how to turn it on.
+    expect(hiddenPageRedirect("/flows", surfaceMode(false, false, false))).toBeNull();
+    expect(hiddenPageRedirect("/flows", surfaceMode(true, false, false))).toBe("/inbox");
     expect(surfaceMode(false, false, true).showsPage("/flows/settings")).toBe(true);
     expect(surfaceMode(false, false, false).showsPage("/tasks")).toBe(true);
+  });
+
+  test("staff get no bypass: the team's switch decides", () => {
+    const teams = [{ _id: "t2", features: {} }];
+    expect(surfaceShown({ ...state(undefined, 1), currentUser: { staff: true }, teams, clientState: { ui: { active_team_id: "t2" } } }, "nav.line")).toBe(false);
   });
 
   test("a team with the line feature on opens the line to its members in its workspace", () => {

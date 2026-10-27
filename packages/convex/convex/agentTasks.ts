@@ -34,6 +34,7 @@ import { armedTriggers } from "./lib/triggerMatch";
 import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, hostedWallCadence, type HostedRoutine } from "./assistant/routines";
 import { nextCadenceRun } from "@platform/assistant/cadence";
 import { startHostedConversationFor } from "./assistant/start";
+import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -1166,6 +1167,7 @@ export const dispatchCloudTriggers = internalMutation({
     for (const task of page.page) {
       const conversation = await cloudTriggerConversation(ctx, task);
       if (!conversation) continue;
+      if (await roleTriggerHeld(ctx, task)) continue;
       // Armed before the owner's plan shrank, before limits existed, or by
       // someone other than the owner: the routine pauses instead of waking a
       // turn. Only older routines count, so the newest pause first.
@@ -1213,6 +1215,16 @@ export const injectFrame = query({
   },
 });
 
+/** A role's trigger waits while its workspace has the Org feature off: off
+ *  means no role wakes, and turning Org back on resumes the same triggers
+ *  where they were, with nothing to restore. */
+async function roleTriggerHeld(ctx: TaskCtx, task: Doc<"agent_tasks">): Promise<boolean> {
+  if (!task.role_id) return false;
+  const role = await ctx.db.get(task.role_id);
+  if (!role) return false;
+  return !(await workspaceHasFeature(ctx, { team_id: role.team_id, user_id: role.scope_user_id }, "org"));
+}
+
 export const getDueTasks = query({
   args: {
     api_token: v.string(),
@@ -1232,6 +1244,7 @@ export const getDueTasks = query({
     for (const task of tasks) {
       if (task.user_id !== auth.userId || task.run_at === undefined || !(task.run_at <= now)) continue;
       if (await cloudTriggerConversation(ctx, task)) continue;
+      if (await roleTriggerHeld(ctx, task)) continue;
       dueTasks.push(task);
     }
     return dueTasks.slice(0, args.limit || 5);
@@ -1252,6 +1265,7 @@ export const claimTask = mutation({
     if (!task || task.user_id !== auth.userId) return null;
     if (task.status !== "scheduled") return null;
     if (await cloudTriggerConversation(ctx, task)) return null;
+    if (await roleTriggerHeld(ctx, task)) return null;
 
     const now = Date.now();
     const sourceFields = claimRunSourceFields(task);

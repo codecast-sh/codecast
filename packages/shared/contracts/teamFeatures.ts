@@ -48,8 +48,15 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
   },
   {
     key: "org",
-    name: "Organization",
-    desc: "Agent roles with a standing session each, a head of people, role assignees on tasks, and the org page. In development.",
+    name: "Org",
+    desc: "Agent roles that each own an area of work with a standing session, report to a person, and bring you only the decisions that need you. A Head of People proposes the structure.",
+    snippets: [],
+    personal: true,
+  },
+  {
+    key: "line",
+    name: "Flows",
+    desc: "Changes run through steps your team can see: check, review, decide, ship. A live flow turns problems from your sources into fixes and brings you one card to decide.",
     snippets: [],
     personal: true,
   },
@@ -75,13 +82,6 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     key: "ship",
     name: "Ship",
     desc: "A Ship button on sessions with changes, tasks in review and open pull requests: one press commits, opens the PR and shepherds it.",
-    snippets: [],
-    personal: true,
-  },
-  {
-    key: "line",
-    name: "Line",
-    desc: "The Line pages: problems each role's line finds, the fixes it proposes and the decisions it brings you. Needs Organization. In development.",
     snippets: [],
     personal: true,
   },
@@ -121,6 +121,29 @@ export function workspaceFeatureEnabled(
   if (activeTeamId) return teamFeatureEnabled(teams.find((t) => String(t?._id) === String(activeTeamId)), key);
   if (!TEAM_FEATURES.find((f) => f.key === key)?.personal) return false;
   return teams.some((t) => teamFeatureEnabled(t, key));
+}
+
+/**
+ * A feature's state in a workspace, for the surfaces that sell it:
+ *   on     the feature shows (workspaceFeatureEnabled).
+ *   offer  off, and its team never decided: no flag was ever stored. The app
+ *          keeps one door open (a sidebar row marked new, a landing, a guide).
+ *   off    an admin turned it off, or the workspace cannot have it: nothing.
+ * The personal workspace offers a `personal` feature while none of the
+ * viewer's teams has it on and at least one never decided.
+ */
+export type FeatureState = "on" | "offer" | "off";
+
+export function workspaceFeatureState(
+  teams: Array<{ _id?: unknown; features?: TeamFeatures | null } | null | undefined>,
+  activeTeamId: string | null | undefined,
+  key: TeamFeatureKey,
+): FeatureState {
+  if (workspaceFeatureEnabled(teams, activeTeamId, key)) return "on";
+  const undecided = (t: { features?: TeamFeatures | null } | null | undefined) => !!t && t.features?.[key] === undefined;
+  if (activeTeamId) return undecided(teams.find((t) => String(t?._id) === String(activeTeamId))) ? "offer" : "off";
+  if (!TEAM_FEATURES.find((f) => f.key === key)?.personal) return "off";
+  return teams.some(undecided) ? "offer" : "off";
 }
 
 /** Every catalog entry that names `snippet` in its snippet list. */

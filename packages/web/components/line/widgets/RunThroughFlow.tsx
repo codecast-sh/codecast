@@ -5,6 +5,7 @@
 // what its change is and names its task); the review says what starts first,
 // since agent stations start sessions of their own.
 import { useMemo, useState } from "react";
+import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { Route } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
 import { usePoolFlowRows } from "../../../hooks/useSyncWorkflows";
@@ -26,7 +27,12 @@ function passingSteps(flow: AppFlow) {
   return flowDiagram(flow).steps.flatMap((s) => (s.inner.length ? s.inner : [s])).map((s) => ({ label: s.label, kind: s.kind === "script" && !CHECKS.test(s.id) ? "auto" : s.kind }));
 }
 
-export function RunThroughFlow({ conversationId, sessionTitle }: { conversationId: string; sessionTitle: string }) {
+/** Shown only where the workspace has Flows on: off, the button is gone with the rest of the feature. */
+export function RunThroughFlow(props: { conversationId: string; sessionTitle: string }) {
+  return useWorkspaceFeature("line") ? <RunThroughFlowButton {...props} /> : null;
+}
+
+function RunThroughFlowButton({ conversationId, sessionTitle }: { conversationId: string; sessionTitle: string }) {
   const [open, setOpen] = useState(false);
   // The flow under review: held here, so the review outlives the popover that picked it.
   const [reviewing, setReviewing] = useState<AppFlow | null>(null);

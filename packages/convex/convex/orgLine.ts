@@ -27,6 +27,7 @@ import { byStartOrder, startValue } from "./lib/linePriority";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { accessJudgeFor, canAccessTask } from "./lib/access";
 import { trialProjectOf } from "./lineTrial";
+import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 
 // The line (docs/architecture/the-line.md L2, L9). A scope owns one workflow,
 // named by `org_roles.line_workflow_slug`; the sweep below starts that
@@ -436,8 +437,22 @@ export type SweepResult = {
 // only the rows it changes and checks them again. As one mutation the pass
 // lost the write race on nearly every attempt (148 runs, 3 commits in 28
 // minutes on 2026-10-23).
+/** Whether a workspace's lines may start work: Flows on (the team's switch),
+ *  and Org on, since a line runs as a role. Either off starts nothing, and
+ *  turning them back on resumes from the same rows. Cached per pass. */
+async function linesRunIn(ctx: Ctx, scope: { team_id?: any; scope_user_id?: any }, seen: Map<string, boolean>): Promise<boolean> {
+  const key = scope.team_id ? `t:${scope.team_id}` : `u:${scope.scope_user_id ?? ""}`;
+  const known = seen.get(key);
+  if (known !== undefined) return known;
+  const ws = { team_id: scope.team_id ?? null, user_id: scope.scope_user_id ?? null };
+  const on = (await workspaceHasFeature(ctx, ws, "line")) && (await workspaceHasFeature(ctx, ws, "org"));
+  seen.set(key, on);
+  return on;
+}
+
 export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean } = {}): Promise<SweepResult> {
   const result: SweepResult = { started: [], skipped_capped: [], skipped_busy: [] };
+  const featureOn = new Map<string, boolean>();
   const roles: any[] = await ctx.db.query("org_roles").collect();
   // One load per runner and folder, shared by every role that runs there in
   // this pass: a pool's slots, else the runner's own machine.
@@ -448,6 +463,7 @@ export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean
   const flowTeams = new Set(flows.map((f) => String(f.team_id ?? "")));
   for (const flow of flows) {
     if (!flow.on || result.started.length >= MAX_STARTS_PER_SWEEP) continue;
+    if (!(await linesRunIn(ctx, { team_id: flow.team_id }, featureOn))) continue;
     const planned = await planLiveFlow(ctx, flow, roles, now, MAX_STARTS_PER_SWEEP - result.started.length, loads);
     result.started.push(...planned.starts.map((st) => ({ ...st, run_id: "planned" })));
     if (planned.waiting) (planned.waiting.includes("working on") ? result.skipped_busy : result.skipped_capped).push(`live:${flow._id}`);
@@ -456,6 +472,7 @@ export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean
     if (result.started.length >= MAX_STARTS_PER_SWEEP) break;
     if (role.status !== "active" || !lineStartsOn(role)) continue;
     if (role.team_id && flowTeams.has(String(role.team_id))) continue;
+    if (!(await linesRunIn(ctx, role, featureOn))) continue;
     const before = loads.size;
     const load = await lineLoadFor(ctx, role, now, loads, roles);
     if (o.loads && loads.size > before) (result.loads ??= []).push({ runner: load.runner, project_path: (await seatOf(ctx, role)).project_path ?? "", working: load.working, cap: load.cap, pool: load.pool ? load.pool.slots.map((sl) => ({ ...sl })) : null });
@@ -493,6 +510,7 @@ export async function startPlanned(ctx: Ctx, p: { role_id: string; task_id: stri
   // line switch no longer decides (its lead is a watcher).
   const flow = p.live_flow_id ? await ctx.db.get(p.live_flow_id) : null;
   if (p.live_flow_id ? !flowAdmits(flow, now) || role.status !== "active" : !roleMayStartHands(role, now)) return null;
+  if (!(await linesRunIn(ctx, role, new Map()))) return null;
   const task = await ctx.db.get(p.task_id);
   if (!task || task.status !== "open" || task.workflow_run_id || task.ephemeral) return null;
   if (p.place && !(await slotStillFree(ctx, role, p.place))) return null;

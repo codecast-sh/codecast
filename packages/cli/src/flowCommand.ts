@@ -27,6 +27,9 @@ export interface FlowDeps {
   readWorkspace: (team?: string) => Promise<Workspace>;
   /** The workspace a write names outright (a team, or it stops with why). */
   writeWorkspace: (team?: string) => Promise<Workspace>;
+  /** Stops with the team feature's own words unless Flows is on for the workspace (the team given, else this shell's).
+   *  The commands that start work call it; reading and a run already going are left alone. */
+  requireFlows: (team?: string) => Promise<void>;
 }
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -191,6 +194,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .description("Publish a repo flow to the team's pool, where every member sees and runs it (cast flow ls, the Flows page)")
     .option("--team <name>", "The team whose pool it joins (default: your active team; personal keeps it yours)")
     .action(async (slug: string, opts: { team?: string }) => {
+      await deps.requireFlows(opts.team);
       const found = await findFlow(slug, deps);
       if (!found.file) { console.error(`${found.slug} ships with codecast; it is in every pool already`); process.exit(1); }
       if (found.where === "team" || found.where === "pushed") {
@@ -222,6 +226,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
     .option("--json", "Print {run_id, task, branch, worktree, files} as JSON")
     .action(async (slug: string, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string }) => {
+      await deps.requireFlows(opts.team);
       const only = opts.only ? opts.only.split(",").map((s) => s.trim()).filter(Boolean) : null;
       const cwd = deps.realCwd();
       const found = await findFlow(slug, teamDeps(deps, opts.team));
@@ -378,6 +383,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--force", "Replace a flow of that name")
     .option("--args <json>", "The args the script reads (default: the args its run was launched with, when this machine ran it)")
     .action(async (script: string, opts: { as: string; slug?: string; force?: boolean; args?: string }) => {
+      await deps.requireFlows();
       const { importWorkflowScript } = await import("./workflow/flowImport.js");
       const cwd = deps.realCwd();
       const file = resolveScript(script, cwd);
@@ -421,6 +427,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       .option("--json", "Print the live flow as JSON")
       .action(async (name: string | undefined, opts: { team?: string; json?: boolean }) => {
         // A switch is a write: it names its team outright, and the server decides who may turn it.
+        if (on) await deps.requireFlows(opts.team);
         const ws = await deps.writeWorkspace(opts.team);
         const l: LiveFlow | null = await deps.cliPost(`/cli/flow/live/${on ? "on" : "off"}`, { ...(ws.kind === "team" ? { team_id: ws.teamId } : {}), ...(name ? { flow: name } : {}), from_session: deps.callingSession() });
         if (opts.json) { console.log(JSON.stringify(l, null, 2)); return; }

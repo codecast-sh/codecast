@@ -205,15 +205,15 @@ export const DEV_SURFACES = {
 
 export type DevSurface = keyof typeof DEV_SURFACES;
 
-/** Surfaces still being built, shown in every mode only to Codecast staff
- *  (lib/staff.ts on the server, `users.staff`) and to a workspace whose team
- *  turned the line feature on (teams.features.line). */
-const STAFF_ONLY_SURFACES: ReadonlySet<DevSurface> = new Set<DevSurface>(["nav.line"]);
+/** Surfaces that belong to a team feature (teams.features, the Features
+ *  switches in team settings): shown only in a workspace with that feature
+ *  on. The Flows app is the `line` feature. */
+const FEATURE_SURFACES: Partial<Record<DevSurface, "line">> = { "nav.line": "line" };
 
 /** Whether `name` is open to this viewer at all, before any mode rule.
- *  `staff`: the viewer is staff or the workspace has the line feature on. */
-export function staffGateOpen(staff: boolean, name: DevSurface): boolean {
-  return staff || !STAFF_ONLY_SURFACES.has(name);
+ *  `flowsOn`: the workspace has the Flows feature on. */
+export function featureGateOpen(flowsOn: boolean, name: DevSurface): boolean {
+  return flowsOn || !FEATURE_SURFACES[name];
 }
 
 /** The rule, over the two facts it reads: hosted mode, and whether the live
@@ -487,14 +487,14 @@ function buildMode(hosted: boolean, shows: (name: DevSurface) => boolean): Surfa
 /** Developer mode: every surface, the developer words. A view's default. */
 export const DEVELOPER_MODE: SurfaceMode = buildMode(false, () => true);
 
-/** Developer mode for a viewer who is not staff: every surface but the
- *  staff-only ones. */
-const DEVELOPER_MODE_PUBLIC: SurfaceMode = buildMode(false, (name) => staffGateOpen(false, name));
+/** Developer mode in a workspace with Flows off: every surface but the
+ *  Flows app's. */
+const DEVELOPER_MODE_NO_FLOWS: SurfaceMode = buildMode(false, (name) => featureGateOpen(false, name));
 
 /** The mode for these facts. */
-export function surfaceMode(hosted: boolean, noMachine: boolean, staff = false): SurfaceMode {
-  if (!hosted) return staff ? DEVELOPER_MODE : DEVELOPER_MODE_PUBLIC;
-  return buildMode(true, (name) => staffGateOpen(staff, name) && shownFor(true, noMachine, name));
+export function surfaceMode(hosted: boolean, noMachine: boolean, flowsOn = false): SurfaceMode {
+  if (!hosted) return flowsOn ? DEVELOPER_MODE : DEVELOPER_MODE_NO_FLOWS;
+  return buildMode(true, (name) => featureGateOpen(flowsOn, name) && shownFor(true, noMachine, name));
 }
 
 /** The surface each developer page belongs to. A page and everything under
@@ -719,11 +719,22 @@ const HIDDEN_PAGE_HOMES: Record<string, string> = {
   "/settings": "/settings",
 };
 
+/** Where each team feature's pages land while the feature is off. */
+const FEATURE_HOMES: Record<"line", string> = { line: "/flows" };
+
 /** The page to show instead of `path` when `mode` hides it (showsPage), or
  *  null when the page shows. The shell's one route guard reads it, so the
  *  rail, the palette and the address bar keep one rule. */
 export function hiddenPageRedirect(path: string, mode: SurfaceMode): string | null {
   if (mode.showsPage(path)) return null;
+  // A page hidden only because its team feature is off goes to the feature's
+  // landing, which says what it is and how to turn it on (FeatureLanding);
+  // that landing itself stays put.
+  const surface = pageSurface(path);
+  if (surface && FEATURE_SURFACES[surface] && (mode.hosted ? shownFor(true, false, surface) : true)) {
+    const home = FEATURE_HOMES[FEATURE_SURFACES[surface]!];
+    return path.split("?")[0].split("#")[0] === home ? null : home;
+  }
   let p = path.split("?")[0].split("#")[0];
   while (p.length > 1) {
     if (HIDDEN_PAGE_HOMES[p]) return HIDDEN_PAGE_HOMES[p];

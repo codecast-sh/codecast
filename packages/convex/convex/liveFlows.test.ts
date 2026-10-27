@@ -44,7 +44,7 @@ function fixtures(o: { tasks: any[]; flow?: Record<string, any> | null; extra?: 
       { _id: "m1", user_id: HOST, team_id: TEAM, role: "admin", joined_at: 1 },
       { _id: "m2", user_id: MATE, team_id: TEAM, role: "member", joined_at: 1 },
     ],
-    teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
+    teams: [{ _id: TEAM, name: "Acme", features: { org: true, line: true } }],
     projects: [growth.project, deals.project],
     plans: [],
     tasks: o.tasks,

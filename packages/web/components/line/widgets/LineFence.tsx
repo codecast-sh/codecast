@@ -6,6 +6,7 @@
 // the project's workspace. A spec it cannot read stays the code it is; a
 // project the viewer cannot read says so instead of drawing an empty frame.
 import { useCallback, useMemo } from "react";
+import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useRouter } from "next/navigation";
 import { useLineProjectId, useLineWorkspace } from "../../../hooks/useLineWorkspace";
 import { readLineFence, type LineFenceSpec } from "../../../lib/line/lineFence";
@@ -58,8 +59,10 @@ const issueOf = (model: LineModel, ref: string | null, taskId: string | null): L
   model.issues.find((i) => i.id === taskId || i.id === ref || (!!ref && i.ref === ref)) ?? null;
 
 export default function LineFence({ code }: { code: string }) {
+  // With Flows off the card is gone with the rest of the feature; the block reads as its source.
+  const flowsOn = useWorkspaceFeature("line");
   const read = useMemo(() => readLineFence(code), [code]);
-  if (!read.ok) return <CodeBlock code={code} language="json" />;
+  if (!read.ok || !flowsOn) return <CodeBlock code={code} language="json" />;
   return <LineFenceSpecView spec={read.spec} />;
 }
 

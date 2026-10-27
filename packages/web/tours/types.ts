@@ -64,7 +64,7 @@ export type TourDef = {
 export type TourRun = { id: string; step: number; replay: boolean };
 
 export const TOUR_AREAS: { area: TourArea; label: string; accent: string }[] = [
-  { area: "org", label: "Organization", accent: "var(--sol-violet)" },
+  { area: "org", label: "Org", accent: "var(--sol-violet)" },
   { area: "inbox", label: "Inbox", accent: "var(--sol-cyan)" },
   { area: "session", label: "Sessions", accent: "var(--sol-blue)" },
   { area: "work", label: "Tasks and plans", accent: "var(--sol-orange)" },

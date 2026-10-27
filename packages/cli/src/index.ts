@@ -2893,6 +2893,7 @@ function groupDeps(): GroupDeps {
       cliPost, callingSession, realCwd: getRealCwd,
       // Where a flow command reads (the team named, else the one this shell reads) and where a switch writes.
       readWorkspace, writeWorkspace: (team?: string) => writeWorkspace(team, { teamRequired: true }),
+      requireFlows: async (team?: string) => requireWorkspaceFeature(await readWorkspace(team), "line"),
     },
   };
 }

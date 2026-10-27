@@ -9,6 +9,7 @@
 // or `{"run":"<run id>"}` to show where a change is in its flow. The card of a
 // `cast flow run` in a transcript is the same widget on the run it started.
 import { memo, useMemo } from "react";
+import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { useNamedFlow, useRunFlow, type FlowLibraryState } from "../../../hooks/useFlowObject";
 import { type AppFlow } from "../../../lib/line/flowPool";
@@ -20,8 +21,10 @@ import { FlowDiagram } from "./FlowDiagram";
 import "../workspace/workspace.css";
 
 export default function FlowFence({ code }: { code: string }) {
+  // With Flows off the card is gone with the rest of the feature; the block reads as its source.
+  const flowsOn = useWorkspaceFeature("line");
   const read = useMemo(() => readFlowFence(code), [code]);
-  if (!read.ok) return <CodeBlock code={code} language="json" />;
+  if (!read.ok || !flowsOn) return <CodeBlock code={code} language="json" />;
   return read.spec.run ? <FlowRunCard runId={read.spec.run} title={read.spec.title} /> : <FlowCard slug={read.spec.flow!} title={read.spec.title} />;
 }
 

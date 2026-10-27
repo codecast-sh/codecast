@@ -50,7 +50,7 @@ function fixtures(o: Overrides = {}) {
       { _id: "m1", user_id: HOST, team_id: TEAM, role: "admin", joined_at: 1 },
       { _id: "m2", user_id: MATE, team_id: TEAM, role: "member", joined_at: 1 },
     ],
-    teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
+    teams: [{ _id: TEAM, name: "Acme", features: { org: true, line: true } }],
     projects: [{ _id: PROJECT, title: "Growth", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, created_at: 1, updated_at: 1 }],
     plans: [],
     tasks: [task(o.task)],
@@ -93,6 +93,17 @@ function fixtures(o: Overrides = {}) {
 }
 
 describe("orgLine.sweep (L9)", () => {
+  test("starts nothing while the team has Flows or Org off, and resumes when both are back on", async () => {
+    for (const features of [{ org: true }, { line: true }, {}]) {
+      const { ctx, tables } = fixtures();
+      tables.teams[0].features = features;
+      expect((await sweepCore(ctx, NOW)).started).toHaveLength(0);
+      expect(tables.workflow_runs).toHaveLength(0);
+      tables.teams[0].features = { org: true, line: true };
+      expect((await sweepCore(ctx, NOW)).started).toHaveLength(1);
+    }
+  });
+
   test("starts one run for an open task assigned to the role's agent, and never a second", async () => {
     const { ctx, tables } = fixtures();
     const first = await sweepCore(ctx, NOW);
