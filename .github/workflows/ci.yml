@@ -556,6 +556,7 @@ jobs:
           src/ccAccounts.background.test.ts
           src/ccKeychain.callers.test.ts
           src/cloud/reach.test.ts
+          src/config/managedPolicy.test.ts
           src/daemon.process-terminal.e2e.test.ts
           src/daemon.watchdog-supervision.test.ts
           src/desktopUpdate.test.ts

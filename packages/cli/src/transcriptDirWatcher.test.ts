@@ -13,12 +13,11 @@ import {
   transcriptDirWatcherConfig,
   agentSessionFromTranscriptPath,
   expandTranscriptRoot,
-  encodePiCwdSlug,
-  decodePiCwdSlug,
   encodeGrokCwdSlug,
   decodeGrokCwdSlug,
   type TranscriptDirEvent,
 } from "./transcriptDirWatcher.js";
+import { encodePiCwdSlug, decodePiCwdSlug } from "./projectPathResolver.js";
 
 // ── Oracles: the OLD per-watcher predicates, verbatim ───────────────────────
 const oldCodex = {
