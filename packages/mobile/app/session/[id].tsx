@@ -23,7 +23,8 @@ import { CODECAST_BASE_URL, sharePath } from '@codecast/shared/entities';
 import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
-import { parsePollAnswers, pollClosedLabel } from '@codecast/web/lib/pollPayload';
+import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
+import { parsePollAnswers, pollClosedLabel, pollDeadline, POLL_TIMED_OUT } from '@codecast/web/lib/pollPayload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { ImageGallery } from '@/components/ImageGallery';
 import { isTrustedImageSrc } from '@/lib/convex';
@@ -497,10 +498,25 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
 // echoes back. Mirrors web's _askUserSentState.
 const _askUserSentState = new Map<string, string>();
 
-function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall; result?: ToolResult; conversationId?: string }) {
+type AskUserQuestionProps = { tool: ToolCall; result?: ToolResult; conversationId?: string };
+type AskUserQuestionInput = { questions?: Array<{ question: string; header?: string; detail?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string>; deniesAt?: number };
+
+function AskUserQuestionBlock(props: AskUserQuestionProps) {
+  let parsedInput: AskUserQuestionInput = {};
+  try { parsedInput = JSON.parse(props.tool.input); } catch {}
+  // Only a terminal dialog still counting down holds a ticking clock.
+  return typeof parsedInput.deniesAt === 'number' && !props.result
+    ? <TimedAskUserQuestion {...props} parsedInput={parsedInput} deniesAt={parsedInput.deniesAt} />
+    : <AskUserQuestionCard {...props} parsedInput={parsedInput} />;
+}
+
+function TimedAskUserQuestion({ deniesAt, ...props }: AskUserQuestionProps & { parsedInput: AskUserQuestionInput; deniesAt: number }) {
+  const now = useCoarseNow(1000);
+  return <AskUserQuestionCard {...props} deadline={pollDeadline(deniesAt, now)} />;
+}
+
+function AskUserQuestionCard({ tool, result, conversationId, parsedInput, deadline }: AskUserQuestionProps & { parsedInput: AskUserQuestionInput; deadline?: ReturnType<typeof pollDeadline> }) {
   const Theme = useTheme();
-  let parsedInput: { questions?: Array<{ question: string; header?: string; detail?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
-  try { parsedInput = JSON.parse(tool.input); } catch {}
 
   const [sentLabel, setSentLabel] = useState<string | undefined>(() => _askUserSentState.get(tool.id));
 
@@ -519,8 +535,9 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
   // questions map to Enter/Escape; everything else to the 1-based option index
   // (matches web's poll-key contract that drives the live /poll picker).
   const isConfirmation = questions[0]?.isConfirmation;
-  const isInteractive = !result && !!conversationId && sentLabel === undefined;
-  const closedLabel = pollClosedLabel(result, answers);
+  const expired = !!deadline?.expired;
+  const isInteractive = !result && !!conversationId && sentLabel === undefined && !expired;
+  const closedLabel = expired ? POLL_TIMED_OUT : pollClosedLabel(result, answers);
 
   const handlePick = (j: number, cleanLabel: string) => {
     if (!conversationId) return;
@@ -627,7 +644,11 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
           </RNView>
         );
       })}
-      {closedLabel && <RNText style={styles.optionDescription}>{closedLabel}</RNText>}
+      {closedLabel ? (
+        <RNText style={styles.optionDescription}>{closedLabel}</RNText>
+      ) : isInteractive && deadline ? (
+        <RNText style={[styles.optionDescription, { color: Theme.yellow, fontVariant: ['tabular-nums'] }]}>Auto-denies in {deadline.left}</RNText>
+      ) : null}
     </RNView>
   );
 }
