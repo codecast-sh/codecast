@@ -16,6 +16,7 @@ import { action, internalAction, internalMutation, internalQuery, mutation, quer
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
+import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole } from "./lib/orgAccess";
 import { callModelMetered, modelCost } from "./lib/anthropic";
 import { roleIconValidator } from "./lib/roleIconValidator";
@@ -136,6 +137,44 @@ export const brief = query({
       accent: b.accent,
       siblings: b.siblings.map((s) => ({ handle: s.handle, title: s.title, concept: s.icon.concept, svg: roleIconSvg(s.icon) })),
     };
+  },
+});
+
+// ── Role faces across workspaces ────────────────────────────────────────────
+
+/** One role's face as every surface draws it: the fields of the session
+ *  `role` snapshot (lib/sessionIdentityFields), read live. */
+export type ViewerRole = {
+  _id: string; short_id: string; handle: string; name: string; given_name: string | null; avatar: string;
+  icon: RoleIcon | null; status: string; tenure_kind: string; assistant: any | null; scope_type: string; team_id: string | null;
+};
+
+function viewerRoleOf(role: any): ViewerRole {
+  return {
+    _id: String(role._id), short_id: role.short_id, handle: role.handle, name: role.name, given_name: role.given_name ?? null,
+    avatar: avatarOf(role), icon: isRoleIcon(role.icon) ? role.icon : null, status: role.status,
+    tenure_kind: role.tenure?.kind ?? "standing", assistant: role.assistant ?? null, scope_type: role.scope_type,
+    team_id: role.team_id ? String(role.team_id) : null,
+  };
+}
+
+/** Every live role in the viewer's personal workspace and in each team they belong to, by index. */
+export async function performViewerRoles(ctx: Ctx, userId: Id<"users">): Promise<ViewerRole[]> {
+  const memberships: any[] = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+  const boundaries = [{ scope_user_id: userId }, ...memberships.map((m) => ({ team_id: m.team_id }))];
+  const roles = (await Promise.all(boundaries.map((b) => rolesInBoundary(ctx, b)))).flat();
+  return roles.map(viewerRoleOf);
+}
+
+// The one home for role faces on the web and phone: what every face reads by
+// role id, whichever workspace is active, so a role's icon, name and avatar
+// change everywhere when the role does. The session `role` snapshot is only
+// the cold-cache fallback; retired roles are left out and fall back to it.
+export const viewerRoles = query({
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<ViewerRole[]> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    return userId ? performViewerRoles(ctx, userId) : [];
   },
 });
 
