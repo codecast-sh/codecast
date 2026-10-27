@@ -9,6 +9,7 @@ import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
+import { keepEnds } from "./keepEnds";
 import { contextVar, executeCommand, expandScriptVars, recordNodeOutput } from "./commandStation";
 import { planReadiness } from "../planReadiness.js";
 import { readGateCard } from "../cardFile.js";
@@ -225,7 +226,7 @@ async function executeAgent(
       return "success";
     } else {
       console.log(`  ${c.red}✗ agent failed (exit ${result.status})${c.reset}`);
-      context["last_error"] = (stderr || output).slice(0, 2000);
+      context["last_error"] = keepEnds(stderr || output, 2000);
       return "failure";
     }
   } finally {

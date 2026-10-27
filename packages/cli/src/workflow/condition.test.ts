@@ -270,6 +270,14 @@ describe("$node.json.<path>", () => {
     expect(ctx["scan.json"]).toBeUndefined();
   });
 
+  test("a long output keeps its end, where a failing script says why", () => {
+    const ctx: Record<string, string> = {};
+    recordNodeOutput(ctx, "eval", `==> Layer 3: rebuilding test schema\n${"[06:03] case passed\n".repeat(600)}6 of 95 gate cases failed`);
+    expect(ctx["eval.output"].length).toBeLessThanOrEqual(4000);
+    expect(ctx["eval.output"].startsWith("==> Layer 3")).toBe(true);
+    expect(ctx["eval.output"].endsWith("6 of 95 gate cases failed")).toBe(true);
+  });
+
   test("script vars: an unresolved dotted tail stays literal", () => {
     expect(expandScriptVars("cp $file.bak", { file: "x" })).toBe("cp 'x'.bak");
     expect(expandScriptVars("echo $nothing.here", {})).toBe("echo $nothing.here");

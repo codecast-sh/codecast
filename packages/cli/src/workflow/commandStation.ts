@@ -4,6 +4,7 @@ import { spawn } from "../proc.js";
 import { lineCommandEnv } from "../lineProfile.js";
 import { c } from "../colors.js";
 import { extractJsonOutput, lookupContextVar } from "./condition";
+import { keepEnds } from "./keepEnds";
 import type { NodeOutcome, WorkflowNode } from "./types";
 
 export function contextVar(context: Record<string, string>, key: string): string | undefined {
@@ -13,13 +14,13 @@ export function contextVar(context: Record<string, string>, key: string): string
 }
 
 
-// Every node's result lands under `<id>.output` (capped for prompts). When the
+// Every node's result lands under `<id>.output` (capped for prompts, both ends kept). When the
 // result is JSON, or ends in a fenced json block, the parsed value is kept
 // whole under `<id>.json` so `$<id>.json.<path>` and conditions can read its
 // fields past the output cap.
 const NODE_JSON_CAP = 64_000;
 export function recordNodeOutput(context: Record<string, string>, nodeId: string, text: string, jsonSource = text): void {
-  context[`${nodeId}.output`] = text.slice(0, 4000);
+  context[`${nodeId}.output`] = keepEnds(text, 4000);
   const parsed = extractJsonOutput(jsonSource);
   const json = parsed === undefined ? undefined : JSON.stringify(parsed);
   if (json !== undefined && json.length <= NODE_JSON_CAP) context[`${nodeId}.json`] = json;
@@ -133,7 +134,7 @@ export async function executeCommand(
 
     const output = result.stdout + result.stderr + (result.timedOut ? `\ntimed out after ${timeoutMs / 1000}s` : "");
     if (output.trim()) {
-      console.log(c.dim + output.slice(0, 2000) + c.reset);
+      console.log(c.dim + keepEnds(output, 2000) + c.reset);
     }
 
     recordNodeOutput(context, node.id, output.trim(), result.stdout);
@@ -144,7 +145,7 @@ export async function executeCommand(
       return "success";
     } else {
       console.log(`  ${c.red}✗ failed (${result.timedOut ? "timed out" : `exit ${result.status}`})${c.reset}`);
-      context["last_error"] = output.trim().slice(0, 2000);
+      context["last_error"] = keepEnds(output.trim(), 2000);
       return "failure";
     }
   } catch (err: any) {

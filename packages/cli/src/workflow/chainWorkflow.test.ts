@@ -103,9 +103,14 @@ describe("compileParallelWorkflow (the-line.md L7, cast exec -j)", () => {
 });
 
 describe("resultPreview", () => {
-  test("is the trimmed head of the output, 800 chars at most, and undefined when empty", () => {
+  test("is the trimmed output, both ends kept within 800 chars, and undefined when empty", () => {
     expect(resultPreview("  hi \n")).toBe("hi");
-    expect(resultPreview("x".repeat(1000))).toHaveLength(800);
+    // A long output keeps both ends: where it started, and the reason it ended on.
+    const long = resultPreview(`started${"x".repeat(1000)}exit 1: the suite failed`)!;
+    expect(long.length).toBeLessThanOrEqual(800);
+    expect(long.startsWith("started")).toBe(true);
+    expect(long.endsWith("exit 1: the suite failed")).toBe(true);
+    expect(long).toContain("characters cut");
     // A station script's closing JSON result is what its node shows.
     expect(resultPreview('bun test v1\n(pass) one\n 1 pass\n{"green": true, "why": "repro.sh passes with the change"}\n')).toBe('{"green": true, "why": "repro.sh passes with the change"}');
     expect(resultPreview('{"dissolved": "no_repro"}\nok Completed ct-1')).toBe('{"dissolved": "no_repro"}\nok Completed ct-1');

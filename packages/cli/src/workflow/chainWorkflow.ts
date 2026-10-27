@@ -18,6 +18,7 @@
 import type { AgentChainSpec, AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { apiPost, type PublishDeps } from "../castApi.js";
 import type { WorkflowEdge, WorkflowGraph, WorkflowNode } from "./types.js";
+import { keepEnds } from "./keepEnds.js";
 
 /** `updateProgress` stores the head of each step's output on the node. */
 export const RESULT_PREVIEW_CHARS = 800;
@@ -39,7 +40,7 @@ export function resultPreview(output: string): string | undefined {
     const fit = jsonThatFits(text, RESULT_PREVIEW_CHARS);
     if (fit) return fit;
   }
-  return text ? text.slice(0, RESULT_PREVIEW_CHARS) : undefined;
+  return text ? keepEnds(text, RESULT_PREVIEW_CHARS) : undefined;
 }
 
 /** A JSON object's text within `cap` characters: string values shortened (an ellipsis marks each cut), then
