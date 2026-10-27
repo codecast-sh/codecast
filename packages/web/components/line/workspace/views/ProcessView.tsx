@@ -41,9 +41,9 @@ export function ProcessView(props: LineViewProps) {
   return <StepsPage {...props} toggle={toggle} />;
 }
 
-/** The Problems chips the summary row points at: the line's own queue, problems a new run must ask again and problems
- *  no run has taken. */
-const NOT_TAKEN = ["newask", "notstarted"] as const;
+/** The Problems chips the summary row points at: the line's own queue, problems a new run must ask again, problems
+ *  no run has taken, and those waiting for another finding. */
+const NOT_TAKEN = ["newask", "notstarted", "waiting"] as const;
 
 const COLS: Array<{ show: StepShow; label: string }> = [
   { show: "waiting", label: "Waiting" },

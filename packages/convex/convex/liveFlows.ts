@@ -17,7 +17,7 @@ import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
 import { utcDay } from "./lib/orgCaps";
 import { WORKING_RUN_STATUSES } from "./lib/linePlacement";
-import { byStartOrder, startValue } from "./lib/linePriority";
+import { barWords, byStartOrder, clearsBar, startValue, type FlowBar } from "./lib/linePriority";
 import { problemSourceOf } from "./workflows";
 import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
 import { flowRouteFor } from "./lib/flowRoute";
@@ -53,10 +53,11 @@ export async function liveFlowFor(ctx: Ctx, teamId: string | null | undefined): 
  * The live flow's queue in start order, as far as `limit`: the open, ready
  * problems of its workspace (the scored head, highest first, and the
  * unscored, which rank as 50) and the open tasks handed to its roles, each
- * with the role whose area holds it. Left out: a problem with a run, one no
- * active role owns, one handed to a person or to a role that does not own
- * it, one from a source the flow does not take, a trial problem, and one
- * with a blocker open.
+ * with the role whose area holds it. Left out: a problem with a run, one
+ * under the flow's bar (clearsBar; a task handed to a role is someone's
+ * choice and runs whatever it scored), one no active role owns, one handed
+ * to a person or to a role that does not own it, one from a source the flow
+ * does not take, a trial problem, and one with a blocker open.
  */
 export async function liveFlowCandidates(ctx: Ctx, flow: any, roles: any[], limit: number): Promise<LiveCandidate[]> {
   if (limit <= 0) return [];
@@ -78,7 +79,7 @@ export async function liveFlowCandidates(ctx: Ctx, flow: any, roles: any[], limi
     if (seen.has(String(task._id))) continue;
     seen.add(String(task._id));
     if (task.status !== "open" || task.workflow_run_id || task.ephemeral || task.workspace !== flow.workspace) continue;
-    if (!task.assignee && !isReadyCause(task)) continue;
+    if (!task.assignee && (!isReadyCause(task) || !clearsBar(task, flow.bar))) continue;
     ranked.push({ task, role: null });
   }
   ranked.sort((a, b) => byStartOrder(a.task, b.task));
@@ -147,6 +148,8 @@ export type LiveFlowRow = {
   caps: { hands_per_day: number | null };
   hands_today: number;
   hold: { why: string; until: number; by: string; at: number } | null;
+  /** The bar a problem clears to start (clearsBar), and who set it; null takes every problem. */
+  bar: (FlowBar & { by: string; at: number }) | null;
   load: { working: number; cap: number };
   waiting: string | null;
   watcher: { role_id: string; handle: string } | null;
@@ -189,6 +192,7 @@ export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promi
     caps: { hands_per_day: flow.caps?.hands_per_day ?? null },
     hands_today: flowHands(flow, now),
     hold: flowHold(flow, now),
+    bar: flow.bar ?? null,
     load: totals,
     waiting: plan.waiting,
     watcher: watcher ? { role_id: String(watcher._id), handle: watcher.handle } : null,
@@ -341,6 +345,59 @@ export const clearHold = mutation({
     const userId = await getAuthUserId(ctx as any);
     if (!userId) throw new ConvexError("Sign in to clear a live flow's hold");
     await clearHoldCore(ctx, userId, await ctx.db.get(id));
+  },
+});
+
+/**
+ * Sets a live flow's bar, or takes it off (`bar` null): a team admin's act,
+ * since it decides which problems the team's machines spend runs on. A lower
+ * bar admits more at the next sweep; a higher one starts fewer and closes
+ * nothing by itself.
+ */
+export async function setBarCore(ctx: Ctx, userId: Id<"users">, flow: any, bar: FlowBar | null, by: string, now = Date.now()) {
+  if (!flow || !(await isMember(ctx, userId, flow.team_id))) throw new ConvexError("no such live flow");
+  await requireTeamAdmin(ctx as any, userId, flow.team_id);
+  if (!bar) {
+    if (flow.bar) await ctx.db.patch(flow._id, { bar: undefined });
+    return null;
+  }
+  const whole = (n: number, lo: number, hi: number, what: string) => {
+    if (!Number.isInteger(n) || n < lo || n > hi) throw new ConvexError(`${what} is a whole number from ${lo} to ${hi}`);
+  };
+  whole(bar.score, 0, 100, "The bar's score");
+  whole(bar.findings, 1, 1000, "The bar's findings");
+  whole(bar.quiet_days, 1, 365, "The days a waiting problem stays open");
+  const next = { score: bar.score, findings: bar.findings, quiet_days: bar.quiet_days, by, at: now };
+  await ctx.db.patch(flow._id, { bar: next });
+  return next;
+}
+
+const barArgs = { score: v.number(), findings: v.number(), quiet_days: v.number() };
+
+/** The web's bar control: a signed-in team admin. */
+export const setBar = mutation({
+  args: { id: v.id("live_flows"), bar: v.union(v.object(barArgs), v.null()) },
+  handler: async (ctx, { id, bar }) => {
+    const userId = await getAuthUserId(ctx as any);
+    if (!userId) throw new ConvexError("Sign in to set a live flow's bar");
+    return setBarCore(ctx, userId, await ctx.db.get(id), bar, `user:${userId}`);
+  },
+});
+
+/** `cast flow bar`: a team admin sets the bar, or takes it off with `off`. */
+export const barFromCli = mutation({
+  args: { api_token: v.string(), from_session: v.optional(v.string()), team_id: v.optional(v.string()), flow: v.optional(v.string()), off: v.optional(v.boolean()), ...barArgs },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) throw new ConvexError("Unauthorized");
+    const flows = await teamFlows(ctx, auth.userId, args.team_id);
+    if (!flows) throw new ConvexError("Your personal workspace has no live flow: name a team");
+    const flow = await pickFlow(ctx, flows, args.flow);
+    const from = args.from_session;
+    const conv: any = from && !SESSION_SHORT_ID_RE.test(from) ? await resolveSessionConversation(ctx as any, auth.userId, from) : null;
+    const by = from && SESSION_SHORT_ID_RE.test(from) ? from : conv?.short_id ?? `user:${auth.userId}`;
+    const bar = await setBarCore(ctx, auth.userId, flow, args.off ? null : { score: args.score, findings: args.findings, quiet_days: args.quiet_days }, by);
+    return { _id: String(flow._id), bar, words: bar ? barWords(bar) : null };
   },
 });
 

@@ -25,6 +25,8 @@ export type LiveFlow = {
   running?: string[];
   /** A hold parks every new run until it ends; only a person clears one, in the browser. */
   hold?: { why: string; until: number; by?: string | null; at?: number } | null;
+  /** Only problems that clear the bar start; the rest wait for another finding and close after quiet_days with none. */
+  bar?: { score: number; findings: number; quiet_days: number; by?: string | null; at?: number } | null;
   queue?: Array<{ task_id: string; short_id: string; title: string; score: number | null; scored: boolean; findings: number; family: string | null; waiting: string | null }>;
 };
 
@@ -142,6 +144,7 @@ export function liveFlowLines(l: LiveFlow, opts: { top: number; bold: (s: string
     `       queue    ${queue.length ? `${queue.length}${queue.length >= 50 ? "+" : ""} waiting` : dim("empty")}`,
     `       running  ${l.load?.working ?? l.running?.length ?? 0}${cap != null ? ` of ${cap}` : ""}${hands != null ? dim(`  · ${l.hands_today ?? 0} of ${hands} sessions today`) : ""}`,
     ...(l.hold ? [`       held     until ${clock(l.hold.until)}: ${l.hold.why}${l.hold.by ? dim(`  · ${l.hold.by}`) : ""}`] : []),
+    ...(l.bar ? [`       bar      score ${l.bar.score}+ or ${l.bar.findings}+ findings${dim(`  · the rest wait for another finding, ${l.bar.quiet_days} days`)}`] : []),
     ...(l.waiting ? [`       ${dim(`waiting: ${l.waiting}`)}`] : []),
     ...(l.watcher ? [`       watcher  @${l.watcher.handle}`] : []),
   ];

@@ -26,6 +26,10 @@ export const liveFlowTables = {
     // has to answer (a spent budget until it rolls over); a person clears it.
     // `by` names who set it: a session's short id, or a user.
     hold: v.optional(v.object({ why: v.string(), until: v.number(), by: v.string(), at: v.number() })),
+    // The bar (shared linePriority clearsBar): only problems at or over it
+    // start runs; the rest wait for another finding, and close after
+    // `quiet_days` with none. A team admin sets it; absent, every problem runs.
+    bar: v.optional(v.object({ score: v.number(), findings: v.number(), quiet_days: v.number(), by: v.string(), at: v.number() })),
     watcher_role_id: v.optional(v.id("org_roles")),
     // The web's optimistic row for a flow started there (startLiveFlowCore): its id, so the real row supersedes it.
     client_key: v.optional(v.string()),

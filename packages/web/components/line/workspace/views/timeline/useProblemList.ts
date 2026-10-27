@@ -17,7 +17,7 @@ import { stoppedNeedingYes } from "../../../../../lib/line/lineNeeds";
 import { stepLabel } from "../../../../../lib/line/runReport";
 import { bucketAt, buildOverview, DEFAULT_RANGE, finderShifts, isOverviewRange, overviewWindow, problemFigures, type OverviewWindow } from "../../../../../lib/line/problemsOverview";
 import { isStatusKey, type ProblemFacts, type ProblemNeed } from "../../../../../lib/line/problemStatus";
-import { landingOutput, newestRuns } from "../../../../../lib/line/problemPage";
+import { landingOutput, newestRuns, underBarOf } from "../../../../../lib/line/problemPage";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import { inStartOrder, type RankTask } from "../../../../../lib/line/lineStartOrder";
 import {
@@ -81,6 +81,8 @@ function problemFacts(model: LineModel, workspace: LineWorkspace) {
   // A problem whose newest run is a trial's: its answered card ships nothing.
   const trial = new Set(workspace.problems.flatMap((i) => { const a = i.history.attempts[i.history.attempts.length - 1]; return a && workspace.trialRuns.has(a.runId) ? [i.id] : []; }));
   // On, off, or null where no role holds the project's line (nothing to turn on: it needs setting up).
+  // A problem's live flow bar: its workspace's, when that team's flow sets one.
+  const barOf = (t: LineCauseTask | null) => { const ws = (t as { workspace?: string } | null)?.workspace; return ws ? workspace.bars.get(ws) ?? null : null; };
   const lineOn = (p: string | null | undefined): boolean | null => {
     if (!p) return null;
     if (workspace.trialProjects.has(p)) return true;
@@ -94,6 +96,7 @@ function problemFacts(model: LineModel, workspace: LineWorkspace) {
       return {
         need: need.get(id) ?? null, failed: failed.get(id) ?? null, silent: silent.get(id) ?? null, stage: stage.get(id) ?? null, task,
         awaitsFindings: task?.readiness === "needs_context" && waitsForFindings(task.readiness_note),
+        underBar: underBarOf(task as Parameters<typeof underBarOf>[0], barOf(task)),
         failedStep: failedStep.get(id)?.label ?? null, failedNode: failedStep.get(id)?.node ?? null, lineOn: lineOn(task?.project_id), lead: task?.project_id ? workspace.admissions.get(task.project_id)?.role?.handle ?? null : null, idle: task?.project_id ? workspace.trialHeld?.get(task.project_id) ?? null : null, assigneeName: task?.assignee ? workspace.names.get(task.assignee) ?? null : null,
         notes: (task as { comments?: ProblemFacts["notes"] } | null)?.comments, trial: trial.has(id),
         aboutSteps: lineStepsOf(task?.cause?.fingerprints),

@@ -54,3 +54,18 @@ export function byStartOrder(a: StartOrderTask, b: StartOrderTask): number {
   const age = (t: StartOrderTask) => t.created_at ?? t._creationTime ?? 0;
   return startValue(b) - startValue(a) || (b.cause?.signal_count ?? 0) - (a.cause?.signal_count ?? 0) || age(a) - age(b);
 }
+
+// A live flow's bar (liveFlows.ts, decision sd-1700): which problems its
+// agents take. The scoring pass rates every problem once, so one sighting
+// rated low waits for another finding, and the finding that joins re-scores
+// it. Unscored problems rank as UNSCORED_VALUE until the pass reaches them. A
+// problem that waits `quiet_days` with no new finding closes, and reopens when
+// one comes.
+export type FlowBar = { score: number; findings: number; quiet_days: number };
+
+/** Whether a problem clears the bar: scored at or over its score, or holding at least its findings. No bar takes every problem. */
+export const clearsBar = (t: StartOrderTask, bar: Pick<FlowBar, "score" | "findings"> | null | undefined): boolean =>
+  !bar || startValue(t) >= bar.score || (t.cause?.signal_count ?? 0) >= bar.findings;
+
+/** The bar in words: "score 60+ or 3+ findings". */
+export const barWords = (bar: Pick<FlowBar, "score" | "findings">): string => `score ${bar.score}+ or ${bar.findings}+ findings`;

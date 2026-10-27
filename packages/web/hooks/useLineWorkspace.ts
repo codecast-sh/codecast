@@ -9,6 +9,7 @@
 //   useLineSelection()                     { selection, select } in the URL
 //   useStationInput(sessionId, runId)      a station's brief, fed when opened
 //   store action labelDecision(runId, nodeId, verdict, note)
+import type { FlowBar } from "@codecast/shared/contracts/linePriority";
 import type { DeployAfter, DeployView } from "@codecast/shared/contracts/deploys";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useWatchEffect } from "./useWatchEffect";
@@ -147,6 +148,8 @@ export type LineWorkspace = {
   allRollups: RollupRow[];
   /** Each project's start switch and slots, by project id (useLineAdmissions). */
   admissions: ReadonlyMap<string, LineAdmission>;
+  /** Each workspace's live flow bar, by workspace key (convex liveFlows): a problem under it waits for another finding. */
+  bars: ReadonlyMap<string, FlowBar>;
   /** Trial projects (convex lineTrial.ts): their runs start on their own, under the trial's dispatch, not a role's switch. */
   trialProjects: ReadonlySet<string>;
   /** A trial project's word for its ready problems while its dispatcher holds them ("Trial held"), by project id. */
@@ -214,6 +217,22 @@ const hasProject = (r: { project_id?: string }) => !!r.project_id;
 const ownCardReader = (everyTaskProject: ReadonlyMap<string, string | null>) => (d: SessionDecisionItem) => !!d.task_id && everyTaskProject.has(d.task_id) && !!d.workflow_run_id;
 
 /** A project's word for problems it does not start on its own: its trial dispatcher's, else its line switch's (LL5). */
+/** A live flow row as far as its bar goes. */
+type LiveBarRow = { workspace?: string; bar?: FlowBar | null } | null | undefined;
+
+/** The bars of the store's live flows as one string ("team:x=60/3/14"), so a push that moves nothing else re-reads nothing. */
+export const liveBarsSig = (rows: Record<string, LiveBarRow> | undefined): string =>
+  Object.values(rows ?? {}).flatMap((r) => (r?.workspace && r.bar ? [`${r.workspace}=${r.bar.score}/${r.bar.findings}/${r.bar.quiet_days}`] : [])).sort().join(",");
+
+/** The bars back from their signature, by workspace key. */
+export function barsOf(sig: string): ReadonlyMap<string, FlowBar> {
+  return new Map(sig ? sig.split(",").map((part) => {
+    const at = part.lastIndexOf("=");
+    const [score, findings, quiet] = part.slice(at + 1).split("/").map(Number);
+    return [part.slice(0, at), { score, findings, quiet_days: quiet }] as const;
+  }) : []);
+}
+
 const holdReader = (admissions: ReadonlyMap<string, LineAdmission>, trialProjects: ReadonlySet<string>, trialHeld: ReadonlyMap<string, string>) =>
   (p: string | null) => (!p ? null : trialProjects.has(p) ? trialHeld.get(p) ?? null : autoStartWord(admissions.get(p)));
 
@@ -371,6 +390,9 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
   // a trial project's from its dispatcher (held, or none).
   const trialHeld = useShared(() => new Map(trialRows.flatMap((p) => { const w = trialStartWord(p.dispatch); return w ? [[p._id, w] as const] : []; })), [trialRows]);
   const holdOf = useShared(() => holdReader(admissions, trialProjects, trialHeld), [admissions, trialProjects, trialHeld]);
+  // The bar each team's live flow sets (LineWorkspace feeds the active team's), read through a signature of the bars alone.
+  const barsSig = useInboxStore((st) => liveBarsSig((st as unknown as { liveFlows?: Record<string, LiveBarRow> }).liveFlows));
+  const bars = useShared(() => barsOf(barsSig), [barsSig]);
   const watchDays = (project as { line_profile?: { watch_days?: number } | null } | null)?.line_profile?.watch_days ?? null;
 
   // The heaviest derivation on the page (it runs the flow over every row): once here, read by the shell and the Inbox.
@@ -427,7 +449,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
 
   // The rest is the line's heavy reading (models of every process, the inboxes, duplicates, the roll-up): it runs as a
   // job outside render, in slices (workspaceSteps), so opening the line never holds the page for the whole of it.
-  const inputs: WorkspaceInputs = { projectId, pinned, project, projects, lineRows, scoped, everyRow, now, admissions, allDecisions, decisionsComplete: teamDecisions.ready, allTrialCards, trialProjects, trialHeld, trialRuns, viewerId, otherTasks, modelOf, deploysReady, everyTaskProject, taskProject, names, bots, allOccurrences, processOf, unread: lg.unread, historyFeeds, decisionRuns, processes, process, held, refs, deploys };
+  const inputs: WorkspaceInputs = { projectId, pinned, project, projects, lineRows, scoped, everyRow, now, admissions, bars, allDecisions, decisionsComplete: teamDecisions.ready, allTrialCards, trialProjects, trialHeld, trialRuns, viewerId, otherTasks, modelOf, deploysReady, everyTaskProject, taskProject, names, bots, allOccurrences, processOf, unread: lg.unread, historyFeeds, decisionRuns, processes, process, held, refs, deploys };
   const deps = Object.values(inputs);
   const scope = `${projectId ?? ""}|${lg.graphKey}|${pinned}|${everySpace}`;
   const job = jobOf(`lw:${pinned}:${everySpace}`);
@@ -447,7 +469,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
 type WorkspaceInputs = {
   projectId: string | null; pinned: boolean; project: LineProject | null; projects: LineProject[];
   lineRows: LineScopedRows; scoped: LineScopedRows; everyRow: LineScopedRows; now: number;
-  admissions: ReadonlyMap<string, LineAdmission>; allDecisions: MapDecision[]; decisionsComplete: boolean;
+  admissions: ReadonlyMap<string, LineAdmission>; bars: ReadonlyMap<string, FlowBar>; allDecisions: MapDecision[]; decisionsComplete: boolean;
   allTrialCards: ReadonlyArray<TrialInboxCard> | undefined; trialProjects: ReadonlySet<string>; trialHeld: ReadonlyMap<string, string>;
   trialRuns: ReadonlySet<string>; viewerId: string | null; otherTasks: Parameters<typeof buildLineInbox>[0]["otherTasks"];
   modelOf: ReturnType<typeof modelBuilder>; deploysReady: boolean; everyTaskProject: ReadonlyMap<string, string | null>;
@@ -471,7 +493,7 @@ const NO_SOURCES = new Map<string, ProblemSource>();
 function assemble(i: WorkspaceInputs, r: WorkspaceReading | null, complete = true): WorkspaceResult {
   return {
     model: r?.model ?? null, project: i.project, home: r?.home ?? i.project, projects: i.projects, graphKey: r?.model?.graphKey ?? null, unread: i.unread, now: i.now,
-    rollup: r?.rollup ?? null, rollups: r?.rollups ?? EMPTY, allRollups: r?.allRollups ?? EMPTY, admissions: i.admissions, trialProjects: i.trialProjects, trialHeld: i.trialHeld, trialRuns: i.trialRuns,
+    rollup: r?.rollup ?? null, rollups: r?.rollups ?? EMPTY, allRollups: r?.allRollups ?? EMPTY, admissions: i.admissions, bars: i.bars, trialProjects: i.trialProjects, trialHeld: i.trialHeld, trialRuns: i.trialRuns,
     rows: i.scoped, everySignals: i.lineRows.signals, historyFeeds: i.historyFeeds, decisionRuns: i.decisionRuns, inbox: r?.inbox ?? EMPTY, allInbox: r?.allInbox ?? EMPTY, problems: r?.problems ?? EMPTY,
     needs: r?.needs ?? EMPTY, forYou: r?.forYou ?? 0, open: r?.open ?? 0, forYouByGraph: r?.forYouByGraph ?? NO_COUNTS, processes: i.processes, byProject: r?.byProject ?? NO_PROJECTS,
     process: i.process, sources: r?.sources ?? NO_SOURCES, names: i.names, decisions: i.allDecisions, overlaps: r?.overlaps ?? NO_OVERLAPS, heldFrom: i.held, refs: i.refs, deploys: i.deploys,

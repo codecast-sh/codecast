@@ -2,6 +2,7 @@
 // pure: the act band's state (every problem has exactly one), the one line
 // that states it beside the stage track, the runs as Work rows, and a
 // finding's own text and where it leads. The components only draw this.
+import { barWords, clearsBar, type FlowBar } from "@codecast/shared/contracts/linePriority";
 import { type CauseHistory, type HandMerge, type HistoryAttempt } from "./causeHistory";
 import { unlandedFix } from "./approvedFix";
 import type { InboxRow } from "./lineInbox";
@@ -214,6 +215,22 @@ export function mergeStepOff(text: string | null | undefined): boolean | null {
   return m ? /merge is off/i.test(m[1]) : null;
 }
 
+/** A problem its live flow's bar holds back: what it scored (null: not scored yet), its findings, and the bar. */
+export type UnderBar = { score: number | null; findings: number; bar: Pick<FlowBar, "score" | "findings"> };
+
+type BarTask = { status?: string; readiness?: string | null; assignee?: string | null; workflow_run_id?: string | null; cause?: { signal_count?: number; scored?: { score: number } | null } | null };
+
+/** Whether its flow's bar holds an open, ready problem back (convex liveFlows: one handed to a role runs whatever it
+ *  scored), and with what; null when it clears the bar or none is set. */
+export function underBarOf(t: BarTask | null | undefined, bar: Pick<FlowBar, "score" | "findings"> | null | undefined): UnderBar | null {
+  if (!t || !bar || t.status !== "open" || t.readiness !== "ready" || t.assignee || clearsBar(t, bar)) return null;
+  return { score: t.cause?.scored?.score ?? null, findings: t.cause?.signal_count ?? 0, bar: { score: bar.score, findings: bar.findings } };
+}
+
+/** "Scored 42 on 1 finding; runs at score 60+ or 3+ findings" */
+export const underBarWords = (u: UnderBar): string =>
+  `${u.score == null ? "Not scored yet" : `Scored ${u.score}`} on ${u.findings} finding${u.findings === 1 ? "" : "s"}; runs at ${barWords(u.bar)}`;
+
 export type NotStartedFacts = {
   task: (BandTask & { workflow_run_id?: string | null; cause?: { signal_count?: number } | null }) | null;
   lineOn?: boolean | null;
@@ -221,6 +238,8 @@ export type NotStartedFacts = {
   idle?: string | null;
   /** Grounding parked it until more findings come. */
   awaitsFindings?: boolean;
+  /** Its live flow's bar holds it (underBarOf): it waits for another finding. */
+  underBar?: UnderBar | null;
   /** It came back after a close. */
   cameBack?: boolean;
   assigneeName?: string | null;
@@ -230,7 +249,7 @@ export type NotStartedFacts = {
 
 /** Why a problem nothing is working on has not started, and whether the sweep would start it (LJ11): the one reading the
  *  Problems row and the problem's page share. A ready one reads "Queued" where its line is on, else says what is missing. */
-export function notStartedWhy(f: NotStartedFacts): { phrase: string; ready: boolean; byHand?: boolean } {
+export function notStartedWhy(f: NotStartedFacts): { phrase: string; ready: boolean; byHand?: boolean; /** Waits for another finding: under its flow's bar. */ waits?: boolean } {
   const t = f.task;
   const blocked = (phrase: string) => ({ phrase, ready: false });
   // A trial's dispatcher that holds (its runs used, its spend cap) starts none of them: held, never ready.
@@ -249,6 +268,7 @@ export function notStartedWhy(f: NotStartedFacts): { phrase: string; ready: bool
   if (t.readiness === "not_actionable") return blocked("Found nothing to change");
   if (t.assignee) return blocked(`Assigned to ${f.assigneeName ?? t.assignee_info?.name ?? "someone"}`);
   if (t.readiness === "ready" && !(typeof t.goal_ref === "string" ? t.goal_ref.trim() : t.goal_ref)) return blocked("Needs a goal");
+  if (f.underBar && !t.workflow_run_id) return { phrase: underBarWords(f.underBar), ready: false, waits: true };
   // Ready, but the task still points at a run that ended: the sweep passes it by, so it starts only by hand.
   if (t.workflow_run_id) return { ...blocked(held ? `Run ${held.n} ended: start by hand` : "Last run ended: start by hand"), byHand: true };
   if (!startableCause(t as unknown as LineCauseTask)) return blocked("Blocked");
@@ -619,7 +639,7 @@ export function problemNow(b: ProblemBand): { status: StatusKey; phrase: string 
       case "review": return b.holder ? "others" : "newask";
       // Main already carries its fix: the line closes it (park.sh); one parked before that is closed from its row.
       case "parked": return b.fixedSha ? "newask" : "notstarted";
-      case "morefindings": return "notstarted";
+      case "morefindings": return "waiting";
       // Grounding found nothing to change: it ended, nothing will start it, and closing it is a person's act no answer reaches.
       case "notstarted": return b.nothing != null ? "newask" : "notstarted";
     }

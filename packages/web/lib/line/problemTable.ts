@@ -410,7 +410,7 @@ export type ProblemSection = {
 };
 
 /** The groups that open as one line under All: long, and nothing in them is the next thing to move. */
-const FOLDED_IN_ALL: ReadonlySet<StatusKey> = new Set(["notstarted", "closed"]);
+const FOLDED_IN_ALL: ReadonlySet<StatusKey> = new Set(["notstarted", "waiting", "closed"]);
 
 function subsOf(status: StatusKey, rows: ProblemRow[], projectName: (id: string | null) => string, all: ReadonlyArray<ProblemRow> = rows, startOrder?: ReadonlyMap<string, number>): ProblemSub[] | null {
   if (status === "failed") {

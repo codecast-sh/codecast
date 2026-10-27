@@ -418,6 +418,26 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (r?.waiting) console.log(dim(`  waiting: ${r.waiting}`));
     });
 
+  // The bar: which problems the flow's machines take. A team admin sets it; a problem under it waits for another finding.
+  flow
+    .command("bar [flow]")
+    .description("Set which problems a live flow runs: those scoring at least --score or holding at least --findings findings; the rest wait for another finding and close after --quiet-days with none (a team admin's setting)")
+    .option("--score <n>", "The lowest score that runs (0 to 100)")
+    .option("--findings <n>", "The findings that run a problem whatever it scored")
+    .option("--quiet-days <n>", "Days a problem under the bar waits for another finding before it closes", "14")
+    .option("--off", "Take the bar off: every problem runs, in score order")
+    .option("--team <name>", "The team whose live flow it is (default: the workspace this directory reads)")
+    .option("--json", "Print the result as JSON")
+    .action(async (name: string | undefined, opts: { score?: string; findings?: string; quietDays: string; off?: boolean; team?: string; json?: boolean }) => {
+      const num = (v: string | undefined) => (v === undefined ? NaN : Number(v));
+      const bar = { score: num(opts.score), findings: num(opts.findings), quiet_days: num(opts.quietDays) };
+      if (!opts.off && (!Number.isFinite(bar.score) || !Number.isFinite(bar.findings))) { console.error("Name the bar with --score and --findings, or take it off with --off"); process.exit(1); }
+      const ws = await deps.writeWorkspace(opts.team);
+      const r = await deps.cliPost("/cli/flow/live/bar", { ...(ws.kind === "team" ? { team_id: ws.teamId } : {}), ...(name ? { flow: name } : {}), ...(opts.off ? { off: true, score: 0, findings: 1, quiet_days: 1 } : bar), from_session: deps.callingSession() });
+      if (opts.json) { console.log(JSON.stringify(r, null, 2)); return; }
+      console.log(r?.bar ? `✓ the flow runs problems at ${r.words}; the rest wait for another finding, ${r.bar.quiet_days} days` : "✓ no bar: every problem runs, in score order");
+    });
+
   // A live flow's switch: the server holds who may turn it, and refuses everyone else in its own words.
   for (const on of [true, false]) {
     flow

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { LINE_RUNS_PER_RUNNER, requeueCore, sweepCore } from "./orgLine";
-import { clearHoldCore, createLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
+import { barFromCli, clearHoldCore, createLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setBarCore, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
 import { hashToken } from "./apiTokens";
 
 // A team's live flow (liveFlows.ts): one queue in start order across every
@@ -200,6 +200,42 @@ describe("liveFlows (one live flow per team)", () => {
     await clearHoldCore(ctx, HOST as any, tables.live_flows[0]);
     expect(tables.live_flows[0].hold).toBeUndefined();
     expect((await sweepCore(ctx, NOW)).started.map((st) => st.task_id)).toEqual(["tasks_g70"]);
+  });
+
+  test("a bar starts only the problems that clear it; one handed to a role runs whatever it scored", async () => {
+    const bar = { score: 60, findings: 3, quiet_days: 14, by: "jx7hand", at: 1 };
+    const { ctx, tables } = fixtures({
+      tasks: [
+        problem("g70", "growth", 70),
+        problem("g40", "growth", 40),
+        problem("d45x3", "deals", 45, { cause: scored(45, 3) }),
+        problem("new1", "deals", null),
+        problem("new3", "deals", null, { cause: scored(null, 3) }),
+        problem("g10", "growth", 10, { assignee: "org_roles_growth" }),
+      ],
+      flow: { bar },
+    });
+    const view = await liveFlowView(ctx, tables.live_flows[0], NOW);
+    expect(view.bar).toEqual(bar);
+    expect(view.queue.map((q) => q.task_id).sort()).toEqual(["tasks_d45x3", "tasks_g10", "tasks_g70", "tasks_new3"]);
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id).sort()).toEqual(["tasks_d45x3", "tasks_g10", "tasks_g70", "tasks_new3"]);
+    // Taken off, the rest start in score order.
+    tables.live_flows[0].bar = undefined;
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_new1", "tasks_g40"]);
+  });
+
+  test("only a team admin sets the bar; the CLI says it in words, refuses a bad one, and takes it off", async () => {
+    const token = "cx_live_flow_bar_token";
+    const { ctx, tables } = fixtures({ tasks: [problem("g70", "growth", 70)], extra: { api_tokens: [{ _id: "api_tokens_1", user_id: HOST, token_hash: await hashToken(token), name: "cli", created_at: 1 }] } });
+    await expect(setBarCore(ctx, MATE as any, tables.live_flows[0], { score: 60, findings: 3, quiet_days: 14 }, "jx7hand", NOW)).rejects.toThrow("team admin required");
+    const set = (args: Record<string, any>) => (barFromCli as any)._handler(ctx, { api_token: token, team_id: TEAM, from_session: "jx7hand", score: 60, findings: 3, quiet_days: 14, ...args });
+    await expect(set({ score: 101 })).rejects.toThrow("The bar's score is a whole number from 0 to 100");
+    await expect(set({ findings: 0 })).rejects.toThrow("The bar's findings is a whole number from 1 to 1000");
+    const r = await set({});
+    expect(r).toMatchObject({ bar: { score: 60, findings: 3, quiet_days: 14, by: "jx7hand" }, words: "score 60+ or 3+ findings" });
+    expect(tables.live_flows[0].bar).toMatchObject({ score: 60, findings: 3, quiet_days: 14 });
+    expect(await set({ off: true })).toMatchObject({ bar: null, words: null });
+    expect(tables.live_flows[0].bar).toBeUndefined();
   });
 
   test("a run whose task waits holds no machine slot, as a run at a card holds none", async () => {

@@ -9,15 +9,15 @@ import { ageShort, type LineCauseTask } from "../lineFlow";
 import type { CauseHistory } from "./causeHistory";
 import type { LineIssue } from "./lineModel";
 import type { NeedKind } from "./lineNeeds";
-import { NO_STEP, dayWords, notStartedWhy, problemBand, problemNow, type BandInput, type BandNeed, type BandNote, type BandTask, type NotStartedFacts } from "./problemPage";
+import { NO_STEP, dayWords, notStartedWhy, problemBand, problemNow, type BandInput, type BandNeed, type BandNote, type BandTask, type NotStartedFacts, type UnderBar } from "./problemPage";
 import { neverShipped } from "./timeline";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { handoffOutcome, plainOutcome } from "./stepWork";
 
-export type StatusKey = "you" | "others" | "newask" | "failed" | "running" | "notstarted" | "approved" | "merged" | "shipped" | "trial" | "closed";
+export type StatusKey = "you" | "others" | "newask" | "failed" | "running" | "notstarted" | "waiting" | "approved" | "merged" | "shipped" | "trial" | "closed";
 
 /** The chips' order, and the table's groups: what a person can move first, then what is moving, then what is done. */
-export const STATUS_ORDER: ReadonlyArray<StatusKey> = ["you", "others", "newask", "failed", "running", "notstarted", "approved", "merged", "shipped", "trial", "closed"];
+export const STATUS_ORDER: ReadonlyArray<StatusKey> = ["you", "others", "newask", "failed", "running", "notstarted", "waiting", "approved", "merged", "shipped", "trial", "closed"];
 
 export const STATUS_LABELS: Record<StatusKey, string> = {
   you: "Waiting on you",
@@ -26,6 +26,7 @@ export const STATUS_LABELS: Record<StatusKey, string> = {
   failed: "Failed",
   running: "Running",
   notstarted: "Not started",
+  waiting: "Waiting for findings",
   approved: "Approved, not merged",
   merged: "Merged",
   shipped: "In production",
@@ -54,6 +55,8 @@ export type ProblemFacts = {
   notes?: ReadonlyArray<BandNote>;
   /** Grounding parked it until more findings come (lineInbox waitsForFindings): no answer unblocks it. */
   awaitsFindings?: boolean;
+  /** Under its live flow's bar (shared linePriority clearsBar): it waits for another finding, which re-scores it. */
+  underBar?: UnderBar | null;
   /** The handle of the role whose area holds its project (the lead its line runs as): a fact grounding needs is asked of
    *  that role, never of the viewer. Null when no role holds the project. */
   lead?: string | null;
@@ -142,7 +145,7 @@ const stepsOf = (f: ProblemFacts): { steps?: ReadonlyArray<string> } => {
  *  silence, its live stage, its task and notes. */
 export function problemStand(issue: Pick<LineIssue, "history" | "status"> & Partial<Pick<LineIssue, "ask" | "findings" | "dissolvedWhy" | "lineFaults">>, f: ProblemFacts, now: number): ProblemStand {
   const h = issue.history;
-  const why = notStartedWhy({ task: (f.task ?? null) as NotStartedFacts["task"], lineOn: f.lineOn ?? null, idle: f.idle, awaitsFindings: f.awaitsFindings, cameBack: h.cameBack || h.regressed, assigneeName: f.assigneeName, attempts: h.attempts });
+  const why = notStartedWhy({ task: (f.task ?? null) as NotStartedFacts["task"], lineOn: f.lineOn ?? null, idle: f.idle, awaitsFindings: f.awaitsFindings, underBar: f.underBar, cameBack: h.cameBack || h.regressed, assigneeName: f.assigneeName, attempts: h.attempts });
   // An approved fix nothing merged is the approved band's own (its act lands it), never a need the band reads.
   const need = f.need?.kind === "unlanded" ? null : f.need ?? null;
   const asked = need && (need.kind === "decision" || need.kind === "question" || need.kind === "confirm");
@@ -184,6 +187,7 @@ export function problemStand(issue: Pick<LineIssue, "history" | "status"> & Part
   }
   if (band.kind === "production") return { status, phrase, quiet: band.since === 0 };
   if (band.kind === "notstarted" && band.nothing != null) return { status, phrase, act: "close" };
+  if (band.kind === "notstarted" && why.waits) return { status: "waiting", phrase, ready: false };
   if (band.kind === "notstarted") return { status, phrase, ready: why.ready, ...(why.byHand ? { act: "start" as const } : {}) };
   if (band.kind === "parked" && band.fixedSha) return { status, phrase, ready: false, act: "fixed" };
   // A run paused with nothing asked is still live: a new run is refused while it holds the problem, so it has no act here.
