@@ -49,13 +49,17 @@ test("RoleIconTile renders the canonical svg, a monogram without an icon, and a 
   assert.equal(tiles[2].textContent, "F");
 });
 
-test("RoleFace draws the animal with characters on and the role's tile from the role rows with them off", async () => {
+test("RoleFace draws the animal with characters on and the role's tile from viewerRoles with them off", async () => {
   const { React, host, render } = await mount();
   const { useInboxStore } = await import("../../store/inboxStore");
   const { RoleFace } = await import("../org/RoleFace");
   const before = useInboxStore.getState();
-  afterAll(() => useInboxStore.setState({ clientState: before.clientState, orgTree: before.orgTree } as never));
-  useInboxStore.setState({ orgTree: { roles: [{ _id: "r1", short_id: "or-1", handle: "infra", name: "Infrastructure lead", icon: ICON }], anchors: [] } } as never);
+  afterAll(() => useInboxStore.setState({ clientState: before.clientState, orgTree: before.orgTree, viewerRoles: (before as any).viewerRoles } as never));
+  // The face fields live in viewerRoles; the org tree only says which role a bare handle means here.
+  useInboxStore.setState({
+    viewerRoles: { r1: { _id: "r1", short_id: "or-1", handle: "infra", name: "Infrastructure lead", icon: ICON } },
+    orgTree: { roles: [{ _id: "r1", handle: "infra" }], anchors: [] },
+  } as never);
   const face = React.createElement(RoleFace, { role: { handle: "infra", avatar: "owl" }, size: 20 });
 
   await render(face);

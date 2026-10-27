@@ -848,7 +848,7 @@ export function applyOrgUndoIntent(log: Record<string, OrgLogEntry>, intent: Ext
  * what they were. A move, a follow and a retire have nothing to undo here:
  * the next org.tree push is authoritative for them.
  */
-export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalChanges"> & { orgProposals?: Record<string, OrgProposalListRow>; orgLog?: Record<string, OrgLogEntry> }, intent: OrgIntent): void {
+export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalChanges"> & { orgProposals?: Record<string, OrgProposalListRow>; orgLog?: Record<string, OrgLogEntry>; viewerRoles?: Record<string, { name: string; avatar?: string | null }> }, intent: OrgIntent): void {
   switch (intent.kind) {
     case "undoChange": {
       for (const b of undoIntentBatches(intent)) {
@@ -900,6 +900,7 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
       return;
     }
     case "roleFields": {
+      writeRoleFaceFields(draft, intent.role_id, intent.from);
       const role = draft.orgTree?.roles.find((r) => r._id === intent.role_id);
       if (!role) return;
       applyRoleFields(role, intent.from, roleFieldKeys(intent.fields));
@@ -1021,7 +1022,19 @@ export function pushRoleFieldsIntent(draft: OrgDraft, roleId: string, fields: Or
   for (const k of keys) (from as Record<string, unknown>)[k] = JSON.parse(JSON.stringify(role[k] ?? null)) ?? undefined;
   const intent: OrgIntent = { kind: "roleFields", id: intentId(), role_id: roleId, fields, from, at: Date.now() };
   applyOrgIntent(tree, intent);
+  writeRoleFaceFields(draft, roleId, fields);
   pushIntent(draft, intent);
+}
+
+/** The face fields of a role edit, on the role's `viewerRoles` row: the one
+ *  home every face reads (lib/roleRows). Written in the same draft as the
+ *  tree, so a rename or a new face paints at once; viewerRoles is localFirst,
+ *  so the write holds until the server echoes it. */
+function writeRoleFaceFields(draft: { viewerRoles?: Record<string, { name: string; avatar?: string | null }> }, roleId: string, fields: OrgUpdateRoleInput): void {
+  const row = draft.viewerRoles?.[roleId];
+  if (!row) return;
+  if (fields.name !== undefined) row.name = fields.name;
+  if ("avatar" in fields) row.avatar = fields.avatar ?? avatarOf({ handle: (row as { handle?: string }).handle ?? "", avatar: null });
 }
 
 /** What naming `role` the lead of a project does to its scope, as the person

@@ -7,8 +7,11 @@ import { ROLE_ICON_TILE, roleIconStroke, roleIconSvg } from "@codecast/shared/co
 import { avatarLength } from "../../lib/orgAvatars";
 import type { RoleTile } from "../../lib/sessionIdentity";
 
-export function RoleIconTile({ tile, size = 20, className, title }: {
+export function RoleIconTile({ tile, size = 20, className, title, block }: {
   tile: RoleTile;
+  /** A block box, for a parent that sizes it with line-height 0 (SessionFace):
+   *  inline, middle alignment there lifts the tile off the text. */
+  block?: boolean;
   /** Pixels, or any CSS length ("1em" rides the prose it sits in). */
   size?: number | string;
   className?: string;
@@ -28,15 +31,18 @@ export function RoleIconTile({ tile, size = 20, className, title }: {
       data-role-tile={tile.icon ? tile.icon.concept : "monogram"}
       style={{
         ["--rt-accent" as string]: `var(--sol-${tile.accent})`,
+        display: block ? "flex" : "inline-flex",
+        verticalAlign: block ? undefined : "middle",
         width: box, height: box,
         borderRadius: `calc(${box} * ${ROLE_ICON_TILE.radius})`,
-        fontSize: `calc(${box} * 0.54)`,
       }}
     >
       {svg ? (
         <span aria-hidden className="role-tile-glyph" style={{ width: `${ROLE_ICON_TILE.glyph * 100}%`, height: `${ROLE_ICON_TILE.glyph * 100}%` }} dangerouslySetInnerHTML={{ __html: svg }} />
       ) : (
-        <span aria-hidden className="role-tile-letter">{tile.monogram}</span>
+        // The letter's size is set on the letter, not the tile: an em-sized
+        // tile ("1em") would otherwise measure itself in the shrunk font.
+        <span aria-hidden className="role-tile-letter" style={{ fontSize: `calc(${box} * 0.54)` }}>{tile.monogram}</span>
       )}
     </span>
   );
