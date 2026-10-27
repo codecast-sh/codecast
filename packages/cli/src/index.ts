@@ -21253,7 +21253,7 @@ workflow
 
 workflow
   .command("resume <task>")
-  .description("Try a failed line run again from a station of its graph, on its own branch, once what failed it is fixed. A resume is a new attempt: each station's visits count again. A trial problem resumes with cast line trial rerun <task> --at <station>")
+  .description("Try a failed line run again from a station of its graph, on its own branch, once what failed it is fixed; an approved run whose merge was left to a person resumes the same way, at its merge station. A resume is a new attempt: each station's visits count again. A trial problem resumes with cast line trial rerun <task> --at <station>")
   .requiredOption("--at <station>", "The station to resume at (verify, to check and evaluate the branch again)")
   .option("--onto-main", "First put the run's branch on the default branch as the remote has it, by the graph's rebase (a conflict resumes at the station the graph sends it to, where a hand resolves it). Run it on the machine that holds the run")
   .option("--current-flow", "Move the run onto its flow's current library version first: a run reads the version it started on, so a fix saved since reaches it only this way")
