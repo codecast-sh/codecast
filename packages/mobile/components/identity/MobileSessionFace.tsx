@@ -1,15 +1,18 @@
 // The face a session wears, on the phone (docs/architecture/session-characters.md
 // S3). The same 24 painted portraits the web draws, from the same files, picked
-// by the same resolver: only the drawing is React Native.
+// by the same resolver: only the drawing is React Native. With the viewer's
+// characters off, a role wears its icon tile (MobileRoleIconTile) and any
+// other row has no face, only its badge.
 //
-// The art is a plain Image of a WebP file. Nothing here draws through
-// react-native-svg, so a face adds no native library to the bundle.
+// The art is a plain Image of a WebP file.
 import type { ReactNode } from 'react';
 import { Image, View, type ImageSourcePropType, type StyleProp, type ViewStyle } from 'react-native';
 import { AVATAR_LABELS, AVATAR_URLS } from '@codecast/web/lib/orgAvatars';
 import type { AvatarKey } from '@codecast/shared/contracts/orgAvatars';
-import { faceBadgeSize, faceIdentity, type IdentityRow } from '@codecast/web/lib/sessionIdentity';
+import { faceBadgeSize, viewerFace, type IdentityRow } from '@codecast/web/lib/sessionIdentity';
+import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { useTheme } from '@/constants/Theme';
+import { MobileRoleIconTile } from './MobileRoleIconTile';
 
 // Vite hands the web a URL string for each file; Metro hands the phone an
 // asset number for the same import.
@@ -24,16 +27,21 @@ export function MobileSessionFace({ row, size = 18, style, badge }: {
   badge?: ReactNode;
 }) {
   const Theme = useTheme();
-  const id = faceIdentity(row);
+  const id = viewerFace(row, useIdentityPrefs());
   const badgeSize = faceBadgeSize(size);
+  if (id.kind === 'none') {
+    return badge ? <View style={[{ width: size, height: size, flexShrink: 0, alignItems: 'center', justifyContent: 'center' }, style]} testID="session-face-plain">{badge}</View> : null;
+  }
   return (
     <View
       style={[{ width: size, height: size, flexShrink: 0, alignItems: 'center', justifyContent: 'center' }, style]}
       accessibilityRole="image"
-      accessibilityLabel={id.name ?? AVATAR_LABELS[id.avatar]}
-      testID={`session-face-${id.kind}-${id.avatar}`}
+      accessibilityLabel={id.kind === 'tile' ? id.name : id.name ?? AVATAR_LABELS[id.avatar]}
+      testID={id.kind === 'tile' ? `session-face-tile-${id.tile.icon?.concept ?? 'monogram'}` : `session-face-${id.role ? 'role' : 'character'}-${id.avatar}`}
     >
-      <Image source={AVATAR_SOURCES[id.avatar]} style={{ width: size, height: size, borderRadius: size / 2 }} />
+      {id.kind === 'tile'
+        ? <MobileRoleIconTile tile={id.tile} size={size} label={id.name} />
+        : <Image source={AVATAR_SOURCES[id.avatar]} style={{ width: size, height: size, borderRadius: size / 2 }} />}
       {!!badge && badgeSize > 0 && (
         <View
           pointerEvents="none"

@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { sessionIdentity } from "./sessionIdentity";
+import { DEFAULT_IDENTITY_PREFS, sessionIdentity, type IdentityPrefs } from "./sessionIdentity";
 import { cleanTitle } from "./conversationProcessor";
 import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, FolderKanban, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight, Hourglass, Link2 } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
@@ -50,15 +50,16 @@ export function paletteObjectPath(type: PaletteTargetType, target: any): string 
 }
 
 /** A row already wearing a character, for the verb's wording. Reads the row
- *  alone: the palette does not know the workspace switch, and "Change" on a
- *  row that only has a face because of that switch is still honest. */
+ *  alone: "Change" on a row that only has a face because of the workspace
+ *  switch is still honest. */
 function isPersonified(target: { _id: string; character_avatar?: string | null; character_name?: string | null; standing_role_id?: string | null; role?: unknown }): boolean {
-  return sessionIdentity(target as never, false).kind !== "plain";
+  return sessionIdentity(target as never).kind !== "plain";
 }
 
 /** `mode` is hosted mode's registry (lib/surfaces.ts useSurfaceMode): model
- *  and machine verbs follow its pickers and chips. */
-export function paletteActions(type: PaletteTargetType | null, targets: any[], userId?: string, chatOn = false, mode: SurfaceMode = DEVELOPER_MODE): PaletteAction[] {
+ *  and machine verbs follow its pickers and chips. `prefs` are the viewer's:
+ *  with characters off no verb gives a session one. */
+export function paletteActions(type: PaletteTargetType | null, targets: any[], userId?: string, chatOn = false, mode: SurfaceMode = DEVELOPER_MODE, prefs: IdentityPrefs = DEFAULT_IDENTITY_PREFS): PaletteAction[] {
   const target = targets[0];
   if (!type || !target) return [];
   const single = targets.length === 1;
@@ -113,7 +114,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       // Personifying is opt in, so the verb names what it does for a row that
       // has no character yet (session-characters.md S2). Hosted mode offers
       // only the change, for a row that already has one.
-      ...(mode.shows("conversation.internals") || isPersonified(target) ? [row("character", isPersonified(target) ? many("Change character…", `Change character for # ${nouns}…`) : many("Give it a character…", `Give # ${nouns} characters…`), Smile, "y")] : []),
+      ...(prefs.characters && (mode.shows("conversation.internals") || isPersonified(target)) ? [row("character", isPersonified(target) ? many("Change character…", `Change character for # ${nouns}…`) : many("Give it a character…", `Give # ${nouns} characters…`), Smile, "y")] : []),
       row("session_pin", target.is_pinned ? many(`Unpin ${noun}`, `Unpin # ${nouns}`) : many(`Pin ${noun}`, `Pin # ${nouns}`), target.is_pinned ? PinOff : Pin, "p", "session.pin"),
       row("session_favorite", target.is_favorite ? many("Remove from favorites", "Remove # from favorites") : many("Add to favorites", "Add # to favorites"), Star, "v", "conv.favorite"),
       row("bucket", many(`Label ${noun}…`, `Label # ${nouns}…`), Tag, "l", "session.moveToBucket"),

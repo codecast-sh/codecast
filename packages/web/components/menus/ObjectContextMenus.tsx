@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { sessionIdentity } from "../../lib/sessionIdentity";
+import { identityPrefsNow } from "../../hooks/useIdentityPrefs";
 import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
 import {
   Archive,
@@ -431,6 +432,7 @@ export function SessionMenuItems({
   onPickCharacter?: () => void;
 }) {
   const id = session._id;
+  const prefs = identityPrefsNow();
   // The card's row can predate a toggle; the store says what the star shows now.
   const isFavorite = isFavoriteInStore(useInboxStore.getState(), id);
   // One-shot snapshots — labels don't churn while a menu is open.
@@ -536,9 +538,9 @@ export function SessionMenuItems({
           Change model &amp; effort…
         </CtxItem>
       )}
-      {onPickCharacter && (
+      {onPickCharacter && prefs.characters && (
         <CtxItem icon={Smile} onSelect={onPickCharacter}>
-          {sessionIdentity(session, false).kind === "plain" ? "Give it a character\u2026" : "Change character\u2026"}
+          {sessionIdentity(session).kind === "plain" ? "Give it a character\u2026" : "Change character\u2026"}
         </CtxItem>
       )}
       {onRename && (

@@ -2,6 +2,7 @@ import { Sparkles, X } from "lucide-react";
 import { useTrackedStore } from "../../store/inboxStore";
 import { agentRoomName, findSessionRow, NEW_AGENT_NAME } from "../../lib/calls/findSessionRow";
 import { identitySig } from "../../lib/sessionIdentity";
+import { identityPrefsNow } from "../../hooks/useIdentityPrefs";
 import { SessionFace } from "../identity";
 
 // A live transcript route rendered as a chip: what kind, where, removable by
@@ -13,7 +14,7 @@ function routeLabel(st: any, route: { kind: string; target: string }): string {
   if (route.kind === "slack") return `#${route.target.slice(0, 12)}`;
   if (route.kind === "session") {
     const row = findSessionRow(st, route.target);
-    return row ? agentRoomName(row) : NEW_AGENT_NAME;
+    return row ? agentRoomName(row, identityPrefsNow()) : NEW_AGENT_NAME;
   }
   const doc = (st.docs ?? {})[route.target];
   return doc?.title || doc?.display_title || "doc";

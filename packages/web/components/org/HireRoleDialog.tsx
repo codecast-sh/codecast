@@ -20,6 +20,7 @@ import { OrgTemplateHire } from "./orgTemplateHire";
 import { AVATAR_KEYS, avatarOf } from "@codecast/shared/contracts/orgAvatars";
 import { ORG_TENURE_THEN, seatSentence, type OrgRoleSeat, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import { RoleFace } from "./RoleFace";
+import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
 import { TakeoverEdit } from "./TakeoverEdit";
 import { useTakeoverPreviews } from "../../hooks/useTakeoverPreviews";
 
@@ -89,6 +90,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
   const [endDate, setEndDate] = useState<string>("");
   const [tenureThen, setTenureThen] = useState<"retire" | "review">("retire");
   const [faceOpen, setFaceOpen] = useState(false);
+  const { characters } = useIdentityPrefs();
   // Preset rows lead the list, then the rest of the workspace.
   const projects = useMemo(() => [...initialProjects, ...wsProjects.filter((p) => !initialProjects.some((q) => q._id === p._id))], [initialProjects, wsProjects]);
   const effHandle = handleTouched ? handle : slugify(name);
@@ -183,7 +185,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
             </Field>
           </div>
 
-          <Field label="Face" hint={avatar ? "chosen" : "from the handle"}>
+          {characters && <Field label="Face" hint={avatar ? "chosen" : "from the handle"}>
             <div className="flex items-center gap-2.5">
               <RoleFace role={{ avatar, handle: effHandle, name }} size={36} />
               <button type="button" onClick={() => setFaceOpen((o) => !o)} className="text-[11.5px] underline-offset-2 hover:underline" style={{ color: "var(--sol-text-muted)" }}>{faceOpen ? "Close" : "Choose a face"}</button>
@@ -201,7 +203,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
                 })}
               </div>
             )}
-          </Field>
+          </Field>}
 
           <Field label="Area" hint={scopeHint}>
             <div className="max-h-[132px] overflow-y-auto rounded-lg border p-1" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>

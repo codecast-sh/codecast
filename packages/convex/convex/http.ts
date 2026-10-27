@@ -4149,6 +4149,11 @@ cliRoute("/cli/role/caps", async (ctx, body) => ctx.runMutation(api.orgRoles.set
 cliRoute("/cli/role/authority", async (ctx, body) => ctx.runMutation((api as any).orgRoles.setAuthority, body));
 cliRoute("/cli/role/reports", async (ctx, body) => ctx.runMutation(api.orgRoles.setReports, body));
 cliRoute("/cli/role/self", async (ctx, body) => ctx.runQuery(api.orgRoles.selfForSession, body));
+// The role's drawn icon (org-staffing.md S13): read it with the brief a hand
+// drawer works from, set a hand-drawn one, or have the generator draw it.
+cliRoute("/cli/role/icon", async (ctx, body) => ctx.runQuery(api.roleIcons.brief, body));
+cliRoute("/cli/role/icon/set", async (ctx, body) => ctx.runMutation(api.roleIcons.setIcon, body));
+cliRoute("/cli/role/icon/generate", async (ctx, body) => ctx.runAction(api.roleIcons.generate, body));
 // The scope's line (the-line.md L2): `cast role line <handle> [--set <slug>]`.
 cliRoute("/cli/role/line", async (ctx, body) => ctx.runQuery(api.orgRoles.line, body));
 cliRoute("/cli/role/line/set", async (ctx, body) => ctx.runMutation(api.orgRoles.setLine, body));

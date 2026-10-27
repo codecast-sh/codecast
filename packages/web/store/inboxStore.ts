@@ -2,6 +2,7 @@ import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActi
 import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress } from "@codecast/shared/contracts";
+import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
 import { cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
 import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
@@ -568,7 +569,7 @@ export type PrStatus = {
 };
 
 /** The role a session row belongs to, as the server snapshots it on the row. */
-export type SessionRoleSnapshot = { _id: string; short_id: string; name: string; handle: string; avatar: string; status: string; tenure_kind: "standing" | "program"; given_name?: string | null };
+export type SessionRoleSnapshot = { _id: string; short_id: string; name: string; handle: string; avatar: string; status: string; tenure_kind: "standing" | "program"; given_name?: string | null; icon?: RoleIcon | null };
 
 export type CloudContextTooLarge = { total_bytes: number; cap_bytes: number; files: Array<{ path: string; bytes: number }> };
 
@@ -1894,6 +1895,10 @@ export type ClientUI = {
   // only the ones somebody personified by hand (session-characters.md S2).
   // Off by default: a face is a choice, not something that happens to you.
   personify_sessions?: boolean;
+  // Roles wear animal characters (a face and an invented name). Off, every
+  // role shows its drawn icon and its title instead, and no session anywhere
+  // wears a character for this viewer (roleIcon.ts). Absent reads as on.
+  show_characters?: boolean;
   // Keep a server record of the composer's quotes (lib/quoteDraftWire), so a
   // quote shows sent, then answered, after its message goes. Off by default.
   quote_drafts?: boolean;

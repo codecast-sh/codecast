@@ -43,19 +43,23 @@ export function assistantReachWords(role: Pick<IdentityRole, "assistant" | "scop
   return role.scope_type === "user" ? `personal, ${team}` : team;
 }
 
-export function roleIdentity(role: IdentityRole, opts: { teamName?: string | null } = {}): RoleIdentity {
+/** `characters: false` is a viewer who turned characters off (role icons,
+ *  roleIcon.ts): the role is named by what it is, so `name` is the subtitle
+ *  and no invented name reaches them. */
+export function roleIdentity(role: IdentityRole, opts: { teamName?: string | null; characters?: boolean } = {}): RoleIdentity {
   const chosen = cleanCharacterName(role.given_name);
-  const name = chosen ?? characterNameFor(String(role._id), avatarOf(role));
   // A Head of People row from before the rename (handle `chief-of-staff`,
   // birth name "Chief of Staff", not yet migrated) reads under its new name;
   // a name a person chose stays theirs.
   const title = role.assistant ? EXECUTIVE_ASSISTANT_NAME : isHeadOfPeopleRole(role) && role.name === LEGACY_HEAD_OF_PEOPLE_NAME ? HEAD_OF_PEOPLE_NAME : role.name;
   const reach = assistantReachWords(role, opts.teamName);
-  return { name, title, subtitle: reach ? `${title}, ${reach}` : title, chosen: chosen !== null };
+  const subtitle = reach ? `${title}, ${reach}` : title;
+  const name = opts.characters === false ? subtitle : chosen ?? characterNameFor(String(role._id), avatarOf(role));
+  return { name, title, subtitle, chosen: chosen !== null };
 }
 
 /** "Ada · Executive Assistant, global": the one line a compact surface prints. */
-export function roleIdentityLine(role: IdentityRole, opts: { teamName?: string | null } = {}): string {
+export function roleIdentityLine(role: IdentityRole, opts: { teamName?: string | null; characters?: boolean } = {}): string {
   const id = roleIdentity(role, opts);
-  return `${id.name} · ${id.subtitle}`;
+  return id.name === id.subtitle ? id.name : `${id.name} · ${id.subtitle}`;
 }

@@ -32,15 +32,17 @@ export function roleArea(role: Pick<OrgRole, "scope_names">): string {
 /** Every role a request can go to, the viewer's own first, each group by name.
  *  Retired roles are out; a paused or unprovisioned seat stays listed so the
  *  picker can say why it cannot take the request. */
-export function roleRecipients(roles: readonly OrgRole[], viewerId: string | null | undefined, opts: { teamName?: string | null } = {}): RoleRecipient[] {
+/** With `characters` false a role is named by its title, and its handle
+ *  takes the title's place beside it. */
+export function roleRecipients(roles: readonly OrgRole[], viewerId: string | null | undefined, opts: { teamName?: string | null; characters?: boolean } = {}): RoleRecipient[] {
   const out: RoleRecipient[] = [];
   for (const role of roles) {
     if (role.status === "retired") continue;
-    const id = roleIdentity(role, { teamName: opts.teamName ?? null });
+    const id = roleIdentity(role, { teamName: opts.teamName ?? null, characters: opts.characters });
     out.push({
       role,
       name: id.name,
-      title: id.subtitle,
+      title: opts.characters === false ? `@${role.handle}` : id.subtitle,
       area: roleArea(role),
       handle: role.handle,
       mine: !!viewerId && role.reports_to.kind === "user" && role.reports_to.user_id === viewerId,
