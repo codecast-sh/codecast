@@ -18,6 +18,7 @@
     "./contracts/managedPolicy": "./contracts/managedPolicy.ts",
     "./contracts/flowMap": "./contracts/flowMap.ts",
     "./contracts/deliveryFailed": "./contracts/deliveryFailed.ts",
+    "./contracts/decisionAnswers": "./contracts/decisionAnswers.ts",
     "./contracts/__fixtures__/inboxProjectionGen": "./contracts/__fixtures__/inboxProjectionGen.ts",
     "./contracts/__fixtures__/teamWorldGen": "./contracts/__fixtures__/teamWorldGen.ts",
     "./contracts/levenshtein": "./contracts/levenshtein.ts",

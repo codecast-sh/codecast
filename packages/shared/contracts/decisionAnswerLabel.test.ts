@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decisionAnswerLabel } from "./machineMessages";
+import { decisionAnswerLabel } from "./decisionAnswers";
 
 // The one line the asking agent acts on. The server's finalizeAnswer and the
 // web's optimistic answerDecision both build it here, so a multi, rank or form

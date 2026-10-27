@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { decisionAnswerClientId, decisionIdFromClientId, formatDecisionAnswer, parseDecisionAnswer, pickAnsweredDecision, isMachineDeliveredMessage } from "./machineMessages";
+import { decisionAnswerClientId, decisionIdFromClientId, formatDecisionAnswer, parseDecisionAnswer, pickAnsweredDecision } from "./decisionAnswers";
+import { isMachineDeliveredMessage } from "./machineMessages";
 
 // The answer to a `cast decide` question is one user message that both the
 // agent and every rendering surface read. The first line stays the plain
