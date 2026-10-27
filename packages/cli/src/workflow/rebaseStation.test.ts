@@ -115,7 +115,7 @@ exit 1
     expect(r.comments).toContain(`Already on main as ${landed.slice(0, 10)}`);
   });
 
-  test("a change the default branch carries with edits no review saw stops and names them, never as a plain conflict", () => {
+  test("a change the default branch mostly carries, reworked after review, stops and names the files that differ, never as a plain conflict", () => {
     // ct-70983: the commit channel committed the session's tree, which held the
     // reviewed change and a fix written after review, in the same file.
     const before = git(work, "rev-parse", "HEAD");
@@ -124,11 +124,44 @@ exit 1
     const r = station();
     expect(r.code).toBe(1);
     expect(r.json).toMatchObject({ rebased: false, landed: false });
-    expect(r.json.why).toContain(`already on origin/main as ${landed.slice(0, 10)} with edits no review saw in intro.txt`);
-    expect(r.comments).toContain("edits no review saw");
+    expect(r.json.why).toContain(`mostly on origin/main as ${landed.slice(0, 10)}, not as reviewed: more than reviewed in intro.txt`);
+    expect(r.comments).toContain("Holds the reviewed edit plus edits no review saw: intro.txt");
     expect(r.comments).not.toContain("resolve the conflict");
     expect(git(work, "rev-parse", "HEAD")).toBe(before);
     expect(git(work, "status", "--porcelain")).toBe("");
+  });
+
+  test("a file main shares only part of the reviewed edit with is named as not holding it, never as landed", () => {
+    // The second review's case: main deletes the same lines the branch did but writes a different line in place of the reviewed one.
+    commit(work, "other.txt", "a\nb\nc\nd\nX\n", "fix(ct-1): other.txt");
+    git(work, "push", "-q", "origin", "codecast/line-ct-1");
+    const other = path.join(root, "shared");
+    git(root, "clone", "-q", origin, other);
+    fs.writeFileSync(path.join(other, "intro.txt"), "say which side offers what to whom\n");
+    fs.writeFileSync(path.join(other, "other.txt"), "a\nb\nc\nd\nY\n");
+    git(other, "commit", "-qam", "intro as reviewed, other.txt another way");
+    git(other, "push", "-q", "origin", "main");
+    const r = station();
+    expect(r.code).toBe(1);
+    expect(r.json.why).toContain("reviewed edit not as written in other.txt");
+    expect(r.json.why).not.toContain("intro.txt");
+    expect(r.comments).toContain("Does not hold the reviewed edit as written (reworked after review, or part of it never landed): other.txt");
+  });
+
+  test("a change only partly on the default branch is a plain conflict: the file that never landed is still to ship", () => {
+    // intro.txt lands exactly as reviewed; other.txt's reviewed edit never lands and conflicts with someone else's.
+    commit(work, "other.txt", "the reviewed edit\n", "fix(ct-1): other.txt too");
+    git(work, "push", "-q", "origin", "codecast/line-ct-1");
+    const other = path.join(root, "partial");
+    git(root, "clone", "-q", origin, other);
+    fs.writeFileSync(path.join(other, "intro.txt"), "say which side offers what to whom\n");
+    fs.writeFileSync(path.join(other, "other.txt"), "someone else's edit\n");
+    git(other, "commit", "-qam", "intro landed, other.txt edited by someone else");
+    git(other, "push", "-q", "origin", "main");
+    const r = station();
+    expect(r.code).toBe(1);
+    expect(r.json.why).toBe("rebase onto origin/main conflicted in other.txt ");
+    expect(r.comments).not.toContain("carries most of");
   });
 
   test("a check that fails on the rebased branch goes back to implement, and the branch returns to where it was", () => {
