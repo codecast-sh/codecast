@@ -940,10 +940,10 @@ async function reopenAfterFix(ctx: any, taskId: Id<"tasks">, userId: Id<"users">
   const task: Doc<"tasks"> = (await ctx.db.get(taskId))!;
   const fixed = task.cause?.dissolved?.fixed_at;
   if (!task.cause || !fixed) return;
-  const { dissolved: _, ...cause } = task.cause;
+  const { dissolved, ...cause } = task.cause;
   await ctx.db.patch(task._id, { cause });
-  await endWatch(ctx, (await ctx.db.get(task._id))!, userId, "open",
-    `Reopened: the fix live since ${isoDay(fixed)} did not hold. ${late.source} saw "${late.title}" on ${isoDay(late.observed_at)}.`, now);
+  const why = dissolved?.quiet ? `a new finding came after it closed quiet on ${isoDay(fixed)}` : `the fix live since ${isoDay(fixed)} did not hold`;
+  await endWatch(ctx, (await ctx.db.get(task._id))!, userId, "open", `Reopened: ${why}. ${late.source} saw "${late.title}" on ${isoDay(late.observed_at)}.`, now);
   await noticeCauseReopened(ctx, task, late.source);
 }
 

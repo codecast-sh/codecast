@@ -17,6 +17,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { parseJsonBlock, STRONG_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { runModelCall, type CallScope } from "./modelCalls";
 import { patchTask } from "./lib/taskWrite";
+import { budgetHasRoom } from "./lib/teamBudget";
 import { insertTaskComment } from "./tasks";
 import { causeBrief } from "./goals";
 export { causeBrief };
@@ -56,14 +57,32 @@ export function isUngroundedCause(task: Doc<"tasks"> | null): task is Doc<"tasks
   return !!task && task.source === "signal" && task.status === "open" && !task.readiness && !task.workflow_run_id;
 }
 
-/** The oldest ungrounded causes, at most `limit`. */
-export async function ungroundedCauses(ctx: { db: any }, limit: number): Promise<Doc<"tasks">[]> {
+/** How far past `limit` a pass reads for causes it can pay for. */
+const GROUND_SCAN = 25;
+
+/**
+ * The oldest ungrounded causes whose workspace's budget has room, at most
+ * `limit`. A workspace whose budget is off or spent waits without holding
+ * back another's: the oldest causes in the index were Codecast's, budget off,
+ * and they took five of every pass's eight while Union's grounding fell
+ * behind by 877 (2026-10-26).
+ */
+export async function ungroundedCauses(ctx: { db: any }, limit: number, now = Date.now()): Promise<Doc<"tasks">[]> {
   const rows: Doc<"tasks">[] = await ctx.db
     .query("tasks")
     .withIndex("by_source_status_readiness", (q: any) => q.eq("source", "signal").eq("status", "open").eq("readiness", undefined))
     .order("asc")
-    .take(limit * 2);
-  return rows.filter(isUngroundedCause).slice(0, limit);
+    .take(limit * GROUND_SCAN);
+  const room = new Map<string, boolean>();
+  const out: Doc<"tasks">[] = [];
+  for (const task of rows) {
+    if (!isUngroundedCause(task) || !task.workspace) continue;
+    if (!room.has(task.workspace)) room.set(task.workspace, await budgetHasRoom(ctx, task.workspace, now));
+    if (!room.get(task.workspace)) continue;
+    out.push(task);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 

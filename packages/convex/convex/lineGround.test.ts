@@ -218,10 +218,29 @@ describe("lineGround.sweep (LE5)", () => {
     const next = await add({ fingerprint: "err-2", title: "Checkout drops the coupon", project: "pr-1" });
     await t.run(async (ctx) => setBudgetCap(ctx, workspace, team, 0, person, Date.now()));
     const before = stub.state.calls.length;
-    expect(await sweep()).toMatchObject({ grounded: 0, unbudgeted: 1 });
+    // A budget with no room is read before any call: the cause waits, and nothing is asked.
+    expect(await sweep()).toMatchObject({ grounded: 0, unbudgeted: 0 });
     expect(stub.state.calls.length).toBe(before);
     expect((await task(next.task_id)).readiness).toBeUndefined();
     expect((await task(filed.task_id)).readiness).toBe("ready");
+  });
+
+  test("a workspace whose budget is off waits without holding back another workspace's causes", async () => {
+    const { add, task, sweep, t, person } = await setup();
+    // Older causes in a team whose budget is off sit first in the index.
+    const other = await t.run(async (ctx) => {
+      const team = await ctx.db.insert("teams", { name: "Other", features: { org: true } } as any);
+      const ids = [];
+      for (let n = 0; n < 8; n++) {
+        ids.push(await ctx.db.insert("tasks", { user_id: person, team_id: team, workspace: `team:${team}`, title: `Old ${n}`, status: "open", source: "signal", priority: "medium", cause: { signal_count: 1, first_seen: T0, last_seen: T0, fingerprints: [`old-${n}`] }, created_at: T0, updated_at: T0 } as any));
+      }
+      return ids;
+    });
+    const filed = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart", project: "pr-1" });
+    stub.state.replies.push(ground({ goal_ref: "pr-1" }));
+    expect(await sweep()).toMatchObject({ grounded: 1, unbudgeted: 0 });
+    expect((await task(filed.task_id)).readiness).toBe("ready");
+    for (const id of other) expect((await task(id)).readiness).toBeUndefined();
   });
 
   test("no reply at all leaves the cause untouched for the next pass", async () => {

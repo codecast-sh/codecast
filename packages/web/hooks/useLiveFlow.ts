@@ -34,6 +34,8 @@ export type LiveFlow = {
   client_key?: string | null;
   /** A hold stops every start until it is cleared or `until` passes; `by` is the session that set it. */
   hold: { why: string; until: number | null; by: string | null; at: number } | null;
+  /** Only problems that clear the bar start; the rest wait for another finding and close after quiet_days with none. */
+  bar?: { score: number; findings: number; quiet_days: number; by: string; at: number } | null;
 };
 
 /** A flow a team session ran or defined, as convex flowLibrary.sessionFlows returns it: the graph once, and the runs,
@@ -67,7 +69,7 @@ export type SessionFlow = {
 
 const teamOf = (space: string | null | undefined) => (space?.startsWith("team:") ? space.slice(5) : null);
 
-const liveSig = (r: LiveFlow) => `${r.on}|${r.flow.id}|${r.flow.label}|${r.load.working}/${r.load.cap}|${r.hands_today}|${r.caps.hands_per_day}|${r.waiting ?? ""}|${(r.sources ?? []).join(" ")}|${r.queue.map((q) => `${q.task_id}:${q.waiting ?? ""}`).join(",")}|${r.running.join(",")}|${r.watcher?.handle ?? ""}|${r.hold ? `${r.hold.why}@${r.hold.until ?? ""}` : ""}`;
+const liveSig = (r: LiveFlow) => `${r.on}|${r.flow.id}|${r.flow.label}|${r.load.working}/${r.load.cap}|${r.hands_today}|${r.caps.hands_per_day}|${r.waiting ?? ""}|${(r.sources ?? []).join(" ")}|${r.queue.map((q) => `${q.task_id}:${q.waiting ?? ""}`).join(",")}|${r.running.join(",")}|${r.watcher?.handle ?? ""}|${r.hold ? `${r.hold.why}@${r.hold.until ?? ""}` : ""}|${r.bar ? `${r.bar.score}/${r.bar.findings}/${r.bar.quiet_days}` : ""}`;
 const sessionSig = (r: SessionFlow) => `${r.label ?? r.name}|${r.run_count}|${r.more}|${r.last_at}|${r.saved?.slug ?? ""}@${r.saved?.version ?? ""}|${r.sessions.join(",")}|${r.by.join(",")}|${r.base ?? ""}`;
 
 /** Feeder and reader: the team workspace's live flow (the first, while a team runs one), or null. */

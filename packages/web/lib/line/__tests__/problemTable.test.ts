@@ -265,7 +265,7 @@ describe("the table", () => {
     const c = statusCounts(rows);
     expect(c.all).toBe(issues.length);
     expect(STATUS_ORDER.reduce((n, s) => n + c.by[s], 0)).toBe(c.all);
-    expect(c.by).toEqual({ you: 1, others: 0, newask: 0, failed: 2, running: 1, notstarted: 2, approved: 0, merged: 0, shipped: 1, trial: 0, closed: 1 });
+    expect(c.by).toEqual({ you: 1, others: 0, newask: 0, failed: 2, running: 1, notstarted: 2, waiting: 0, approved: 0, merged: 0, shipped: 1, trial: 0, closed: 1 });
     // A chip's count is the rows it opens.
     for (const s of STATUS_ORDER) expect(filterProblems(rows, { ...all, status: s })).toHaveLength(c.by[s]);
     expect(filterProblems(rows, { status: "shipped", quiet: true, q: "" }).map((r) => r.id)).toEqual(["8"]);

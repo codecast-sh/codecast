@@ -6493,7 +6493,8 @@ export default defineSchema({
       // it (findingGroups.recursAfterFix).
       // coaching: no code or prompt to change; the person on Union's side who
       // missed it is coached, by the role named here (or its name when no role).
-      dissolved: v.optional(v.object({ at: v.number(), note: v.string(), fixed_at: v.optional(v.number()), coaching: v.optional(v.object({ owner: v.string(), role_id: v.optional(v.id("org_roles")) })) })),
+      // `quiet`: closed by its live flow's bar for waiting with no new finding (liveFlowQuiet.ts); fixed_at is then the close.
+      dissolved: v.optional(v.object({ at: v.number(), note: v.string(), fixed_at: v.optional(v.number()), quiet: v.optional(v.boolean()), coaching: v.optional(v.object({ owner: v.string(), role_id: v.optional(v.id("org_roles")) })) })),
       // When findings last joined it after it opened (a move, a merge, or a
       // finding attached to it): a trial problem regrouped since its last run
       // is due a new one (lineTrial.dispatch).

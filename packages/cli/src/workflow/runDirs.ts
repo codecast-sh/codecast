@@ -12,8 +12,11 @@ import { spawnSync } from "../proc.js";
  * run's. Outside a repository it lives under the temp directory.
  */
 export function lineRunsRoot(cwd: string): string {
-  // A main checkout's own root needs no git call (the daemon asks from its loop, worktreeGc.ts).
-  try { if (fs.statSync(path.join(cwd, ".git")).isDirectory()) return path.join(cwd, ".git", "cast-line"); } catch {}
+  // A main checkout's own root needs no git call (the daemon asks from its loop, worktreeGc.ts). A `.git` with no HEAD
+  // is not a repository's: Claude Code writes `<cwd>/.git/info/exclude` wherever a session starts, so one started in a
+  // subfolder (Union's outreach/) leaves a bare `.git` there, and runs that took it for the checkout's kept half their
+  // records apart from the rest (Green read an empty proof dir and Build ran out of visits, ct-61693, 2026-10-26).
+  try { if (fs.existsSync(path.join(cwd, ".git", "HEAD"))) return path.join(cwd, ".git", "cast-line"); } catch {}
   try {
     const r = spawnSync("git", ["-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
     if (r.status === 0 && r.stdout.trim()) return path.join(r.stdout.trim(), "cast-line");

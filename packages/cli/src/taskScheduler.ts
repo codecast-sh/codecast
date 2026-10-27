@@ -25,6 +25,18 @@ const execAsync = (cmd: string, opts?: Record<string, any>) => _execAsync(cmd, {
 const POLL_INTERVAL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const MAX_CONCURRENCY = 2;
+/** While the machine is "over", a due run waits for room, but no longer than this: the level holds as long as any
+ *  session is confined, so a Mac running hundreds of sessions can stay "over" all day (44 triggers up to 12 hours
+ *  late, the Union line's slot governor among them, 2026-10-26). */
+export const TRIGGER_STARVE_MS = 30 * 60_000;
+
+/** The due runs a poll may start: all of them with room; at "over", only the one that has waited longest, once it has
+ *  waited TRIGGER_STARVE_MS. A run started so is unattended, so the governor confines it like any other. */
+export function startableDue<T extends { run_at?: number }>(due: readonly T[], admitted: boolean, now: number): T[] {
+  if (admitted) return [...due];
+  const starved = due.filter((t) => t.run_at !== undefined && now - t.run_at >= TRIGGER_STARVE_MS);
+  return starved.sort((a, b) => a.run_at! - b.run_at!).slice(0, 1);
+}
 
 // SAFE_MODE_MANDATE and SAFE_MODE_DENY_RULES live in agentLaunch.ts so a
 // read only agent definition and a --safe trigger share one fence.
@@ -325,8 +337,6 @@ export class TaskScheduler {
   private async poll(): Promise<void> {
     if (this.stopped) return;
     if (this.running.size >= MAX_CONCURRENCY) return;
-    // Due runs stay due: the next poll after the machine drops below "over" starts them.
-    if (!governor.admit("trigger")) return;
 
     try {
       // Over-fetch so ineligible tasks (wrong machine) can't shadow eligible
@@ -334,10 +344,10 @@ export class TaskScheduler {
       const dueTasks = await this.syncService.getDueTasks(10);
       if (!dueTasks || dueTasks.length === 0) return;
 
-      for (const task of dueTasks) {
+      // At "over" due runs stay due, up to TRIGGER_STARVE_MS (startableDue).
+      const eligible = dueTasks.filter((t) => !this.running.has(t._id) && this.canServeTask(t));
+      for (const task of startableDue(eligible, governor.admit("trigger"), Date.now())) {
         if (this.running.size >= MAX_CONCURRENCY) break;
-        if (this.running.has(task._id)) continue;
-        if (!this.canServeTask(task)) continue;
         await this.executeTask(task);
       }
     } catch (err) {

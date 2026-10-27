@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { problemStand } from "../problemStatus";
+import { underBarOf } from "../problemPage";
 
 const history = (outcome: { tone: string; text: string }) => ({
   attempts: [{ runId: "r1", n: 1, start: 0, end: 1, live: false, outcome, ended: null, endStep: null, unapproved: false, superseded: false, card: null }],
@@ -68,5 +69,27 @@ describe("problemStand: a newer run stopped while an earlier run's built fix wai
   test("an answered card or a merge since leaves nothing to land", () => {
     const answered = { ...h, attempts: [{ ...h.attempts[0], card: { ref: "sd-522", status: "answered", answer: "Drop" } }, h.attempts[1]] };
     expect(problemStand({ status: "in_progress", history: answered } as any, { failed: { key: "budget:prove", label: "x", step: "Prove" } }, 10).act).toBeUndefined();
+  });
+});
+
+describe("problemStand: a problem its live flow's bar holds back (sd-1700)", () => {
+  const fresh = { attempts: [], closes: [], ships: [], watches: [], regressions: [], cameBack: false, regressed: false, coverage: { state: "unknown" } } as any;
+  const task = (score: number | null, findings: number, over: Record<string, unknown> = {}) =>
+    ({ status: "open", readiness: "ready", goal_ref: "pj-1", cause: { signal_count: findings, ...(score == null ? {} : { scored: { score } }) }, ...over }) as any;
+  const bar = { score: 60, findings: 3 };
+  test("one low-scored sighting waits for another finding, under its own chip, saying what it scored and what runs", () => {
+    const t = task(42, 1);
+    const s = problemStand({ status: "open", history: fresh } as any, { task: t, lineOn: true, underBar: underBarOf(t, bar) }, 1);
+    expect(s).toMatchObject({ status: "waiting", phrase: "Scored 42 on 1 finding; runs at score 60+ or 3+ findings", ready: false });
+    const unscored = task(null, 2);
+    expect(problemStand({ status: "open", history: fresh } as any, { task: unscored, lineOn: true, underBar: underBarOf(unscored, bar) }, 1).phrase).toBe("Not scored yet on 2 findings; runs at score 60+ or 3+ findings");
+  });
+  test("over the bar, handed to a role, or with no bar set, it is queued as before", () => {
+    expect(underBarOf(task(70, 1), bar)).toBeNull();
+    expect(underBarOf(task(20, 3), bar)).toBeNull();
+    expect(underBarOf(task(20, 1, { assignee: "or-39" }), bar)).toBeNull();
+    expect(underBarOf(task(20, 1), null)).toBeNull();
+    const s = problemStand({ status: "open", history: fresh } as any, { task: task(70, 1), lineOn: true, underBar: null }, 1);
+    expect(s).toMatchObject({ status: "notstarted", phrase: "Queued", ready: true });
   });
 });

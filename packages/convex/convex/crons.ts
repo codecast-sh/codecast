@@ -20,6 +20,8 @@ crons.interval("score agent-review problems", { minutes: 15 }, internal.problemS
 // Group the findings that came in while grouping could not compare them (the budget refused, or the embedding failed):
 // they wait held instead of opening a problem each (findingRegroup.ts).
 crons.interval("group findings grouping refused", { minutes: 10 }, internal.findingRegroup.groupAwaiting, {});
+// A problem under a live flow's bar that got no new finding in the bar's days closes; a new one reopens it (sd-1700).
+crons.interval("close quiet problems under a live flow bar", { hours: 6 }, internal.liveFlowQuiet.sweepAll, {});
 
 crons.interval("summarize long assistant conversations", { minutes: 10 }, internal.assistant.longHistory.compress, {});
 

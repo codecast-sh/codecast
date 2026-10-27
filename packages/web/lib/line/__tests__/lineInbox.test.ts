@@ -113,6 +113,23 @@ describe("the line's inbox", () => {
     expect(groups.find((g) => g.kind === "failed")).toBeUndefined();
   });
 
+  test("a failed run its problem let go of (put back in the queue) waits on no one", () => {
+    const groups = buildLineInbox({
+      signals: [],
+      tasks: [cause("7", { readiness: "ready" }), cause("8", { workflow_run_id: "e" })] as never,
+      runs: [
+        { _id: "d", task_id: "7", status: "failed", created_at: now - 3 * H, updated_at: now - 3 * H },
+        { _id: "e", task_id: "8", status: "failed", created_at: now - 3 * H, updated_at: now - 3 * H },
+      ] as never,
+      decisions: [],
+      projects: [],
+      rollups: [],
+      admissions: new Map(),
+      now,
+    });
+    expect(groups.find((g) => g.kind === "failed")?.rows.map((r) => r.ref)).toEqual(["ct-8"]);
+  });
+
   test("failed runs read as the station and what happened there, and runs that stopped the same way are one line", () => {
     expect(failCause({ fail_reason: "max_visits=3 exceeded on implement" })).toMatchObject({ step: "implement", label: "Implement went round 3 times and stopped" });
     // A loop a red check drove names the check, and a base that was already red reads as pre-existing.

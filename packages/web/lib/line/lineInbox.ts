@@ -433,10 +433,12 @@ export function buildLineInbox(input: LineInboxInput): InboxGroup[] {
     else if (causeAsks(t)) rows.push({ ...base(t, (t.cause?.signal_count ?? 0) <= 1 ? "confirm" : "question", id), at: t.updated_at ?? null, ask: askLine(t.readiness_note), note: t.readiness_note ?? null, findings: t.cause?.signal_count ?? 0 });
   }
 
-  // Runs: a problem whose newest run failed, while the problem is still open; and live runs silent for a day.
+  // Runs: a problem whose newest run failed, while the problem is still open and still holds that run (a failed run
+  // keeps its problem; `cast line requeue` lets go of it, and the problem waits its turn in the queue); and live runs
+  // silent for a day.
   for (const [taskId, r] of newestRunByTask(input.runs)) {
     const t = byId.get(taskId);
-    if (r.status !== "failed" || stoppedOnPurpose(r) || !t || terminal(t.status)) continue;
+    if (r.status !== "failed" || stoppedOnPurpose(r) || !t || terminal(t.status) || t.workflow_run_id !== r._id) continue;
     const fail = failCause(r);
     // A yes or a wait given to this stop is on the problem: it waits on nobody now.
     if (stopAnswered(fail, t.readiness_note)) continue;

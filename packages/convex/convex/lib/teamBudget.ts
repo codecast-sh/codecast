@@ -62,6 +62,14 @@ async function current(ctx: { db: any }, workspace: string, teamId: Id<"teams"> 
   return { ...row, ...roll } as Doc<"team_budgets">;
 }
 
+/** Whether a workspace's budget has any room now, read without writing: no row or a cap of 0 is off, and a month
+ *  spent or held to its cap is full. A new month has room. */
+export async function budgetHasRoom(ctx: { db: any }, workspace: string, now: number): Promise<boolean> {
+  const row = await rowOf(ctx, workspace);
+  if (!row || row.cap_usd <= 0) return false;
+  return row.month !== budgetMonth(now) || row.spent_usd + row.held_usd < row.cap_usd;
+}
+
 /** A call's worst case: its prompt at three characters a token (which overstates English) and every output token it may write. */
 export function worstCaseCost(model: string, promptChars: number, maxTokens: number): number {
   return modelCost(model, { input_tokens: Math.ceil(promptChars / 3), output_tokens: maxTokens });

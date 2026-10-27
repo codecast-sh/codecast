@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { TaskScheduler, buildRunLaunch, buildRunScript, paneChildren, runPaneFinished, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
+import { TaskScheduler, TRIGGER_STARVE_MS, buildRunLaunch, buildRunScript, paneChildren, runPaneFinished, startableDue, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { deviceId } from "./remote/device.js";
 import { runTriggerPrecheck } from "./precheckRunner.js";
 import { triggerPrecheckPassed } from "@codecast/shared/contracts";
@@ -616,5 +616,21 @@ describe("checkTaskCompletion's session check", () => {
       probe.mockRestore();
       scheduler.stop?.();
     }
+  });
+});
+
+describe("due runs while the machine is over (startableDue)", () => {
+  const now = 1_800_000_000_000;
+  const due = [
+    { _id: "fresh", run_at: now - 60_000 },
+    { _id: "late", run_at: now - TRIGGER_STARVE_MS - 1 },
+    { _id: "latest", run_at: now - 12 * 3_600_000 },
+  ];
+  it("with room, every due run may start", () => {
+    expect(startableDue(due, true, now).map((t) => t._id)).toEqual(["fresh", "late", "latest"]);
+  });
+  it("at over, only the run that has waited longest starts, once it has waited past the bound", () => {
+    expect(startableDue(due, false, now).map((t) => t._id)).toEqual(["latest"]);
+    expect(startableDue([due[0]], false, now)).toEqual([]);
   });
 });

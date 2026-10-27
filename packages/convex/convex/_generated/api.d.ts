@@ -380,6 +380,7 @@ import type * as linearApi from "../linearApi.js";
 import type * as linearWebhooks from "../linearWebhooks.js";
 import type * as linkPreviews from "../linkPreviews.js";
 import type * as liveActivity from "../liveActivity.js";
+import type * as liveFlowQuiet from "../liveFlowQuiet.js";
 import type * as liveFlows from "../liveFlows.js";
 import type * as liveFlowsSchema from "../liveFlowsSchema.js";
 import type * as localFirstCommands from "../localFirstCommands.js";
@@ -951,6 +952,7 @@ declare const fullApi: ApiFromModules<{
   linearWebhooks: typeof linearWebhooks;
   linkPreviews: typeof linkPreviews;
   liveActivity: typeof liveActivity;
+  liveFlowQuiet: typeof liveFlowQuiet;
   liveFlows: typeof liveFlows;
   liveFlowsSchema: typeof liveFlowsSchema;
   localFirstCommands: typeof localFirstCommands;
