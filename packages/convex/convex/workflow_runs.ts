@@ -1111,7 +1111,8 @@ export const updateProgress = mutation({
       status: args.run_status ?? run.status,
       // A run a cancel already ended keeps why: its runner, finding the gate gone, reports a failure of its own after it ("no outgoing edge from decide").
       fail_reason: run.status === "failed" && run.fail_reason && args.run_status === "failed" ? run.fail_reason : args.fail_reason,
-      ...(args.graph_hash ? { graph_hash: args.graph_hash } : {}),
+      // A runner's first report names the graph it loaded, so a restart a re-pin asked for has happened.
+      ...(args.graph_hash ? { graph_hash: args.graph_hash, restart_runner_at: undefined } : {}),
       ...(args.graph_nodes?.length ? { graph_nodes: args.graph_nodes } : {}),
       ...(args.runner_device ? { runner_device: args.runner_device } : {}),
       updated_at: now,
@@ -1447,7 +1448,7 @@ export const liveRunsForDevice = mutation({
       const rows = await ctx.db.query("workflow_runs")
         .withIndex("by_runner_device_status", (q) => q.eq("runner_device", args.device).eq("status", status))
         .take(100);
-      runs.push(...rows.filter((r) => r.user_id === auth.userId).map((r) => ({ run_id: r._id, status: r.status, current_node_id: r.current_node_id ?? null, updated_at: r.updated_at })));
+      runs.push(...rows.filter((r) => r.user_id === auth.userId).map((r) => ({ run_id: r._id, status: r.status, current_node_id: r.current_node_id ?? null, updated_at: r.updated_at, restart_at: r.restart_runner_at ?? null })));
     }
     const failed = await failStrandedPendingRuns(ctx, auth.userId, Date.now());
     return { runs, failed };

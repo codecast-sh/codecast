@@ -149,7 +149,11 @@ export async function repinRunForResume(ctx: any, run: Doc<"workflow_runs">, at:
  * included, so a fix saved to a station a waiting run has not reached yet
  * never reaches it: Union's Ship answers on runs started on agentwatch v17
  * failed at an Eval line v18 had fixed (ct-61712, 2026-10-27). A run whose
- * current station the current graph lacks keeps its versions. `dry` reports.
+ * current station the current graph lacks keeps its versions. A live runner
+ * holds the graph it loaded at start, so each moved run is marked for its
+ * machine to restart the runner once it waits at a gate (restart_runner_at):
+ * a re-pin alone left Union's 95 runs at a card on their old Eval
+ * (2026-10-27). `dry` reports.
  */
 export const repinLiveRuns = internalMutation({
   args: { workflow_id: v.id("workflows"), started_before: v.optional(v.number()), run_id: v.optional(v.id("workflow_runs")), dry: v.optional(v.boolean()) },
@@ -169,7 +173,7 @@ export const repinLiveRuns = internalMutation({
         if (args.started_before && run.created_at >= args.started_before) continue;
         if (key(run.flow_versions) === key(flow_versions)) continue;
         if (run.current_node_id && !stations.has(run.current_node_id)) { kept.push({ run: String(run._id), why: `the current graph has no ${run.current_node_id}` }); continue; }
-        if (!args.dry) await ctx.db.patch(run._id, { flow_versions });
+        if (!args.dry) await ctx.db.patch(run._id, { flow_versions, restart_runner_at: Date.now() });
         const task: Doc<"tasks"> | null = run.task_id ? await ctx.db.get(run.task_id) : null;
         moved.push(`${task?.short_id ?? String(run._id)}@${run.current_node_id ?? "start"}`);
       }

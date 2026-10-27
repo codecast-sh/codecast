@@ -142,6 +142,24 @@ describe("a flow in the library", () => {
     expect(named.workflow.library.versions[0].snapshot.nodes[1].prompt).toBe("Fixed eval line.");
   });
 
+  test("a moved run is marked for its machine to restart its runner, and the new runner's first report clears the mark", async () => {
+    // Oct 27: the runners of Union's 95 runs at a card held the graphs they loaded at start, so a re-pin alone left them on the old Eval.
+    const { t, upsert, run, row } = await setup();
+    await upsert(push("spine", "aaaaaaaaaaaaaaaa", "Fix it.", { save: true, library: true }));
+    const waiting = await run("spine");
+    await upsert(push("spine", "dddddddddddddddd", "Fixed eval line.", { save: true }));
+    const flow = await row("spine");
+    await t.run((ctx) => ctx.db.patch(waiting.runId, { status: "paused", current_node_id: "fix", workspace: flow.workspace, runner_device: "dev-host" } as any));
+    const { internal } = await import("./_generated/api");
+    await t.mutation((internal as any).flowVersions.repinLiveRuns, { workflow_id: flow._id, dry: true });
+    const live = () => t.mutation(api.workflow_runs.liveRunsForDevice, { api_token: TOKEN, device: "dev-host" });
+    expect((await live()).runs[0].restart_at).toBeNull();
+    await t.mutation((internal as any).flowVersions.repinLiveRuns, { workflow_id: flow._id });
+    expect((await live()).runs[0]).toMatchObject({ status: "paused", current_node_id: "fix", restart_at: expect.any(Number) });
+    await t.mutation(api.workflow_runs.updateProgress, { api_token: TOKEN, run_id: waiting.runId, current_node_id: "fix", node_id: "fix", node_status: "running", graph_hash: "h-new" });
+    expect((await live()).runs[0].restart_at).toBeNull();
+  });
+
   test("a failed run resumed with --current-flow reads the current version; its check, or a station the version lacks, moves nothing", async () => {
     const { t, owner, upsert, run } = await setup();
     await upsert(push("spine", "aaaaaaaaaaaaaaaa", "Fix it.", { save: true, library: true }));

@@ -8162,6 +8162,10 @@ export default defineSchema({
     // (cast workflow resume --queue): the line's sweep resumes it there, ahead
     // of new starts (orgLine.planSweep), onto the current flow when asked.
     resume_queued: v.optional(v.object({ at: v.string(), current_flow: v.optional(v.boolean()), by: v.id("users"), since: v.number() })),
+    // When a re-pin moved the live run onto newer flow versions (flowVersions.repinLiveRuns). Its runner holds the
+    // graph it loaded at start, so the run's machine restarts the runner once the run waits at a gate (daemon
+    // resumeOrphanedWorkflowRuns); the new runner's first report clears it.
+    restart_runner_at: v.optional(v.number()),
   })
     .index("by_share_token", ["share_token"])
     // A daemon's sweep for its own live runs whose runner is gone.
