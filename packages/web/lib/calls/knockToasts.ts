@@ -1,6 +1,6 @@
 import { toast as sonner } from "sonner";
 import { guestDisplayName } from "@codecast/shared/contracts";
-import type { GuestWaiting, RoomKnock } from "../../store/inboxStore";
+import type { GuestWaiting, RoomKnock } from "../../store/callRoomTypes";
 import { firstName } from "../../components/calls/speakers";
 
 // SOMEBODY AT THE DOOR, wherever the person inside is looking.

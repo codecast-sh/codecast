@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { useInboxStore, type GuestWaiting } from "../store/inboxStore";
+import { useInboxStore } from "../store/inboxStore";
+import type { GuestWaiting } from "../store/callRoomTypes";
 import { useLiveRoomRows, type LiveRoomRow } from "./liveRoomRows";
 import { guestsStillWaiting } from "../lib/calls/knockToasts";
 import { useNowWhen } from "./useCoarseNow";

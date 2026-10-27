@@ -5,9 +5,9 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { dmRoomKey } from "@codecast/shared/contracts";
 import { JOIN_TITLE_MS } from "../calls/joinAnnounce";
 import { useInboxStore } from "../../store/inboxStore";
+import { dmUnreadOf } from "./faceDmUnread";
 import {
   deriveFaceRow,
-  dmUnreadOf,
   engagementOf,
   faceRowInputSig,
   isInCall,

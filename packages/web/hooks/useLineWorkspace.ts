@@ -40,7 +40,8 @@ import { graphPickOrder, processIndex, projectGraphs, type GraphRun, type Projec
 import { buildLineInbox, inboxByGraph, inboxKindByCase, inboxProcessOf, lineProjectCounts, type InboxGroup, type TrialInboxCard } from "../lib/line/lineInbox";
 import { foldDuplicateNeeds, lineNeeds, needCount, unlandedNeed, type LineNeed } from "../lib/line/lineNeeds";
 import { unlandedFix } from "../lib/line/approvedFix";
-import { fixMergesSig, landingOutput, newestRuns, type FixPullRequest, type LandedTask } from "../lib/line/problemPage";
+import { landingOutput, newestRuns } from "../lib/line/problemPage";
+import { fixMergesSig, type FixPullRequest, type LandedTask } from "../lib/line/fixMerges";
 import { caseRefs, lineSelectionPushes, lineSelectionSearch, readLineSelection, resolveLineProject, type CaseRefs, type LineSelection, type LineSelectionPatch } from "../lib/line/lineWorkspaceUrl";
 import { useLineFloor, useProjectWorkspace } from "../components/line/useLineFloor";
 import { useLineGraph } from "../components/line/map/useLineGraph";

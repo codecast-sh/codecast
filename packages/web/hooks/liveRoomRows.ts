@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { useTrackedStore, type LiveRoom } from "../store/inboxStore";
+import { useTrackedStore } from "../store/inboxStore";
+import type { LiveRoom } from "../store/callRoomTypes";
 import { describeRoomLive } from "../lib/calls/roomLabels";
 import { useNowWhen } from "./useCoarseNow";
 import { CALL_KNOCK_TTL_MS } from "@codecast/shared/contracts";

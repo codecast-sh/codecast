@@ -17,7 +17,7 @@ import {
 } from "../../lib/chat/faceChat";
 import { memberDisplayName } from "../../lib/liveEntities";
 import { hueFor } from "../../lib/avatarInitials";
-import { markFaceRead } from "../../lib/faces/faceRow";
+import { markFaceRead } from "../../lib/faces/faceDmUnread";
 import { whereOf } from "../../lib/chat/faceChatText";
 import { Preview } from "./FaceMessages";
 import "./faceChat.css";

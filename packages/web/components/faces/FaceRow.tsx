@@ -31,7 +31,8 @@ import { ChevronLeft, EyeOff, GripHorizontal, Link2, Maximize2, MicOff, Minus, P
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { AVATAR_URLS } from "../../lib/orgAvatars";
 import { useInboxStore } from "../../store/inboxStore";
-import { callRoomOf, markFaceRead, type FaceEntry, type FaceRow as FaceRowModel, type FaceState, type LinkKind } from "../../lib/faces/faceRow";
+import { markFaceRead } from "../../lib/faces/faceDmUnread";
+import { callRoomOf, type FaceEntry, type FaceRow as FaceRowModel, type FaceState, type LinkKind } from "../../lib/faces/faceRow";
 import { useCircleFace } from "../../hooks/useCircleFace";
 import { CircleFace } from "../calls/FaceCircle";
 import { getCallTiles, subscribeCallTiles, type ParticipantTile } from "../../lib/calls/callManager";
