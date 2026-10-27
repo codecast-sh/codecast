@@ -13,7 +13,9 @@
 // `<node>.json.<path>` reads a field of that node's JSON output. Any other
 // bare word is a literal, so `outcome = success` compares the outcome with the
 // word success. Ordering operators compare numbers and are false unless both
-// sides parse as numbers, so an unset count never routes; `=` and `!=`
+// sides parse as numbers, so an unset count never routes (a station's
+// `<node>.visits` is a count the runner keeps, and reads 0 until the station
+// runs in this attempt); `=` and `!=`
 // compare numerically when both sides are numbers (`1.0 = 1`), else as text. A lone operand is true when it names a
 // context value that is non-empty and not "false" or "0".
 
@@ -153,6 +155,10 @@ export function lookupContextVar(context: Record<string, string>, key: string): 
     }
   }
   if (key.startsWith("context.")) return lookupContextVar(context, key.slice("context.".length));
+  // A station that has not run in this attempt has made no visits. A resume clears the counts (clearVisits), and
+  // unset, `propose.visits < 3` and `propose.visits >= 3` were both false: a build sent back to propose fell through
+  // to its failure edge (ct-62191, Oct 27).
+  if (/^[\w-]+\.visits$/.test(key)) return "0";
   return undefined;
 }
 

@@ -189,6 +189,13 @@ describe("evalCondition: the language", () => {
     expect(evalCondition("outcome > 0", ctx)).toBe(false);
   });
 
+  test("a station that has not run in this attempt counts 0 visits", () => {
+    expect(evalCondition("propose.visits < 3", ctx)).toBe(true);
+    expect(evalCondition("propose.visits >= 3", ctx)).toBe(false);
+    expect(evalCondition("propose.visits >= 3", { ...ctx, "propose.visits": "3" })).toBe(true);
+    expect(evalCondition("context.propose.visits = 0", ctx)).toBe(true);
+  });
+
   test("contains, quoted strings and literals", () => {
     expect(evalCondition("name contains login", ctx)).toBe(true);
     expect(evalCondition("name CONTAINS 'feature/'", ctx)).toBe(true);
