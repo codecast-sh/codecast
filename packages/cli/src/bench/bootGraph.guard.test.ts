@@ -281,7 +281,9 @@ describe("command groups stay off the boot graph", () => {
     // already on this graph (resumeCommand.ts, sessionProcessMatcher.ts,
     // contracts/decisionAnswers.ts), adding their headers and imports, and
     // ccAccounts.ts grew; still under the 4406 this pass started from.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4379);
+    // 4380 on 2026-10-27: `cast workflow resume --current-flow` in index.ts
+    // (+0.25), which moves a failed run onto its flow's current version.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4380);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
