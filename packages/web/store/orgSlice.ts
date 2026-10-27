@@ -37,6 +37,7 @@ import { hasThreadState, clearedThreadStateFields, type ThreadStateFields } from
 import { isConvexId } from "../lib/entityLinks";
 import { leadScopeChange, type LeadScopeChange } from "@codecast/shared/contracts/orgLead";
 import type { OrgLogEntry, OrgLogRow } from "@codecast/shared/contracts/orgChange";
+import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
 
 /** An optimistic edit awaiting the server's echo (see the header). The tree
  *  kinds reshape the tree (a move, a follow, a role's fields, a retire). The
@@ -848,7 +849,7 @@ export function applyOrgUndoIntent(log: Record<string, OrgLogEntry>, intent: Ext
  * what they were. A move, a follow and a retire have nothing to undo here:
  * the next org.tree push is authoritative for them.
  */
-export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalChanges"> & { orgProposals?: Record<string, OrgProposalListRow>; orgLog?: Record<string, OrgLogEntry> }, intent: OrgIntent): void {
+export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalChanges"> & { orgProposals?: Record<string, OrgProposalListRow>; orgLog?: Record<string, OrgLogEntry> } & FaceRowsDraft, intent: OrgIntent): void {
   switch (intent.kind) {
     case "undoChange": {
       for (const b of undoIntentBatches(intent)) {
@@ -900,6 +901,7 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
       return;
     }
     case "roleFields": {
+      writeRoleFaceFields(draft, intent.role_id, intent.from);
       const role = draft.orgTree?.roles.find((r) => r._id === intent.role_id);
       if (!role) return;
       applyRoleFields(role, intent.from, roleFieldKeys(intent.fields));
@@ -1011,7 +1013,7 @@ export function mergeOrgTree(incoming: OrgTree, intents: OrgIntent[], now = Date
 /** A field edit on a role as an intent: applied to the tree now, replayed over
  *  every server push until the tree agrees, and put back from `from` when the
  *  server refuses. updateOrgRole and setProjectLead both write through it. */
-export function pushRoleFieldsIntent(draft: OrgDraft, roleId: string, fields: OrgUpdateRoleInput): void {
+export function pushRoleFieldsIntent(draft: OrgDraft & FaceRowsDraft, roleId: string, fields: OrgUpdateRoleInput): void {
   const tree = draft.orgTree;
   const role = tree?.roles.find((r) => r._id === roleId);
   if (!tree || !role) return;
@@ -1021,7 +1023,22 @@ export function pushRoleFieldsIntent(draft: OrgDraft, roleId: string, fields: Or
   for (const k of keys) (from as Record<string, unknown>)[k] = JSON.parse(JSON.stringify(role[k] ?? null)) ?? undefined;
   const intent: OrgIntent = { kind: "roleFields", id: intentId(), role_id: roleId, fields, from, at: Date.now() };
   applyOrgIntent(tree, intent);
+  writeRoleFaceFields(draft, roleId, fields);
   pushIntent(draft, intent);
+}
+
+/** The face fields of a role edit, on the role's `viewerRoles` row: the one
+ *  home every face reads (lib/roleRows). Written in the same draft as the
+ *  tree, so a rename or a new face paints at once; viewerRoles is localFirst,
+ *  so the write holds until the server echoes it. */
+/** The viewerRoles rows a role edit writes its face fields onto. */
+type FaceRowsDraft = { viewerRoles?: Record<string, { name: string; handle?: string; avatar?: string | null }> };
+
+function writeRoleFaceFields(draft: FaceRowsDraft, roleId: string, fields: OrgUpdateRoleInput): void {
+  const row = draft.viewerRoles?.[roleId];
+  if (!row) return;
+  if (fields.name !== undefined) row.name = fields.name;
+  if ("avatar" in fields) row.avatar = fields.avatar ?? avatarOf({ handle: row.handle ?? "", avatar: null });
 }
 
 /** What naming `role` the lead of a project does to its scope, as the person
