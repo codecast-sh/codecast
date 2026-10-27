@@ -431,16 +431,41 @@ aliases of the Head of People (`@head-of-people`). The org page draws the root s
 "Head of People"; `/anchor` redirects to its scope page; the anchors table
 stays as the implementation detail it is. Coalescing default is two minutes.
 
-## S13. Personified roles
+## S13. Role faces: characters and icons
 
-Long lived roles get a face. A set of tasteful, whimsical animal profile
-icons (24 painted storybook portraits, one style, 256 px WebP) lives in
+Every long lived role carries two faces, and each viewer picks which one they
+see. The setting is `clientState.ui.show_characters` (absent reads as on).
+
+**Character.** An animal portrait and an optional given name. The 24 painted
+storybook portraits (one style, 256 px WebP) live in
 `packages/web/components/org/avatars/` with the key list in
-`packages/shared/contracts/orgAvatars.ts`. `org_roles.avatar?: key`. The
-hire form offers the set (a default derived from the handle so every role has
-one); the org node, the scope page header, the chat role pill, the wake card
-header and a proposal's ghost seat all draw it; a display name may differ from
-the handle and both show.
+`packages/shared/contracts/orgAvatars.ts`; `org_roles.avatar?: key`, defaulted
+from the handle at hire.
+
+**Icon.** A glyph of what the role looks after (a database for infrastructure,
+a coin for finances) in a rounded square tile, beside the role's title and no
+name. The tile shape says "role" (people and characters are circles). The
+format is `RoleIcon` in `packages/shared/contracts/roleIcon.ts`: up to 8
+validated vector shapes on a 24 grid, a concept word and one of the 8 sol
+accents, stored as `org_roles.icon`. Markup is only ever emitted by
+`roleIconSvg`, so a stored icon cannot carry script or style. A role with no
+icon yet shows its monogram in the same tile.
+
+**Drawing.** `roleIcons.generate` draws one: three drawers sketch in parallel
+from the design brief (`ROLE_ICON_LANGUAGE`), the server rasterizes each to a
+contact sheet, and a judge picks the best, rejecting a concept another role in
+the boundary already holds or one too close in shape (two rounds at most,
+about $0.10). Hiring schedules a drawing; `roleIcons:backfill` draws for
+roles that have none, one per run; Redraw on the scope page draws a fresh one
+behind the consequential confirm; `cast role icon @h --svg` sets a hand drawn
+one. A drawing never overwrites an icon a person set.
+
+**Where it shows.** The resolver `sessionIdentity` (web, imported by mobile)
+returns a role face as `style: "character" | "icon"` from the viewer's prefs,
+and every surface (sidebar, session header, chat pill, org node, scope page,
+mentions, proposal author) draws what it returns. With characters off, no
+session wears a character at all, and "Personify every session" is locked off.
+What agents call themselves in their own messages is unchanged.
 
 ## S14. First open
 
