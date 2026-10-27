@@ -217,11 +217,12 @@ describe("liveFlows (one live flow per team)", () => {
     });
     const view = await liveFlowView(ctx, tables.live_flows[0], NOW);
     expect(view.bar).toEqual(bar);
-    expect(view.queue.map((q) => q.task_id).sort()).toEqual(["tasks_d45x3", "tasks_g10", "tasks_g70", "tasks_new3"]);
-    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id).sort()).toEqual(["tasks_d45x3", "tasks_g10", "tasks_g70", "tasks_new3"]);
-    // Taken off, the rest start in score order.
+    // A problem with no score clears it (errors and judge cases are never scored): it ranks at 50, after the scored head.
+    expect(view.queue.map((q) => q.task_id)).toEqual(["tasks_g70", "tasks_new3", "tasks_new1", "tasks_d45x3", "tasks_g10"]);
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id).sort()).toEqual(["tasks_d45x3", "tasks_g10", "tasks_g70", "tasks_new1", "tasks_new3"]);
+    // Taken off, the one under it starts too.
     tables.live_flows[0].bar = undefined;
-    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_new1", "tasks_g40"]);
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_g40"]);
   });
 
   test("only a team admin sets the bar; the CLI says it in words, refuses a bad one, and takes it off", async () => {

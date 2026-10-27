@@ -81,8 +81,8 @@ describe("problemStand: a problem its live flow's bar holds back (sd-1700)", () 
     const t = task(42, 1);
     const s = problemStand({ status: "open", history: fresh } as any, { task: t, lineOn: true, underBar: underBarOf(t, bar) }, 1);
     expect(s).toMatchObject({ status: "waiting", phrase: "Scored 42 on 1 finding; runs at score 60+ or 3+ findings", ready: false });
-    const unscored = task(null, 2);
-    expect(problemStand({ status: "open", history: fresh } as any, { task: unscored, lineOn: true, underBar: underBarOf(unscored, bar) }, 1).phrase).toBe("Not scored yet on 2 findings; runs at score 60+ or 3+ findings");
+    // Not scored, it clears the bar and waits in the queue at 50 until its score comes.
+    expect(underBarOf(task(null, 1), bar)).toBeNull();
   });
   test("over the bar, handed to a role, or with no bar set, it is queued as before", () => {
     expect(underBarOf(task(70, 1), bar)).toBeNull();

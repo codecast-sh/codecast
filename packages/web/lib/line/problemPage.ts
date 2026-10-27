@@ -215,21 +215,22 @@ export function mergeStepOff(text: string | null | undefined): boolean | null {
   return m ? /merge is off/i.test(m[1]) : null;
 }
 
-/** A problem its live flow's bar holds back: what it scored (null: not scored yet), its findings, and the bar. */
-export type UnderBar = { score: number | null; findings: number; bar: Pick<FlowBar, "score" | "findings"> };
+/** A problem its live flow's bar holds back: what it scored, its findings, and the bar. */
+export type UnderBar = { score: number; findings: number; bar: Pick<FlowBar, "score" | "findings"> };
 
 type BarTask = { status?: string; readiness?: string | null; assignee?: string | null; workflow_run_id?: string | null; cause?: { signal_count?: number; scored?: { score: number } | null } | null };
 
 /** Whether its flow's bar holds an open, ready problem back (convex liveFlows: one handed to a role runs whatever it
  *  scored), and with what; null when it clears the bar or none is set. */
 export function underBarOf(t: BarTask | null | undefined, bar: Pick<FlowBar, "score" | "findings"> | null | undefined): UnderBar | null {
-  if (!t || !bar || t.status !== "open" || t.readiness !== "ready" || t.assignee || clearsBar(t, bar)) return null;
-  return { score: t.cause?.scored?.score ?? null, findings: t.cause?.signal_count ?? 0, bar: { score: bar.score, findings: bar.findings } };
+  const score = t?.cause?.scored?.score;
+  if (!t || !bar || score == null || t.status !== "open" || t.readiness !== "ready" || t.assignee || clearsBar(t, bar)) return null;
+  return { score, findings: t.cause?.signal_count ?? 0, bar: { score: bar.score, findings: bar.findings } };
 }
 
 /** "Scored 42 on 1 finding; runs at score 60+ or 3+ findings" */
 export const underBarWords = (u: UnderBar): string =>
-  `${u.score == null ? "Not scored yet" : `Scored ${u.score}`} on ${u.findings} finding${u.findings === 1 ? "" : "s"}; runs at ${barWords(u.bar)}`;
+  `Scored ${u.score} on ${u.findings} finding${u.findings === 1 ? "" : "s"}; runs at ${barWords(u.bar)}`;
 
 export type NotStartedFacts = {
   task: (BandTask & { workflow_run_id?: string | null; cause?: { signal_count?: number } | null }) | null;

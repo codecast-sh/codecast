@@ -33,7 +33,7 @@ export function closesQuiet(t: Doc<"tasks">, bar: FlowBar, now: number): boolean
 export function quietWords(t: Pick<Doc<"tasks">, "cause" | "readiness">, bar: FlowBar): string {
   const score = t.cause?.scored?.score;
   const n = t.cause?.signal_count ?? 0;
-  const held = t.readiness === "not_actionable" ? "the line found nothing to change" : `${score == null ? "not scored" : `scored ${score}`} on ${n} finding${n === 1 ? "" : "s"}, under the flow's bar (${barWords(bar)})`;
+  const held = t.readiness === "not_actionable" ? "the line found nothing to change" : `scored ${score} on ${n} finding${n === 1 ? "" : "s"}, under the flow's bar (${barWords(bar)})`;
   return `Closed quiet: ${held}, and no new finding in ${bar.quiet_days} days. A new finding reopens it.`;
 }
 

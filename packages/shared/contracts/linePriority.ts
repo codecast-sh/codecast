@@ -56,16 +56,18 @@ export function byStartOrder(a: StartOrderTask, b: StartOrderTask): number {
 }
 
 // A live flow's bar (liveFlows.ts, decision sd-1700): which problems its
-// agents take. The scoring pass rates every problem once, so one sighting
+// agents take. The scoring pass rates a judge's problems once, so one sighting
 // rated low waits for another finding, and the finding that joins re-scores
-// it. Unscored problems rank as UNSCORED_VALUE until the pass reaches them. A
-// problem that waits `quiet_days` with no new finding closes, and reopens when
-// one comes.
+// it. A problem with no score clears the bar: the pass covers only the judges
+// it was configured for, so errors, replays, evals and judge cases are never
+// scored, and a new problem it covers ranks as UNSCORED_VALUE, behind every
+// one over the bar, until its score comes. A problem that waits `quiet_days`
+// with no new finding closes, and reopens when one comes.
 export type FlowBar = { score: number; findings: number; quiet_days: number };
 
-/** Whether a problem clears the bar: scored at or over its score, or holding at least its findings. No bar takes every problem. */
+/** Whether a problem clears the bar: not scored, scored at or over its score, or holding at least its findings. No bar takes every problem. */
 export const clearsBar = (t: StartOrderTask, bar: Pick<FlowBar, "score" | "findings"> | null | undefined): boolean =>
-  !bar || startValue(t) >= bar.score || (t.cause?.signal_count ?? 0) >= bar.findings;
+  !bar || !t.cause?.scored || t.cause.scored.score >= bar.score || (t.cause?.signal_count ?? 0) >= bar.findings;
 
 /** The bar in words: "score 60+ or 3+ findings". */
 export const barWords = (bar: Pick<FlowBar, "score" | "findings">): string => `score ${bar.score}+ or ${bar.findings}+ findings`;
