@@ -7881,13 +7881,11 @@ html.hosted-mode.minimal-style [data-cc-rail-search] input:is(:hover, :focus) {
 /* A role's icon tile (components/identity/RoleIconTile.tsx). `--rt-accent`
    is the icon's accent token, set inline. */
 .role-tile {
-  display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   overflow: hidden;
   line-height: 1;
-  vertical-align: middle;
   background: color-mix(in srgb, var(--rt-accent) 20%, var(--sol-bg-alt));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rt-accent) 45%, var(--sol-bg));
   color: color-mix(in srgb, var(--rt-accent) 55%, var(--sol-text));

@@ -59,6 +59,7 @@ import { NewMenu } from "./NewMenu";
 import { TopbarRow } from "./TopbarRow";
 import { PhoneCallStrip } from "./calls/PhoneCallStrip";
 import { HeaderPins, AnchorPanel } from "./anchor/AnchorPanel";
+import { useSyncViewerRoles } from "../hooks/useSyncViewerRoles";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
 import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
 import { useSyncIssueSyncSources } from "../hooks/useSyncIssueSyncSources";
@@ -330,6 +331,9 @@ function HostFeeders() {
   // The anchors collection feeds the header chip, the slide-over, the inbox's
   // anchor marks and chat's DM naming — one subscription for the whole shell.
   useSyncAnchors();
+  // Every role the viewer can see, in any workspace: the one home of a role's
+  // face and name, so a role from another workspace still wears its own.
+  useSyncViewerRoles();
   // The team's git activity: the team feed reads it, and so does any page that
   // wants recent events without opening a scope of its own.
   useSyncTeamExternalEvents();

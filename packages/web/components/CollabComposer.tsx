@@ -35,6 +35,7 @@ import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 import { roleAuthorOf } from "../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../hooks/useLiveIdentityRow";
 import { useGuestSuggestions } from "../hooks/useGuestSuggestions";
+import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
 // ── Live composer co-presence ────────────────────────────────────────────────
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
@@ -269,7 +270,7 @@ export const CollabComposer = memo(function CollabComposer({
     () => ({ _id: String(conversation._id), standing_role_id: c.standing_role_id ?? null, acting_user_id: c.acting_user_id ?? null }),
     [conversation._id, c.standing_role_id, c.acting_user_id], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const roleName = roleAuthorOf(useLiveIdentityRow(identityBase))?.name ?? null;
+  const roleName = roleAuthorOf(useLiveIdentityRow(identityBase), useIdentityPrefs())?.name ?? null;
   const target = roleName ?? `${owner}'s session`;
   // A session whose machine stopped beating is not live: what is sent waits
   // in the queue until that machine is back, so the strip says where it waits.
