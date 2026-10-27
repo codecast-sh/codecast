@@ -27,6 +27,7 @@ import { computeReportingPeople, type BriefPerson } from "./orgGoals";
 import { roleServedInitiatives } from "./lib/roleInitiatives";
 import { metricLine, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { parseCallRef } from "@codecast/shared/entities";
+import { isActiveTask } from "@codecast/shared/tasks";
 import { findInitiative } from "./lib/initiativeRef";
 import { canReadCall } from "./transcripts";
 
@@ -613,7 +614,8 @@ const scopeArgs = {
 };
 
 // The scope resolved to rows: the role (when named), its workspace, and every
-// project, plan and task inside it, access checked per row. The goals a
+// project, plan and active task inside it (isActiveTask, the board's rule),
+// access checked per row. The goals a
 // scope names ride beside them: the rows, and their ids for a caller that
 // only filters.
 export type ResolvedScope = {
@@ -678,13 +680,18 @@ export async function resolveScope(
   const admit = async (rows: any[]) => {
     for (const t of rows) {
       const id = t._id.toString();
-      if (taskById.has(id) || ephemeralIds.has(id) || !(await mayRead("tasks", t))) continue;
+      if (taskById.has(id) || ephemeralIds.has(id) || !isActiveTask(t) || !(await mayRead("tasks", t))) continue;
       if (t.ephemeral) ephemeralIds.add(id);
       else taskById.set(id, t);
     }
   };
+  // A project's tasks are read by triage state, so the suggestions a review
+  // files by the thousand (AgentWatch held 7k) are never loaded: only active
+  // rows and rows from before triage existed can be work (isActiveTask).
   for (const project of projects) {
-    await admit(await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect());
+    for (const triage of ["active", undefined]) {
+      await admit(await ctx.db.query("tasks").withIndex("by_project_triage", (q: any) => q.eq("project_id", project._id).eq("triage_status", triage)).collect());
+    }
   }
   for (const plan of planById.values()) {
     await admit(await ctx.db.query("tasks").withIndex("by_plan_id", (q: any) => q.eq("plan_id", plan._id)).collect());

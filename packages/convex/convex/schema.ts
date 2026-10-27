@@ -6563,6 +6563,9 @@ export default defineSchema({
     .index("by_user_updated", ["user_id", "updated_at"])
     .index("by_project_id", ["project_id"])
     .index("by_project_status", ["project_id", "status"])
+    // A project's real work without its untriaged rows (org resolveScope): a
+    // review files thousands of suggested problems under one project.
+    .index("by_project_triage", ["project_id", "triage_status"])
     // Sparse: tasks filed under a plan. Powers the org scope feed (docs/
     // architecture/scopes-and-feed.md F2) reading a plan's tasks directly.
     .index("by_plan_id", ["plan_id"])

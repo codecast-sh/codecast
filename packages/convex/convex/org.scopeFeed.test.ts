@@ -195,6 +195,19 @@ describe("F2 read budget", () => {
   });
 });
 
+describe("resolveScope reads the scope's work, not a review's suggestions", () => {
+  test("suggested rows under a scope project are neither loaded nor counted; a promoted one is work", async () => {
+    const suggested = Array.from({ length: 300 }, (_, i) => ({
+      _id: `tasks_sig${i}`, user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: `ct-${i + 100}`, title: `Problem ${i}`, task_type: "task", source: "signal", triage_status: "suggested", status: i % 2 ? "dropped" : "open", created_at: 1, updated_at: NOW - H,
+    }));
+    const promoted = { _id: "tasks_sig_live", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, short_id: "ct-99", title: "Accepted problem", task_type: "task", source: "signal", triage_status: "active", status: "in_progress", created_at: 1, updated_at: NOW - H };
+    const c = countingDb(fixtures({ tasks: [...fixtures()._tables.tasks, ...suggested, promoted] }));
+    const resolved = await scoped(c.db);
+    expect(resolved.tasks.map((t: any) => t.short_id).sort()).toEqual(["ct-1", "ct-2", "ct-99"]);
+    expect(c.reads("tasks")).toBeLessThan(10);
+  });
+});
+
 // Goals in a scope (initiatives-projects-role-page.md I5). The record's
 // moments are read off the goal row, and calls from one window per team, so
 // neither grows the feed's reads with the entries on the record.
