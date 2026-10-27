@@ -23,8 +23,8 @@ describe("buildCodexStableContext", () => {
   test("builds solo stable context scoped to the current project", async () => {
     let requestBody: Record<string, unknown> | undefined;
 
-    globalThis.fetch = (async (_input, init) => {
-      requestBody = JSON.parse(String(init?.body || "{}"));
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).endsWith("/cli/feed")) requestBody = JSON.parse(String(init?.body || "{}"));
       return new Response(JSON.stringify({
         conversations: [{
           id: "conv-1234567890",
@@ -69,8 +69,8 @@ describe("buildCodexStableContext", () => {
   test("builds team stable context across all projects when global mode is enabled", async () => {
     let requestBody: Record<string, unknown> | undefined;
 
-    globalThis.fetch = (async (_input, init) => {
-      requestBody = JSON.parse(String(init?.body || "{}"));
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).endsWith("/cli/feed")) requestBody = JSON.parse(String(init?.body || "{}"));
       return new Response(JSON.stringify({
         conversations: [],
       }), {
