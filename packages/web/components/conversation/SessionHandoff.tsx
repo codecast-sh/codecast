@@ -8,7 +8,7 @@ import { abbrevModel } from "../../lib/entityDisplay";
 import { formatAgentType } from "../AgentTypeIcon";
 import type { SessionHandoffPrompt } from "../../lib/sessionHandoff";
 import type { HandoffLinkDetails } from "./types";
-import { HEADER_CHIP } from "./ConversationHeaderBar";
+import { HEADER_CHIP } from "../../lib/headerChip";
 import { MessageMarkdown } from "./markdown";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 

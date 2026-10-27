@@ -16,7 +16,7 @@ import { runThroughMessage } from "../../../lib/line/flowMessages";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { FlowDiagram } from "./FlowDiagram";
-import { HEADER_CHIP } from "../../conversation/ConversationHeaderBar";
+import { HEADER_CHIP } from "../../../lib/headerChip";
 import "../workspace/workspace.css";
 
 /** A command step that only looks (the project's check, a proof going red or green, the evals), not one that acts. */

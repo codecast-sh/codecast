@@ -95,6 +95,7 @@ export const APP_SURFACES: AppSurface[] = [
   settings("settings/accounts", "linked accounts"),
   settings("settings/plan", "the assistant's plan, usage and extra credit"),
   settings("settings/claude-accounts", "Claude accounts"),
+  settings("settings/account-pool", "the team's shared Claude account pool"),
   settings("settings/team", "team settings"),
   settings("settings/integrations", "integrations"),
   settings("settings/notifications", "notification settings"),

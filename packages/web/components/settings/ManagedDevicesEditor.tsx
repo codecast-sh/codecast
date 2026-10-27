@@ -29,7 +29,7 @@ import { relativeTime } from "../../lib/entityDisplay";
 import { ConsequentialSwitch, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { DEFAULT_MDM_VENDOR, MDM_VENDORS, type MdmVendorId } from "@codecast/convex/convex/lib/mdmVendors";
 
-export const MDM_PKG_URL = "https://dl.codecast.sh/desktop/mdm/Codecast.pkg";
+const MDM_PKG_URL = "https://dl.codecast.sh/desktop/mdm/Codecast.pkg";
 
 const RESTRICTIONS = MANAGED_POLICY.filter((d) => d.team && d.kind === "restriction");
 const AUTO_UPDATE = MANAGED_POLICY.find((d) => d.key === "auto_update")!;

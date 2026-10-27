@@ -15,7 +15,7 @@ import { HeaderModelControl } from "../SessionControlMenu";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { DropdownMenuItem, DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { OwnerAvatar, type HandoffInfo } from "../OwnersBadge";
-import { HEADER_CHIP } from "./ConversationHeaderBar";
+import { HEADER_CHIP } from "../../lib/headerChip";
 import { copyToClipboard } from "../../lib/utils";
 import { useImageGallery } from "../ImageGallery";
 import { PageFavicon } from "../PublishedPageEmbed";

@@ -200,7 +200,6 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // lib/
   "lib/inputQuiet.ts:lastInputAt": { shared: "the person's last keystroke, one keyboard for every window; the sim types nothing, so it never moves" },
   "lib/settingsData.ts:TEAM_SCOPED_SETTINGS": CONSTANT,
-  "lib/surfaceRules.ts:STAFF_ONLY_SURFACES": CONSTANT,
   "lib/analytics.ts:runtime": ANALYTICS,
   "lib/analytics.ts:initPromise": ANALYTICS,
   "lib/appWindowRegistry.ts:present": DESKTOP,
