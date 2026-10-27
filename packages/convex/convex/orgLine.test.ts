@@ -494,6 +494,38 @@ describe("orgLine admission (LE6)", () => {
       expect(tables.daemon_commands.at(-1)!.target_device_id).toBe("h1");
     });
 
+    test("a failed run queued to resume goes back on its own host once that host has a slot, ahead of new starts", async () => {
+      const queued = (id: string, device: string, since: number) => ({
+        _id: `workflow_runs_${id}`, user_id: HOST, status: "failed", org_role_id: ROLE, task_id: `tasks_${id}`, runner_device: device,
+        project_path: `/home/ubuntu/${device}/growth`, current_node_id: "build", fail_reason: "max_visits=3 exceeded on build", node_statuses: [],
+        resume_queued: { at: "build", by: HOST, since },
+      });
+      const { ctx, tables } = fixtures({
+        role: caps({ hands_per_day: 100 }),
+        extra: {
+          initiatives,
+          tasks: [...causes(3), cause({ _id: "tasks_q1", short_id: "ct-q1", status: "in_review", execution_status: "blocked" }), cause({ _id: "tasks_q2", short_id: "ct-q2", status: "in_review" })],
+          devices: [laptop, host("h1", 2), host("h2", 1)],
+          workflow_runs: [queued("q2", "h2", NOW - 1_000), queued("q1", "h1", NOW - 2_000), ...working(1, { runner_device: "h2", project_path: "/home/ubuntu/h2/growth" })],
+        },
+      });
+      const res = await sweepCore(ctx, NOW);
+      // h2 is full, so its queued run waits; h1 resumes its own first and starts one new problem with the slot left.
+      expect(res.resumed).toEqual([{ run_id: "workflow_runs_q1", device: "h1" }]);
+      expect(res.started.map((s) => s.place?.device)).toEqual(["h1"]);
+      const q1 = tables.workflow_runs.find((r) => r._id === "workflow_runs_q1")!;
+      expect(q1).toMatchObject({ status: "running", current_node_id: "build", visits_reset_at: NOW });
+      expect(q1.resume_queued).toBeUndefined();
+      expect(tables.tasks.find((t) => t._id === "tasks_q1")!.execution_status).toBeUndefined();
+      expect(tables.workflow_runs.find((r) => r._id === "workflow_runs_q2")!.status).toBe("failed");
+      // h2's run finishes: its queued run resumes there before anything new starts on it.
+      tables.workflow_runs.find((r) => r._id === "workflow_runs_w0")!.status = "completed";
+      const next = await sweepCore(ctx, NOW + 60_000);
+      expect(next.resumed).toEqual([{ run_id: "workflow_runs_q2", device: "h2" }]);
+      expect(next.started.filter((s) => s.place?.device === "h2")).toEqual([]);
+      expect(tables.daemon_commands.filter((c) => c.target_device_id === "h2")).toHaveLength(1);
+    });
+
     test("a planned start checks again what moved since the plan: the task, the role's hands, the host's slot", async () => {
       const { ctx, tables } = fixtures({
         role: caps({ hands_per_day: 100 }),

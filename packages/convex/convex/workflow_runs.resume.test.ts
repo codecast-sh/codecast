@@ -130,11 +130,18 @@ describe("resumeFailedRunCore (cast workflow resume)", () => {
 
   test("a failed run goes on from the named station on its machine, as a new attempt, its problem unblocked", async () => {
     const { ctx, tables } = await failed();
-    expect(await resumeFailedRunCore(ctx, HOST, RUN, "verify", {}, NOW + 1)).toEqual({ run_id: RUN, task: "ct-9", resumed_at: "verify" });
+    expect(await resumeFailedRunCore(ctx, HOST, RUN, "verify", {}, NOW + 1)).toEqual({ run_id: RUN, task: "ct-9", resumed_at: "verify", queued: false });
     expect(tables.workflow_runs[0]).toMatchObject({ status: "running", current_node_id: "verify", visits_reset_at: NOW + 1, fresh_branch: true });
     expect(tables.workflow_runs[0].fail_reason).toBeUndefined();
     expect(tables.tasks[0].execution_status).toBeUndefined();
     expect(commandArgs(tables)).toEqual([{ command: "run_workflow", device: "dev-mini", args: { workflow_run_id: RUN } }]);
+  });
+
+  test("queued, a resume is recorded for the line's sweep and starts nothing yet", async () => {
+    const { ctx, tables } = await failed();
+    expect(await resumeFailedRunCore(ctx, HOST, RUN, "verify", { queue: true }, NOW + 1)).toMatchObject({ resumed_at: "verify", queued: true });
+    expect(tables.workflow_runs[0]).toMatchObject({ status: "failed", resume_queued: { at: "verify", by: HOST, since: NOW + 1 } });
+    expect(commandArgs(tables)).toEqual([]);
   });
 
   test("a run that ended through one of its graph's failure stations resumes like a failed one; one that ended well does not", async () => {

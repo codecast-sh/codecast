@@ -8,11 +8,11 @@ import { readinessLookups } from "./lib/taskGraph";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
 import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
-import { flowAdmits, flowHands, liveFlowFor, planLiveFlow } from "./liveFlows";
+import { flowAdmits, flowHands, flowHold, liveFlowFor, planLiveFlow } from "./liveFlows";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { recordHandStart } from "./spawn";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
-import { createRunCore, isLiveRunStatus, queueRunOnDaemon } from "./workflow_runs";
+import { createRunCore, isLiveRunStatus, queueRunOnDaemon, resumeQueuedRun } from "./workflow_runs";
 import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineRouteFor } from "./workflows";
@@ -413,6 +413,8 @@ export type SweepResult = {
   skipped_capped: string[];
   // Roles whose next cause waits for a run on their machine to finish (LE6).
   skipped_busy: string[];
+  // Failed runs queued to resume (cast workflow resume --queue), each back on its own machine.
+  resumed?: Array<{ run_id: string; device: string }>;
   // A dry pass (orgLine.explain) also says each load it read.
   loads?: Array<{ runner: string; project_path: string; working: number; cap: number; pool: Array<{ device: string; root: string; runs: number; working: number }> | null }>;
 };
@@ -461,6 +463,7 @@ export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean
   // while it exists, on or off, they admit nothing on their own.
   const flows: any[] = await ctx.db.query("live_flows").collect();
   const flowTeams = new Set(flows.map((f) => String(f.team_id ?? "")));
+  result.resumed = await planQueuedResumes(ctx, now, roles, loads, featureOn, new Map(flows.map((f) => [String(f.team_id ?? ""), f])));
   for (const flow of flows) {
     if (!flow.on || result.started.length >= MAX_STARTS_PER_SWEEP) continue;
     if (!(await linesRunIn(ctx, { team_id: flow.team_id }, featureOn))) continue;
@@ -495,6 +498,43 @@ export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean
     }
   }
   return result;
+}
+
+const QUEUED_RESUMES_READ = 200;
+
+/**
+ * Failed runs queued to resume (cast workflow resume --queue), oldest first, each on its own machine while that
+ * machine has a free slot. They plan before any new start in the pass and take its slots: finishing work comes before
+ * starting it. A team whose live flow is off or held resumes nothing, as it starts nothing. Only a machine that offers
+ * the line's checkout (a pool slot) takes a queued resume.
+ */
+async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: LineLoads, featureOn: Map<string, boolean>, flowsByTeam: Map<string, any>): Promise<Array<{ run_id: string; device: string }>> {
+  const queued: any[] = await ctx.db.query("workflow_runs").withIndex("by_resume_queued", (q: any) => q.gt("resume_queued.since", 0)).take(QUEUED_RESUMES_READ);
+  const out: Array<{ run_id: string; device: string }> = [];
+  for (const run of queued) {
+    if (out.length >= MAX_STARTS_PER_SWEEP) break;
+    const role = roles.find((r) => String(r._id) === String(run.org_role_id));
+    if (!role || role.status !== "active" || !run.runner_device) continue;
+    const flow = flowsByTeam.get(String(role.team_id ?? ""));
+    if (flow && (!flow.on || flowHold(flow, now))) continue;
+    if (!(await linesRunIn(ctx, role, featureOn))) continue;
+    const load = await lineLoadFor(ctx, role, now, loads, roles);
+    const slot = load.pool?.slots.find((s) => s.device === run.runner_device);
+    if (!slot || slot.runs - slot.working <= 0) continue;
+    slot.working++;
+    load.working++;
+    out.push({ run_id: String(run._id), device: run.runner_device });
+  }
+  return out;
+}
+
+/** One planned resume, checked again: still queued, and its machine's slot still free (slotStillFree). */
+export async function resumePlanned(ctx: Ctx, runId: string, now = Date.now()): Promise<string | null> {
+  const run = await ctx.db.get(runId);
+  const role = run?.org_role_id ? await ctx.db.get(run.org_role_id) : null;
+  if (!run?.resume_queued || !run.runner_device || !role) return null;
+  if (!(await slotStillFree(ctx, role, { device: run.runner_device, project_path: run.project_path ?? "" }))) return null;
+  return resumeQueuedRun(ctx, run._id, now);
 }
 
 /**
@@ -538,12 +578,14 @@ async function slotStillFree(ctx: Ctx, role: any, place: RunPlace): Promise<bool
 export async function sweepCore(ctx: Ctx, now = Date.now(), o: { dry?: boolean } = {}): Promise<SweepResult> {
   const plan = await planSweep(ctx, now, { loads: o.dry });
   if (o.dry) return { ...plan, started: plan.started.map((s) => ({ ...s, run_id: `dry${s.place ? `@${s.place.device}` : ""}` })) };
+  const resumed: NonNullable<SweepResult["resumed"]> = [];
+  for (const r of plan.resumed ?? []) if (await resumePlanned(ctx, r.run_id, now)) resumed.push(r);
   const started: SweepResult["started"] = [];
   for (const s of plan.started) {
     const runId = await startPlanned(ctx, s, now);
     if (runId) started.push({ ...s, run_id: runId });
   }
-  return { ...plan, started };
+  return { ...plan, started, resumed };
 }
 
 const placeArg = v.optional(v.object({ device: v.string(), project_path: v.string() }));
@@ -551,6 +593,11 @@ const placeArg = v.optional(v.object({ device: v.string(), project_path: v.strin
 export const plan = internalQuery({
   args: {},
   handler: async (ctx): Promise<SweepResult> => planSweep(ctx),
+});
+
+export const resumeOne = internalMutation({
+  args: { run_id: v.id("workflow_runs") },
+  handler: async (ctx, args): Promise<string | null> => resumePlanned(ctx, args.run_id),
 });
 
 export const startOne = internalMutation({
@@ -562,12 +609,16 @@ export const sweep = internalAction({
   args: {},
   handler: async (ctx): Promise<SweepResult> => {
     const planned: SweepResult = await ctx.runQuery(internal.orgLine.plan, {});
+    const resumed: NonNullable<SweepResult["resumed"]> = [];
+    for (const r of planned.resumed ?? []) {
+      if (await ctx.runMutation(internal.orgLine.resumeOne, { run_id: r.run_id as Id<"workflow_runs"> })) resumed.push(r);
+    }
     const started: SweepResult["started"] = [];
     for (const s of planned.started) {
       const runId: string | null = await ctx.runMutation(internal.orgLine.startOne, { role_id: s.role_id as Id<"org_roles">, task_id: s.task_id as Id<"tasks">, ...(s.place ? { place: s.place } : {}), ...(s.live_flow_id ? { live_flow_id: s.live_flow_id as Id<"live_flows"> } : {}) });
       if (runId) started.push({ ...s, run_id: runId });
     }
-    return { ...planned, started };
+    return { ...planned, started, resumed };
   },
 });
 

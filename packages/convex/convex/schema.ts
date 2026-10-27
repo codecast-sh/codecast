@@ -8158,6 +8158,10 @@ export default defineSchema({
     // When a failed run was last resumed at a station as a new attempt: its
     // runner counts each station's visits again from then (cli runResume.ts).
     visits_reset_at: v.optional(v.number()),
+    // A failed run waiting for a free slot on its own machine to resume at `at`
+    // (cast workflow resume --queue): the line's sweep resumes it there, ahead
+    // of new starts (orgLine.planSweep), onto the current flow when asked.
+    resume_queued: v.optional(v.object({ at: v.string(), current_flow: v.optional(v.boolean()), by: v.id("users"), since: v.number() })),
   })
     .index("by_share_token", ["share_token"])
     // A daemon's sweep for its own live runs whose runner is gone.
@@ -8181,7 +8185,9 @@ export default defineSchema({
     // here, never its runs whole (deploys.md DP2).
     .index("by_workspace_merged", ["workspace", "merge.at"])
     // A session flow's runs (session_flows): the runs on one graph in one workspace, newest first.
-    .index("by_workspace_graph", ["workspace", "graph_hash", "updated_at"]),
+    .index("by_workspace_graph", ["workspace", "graph_hash", "updated_at"])
+    // Sparse in effect: only runs queued to resume carry resume_queued, read oldest first by the sweep.
+    .index("by_resume_queued", ["resume_queued.since"]),
 
   client_state: defineTable({
     user_id: v.id("users"),

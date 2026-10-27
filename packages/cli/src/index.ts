@@ -21257,8 +21257,9 @@ workflow
   .requiredOption("--at <station>", "The station to resume at (verify, to check and evaluate the branch again)")
   .option("--onto-main", "First put the run's branch on the default branch as the remote has it, by the graph's rebase (a conflict resumes at the station the graph sends it to, where a hand resolves it). Run it on the machine that holds the run")
   .option("--current-flow", "Move the run onto its flow's current library version first: a run reads the version it started on, so a fix saved since reaches it only this way")
+  .option("--queue", "Wait for a free run slot on the run's own machine: the line's sweep resumes it there before it starts new problems")
   .option("--json", "Machine-readable output")
-  .action(async (task: string, options: { at: string; ontoMain?: boolean; currentFlow?: boolean; json?: boolean }) => {
+  .action(async (task: string, options: { at: string; ontoMain?: boolean; currentFlow?: boolean; queue?: boolean; json?: boolean }) => {
     const fail = (message: string): never => { console.error(message); process.exit(2); };
     const listed = await cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1 });
     const row = Array.isArray(listed?.runs) ? listed.runs[0] : null;
@@ -21275,9 +21276,10 @@ workflow
     } catch (e) {
       fail(`${task}: ${(e as Error).message}`);
     }
-    const r = await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: plan.at, ...currentFlow });
+    const r = await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: plan.at, ...currentFlow, ...(options.queue ? { queue: true } : {}) });
     if (options.json) { printJson({ ...r, note: plan.note }); return; }
-    console.log(`${task}: resumes at ${r.resumed_at} as a new attempt${plan.note ? ` (${plan.note})` : ""} (run ${r.run_id}).`);
+    const when = r.queued ? "once its machine has a free run slot" : "now";
+    console.log(`${task}: resumes at ${r.resumed_at} as a new attempt, ${when}${plan.note ? ` (${plan.note})` : ""} (run ${r.run_id}).`);
   });
 
 workflow
