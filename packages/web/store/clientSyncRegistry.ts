@@ -1097,6 +1097,21 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: {},
     feeds: ["anchors.listAnchors"],
   },
+  // Every role the viewer can see, in their personal workspace and every team
+  // (roleIcons.viewerRoles): the one home of a role's face and name fields
+  // (name, given_name, avatar, icon). Faces read it by role id whichever
+  // workspace is active; a session's `role` snapshot is only the cold-cache
+  // fallback. The complete visible set, so a snapshot sync. localFirst: a
+  // role edit (updateOrgRole) writes the face fields here in its draft, and
+  // they hold over pushes until the server echoes them.
+  viewerRoles: {
+    writtenBy: ["roleIcons", "orgRoles"],
+    persistence: { kind: "collection", key: "viewerRoles" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    sync: {},
+    feeds: ["roleIcons.viewerRoles"],
+  },
   // Cross-session message graph (crosstalk): one server-derived snapshot.
   // Singleton; the store's SYNC_REGISTRY strips the per-push generatedAt so an
   // unchanged graph doesn't wake subscribers.
@@ -2021,6 +2036,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessionThreads: "shared",
   wallet: "shared",
   orgTree: "shared",
+  viewerRoles: "shared",
   orgHealth: "shared",
   orgProposals: "shared",
   orgProposalChanges: "shared",
