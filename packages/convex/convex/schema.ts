@@ -1228,6 +1228,12 @@ export default defineSchema({
     // default; a role's standing session ignores both and wears the role.
     character_avatar: v.optional(v.string()),
     character_name: v.optional(v.string()),
+    // A plain session's drawn icon (org-staffing.md S13), in the role icon
+    // language: drawn from its title when it sits in someone's header pins
+    // with characters off. The stamp spaces requests, so a failed drawing is
+    // asked for again later rather than on every paint.
+    drawn_icon: v.optional(roleIconValidator),
+    drawn_icon_requested_at: v.optional(v.number()),
     // Which device currently OWNS (runs) this session. Set by the managing
     // daemon. Absent = legacy/unowned. The single-owner invariant: a daemon
     // only manages sessions whose owner_device_id matches its own device id.

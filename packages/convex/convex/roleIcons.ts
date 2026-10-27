@@ -228,7 +228,7 @@ export const saveGenerated = internalMutation({
 export type GeneratedIcon = { icon: RoleIcon; svg: string; concept: string; rationale: string; preview_url: string | null; cost_usd: number; calls: number };
 
 /** The model call the pipeline asks for, on the deployment's key; a sheet goes up to storage so the judge can read it by url. */
-function deploymentAsk(ctx: any, scratch: Id<"_storage">[]): Ask {
+export function deploymentAsk(ctx: any, scratch: Id<"_storage">[]): Ask {
   return async (req) => {
     let images: Array<{ label: string; url: string }> | undefined;
     if (req.image) {
@@ -314,6 +314,30 @@ export const generateForRole = internalAction({
   },
 });
 
+/** Hires this recent whose drawing failed (the model key out of credit, a
+ *  timeout) are drawn again by the sweep; older ones keep their monogram
+ *  until someone presses Redraw. */
+export const REDRAW_WINDOW_MS = 3 * 24 * 60 * 60_000;
+
+/** The live roles hired within the window that still have no icon. */
+export const recentWithoutIcon = internalQuery({
+  args: { since: v.number() },
+  handler: async (ctx, args): Promise<Array<Id<"org_roles">>> => {
+    const roles = await ctx.db.query("org_roles").withIndex("by_creation_time", (q: any) => q.gt("_creationTime", args.since)).collect();
+    return roles.filter((r: any) => r.status !== "retired" && !isRoleIcon(r.icon)).map((r: any) => r._id);
+  },
+});
+
+// The cron (crons.ts): a hire's drawing is tried once, so one that failed
+// would stay a monogram. Spaced a minute apart, so each sees the last one's icon.
+export const redrawMissing = internalAction({
+  args: {},
+  handler: async (ctx): Promise<void> => {
+    const ids: Array<Id<"org_roles">> = await ctx.runQuery(internal.roleIcons.recentWithoutIcon, { since: Date.now() - REDRAW_WINDOW_MS });
+    for (const [n, role_id] of ids.entries()) await ctx.scheduler.runAfter(n * 60_000, internal.roleIcons.generateForRole, { role_id });
+  },
+});
+
 export const roleRow = internalQuery({
   args: { role_id: v.id("org_roles") },
   handler: async (ctx, args) => ctx.db.get(args.role_id),
@@ -358,3 +382,4 @@ export const backfill = internalAction({
     return { drew: failed ? null : next.handle, failed, remaining_limit: limit - 1 };
   },
 });
+

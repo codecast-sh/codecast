@@ -503,6 +503,7 @@ import type * as sessionDecisions from "../sessionDecisions.js";
 import type * as sessionDelete from "../sessionDelete.js";
 import type * as sessionFlowsSchema from "../sessionFlowsSchema.js";
 import type * as sessionGuests from "../sessionGuests.js";
+import type * as sessionIcons from "../sessionIcons.js";
 import type * as sessionImages from "../sessionImages.js";
 import type * as sessionInitiator from "../sessionInitiator.js";
 import type * as sessionInsights from "../sessionInsights.js";
@@ -1087,6 +1088,7 @@ declare const fullApi: ApiFromModules<{
   sessionDelete: typeof sessionDelete;
   sessionFlowsSchema: typeof sessionFlowsSchema;
   sessionGuests: typeof sessionGuests;
+  sessionIcons: typeof sessionIcons;
   sessionImages: typeof sessionImages;
   sessionInitiator: typeof sessionInitiator;
   sessionInsights: typeof sessionInsights;

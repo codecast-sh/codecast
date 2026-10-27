@@ -1642,7 +1642,7 @@ export const INBOX_ROW_FIELDS = [
   "workflow_run_id", "workflow_run_name", "workflow_run_status", "workflow_run_started_at",
   "workflow_run_activity", "workflow_run_agents_done", "workflow_run_agents_total",
   "anchor_id", "is_anchor", "org_role_id", "standing_role_id", "role", "acting_user_id",
-  "character_avatar", "character_name", "icon", "icon_color", "image_preview_url", "browser_pane_offer",
+  "character_avatar", "character_name", "drawn_icon", "icon", "icon_color", "image_preview_url", "browser_pane_offer",
   "owner_device_id", "owner_user_id", "author_avatar", "local_mirror", "migration_batch_id",
   "cloud_placement", "cloud_seed", "cloud_workspace", "cloud_context_too_large", "cloud_placement_progress",
   "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subagent_caps", "merge_back",

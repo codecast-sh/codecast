@@ -25,6 +25,13 @@ import { Pin, PinOff, Plus } from "lucide-react";
 import { DropdownMenuItem } from "../ui/dropdown-menu";
 import { ContextMenu, CtxCheckItem, CtxHeader, CtxItem, CtxLabel, CtxSeparator, useContextMenu } from "../ui/context-menu";
 import { SessionFace } from "../identity/SessionFace";
+import { RoleIconTile } from "../identity/RoleIconTile";
+import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
+import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
+import { roleIconSig, viewerFace, type IdentityRow } from "../../lib/sessionIdentity";
+import { SESSION_ICON_RETRY_MS, isRoleIcon, roleMonogram } from "@codecast/shared/contracts/roleIcon";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { RoleOffer } from "../org/scope/RoleOffer";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -195,9 +202,31 @@ function useHeaderPins(): ResolvedPin[] {
 /** A pinned session's face: the row's character, read through a short
  *  signature so a heartbeat elsewhere never re-renders the header. */
 function SessionPinFace({ id, size }: { id: string; size: number }) {
-  const s = useTrackedStore([(st) => { const r = st.sessions[id]; return r ? `${r.character_avatar ?? ""}|${r.character_name ?? ""}|${r.title ?? ""}|${r.standing_role_id ?? ""}` : ""; }]);
+  const s = useTrackedStore([(st) => { const r = st.sessions[id]; return r ? `${r.character_avatar ?? ""}|${r.character_name ?? ""}|${r.title ?? ""}|${r.standing_role_id ?? ""}|${roleIconSig(r.drawn_icon)}` : ""; }]);
   const row = s.sessions[id];
+  const live = useLiveIdentityRow((row ?? null) as IdentityRow | null);
+  const prefs = useIdentityPrefs();
+  // With characters off a plain session has no face, so its pin wears the
+  // session's drawn icon bare (no tile: tiles are roles), or the title's
+  // letter until the server has drawn one.
+  const glyph = !!live && viewerFace(live, prefs).kind === "none";
+  const icon = glyph && isRoleIcon(row?.drawn_icon) ? row.drawn_icon : null;
+  const requestIcon = useMutation(api.sessionIcons.requestSessionIcon);
+  // Asked again each retry window while the pin stays up, so a drawing that
+  // failed (no model credit) lands without a reload; the server holds the window.
+  const retryWindow = Math.floor(useCoarseNow(60 * 60_000) / SESSION_ICON_RETRY_MS);
+  useWatchEffect(() => {
+    if (glyph && !icon && row?.title) requestIcon({ conversation_id: id }).catch(() => {});
+  }, [glyph, !!icon, row?.title, id, retryWindow]);
   if (!row) return <AnchorAvatar anchor={null} size={size} />;
+  if (glyph) {
+    const title = row.title || "Session";
+    return (
+      <span className="inline-flex flex-shrink-0" style={{ width: size, height: size }} data-session-glyph>
+        <RoleIconTile bare tile={{ icon, monogram: roleMonogram(title), accent: icon?.accent ?? "blue", title }} className="w-full h-full" />
+      </span>
+    );
+  }
   return <SessionFace row={row as any} size={size} />;
 }
 

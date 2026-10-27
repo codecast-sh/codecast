@@ -362,3 +362,7 @@ export function roleMonogram(title: string): string {
   const word = words.find((w) => !FILLER.has(w.toLowerCase())) ?? words[0] ?? "?";
   return word[0].toUpperCase();
 }
+
+/** How long a pinned session's icon request holds off the next
+ *  (convex/sessionIcons.ts): the pin asks again each window while it has none. */
+export const SESSION_ICON_RETRY_MS = 6 * 60 * 60_000;

@@ -74,6 +74,8 @@ export const CONVERSATION_FIELDS = {
   // paths normalize them (normalizeCharacterFields).
   character_avatar: { send: true, dispatch: true, patch: true },
   character_name: { send: true, dispatch: true, patch: true },
+  // A pinned plain session's drawn icon: server-drawn, never client-written.
+  drawn_icon: { send: true },
   // Org pointers are server-owned (immutable on the rail) but the row carries
   // them so a session can resolve its identity to the role it belongs to.
   org_role_id: { send: true },

@@ -586,4 +586,7 @@ crons.interval(
   {}
 );
 
+// A role hired while its drawing failed (no model credit) gets drawn later.
+crons.interval("redraw recent roles without an icon", { hours: 6 }, internal.roleIcons.redrawMissing, {});
+
 export default crons;

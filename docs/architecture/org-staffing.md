@@ -458,7 +458,17 @@ the boundary already holds or one too close in shape (two rounds at most,
 about $0.10). Hiring schedules a drawing; `roleIcons:backfill` draws for
 roles that have none, one per run; Redraw on the scope page draws a fresh one
 behind the consequential confirm; `cast role icon @h --svg` sets a hand drawn
-one. A drawing never overwrites an icon a person set.
+one. A drawing never overwrites an icon a person set. A hire's drawing that
+fails (the model key out of credit) is retried by `roleIcons.redrawMissing`
+every 6 hours for roles hired in the last 3 days.
+
+**Pinned sessions.** A plain session in a viewer's header pins, with
+characters off, wears an icon too: drawn from its title in the same language,
+clear of every concept the viewer's roles hold, stored as
+`conversations.drawn_icon`. It shows bare, with no tile and no accent, so it
+never reads as a role. The pin asks for it (`sessionIcons.requestSessionIcon`)
+while it has none, at most once per 6 hours; until then, and while the session
+is untitled, the pin shows the title's letter.
 
 **Where it shows.** The resolver `sessionIdentity` (web, imported by mobile)
 returns a role face as `style: "character" | "icon"` from the viewer's prefs,

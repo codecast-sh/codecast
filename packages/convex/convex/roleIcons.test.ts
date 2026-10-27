@@ -163,3 +163,4 @@ describe("viewerRoles: every role face the viewer can see, across workspaces", (
     expect(rows.find((r) => r.handle === "bad")!.icon).toBeNull();
   });
 });
+

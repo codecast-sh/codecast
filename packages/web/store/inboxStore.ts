@@ -894,6 +894,8 @@ export type InboxSession = {
   // lib/sessionIdentity.
   character_avatar?: string | null;
   character_name?: string | null;
+  // A plain session's drawn icon (roleIcons.requestSessionIcon), worn by its header pin with characters off.
+  drawn_icon?: RoleIcon | null;
   // Org pointers and, when one is set, a snapshot of that role so the row can
   // wear the role's face and name without the org tree loaded.
   org_role_id?: string | null;

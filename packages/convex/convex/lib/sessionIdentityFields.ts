@@ -15,6 +15,7 @@ export async function identityFieldsOf(conv: any, getDoc: (id: any) => Promise<a
   return {
     character_avatar: conv.character_avatar ?? null,
     character_name: conv.character_name ?? null,
+    drawn_icon: isRoleIcon(conv.drawn_icon) ? conv.drawn_icon : null,
     org_role_id: conv.org_role_id?.toString() ?? null,
     standing_role_id: conv.standing_role_id?.toString() ?? null,
     role: role
