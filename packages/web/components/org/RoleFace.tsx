@@ -6,40 +6,48 @@
 // chose, else the stable default for its handle) or its drawn icon tile. The
 // art lives in avatars/RoleAvatar and identity/RoleIconTile.
 import { useMemo } from "react";
-import { avatarOf } from "@codecast/shared/contracts/orgAvatars";
+import { avatarOf, type AvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { RoleAvatar } from "./avatars";
 import { RoleIconTile } from "../identity/RoleIconTile";
 import { useInboxStore } from "../../store/inboxStore";
 import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
-import { roleIconSig, roleTile, type IdentityPrefs } from "../../lib/sessionIdentity";
+import { roleIconSig, roleTile, type IdentityPrefs, type RoleTile } from "../../lib/sessionIdentity";
 import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
 
 export type RoleLike = { _id?: string; short_id?: string; avatar?: string | null; handle: string; name?: string; icon?: RoleIcon | null };
 
-type RoleRowLike = { _id: string; short_id: string; handle: string; name: string; icon?: RoleIcon | null };
+type RoleRowLike = { _id: string; short_id: string; handle: string; name: string; avatar?: string | null; icon?: RoleIcon | null };
+type FaceState = { viewerRoles?: Record<string, RoleRowLike> | null; orgTree?: { roles: readonly { _id: string; handle: string }[] } | null };
 
-/** The live role row a caller's partial role names, by id, short id or handle. */
-function findRole(roles: readonly RoleRowLike[] | undefined, role: RoleLike): RoleRowLike | null {
-  if (!roles) return null;
-  return roles.find((r) => (role._id && r._id === role._id) || (role.short_id && r.short_id === role.short_id))
-    ?? roles.find((r) => r.handle === role.handle) ?? null;
+/** The live role row a caller's partial role names: by id or short id from
+ *  the viewer's role rows (viewerRoles), their one home. A handle alone is
+ *  only unique inside a workspace, so it is read as the active workspace's
+ *  role of that handle (the org tree says which id that is). */
+function findRole(s: FaceState, role: RoleLike): RoleRowLike | null {
+  const rows = s.viewerRoles;
+  if (!rows) return null;
+  if (role._id && rows[role._id]) return rows[role._id];
+  for (const id in rows) if (role.short_id && rows[id].short_id === role.short_id) return rows[id];
+  if (role._id || role.short_id) return null;
+  const id = s.orgTree?.roles.find((r) => r.handle === role.handle)?._id;
+  return id ? rows[id] ?? null : null;
 }
 
-/** The tile a role wears with characters off. The caller's role may be a
- *  partial (a chat seat, an assignee chip): the icon and title are read from
- *  the role rows (org.roles), their one home, and the caller's fields only
- *  fill in for a role the rows do not hold. Subscribes only while it draws a
- *  tile, to a signature of that role's title and icon. */
-export function useRoleTile(role: RoleLike, active: boolean) {
+/** The role's face as the viewer sees it: its animal, or with characters
+ *  off its tile. The caller's role may be a partial or a stale snapshot (a
+ *  chat seat, an assignee chip): the face fields are read from the role rows,
+ *  their one home, and the caller's only fill in for a role the rows do not
+ *  hold. Subscribes to a signature of that role's face fields alone. */
+export function useRoleFace(role: RoleLike, characters: boolean): { kind: "animal"; avatar: AvatarKey } | { kind: "tile"; tile: RoleTile } {
   const sig = useInboxStore((s) => {
-    if (!active) return "";
-    const r = findRole(s.orgTree?.roles as RoleRowLike[] | undefined, role);
-    return r ? `${r._id}|${r.name}|${roleIconSig(r.icon)}` : "";
+    const r = findRole(s as FaceState, role);
+    return r ? `${r._id}|${r.name}|${r.avatar ?? ""}|${roleIconSig(r.icon)}` : "";
   });
   return useMemo(() => {
-    const live = active ? findRole(useInboxStore.getState().orgTree?.roles as RoleRowLike[] | undefined, role) : null;
-    return roleTile({ handle: role.handle, name: live?.name ?? role.name ?? role.handle, icon: role.icon !== undefined ? role.icon : live?.icon });
-  }, [sig, active, role.handle, role.name, role.icon]); // eslint-disable-line react-hooks/exhaustive-deps
+    const live = findRole(useInboxStore.getState() as FaceState, role);
+    if (characters) return { kind: "animal", avatar: avatarOf(live ? { ...live, avatar: live.avatar ?? role.avatar } : role) };
+    return { kind: "tile", tile: roleTile({ handle: role.handle, name: live?.name ?? role.name ?? role.handle, icon: live ? live.icon : role.icon }) };
+  }, [sig, characters, role._id, role.short_id, role.handle, role.name, role.avatar, role.icon]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 /**
@@ -50,11 +58,11 @@ export function useRoleTile(role: RoleLike, active: boolean) {
  */
 export function RoleFace({ role, size = 24, className, title, prefs: prefsProp }: { role: RoleLike; size?: number | string; className?: string; title?: string; prefs?: IdentityPrefs }) {
   const prefs = useIdentityPrefs(prefsProp);
-  const tile = useRoleTile(role, !prefs.characters);
-  if (!prefs.characters) return <RoleIconTile tile={tile} size={size} className={className} title={title ?? tile.title} />;
+  const face = useRoleFace(role, prefs.characters);
+  if (face.kind === "tile") return <RoleIconTile tile={face.tile} size={size} className={className} title={title ?? face.tile.title} />;
   return (
     <RoleAvatar
-      avatar={avatarOf(role)}
+      avatar={face.avatar}
       size={size}
       className={className}
       title={title ?? role.name ?? `@${role.handle}`}

@@ -111,8 +111,8 @@ test('the title line leads with the name once personified, and is the bare title
 
 // A teammate's role session reached from outside the inbox has only a thin
 // session row; the role pointer rides the conversation row and the role's
-// name and face live in the org tree. The speaker is the role, not the agent.
-test("an agent speaks as its role's given name, found through the conversation row and the org tree", () => {
+// name and face live in the viewer's role rows (viewerRoles). The speaker is the role, not the agent.
+test("an agent speaks as its role's given name, found through the conversation row and the role rows", () => {
   const HAZEL = {
     _id: 'r9', short_id: 'ro-9', name: 'Engineering Co-worker', handle: 'eng', avatar: 'hare', status: 'active', given_name: 'Hazel',
     scope: { project_ids: [] }, reports_to: { kind: 'user', user_id: 'u1' },
@@ -122,7 +122,7 @@ test("an agent speaks as its role's given name, found through the conversation r
       ...s,
       sessions: { ...s.sessions, [ID]: { _id: ID, title: 'Fix the sync', agent_type: 'claude_code' } },
       conversations: { ...s.conversations, [ID]: { _id: ID, standing_role_id: 'r9' } },
-      orgTree: { workspace: { kind: 'team', id: 't1', name: 'Team' }, roles: [HAZEL], anchors: [] },
+      viewerRoles: { [HAZEL._id]: HAZEL },
     }));
   });
   function Speaker() {
@@ -144,7 +144,7 @@ test("an agent speaks as its role's given name, found through the conversation r
     useInboxStore.setState((s: any) => {
       const { [ID]: _s, ...sessions } = s.sessions;
       const { [ID]: _c, ...conversations } = s.conversations;
-      return { ...s, sessions, conversations, orgTree: null };
+      return { ...s, sessions, conversations, viewerRoles: {} };
     });
   });
 });
@@ -195,10 +195,10 @@ test('characters off: a personified session renders plain, even with personify-a
   setCharacters(true);
 });
 
-test("an escalation's partial role finds its icon in the org tree", async () => {
+test("an escalation's partial role finds its icon in the viewer's role rows", async () => {
   const { RoleFace } = await import('../org/RoleFace');
   TestRenderer.act(() => {
-    useInboxStore.setState((s: any) => ({ ...s, orgTree: { workspace: { kind: 'team', id: 't1', name: 'Team' }, roles: [{ ...ICON_ROLE, scope: { project_ids: [] } }], anchors: [] } }));
+    useInboxStore.setState((s: any) => ({ ...s, viewerRoles: { [ICON_ROLE._id]: ICON_ROLE } }));
   });
   const partial = { short_id: ROLE.short_id, handle: ROLE.handle, name: DB.title, avatar: 'owl' };
   const on = render(<RoleFace role={partial} size={16} />);
@@ -207,7 +207,20 @@ test("an escalation's partial role finds its icon in the org tree", async () => 
   const off = render(<RoleFace role={partial} size={16} />);
   expect(off.root.findByProps({ testID: `session-face-tile-${DB.icon.concept}` })).toBeTruthy();
   setCharacters(true);
-  TestRenderer.act(() => { useInboxStore.setState((s: any) => ({ ...s, orgTree: null })); });
+  TestRenderer.act(() => { useInboxStore.setState((s: any) => ({ ...s, viewerRoles: {} })); });
+});
+
+// A session row cached before roles had icons carries a role snapshot with no
+// `icon`; the face reads the icon from the role rows, its one home.
+test('a stale role snapshot still draws the role\'s icon from the role rows', () => {
+  TestRenderer.act(() => {
+    useInboxStore.setState((s: any) => ({ ...s, viewerRoles: { [ICON_ROLE._id]: ICON_ROLE } }));
+  });
+  setCharacters(false);
+  const tree = render(<identity.MobileSessionFace row={{ _id: ID, standing_role_id: 'r1', role: ROLE }} size={22} />);
+  expect(tree.root.findByProps({ testID: `session-face-tile-${DB.icon.concept}` }).props.accessibilityLabel).toBe(DB.title);
+  setCharacters(true);
+  TestRenderer.act(() => { useInboxStore.setState((s: any) => ({ ...s, viewerRoles: {} })); });
 });
 
 // The Sep 14 crash came from two copies of a native library in one bundle. A

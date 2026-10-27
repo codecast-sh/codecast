@@ -2,14 +2,11 @@
 // S13). A role row drawn through the session face, so the chart, the role page
 // and a standing session's header resolve one role to one face: its animal, or
 // its icon tile for a viewer with characters off.
-import { useMemo } from 'react';
 import type { StyleProp, ViewStyle } from 'react-native';
 import { MobileSessionFace } from '@/components/identity';
 import { avatarOf } from '@codecast/shared/contracts/orgAvatars';
 import type { RoleIcon } from '@codecast/shared/contracts/roleIcon';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
-import { roleIconSig } from '@codecast/web/lib/sessionIdentity';
 
 /** A whole role row (the org screens), or the partial one a transcript line
  *  carries (an escalation names a role by short id, handle and name). */
@@ -18,29 +15,21 @@ type RoleLike = {
   status?: string; tenure?: { kind: 'standing' | 'program' } | null; icon?: RoleIcon | null;
 };
 
-type LiveRole = { _id: string; short_id: string; handle: string; icon?: RoleIcon | null };
+type FaceState = { viewerRoles?: Record<string, { _id: string; short_id: string }> | null; orgTree?: { roles: readonly { _id: string; handle: string }[] } | null };
 
-function findRole(roles: readonly LiveRole[] | undefined, role: RoleLike): LiveRole | null {
-  if (!roles) return null;
-  return roles.find((r) => (role._id && r._id === role._id) || r.short_id === role.short_id)
-    ?? roles.find((r) => r.handle === role.handle) ?? null;
-}
-
-/** The role's icon: the caller's, or for a partial role that carries none, the
- *  one on its row in the org tree, its one home. Subscribes only while the
- *  viewer sees tiles and the caller has no icon to hand. */
-function useRoleIcon(role: RoleLike, active: boolean): RoleIcon | null {
-  const live = active && role.icon === undefined;
-  const sig = useInboxStore((s) => (live ? roleIconSig(findRole(s.orgTree?.roles as LiveRole[] | undefined, role)?.icon) : ''));
-  return useMemo(
-    () => (role.icon !== undefined ? role.icon : live ? findRole(useInboxStore.getState().orgTree?.roles as LiveRole[] | undefined, role)?.icon ?? null : null),
-    [sig, live, role.icon, role._id, role.short_id, role.handle], // eslint-disable-line react-hooks/exhaustive-deps
-  );
+/** The role's id in the viewer's role rows (viewerRoles), so the face reads
+ *  its live fields there (MobileSessionFace, withLiveRole). A partial role
+ *  names it by short id; a handle alone is unique only inside a workspace, so
+ *  it is read as the active workspace's role of that handle. Web's RoleFace
+ *  resolves the same way. */
+function roleIdOf(s: FaceState, role: RoleLike): string | null {
+  if (role._id) return role._id;
+  for (const id in s.viewerRoles ?? {}) if (s.viewerRoles![id].short_id === role.short_id) return id;
+  return s.orgTree?.roles.find((r) => r.handle === role.handle)?._id ?? null;
 }
 
 export function RoleFace({ role, size = 24, style }: { role: RoleLike; size?: number; style?: StyleProp<ViewStyle> }) {
-  const icon = useRoleIcon(role, !useIdentityPrefs().characters);
-  const id = role._id ?? role.short_id;
+  const id = useInboxStore((s) => roleIdOf(s as FaceState, role)) ?? role.short_id;
   return (
     <MobileSessionFace
       size={size}
@@ -48,7 +37,7 @@ export function RoleFace({ role, size = 24, style }: { role: RoleLike; size?: nu
       row={{
         _id: id,
         standing_role_id: id,
-        role: { _id: id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), status: role.status ?? 'active', tenure_kind: role.tenure?.kind ?? 'standing', icon },
+        role: { _id: id, short_id: role.short_id, name: role.name, handle: role.handle, avatar: avatarOf(role), status: role.status ?? 'active', tenure_kind: role.tenure?.kind ?? 'standing', icon: role.icon ?? null },
       }}
     />
   );
