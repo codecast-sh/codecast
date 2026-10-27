@@ -60,6 +60,7 @@ describe("ci.yml job graph", () => {
       const setup = steps.findIndex((step) => step.uses === SETUP_BUN);
       expect(setup, `${name} sets up bun`).toBeGreaterThan(-1);
       expect(SETUP_DEPS, `${name} deps`).toContain(steps[setup].with?.deps ?? "install");
+      expect(String(steps[setup].with?.["bun-version"] ?? "0.0.0"), `${name} bun-version`).toMatch(/^\d+\.\d+\.\d+$/);
       const firstBun = steps.findIndex((step) => /\bbun\b/.test(String(step.run ?? "")));
       expect(setup, `${name} sets up bun before its first bun step`).toBeLessThan(firstBun);
     }
@@ -68,13 +69,14 @@ describe("ci.yml job graph", () => {
   test("the composite action caches the bun store and installs only after", () => {
     const steps: any[] = setupBun.runs.steps;
     expect(setupBun.runs.using).toBe("composite");
-    expect(Object.keys(setupBun.inputs)).toEqual(["deps"]);
+    expect(Object.keys(setupBun.inputs)).toEqual(["deps", "bun-version"]);
     expect(setupBun.inputs.deps.default).toBe("install");
+    expect(String(setupBun.inputs["bun-version"].default)).toMatch(/^\d+\.\d+\.\d+$/);
     const bun = steps.findIndex((step) => String(step.uses ?? "").startsWith("oven-sh/setup-bun@"));
     const cache = steps.findIndex((step) => String(step.uses ?? "").startsWith("actions/cache@"));
     const install = steps.findIndex((step) => step.run === "bun install");
     expect(bun).toBe(0);
-    expect(steps[bun].with["bun-version"]).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(steps[bun].with["bun-version"]).toBe("${{ inputs.bun-version }}");
     expect(cache).toBeGreaterThan(bun);
     expect(steps[cache].if).toBe("inputs.deps != 'none'");
     expect(steps[cache].with.path).toBe("~/.bun/install/cache");
