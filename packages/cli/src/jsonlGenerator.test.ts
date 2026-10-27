@@ -401,6 +401,81 @@ describe("generateClaudeCodeJsonl", () => {
     expect(count).toBeLessThanOrEqual(messages.length);
   });
 
+  test("isHumanInstruction leaves out machine-delivered turns and compaction summaries", () => {
+    expect(isHumanInstruction({ role: "user", content: "<task-notification>\n<task-id>b1</task-id>", timestamp: "t" })).toBe(false);
+    expect(isHumanInstruction({ role: "user", content: '<scheduled-task title="Daily run">go</scheduled-task>', timestamp: "t" })).toBe(false);
+    expect(isHumanInstruction({ role: "user", content: "This session is being continued from a previous conversation that ran out of context.", timestamp: "t" })).toBe(false);
+  });
+
+  const conv = (id: string, count: number): ExportResult["conversation"] => ({
+    id, title: "t", session_id: "s", agent_type: "claude_code", project_path: "/tmp/project", model: null,
+    message_count: count, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z",
+  });
+  const at = (i: number) => new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString();
+  const summaryText = (n: number) => `This session is being continued from a previous conversation that ran out of context. Summary ${n}.`;
+  const chatOf = (jsonl: string) => jsonl.trim().split("\n").map((l) => JSON.parse(l)).filter((l) => l.type === "user" || l.type === "assistant");
+  const textOf = (l: any): string => typeof l.message?.content === "string" ? l.message.content : l.message?.content?.[0]?.text ?? "";
+
+  test("a rebuild starts at the latest compaction summary", () => {
+    const messages: ExportResult["messages"] = [
+      { role: "user", content: "ask before the first compaction", timestamp: at(0) },
+      { role: "assistant", content: "old work", timestamp: at(1) },
+      { role: "user", content: summaryText(1), timestamp: at(2) },
+      { role: "user", content: "ask between compactions", timestamp: at(3) },
+      { role: "assistant", content: "middle work", timestamp: at(4) },
+      { role: "user", content: summaryText(2), timestamp: at(5) },
+      { role: "user", content: "ask since the latest compaction", timestamp: at(6) },
+      ...Array.from({ length: 10 }, (_, i) => ({ role: "assistant", content: `recent ${i}`, timestamp: at(7 + i) })),
+    ];
+    const data: ExportResult = { conversation: conv("jx7dune", messages.length), messages };
+
+    const { jsonl } = generateClaudeCodeJsonl(data, { tailMessages: 3 });
+    const texts = chatOf(jsonl).map(textOf);
+
+    expect(texts).toContain(summaryText(2));
+    expect(texts).toContain("ask since the latest compaction");
+    expect(texts).toContain("recent 9");
+    // Everything before the latest summary is covered by it.
+    expect(texts).not.toContain(summaryText(1));
+    expect(texts).not.toContain("ask between compactions");
+    expect(texts).not.toContain("ask before the first compaction");
+    expect(texts[0]).toContain("the latest compaction summary (message 6)");
+  });
+
+  test("a long role thread rebuilds inside the token budget", () => {
+    // The shape that broke a move: thousands of machine wakes, dozens of
+    // compaction summaries and long human asks around one small live context.
+    const big = "x".repeat(8000);
+    const messages: ExportResult["messages"] = [];
+    for (let i = 0; i < 3000; i += 1) {
+      const kind = i % 6;
+      const content =
+        kind === 0 ? `<task-notification>\n<task-id>b${i}</task-id>\n${big}` :
+        kind === 1 ? `<scheduled-task title="Daily run">${big}</scheduled-task>` :
+        kind === 2 ? `human ask ${i} ${big}` :
+        kind === 3 && i % 60 === 3 ? `${summaryText(i)} ${big}` :
+        null;
+      messages.push(content
+        ? { role: "user", content, timestamp: at(i) }
+        : { role: "assistant", content: `work ${i} ${big}`, timestamp: at(i) });
+    }
+    const data: ExportResult = { conversation: conv("jx7role", messages.length), messages };
+    const budget = 160_000;
+
+    const tailMessages = chooseClaudeTailMessagesForTokenBudget(data, budget);
+    const { jsonl } = generateClaudeCodeJsonl(data, { tailMessages });
+    const chat = chatOf(jsonl);
+    const tokens = chat.reduce((sum, l) => sum + Math.ceil(textOf(l).length / 4), 0);
+
+    expect(tokens).toBeLessThanOrEqual(budget);
+    const texts = chat.map(textOf);
+    expect(texts.filter((t) => t.startsWith("This session is being continued")).length).toBe(1);
+    // Machine wakes from before the tail are never prepended as instructions.
+    const head = texts.slice(0, texts.length - tailMessages);
+    expect(head.some((t) => t.startsWith("<task-notification>") || t.startsWith("<scheduled-task"))).toBe(false);
+    expect(texts.at(-1)).toBe(messages.at(-1)!.content);
+  });
+
   test("preserves all tool_result blocks including orphans", () => {
     const data: ExportResult = {
       conversation: {

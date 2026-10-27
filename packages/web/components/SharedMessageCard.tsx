@@ -14,6 +14,7 @@ import { AuthorAvatar } from "./entityDisplay";
 import { relativeTime } from "../lib/entityDisplay";
 import { identityRowOf, speakerOf } from "../lib/sessionIdentity";
 import { clipFade } from "./CollapsibleBody";
+import { identityPrefsNow } from "../hooks/useIdentityPrefs";
 
 // A conversation message shared into chat — by its public share link
 // (/share/message/<token>) or in place (/conversation/<id>#msg-<id>). Both
@@ -59,7 +60,7 @@ function useMessageRef(payload: string): Resolution {
 /** Who wrote the message: the human, or the agent as it speaks there (its
  *  role's or character's name, else its product name). */
 function roleLabel(message: any, conversation: SharedMessageData["conversation"]): string {
-  return message?.role === "user" ? "User" : speakerOf(identityRowOf(conversation), conversation.agent_type).name;
+  return message?.role === "user" ? "User" : speakerOf(identityRowOf(conversation), conversation.agent_type, identityPrefsNow()).name;
 }
 
 /** The message's first meaningful line, for the pill and the aria name. */
