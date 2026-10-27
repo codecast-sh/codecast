@@ -209,6 +209,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setAgentPermissionModes: SETTINGS,
   setCapabilityBinding: SETTINGS,
   setChannelNotifyLevel: SETTINGS,
+  setChatThreadMuted: SETTINGS,
   setChatSlackMember: SETTINGS,
   setCloudSessionMode: SETTINGS,
   setCloudSessionSync: SETTINGS,

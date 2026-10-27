@@ -146,6 +146,7 @@ const FIXTURES: Record<string, Fixture> = {
       priority: ["p1", "p2"],
       labels: [["a"], ["b"]],
       parent_initiative_id: ["in_a", "in_b"],
+      position: [1, 2],
       metrics: [[{ key: "k", name: "n", target: "1" }], [{ key: "k", name: "n", target: "2" }]],
       why: ["w1", "w2"],
       done_when: ["dw1", "dw2"],
