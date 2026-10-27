@@ -6,7 +6,7 @@
 // the guide kit; the copy names what a person sees in the app.
 import { Check, MoreHorizontal, Pause, Play, X } from "lucide-react";
 import { Switch } from "../../components/ui/switch";
-import { Chip, Count, Dot, Face, Msg, Person, ROLES, RoleCard, SessionRow, Show, StageButton, StatePill, Win, Wires, useArrived, wirePath, type RoleKey, type WorkState } from "./kit";
+import { Chip, Count, Dot, Face, Msg, Person, ROLES, RoleCard, SessionRow, Show, StageButton, StatePill, Win, Wires, useArrived, useStageDrag, wirePath, type RoleKey, type WorkState } from "./kit";
 import type { GuideDef, SceneProps } from "./types";
 
 const ACCENT = "var(--sol-violet)";
@@ -52,10 +52,10 @@ function TooMany({ beat }: SceneProps) {
           <path key={`d${i}`} d={wirePath(476, rowY(i), youX - 34, youY)} className="gs-wire" data-hot={beat === 1 ? "" : undefined} style={{ opacity: !grouped && i < shown ? 0.85 : 0, stroke: beat === 1 ? "var(--sol-orange)" : undefined, strokeWidth: 1.1, transform: "rotate(0)" }} />
         ))}
         {INBOX.map((r, i) => (
-          <path key={`g${i}`} d={wirePath(476, rowY(i), 668, LANE_Y[r.lane])} className="gs-wire" style={{ opacity: grouped ? 0.7 : 0, transitionDelay: `${300 + i * 25}ms` }} />
+          <path key={`g${i}`} d={wirePath(476, rowY(i), 692, LANE_Y[r.lane])} className="gs-wire" style={{ opacity: grouped ? 0.7 : 0, transitionDelay: `${300 + i * 25}ms` }} />
         ))}
         {(["product", "qa", "growth"] as const).map((k) => (
-          <path key={k} d={wirePath(760, LANE_Y[k], youX - 34, youY)} className="gs-wire" data-hot="" style={{ opacity: grouped ? 1 : 0, transitionDelay: "700ms" }} />
+          <path key={k} d={wirePath(738, LANE_Y[k], youX - 34, youY)} className="gs-wire" data-hot="" style={{ opacity: grouped ? 1 : 0, transitionDelay: "700ms" }} />
         ))}
       </Wires>
       {(["product", "qa", "growth"] as const).map((k, i) => (
@@ -66,7 +66,7 @@ function TooMany({ beat }: SceneProps) {
           </div>
         </Show>
       ))}
-      <div className="absolute flex flex-col items-center gap-2" style={{ left: youX - 50, top: youY - 34, width: 100 }}>
+      <div className="absolute flex flex-col items-center gap-2" style={{ left: youX - 75, top: youY - 34, width: 150 }}>
         <span className="rounded-full transition-[box-shadow] duration-500" style={{ boxShadow: beat === 1 ? "0 0 0 5px color-mix(in srgb, var(--sol-orange) 45%, transparent), 0 0 0 14px color-mix(in srgb, var(--sol-orange) 14%, transparent)" : "0 0 0 4px color-mix(in srgb, var(--guide-accent) 25%, transparent)" }}>
           <Person name="You" you size={64} color={YOU_COLOR} />
         </span>
@@ -90,7 +90,7 @@ function ARole({ beat }: SceneProps) {
   ];
   return (
     <div className="gs">
-      <div className="gs-card absolute" style={{ left: 56, top: 44, width: 500, height: 512, padding: 22 }}>
+      <div className="gs-card absolute" style={{ left: 56, top: 50, width: 500, height: 478, padding: 22 }}>
         <div className="flex items-center gap-4">
           <Face avatar="fox" size={72} />
           <div className="min-w-0">
@@ -114,9 +114,9 @@ function ARole({ beat }: SceneProps) {
         <Show on={beat >= 3} at={{ x: 22, y: 358, w: 456 }}>
           <div className="gs-label">TRIGGERS THAT WAKE IT</div>
           <div className="mt-2 flex flex-col gap-1.5">
-            {[["Every 4 hours", "Review open work in its projects", "in 1h 12m"], ["When a session needs input", "Answer it, or bring it to you", "armed"]].map(([when, what, next], i) => (
+            {[["Every 4 hours", "Review its open work", "in 1h 12m"], ["A session needs input", "Answer, or bring it to you", "armed"]].map(([when, what, next], i) => (
               <div key={when} className="flex items-center gap-3 h-[38px] px-3 rounded-lg" style={{ background: "var(--sol-bg)", border: "1px solid color-mix(in srgb, var(--sol-border) 60%, transparent)", animation: beat === 3 ? `guide-breathe 1.6s ${i * 0.4}s ease-in-out 2` : undefined }}>
-                <span className="text-[12px] font-semibold w-[170px] shrink-0">{when}</span>
+                <span className="text-[12px] font-semibold w-[178px] shrink-0">{when}</span>
                 <span className="text-[12px] gs-muted flex-1 truncate">{what}</span>
                 <span className="text-[11px] gs-dim">{next}</span>
               </div>
@@ -147,20 +147,24 @@ function ARole({ beat }: SceneProps) {
 // ------------------------------------------------------------ 3. the chart
 
 const CHART: Array<{ key: RoleKey; cx: number; boss: "you" | "leo" | "product"; dots: WorkState[]; goal?: string }> = [
-  { key: "people", cx: 140, boss: "you", dots: ["dormant"] },
-  { key: "product", cx: 320, boss: "you", dots: ["working", "needs_input", "done", "working"], goal: "Group bookings live" },
-  { key: "qa", cx: 500, boss: "you", dots: ["working", "working", "needs_input", "working", "done", "working"], goal: "Zero double bookings" },
-  { key: "growth", cx: 680, boss: "you", dots: ["working", "done", "idle"], goal: "Bookings +20% by June" },
-  { key: "infra", cx: 880, boss: "leo", dots: ["working", "dormant"], goal: "Checkout under 1s" },
+  { key: "people", cx: 120, boss: "you", dots: ["dormant"] },
+  { key: "product", cx: 316, boss: "you", dots: ["working", "needs_input", "done", "working"], goal: "Group bookings live" },
+  { key: "qa", cx: 512, boss: "you", dots: ["working", "working", "needs_input", "working", "done", "working"], goal: "Zero double bookings" },
+  { key: "growth", cx: 708, boss: "you", dots: ["working", "done", "idle"], goal: "Bookings +20% by June" },
+  { key: "infra", cx: 920, boss: "leo", dots: ["working", "dormant"], goal: "Checkout under 1s" },
 ];
-const ROLE_W = 168;
-const ROLE_Y = 250;
+const ROLE_W = 184;
+const ROLE_Y = 290;
+
+/** Where Growth goes when it is dropped on Head of Product, from where it stands. */
+const GROWTH_MOVE = { x: 316 - 708, y: 452 - ROLE_Y };
 
 function Chart({ beat, act, waiting }: SceneProps) {
   const moved = beat >= 3 || (beat === 2 && !waiting);
+  const drag = useStageDrag(waiting, GROWTH_MOVE, act);
   const lens = beat >= 4 ? "Everything" : "People";
-  const posOf = (c: (typeof CHART)[number]) => (c.key === "growth" && moved ? { cx: 320, y: 420 } : { cx: c.cx, y: ROLE_Y });
-  const bossAt = (c: (typeof CHART)[number]) => (c.key === "growth" && moved ? { x: 320, y: ROLE_Y + 104 } : c.boss === "leo" ? { x: 880, y: 152 } : { x: 380, y: 152 });
+  const posOf = (c: (typeof CHART)[number]) => (c.key === "growth" && moved ? { cx: 316, y: 452 } : { cx: c.cx, y: ROLE_Y });
+  const bossAt = (c: (typeof CHART)[number]) => (c.key === "growth" && moved ? { x: 316, y: ROLE_Y + 98 } : c.boss === "leo" ? { x: 920, y: 166 } : { x: 414, y: 166 });
   return (
     <div className="gs">
       <div className="absolute flex items-center gap-1 p-1 rounded-lg" style={{ left: 390, top: 22, background: "var(--sol-bg)", border: "1px solid color-mix(in srgb, var(--sol-border) 70%, transparent)" }}>
@@ -174,8 +178,8 @@ function Chart({ beat, act, waiting }: SceneProps) {
           return <path key={c.key} d={wirePath(b.x, b.y, p.cx, p.y)} className="gs-wire" data-hot={c.key === "growth" && moved ? "" : undefined} style={{ strokeDasharray: 600, strokeDashoffset: 0, animation: `gs-draw 900ms ${200 + i * 90}ms both` }} />;
         })}
       </Wires>
-      {[{ x: 380, name: "You", you: true, sub: "Founder", color: YOU_COLOR }, { x: 880, name: "Leo", you: false, sub: "Engineer", color: "var(--sol-magenta)" }].map((p) => (
-        <div key={p.name} className="gs-card absolute flex items-center gap-2.5" style={{ left: p.x - 80, top: 96, width: 160, padding: "9px 11px", animation: "guide-say-in 500ms both" }}>
+      {[{ x: 414, name: "You", you: true, sub: "Founder", color: YOU_COLOR }, { x: 920, name: "Leo", you: false, sub: "Engineer", color: "var(--sol-magenta)" }].map((p) => (
+        <div key={p.name} className="gs-card absolute flex items-center gap-2.5" style={{ left: p.x - 80, top: 112, width: 160, padding: "9px 11px", animation: "guide-say-in 500ms both" }}>
           <Person name={p.name} you={p.you} size={32} color={p.color} />
           <div><div className="text-[13px] font-semibold leading-tight">{p.you ? "You" : p.name}</div><div className="text-[11px] gs-dim">{p.sub}</div></div>
         </div>
@@ -184,29 +188,30 @@ function Chart({ beat, act, waiting }: SceneProps) {
         const p = posOf(c);
         const waits = c.key === "growth" && waiting;
         return (
-          <div key={c.key} className="absolute transition-all duration-[900ms]" style={{ left: p.cx - ROLE_W / 2, top: p.y, width: ROLE_W, transitionTimingFunction: "cubic-bezier(.3,.7,.2,1)", animation: `guide-say-in 500ms ${300 + i * 90}ms both` }}>
-            <Show on={lens === "Everything" && !!c.goal} at={{ x: 0, y: -34, w: ROLE_W }}>
-              <Chip color="var(--sol-yellow)" style={{ maxWidth: ROLE_W }}>◎ {c.goal}</Chip>
-            </Show>
-            <RoleCard role={c.key} spot={waits} line={c.key === "people" ? "reviews the company" : `${c.dots.length} sessions`} state={c.dots.includes("needs_input") ? "needs_input" : "working"} />
+          <div key={c.key} className="absolute" style={{ left: p.cx - ROLE_W / 2, top: p.y, width: ROLE_W, zIndex: c.key === "growth" ? 2 : undefined, transition: c.key === "growth" && drag.live ? "none" : "left 900ms cubic-bezier(.3,.7,.2,1), top 900ms cubic-bezier(.3,.7,.2,1), transform 600ms cubic-bezier(.3,.7,.2,1)", transform: c.key === "growth" ? drag.transform : undefined, animation: `guide-say-in 500ms ${300 + i * 90}ms both` }}>
+            <RoleCard role={c.key} spot={waits} line={c.key === "people" ? "weekly review" : `${c.dots.length} sessions`} state={c.dots.includes("needs_input") ? "needs_input" : "working"}>
+              <div className="overflow-hidden transition-all duration-500" style={{ maxHeight: lens === "Everything" && c.goal ? 30 : 0, opacity: lens === "Everything" && c.goal ? 1 : 0 }}>
+                <div className="mt-2 pt-2 text-[11px] truncate" style={{ color: "var(--sol-yellow)", borderTop: "1px solid color-mix(in srgb, var(--sol-border) 55%, transparent)" }}>◎ {c.goal}</div>
+              </div>
+            </RoleCard>
             {waits && (
-              <button type="button" onClick={act} className="absolute inset-0 rounded-xl cursor-grab" aria-label="Drag Growth under Head of Product" data-guide-stage-act />
+              <button type="button" {...drag.handlers} className="absolute inset-0 rounded-xl cursor-grab active:cursor-grabbing touch-none" aria-label="Drag Growth under Head of Product" data-guide-stage-act />
             )}
-            <div className="flex items-center gap-1 mt-2 px-1">
-              {c.dots.map((d, j) => <span key={j} style={{ animation: beat >= 1 && d !== "idle" ? `guide-say-in 400ms ${j * 70}ms both` : undefined }}><Dot state={beat >= 1 ? d : "idle"} size={9} /></span>)}
+            <div className="flex items-center gap-1.5 mt-2.5 px-1">
+              {c.dots.map((d, j) => <span key={j} style={{ animation: beat >= 1 && d !== "idle" ? `guide-say-in 400ms ${j * 70}ms both` : undefined }}><Dot state={beat >= 1 ? d : "idle"} size={11} /></span>)}
             </div>
           </div>
         );
       })}
-      <Show on={beat === 1} at={{ x: 60, y: 520 }}>
+      <Show on={beat === 1} at={{ x: 60, y: 540 }}>
         <div className="flex items-center gap-4 text-[11.5px] gs-muted">
           {(["working", "needs_input", "done", "dormant"] as WorkState[]).map((s) => <span key={s} className="flex items-center gap-1.5"><Dot state={s} /> {s === "needs_input" ? "Waiting on someone" : s === "working" ? "Working" : s === "done" ? "Done, yours to read" : "Asleep until its trigger"}</span>)}
         </div>
       </Show>
-      <Show on={waiting} at={{ x: 520, y: 470, w: 300 }}>
+      <Show on={waiting} at={{ x: 530, y: 470, w: 300 }}>
         <div className="gs-note" style={{ position: "relative" }}>Drag Growth onto Head of Product</div>
       </Show>
-      <Show on={moved && beat < 4} pop at={{ x: 430, y: 520 }}>
+      <Show on={moved && beat < 4} pop at={{ x: 470, y: 470 }}>
         <div className="flex items-center gap-2 px-3 h-[32px] rounded-lg text-[12px]" style={{ background: "var(--sol-card)", border: "1px solid color-mix(in srgb, var(--guide-accent) 45%, transparent)" }}>
           <Check className="w-3.5 h-3.5" style={{ color: ACCENT }} /> Growth now reports to Head of Product <span className="gs-dim ml-2">Undo</span>
         </div>
@@ -232,7 +237,7 @@ function Hiring({ beat, act, waiting }: SceneProps) {
       <Win title={<><b>Hire</b><span className="gs-dim">· start from a template</span></>} at={{ x: 36, y: 36, w: 560, h: 528 }}>
         <div className="absolute left-4 right-4 top-4 grid grid-cols-2 gap-3">
           {TEMPLATES.map((t, i) => (
-            <div key={t.name} className={`gs-card p-3.5 ${t.hire && waiting ? "gs-spot" : ""}`} style={{ height: 176, animation: `guide-say-in 450ms ${i * 80}ms both`, opacity: hired && !t.hire ? 0.45 : 1, transition: "opacity 500ms" }}>
+            <div key={t.name} className={`gs-card p-3.5 ${t.hire && waiting ? "gs-spot" : ""}`} style={{ height: 198, animation: `guide-say-in 450ms ${i * 80}ms both`, opacity: hired && !t.hire ? 0.45 : 1, transition: "opacity 500ms" }}>
               <div className="flex -space-x-2">{t.faces.map((f) => <span key={f} className="rounded-full" style={{ boxShadow: "0 0 0 2px var(--sol-card)" }}><Face avatar={f} size={34} /></span>)}</div>
               <div className="mt-3 text-[14px] font-semibold">{t.name}</div>
               <div className="text-[11.5px] gs-muted mt-1 leading-snug h-[34px]">{t.roles}</div>
@@ -247,7 +252,7 @@ function Hiring({ beat, act, waiting }: SceneProps) {
           ))}
         </div>
         <div className="absolute left-4 right-4 bottom-4 gs-card px-3 h-[46px] flex items-center gap-2" style={{ animation: "guide-say-in 450ms 400ms both" }}>
-          <span className="text-[12.5px] gs-dim flex-1">Or describe one: "A role that keeps our help docs current"</span>
+          <span className="text-[12.5px] gs-dim flex-1">Or describe one: "Keeps our help docs current"</span>
           <StageButton>Make role</StageButton>
         </div>
       </Win>
@@ -303,20 +308,20 @@ function HeadOfPeople({ beat, act, waiting }: SceneProps) {
         </div>
       </Win>
       {(["product", "qa", "growth"] as const).map((k, i) => (
-        <RoleCard key={k} role={k} at={{ x: 500 + i * 172, y: 48, w: 160 }} line={k === "qa" ? <span style={{ color: load.qa >= 1 ? "var(--sol-red)" : undefined }}>{load.qa >= 1 ? "3.1× its load" : "within its load"}</span> : "within its load"}>
+        <RoleCard key={k} role={k} at={{ x: 488 + i * 176, y: 48, w: 172 }} line={<span style={{ color: load[k] >= 1 ? "var(--sol-red)" : undefined }}>{k === "qa" && load.qa >= 1 ? "3.1× its load" : `${Math.round(load[k] * 100)}% of its load`}</span>}>
           <div className="gs-bar mt-2.5"><i style={{ width: `${Math.min(1, load[k]) * 100}%`, background: load[k] >= 1 ? "var(--sol-red)" : load[k] > 0.7 ? "var(--sol-yellow)" : "var(--sol-green)" }} /></div>
         </RoleCard>
       ))}
       <Wires>
-        <path d={wirePath(752, 128, 752, 196)} className="gs-wire" style={{ opacity: beat >= 1 ? 1 : 0, strokeDasharray: applied ? "none" : "4 4" }} data-hot={beat >= 1 ? "" : undefined} />
+        <path d={wirePath(750, 128, 750, 196)} className="gs-wire" style={{ opacity: beat >= 1 ? 1 : 0, strokeDasharray: applied ? "none" : "4 4" }} data-hot={beat >= 1 ? "" : undefined} />
       </Wires>
-      <Show on={beat >= 1} pop at={{ x: 672, y: 196, w: 160 }}>
+      <Show on={beat >= 1} pop at={{ x: 664, y: 196, w: 172 }}>
         <RoleCard role="payments" ghost={!applied} line={applied ? "6 sessions" : "proposed"} state={applied ? "working" : undefined} />
       </Show>
-      <Show on={beat >= 1 && !applied} at={{ x: 846, y: 200, w: 170 }} style={{ transitionDelay: "300ms" }}>
+      <Show on={beat >= 1 && !applied} at={{ x: 848, y: 200, w: 170 }} style={{ transitionDelay: "300ms" }}>
         <div className="flex flex-col gap-1.5 items-start"><Chip color={ACCENT}>+ owns Payments</Chip><Chip color={ACCENT}>6 sessions move</Chip></div>
       </Show>
-      <Show on={beat >= 2} at={{ x: 500, y: 300, w: 504 }}>
+      <Show on={beat >= 2} at={{ x: 488, y: 300, w: 524 }}>
         <div className="gs-card p-4" style={{ borderColor: applied ? "color-mix(in srgb, var(--sol-green) 45%, transparent)" : undefined }}>
           <div className="flex items-center gap-2">
             <span className="gs-pill" style={{ color: ACCENT, background: "color-mix(in srgb, var(--sol-violet) 14%, transparent)" }}>PROPOSAL</span>
@@ -362,7 +367,7 @@ function Ladder({ beat, act, waiting }: SceneProps) {
   const tokenY = beat === 0 ? (arrived ? 322 : 448) : beat === 1 ? 322 : answered ? 448 : 70;
   const node = (id: (typeof LADDER)[number]["id"]) => {
     if (id === "you") return <div className="gs-card flex items-center gap-2.5" style={{ padding: "9px 11px" }}><Person name="You" you size={30} color={YOU_COLOR} /><div className="text-[13px] font-semibold">You</div></div>;
-    if (id === "hand") return <div className="gs-card flex items-center gap-2 px-3 h-[48px]"><Dot state={answered || !second ? "working" : "needs_input"} /><span className="text-[12px] font-semibold">Fix refund retries</span><span className="text-[10.5px] gs-dim ml-auto">a session</span></div>;
+    if (id === "hand") return <div className="gs-card flex items-center gap-2 px-3 h-[48px]"><Dot state={answered || !second ? "working" : "needs_input"} /><span className="text-[12px] font-semibold whitespace-nowrap">Fix refund retries</span></div>;
     return <RoleCard role={id} />;
   };
   return (
@@ -387,11 +392,11 @@ function Ladder({ beat, act, waiting }: SceneProps) {
         </div>
       </Show>
       {/* The second question: climbs, each rung adding what it knows. */}
-      <Show on={second && !answered} at={{ x: LADDER_X + 132, y: 452, w: 270 }}><div className="gs-note" style={{ position: "relative" }}>Ship the refund fix to every customer today?</div></Show>
-      <Show on={second} at={{ x: LADDER_X + 132, y: 326, w: 250 }} style={{ transitionDelay: "500ms" }}>
+      <Show on={second && !answered} at={{ x: LADDER_X + 132, y: 452, w: 226 }}><div className="gs-note" style={{ position: "relative" }}>Ship the refund fix to every customer today?</div></Show>
+      <Show on={second} at={{ x: LADDER_X + 132, y: 326, w: 226 }} style={{ transitionDelay: "500ms" }}>
         <div className="text-[11.5px] gs-muted leading-snug">"Touches every customer, so it's not mine to call."</div>
       </Show>
-      <Show on={second} at={{ x: LADDER_X + 132, y: 200, w: 250 }} style={{ transitionDelay: "1100ms" }}>
+      <Show on={second} at={{ x: LADDER_X + 132, y: 200, w: 226 }} style={{ transitionDelay: "1100ms" }}>
         <div className="text-[11.5px] leading-snug"><b>Recommends:</b> <span className="gs-muted">ship to 10% first and watch refunds for a day.</span></div>
       </Show>
       <Show on={beat >= 3} at={{ x: 620, y: 70, w: 390 }}>
@@ -441,21 +446,21 @@ function RolePage({ beat }: SceneProps) {
           <div className="ml-auto flex items-center gap-2 text-[12px] gs-muted">Reports to <Person name="You" you size={20} color={YOU_COLOR} /> You</div>
           <span className={`w-8 h-8 rounded-lg inline-flex items-center justify-center ${menu ? "gs-spot" : ""}`} style={{ border: "1px solid color-mix(in srgb, var(--sol-border) 70%, transparent)" }}><MoreHorizontal className="w-4 h-4" /></span>
         </div>
-        <Show on={menu} pop at={{ x: 790, y: 64, w: 170 }} style={{ zIndex: 3 }}>
-          <div className="gs-card p-1.5 flex flex-col text-[12.5px]">
+        <Show on={menu} pop at={{ x: 712, y: 66, w: 240 }} style={{ zIndex: 3, transformOrigin: "top right" }}>
+          <div className="gs-card p-1.5 flex flex-col text-[12.5px]" style={{ background: "var(--sol-card)", boxShadow: "0 24px 60px -20px rgba(0,0,0,.65)" }}>
             {[[Pause, "Pause", "stops it, keeps everything"], [X, "Retire", "its sessions report to you"]].map(([Icon, label, sub]: any) => (
               <div key={label} className="flex items-start gap-2 px-2 py-1.5 rounded-md"><Icon className="w-3.5 h-3.5 mt-0.5" /><span><span className="font-semibold">{label}</span><br /><span className="text-[11px] gs-dim">{sub}</span></span></div>
             ))}
           </div>
         </Show>
-        <div className="absolute left-0 top-[74px] bottom-0 w-[520px] p-5 flex flex-col gap-3" style={{ borderRight: "1px solid color-mix(in srgb, var(--sol-border) 60%, transparent)" }}>
+        <div className="absolute left-0 top-[74px] bottom-0 w-[470px] p-5 flex flex-col gap-3" style={{ borderRight: "1px solid color-mix(in srgb, var(--sol-border) 60%, transparent)" }}>
           <Msg from={<Person name="You" you size={24} color={YOU_COLOR} />} you>What's blocking the checkout release?</Msg>
           <Msg from={<Face avatar="hedgehog" size={24} />}>One flaky test in booking-sync. A session is fixing it now; the fix comes to you as a card by 3pm. Everything else for Thursday is green.</Msg>
           <div className="mt-auto gs-card h-[44px] px-3 flex items-center text-[12.5px] gs-dim">Ask QA Lead…</div>
         </div>
-        <div className="absolute right-0 top-[74px] bottom-0 left-[520px] p-4">
-          <div className="flex gap-1 flex-wrap">
-            {TABS.map((t) => <span key={t} className="px-2.5 h-[26px] inline-flex items-center rounded-md text-[11.5px] transition-colors duration-300" style={{ background: t === tab ? "var(--sol-bg-alt)" : "transparent", color: t === tab ? "var(--sol-text)" : "var(--sol-text-dim)", fontWeight: t === tab ? 600 : 400 }}>{t}</span>)}
+        <div className="absolute right-0 top-[74px] bottom-0 left-[470px] p-4">
+          <div className="flex gap-0.5">
+            {TABS.map((t) => <span key={t} className="px-2 h-[26px] inline-flex items-center rounded-md text-[11.5px] transition-colors duration-300" style={{ background: t === tab ? "var(--sol-bg-alt)" : "transparent", color: t === tab ? "var(--sol-text)" : "var(--sol-text-dim)", fontWeight: t === tab ? 600 : 400 }}>{t}</span>)}
           </div>
           <div key={tab} className="mt-4 flex flex-col gap-2" style={{ animation: "guide-say-in 380ms ease-out" }}>
             {tab === "Overview" && (
@@ -504,6 +509,7 @@ export const ORG_GUIDE: GuideDef = {
   name: "Org",
   accent: ACCENT,
   home: "/org",
+  pageTour: "org-page",
   chapters: [
     {
       id: "threads",

@@ -8,12 +8,20 @@
 // The words come from @platform/flags (featureOffCopy), so the CLI's refusal,
 // the server's error and this page say the same thing about the same feature.
 import Link from "next/link";
+import { Suspense } from "react";
+import { FeatureLanding, GUIDE_FOR } from "../tours/guides";
 import { type TeamFeatureKey } from "@codecast/shared/contracts";
 import { featureOffCopy } from "@platform/flags";
 import { TEAM_FEATURE_CATALOG } from "../lib/teamFeatures";
 import { useInboxStore } from "../store/inboxStore";
 
 export function TeamFeatureOff({ feature }: { feature: TeamFeatureKey }) {
+  // A feature with a guide gets its landing: what it is, the guide, the switch.
+  if (GUIDE_FOR[feature]) return <Suspense fallback={null}><FeatureLanding feature={feature} /></Suspense>;
+  return <FeatureOffLine feature={feature} />;
+}
+
+function FeatureOffLine({ feature }: { feature: TeamFeatureKey }) {
   const isAdmin = useInboxStore((s) => {
     const teamId = s.clientState.ui?.active_team_id;
     const team = (s.teams || []).find((t: any) => String(t._id) === String(teamId));

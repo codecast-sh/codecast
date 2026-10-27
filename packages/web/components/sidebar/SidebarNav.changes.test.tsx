@@ -25,7 +25,7 @@ function rail(changesOn: boolean | undefined, active: SidebarNavActive = ACTIVE,
        
         tasks={shut}
         docs={shut}
-        orgOn={false}
+        orgOn
         changesOn={changesOn}
         agent={{ label: "Agent", title: "Agent", icon: <span /> }}
         mode={mode}
@@ -122,4 +122,25 @@ test("the narrow rail shows Goals, Projects and Org as icons", () => {
     </MemoryRouter>,
   );
   for (const href of ["/goals", "/projects", "/org"]) expect(html).toContain(`href="${href}"`);
+});
+
+test("Org and Flows rows: on shows them, a team that never decided sees them marked new, a team that turned them off sees neither", () => {
+  const view = (orgOn: boolean, offers: { org?: boolean; line?: boolean }, mode: SurfaceMode) => renderToStaticMarkup(
+    <MemoryRouter>
+      <SidebarNavView isNarrow={false} inbox={<span />} active={ACTIVE} tasks={shut} docs={shut} orgOn={orgOn} offers={offers} mode={mode} agent={{ label: "Agent", title: "Agent", icon: <span /> }} />
+    </MemoryRouter>,
+  );
+  const off = view(false, {}, surfaceMode(false, false, false));
+  expect(off).not.toContain('href="/org"');
+  expect(off).not.toContain('href="/flows"');
+  const offered = view(false, { org: true, line: true }, surfaceMode(false, false, false));
+  expect(offered).toContain('href="/org"');
+  expect(offered).toContain('href="/flows"');
+  expect(offered.match(/data-feature-new/g)?.length).toBe(2);
+  const on = view(true, {}, surfaceMode(false, false, true));
+  expect(on).toContain('href="/org"');
+  expect(on).toContain('href="/flows"');
+  expect(on).not.toContain("data-feature-new");
+  // Hosted mode never offers Flows: it has no Flows at all.
+  expect(view(false, { line: true }, surfaceMode(true, false, false))).not.toContain('href="/flows"');
 });

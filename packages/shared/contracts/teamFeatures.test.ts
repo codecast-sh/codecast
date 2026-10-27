@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { teamFeatureEnabled, workspaceFeatureEnabled } from "./teamFeatures";
+import { teamFeatureEnabled, workspaceFeatureEnabled, workspaceFeatureState } from "./teamFeatures";
 
 // The org feature is seated per team AND per person, and the personal
 // workspace has no flag row. The rule that decides whose personal org exists
@@ -23,5 +23,24 @@ describe("workspaceFeatureEnabled", () => {
   it("a team-only feature stays off in the personal workspace", () => {
     expect(workspaceFeatureEnabled([off], null, "chat")).toBe(false);
     expect(teamFeatureEnabled(off, "chat")).toBe(true);
+  });
+});
+
+describe("workspaceFeatureState", () => {
+  const on = { _id: "a", features: { org: true, line: true } };
+  const off = { _id: "b", features: { org: false, line: false } };
+  const undecided = { _id: "c", features: { chat: true } };
+  it("a team reads its own flag: on, never decided (offer), or turned off", () => {
+    expect(workspaceFeatureState([on, off, undecided], "a", "line")).toBe("on");
+    expect(workspaceFeatureState([on, off, undecided], "b", "line")).toBe("off");
+    expect(workspaceFeatureState([on, off, undecided], "c", "line")).toBe("offer");
+    expect(workspaceFeatureState([undecided], "missing", "org")).toBe("off");
+  });
+  it("personal borrows: on when a team has it on, offered while one never decided, else off", () => {
+    expect(workspaceFeatureState([off, on], null, "org")).toBe("on");
+    expect(workspaceFeatureState([off, undecided], null, "org")).toBe("offer");
+    expect(workspaceFeatureState([off], null, "org")).toBe("off");
+    // A team-only feature is never offered in the personal workspace.
+    expect(workspaceFeatureState([undecided], null, "calls")).toBe("off");
   });
 });

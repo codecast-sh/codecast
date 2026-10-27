@@ -41,25 +41,30 @@ export function GuidePlayer({ guide }: { guide: GuideDef }) {
   const beatKey = `${pos.chapter}:${pos.beat}`;
   const waiting = !!beat?.act && !acted.has(beatKey);
 
-  const next = () => setPos((p) => {
+  // The hold on an act's result: any step the person takes first replaces it.
+  const actHold = useRef<number | null>(null);
+  const clearActHold = () => { if (actHold.current !== null) { window.clearTimeout(actHold.current); actHold.current = null; } };
+  const next = () => { clearActHold(); setPos(nextPos); };
+  const nextPos = (p: Pos): Pos => {
     if (p.chapter >= chapters.length) return p;
     const ch = chapters[p.chapter];
     if (p.beat + 1 < ch.beats.length) return { chapter: p.chapter, beat: p.beat + 1 };
     return { chapter: p.chapter + 1, beat: 0 };
-  });
-  const back = () => setPos((p) => {
+  };
+  const back = () => { clearActHold(); setPos((p) => {
     if (p.chapter >= chapters.length) return { chapter: chapters.length - 1, beat: chapters[chapters.length - 1].beats.length - 1 };
     if (p.beat > 0) return { chapter: p.chapter, beat: p.beat - 1 };
     if (p.chapter === 0) return p;
     return { chapter: p.chapter - 1, beat: chapters[p.chapter - 1].beats.length - 1 };
-  });
-  const jump = (c: number) => { setPos({ chapter: Math.max(0, Math.min(chapters.length, c)), beat: 0 }); setPlaying(true); };
+  }); };
+  const jump = (c: number) => { clearActHold(); setPos({ chapter: Math.max(0, Math.min(chapters.length, c)), beat: 0 }); setPlaying(true); };
   const act = () => {
     if (!waiting) return;
     setActed((s) => new Set(s).add(beatKey));
     setPlaying(true);
     // The press is the beat's payoff: hold on its result a moment.
-    window.setTimeout(next, 1100);
+    clearActHold();
+    actHold.current = window.setTimeout(() => { actHold.current = null; setPos(nextPos); }, 1100);
   };
   const close = () => endTour(finale ? "finished" : "skipped");
 
@@ -154,8 +159,8 @@ export function GuidePlayer({ guide }: { guide: GuideDef }) {
   );
 }
 
-/** The stage at its design size, scaled to fit what the window leaves it. */
-function ScaledStage({ children }: { children: React.ReactNode }) {
+/** The stage at its design size, scaled to fit what its box leaves it. */
+export function ScaledStage({ children, max = 1.35, className = "guide-stage-wrap" }: { children: React.ReactNode; max?: number; className?: string }) {
   const outer = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
   useWatchEffect(() => {
@@ -163,7 +168,7 @@ function ScaledStage({ children }: { children: React.ReactNode }) {
     if (!el) return;
     const fit = () => {
       const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) setScale(Math.min(r.width / STAGE_W, r.height / STAGE_H, 1.35));
+      if (r.width > 0 && r.height > 0) setScale(Math.min(r.width / STAGE_W, r.height / STAGE_H, max));
     };
     fit();
     const ro = new ResizeObserver(fit);
@@ -172,7 +177,7 @@ function ScaledStage({ children }: { children: React.ReactNode }) {
     return () => { ro.disconnect(); window.removeEventListener("resize", fit); };
   }, []);
   return (
-    <div ref={outer} className="guide-stage-wrap">
+    <div ref={outer} className={className}>
       <div className="guide-stage" style={{ width: STAGE_W, height: STAGE_H, transform: `scale(${scale})` }} data-guide-stage>
         {children}
       </div>

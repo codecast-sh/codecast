@@ -1,6 +1,7 @@
 "use client";
 
 import { isHostedUi } from "../components/simple/lanePaths";
+import { startTour } from '../tours/engine';
 import { toast } from "sonner";
 import { isForeignSession } from "../lib/liveEntities";
 import { resolvePaletteTarget } from "../lib/paletteTarget";
@@ -238,6 +239,10 @@ export function useGlobalShortcutActions() {
     const s = useInboxStore.getState();
     s.setToursPanelOpen(!s.toursPanelOpen);
   }, []));
+
+  // The feature guides (tours/guides), on or off: they are how a team decides.
+  useShortcutAction('ui.guideOrg', useCallback(() => { startTour('org-guide', { replay: true }); }, []));
+  useShortcutAction('ui.guideFlows', useCallback(() => { startTour('flows-guide', { replay: true }); }, []));
 
   // Assistant mode on or off (client_state.ui.lane), from the palette.
   useShortcutAction('ui.toggleLane', useCallback(() => {

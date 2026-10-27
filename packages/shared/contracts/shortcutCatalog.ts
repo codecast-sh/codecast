@@ -43,6 +43,8 @@ export type ShortcutAction =
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
   | 'ui.openTours'
+  | 'ui.guideOrg'
+  | 'ui.guideFlows'
   | 'ui.toggleLane'
   | 'ui.openSettings'
   | 'ui.undo'

@@ -1,7 +1,8 @@
 "use client";
 /**
- * Per-team opt-in features (chat, calls) — one switch per catalog entry, admin
- * only. Off is the default and means NO UI anywhere for that feature; on shows
+ * Per-team opt-in features (chat, calls, org, flows) — one switch per catalog
+ * entry, admin only. A feature with a guide (tours/guides) offers it beside
+ * its switch. Off is the default and means NO UI anywhere for that feature; on shows
  * it for every member of this team and installs the matching agent snippets on
  * their machines (the daemon reconciles on its next heartbeat). Catalog:
  * @codecast/shared/contracts/teamFeatures — the same list the server guards on.
@@ -16,6 +17,8 @@ import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "./ui";
 import { TEAM_FEATURES, teamFeatureEnabled } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
+import { GUIDE_FOR } from "../../tours/guides";
+import { startTour } from "../../tours/engine";
 
 export function TeamFeaturesEditor({ teamId, isAdmin }: { teamId: Id<"teams">; isAdmin: boolean }) {
   const team = useInboxStore((s) => (s.teams || []).find((t: any) => String(t._id) === String(teamId)));
@@ -36,6 +39,11 @@ export function TeamFeaturesEditor({ teamId, isAdmin }: { teamId: Id<"teams">; i
         const on = teamFeatureEnabled(team, f.key);
         return (
           <SettingsRow key={f.key} label={f.name} description={f.desc}>
+            {GUIDE_FOR[f.key] && (
+              <button type="button" onClick={() => startTour(GUIDE_FOR[f.key]!, { replay: true })} className="mr-3 text-xs text-sol-text-dim hover:text-sol-text transition-colors whitespace-nowrap" data-feature-guide={f.key}>
+                Watch the guide
+              </button>
+            )}
             <Switch
               checked={on}
               disabled={!isAdmin}

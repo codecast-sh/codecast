@@ -605,6 +605,8 @@ const ACTION_SURFACES: Record<string, DevSurface> = {
   "doc.type": "actions.fleet",
   "task.assign": "actions.fleet",
   "ui.openTours": "actions.fleet",
+  // Flows is a developer surface, so its guide is too; Org's shows in both modes.
+  "ui.guideFlows": "actions.fleet",
   "nav.inbox": "actions.fleet",
   // Every label sits behind working detail hosted mode hides, and hosted
   // rows have no select gutter; message density and zen mode tune a fleet's

@@ -4,7 +4,7 @@
 // shortcuts panel, and the inbox's triage bar. Picking a row starts the tour
 // (the layer goes to its page first).
 import { useRef } from "react";
-import { Check, Compass, X } from "lucide-react";
+import { Check, Compass, Play, X } from "lucide-react";
 import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -50,7 +50,7 @@ function Panel() {
               <Compass className="w-5 h-5" style={{ color: "var(--sol-violet)" }} strokeWidth={1.75} /> Tours
             </h2>
             <p className="mt-1 text-[12.5px] leading-relaxed max-w-[46ch]" style={{ color: "var(--sol-text-muted)" }}>
-              Short walks through one feature each, on the real page. {off ? "Tips are off in Settings, so none starts on its own." : "A new one starts on its own the first time you meet its feature, once."}
+              A guide plays a whole feature on an example team; a tour walks one real page. {off ? "Tips are off in Settings, so no tour starts on its own." : "A tour starts on its own the first time you meet its page, once."}
             </p>
           </div>
           <button type="button" onClick={close} aria-label="Close" className="ml-auto -mr-2 -mt-1 w-7 h-7 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-alt" style={{ color: "var(--sol-text-dim)" }}>
@@ -81,7 +81,9 @@ function Panel() {
                         data-tour-seen={outcome ?? "new"}
                       >
                         <div className="flex items-center gap-2">
+                          {t.kind === "guide" && <Play className="w-3.5 h-3.5 shrink-0" style={{ color: area.accent }} />}
                           <span className="text-[13.5px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{t.title}</span>
+                          {t.kind === "guide" && <span className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>guide · {t.minutes} min</span>}
                           {outcome === "finished" && <span className="inline-flex items-center gap-1 text-[10.5px]" style={{ color: "var(--sol-green)" }}><Check className="w-3 h-3" /> seen</span>}
                           {outcome === "skipped" && <span className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>skipped</span>}
                           {!outcome && <span className="text-[10.5px] px-1.5 h-[16px] inline-flex items-center rounded-md" style={{ background: `color-mix(in srgb, ${area.accent} 16%, transparent)`, color: area.accent }}>new</span>}

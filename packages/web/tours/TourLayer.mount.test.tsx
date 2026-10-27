@@ -125,7 +125,17 @@ async function run() {
   pathname = "/inbox";
   startTour("org-role", { replay: true });
   await render(); await settle();
-  assert.deepEqual(pushes, ["/org"]);
+  // A role's page started from elsewhere opens the root role's page.
+  assert.deepEqual(pushes, ["/anchor"]);
+  endTour("skipped");
+  await render();
+
+  // ── a guide draws nothing here (GuideLayer plays it, full screen) ──
+  pathname = "/inbox";
+  startTour("org-guide", { replay: true });
+  await render(); await settle();
+  assert.equal(q("[data-tour-open]"), null);
+  assert.deepEqual(pushes, ["/anchor"]);
   endTour("skipped");
   await render();
 

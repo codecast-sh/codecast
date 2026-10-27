@@ -57,6 +57,8 @@ export type TourDef = {
    *  screen, wherever it is started. */
   kind?: "spotlight" | "modal" | "guide";
   steps: TourStep[];
+  /** A guide's length at its own pace, in whole minutes, said wherever it is offered. */
+  minutes?: number;
   /** Records written before the tours existed that count as having seen it. */
   legacy?: { tips?: string[]; ui?: string[] };
 };

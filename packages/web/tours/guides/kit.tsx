@@ -3,7 +3,7 @@
 // kit"). A scene is absolutely laid out on the 1040x600 stage and changes
 // only data-* states as its beat moves, so every motion is a CSS transition
 // and stepping back plays it in reverse.
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { RoleAvatar } from "../../components/org/avatars";
 import { useInboxStore } from "../../store/inboxStore";
@@ -95,7 +95,7 @@ export function RoleCard({ role, line, state, at: box, ghost, spot, className = 
       <div className="flex items-center gap-2.5">
         <Face avatar={r.avatar} size={30} />
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold truncate leading-tight">{r.name}</div>
+          <div className="text-[12.5px] font-semibold truncate leading-tight">{r.name}</div>
           <div className="text-[11px] gs-dim truncate leading-tight mt-0.5 flex items-center gap-1.5">{state && <Dot state={state} size={6} />}{line ?? `@${r.handle}`}</div>
         </div>
       </div>
@@ -153,4 +153,54 @@ export function useArrived(delay = 80): boolean {
     return () => window.clearTimeout(t);
   });
   return arrived;
+}
+
+/**
+ * A card the person drags to its new place on the stage. Past `threshold`
+ * stage pixels the drop counts and `onDrop` runs; the card then glides from
+ * where it was let go to where the scene puts it (`to`: that place, relative
+ * to where it stood). A click without a drag counts too, for a trackpad or a
+ * keyboard. Pointer moves are in screen pixels, read back through the
+ * stage's scale.
+ */
+export function useStageDrag(enabled: boolean, to: { x: number; y: number }, onDrop: () => void, threshold = 70) {
+  const start = useRef<{ x: number; y: number; scale: number } | null>(null);
+  const [off, setOff] = useState<{ x: number; y: number } | null>(null);
+  const [live, setLive] = useState(false);
+  const moved = useRef(false);
+  const drop = (o: { x: number; y: number }) => {
+    // From here on the scene places the card at `to`; the offset that keeps it where it was let go then eases to none.
+    setLive(true);
+    setOff({ x: o.x - to.x, y: o.y - to.y });
+    onDrop();
+    window.setTimeout(() => { setLive(false); setOff(null); }, 40);
+  };
+  const handlers = {
+    onPointerDown: (e: PointerEvent<HTMLElement>) => {
+      if (!enabled) return;
+      const stage = e.currentTarget.closest("[data-guide-stage]") as HTMLElement | null;
+      const scale = stage ? stage.getBoundingClientRect().width / 1040 : 1;
+      start.current = { x: e.clientX, y: e.clientY, scale };
+      moved.current = false;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setLive(true);
+    },
+    onPointerMove: (e: PointerEvent<HTMLElement>) => {
+      const s = start.current;
+      if (!s) return;
+      const o = { x: (e.clientX - s.x) / s.scale, y: (e.clientY - s.y) / s.scale };
+      if (Math.hypot(o.x, o.y) > 4) moved.current = true;
+      setOff(o);
+    },
+    onPointerUp: (e: PointerEvent<HTMLElement>) => {
+      const s = start.current;
+      start.current = null;
+      if (!s) return;
+      const o = { x: (e.clientX - s.x) / s.scale, y: (e.clientY - s.y) / s.scale };
+      if (!moved.current || Math.hypot(o.x, o.y) >= threshold) drop(moved.current ? o : { x: 0, y: 0 });
+      else { setLive(false); setOff(null); }
+    },
+    onPointerCancel: () => { start.current = null; setLive(false); setOff(null); },
+  };
+  return { handlers, live, transform: off ? `translate(${off.x}px, ${off.y}px)` : undefined };
 }

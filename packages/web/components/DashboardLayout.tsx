@@ -35,7 +35,7 @@ import { PasskeyProbationBanner } from "./PasskeyProbationBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
 import { TourLayer, ToursPanel } from "../tours";
-import { GuideLayer } from "../tours/guides";
+import { FeatureOfferAnywhere, GuideLayer } from "../tours/guides";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { ThemeIntroAnywhere } from "./theme/ThemeIntroAnywhere";
@@ -1467,6 +1467,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <TeamDomainBanner />
         <NewSnippetsBanner />
         <OrgIntroAnywhere />
+        <FeatureOfferAnywhere />
         <ThemeIntroAnywhere />
         <Surface name="banner.cliOffline"><CliOfflineBanner /></Surface>
         <Surface name="banner.tmuxMissing"><TmuxMissingBanner /></Surface>

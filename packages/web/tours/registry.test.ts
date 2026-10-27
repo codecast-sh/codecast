@@ -23,10 +23,12 @@ describe("the tours registry", () => {
       expect(t.teaches.length).toBeGreaterThan(20);
       expect(t.teaches.length).toBeLessThanOrEqual(120);
       expect(t.teaches.endsWith(".")).toBe(true);
-      if (t.kind === "modal") expect(t.steps.length).toBe(0);
+      if (t.kind === "modal" || t.kind === "guide") expect(t.steps.length).toBe(0);
       else expect(t.steps.length).toBeGreaterThanOrEqual(3);
     }
     expect(TOURS.filter((t) => t.kind === "modal").map((t) => t.id)).toEqual(["inbox"]);
+    // A guide runs wherever it starts, full screen (tours/guides).
+    expect(TOURS.filter((t) => t.kind === "guide").map((t) => [t.id, t.route])).toEqual([["org-guide", null], ["flows-guide", null]]);
   });
 
   test("a step is a short title and one to three plain sentences", () => {
@@ -48,7 +50,7 @@ describe("the tours registry", () => {
 
   test("the org tour teaches the role's page as it works today", () => {
     const org = TOURS.filter((t) => t.area === "org").map((t) => t.id);
-    expect(org).toEqual(["org-role"]);
+    expect(org).toEqual(["org-guide", "org-page", "org-role"]);
     const text = TOURS.filter((t) => t.area === "org").flatMap((t) => t.steps.map((s) => `${s.title} ${s.body}`)).join(" ");
     for (const must of ["Reports to", "Pause"]) expect(text).toContain(must);
   });
@@ -56,6 +58,9 @@ describe("the tours registry", () => {
   test("a route says where a tour runs", () => {
     expect(tourById("org-role")!.route!.match("/org/or-1")).toBe(true);
     expect(tourById("org-role")!.route!.match("/org")).toBe(false);
+    // A role's page is its standing session's conversation, or the root role's /anchor.
+    expect(tourById("org-role")!.route!.match("/conversation/abc")).toBe(true);
+    expect(tourById("org-role")!.route!.match("/anchor")).toBe(true);
     expect(tourById("session")!.route!.match("/conversation/abc")).toBe(true);
     expect(tourById("session")!.route!.match("/tasks")).toBe(false);
     expect(tourById("inbox")!.route!.match("/")).toBe(true);

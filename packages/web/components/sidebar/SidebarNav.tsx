@@ -229,6 +229,7 @@ export function SidebarNavView({
   docs,
   orgOn,
   orgBadge,
+  offers,
   changesOn,
   agent,
   mode = DEVELOPER_MODE,
@@ -250,6 +251,9 @@ export function SidebarNavView({
   orgOn: boolean;
   /** The Org row's count of what waits on you; renders nothing at zero. */
   orgBadge?: ReactNode;
+  /** Features the workspace's team never decided on (workspaceFeatureState
+   *  "offer"): their row stays, marked new, and opens the feature's landing. */
+  offers?: { org?: boolean; line?: boolean };
   /** The active team has Changes on (teams.features.changes): its row sits under Feed. */
   changesOn?: boolean;
   /** The workspace's agent: its name, its hover title and its face. */
@@ -323,7 +327,7 @@ export function SidebarNavView({
           title="Projects: the work that moves the goals"
           icon={<FolderKanban className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
-        {shows("nav.org") && <NavSection
+        {shows("nav.org") && (orgOn || offers?.org) && <NavSection
           label={page("/org", "Org")}
           href="/org"
           isActive={active.org}
@@ -331,7 +335,7 @@ export function SidebarNavView({
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
           title="Org: who carries the work, people and agent roles"
-          badge={orgBadge}
+          badge={orgOn ? orgBadge : <NewMark />}
           icon={<Network className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         <NavSection
@@ -409,13 +413,14 @@ export function SidebarNavView({
           standing things that set it running. */}
       <RailHeading label={words.agentsGroup} isNarrow={isNarrow} />
       <div data-rail-group="agents" className="text-sm">
-        {showsPage("/flows") && <NavSection
+        {(showsPage("/flows") || (offers?.line && !mode.hosted)) && <NavSection
           label={page("/flows", "Flows")}
           href="/flows"
           isActive={active.line}
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
-          title="Flows: from a finding to a shipped, watched change"
+          title="Flows: every change through steps your team can see"
+          badge={offers?.line ? <NewMark /> : undefined}
           icon={<Waypoints className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         {routines}
@@ -446,4 +451,9 @@ export function SidebarNavView({
       </>)}
     </>
   );
+}
+
+/** A feature row's mark while its team has not decided on it. */
+function NewMark() {
+  return <span className="text-[10px] font-semibold tracking-wide px-1.5 h-[16px] inline-flex items-center rounded-md" style={{ color: "var(--sol-cyan)", background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)" }} data-feature-new>NEW</span>;
 }

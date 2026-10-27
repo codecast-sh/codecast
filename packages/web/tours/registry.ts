@@ -24,6 +24,7 @@ export const TOURS: TourDef[] = [
     area: "org",
     route: null,
     kind: "guide",
+    minutes: 2,
     steps: [],
   },
   {
@@ -33,7 +34,91 @@ export const TOURS: TourDef[] = [
     area: "flows",
     route: null,
     kind: "guide",
+    minutes: 2,
     steps: [],
+  },
+  {
+    id: "org-page",
+    title: "The Org page",
+    teaches: "Your own Org page: its views, hiring a role, the Head of People, and the cards on the chart.",
+    area: "org",
+    route: { href: "/org", match: (p: string) => p === "/org" },
+    steps: [
+      {
+        id: "views",
+        target: "[data-org-view-switch]",
+        title: "Three views",
+        body: "People is who carries the work. Everything adds goals and projects. Goals shows only what the work is for.",
+      },
+      {
+        id: "role",
+        target: '[data-org-node="role"]',
+        title: "A role",
+        body: "Each card is a role with its sessions under it. Open one to talk to it; drag it onto another card to change who it reports to.",
+        prepare: { click: '[data-org-view="people"]', until: '[data-org-node="role"]' },
+        optional: true,
+      },
+      {
+        id: "hire",
+        target: "[data-org-hire]",
+        title: "Hire",
+        body: "Add a role from a template, or describe the one you need in a sentence.",
+        optional: true,
+      },
+      {
+        id: "people",
+        target: "[data-org-panel-open]",
+        title: "Head of People",
+        body: "It reviews how work moves and proposes changes to the chart. Nothing applies until you approve.",
+        optional: true,
+      },
+    ],
+  },
+  {
+    id: "flows-page",
+    title: "The Flows page",
+    teaches: "Your own Flows page: what waits on you, where problems come from, the flows, and what shipped.",
+    area: "flows",
+    route: { href: "/flows", match: (p: string) => p === "/flows" || p.startsWith("/flows/") },
+    steps: [
+      {
+        id: "foryou",
+        target: '[data-pipeline-stage="decisions"]',
+        title: "For you",
+        body: "Every card a flow brought you to decide, with its evidence. Start here.",
+      },
+      {
+        id: "signals",
+        target: '[data-pipeline-stage="signals"]',
+        title: "Signals",
+        body: "The sources that report what goes wrong: errors, support, replays, agent reviews.",
+      },
+      {
+        id: "problems",
+        target: '[data-pipeline-stage="problems"]',
+        title: "Problems",
+        body: "Findings grouped into problems, worst first, each with its timeline and every fix tried.",
+      },
+      {
+        id: "flows",
+        target: '[data-pipeline-stage="flows"]',
+        title: "Flows",
+        body: "The live flows and their steps, and the library of flows a change can run through.",
+      },
+      {
+        id: "switch",
+        target: "[data-live-flow-switch]",
+        title: "On or off",
+        body: "A live flow starts work by itself only while it is on. An admin turns it.",
+        optional: true,
+      },
+      {
+        id: "shipped",
+        target: '[data-pipeline-stage="shipped"]',
+        title: "Shipped",
+        body: "Fixes that went live, watched for a week. One that came back is listed first.",
+      },
+    ],
   },
   {
     id: "org-role",
@@ -208,4 +293,10 @@ export const TOURS: TourDef[] = [
 
 export function tourById(id: string): TourDef | undefined {
   return TOURS.find((t) => t.id === id);
+}
+
+/** A guide's call to action, with its length when it has one. */
+export function watchGuideLabel(id: string): string {
+  const minutes = tourById(id)?.minutes;
+  return minutes ? `Watch the guide · ${minutes} min` : "Watch the guide";
 }

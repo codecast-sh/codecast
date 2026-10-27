@@ -17,16 +17,17 @@ import type { GuideDef, SceneProps } from "./types";
 const ACCENT = "var(--sol-cyan)";
 const CHANGE = SHIPPED_FLOWS.find((f) => f.slug === "change") ?? SHIPPED_FLOWS[0];
 
-/** A run of the Change flow standing at step `at` (0-based), every earlier step done. */
+/** A run of the Change flow standing at step `at` (0-based), every earlier step done. A segment's
+ *  state is read from its own steps' ids, so the run names leaves, the way a real run's visits do. */
 function useChangeRun(at: number | null, finished = false) {
   return useMemo(() => {
     if (at === null) return null;
-    const steps = flowDiagram(CHANGE).steps.map((s) => s.id);
-    const upTo = finished ? steps.length : Math.min(at, steps.length - 1);
+    const leaves = flowDiagram(CHANGE).steps.map((s) => (s.inner.length ? s.inner.map((i) => i.id) : [s.id]));
+    const upTo = finished ? leaves.length : Math.min(at, leaves.length - 1);
     return {
       status: finished ? "completed" : "running",
-      current_node_id: finished ? null : steps[upTo],
-      node_statuses: steps.slice(0, upTo).map((id) => ({ node_id: id, status: "completed" })),
+      current_node_id: finished ? null : leaves[upTo][0],
+      node_statuses: leaves.slice(0, upTo).flat().map((id) => ({ node_id: id, status: "completed" })),
     };
   }, [at, finished]);
 }
@@ -36,29 +37,19 @@ const stepCount = () => flowDiagram(CHANGE).steps.length;
 // ------------------------------------------------------------ 1. a flow
 
 function AFlow({ beat }: SceneProps) {
-  const library = SHIPPED_FLOWS.filter((f) => f.slug !== "line");
+  const library = [...SHIPPED_FLOWS].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "line" ? -1 : 1));
   return (
     <div className="gs">
-      <div className="absolute" style={{ left: 60, top: 58, width: 920 }}>
+      <div className="absolute" style={{ left: 60, top: 36, width: 920 }}>
         <div className="flex items-baseline gap-3">
           <span className="gs-serif text-[28px] font-semibold">Change</span>
           <span className="text-[12.5px] gs-muted">the flow every Tidepool change runs before it ships</span>
         </div>
         <div className="gs-card mt-4 overflow-hidden" style={{ animation: "guide-say-in 500ms 150ms both" }}>
-          <FlowDiagram flow={CHANGE} />
+          <FlowDiagram flow={CHANGE} compact={beat === 0} />
         </div>
       </div>
-      <Show on={beat >= 1} at={{ x: 60, y: 300, w: 920 }}>
-        <div className="flex gap-3">
-          {[[Bot, "An agent session", "reads, writes and reviews code"], [SquareTerminal, "A command", "runs tests, checks, a merge"], [User, "A person", "decides, and only where it matters"]].map(([Icon, k, v]: any, i) => (
-            <div key={k} className="gs-card flex-1 p-3.5 flex gap-3 items-start" style={{ transitionDelay: `${i * 90}ms` }}>
-              <span className="w-8 h-8 rounded-lg inline-flex items-center justify-center shrink-0" style={{ background: "color-mix(in srgb, var(--guide-accent) 14%, transparent)", color: ACCENT }}><Icon className="w-4 h-4" /></span>
-              <div><div className="text-[13px] font-semibold">{k}</div><div className="text-[12px] gs-muted mt-0.5">{v}</div></div>
-            </div>
-          ))}
-        </div>
-      </Show>
-      <Show on={beat >= 2} at={{ x: 60, y: 420, w: 920 }}>
+      <Show on={beat >= 2} at={{ x: 60, y: 446, w: 920 }}>
         <div className="gs-label mb-2">THE TEAM'S LIBRARY</div>
         <div className="flex flex-wrap gap-2">
           {library.map((f, i) => (
@@ -83,7 +74,7 @@ function RunChange({ beat, act, waiting }: SceneProps) {
   const run = useChangeRun(running ? (beat >= 4 ? Math.max(0, stepCount() - 2) : 1) : null);
   return (
     <div className="gs">
-      <Win title={<><Dot state={running ? "working" : "done"} /><b>Fix double booking on slot release</b><span className="gs-dim">· claude · tidepool/app</span></>} at={{ x: 36, y: 30, w: 968, h: 540 }}
+      <Win title={<><Dot state={running ? "working" : "done"} /><b>Fix double booking on slot release</b><span className="gs-dim">· claude · tidepool/app</span></>} at={{ x: 36, y: 60, w: 968, h: 480 }}
         right={<button type="button" onClick={waiting ? act : undefined} data-wait={waiting ? "" : undefined} data-guide-stage-act={waiting ? "" : undefined} className={`gs-btn ${waiting ? "" : ""}`} style={{ borderColor: picked ? "var(--guide-accent)" : undefined, color: picked ? ACCENT : undefined }}><Route className="w-3.5 h-3.5" /> Run through</button>}>
         <div className="absolute left-6 right-6 top-5 flex flex-col gap-3">
           <Msg from={<Person name="You" you size={24} color="var(--sol-blue)" />} you>Two people can book the same surf slot when one cancels. Fix it.</Msg>
@@ -95,7 +86,7 @@ function RunChange({ beat, act, waiting }: SceneProps) {
         <Show on={beat === 1 || (beat === 2 && false)} at={{ x: 600, y: 4, w: 350 }} style={{ zIndex: 4 }}>
           <div className="gs-card p-2 flex flex-col" style={{ boxShadow: "0 20px 50px -20px rgba(0,0,0,.55)" }}>
             <div className="gs-label px-2 pt-1 pb-2">RUN THIS CHANGE THROUGH</div>
-            {SHIPPED_FLOWS.filter((f) => ["change", "review", "check", "ship"].includes(f.slug)).map((f) => (
+            {["change", "review", "check", "ship"].map((slug) => SHIPPED_FLOWS.find((f) => f.slug === slug)!).filter(Boolean).map((f) => (
               <div key={f.slug} className={`flex items-center gap-2 px-2.5 h-[40px] rounded-lg ${f.slug === "change" && waiting ? "gs-spot" : ""}`} style={{ background: f.slug === "change" ? "var(--sol-bg-alt)" : "transparent" }}>
                 <Route className="w-3.5 h-3.5" style={{ color: f.slug === "change" ? ACCENT : "var(--sol-text-dim)" }} />
                 <span className="text-[12.5px] font-semibold w-[70px]">{f.label}</span>
@@ -116,13 +107,14 @@ function RunChange({ beat, act, waiting }: SceneProps) {
             <div className="mt-4 flex gap-2 justify-end"><StageButton>Cancel</StageButton><StageButton primary>Run it</StageButton></div>
           </div>
         </Show>
-        <Show on={running} at={{ x: 24, y: 210, w: 920 }}>
+        <Show on={running} at={{ x: 24, y: 196, w: 920 }}>
           <div className="gs-card p-3" style={{ borderColor: "color-mix(in srgb, var(--guide-accent) 40%, transparent)" }}>
             <div className="flex items-center gap-2 px-1 pb-2">
               <Route className="w-4 h-4" style={{ color: ACCENT }} />
               <span className="text-[13px] font-semibold">Change</span>
               <span className="text-[11.5px] gs-dim">· run 1 · ct-412 Fix double booking</span>
               <span className="ml-auto text-[11.5px] font-semibold" style={{ color: beat >= 4 ? "var(--sol-orange)" : ACCENT }}>{beat >= 4 ? "Waiting on you at Decide" : "Reviewing"}</span>
+              <StageButton>Stop</StageButton>
             </div>
             <FlowDiagram flow={CHANGE} run={run} compact />
             <div className="mt-2 px-1 flex flex-col gap-1 text-[12px]">
@@ -144,7 +136,10 @@ function Decide({ beat, act, waiting }: SceneProps) {
   const spot = beat === 1;
   return (
     <div className="gs">
-      <div className="gs-card absolute p-5" style={{ left: 60, top: 40, width: 560, height: 520, borderColor: "color-mix(in srgb, var(--guide-accent) 45%, transparent)" }}>
+      <div className="gs-card absolute px-2 py-1" style={{ left: 60, top: 28, width: 920 }}>
+        <FlowDiagram flow={CHANGE} run={run} compact />
+      </div>
+      <div className="gs-card absolute p-5" style={{ left: 60, top: 146, width: 560, height: 426, borderColor: "color-mix(in srgb, var(--guide-accent) 45%, transparent)" }}>
         <div className="flex items-center gap-2"><span className="gs-pill" style={{ color: "var(--sol-orange)", background: "color-mix(in srgb, var(--sol-orange) 14%, transparent)" }}>DECIDE</span><span className="text-[11.5px] gs-dim">Change · ct-412</span></div>
         <div className="mt-2 gs-serif text-[21px] font-semibold leading-snug">Ship: fix double booking on slot release</div>
         <p className="mt-2 text-[12.5px] gs-muted leading-relaxed">Releasing a slot locks its row, so a second booking waits instead of landing on the same slot.</p>
@@ -169,10 +164,8 @@ function Decide({ beat, act, waiting }: SceneProps) {
           )}
         </div>
       </div>
-      <div className="absolute flex flex-col gap-3" style={{ left: 650, top: 40, width: 350 }}>
-        <div className="gs-card p-3">
-          <FlowDiagram flow={CHANGE} run={run} compact />
-        </div>
+      <div className="absolute flex flex-col gap-3" style={{ left: 650, top: 146, width: 330 }}>
+        <div className="gs-label">SHIP</div>
         {[[GitPullRequest, "Pull request #482 opened", "tidepool/app"], [Check, "Checks green", "CI · 4m 12s"], [GitMerge, "Merged to main", "2:14 pm"]].map(([Icon, k, v]: any, i) => (
           <Show key={k} on={beat >= 3} style={{ transitionDelay: `${i * 450}ms` }}>
             <div className="gs-card flex items-center gap-3 px-3 h-[48px]">
@@ -235,6 +228,18 @@ function ProblemsIn({ beat }: SceneProps) {
           <Show on={beat >= 2}><span className="text-[11px] font-semibold tabular-nums" style={{ color: p.color }}>{[91, 64, 38][j]}</span></Show>
         </div>
       ))}
+      <Show on={beat >= 1} at={{ x: 430, y: 452, w: 570 }} style={{ transitionDelay: "500ms" }}>
+        <div className="flex items-end gap-[10px] h-[92px] px-4">
+          {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
+            <div key={i} className="flex-1 flex flex-col items-center gap-1">
+              <div className="w-full flex flex-col-reverse rounded-[3px] overflow-hidden">
+                {PROBLEMS.map((p) => <span key={p.title} style={{ height: p.trend[i] * 9, background: p.color, opacity: 0.85 }} />)}
+              </div>
+              <span className="text-[10px] gs-dim">{d}</span>
+            </div>
+          ))}
+        </div>
+      </Show>
       <Show on={beat >= 2} at={{ x: 430, y: 66, w: 570 }}>
         <div className="flex items-center text-[11px] gs-dim px-4"><span className="flex-1">PROBLEMS, WORST FIRST</span><span>7 DAYS</span><span className="w-[60px] text-right">SCORE</span></div>
       </Show>
@@ -247,36 +252,39 @@ function ProblemsIn({ beat }: SceneProps) {
 const LIVE_STEPS = ["Investigate", "Propose", "Prove", "Build", "Verify", "Review", "Decide"];
 
 function LiveFlow({ beat }: SceneProps) {
-  const on = beat >= 0;
+  const on = true;
+  // The run the camera follows: just started, then through the agent steps, then waiting on a person.
   const at = beat === 0 ? 0 : beat === 1 ? 5 : 6;
   return (
     <div className="gs">
-      <div className="gs-card absolute p-5" style={{ left: 40, top: 40, width: 960, height: 250 }}>
+      <div className="gs-card absolute p-5" style={{ left: 40, top: 46, width: 960, height: 200 }}>
         <div className="flex items-center gap-3">
           <span className="gs-pill" style={{ color: "var(--sol-green)", background: "color-mix(in srgb, var(--sol-green) 14%, transparent)" }}>LIVE</span>
           <span className="gs-serif text-[20px] font-semibold">Tidepool fix flow</span>
           <span className="text-[12px] gs-muted flex items-center gap-1.5">run by <Face avatar="hedgehog" size={18} /> QA Lead</span>
           <span className="ml-auto flex items-center gap-2 text-[12px]">{on ? "On" : "Off"} <Switch checked={on} onCheckedChange={() => {}} aria-label="Live flow" /></span>
         </div>
-        <div className="mt-6 flex items-center">
+        <div className="mt-9 flex items-center relative">
+          <span className="absolute z-[1] gs-pill" style={{ top: -30, left: at * 126 + 50, transform: "translateX(-50%)", transition: `left ${beat === 1 ? 2600 : 900}ms cubic-bezier(.4,0,.2,1)`, color: "var(--sol-bg)", background: ACCENT }}>ct-412</span>
           {LIVE_STEPS.map((s, i) => {
-            const done = i < at, now = i === at;
+            const here = i === at;
+            const person = s === "Decide";
             return (
               <div key={s} className="flex items-center">
-                {i > 0 && <span className="w-[26px] h-[2px] transition-colors duration-500" style={{ background: done || now ? "var(--guide-accent)" : "color-mix(in srgb, var(--sol-border) 80%, transparent)" }} />}
+                {i > 0 && <span className="w-[26px] h-[2px]" style={{ background: "color-mix(in srgb, var(--guide-accent) 45%, transparent)" }} />}
                 <div className="flex flex-col items-center gap-1.5 w-[100px]">
-                  <span className={`w-[34px] h-[34px] rounded-full inline-flex items-center justify-center transition-all duration-500 ${now ? "gs-live" : ""}`} style={{ background: done ? "var(--guide-accent)" : now ? "color-mix(in srgb, var(--guide-accent) 18%, var(--sol-card))" : "var(--sol-bg)", border: `1.5px solid ${done || now ? "var(--guide-accent)" : "color-mix(in srgb, var(--sol-border) 80%, transparent)"}`, color: done ? "var(--sol-bg)" : ACCENT }}>
-                    {done ? <Check className="w-4 h-4" /> : s === "Decide" ? <User className="w-4 h-4" /> : s === "Verify" || s === "Prove" ? <SquareTerminal className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+                  <span className={`w-[34px] h-[34px] rounded-full inline-flex items-center justify-center transition-all duration-500 ${here ? "gs-live" : ""}`} style={{ background: here ? "color-mix(in srgb, var(--guide-accent) 22%, var(--sol-card))" : "var(--sol-bg)", border: `1.5px solid ${here ? "var(--guide-accent)" : "color-mix(in srgb, var(--sol-border) 80%, transparent)"}`, color: person ? "var(--sol-orange)" : ACCENT }}>
+                    {person ? <User className="w-4 h-4" /> : s === "Verify" || s === "Prove" ? <SquareTerminal className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                   </span>
                   <span className="text-[11.5px] font-semibold">{s}</span>
-                  <span className="text-[10.5px] gs-dim tabular-nums">{[3, 2, 1, 4, 2, 1, 2][i]} {s === "Decide" ? "on you" : "running"}</span>
+                  <span className="text-[10.5px] tabular-nums" style={{ color: person ? "var(--sol-orange)" : "var(--sol-text-dim)" }}>{[3, 2, 1, 4, 2, 1, 2][i]} {person ? "on you" : "running"}</span>
                 </div>
               </div>
             );
           })}
         </div>
       </div>
-      <div className="absolute flex flex-col gap-2" style={{ left: 40, top: 312, width: 470 }}>
+      <div className="absolute flex flex-col gap-2" style={{ left: 40, top: 280, width: 470 }}>
         <div className="gs-label">QUEUE, BEST FIRST</div>
         {["Double booking on slot release", "Checkout times out on slow 3G", "Refund email missing the receipt", "Instructor calendar shows UTC"].map((t, i) => (
           <div key={t} className="gs-card flex items-center gap-3 px-3 h-[40px] transition-all duration-700" style={{ opacity: i < beat ? 0.35 : 1 }}>
@@ -285,13 +293,13 @@ function LiveFlow({ beat }: SceneProps) {
           </div>
         ))}
       </div>
-      <Show on={beat >= 2} at={{ x: 540, y: 330, w: 460 }}>
+      <Show on={beat >= 2} at={{ x: 540, y: 300, w: 460 }}>
         <div className="gs-card p-3.5 flex gap-3 items-start">
           <Face avatar="hedgehog" size={30} />
           <div className="text-[12.5px] leading-snug"><b>QA Lead</b> <span className="gs-muted">answers what the run asks inside its charter, and recommends on the cards that go to you.</span></div>
         </div>
       </Show>
-      <Show on={beat >= 3} at={{ x: 540, y: 432, w: 460 }}>
+      <Show on={beat >= 3} at={{ x: 540, y: 402, w: 460 }}>
         <div className="flex gap-2 flex-wrap">
           <Chip color={ACCENT}>Takes from: Errors, Support, Agent review</Chip>
           <Chip>12 runs a day at most</Chip>
@@ -358,7 +366,7 @@ function Watched({ beat }: SceneProps) {
 function MakeItYours({ beat }: SceneProps) {
   return (
     <div className="gs">
-      <Win title={<><b>Propose</b><span className="gs-dim">· a step's instructions</span></>} at={{ x: 36, y: 36, w: 470, h: 330 }}>
+      <Win title={<><b>Propose</b><span className="gs-dim">· a step's instructions</span></>} at={{ x: 36, y: 36, w: 470, h: 290 }}>
         <div className="absolute inset-0 p-4 text-[12px] leading-[1.65] font-mono">
           <div className="gs-muted">Read the problem and what was tried before.</div>
           <div className="gs-muted">Propose the smallest change that fixes the cause.</div>
@@ -373,7 +381,7 @@ function MakeItYours({ beat }: SceneProps) {
           <div className="gs-label">TRIED ON 5 PAST CASES</div>
           <div className="mt-2 grid text-[11.5px]" style={{ gridTemplateColumns: "1.3fr 1fr 1fr" }}>
             <span className="gs-dim pb-1.5">Case</span><span className="gs-dim pb-1.5">It said</span><span className="gs-dim pb-1.5">It says now</span>
-            {[["3G timeout", "Close: slow network", "Add a timeout", true], ["Double booking", "Lock the row", "Lock the row", false], ["Refund receipt", "Resend email", "Resend email", false], ["Calendar UTC", "Close: user error", "Store the timezone", true], ["Promo code", "Fix rounding", "Fix rounding", false]].map(([c, a, b, changed]) => (
+            {[["3G timeout", "Close it", "Add a timeout", true], ["Double booking", "Lock the row", "Lock the row", false], ["Refund receipt", "Resend email", "Resend email", false], ["Calendar UTC", "Close it", "Store the timezone", true], ["Promo code", "Fix rounding", "Fix rounding", false]].map(([c, a, b, changed]) => (
               <div key={c as string} className="contents">
                 <span className="py-1.5 font-semibold" style={{ borderTop: "1px solid color-mix(in srgb, var(--sol-border) 50%, transparent)" }}>{c as string}</span>
                 <span className="py-1.5 gs-muted" style={{ borderTop: "1px solid color-mix(in srgb, var(--sol-border) 50%, transparent)", textDecoration: changed ? "line-through" : undefined }}>{a as string}</span>
@@ -384,10 +392,10 @@ function MakeItYours({ beat }: SceneProps) {
           <div className="mt-2 text-[11.5px]" style={{ color: "var(--sol-green)" }}>2 answers better · 3 the same · nothing ships from a test</div>
         </div>
       </Show>
-      <Show on={beat >= 2} at={{ x: 36, y: 390, w: 470 }}>
+      <Show on={beat >= 2} at={{ x: 36, y: 346, w: 470 }}>
         <div className="gs-card p-4">
           <div className="gs-label">MARK WHAT IT GOT RIGHT</div>
-          {[["Calendar UTC → store the timezone", "right"], ["3G timeout → close: slow network", "wrong"]].map(([t, v]) => (
+          {[["Calendar UTC → store the timezone", "right"], ["3G timeout → close it", "wrong"]].map(([t, v]) => (
             <div key={t} className="flex items-center gap-2 mt-2 text-[12px]">
               <span className="flex-1 truncate">{t}</span>
               <span className="w-7 h-7 rounded-md inline-flex items-center justify-center" style={{ background: v === "right" ? "color-mix(in srgb, var(--sol-green) 18%, transparent)" : "transparent", color: v === "right" ? "var(--sol-green)" : "var(--sol-text-dim)" }}><ThumbsUp className="w-3.5 h-3.5" /></span>
@@ -397,11 +405,11 @@ function MakeItYours({ beat }: SceneProps) {
           <div className="mt-2 text-[11px] gs-dim">Marked answers become this step's test set.</div>
         </div>
       </Show>
-      <Show on={beat >= 3} at={{ x: 530, y: 330, w: 474 }}>
+      <Show on={beat >= 3} at={{ x: 530, y: 346, w: 474 }}>
         <div className="gs-card p-4">
           <div className="gs-label">FROM A SESSION TO THE LIBRARY</div>
-          <div className="mt-3 flex items-center gap-2 text-[12px]">
-            <span className="gs-card px-2.5 h-[30px] inline-flex items-center">A workflow an agent ran</span>
+          <div className="mt-3 flex items-center gap-1.5 text-[11.5px] whitespace-nowrap">
+            <span className="gs-card px-2.5 h-[30px] inline-flex items-center">An agent's workflow</span>
             <ChevronRight className="w-4 h-4 gs-dim" />
             <span className="gs-card px-2.5 h-[30px] inline-flex items-center">Add to flows</span>
             <ChevronRight className="w-4 h-4 gs-dim" />
@@ -422,6 +430,7 @@ export const FLOWS_GUIDE: GuideDef = {
   name: "Flows",
   accent: ACCENT,
   home: "/flows",
+  pageTour: "flows-page",
   chapters: [
     {
       id: "flow",
@@ -429,7 +438,7 @@ export const FLOWS_GUIDE: GuideDef = {
       Scene: AFlow,
       beats: [
         { say: "A flow is the path a change takes before it ships: the same steps, in the same order, every time." },
-        { say: "Each step says who does it: an agent session, a command, or a person.", hold: 4000 },
+        { say: "Each step shows who does it (an agent session, a command, or a person) and where the work goes when it does not pass.", hold: 5000 },
         { say: "Your team keeps a library: whole flows like Change, and segments like Review that any flow can reuse.", hold: 4400 },
       ],
     },
