@@ -318,7 +318,7 @@ async function enrichAuthor(ctx: Ctx, author: ProposalRow["author"]): Promise<Re
     }
     if (author.kind === "role") {
       const role: any = await ctx.db.get(author.id as Id<"org_roles">);
-      return role ? { ...author, name: role.name, handle: role.handle, short_id: role.short_id, avatar: role.avatar ?? undefined } : author;
+      return role ? { ...author, name: role.name, handle: role.handle, short_id: role.short_id, avatar: role.avatar ?? undefined, icon: role.icon ?? undefined } : author;
     }
     const user: any = await ctx.db.get(author.id as Id<"users">);
     return user ? { ...author, name: user.name ?? user.email ?? undefined } : author;

@@ -33,8 +33,9 @@ import { CUES, PEOPLE, SESSIONS } from "../fixtures/story";
 import { RAIL, RAIL_ACTIVE, TEAM_CHIP, TEAMMATES } from "../fixtures/inbox";
 import { PREV } from "../fixtures/conversation";
 import type { PartProps } from "./contract";
+import { DEFAULT_IDENTITY_PREFS } from "@/lib/sessionIdentity";
 
-const CHROME: SessionCardChrome = { showModelBadge: false, showAgentIcon: true, showBranchPill: true, personifyAll: false };
+const CHROME: SessionCardChrome = { showModelBadge: false, showAgentIcon: true, showBranchPill: true, prefs: DEFAULT_IDENTITY_PREFS };
 const IDLE = { isLive: false, pendingSend: false, restarting: false, draft: "" };
 const LIVE = { ...IDLE, isLive: true };
 const noop = () => {};

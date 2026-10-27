@@ -432,7 +432,7 @@ export const ChatMessage = memo(function ChatMessage({
                 <Link className="ch-msg-author" href={`/org/${author.role.shortId}`} title="Open the role">
                   {author.name}
                 </Link>
-                <span className="ch-msg-via">{author.role.title}</span>
+                {author.role.title !== author.name && <span className="ch-msg-via">{author.role.title}</span>}
               </>
             ) : (
               <span className="ch-msg-author">{author.name}</span>

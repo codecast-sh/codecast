@@ -28,6 +28,7 @@ import { filterRoleRecipients, roleRecipients, sendRequestToRole, type GateImage
 import { useInboxStore } from "../store/inboxStore";
 import { awaitUpload } from "../lib/pendingUploads";
 import { toast } from "sonner";
+import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
 
 const ALT_CAP = isMac ? "⌥" : "Alt";
 
@@ -72,9 +73,10 @@ export function ComposeRolePicker({ picked, onPick, onDone, page, className = ""
   const { roles, workspace } = useOrgRoles();
   const { user } = useCurrentUser();
   const viewerId = user?._id ? String(user._id) : null;
+  const { characters } = useIdentityPrefs();
   const all = useMemo(
-    () => roleRecipients(roles, viewerId, { teamName: workspace?.kind === "team" ? workspace.name : null }),
-    [roles, viewerId, workspace],
+    () => roleRecipients(roles, viewerId, { teamName: workspace?.kind === "team" ? workspace.name : null, characters }),
+    [roles, viewerId, workspace, characters],
   );
 
   const [open, setOpen] = useState(false);

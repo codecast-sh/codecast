@@ -18,7 +18,8 @@
 // running, no composer on the page holds text, and neither pref is set.
 // OrgIntroAnywhere asks that question once the page has settled, and again
 // on every route change until the card has risen once in this load.
-import { RoleAvatar } from "./avatars";
+import { RoleFace } from "./RoleFace";
+import { HEAD_OF_PEOPLE_HANDLE, HEAD_OF_PEOPLE_NAME } from "./orgStaffingTypes";
 import { RisingCard } from "../RisingCard";
 import { ORG_INTRO_HEAD_OF_PEOPLE } from "../../lib/orgIntro";
 import { ORG_MEET_TITLE, ORG_MEET_LINES } from "../../lib/orgIntroCard";
@@ -28,7 +29,7 @@ import { ORG_MEET_TITLE, ORG_MEET_LINES } from "../../lib/orgIntroCard";
 export function OrgIntroCard({ onSee, onDismiss }: { onSee: () => void; onDismiss: () => void }) {
   return (
     <RisingCard
-      face={<RoleAvatar avatar={ORG_INTRO_HEAD_OF_PEOPLE} size={46} />}
+      face={<RoleFace role={{ handle: HEAD_OF_PEOPLE_HANDLE, avatar: ORG_INTRO_HEAD_OF_PEOPLE, name: HEAD_OF_PEOPLE_NAME }} size={46} />}
       title={ORG_MEET_TITLE}
       lines={ORG_MEET_LINES}
       primaryLabel="See it"

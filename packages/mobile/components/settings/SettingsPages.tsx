@@ -339,6 +339,7 @@ function AppearancePage() {
   const Theme = useTheme();
   const { theme, pick } = useThemePicker();
   const inboxImageThumbs = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
+  const showCharacters = useInboxStore((s) => s.clientState?.ui?.show_characters !== false);
   const hostedMode = useHostedMode();
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   return (
@@ -366,6 +367,12 @@ function AppearancePage() {
           description="Show a small thumbnail on inbox rows when a session contains images"
           value={inboxImageThumbs}
           onValueChange={(v) => updateClientUI({ inbox_image_thumbs: v })}
+        />
+        <ToggleRow
+          label="Characters"
+          description="Roles wear an animal face and a name. Off, each role shows an icon of what it looks after and its title, and no session wears a character"
+          value={showCharacters}
+          onValueChange={(v) => updateClientUI({ show_characters: v })}
         />
       </SettingsGroup>
     </SettingsScroll>

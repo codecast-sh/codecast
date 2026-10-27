@@ -10,7 +10,7 @@ import { Briefcase, ChevronDown, UserPlus } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { OrgRole } from "../org/orgTypes";
 import { watchersLabel, type ProjectLead } from "@codecast/shared/contracts/orgLead";
-import { RoleAvatar } from "../org/avatars";
+import { RoleFace } from "../org/RoleFace";
 import { RoleHoverCard } from "../identity";
 import { CHARTER_PRIORITIES, PRIORITY_META, ownerCandidates, ownerRoleOf, type CharterPriority, type OrgRoles } from "./charterMeta";
 import { objectHref } from "../../lib/entityLinks";
@@ -126,8 +126,8 @@ export function PriorityPill({ priority, onChange, size = "sm", className }: {
 /** A role's face at chip size. */
 export function ChipFace({ role, px }: { role: OrgRole; px: number }) {
   return (
-    <span className="inline-block rounded-full shrink-0" style={{ width: px, height: px, lineHeight: 0 }}>
-      <RoleAvatar avatar={role.avatar ?? role.handle} size={px} title={role.name} />
+    <span className="inline-block shrink-0" style={{ width: px, height: px, lineHeight: 0 }}>
+      <RoleFace role={role} size={px} title={role.name} />
     </span>
   );
 }
