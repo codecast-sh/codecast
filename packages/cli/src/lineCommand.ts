@@ -235,6 +235,7 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
     .option("--concurrency <n>", "Replays at once (each is a whole agent turn)", (v) => parseInt(v, 10), 2)
     .option("--as-of", "Serve each case's own problem page (cast task show) as it stood before its run closed it: open, with its history and comments cut")
     .option("--db <file:VAR>", "A read-only database the stations may query: the env file (from the repository root) and the variable holding its URL; the replay's checkout gets only that one, and the real env files are hidden")
+    .option("--account <profile>", "The saved Claude account the replays run on (cast accounts); default: this machine's login, which may be another account's spent week")
     .option("--json", "Machine-readable output")
     .action(async (graph: string, station: string, runs: string[], options: any) => {
       const fs = await import("node:fs");
@@ -257,7 +258,7 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       if (!options.json) console.log(`Replaying ${station} on ${cases.length} case${cases.length === 1 ? "" : "s"} x ${options.reps} on ${base ? `${base} and ${work}` : work}, into ${out}`);
       const overlay = options.try ? path.resolve(options.try) : undefined;
       const db = options.db ? { file: String(options.db).slice(0, String(options.db).lastIndexOf(":")), key: String(options.db).slice(String(options.db).lastIndexOf(":") + 1) } : undefined;
-      const { tally, p } = await runReplay({ root, cast: graph, station, cases, base, overlay, db, asOf: !!options.asOf, reps: options.reps, out, concurrency: options.concurrency, log: options.json ? undefined : (l) => console.log(`  ${l}`) }, replayDeps());
+      const { tally, p } = await runReplay({ root, cast: graph, station, cases, base, overlay, db, asOf: !!options.asOf, reps: options.reps, out, concurrency: options.concurrency, ...(options.account ? { account: String(options.account) } : {}), log: options.json ? undefined : (l) => console.log(`  ${l}`) }, replayDeps());
       if (options.json) { console.log(JSON.stringify({ out, tally, p }, null, 2)); return; }
       const row = (arm: "base" | "work", label: string) => `  ${label}: ${tally[arm].pass}/${tally[arm].n} pass${tally[arm].failed ? `, ${tally[arm].failed} did not run` : ""}, $${tally[arm].cost_usd.toFixed(2)}`;
       if (base) console.log(row("base", base));

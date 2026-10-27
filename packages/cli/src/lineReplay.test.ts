@@ -145,6 +145,22 @@ describe("arms", () => {
     expect(r.p).not.toBeNull();
     expect(JSON.parse(fs.readFileSync(path.join(out, "summary.json"), "utf8")).tally.work.pass).toBe(2);
   });
+
+  test("an account named for the replay is the one every replay runs on", async () => {
+    const { top, root } = fixture();
+    const out = path.join(top, "out");
+    fs.mkdirSync(out);
+    const accounts: Array<string | null> = [];
+    const harness = async (argv: string[]) => {
+      accounts.push(argv.includes("--account") ? argv[argv.indexOf("--account") + 1] : null);
+      const dir = argv[argv.indexOf("--run") + 1];
+      fs.writeFileSync(path.join(dir, "out.json"), JSON.stringify({ result: "ok", total_cost_usd: 0.1 }));
+      fs.writeFileSync(path.join(dir, "said.json"), JSON.stringify(["Done.\n```json\n{\"outcome\": \"red\"}\n```"]));
+      return 0;
+    };
+    await runReplay({ root, cast: "line/g.cast", station: "work", cases: [{ run: "run1", expect: { outcome: "red" } }], base: null, reps: 1, out, concurrency: 1, account: "apetrosian" }, { harness, harnessScript: "h.ts" });
+    expect(accounts).toEqual(["apetrosian"]);
+  });
 });
 
 describe("the problem as it stood", () => {

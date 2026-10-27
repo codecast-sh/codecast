@@ -272,6 +272,8 @@ export function gradePrompt(question: string, said: string[], calls: string[], d
 export type ReplayDeps = {
   harness: (argv: string[], opts: { cwd: string; timeoutMs?: number; env?: Record<string, string> }) => Promise<number>;
   harnessScript: string;
+  /** The saved Claude account the harness runs on (ReplayArgs.account). */
+  account?: string;
 };
 
 function readIn(dir: string, f: string): string {
@@ -290,7 +292,8 @@ export async function replayOnce(c: ReplayCase, arm: Arm, rep: number, brief: Br
   const promptFile = `${dir}.prompt.md`;
   fs.writeFileSync(promptFile, brief.brief);
   const started = Date.now();
-  const code = await deps.harness([deps.harnessScript, "--run", dir, "--prompt", promptFile, "--model", brief.model, "--cwd", at.cwd, "--read-only", ...(at.port ? ["--allow-port", String(at.port)] : []), ...(at.serve ? ["--serve", at.serve] : [])], { cwd: at.cwd, timeoutMs: brief.timeoutMs, ...(at.hide ? { env: { DRY_RUN_HIDE_REGEX: at.hide } } : {}) });
+  const account = deps.account ? ["--account", deps.account] : [];
+  const code = await deps.harness([deps.harnessScript, "--run", dir, "--prompt", promptFile, "--model", brief.model, "--cwd", at.cwd, "--read-only", ...account, ...(at.port ? ["--allow-port", String(at.port)] : []), ...(at.serve ? ["--serve", at.serve] : [])], { cwd: at.cwd, timeoutMs: brief.timeoutMs, ...(at.hide ? { env: { DRY_RUN_HIDE_REGEX: at.hide } } : {}) });
   let out: any = null;
   try { out = JSON.parse(readIn(dir, "out.json")); } catch { /* none */ }
   let said: string[] = [];
@@ -306,7 +309,7 @@ export async function replayOnce(c: ReplayCase, arm: Arm, rep: number, brief: Br
     const gdir = path.join(dir, "grade");
     fs.mkdirSync(gdir, { recursive: true });
     fs.writeFileSync(path.join(gdir, "prompt.md"), gradePrompt(c.grade, said, calls, decision));
-    await deps.harness([deps.harnessScript, "--run", gdir, "--prompt", path.join(gdir, "prompt.md"), "--model", GRADE_MODEL, "--call"], { cwd: gdir, timeoutMs: 10 * 60_000 });
+    await deps.harness([deps.harnessScript, "--run", gdir, "--prompt", path.join(gdir, "prompt.md"), "--model", GRADE_MODEL, "--call", ...account], { cwd: gdir, timeoutMs: 10 * 60_000 });
     let g: any = null;
     try { g = JSON.parse(readIn(gdir, "out.json")); } catch { /* none */ }
     const json = extractJsonOutput(String(g?.result ?? "")) as any;
@@ -335,10 +338,13 @@ export type ReplayArgs = {
   reps: number;
   out: string;
   concurrency?: number;
+  /** The saved Claude account every replay and grade runs on (prompt-dry-run --account); none takes the machine's login. */
+  account?: string;
   log?: (line: string) => void;
 };
 
-export async function runReplay(a: ReplayArgs, deps: ReplayDeps): Promise<{ results: ReplayResult[]; tally: Record<Arm, ArmTally>; p: number | null }> {
+export async function runReplay(a: ReplayArgs, given: ReplayDeps): Promise<{ results: ReplayResult[]; tally: Record<Arm, ArmTally>; p: number | null }> {
+  const deps = a.account ? { ...given, account: a.account } : given;
   const castAbs = path.resolve(a.root, a.cast);
   const castRel = path.relative(a.root, castAbs);
   const trees: Partial<Record<Arm, string>> = { work: a.overlay ? armTree(a.root, path.dirname(castAbs), null, path.join(a.out, "work-tree"), a.overlay) : a.root };
