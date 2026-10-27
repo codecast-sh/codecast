@@ -245,7 +245,11 @@ describe("command groups stay off the boot graph", () => {
     // contracts/machineMessages.ts for its max-lines pin. The same pass's other
     // splits went into files already here: the resume flag readers into
     // resumeCommand.ts, live process discovery into sessionProcessMatcher.ts.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(328);
+    // 329 on 2026-10-27: psTerminal.ts, the ps terminal tokens as a leaf. They
+    // lived in resourceMonitor.ts, which processTable.ts reads at load time
+    // through the cycle processTable -> resourceMonitor -> sessionProcessMatcher
+    // -> tmux, so loading resourceMonitor first threw a TDZ ReferenceError.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(329);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -396,7 +400,11 @@ describe("command groups stay off the boot graph", () => {
     // when it stops delivering a message (a subpath import, off the barrel).
     // 518 on 2026-10-26, two splits for max-lines pins: tmuxPaneState.ts (the
     // pane classifiers, out of daemon.ts) and contracts/decisionAnswers.ts (above).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(518);
+    // 519 on 2026-10-27: psTerminal.ts, the ps terminal tokens as a leaf. They
+    // lived in resourceMonitor.ts, which processTable.ts reads at load time
+    // through the cycle processTable -> resourceMonitor -> sessionProcessMatcher
+    // -> tmux, so loading resourceMonitor first threw a TDZ ReferenceError.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(519);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

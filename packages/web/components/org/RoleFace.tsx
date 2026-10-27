@@ -52,7 +52,9 @@ function useRoleFace(role: RoleLike, characters: boolean): { kind: "animal"; ava
     return r ? `${r._id}|${r.name}|${r.avatar ?? ""}|${roleIconSig(r.icon)}` : "";
   });
   return useMemo(() => {
-    const live = findRole(useInboxStore.getState() as FaceState, role);
+    // An empty signature means no row names this role, so there is nothing to
+    // read (the homepage poster renders on the server with an empty store).
+    const live = sig ? findRole(useInboxStore.getState() as FaceState, role) : null;
     const named = !!(role._id || role.short_id);
     if (characters) return { kind: "animal", avatar: avatarOf({ handle: role.handle, avatar: named ? live?.avatar ?? role.avatar : role.avatar ?? live?.avatar }) };
     const name = (named ? live?.name ?? role.name : role.name ?? live?.name) ?? role.handle;
