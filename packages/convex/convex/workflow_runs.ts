@@ -24,7 +24,7 @@ import { resolveOwnerDevice } from "./devices";
 import { openRunPrice } from "./lib/trialRunPrices";
 import { isLineRunSlug, lineRouteFor } from "./workflows";
 import { recordRoutineRunGraph, recordScriptRunGraph } from "./flowLibrary";
-import { libraryOfRun, runFlowVersions } from "./flowVersions";
+import { libraryOfRun, repinRunForResume, runFlowVersions } from "./flowVersions";
 import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
 
@@ -1556,7 +1556,7 @@ export const reaskFromCli = mutation({
  * will read (as it is now, which the stored workflow may predate). A trial problem resumes under its trial's limits
  * (cast line trial rerun <task> --at).
  */
-export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs">, at: string, opts: { check?: boolean } = {}, now = Date.now()) {
+export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs">, at: string, opts: { check?: boolean; currentFlow?: boolean } = {}, now = Date.now()) {
   const run = await ctx.db.get(runId);
   if (!run || !(await canReadRun(ctx, userId, run))) throw new ConvexError("Run not found");
   if (String(run.user_id) !== String(userId)) throw new ConvexError("Only the run's owner resumes it");
@@ -1567,17 +1567,19 @@ export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: 
   const node = at.trim();
   if (!node) throw new ConvexError("Name the station to resume at");
   if (!run.runner_device) throw new ConvexError("The run names no machine to pick it up");
+  // A run reads the flow versions it started on, resume included; --current-flow moves it onto the current ones first.
+  if (opts.currentFlow) await repinRunForResume(ctx, run, node, { check: opts.check });
   if (opts.check) return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node };
   await resumeRunAt(ctx, userId, run, node, now, { newAttempt: true });
   return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node };
 }
 
 export const resumeFromCli = mutation({
-  args: { api_token: v.string(), run_id: v.id("workflow_runs"), at: v.string(), check: v.optional(v.boolean()) },
+  args: { api_token: v.string(), run_id: v.id("workflow_runs"), at: v.string(), check: v.optional(v.boolean()), current_flow: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) return { error: "Unauthorized" };
-    return resumeFailedRunCore(ctx, auth.userId, args.run_id, args.at, { check: args.check });
+    return resumeFailedRunCore(ctx, auth.userId, args.run_id, args.at, { check: args.check, currentFlow: args.current_flow });
   },
 });
 

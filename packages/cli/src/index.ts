@@ -21256,14 +21256,16 @@ workflow
   .description("Try a failed line run again from a station of its graph, on its own branch, once what failed it is fixed. A resume is a new attempt: each station's visits count again. A trial problem resumes with cast line trial rerun <task> --at <station>")
   .requiredOption("--at <station>", "The station to resume at (verify, to check and evaluate the branch again)")
   .option("--onto-main", "First put the run's branch on the default branch as the remote has it, by the graph's rebase (a conflict resumes at the station the graph sends it to, where a hand resolves it). Run it on the machine that holds the run")
+  .option("--current-flow", "Move the run onto its flow's current library version first: a run reads the version it started on, so a fix saved since reaches it only this way")
   .option("--json", "Machine-readable output")
-  .action(async (task: string, options: { at: string; ontoMain?: boolean; json?: boolean }) => {
+  .action(async (task: string, options: { at: string; ontoMain?: boolean; currentFlow?: boolean; json?: boolean }) => {
     const fail = (message: string): never => { console.error(message); process.exit(2); };
     const listed = await cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1 });
     const row = Array.isArray(listed?.runs) ? listed.runs[0] : null;
     if (!row) fail(`${task} has no run`);
     // The server's refusals first (a closed or trial problem, a run that is not failed), so nothing is rebased for a run that will not move.
-    await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: options.at, check: true });
+    const currentFlow = options.currentFlow ? { current_flow: true } : {};
+    await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: options.at, check: true, ...currentFlow });
     const { currentRunGraph } = await import("./workflow/reask.js");
     const { resumeStation } = await import("./workflow/resumeFailed.js");
     const { graph } = await currentRunGraph({ getCliEndpoint, detectCurrentSessionId }, row._id);
@@ -21273,7 +21275,7 @@ workflow
     } catch (e) {
       fail(`${task}: ${(e as Error).message}`);
     }
-    const r = await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: plan.at });
+    const r = await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: plan.at, ...currentFlow });
     if (options.json) { printJson({ ...r, note: plan.note }); return; }
     console.log(`${task}: resumes at ${r.resumed_at} as a new attempt${plan.note ? ` (${plan.note})` : ""} (run ${r.run_id}).`);
   });

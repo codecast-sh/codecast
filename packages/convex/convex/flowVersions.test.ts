@@ -112,6 +112,49 @@ describe("a flow in the library", () => {
     expect(resumed.workflow.library.versions[0].snapshot.nodes[1].prompt).toBe("Fix it.");
   });
 
+  test("repinLiveRuns moves waiting runs onto the current version, unless their station is gone", async () => {
+    const { t, upsert, run, row } = await setup();
+    await upsert(push("spine", "aaaaaaaaaaaaaaaa", "Fix it.", { save: true, library: true }));
+    const waiting = await run("spine");
+    const lost = await run("spine");
+    await upsert(push("spine", "dddddddddddddddd", "Fixed eval line.", { save: true }));
+    const flow = await row("spine");
+    await t.run(async (ctx) => {
+      // A station the graph source declares but the version's node list leaves out still counts.
+      await ctx.db.patch(waiting.runId, { status: "paused", current_node_id: "fix", workspace: flow.workspace } as any);
+      await ctx.db.patch(lost.runId, { status: "paused", current_node_id: "gone_station", workspace: flow.workspace } as any);
+    });
+    const { internal } = await import("./_generated/api");
+    const dry = await t.mutation((internal as any).flowVersions.repinLiveRuns, { workflow_id: flow._id, dry: true });
+    expect(dry.moved).toHaveLength(1);
+    expect(dry.kept).toEqual([{ run: String(lost.runId), why: "the current graph has no gone_station" }]);
+    await t.mutation((internal as any).flowVersions.repinLiveRuns, { workflow_id: flow._id });
+    const resumed = await t.mutation(api.workflow_runs.getForDaemon, { api_token: TOKEN, run_id: waiting.runId });
+    expect(resumed.workflow.library.versions[0].snapshot.nodes[1].prompt).toBe("Fixed eval line.");
+    const unmoved = await t.mutation(api.workflow_runs.getForDaemon, { api_token: TOKEN, run_id: lost.runId });
+    expect(unmoved.workflow.library.versions[0].snapshot.nodes[1].prompt).toBe("Fix it.");
+  });
+
+  test("a failed run resumed with --current-flow reads the current version; its check, or a station the version lacks, moves nothing", async () => {
+    const { t, owner, upsert, run } = await setup();
+    await upsert(push("spine", "aaaaaaaaaaaaaaaa", "Fix it.", { save: true, library: true }));
+    const failed = await run("spine");
+    await upsert(push("spine", "dddddddddddddddd", "Fixed eval line.", { save: true }));
+    await t.run((ctx) => ctx.db.patch(failed.runId, { status: "failed", current_node_id: "fix", runner_device: "laptop", fail_reason: "Eval failed" } as any));
+    const { resumeFailedRunCore } = await import("./workflow_runs");
+    const resume = (at: string, opts: Record<string, boolean>) => t.run((ctx) => resumeFailedRunCore(ctx as any, owner, failed.runId, at, opts));
+    const prompt = async () => (await t.mutation(api.workflow_runs.getForDaemon, { api_token: TOKEN, run_id: failed.runId })).workflow.library.versions[0].snapshot.nodes[1].prompt;
+    await expect(resume("gone_station", { currentFlow: true, check: true })).rejects.toThrow("no station gone_station");
+    await resume("fix", { currentFlow: true, check: true });
+    expect(await prompt()).toBe("Fix it.");
+    await resume("fix", { currentFlow: true });
+    expect(await prompt()).toBe("Fixed eval line.");
+    await upsert(push("plain", "eeeeeeeeeeeeeeee", "Fix it."));
+    const outside = await run("plain");
+    await t.run((ctx) => ctx.db.patch(outside.runId, { status: "failed", current_node_id: "fix", runner_device: "laptop" } as any));
+    await expect(t.run((ctx) => resumeFailedRunCore(ctx as any, owner, outside.runId, "fix", { currentFlow: true }))).rejects.toThrow("does not run from the library");
+  });
+
   test("a variant runs on its base's current version, and an edit to the base reaches it", async () => {
     const { upsert, run } = await setup();
     await upsert(push("spine", "aaaaaaaaaaaaaaaa", "Spine fix.", { save: true, library: true }));

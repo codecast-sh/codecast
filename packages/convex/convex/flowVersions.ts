@@ -16,7 +16,7 @@
 //     resolution from before the library, byte for byte (cli daemonGraph.ts).
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { mutation, query } from "./functions";
+import { internalMutation, mutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
@@ -115,6 +115,67 @@ export async function runFlowVersions(ctx: any, workflowId: Id<"workflows"> | un
   }
   return { flow_versions: out };
 }
+
+type FlowVersions = Array<{ workflow_id: Id<"workflows">; version_id: Id<"workflow_versions"> }>;
+
+/** Every station a run on these versions can stand at. A version lists only some of its nodes, and a variant's holds
+ *  only what it changes, so the ids also come from each version's own graph source, the flow's and its bases'. */
+async function stationsOf(ctx: any, flowVersions: FlowVersions): Promise<Set<string>> {
+  const stations = new Set<string>();
+  for (const fv of flowVersions) {
+    const ver: Doc<"workflow_versions"> | null = await ctx.db.get(fv.version_id);
+    for (const n of ver?.nodes ?? []) stations.add(n.id);
+    for (const n of ver?.snapshot?.nodes ?? []) stations.add(n.id);
+    for (const m of (ver?.snapshot?.source ?? "").matchAll(/^\s*([A-Za-z_]\w*)\s*\[/gm)) stations.add(m[1]!);
+  }
+  return stations;
+}
+
+/**
+ * One run onto its flow's current library versions before it resumes at `at` (`cast workflow resume --current-flow`):
+ * a fix saved since the run started reaches it. Refused for a flow outside the library, or one whose current graph
+ * has no `at`. `check` refuses the same way and moves nothing.
+ */
+export async function repinRunForResume(ctx: any, run: Doc<"workflow_runs">, at: string, opts: { check?: boolean } = {}): Promise<void> {
+  const { flow_versions } = await runFlowVersions(ctx, run.workflow_id);
+  if (!flow_versions?.length) throw new ConvexError("The run's flow does not run from the library, so it has no current version to move onto");
+  if (!(await stationsOf(ctx, flow_versions)).has(at)) throw new ConvexError(`The flow's current version has no station ${at}`);
+  if (!opts.check) await ctx.db.patch(run._id, { flow_versions });
+}
+
+/**
+ * Moves a library flow's live runs onto its current versions (run with
+ * packages/convex/run.sh). A run reads the versions it started on, resume
+ * included, so a fix saved to a station a waiting run has not reached yet
+ * never reaches it: Union's Ship answers on runs started on agentwatch v17
+ * failed at an Eval line v18 had fixed (ct-61712, 2026-10-27). A run whose
+ * current station the current graph lacks keeps its versions. `dry` reports.
+ */
+export const repinLiveRuns = internalMutation({
+  args: { workflow_id: v.id("workflows"), started_before: v.optional(v.number()), dry: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const flow: Doc<"workflows"> | null = await ctx.db.get(args.workflow_id);
+    const { flow_versions } = await runFlowVersions(ctx, args.workflow_id);
+    if (!flow?.workspace || !flow_versions?.length) throw new ConvexError("That flow does not run from the library");
+    const stations = await stationsOf(ctx, flow_versions);
+    const key = (fv: ReadonlyArray<{ version_id: Id<"workflow_versions"> }> | undefined) => (fv ?? []).map((x) => String(x.version_id)).join(",");
+    const moved: string[] = [];
+    const kept: Array<{ run: string; why: string }> = [];
+    for (const status of ["pending", "running", "paused"] as const) {
+      const runs: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", flow.workspace).eq("status", status)).collect();
+      for (const run of runs) {
+        if (String(run.workflow_id) !== String(args.workflow_id) || !run.flow_versions?.length) continue;
+        if (args.started_before && run.created_at >= args.started_before) continue;
+        if (key(run.flow_versions) === key(flow_versions)) continue;
+        if (run.current_node_id && !stations.has(run.current_node_id)) { kept.push({ run: String(run._id), why: `the current graph has no ${run.current_node_id}` }); continue; }
+        if (!args.dry) await ctx.db.patch(run._id, { flow_versions });
+        const task: Doc<"tasks"> | null = run.task_id ? await ctx.db.get(run.task_id) : null;
+        moved.push(`${task?.short_id ?? String(run._id)}@${run.current_node_id ?? "start"}`);
+      }
+    }
+    return { versions: flow_versions.map((x) => String(x.version_id)), moved, kept };
+  },
+});
 
 /** What a runner materializes for a run that recorded library versions (getForDaemon's `library`), in the order it writes them: the flow, then its bases. */
 export async function libraryOfRun(ctx: any, run: Pick<Doc<"workflow_runs">, "flow_versions">): Promise<{ library?: { versions: Array<{ workflow_id: string; version_id: string; slug: string | null; snapshot: Snapshot }> } }> {
