@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { HIRE_ATTEMPTS, hireRetryDelay, performSaveGenerated, performSetRoleIcon } from "./roleIcons";
+import { HIRE_ATTEMPTS, hireRetryDelay, performSaveGenerated, performSetRoleIcon, performViewerRoles } from "./roleIcons";
 import { performCreateRole } from "./orgRoles";
 import { ROLE_ICON_EXAMPLES } from "@codecast/shared/contracts/roleIconExamples";
 import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
@@ -133,5 +133,33 @@ describe("hires drawn together (hireRetryDelay)", () => {
     expect(hireRetryDelay("taken", HIRE_ATTEMPTS, "org_roles_a")).toBeNull();
     expect(hireRetryDelay("saved", 1, "org_roles_a")).toBeNull();
     expect(hireRetryDelay("kept", 1, "org_roles_a")).toBeNull();
+  });
+});
+
+describe("viewerRoles: every role face the viewer can see, across workspaces", () => {
+  const OTHER = "u".repeat(31) + "o";
+  test("personal roles and each member team's live roles, in the snapshot's shape; nothing else", async () => {
+    const db = makeFakeDb({
+      team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "member", joined_at: 1 }],
+      org_roles: [
+        role("org_roles_team", "infra", { icon: coin, given_name: "Rowan", avatar: "stag" }),
+        role("org_roles_paused", "paused", { status: "paused" }),
+        role("org_roles_gone", "gone", { status: "retired" }),
+        role("org_roles_mine", "alive", { scope_type: "user", team_id: undefined, scope_user_id: ME, tenure: { kind: "program", ends: { date: 1 }, then: "retire" } }),
+        role("org_roles_theirs", "theirs", { scope_type: "user", team_id: undefined, scope_user_id: OTHER }),
+        role("org_roles_foreign", "foreign", { team_id: "teams_other" }),
+        role("org_roles_badicon", "bad", { icon: { ...coin, shapes: [{ t: "path", d: "M2 2 L4" }] } }),
+      ],
+    });
+    const rows = await performViewerRoles(ctxOf(db), ME as any);
+    expect(rows.map((r) => r.handle).sort()).toEqual(["alive", "bad", "infra", "paused"]);
+    const infra = rows.find((r) => r.handle === "infra")!;
+    expect(infra).toEqual({
+      _id: "org_roles_team", short_id: "or-org_roles_team", handle: "infra", name: "infra lead", given_name: "Rowan", avatar: "stag",
+      icon: coin, status: "active", tenure_kind: "standing", assistant: null, scope_type: "team", team_id: TEAM,
+    });
+    expect(rows.find((r) => r.handle === "alive")).toMatchObject({ team_id: null, tenure_kind: "program", icon: null });
+    // A stored icon that no longer validates reads as none, so the face falls back to the monogram.
+    expect(rows.find((r) => r.handle === "bad")!.icon).toBeNull();
   });
 });
