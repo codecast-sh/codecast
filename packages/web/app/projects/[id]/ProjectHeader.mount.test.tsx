@@ -57,10 +57,10 @@ async function verifyProjectHeader() {
   const calls: string[] = [];
   const asked: unknown[] = [];
   const state: any = {
-    // Staff: the Line tab is open to staff only (surfaceRules STAFF_ONLY_SURFACES).
-    currentUser: { _id: "fixture-user-me", name: "Ashot", staff: true },
+    // The Flows tab shows in a workspace with the Flows feature on (surfaceRules FEATURE_SURFACES).
+    currentUser: { _id: "fixture-user-me", name: "Ashot" },
     clientState: { ui: { active_team_id: "fixture-team" } },
-    teams: [{ _id: "fixture-team", name: "Fixture" }, { _id: "home-team", name: "Codecast" }],
+    teams: [{ _id: "fixture-team", name: "Fixture", features: { line: true } }, { _id: "home-team", name: "Codecast" }],
     projects: { [PID]: { ...serverRow } } as Record<string, any>,
     syncMeta: { 'tasks:v2:{"workspace":"team","team_id":"fixture-team"}': { backfilledAt: 1 } },
     // What the store's action does to the draft (store/inboxStore updateProject).
