@@ -7,9 +7,10 @@
 // The profile is read on every call but parsed only when its file changes: a
 // stat per path, and a plutil spawn only for a new mtime. The daemon reads
 // config constantly, and this sits on the stable-context fast path through
-// readAuthConfig, so keep it to node builtins and the contract.
+// readAuthConfig, so keep it to node builtins, proc.ts (main.ts loads it
+// already) and the contract.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

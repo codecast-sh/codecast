@@ -27,7 +27,10 @@ import { isComputerErrorCode } from "./errors.js";
 import { guidanceSectionStatus } from "../snippets.js";
 
 const computer = snippetBySlug("computer")!;
-const BODY = computer.section!.body;
+/** Everything an agent can read about the group: the installed section plus
+ *  the reference `cast guide computer` prints after it (the section names that
+ *  command as where the rest lives). */
+const BODY = `${computer.section!.body}\n\n${computer.section!.reference ?? ""}`;
 
 /** The registered command tree, built the way index.ts builds it. */
 function registeredGroup(): Command {
@@ -142,11 +145,11 @@ describe("the Computer section describes the binary that ships with it", () => {
     // behaviour rule, the coordinate rule, and the line that keeps this
     // tool off web pages.
     expect(BODY).toContain("never infer an index from `elementCount`");
-    expect(BODY).toContain("No verb raises a window on its own");
-    expect(BODY).toContain("Secrets never go on the command line");
-    expect(BODY).toContain("Do not push, submit a form, send a message, buy anything, delete data");
+    expect(BODY).toContain("none raises one unless you pass `--restore-window`");
+    expect(BODY).toContain("Secrets go through `--text-stdin` or `--value-stdin`, never the command line");
+    expect(BODY).toContain("Do not submit a form, send a message, buy, delete or change settings unless the human asked");
     expect(BODY).toContain("a position read off one is the coordinate an action takes");
-    expect(BODY).toContain("`cast browser` is the tool and stays the default");
+    expect(BODY).toContain("Inside a web page, `cast browser` stays the tool");
   });
 
   test("the safety rules name the real block list and the real paste cap", () => {
