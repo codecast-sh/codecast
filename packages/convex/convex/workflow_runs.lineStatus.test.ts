@@ -78,6 +78,24 @@ describe("a run's end (LE16)", () => {
     expect((await read()).notes.filter((n) => n.type === "change_shipped")).toHaveLength(2);
   });
 
+  test("a ship whose merge station left the merge to a person: the approved fix waits in review, with no watch and no ship notice", async () => {
+    const { t, ids, end, finish, read } = await setup({ status: "in_progress" });
+    await t.run(async (ctx) => { await ctx.db.patch(ids.taskId, { watch_until: T0 + 7 * 86_400_000, watch_from: T0 } as any); });
+    const left = { ...node("merge", T0 + 13), result_preview: "merge left to a person: merge is off for this flow; a person turns it on with cast role line --merge on" };
+    await end([...lineNodes("decide", "ship", "push"), left, node("watch", T0 + 14)]);
+    await finish();
+    const { task, history, notes } = await read();
+    expect(task.status).toBe("in_review");
+    expect(task.watch_until).toBeUndefined();
+    expect(task.watch_from).toBeUndefined();
+    expect(history.map((h: any) => [h.old_value, h.new_value])).toEqual([["in_progress", "in_review"]]);
+    expect(notes.filter((n) => n.type === "change_shipped")).toHaveLength(0);
+    // Resumed at its merge station once merging is on, it lands: the problem is done.
+    await end([...lineNodes("decide", "ship", "push"), { ...node("merge", T0 + 20), result_preview: "merged codecast/agentwatch-ct-1 into main at 0123456789 (1 of 25 today)" }, node("watch", T0 + 21)]);
+    await finish();
+    expect((await read()).task.status).toBe("done");
+  });
+
   test("drop and dissolve: the status the station wrote stands", async () => {
     for (const [station, status] of [["drop", "dropped"], ["dissolve", "done"]] as const) {
       const { end, finish, read } = await setup({ status, closed_at: T0 + 5 });

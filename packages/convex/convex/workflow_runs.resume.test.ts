@@ -3,7 +3,7 @@
 // the live runs it drove. Driven against the fake db like the gate tests.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { resumeFailedRunCore } from "./failedRunResume";
+import { resumeFailedRunCore, resumeQueuedRun } from "./failedRunResume";
 import { failStrandedPendingRuns, liveRunsForDevice, reaskRunCore, resumeRunCore, STRANDED_PENDING_MS } from "./workflow_runs";
 import { hashToken } from "./apiTokens";
 
@@ -156,6 +156,24 @@ describe("resumeFailedRunCore (cast workflow resume)", () => {
     expect(stopped.tables.workflow_runs[0]).toMatchObject({ status: "running", current_node_id: "decide", visits_reset_at: NOW + 1 });
     const shipped = await ended("watch");
     await expect(resumeFailedRunCore(shipped.ctx, HOST, RUN, "decide")).rejects.toThrow("only a failed run");
+  });
+
+  test("an approved run whose merge station left the merge to a person resumes at its merge station, now or queued; one that merged does not", async () => {
+    // Oct 27: 31 of Union's approved fixes walked on from a merge left to a person (merge was off) to watch and exit.
+    const ended = (merge: string) => failed({
+      status: "completed", fail_reason: undefined, current_node_id: "exit",
+      node_statuses: [{ node_id: "push", status: "completed", completed_at: NOW - 3 }, { node_id: "merge", status: "completed", completed_at: NOW - 2, result_preview: merge }, { node_id: "watch", status: "completed", completed_at: NOW - 1 }, { node_id: "exit", status: "completed", completed_at: NOW }],
+    }, { status: "in_review", execution_status: undefined, execution_concerns: undefined });
+    const left = await ended("merge left to a person: merge is off for this flow; a person turns it on with cast role line --merge on");
+    expect(await resumeFailedRunCore(left.ctx, HOST, RUN, "merge", {}, NOW + 1)).toMatchObject({ resumed_at: "merge", queued: false });
+    expect(left.tables.workflow_runs[0]).toMatchObject({ status: "running", current_node_id: "merge", visits_reset_at: NOW + 1 });
+    expect(commandArgs(left.tables)).toEqual([{ command: "run_workflow", device: "dev-mini", args: { workflow_run_id: RUN } }]);
+    const queued = await ended("merge left to a person: the role has reached its daily merge limit (25 of 25)");
+    expect(await resumeFailedRunCore(queued.ctx, HOST, RUN, "merge", { queue: true }, NOW + 1)).toMatchObject({ queued: true });
+    expect(await resumeQueuedRun(queued.ctx, RUN, NOW + 2)).toBe(RUN);
+    expect(queued.tables.workflow_runs[0]).toMatchObject({ status: "running", current_node_id: "merge" });
+    const merged = await ended("merged codecast/agentwatch-ct-9 into main at 0123456789 (3 of 25 today)");
+    await expect(resumeFailedRunCore(merged.ctx, HOST, RUN, "merge")).rejects.toThrow("only a failed run, or an approved one whose merge was left to a person");
   });
 
   test("refused, or only checked, writes nothing: another person, a run that is not failed, a closed problem, a trial problem, no station", async () => {

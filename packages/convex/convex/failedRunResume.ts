@@ -1,9 +1,10 @@
-// `cast workflow resume`: a failed line run tried again from a station of its
-// graph, now, or once its own machine has a free run slot (a queued resume,
-// which the line's sweep carries out ahead of new starts: orgLine.planSweep).
+// `cast workflow resume`: a failed line run, or an approved one whose merge was
+// left to a person, tried again from a station of its graph, now, or once its
+// own machine has a free run slot (a queued resume, which the line's sweep
+// carries out ahead of new starts: orgLine.planSweep).
 import { ConvexError, v } from "convex/values";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { endedFailing } from "@codecast/shared/contracts/changeCard";
+import { endedFailing, endedUnmerged } from "@codecast/shared/contracts/changeCard";
 import { mutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -13,13 +14,16 @@ import { canReadRun, resumeRunAt } from "./workflow_runs";
 
 type Ctx = { db: any };
 
+const resumable = (run: Doc<"workflow_runs">): boolean => endedFailing(run) || endedUnmerged(run);
+
 /**
  * `cast workflow resume <task> --at <station>`: a failed run tried again from a station of its graph, on its own
  * branch, once its lead has fixed what failed it. The owner resumes it, as with reask. The run keeps what it made, and
  * a resume is a new attempt: the visits the earlier attempt used, the cap that stops a loop within one attempt, count
  * again from now (`visits_reset_at`, which the runner reads). The caller checks the station against the graph the run
  * will read (as it is now, which the stored workflow may predate). A trial problem resumes under its trial's limits
- * (cast line trial rerun <task> --at).
+ * (cast line trial rerun <task> --at). An approved run whose merge station left the merge to a person (the switch was
+ * off, the day's limit used) resumes the same way, at its merge station.
  */
 export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"workflow_runs">, at: string, opts: { check?: boolean; currentFlow?: boolean; queue?: boolean } = {}, now = Date.now()) {
   const run = await ctx.db.get(runId);
@@ -28,7 +32,7 @@ export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: 
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task && isTerminalTaskStatus(task.status)) throw new ConvexError(`${task.short_id} is ${task.status}: a closed problem is not resumed`);
   if (task && (await trialProjectOf(ctx, task))) throw new ConvexError(`${task.short_id} is a trial problem: cast flow trial rerun ${task.short_id} --at <station> resumes it under the trial's budget`);
-  if (!endedFailing(run)) throw new ConvexError(`The run is ${run.status}: only a failed run is resumed at a station (a run waiting on a decision is asked again with cast workflow reask)`);
+  if (!resumable(run)) throw new ConvexError(`The run is ${run.status}: only a failed run, or an approved one whose merge was left to a person, is resumed at a station (a run waiting on a decision is asked again with cast workflow reask)`);
   const node = at.trim();
   if (!node) throw new ConvexError("Name the station to resume at");
   if (!run.runner_device) throw new ConvexError("The run names no machine to pick it up");
@@ -56,7 +60,7 @@ export async function resumeQueuedRun(ctx: Ctx, runId: Id<"workflow_runs">, now 
   if (!run || !queued) return null;
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   const drop = async () => { await ctx.db.patch(run._id, { resume_queued: undefined }); return null; };
-  if (!endedFailing(run) || !run.runner_device || (task && isTerminalTaskStatus(task.status))) return drop();
+  if (!resumable(run) || !run.runner_device || (task && isTerminalTaskStatus(task.status))) return drop();
   if (queued.current_flow) {
     try {
       await repinRunForResume(ctx, run, queued.at);

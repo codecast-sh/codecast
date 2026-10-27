@@ -502,7 +502,7 @@ export function verdictLabel(verdict: ChangeVerdict | "" | undefined): string {
   return verdict === "ship" ? "Ship" : verdict === "revise" ? "Revise" : verdict === "drop" ? "Drop" : "No recommendation";
 }
 
-export { CARD_GATE_NODE_ID, LINE_END_NODES, cardAnswered, endedFailing, isLineRun, lineRunOutcome, passedUnansweredCard, runEnd, type AnsweredGate, type LineRunEnd, type LineRunStations } from "./lineRunEnd";
+export { CARD_GATE_NODE_ID, LINE_END_NODES, cardAnswered, endedFailing, endedUnmerged, isLineRun, lineRunOutcome, mergeLeft, passedUnansweredCard, runEnd, type AnsweredGate, type LineRunEnd, type LineRunStations } from "./lineRunEnd";
 
 /** The verdict a gate option names ("Revise", "[R] Revise", "Drop the change"), or null. */
 export function verdictOfOption(label: string | undefined): ChangeVerdict | null {

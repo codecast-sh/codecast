@@ -9,7 +9,7 @@ import { killConversation } from "./conversations";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, userMayRead, withdrawCore, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
-import { CARD_GATE_NODE_ID, costParts, lineRunOutcome, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, costParts, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
@@ -65,10 +65,12 @@ export async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promi
  * The status a run's end leaves its task in (the-line-end-to-end.md LE16).
  * A status the line already decided stands: done and dropped are never
  * overwritten. A line run that shipped makes the cause done (the watch is the
- * window after done); one that parked returns it to open, to wait for
- * admission. Any other completed run hands work it was still doing to a
- * person (in_progress becomes in_review) and leaves every other status, such
- * as a review reject's open, where its station put it. Null leaves it.
+ * window after done), unless its merge station left the merge to a person:
+ * the approved fix is not on the default branch, so it waits in review to
+ * land. One that parked returns it to open, to wait for admission. Any other
+ * completed run hands work it was still doing to a person (in_progress
+ * becomes in_review) and leaves every other status, such as a review
+ * reject's open, where its station put it. Null leaves it.
  */
 export function runEndStatus(
   taskStatus: string,
@@ -77,7 +79,7 @@ export function runEndStatus(
 ): "done" | "open" | "in_review" | null {
   if (runStatus !== "completed" || isTerminalTaskStatus(taskStatus)) return null;
   const end = lineRunOutcome(run)?.kind;
-  if (end === "shipped") return "done";
+  if (end === "shipped" && !mergeLeft(run ?? {})) return "done";
   if (end === "parked") return taskStatus === "in_progress" ? "open" : null;
   return taskStatus === "in_progress" ? "in_review" : null;
 }
@@ -93,9 +95,15 @@ async function settleRunTask(ctx: Ctx & { runMutation?: any }, run: any, runStat
     return;
   }
   const next = runEndStatus(task.status, runStatus, run);
-  if (!next) return;
+  // An approved fix whose merge was left to a person is not live, so the watch its graph's watch station started has
+  // nothing to watch: a quiet one would close the problem as resolved, and a new report would reopen it.
+  const unwatch = runStatus === "completed" && mergeLeft(run) && task.watch_until !== undefined ? { watch_from: undefined, watch_until: undefined } : null;
+  if (!next) {
+    if (unwatch && !isTerminalTaskStatus(task.status)) await patchTask(ctx, task, { ...unwatch, updated_at: now });
+    return;
+  }
   const end = lineRunOutcome(run);
-  await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id, now, ...(next === "done" && end ? { closedAt: end.at } : {}) });
+  await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id, now, ...(next === "done" && end ? { closedAt: end.at } : {}), ...(unwatch ? { extra: unwatch } : {}) });
   if (next === "done" && end?.kind === "shipped") await noticeChangeShipped(ctx, task, task.watch_until);
 }
 

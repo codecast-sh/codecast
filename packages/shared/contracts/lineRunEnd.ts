@@ -17,9 +17,19 @@ export const LINE_END_NODES: Readonly<Record<string, LineRunEnd>> = { watch: "sh
 
 /** A run as isLineRun and lineRunOutcome read it: the stations it visited, and its graph's stations (LE14). */
 export type LineRunStations = {
-  node_statuses?: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null; started_at?: number; completed_at?: number }>;
+  node_statuses?: ReadonlyArray<{ node_id: string; status: string; outcome?: string | null; started_at?: number; completed_at?: number; result_preview?: string | null }>;
   graph_nodes?: ReadonlyArray<{ id: string }>;
 };
+
+/** Whether the run's merge station left the merge to a person (the line it prints: "merge left to a person: <why>",
+ *  lineMerge.ts): the switch was off, the day's limit was used, main clashed with the branch, or its checks were red.
+ *  The change is pushed but not on the default branch. AgentWatch's graph walks on from its merge station to its
+ *  watch either way, so such a run still ends "shipped" (through its landing steps, as the Line pages read it:
+ *  approved, not merged), and its watch alone does not say the change landed. */
+export function mergeLeft(run: LineRunStations): boolean {
+  const merge = [...(run.node_statuses ?? [])].reverse().find((n) => n.node_id === "merge");
+  return merge?.status === "completed" && /^merge left to a person\b/m.test(merge.result_preview ?? "");
+}
 
 /** Whether a run is a line run: its graph puts a change to a person on the card gate and watches it after it
  *  ships, which the shipped line and every variant of its spine (agentwatch starts at bind) share and no segment
@@ -110,3 +120,7 @@ export function endedFailing(run: { status: string } & LineRunStations): boolean
   for (const n of run.node_statuses ?? []) if (n.node_id !== "exit" && (!last || (n.completed_at ?? 0) >= (last.completed_at ?? 0))) last = n;
   return /^failed(?:_|$)/.test(last?.node_id ?? "");
 }
+
+/** A run that ended with its approved change pushed and its merge left to a person (mergeLeft). Like a failed run,
+ *  it resumes at a station of its graph: at its merge station once what stopped the merge is gone. */
+export const endedUnmerged = (run: { status: string } & LineRunStations): boolean => run.status === "completed" && mergeLeft(run);
