@@ -39,6 +39,9 @@ export async function holdsSlot(ctx: Ctx, run: any, waiting: Set<string>): Promi
   return !task?.waiting_since;
 }
 
+/** The runs a device's line slot takes at once: none while an operator holds the device (devices.holdLine). */
+export const slotRuns = (device: { line_hold?: unknown }, slot: { runs: number }): number => (device.line_hold ? 0 : slot.runs);
+
 /** The runner's devices that offer any line checkout: their runs are counted by the pool, not the runner's own cap. */
 export async function poolDeviceIds(ctx: Ctx, runner: string): Promise<Set<string>> {
   const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", runner)).collect();
@@ -63,8 +66,9 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
   const slots: LineSlot[] = [];
   for (const d of devices) {
     if (!isDeviceOnline(d, now)) continue;
-    // A slot with no runs (a spent account, a full disk) keeps its machine in the pool with no room, so the run waits
-    // for a slot instead of falling back to the runner's own machine (Oct 24: 7 of 10 runs landed on the laptop).
+    // A slot with no runs (a spent account, a full disk, an operator's hold) keeps its machine in the pool with no room,
+    // so the run waits for a slot instead of falling back to the runner's own machine (Oct 24: 7 of 10 runs landed on
+    // the laptop).
     const slot = (d.line_slots ?? []).find((s: any) => s.origin === origin);
     if (!slot) continue;
     let working = 0;
@@ -75,7 +79,7 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
         .collect();
       for (const r of runs) if (await holdsSlot(ctx, r, waiting)) working++;
     }
-    slots.push({ device: String(d.device_id), root: slot.root, runs: slot.runs, working });
+    slots.push({ device: String(d.device_id), root: slot.root, runs: slotRuns(d, slot), working });
   }
   return slots.length ? { origin, subpath, slots } : null;
 }

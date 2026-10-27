@@ -494,6 +494,24 @@ describe("orgLine admission (LE6)", () => {
       expect(tables.daemon_commands.at(-1)!.target_device_id).toBe("h1");
     });
 
+    test("a host an operator holds out of the line takes no new run and no queued resume, whatever its slots say, until the hold is released", async () => {
+      // Oct 27: Cam's union-shared box had no Codex for the Review hand, so every run that reached Review there failed.
+      const held = { why: "no Codex for Review (ct-74380)", at: NOW - 1_000 };
+      const queuedThere = { _id: "workflow_runs_q1", user_id: HOST, status: "failed", org_role_id: ROLE, task_id: "tasks_q1", runner_device: "h1", project_path: "/home/ubuntu/h1/growth", current_node_id: "review", fail_reason: "hand could not start", node_statuses: [], resume_queued: { at: "review", by: HOST, since: NOW - 2_000 } };
+      const { ctx, tables } = fixtures({
+        role: caps({ hands_per_day: 100 }),
+        extra: { initiatives, tasks: [...causes(4), cause({ _id: "tasks_q1", short_id: "ct-q1", status: "in_review" })], devices: [laptop, host("h1", 3, { line_hold: held }), host("h2", 2)], workflow_runs: [queuedThere] },
+      });
+      const res = await sweepCore(ctx, NOW);
+      expect(res.resumed ?? []).toEqual([]);
+      expect(res.started.map((s) => s.place?.device)).toEqual(["h2", "h2"]);
+      expect(tables.workflow_runs.find((r) => r._id === "workflow_runs_q1")!.status).toBe("failed");
+      // Released: the queued run goes back on its own host ahead of new starts there.
+      delete (tables.devices.find((d) => d.device_id === "h1") as any).line_hold;
+      const next = await sweepCore(ctx, NOW + 60_000);
+      expect(next.resumed).toEqual([{ run_id: "workflow_runs_q1", device: "h1" }]);
+    });
+
     test("a failed run queued to resume goes back on its own host once that host has a slot, ahead of new starts", async () => {
       const queued = (id: string, device: string, since: number) => ({
         _id: `workflow_runs_${id}`, user_id: HOST, status: "failed", org_role_id: ROLE, task_id: `tasks_${id}`, runner_device: device,

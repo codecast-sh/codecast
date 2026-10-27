@@ -18,7 +18,7 @@ import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineRouteFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
-import { holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
+import { holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, slotRuns, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
 import { allRolesInBoundary, projectLeadRole, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownerOf, projectLeadOf } from "@codecast/shared/contracts/orgLead";
@@ -572,7 +572,7 @@ async function slotStillFree(ctx: Ctx, role: any, place: RunPlace): Promise<bool
     const runs: any[] = await ctx.db.query("workflow_runs").withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", place.device).eq("status", status)).collect();
     for (const r of runs) if (await holdsSlot(ctx, r, waiting)) working++;
   }
-  return working < slot.runs;
+  return working < slotRuns(device, slot);
 }
 
 /** The pass in one transaction, as the tests drive it; `dry` plans only (orgLine.explain). */

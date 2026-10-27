@@ -3117,6 +3117,9 @@ export default defineSchema({
     local_project_roots: v.optional(v.array(v.string())),
     // The line checkouts this device offers (lib/lineSlotsValidator).
     line_slots: v.optional(lineSlotsValidator),
+    // An operator's hold on this device's line slots (devices.holdLine): its checkouts stay in the pool with no room,
+    // whatever the heartbeat reports, for a machine that cannot finish a run (no Codex for Review) and cannot be reached.
+    line_hold: v.optional(v.object({ why: v.string(), at: v.number() })),
     // Git-plane health per repo with live sessions on this device (gitPlane.ts),
     // heartbeat-reported: is origin a real rendezvous URL, does fetch succeed,
     // how far HEAD sits from upstream. Metadata only — never file content or
