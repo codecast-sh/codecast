@@ -16,6 +16,8 @@ import {
   writeAccountToken,
 } from "./ccAccounts.js";
 import { getProviderKeyPublicKey } from "./providerKeyCrypto.js";
+import { accountSourcePrefix, launchAccountPrefix } from "./ccAccounts.js";
+import { readPushableCredential } from "./remote/session-move.js";
 import { installedPoolProfiles, runPoolPass, type PoolBackend, type PoolState } from "./ccPool.js";
 
 // The pool's daemon pass, holder and drawer on two sandboxed machines (one
@@ -115,6 +117,20 @@ describe("the shared account pool on two machines", () => {
     expect(row.setup_token).toBeDefined();
     // Nothing changes on the next pass.
     expect(await runPoolPass(s.drawer, cfg(drawerHome), NOW)).toEqual([]);
+  });
+
+  it("a pool copy carries sessions only through the fleet store, and never reaches this machine's hosts", async () => {
+    const s = server();
+    use(holderHome);
+    await runPoolPass(s.holder, cfg(holderHome), NOW);
+    use(drawerHome);
+    await runPoolPass(s.drawer, cfg(drawerHome), NOW);
+    // A pin cannot source the token into a process, where a take-back could not reach it.
+    expect(accountSourcePrefix("pool-claude4")).toBe("");
+    await putFleetOn("pool-claude4", NOW);
+    expect(launchAccountPrefix(undefined).prefix).toContain("cc-fleet.env");
+    // The fleet's bearer is the pool token, but it is not what goes to this machine's hosts.
+    expect(readPushableCredential().cred ?? "").not.toContain(TOKEN);
   });
 
   it("taking the account back removes the copy and moves the fleet off it", async () => {

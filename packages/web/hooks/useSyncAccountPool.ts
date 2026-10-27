@@ -10,6 +10,7 @@ const api = _api as any;
 export type PoolSplit = { user_id: string; name: string; tokens: number };
 export type PoolAccount = {
   _id: string;
+  share_key: string;
   team_id: string;
   user_id: string;
   contributor_name: string;

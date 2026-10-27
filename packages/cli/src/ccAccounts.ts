@@ -2024,6 +2024,9 @@ export function accountSourcePrefix(name: string | undefined, warn?: (msg: strin
   }
   // The name rides along in the env so the statusLine hook and the refresh
   // gate can say which account the session runs on.
+  // A pool copy rides only the fleet store, which a take-back can empty; a
+  // token sourced into a process could not be taken back from it.
+  if (readProfileIndex().profiles[name]?.pool_share_id) return "";
   const nameExport = `export CODECAST_CC_ACCOUNT=${name}; `;
   const token = accountTokenInfo(name);
   if (token && token.expires_at > Date.now()) return `${sourceFilePrefix(token.file)}${nameExport}`;

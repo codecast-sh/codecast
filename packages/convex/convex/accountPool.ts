@@ -39,6 +39,9 @@ export function poolProfileName(email: string): string {
   return `pool-${local}`.slice(0, 41);
 }
 
+/** One account in one team's pool, as the web keys it before the server row exists. */
+export const poolShareKey = (email: string, teamId: string) => `${normalizeEmail(email)}|${teamId}`;
+
 /** A share counts while its contributor is still on its team. */
 export async function shareCounts(ctx: Ctx, share: Share): Promise<boolean> {
   return isTeamMember(ctx, share.user_id, share.team_id);
@@ -216,7 +219,8 @@ export const poolForDevice = query({
       const targets = (await eligibleTargets(ctx, share, now)).map((d) => ({
         device_id: d.device_id,
         pubkey: d.provider_key_pubkey!,
-        token_stored_at: copies.find((c: any) => c.device_id === d.device_id && c.user_id === d.user_id)?.token_stored_at ?? null,
+        // A copy sealed to an older key of the machine counts as missing.
+        token_stored_at: copies.find((c: any) => c.device_id === d.device_id && c.user_id === d.user_id && c.pubkey === d.provider_key_pubkey)?.token_stored_at ?? null,
       }));
       seal.push({ share_id: share._id, email: share.email, targets });
     }
@@ -270,7 +274,7 @@ export const storePoolCopies = mutation({
     for (const c of args.copies) {
       const device = targets.get(c.device_id);
       if (!device) continue;
-      const row = { sealed: c.sealed, token_stored_at: args.token_stored_at, sealed_at: now };
+      const row = { sealed: c.sealed, token_stored_at: args.token_stored_at, sealed_at: now, pubkey: device.provider_key_pubkey };
       const prior = existing.find((e: any) => e.device_id === c.device_id && e.user_id === device.user_id);
       if (prior) await ctx.db.patch(prior._id, row);
       else await ctx.db.insert("account_pool_copies", { share_id: share._id, user_id: device.user_id, device_id: c.device_id, ...row });
@@ -352,6 +356,8 @@ export const listPool = query({
         split.sort((a, b) => b.tokens - a.tokens);
         rows.push({
           _id: share._id,
+          // The natural key the web's optimistic share stub carries (rowKey).
+          share_key: poolShareKey(share.email, share.team_id),
           team_id: share.team_id,
           user_id: share.user_id,
           contributor_name: await nameOf(share.user_id),

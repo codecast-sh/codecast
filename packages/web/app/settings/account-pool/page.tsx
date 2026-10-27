@@ -47,7 +47,7 @@ function TeamPool({ teamName, rows, showTeam }: { teamName: string; rows: PoolAc
       icon={Layers}
       actions={
         <span className="text-[11px] tabular-nums text-sol-text-dim">
-          {rows.length} account{rows.length === 1 ? "" : "s"} · {machines} cop{machines === 1 ? "y" : "ies"} · {tokens(week)} tokens, 7 days
+          {rows.length} account{rows.length === 1 ? "" : "s"} · {machines} machine{machines === 1 ? "" : "s"} · {tokens(week)} tokens, 7 days
         </span>
       }
     >
@@ -117,7 +117,7 @@ function TeamPool({ teamName, rows, showTeam }: { teamName: string; rows: PoolAc
               <AccountUsageBars usage={a.usage} now={now} />
             </div>
             {total > 0 && (
-              <div className="mt-2 flex h-1.5 overflow-hidden rounded-full bg-sol-bg-alt pl-0 ml-[18px]" aria-label="Who spent this account this week">
+              <div className="mt-2 ml-[18px] flex h-1.5 overflow-hidden rounded-full bg-sol-bg-alt" aria-label="Who spent this account this week">
                 {a.split.map((s) => (
                   <i key={s.user_id} data-tip={`${s.name}: ${tokens(s.tokens)}`} style={{ width: `${(100 * s.tokens) / total}%`, background: `var(${tone(s.user_id)})` }} />
                 ))}

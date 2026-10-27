@@ -23,7 +23,7 @@ import { execFileSync, execSync, spawn, spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { credentialHealth, readFleetCredential, readFleetCredentialAsync } from "../ccAccounts.js";
+import { credentialHealth, readFleetCredential, readFleetCredentialAsync, readFleetState, readProfileIndex } from "../ccAccounts.js";
 import { collectCopyFiles, containedRemotePath, InvalidWorkspaceManifest, manifestCopyEntries } from "../workspace/copyFiles.js";
 import { laptopHome, trustOnlyBundle, type AgentAuthBundle } from "./agentAuth.js";
 import { AGENT_AUTH_RECEIVER } from "./agentAuthReceiver.py.js";
@@ -687,11 +687,19 @@ export interface CredentialPushOutcome {
  * session on "Login expired".
  */
 export function readPushableCredential(): { cred: string | null; reason?: string } {
-  return gatePushableCredential(readFleetCredential() ?? readLocalCredential());
+  return gatePushableCredential((fleetOnPoolCopy() ? null : readFleetCredential()) ?? readLocalCredential());
 }
 
 export async function readPushableCredentialAsync(): Promise<{ cred: string | null; reason?: string }> {
-  return gatePushableCredential((await readFleetCredentialAsync()) ?? (await readLocalCredentialAsync()));
+  return gatePushableCredential((fleetOnPoolCopy() ? null : await readFleetCredentialAsync()) ?? (await readLocalCredentialAsync()));
+}
+
+/** The fleet runs on a teammate's pooled account (ccPool.ts). Its token goes
+ *  only to machines the server sealed a copy for, never on to this machine's
+ *  hosts, where a take-back could not reach it; they keep this machine's own login. */
+function fleetOnPoolCopy(): boolean {
+  const profile = readFleetState()?.profile;
+  return !!profile && !!readProfileIndex().profiles[profile]?.pool_share_id;
 }
 
 function gatePushableCredential(cred: string | null): { cred: string | null; reason?: string } {

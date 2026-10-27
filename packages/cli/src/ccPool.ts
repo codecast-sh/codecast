@@ -22,6 +22,7 @@ import {
   readProfileIndex,
   clearLaunchProfile,
   describeFleetWrite,
+  fleetStoreEnabled,
   fleetStatePath,
   fleetStoreDir,
   moveFleetToFallback,
@@ -207,15 +208,18 @@ export async function runPoolPass(backend: PoolBackend, configDir: string, now =
   return done;
 }
 
-/** The pass on the daemon's clock, against the signed-in backend. Remotes
- *  run whatever their laptop's fleet store carries, so they take no part. */
+/** The pass on the daemon's clock, against the signed-in backend. Only a
+ *  machine on the fleet store takes part: a pool copy carries sessions only
+ *  there (a take-back can empty it), so a remote or a machine with the fleet
+ *  turned off neither holds copies nor draws. */
 export function startPoolPasses(opts: {
   client: () => { query(name: any, args: any): Promise<any>; mutation(name: any, args: any, o?: any): Promise<any> } | null;
   token: () => string | undefined;
   deviceId: string;
   configDir: string;
   log: (line: string) => void;
-}): ReturnType<typeof setInterval> {
+}): ReturnType<typeof setInterval> | null {
+  if (!fleetStoreEnabled()) return null;
   let running = false;
   const backend: PoolBackend = {
     state: async () => {

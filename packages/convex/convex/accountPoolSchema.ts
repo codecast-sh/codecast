@@ -37,6 +37,9 @@ export const accountPoolTables = {
     sealed: v.object({ provider: v.string(), epk: v.string(), iv: v.string(), ct: v.string() }),
     // When the holder stored the token: the copy's one-year lifetime runs from here.
     token_stored_at: v.number(),
+    // The machine key the copy was sealed to. A machine that regenerates its
+    // key cannot open the old copy, so a key change asks the holder to reseal.
+    pubkey: v.optional(v.string()),
     sealed_at: v.number(),
   })
     .index("by_share", ["share_id"])

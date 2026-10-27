@@ -174,6 +174,34 @@ describe("sharing an account into the team's pool", () => {
     expect(rows[0].split).toEqual([{ user_id: JASON, name: "Jason", tokens: 1000 }]);
   });
 
+  test("a machine that regenerates its key gets a fresh copy", async () => {
+    const db = fixture();
+    await share(db);
+    await store(db, db._tables.account_shares[0]._id, ["jason-laptop"]);
+    expect((await poolFor(db, ASHOT, "ashot-laptop")).seal[0].targets[0].token_stored_at).toBe(NOW - DAY);
+    db._tables.devices.find((d: any) => d.device_id === "jason-laptop").provider_key_pubkey = "pk-jason-new";
+    // Sealed to the old key: the holder sees it as missing and reseals.
+    expect((await poolFor(db, ASHOT, "ashot-laptop")).seal[0].targets[0]).toMatchObject({ pubkey: "pk-jason-new", token_stored_at: null });
+  });
+
+  test("a Codex session's tokens are never counted against a Claude account", async () => {
+    const db = fixture();
+    const jasonLaptop = db._tables.devices.find((d: any) => d.device_id === "jason-laptop");
+    jasonLaptop.codex_accounts = { active_email: "claude4@x.com", profiles: [] };
+    const conv = { _id: "conversations_c", user_id: JASON, owner_device_id: "jason-laptop", agent_type: "codex", _creationTime: NOW - DAY };
+    db._tables.conversations.push(conv);
+    const ctx = { db, scheduler: { async runAfter() {} } };
+    await rollUpUsage(ctx, conv, [{ usage: { input_tokens: 10, output_tokens: 10 }, api_message_id: "c1", inserted: true, model: "gpt-5", timestamp: NOW - 60_000 }], {}, NOW);
+    expect(db._tables.usage_pending[0].account).toBeUndefined();
+  });
+
+  test("the web's optimistic stub and the server row share one key", async () => {
+    const db = fixture();
+    await share(db);
+    const rows = await (listPool as any)._handler(as(db, ASHOT), {});
+    expect(rows[0].share_key).toBe(`claude4@x.com|${TEAM}`);
+  });
+
   test("pool profile names stay valid profile names", () => {
     expect(poolProfileName("Claude4+test@almostcandid.com")).toBe("pool-claude4test");
     expect(poolProfileName("@x.com")).toBe("pool-account");
