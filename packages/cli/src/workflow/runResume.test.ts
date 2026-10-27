@@ -4,7 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource } from "./parser.js";
 import { runWorkflow, type RunOptions } from "./runner.js";
-import { checkpointPath, claimRun, isMidRun, PANE_CLAIM_GRACE_S, paneReplaceable, readCheckpoint, resumePoint, runnerPidFile, runPaneLaunchLine, type ResumeRow } from "./runResume.js";
+import { checkpointPath, claimRun, closeDeadRunPanes, DEAD_RUN_PANE_IDLE_S, deadRunPanes, isMidRun, PANE_CLAIM_GRACE_S, paneReplaceable, readCheckpoint, resumePoint, runnerPidFile, runPaneLaunchLine, type ResumeRow } from "./runResume.js";
 import { lineRunDir } from "./runner.js";
 import { deviceId } from "../remote/device.js";
 
@@ -502,5 +502,31 @@ describe("workflow/runResume runPaneLaunchLine", () => {
       try { tmux("kill-server"); } catch {}
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("workflow/runResume deadRunPanes", () => {
+  test("a run pane back at an idle shell closes; a live runner, a fresh shell and other sessions stay", () => {
+    const now = 1_800_000_000;
+    const old = now - DEAD_RUN_PANE_IDLE_S - 1;
+    expect(deadRunPanes([
+      { session: "wf-8h0tdw", command: "bash", activityS: old },
+      { session: "wf-8h0tdw", command: "bash", activityS: old },
+      { session: "wf-8gwa6d", command: "-zsh", activityS: old },
+      { session: "wf-8h01x4", command: "cast", activityS: old },
+      { session: "wf-8h0ek6", command: "bash", activityS: now - 60 },
+      { session: "cc-claude-abc", command: "bash", activityS: old },
+    ], now)).toEqual(["wf-8h0tdw", "wf-8gwa6d"]);
+  });
+
+  test("closing kills each dead pane's session through the daemon's tmux, and a listing that fails closes nothing", () => {
+    const now = 1_800_000_000;
+    const calls: string[][] = [];
+    const tmux = (args: string[]) => { calls.push(args); return args[0] === "list-panes" ? `wf-aaaaaa|bash|${now - DEAD_RUN_PANE_IDLE_S - 5}\nwf-bbbbbb|cast|${now - 99_999}\n` : ""; };
+    closeDeadRunPanes(tmux, () => {}, now);
+    expect(calls.slice(1)).toEqual([["kill-session", "-t", "=wf-aaaaaa"]]);
+    const none: string[][] = [];
+    closeDeadRunPanes((args) => { none.push(args); throw new Error("no server"); }, () => {}, now);
+    expect(none).toHaveLength(1);
   });
 });

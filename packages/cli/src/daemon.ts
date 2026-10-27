@@ -68,7 +68,7 @@ import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilit
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, recordRemoteLaunch, stableHostnameAsync } from "./remote/device.js";
 import { UNSAFE_PATH_RE, creatableStartFolder, missingFolderError, missingResumeFolderError, noLocalCheckoutBannerActionable, noLocalCheckoutError, placeFreshDeliverySession, type ConversationProjectInfo } from "./resumePlacement.js";
-import { liveRunnerPid, paneReplaceable, runnerPidFile, runPaneLaunchLine, runPaneName } from "./workflow/runResume.js";
+import { closeDeadRunPanes, liveRunnerPid, paneReplaceable, runnerPidFile, runPaneLaunchLine, runPaneName } from "./workflow/runResume.js";
 import {
   accountSwitchRestartReason,
   previousAccountToClaim,
@@ -1649,6 +1649,7 @@ async function liveWorkflowRunIds(): Promise<Set<string> | null> {
 }
 
 async function resumeOrphanedWorkflowRuns(): Promise<void> {
+  closeDeadRunPanes((args) => tmuxExecSync(args, { timeout: 5000 }), log);
   const data = await fetchLiveRunsOnDevice();
   const siteUrl = getSiteUrl();
   const token = getAuthToken();

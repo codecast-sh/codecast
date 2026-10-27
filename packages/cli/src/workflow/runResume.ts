@@ -48,6 +48,30 @@ export function paneReplaceable(pane: { command: string; createdS: number } | nu
   return nowS - pane.createdS >= PANE_CLAIM_GRACE_S;
 }
 
+/** How long a run pane may sit at a bare shell before the daemon closes it. */
+export const DEAD_RUN_PANE_IDLE_S = 30 * 60;
+
+/**
+ * The run panes to close: back at their shell (the runner exited, or its
+ * `exec` failed, which leaves an interactive shell standing) and idle past
+ * DEAD_RUN_PANE_IDLE_S. Nothing reads them and a resume makes its own pane,
+ * but each kept its session: 1,420 across the five Union line hosts on
+ * 2026-10-27, about 100 a host a day.
+ */
+export function deadRunPanes(panes: ReadonlyArray<{ session: string; command: string; activityS: number }>, nowS: number): string[] {
+  return [...new Set(panes.filter((p) => p.session.startsWith("wf-") && SHELLS.has(p.command.replace(/^-/, "")) && nowS - p.activityS >= DEAD_RUN_PANE_IDLE_S).map((p) => p.session))];
+}
+
+/** Close them, through the daemon's tmux (`tmux` runs one command and returns its output, throwing on failure). */
+export function closeDeadRunPanes(tmux: (args: string[]) => string, log: (line: string) => void, nowS = Date.now() / 1000): void {
+  let listed = "";
+  try { listed = tmux(["list-panes", "-a", "-F", "#{session_name}|#{pane_current_command}|#{session_activity}"]); } catch { return; }
+  const panes = listed.trim().split("\n").filter(Boolean).map((l) => { const [session, command, activity] = l.split("|"); return { session: session ?? "", command: command ?? "", activityS: Number(activity) || 0 }; });
+  for (const session of deadRunPanes(panes, nowS)) {
+    try { tmux(["kill-session", "-t", `=${session}`]); log(`[WORKFLOW] closed ${session}: its runner was gone and its shell idle`); } catch { /* gone */ }
+  }
+}
+
 /** The pid driving `runId` on this machine, or null when no live process does. */
 export function liveRunnerPid(runId: string): number | null {
   try {
