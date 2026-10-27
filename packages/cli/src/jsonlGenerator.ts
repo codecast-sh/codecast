@@ -8,6 +8,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { isCompactionSummaryMessage, isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import { CODECAST_IMPORT_NOTICE_PREFIX } from "./parser";
 import { claudeProjectDirName } from "./projectPathResolver.js";
 import { buildCodexImportContext, type CodexImportItem } from "./codexImportContext.js";
@@ -117,32 +118,74 @@ export function isHumanInstruction(m: ExportedMessage): boolean {
   if (m.role !== "user" || m.isMeta) return false;
   if (m.tool_results && m.tool_results.length > 0) return false;
   const text = m.content?.trim() ?? "";
-  return text.length > 0 && !text.startsWith(CODECAST_IMPORT_NOTICE_PREFIX);
+  return text.length > 0 && !text.startsWith(CODECAST_IMPORT_NOTICE_PREFIX)
+    && !isMachineDeliveredMessage(text) && !isCompactionSummaryMessage(text);
+}
+
+/** The most a trimmed rebuild spends on earlier human instructions. A standing
+ *  role's thread holds thousands; kept whole they overflowed the window the
+ *  trim exists to fit (a 65k-message session rebuilt at ~2.6M tokens). */
+export const IMPORT_INSTRUCTION_TOKENS = 20_000;
+
+/** How far before the latest compaction summary a rebuilt tail may reach.
+ *  Claude Code keeps the last messages before a compaction verbatim beside its
+ *  summary, which was written without them; past those, the summary covers it. */
+export const IMPORT_PRESERVED_TOKENS = 20_000;
+
+/** The latest compaction summary, or -1. A rebuild starts there: Claude Code's
+ *  own context after compacting was that summary and what followed it. */
+export function latestCompactionSummaryIndex(messages: ExportedMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user" && isCompactionSummaryMessage(messages[i].content)) return i;
+  }
+  return -1;
+}
+
+/** The human instructions in messages[from, to) a rebuild surfaces, newest
+ *  first up to IMPORT_INSTRUCTION_TOKENS, returned in order. */
+function keptInstructions(messages: ExportedMessage[], from: number, to: number): ExportedMessage[] {
+  const kept: ExportedMessage[] = [];
+  let used = 0;
+  for (let i = to - 1; i >= from; i -= 1) {
+    if (!isHumanInstruction(messages[i])) continue;
+    const t = estimateTokensForMessage(messages[i]);
+    if (used + t > IMPORT_INSTRUCTION_TOKENS) break;
+    used += t;
+    kept.push(messages[i]);
+  }
+  return kept.reverse();
 }
 
 export function chooseClaudeTailMessagesForTokenBudget(data: ExportResult, budgetTokens: number): number {
   if (budgetTokens <= 0) return 0;
   const messages = data.messages;
   if (messages.length === 0) return 0;
+  const summaryIndex = latestCompactionSummaryIndex(messages);
 
-  // Reserve room for the import notice plus every earlier human instruction we
-  // prepend — those are surfaced no matter where the tail starts, so they come
-  // out of the budget first. Counting all of them (not just the ones before the
-  // eventual cutoff) is a safe over-estimate: it only shortens the tail slightly,
-  // it never overflows the window.
+  // Reserve room for the import notice, the latest compaction summary and the
+  // instructions we prepend — those are surfaced no matter where the tail
+  // starts, so they come out of the budget first. Choosing the instructions
+  // over everything after the summary (not just up to the eventual cutoff) is
+  // a safe over-estimate: it only shortens the tail slightly, it never
+  // overflows the window.
+  const reservedRows = new Set(keptInstructions(messages, summaryIndex + 1, messages.length));
+  if (summaryIndex >= 0) reservedRows.add(messages[summaryIndex]);
   let reserved = estimateTokensFromText(CODECAST_IMPORT_NOTICE_PREFIX) + 512;
-  for (const m of messages) {
-    if (isHumanInstruction(m)) reserved += estimateTokensForMessage(m);
-  }
+  for (const m of reservedRows) reserved += estimateTokensForMessage(m);
   const budget = Math.max(0, budgetTokens - reserved);
 
   let used = 0;
+  let preserved = 0;
   let count = 0;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    // Human instructions are already paid for in `reserved`; don't double-count
-    // the ones that fall inside the tail.
-    const t = isHumanInstruction(messages[i]) ? 0 : estimateTokensForMessage(messages[i]);
+    // Reserved rows are already paid for; don't double-count the ones that
+    // fall inside the tail.
+    const t = reservedRows.has(messages[i]) ? 0 : estimateTokensForMessage(messages[i]);
     if (count > 0 && used + t > budget) break;
+    if (i < summaryIndex) {
+      preserved += t;
+      if (preserved > IMPORT_PRESERVED_TOKENS) break;
+    }
     used += t;
     count += 1;
   }
@@ -544,9 +587,13 @@ export function applyImportTailTrim(data: ExportResult, tailMessages: number | u
   const cutoffIndex = originalCount - tailMessages; // tail begins here (0-based)
   const tailStartLine = cutoffIndex + 1;            // 1-based, `cast read` numbering
   const tail = messages.slice(cutoffIndex);
-  // Keep every earlier human instruction, not just the first — they carry the
-  // human's intent through the whole conversation and cost little.
-  const earlierInstructions = messages.slice(0, cutoffIndex).filter(isHumanInstruction);
+  // The latest compaction summary covers everything before it, so a cut past
+  // it keeps the summary and only the human instructions since; a cut short of
+  // it keeps it inside the tail and needs nothing prepended.
+  const summaryIndex = latestCompactionSummaryIndex(messages);
+  const summary = summaryIndex >= 0 && summaryIndex < cutoffIndex ? [messages[summaryIndex]] : [];
+  // The human's intent across the conversation, newest first within a cap.
+  const earlierInstructions = keptInstructions(messages, summaryIndex + 1, cutoffIndex);
 
   const convRef = data.conversation.id;
   const kept = earlierInstructions.length;
@@ -557,12 +604,13 @@ export function applyImportTailTrim(data: ExportResult, tailMessages: number | u
     content:
       `${CODECAST_IMPORT_NOTICE_PREFIX} This session was trimmed to fit ${fitReason}. ` +
       `The full conversation is ${originalCount} messages.\n` +
-      `Kept here: ${kept > 0 ? `your ${kept} earlier instruction${kept === 1 ? "" : "s"} (below), then ` : ""}` +
+      `Kept here: ${summary.length ? `the latest compaction summary (message ${summaryIndex + 1}), ` : ""}` +
+      `${kept > 0 ? `your ${kept} earlier instruction${kept === 1 ? "" : "s"}${summary.length ? " since it" : ""} (below), then ` : summary.length ? "then " : ""}` +
       `the last ${tailMessages} messages (starting at message ${tailStartLine}).\n` +
       `Need anything from the omitted middle? Read it with: cast read ${convRef} <from>:<to> ` +
       `— e.g. \`cast read ${convRef} 1:${Math.max(1, tailStartLine - 1)}\` for everything before the tail.`,
   };
-  return [notice, ...earlierInstructions, ...tail];
+  return [notice, ...summary, ...earlierInstructions, ...tail];
 }
 
 export function generatedSessionCwd(data: ExportResult, options: { cwd?: string }): string {

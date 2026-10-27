@@ -115,12 +115,13 @@ export function speakerOf(row: IdentityRow | null, agentType?: string | null, pr
   return { name: id.name, identity: id };
 }
 
-/** Where a role's identity lives: the role rows (the org tree's `roles`, fed
- *  app wide by org.roles) and the seats pairing each role with its bot user.
+/** Where a role's identity lives: the role rows (`viewerRoles`, every role
+ *  the viewer can see in any workspace, fed by roleIcons.viewerRoles; built by
+ *  lib/roleRows) and the seats pairing each role with its bot user.
  *  One home per fact: a role's name and face are read from its row, never
  *  from the bot user minted for it, whose name is the title it was born with. */
 export type RoleRows = {
-  roles: readonly { _id: string; short_id: string; name: string; handle: string; avatar?: string | null; status: string; given_name?: string | null; icon?: RoleIcon | null; tenure?: { kind: "standing" | "program" } | null; assistant?: IdentityRoleRow["assistant"]; scope_type?: "team" | "user" }[];
+  roles: readonly { _id: string; short_id: string; name: string; handle: string; avatar?: string | null; status: string; given_name?: string | null; icon?: RoleIcon | null; tenure_kind?: string | null; assistant?: IdentityRoleRow["assistant"]; scope_type?: "team" | "user" }[];
   anchors: readonly { bot_user_id: string; org_role_id?: string | null }[];
 };
 
@@ -142,7 +143,7 @@ export function withLiveRole<T extends IdentityRow>(row: T, rows: RoleRows | nul
   if (!live) return row;
   const role: SessionRoleSnapshot = {
     _id: live._id, short_id: live.short_id, name: live.name, handle: live.handle,
-    avatar: avatarOf(live), status: live.status, tenure_kind: live.tenure?.kind ?? "standing",
+    avatar: avatarOf(live), status: live.status, tenure_kind: live.tenure_kind === "program" ? "program" : "standing",
     given_name: live.given_name ?? null, icon: live.icon ?? null,
   };
   return { ...row, standing_role_id: roleId, role };
