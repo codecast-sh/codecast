@@ -10,9 +10,8 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { isCompactionSummaryMessage, isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import { CODECAST_IMPORT_NOTICE_PREFIX } from "./parser";
-import { claudeProjectDirName } from "./projectPathResolver.js";
+import { claudeProjectDirName, encodePiCwdSlug } from "./projectPathResolver.js";
 import { buildCodexImportContext, type CodexImportItem } from "./codexImportContext.js";
-import { encodePiCwdSlug } from "./transcriptDirWatcher.js";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -445,115 +444,6 @@ function truncate(text: string, max = 2000): string {
 export function claudeTranscriptModel(conversationModel: string | null | undefined): string {
   if (conversationModel && /^claude-/.test(conversationModel)) return conversationModel;
   return "opus";
-}
-
-// A session's JSONL records the model it ran on — often a pinned snapshot like
-// claude-opus-4-6-20260205, which gets retired when a newer model ships. Return
-// the live short alias matching the recorded model so a resume lands on a live
-// model instead of a dead snapshot (if the recorded model is still current the
-// alias resolves to it anyway). Also matches a bare recorded alias.
-//
-// Two signals mark the model a session is on, and the LAST one of either kind
-// wins:
-//  - assistant lines record the model each turn actually ran on;
-//  - a /model switch emits a `<local-command-stdout>Set model to <Name>` user
-//    line with NO assistant line until the next turn, so it's the only trace of
-//    a switch-then-resume/fork-before-any-turn. Fork reconstructions stamp the
-//    conversation-level model uniformly on assistant lines but preserve this
-//    stdout line, so it's also what keeps forks on the switched model.
-// First-match scanning is what caused the original bug: it returned the model
-// the session STARTED on and reverted mid-session /model switches on every
-// resume. The ANSI escapes around the name arrive JSON-escaped (literal
-// `\u001b[1m` text) in raw transcript bytes; match the raw ESC byte too for
-// pre-parsed content. Newer Claude Code builds quote the name in backticks
-// instead ("Set model to `Opus 5` and saved…"); the same slot takes either.
-// "Default" means the user's saved default — no override.
-const MODEL_ALIAS_RE =
-  /"model"\s*:\s*"(?:claude-)?(opus|sonnet|haiku|fable)\b|<local-command-stdout>Set model to (?:(?:\\u001b|\x1b)\[\d+m|`)*(opus|sonnet|haiku|fable|default)/gi;
-export function claudeModelAlias(jsonlContent: string): string | null {
-  let last: string | null = null;
-  MODEL_ALIAS_RE.lastIndex = 0;
-  for (let m = MODEL_ALIAS_RE.exec(jsonlContent); m; m = MODEL_ALIAS_RE.exec(jsonlContent)) {
-    const name = (m[1] ?? m[2]).toLowerCase();
-    last = name === "default" ? null : name;
-  }
-  return last;
-}
-
-// Pick the `--model` flag for a resume. We override the model on EVERY resume,
-// not just forks: the JSONL records whatever model the session last ran on,
-// which may be a now-retired pinned snapshot. An explicit --model in extraFlags
-// always wins.
-export function resumeModelFlag(jsonlContent: string, extraFlags: string): string {
-  if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
-  const alias = claudeModelAlias(jsonlContent);
-  return alias ? ` --model ${alias}` : "";
-}
-
-// File variant of resumeModelFlag. We want the LAST recorded model, so scan a
-// bounded window from the END of the file (small transcripts fit entirely, so
-// the head-of-file case is covered too). If a huge transcript's tail window
-// somehow contains no model field (e.g. a giant trailing user message), fall
-// back to a head window rather than dropping the override — resuming with no
-// flag can land on a retired pinned snapshot and crash.
-const MODEL_SCAN_WINDOW_BYTES = 8 * 1024 * 1024;
-function readWindow(fd: number, position: number, length: number): string {
-  const buf = Buffer.alloc(length);
-  const bytesRead = fs.readSync(fd, buf, 0, length, position);
-  return buf.toString("utf-8", 0, bytesRead);
-}
-export function resumeModelFlagFromFile(jsonlPath: string, extraFlags: string): string {
-  if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
-  return lastFlagFromFileWindows(jsonlPath, (tail) => resumeModelFlag(tail, extraFlags));
-}
-
-// Shared tail-then-head window scan for resume flag extraction (see
-// resumeModelFlagFromFile's rationale above).
-function lastFlagFromFileWindows(jsonlPath: string, scan: (content: string) => string): string {
-  try {
-    const fd = fs.openSync(jsonlPath, "r");
-    try {
-      const size = fs.fstatSync(fd).size;
-      const windowSize = Math.min(size, MODEL_SCAN_WINDOW_BYTES);
-      const tail = readWindow(fd, size - windowSize, windowSize);
-      const flag = scan(tail);
-      if (flag || size <= windowSize) return flag;
-      return scan(readWindow(fd, 0, windowSize));
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return "";
-  }
-}
-
-// Effort twin of claudeModelAlias/resumeModelFlag. Effort has NO per-message
-// field in the transcript — the only signals are the switch echoes: the
-// /effort command's "Set effort level to <x>" and the /model picker's
-// session-only commit suffix "… with <x> effort". Both arrive with the same
-// JSON-escaped-or-raw ANSI wrapping as model switch lines. "auto" clears the
-// override (resume with no flag = the user's saved default).
-const EFFORT_LEVEL_RE =
-  /<local-command-stdout>[^<]*?(?:Set effort level to (?:(?:\\u001b|\x1b)\[\d+m|`)*(low|medium|high|xhigh|max|auto)\b|with (?:(?:\\u001b|\x1b)\[\d+m|`)*(low|medium|high|xhigh|max)(?:(?:\\u001b|\x1b)\[\d+m|`)* effort)/gi;
-export function claudeEffortLevel(jsonlContent: string): string | null {
-  let last: string | null = null;
-  EFFORT_LEVEL_RE.lastIndex = 0;
-  for (let m = EFFORT_LEVEL_RE.exec(jsonlContent); m; m = EFFORT_LEVEL_RE.exec(jsonlContent)) {
-    const level = (m[1] ?? m[2]).toLowerCase();
-    last = level === "auto" ? null : level;
-  }
-  return last;
-}
-
-export function resumeEffortFlag(jsonlContent: string, extraFlags: string): string {
-  if (/(^|\s)--effort(\s|=)/.test(extraFlags)) return "";
-  const level = claudeEffortLevel(jsonlContent);
-  return level ? ` --effort ${level}` : "";
-}
-
-export function resumeEffortFlagFromFile(jsonlPath: string, extraFlags: string): string {
-  if (/(^|\s)--effort(\s|=)/.test(extraFlags)) return "";
-  return lastFlagFromFileWindows(jsonlPath, (tail) => resumeEffortFlag(tail, extraFlags));
 }
 
 export interface GenerateClaudeCodeJsonlOptions {

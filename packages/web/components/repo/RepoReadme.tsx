@@ -8,7 +8,7 @@
 // is the boundary that makes rendering a stranger's README safe. Relative
 // links and images resolve against the file in the repository, at the ref the
 // page is showing.
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -18,6 +18,7 @@ import { MD_COMPONENTS } from "../../lib/markdownComponents";
 import { MD_REMARK_PLUGINS } from "../../lib/markdownPlugins";
 import { VAULT_HTML_SCHEMA } from "../../lib/vault/htmlPolicy";
 import { githubHeadingSlugger, resolveRepoMarkdownUrl } from "../../lib/repoContent";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRepoBlob, useRepoMeta, useRepoReadme } from "../../hooks/useRepoBrowse";
 import { useRepoTransport } from "../../lib/repoTransport";
 import { repoBlobHref, type RepoRouteFamily } from "../../lib/repoView";
@@ -90,7 +91,7 @@ function readmeHeading(Tag: "h1" | "h2" | "h3" | "h4", className: string) {
 
 /** The README arrives after the page, so the browser's own jump to `#section` finds nothing; jump once it renders. */
 function useScrollToHash(ready: boolean) {
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!ready || !window.location.hash) return;
     let id: string;
     try { id = decodeURIComponent(window.location.hash.slice(1)); } catch { return; }

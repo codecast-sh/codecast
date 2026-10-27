@@ -2,12 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import {
-  claudeModelAlias,
-  claudeTranscriptModel,
-  resumeModelFlag,
-  resumeModelFlagFromFile,
-} from "./jsonlGenerator.js";
+import { claudeTranscriptModel } from "./jsonlGenerator.js";
+import { claudeModelAlias, resumeModelFlag, resumeModelFlagFromFile } from "./resumeCommand.js";
 
 // Regression test for the recurring "There's an issue with the selected model
 // (claude-opus-4-6-20260205) ... it may not exist" crash on resume (2026-05-25).

@@ -176,7 +176,6 @@ packages/shared/contracts/changeCard.ts 850
 packages/shared/contracts/fleetDiff.ts 850
 packages/shared/contracts/inboxProjection.test.ts 1100
 packages/shared/contracts/inboxProjection.ts 1700
-packages/shared/contracts/machineMessages.ts 900
 packages/shared/contracts/orgProposal.test.ts 1250
 packages/shared/contracts/orgProposal.ts 1950
 packages/shared/contracts/secrets.ts 950

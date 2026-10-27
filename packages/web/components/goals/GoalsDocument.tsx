@@ -14,7 +14,7 @@
 // rules (one level of nesting, the order by `position`) are goalsOutline's.
 // An open proposal's goal stands where it would sit, in violet, answered on
 // the Org screen.
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useMemo, useRef, useState, type DragEvent } from "react";
 import Link from "next/link";
 import { ChevronRight, GripVertical, MoreHorizontal, Plus, X } from "lucide-react";
 import { metricReadings, metricTrends, type InitiativeRow } from "@codecast/shared/contracts/initiative";
@@ -24,6 +24,8 @@ import { useInboxStore } from "../../store/inboxStore";
 import { undoAsOne } from "../../store/undoActions";
 import { quoted } from "../../store/undo/labels";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useSyncInitiativeUpdates } from "../../hooks/useInitiatives";
 import { useSyncOrgProposal, useSyncOrgProposals } from "../../hooks/useSyncOrgProposals";
 import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
@@ -222,7 +224,7 @@ export function GoalsDocumentView({ doc, now }: { doc: CompanyDoc; now: number }
   const [showClosed, setShowClosed] = useState(false);
 
   // An address with #in-12 opens on that goal.
-  useEffect(() => {
+  useWatchEffect(() => {
     const id = typeof window !== "undefined" ? window.location.hash.slice(1) : "";
     if (id) document.getElementById(`goal-${id}`)?.scrollIntoView({ block: "start" });
   }, [listed.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -290,7 +292,7 @@ function Mission({ goal }: { goal: InitiativeRow }) {
 function Outline({ goals, closed, d, scroller }: { goals: readonly DocGoal[]; closed: number; d: Doc; scroller: React.RefObject<HTMLDivElement | null> }) {
   const [inView, setInView] = useState<string | null>(null);
   // The goal in view is the last top-level section whose heading has passed the top third of the pane.
-  useEffect(() => {
+  useWatchEffect(() => {
     const root = scroller.current;
     if (!root) return;
     const read = () => {
@@ -524,7 +526,7 @@ function GoalMenu({ goal, d }: { goal: InitiativeRow; d: Doc }) {
 function DraftGoal({ at, depth, d }: { at: Draft; depth: number; d: Doc }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const done = useRef(false);
-  useEffect(() => { ref.current?.focus(); }, []);
+  useMountEffect(() => { ref.current?.focus(); });
   const commit = (next: boolean) => {
     if (done.current) return;
     done.current = true;
@@ -556,7 +558,7 @@ function DraftGoal({ at, depth, d }: { at: Draft; depth: number; d: Doc }) {
 const AutoTextarea = ({ ref, className, onInput, ...rest }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { ref?: React.Ref<HTMLTextAreaElement> }) => {
   const own = useRef<HTMLTextAreaElement | null>(null);
   const fit = () => { const el = own.current; if (el) { el.style.height = "0px"; el.style.height = `${el.scrollHeight}px`; } };
-  useEffect(fit);
+  useWatchEffect(fit);
   return (
     <textarea
       ref={(el) => { own.current = el; if (typeof ref === "function") ref(el); else if (ref) (ref as React.RefObject<HTMLTextAreaElement | null>).current = el; }}
@@ -577,8 +579,8 @@ function TitleField({ goal, d, className, label = "Goal title" }: { goal: Initia
   const ref = useRef<HTMLTextAreaElement>(null);
   const focused = useRef(false);
   // A title another window changes is taken in unless this one is being typed in.
-  useEffect(() => { if (!focused.current && ref.current && ref.current.value !== goal.title) ref.current.value = goal.title; }, [goal.title]);
-  useEffect(() => { if (d?.focus === goal._id) { ref.current?.focus(); d.setFocus(null); } }, [d?.focus]); // eslint-disable-line react-hooks/exhaustive-deps
+  useWatchEffect(() => { if (!focused.current && ref.current && ref.current.value !== goal.title) ref.current.value = goal.title; }, [goal.title]);
+  useWatchEffect(() => { if (d?.focus === goal._id) { ref.current?.focus(); d.setFocus(null); } }, [d?.focus]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = () => {
     const next = ref.current?.value.replace(/\s+/g, " ").trim() ?? "";
     if (!next) { if (ref.current) ref.current.value = goal.title; return; }
@@ -666,7 +668,7 @@ function WordsInPlace({ value, onSave, placeholder, label, className, start = fa
   const [editing, setEditing] = useState(start);
   const ref = useRef<HTMLTextAreaElement>(null);
   const cancelled = useRef(false);
-  useEffect(() => { if (editing) { const el = ref.current; el?.focus(); el?.setSelectionRange(el.value.length, el.value.length); } }, [editing]);
+  useWatchEffect(() => { if (editing) { const el = ref.current; el?.focus(); el?.setSelectionRange(el.value.length, el.value.length); } }, [editing]);
   const close = () => {
     const next = ref.current?.value.trim() ?? value;
     if (!cancelled.current && next !== value.trim()) onSave(next);

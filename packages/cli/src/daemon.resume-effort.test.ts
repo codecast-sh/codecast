@@ -6,7 +6,7 @@ import {
   claudeEffortLevel,
   resumeEffortFlag,
   resumeEffortFlagFromFile,
-} from "./jsonlGenerator.js";
+} from "./resumeCommand.js";
 
 // Effort twin of daemon.resume-model-alias.test.ts. Unlike model, effort has NO
 // per-message field in the transcript — the only durable signals are the two
