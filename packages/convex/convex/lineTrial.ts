@@ -1535,7 +1535,7 @@ export async function rerunCore(ctx: Ctx, userId: Id<"users">, ref: string, now 
     return { task: task.short_id, run_id: run._id, resumed_at: node, ...(route.to === "investigate" ? { rebuild: "investigate" as const, why: route.why } : {}) };
   }
   // A failed run tried again at a station its lead names, on its own branch, as a new attempt under the trial's
-  // limits (workflow_runs.resumeFailedRunCore).
+  // limits (failedRunResume.resumeFailedRunCore).
   if (at?.trim()) {
     if (!run || run.status !== "failed") throw new Error(`${task.short_id}'s run ${run ? `is ${run.status}` : "does not exist"}; --at resumes a failed run (a run waiting at a card is asked again with --reask --at)`);
     if (!run.runner_device) throw new Error(`${task.short_id}'s run names no machine`);

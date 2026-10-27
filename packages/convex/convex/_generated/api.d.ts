@@ -136,6 +136,7 @@ import type * as executionBindings from "../executionBindings.js";
 import type * as expectations from "../expectations.js";
 import type * as expectationsSchema from "../expectationsSchema.js";
 import type * as externalEvents from "../externalEvents.js";
+import type * as failedRunResume from "../failedRunResume.js";
 import type * as favoriteViewWrites from "../favoriteViewWrites.js";
 import type * as feedPagination from "../feedPagination.js";
 import type * as fileChangeBodies from "../fileChangeBodies.js";
@@ -715,6 +716,7 @@ declare const fullApi: ApiFromModules<{
   expectations: typeof expectations;
   expectationsSchema: typeof expectationsSchema;
   externalEvents: typeof externalEvents;
+  failedRunResume: typeof failedRunResume;
   favoriteViewWrites: typeof favoriteViewWrites;
   feedPagination: typeof feedPagination;
   fileChangeBodies: typeof fileChangeBodies;

@@ -12,7 +12,8 @@ import { flowAdmits, flowHands, flowHold, liveFlowFor, planLiveFlow } from "./li
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { recordHandStart } from "./spawn";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
-import { createRunCore, isLiveRunStatus, queueRunOnDaemon, resumeQueuedRun } from "./workflow_runs";
+import { createRunCore, isLiveRunStatus, queueRunOnDaemon } from "./workflow_runs";
+import { resumeQueuedRun } from "./failedRunResume";
 import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineRouteFor } from "./workflows";

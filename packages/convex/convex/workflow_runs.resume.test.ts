@@ -3,7 +3,8 @@
 // the live runs it drove. Driven against the fake db like the gate tests.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { failStrandedPendingRuns, liveRunsForDevice, reaskRunCore, resumeFailedRunCore, resumeRunCore, STRANDED_PENDING_MS } from "./workflow_runs";
+import { resumeFailedRunCore } from "./failedRunResume";
+import { failStrandedPendingRuns, liveRunsForDevice, reaskRunCore, resumeRunCore, STRANDED_PENDING_MS } from "./workflow_runs";
 import { hashToken } from "./apiTokens";
 
 const HOST = "users_host" as any;

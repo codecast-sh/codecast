@@ -148,7 +148,7 @@ describe("a flow in the library", () => {
     const failed = await run("spine");
     await upsert(push("spine", "dddddddddddddddd", "Fixed eval line.", { save: true }));
     await t.run((ctx) => ctx.db.patch(failed.runId, { status: "failed", current_node_id: "fix", runner_device: "laptop", fail_reason: "Eval failed" } as any));
-    const { resumeFailedRunCore } = await import("./workflow_runs");
+    const { resumeFailedRunCore } = await import("./failedRunResume");
     const resume = (at: string, opts: Record<string, boolean>) => t.run((ctx) => resumeFailedRunCore(ctx as any, owner, failed.runId, at, opts));
     const prompt = async () => (await t.mutation(api.workflow_runs.getForDaemon, { api_token: TOKEN, run_id: failed.runId })).workflow.library.versions[0].snapshot.nodes[1].prompt;
     await expect(resume("gone_station", { currentFlow: true, check: true })).rejects.toThrow("no station gone_station");
