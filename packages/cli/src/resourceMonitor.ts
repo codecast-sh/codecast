@@ -1,6 +1,7 @@
 import { resourceProbe } from "./resourceProbe.js";
 import { execFileAsync } from "./proc.js";
 import { shortId } from "./sessionProcessMatcher.js";
+import { TTY_TOKEN, noTerminal } from "./psTerminal.js";
 
 export interface ProcessInfo {
   pid: number;
@@ -339,12 +340,7 @@ export async function captureProcessSnapshot(): Promise<Map<number, ProcessInfo>
   return parseProcessSnapshot(captured.stdout);
 }
 
-/** A ps terminal value: none (`??` on macOS, `?` on Linux), a name, or a
- *  macOS `tdev` major/minor. */
-export const TTY_TOKEN = /^(\?\??|-|console|tty\S*|pts\/\d+|\d+\/\d+)$/;
-
-/** The terminal value ps prints for a process with no controlling terminal. */
-export const noTerminal = (tty: string): boolean => /^(\?\??|-)$/.test(tty);
+export { TTY_TOKEN, noTerminal };
 
 export function parseProcessSnapshot(stdout: string, collectedAt = Date.now()): Map<number, ProcessInfo> {
   const result = new Map<number, ProcessInfo>();

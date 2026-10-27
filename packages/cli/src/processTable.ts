@@ -13,7 +13,7 @@
 
 import * as fs from "node:fs";
 import { execFileAsync, execFileSync } from "./proc.js";
-import { TTY_TOKEN, noTerminal } from "./resourceMonitor.js";
+import { TTY_TOKEN, noTerminal } from "./psTerminal.js";
 import { agentBinaryFromPsRow, isRecognizedAgentComm } from "./sessionProcessMatcher.js";
 import { tmuxRunAsync } from "./tmux.js";
 import { CLAUDE_VERSIONED_BINARY_RE } from "./stableClaudeBinary.js";

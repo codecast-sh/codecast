@@ -29,7 +29,8 @@
 // start time, so an entry that went stale while the daemon was down is no
 // one's.
 import * as fs from "node:fs";
-import { noTerminal, sameStartedAt, type ProcessInfo } from "./resourceMonitor.js";
+import { noTerminal } from "./psTerminal.js";
+import { sameStartedAt, type ProcessInfo } from "./resourceMonitor.js";
 import type { ProcRow } from "./processTable.js";
 
 type Ancestors = Map<number, number>;
