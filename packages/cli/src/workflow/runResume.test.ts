@@ -4,7 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource } from "./parser.js";
 import { runWorkflow, type RunOptions } from "./runner.js";
-import { checkpointPath, claimRun, closeDeadRunPanes, DEAD_RUN_PANE_IDLE_S, deadRunPanes, isMidRun, PANE_CLAIM_GRACE_S, paneReplaceable, readCheckpoint, resumePoint, runnerPidFile, runPaneLaunchLine, type ResumeRow } from "./runResume.js";
+import { checkpointPath, claimRun, closeDeadRunPanes, DEAD_RUN_PANE_IDLE_S, deadRunPanes, isMidRun, PANE_CLAIM_GRACE_S, paneReplaceable, readCheckpoint, restartsForNewerFlow, resumePoint, runnerPidFile, runPaneLaunchLine, type ResumeRow } from "./runResume.js";
 import { lineRunDir } from "./runner.js";
 import { deviceId } from "../remote/device.js";
 
@@ -407,6 +407,20 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     if ("release" in claim) claim.release();
     expect(fs.existsSync(runnerPidFile(runId))).toBe(false);
   }, 30000);
+});
+
+describe("workflow/runResume restartsForNewerFlow", () => {
+  test("a runner is restarted when its run, waiting at a gate, moved onto newer flow versions: once per move, and only while the daemon may resume it", () => {
+    const moved = { status: "paused", restart_at: 1_000 };
+    expect(restartsForNewerFlow(moved, undefined, true)).toBe(true);
+    // Mid-station work is never cut short: the runner is restarted when the run next waits at a gate.
+    expect(restartsForNewerFlow({ status: "running", restart_at: 1_000 }, undefined, true)).toBe(false);
+    expect(restartsForNewerFlow({ status: "paused", restart_at: null }, undefined, true)).toBe(false);
+    expect(restartsForNewerFlow(moved, 1_000, true)).toBe(false);
+    expect(restartsForNewerFlow({ status: "paused", restart_at: 2_000 }, 1_000, true)).toBe(true);
+    // Out of resumes for now: a stopped runner would not be started again, so it keeps running.
+    expect(restartsForNewerFlow(moved, undefined, false)).toBe(false);
+  });
 });
 
 describe("workflow/runResume resumePoint", () => {

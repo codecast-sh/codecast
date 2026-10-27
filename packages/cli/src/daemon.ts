@@ -68,7 +68,7 @@ import { ensureCapabilityInventoryFresh, pendingCapabilityPayload, markCapabilit
 import { reconcileFromHeartbeat } from "./capabilities/reconcile.js";
 import { deviceId, deviceLabel, isRemoteDevice, recordRemoteLaunch, stableHostnameAsync } from "./remote/device.js";
 import { UNSAFE_PATH_RE, creatableStartFolder, missingFolderError, missingResumeFolderError, noLocalCheckoutBannerActionable, noLocalCheckoutError, placeFreshDeliverySession, type ConversationProjectInfo } from "./resumePlacement.js";
-import { closeDeadRunPanes, liveRunnerPid, paneReplaceable, runnerPidFile, runPaneLaunchLine, runPaneName } from "./workflow/runResume.js";
+import { closeDeadRunPanes, liveRunnerPid, paneReplaceable, restartsForNewerFlow, runnerPidFile, runPaneLaunchLine, runPaneName } from "./workflow/runResume.js";
 import {
   accountSwitchRestartReason,
   previousAccountToClaim,
@@ -1610,7 +1610,8 @@ async function launchWorkflowRun(siteUrl: string, apiToken: string, runId: strin
 // runner that dies on start is not restarted forever.
 const WORKFLOW_RESUME_TICK_MS = 2 * 60_000;
 const workflowResumes = new Map<string, number[]>();
-type LiveRunsOnDevice = { runs?: Array<{ run_id: string; status: string; current_node_id: string | null; updated_at: number }>; failed?: string[] };
+const runnerRestarts = new Map<string, number>();
+type LiveRunsOnDevice = { runs?: Array<{ run_id: string; status: string; current_node_id: string | null; updated_at: number; restart_at?: number | null }>; failed?: string[] };
 async function fetchLiveRunsOnDevice(): Promise<LiveRunsOnDevice | null> {
   const siteUrl = getSiteUrl();
   const token = getAuthToken();
@@ -1656,16 +1657,23 @@ async function resumeOrphanedWorkflowRuns(): Promise<void> {
   if (!data || !siteUrl || !token) return;
   const now = Date.now();
   for (const run of data?.runs ?? []) {
-    if (liveRunnerPid(run.run_id)) continue;
+    const pid = liveRunnerPid(run.run_id);
+    const resumes = (workflowResumes.get(run.run_id) ?? []).filter((t) => now - t < 6 * 60 * 60_000);
+    if (pid && restartsForNewerFlow(run, runnerRestarts.get(run.run_id), resumes.length < 3)) {
+      // SIGTERM is the machine going away under the runner: the run stays live, and the next pass resumes it here.
+      runnerRestarts.set(run.run_id, run.restart_at!);
+      log(`[WORKFLOW] ${run.run_id} moved onto newer flow versions while waiting at ${run.current_node_id ?? "a gate"}; restarting its runner on them`);
+      try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
+    }
+    if (pid) continue;
     if (!governor.admit("workflow_resume")) {
       log(`[WORKFLOW] resume of ${run.run_id} held: machine ${describeLoad()}`);
       continue;
     }
     // A runner launched a moment ago has not claimed the run yet.
     if (now - run.updated_at < WORKFLOW_RESUME_TICK_MS) continue;
-    const recent = (workflowResumes.get(run.run_id) ?? []).filter((t) => now - t < 6 * 60 * 60_000);
-    if (recent.length >= 3) continue;
-    workflowResumes.set(run.run_id, [...recent, now]);
+    if (resumes.length >= 3) continue;
+    workflowResumes.set(run.run_id, [...resumes, now]);
     log(`[WORKFLOW] ${run.run_id} has no runner here; resuming it at ${run.current_node_id ?? "its start"}`);
     const started = await launchWorkflowRun(siteUrl, token, run.run_id);
     if ("error" in started) log(`[WORKFLOW] resume of ${run.run_id} failed: ${started.error}`);

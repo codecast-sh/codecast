@@ -83,6 +83,18 @@ export function liveRunnerPid(runId: string): number | null {
 }
 
 /**
+ * Whether a daemon restarts a run's live runner so the run goes on with newer
+ * flow versions. A runner holds the graph it loaded when it started; a re-pin
+ * moves the run's record (restart_at) but not that graph. The runner is
+ * stopped only while the run waits at a gate (a resumed gate is polled, never
+ * asked again), once per re-pin, and only while the daemon may still resume
+ * the run, so a stopped runner is always started again.
+ */
+export function restartsForNewerFlow(run: { status: string; restart_at?: number | null }, restartedFor: number | undefined, mayResume: boolean): boolean {
+  return run.status === "paused" && !!run.restart_at && restartedFor !== run.restart_at && mayResume;
+}
+
+/**
  * Claim `runId` for this process: one runner per run, so a resume never
  * drives a run a live runner still holds. Returns the release, or the pid of
  * the live holder. A holder that died (SIGKILL, a reboot) leaves a pid file
