@@ -13,6 +13,7 @@
 import { AvatarImg } from "../../lib/avatarCache";
 import { agentName, anchorScopeLabel, type AnchorRow } from "../../hooks/useSyncAnchors";
 import { RoleFace } from "../org/RoleFace";
+import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
 import { HEAD_OF_PEOPLE_HANDLE, HEAD_OF_PEOPLE_NAME } from "../org/orgStaffingTypes";
 
 /** The standing agent mark. Custom (not lucide's boat anchor): a head over a
@@ -29,7 +30,7 @@ type Identity = Pick<AnchorRow, "bot_name" | "bot_avatar" | "scope_type" | "team
 /** The role's face when the row is a seat; else the avatar, else the glyph on
  *  a tinted tile. Same shape at every size. */
 export function AnchorAvatar({ anchor, size = 28, className = "" }: { anchor: Identity | null | undefined; size?: number; className?: string }) {
-  const name = agentName(anchor);
+  const name = agentName(anchor, useIdentityPrefs());
   if (anchor?.role) return <RoleFace role={anchor.role} size={size} className={`shrink-0 ${className}`} title={name} />;
   const style = { width: size, height: size };
   const radius = size >= 32 ? "rounded-lg" : "rounded-md";

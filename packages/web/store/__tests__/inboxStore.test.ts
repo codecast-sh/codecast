@@ -4309,7 +4309,7 @@ describe("resolveSessionAuthor", () => {
     const role = { _id: "or1", short_id: "or-1", name: "Cam's Engineering Co-worker", handle: "cam-coworker", avatar: "hare", status: "active", tenure_kind: "standing" as const, given_name: "Hazel" };
     const bot = { _id: "bot1", name: "Cam's Engineering Co-worker" } as any;
     expect(resolveSessionAuthor({ user_id: "u2", acting_user_id: "bot1", standing_role_id: "or1", role }, null, me, [...roster, bot]))
-      .toEqual({ name: "Hazel", avatar: null, face: "hare" });
+      .toEqual({ name: "Hazel", avatar: null, face: "hare", role });
   });
 
   it("returns null for the current user's own session (user_id === me)", () => {

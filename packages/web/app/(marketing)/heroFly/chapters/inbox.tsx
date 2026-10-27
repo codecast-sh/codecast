@@ -16,6 +16,7 @@ import { PanelLeft, Plus } from "lucide-react";
 import { NotificationBellButton } from "@/components/NotificationBell";
 import { ViewerFaces } from "@/components/presence/ViewerFaces";
 import { SearchField } from "@/components/search/SearchField";
+import { useIdentityPrefs } from "@/hooks/useIdentityPrefs";
 import { TeamSwitcherButton } from "@/components/TeamSwitcher";
 import { TopbarButton } from "@/components/TopbarButton";
 import { InboxViewPickerStill } from "@/components/InboxViewPicker";
@@ -70,6 +71,7 @@ export function DeskRail(_: PartProps) {
   // The cursor e2e asks from the start; the API worker waits on its question until it is answered.
   const needsInput = useFilmTime((t) => (apiWorkerPhase(t) === "asking" ? 2 : 1));
   const shut = { items: [], expanded: false, onToggle: noop };
+  const prefs = useIdentityPrefs();
   return (
     <nav data-sv-nav className="h-full w-full flex flex-col bg-sol-bg-alt select-none text-sol-text">
       {/* Inert: the rows are links and buttons, which the sandbox keeps from navigating. */}
@@ -90,7 +92,7 @@ export function DeskRail(_: PartProps) {
           tasks={shut}
           docs={shut}
           orgOn
-          agent={{ label: agentName(null), title: agentName(null), icon: <AnchorAvatar anchor={null} size={20} className="flex-shrink-0" /> }}
+          agent={{ label: agentName(null, prefs), title: agentName(null, prefs), icon: <AnchorAvatar anchor={null} size={20} className="flex-shrink-0" /> }}
         />
       </div>
     </nav>

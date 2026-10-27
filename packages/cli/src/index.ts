@@ -13760,7 +13760,7 @@ roleGroup
   .option("--concept <words>", "With --svg: the object it draws, in a word or two; no other role in the workspace may hold it")
   .option("--accent <color>", "With --svg: the tile's tint, one of the theme accents (default: the role's current one, else its siblings' least used)")
   .option("--generate", "Have codecast draw it: three drawings judged at sidebar size, a minute or so")
-  .option("--hint <text>", "With --generate: steer the drawing (\"something botanical\", \"not a wrench\")")
+  .option("--hint <text>", stdinText("With --generate: steer the drawing (\"something botanical\", \"not a wrench\")"))
   .option("--team <name|id>", "Team workspace")
   .option("--json", "Machine-readable output")
   .action(async (handle: string, options: any) => {

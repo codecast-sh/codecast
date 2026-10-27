@@ -30,7 +30,7 @@ function findRole(roles: readonly RoleRowLike[] | undefined, role: RoleLike): Ro
  *  the role rows (org.roles), their one home, and the caller's fields only
  *  fill in for a role the rows do not hold. Subscribes only while it draws a
  *  tile, to a signature of that role's title and icon. */
-export function useRoleTile(role: RoleLike, active: boolean) {
+function useRoleTile(role: RoleLike, active: boolean) {
   const sig = useInboxStore((s) => {
     if (!active) return "";
     const r = findRole(s.orgTree?.roles as RoleRowLike[] | undefined, role);

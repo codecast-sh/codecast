@@ -39,6 +39,8 @@ async function verify() {
   const realScopeEditors = { ...(await import("./ScopeEditors")) };
   mock.module("./ScopeEditors", () => ({ ...realScopeEditors, GatedScopeEditor: () => React.createElement("div", { "data-scope-editor": true }), InlineEdit: () => null }));
   mock.module("../RetireRoleConfirm", () => ({ RetireRoleConfirm: () => null }));
+  // The faces section redraws icons through a Convex action; no client here.
+  mock.module("../../../hooks/useRedrawRoleIcon", () => ({ useRedrawRoleIcon: () => ({ pending: null, rationale: null, run: () => {} }) }));
   mock.module("../../anchor/SlackConnect", () => ({ SlackConnect: () => null }));
   mock.module("../../ui/select-box", () => ({ SelectBox: ({ children, ...rest }: any) => React.createElement("select", rest, children) }));
   // The merge switch, the handoff banner and the split (RoleHandoffSections)
