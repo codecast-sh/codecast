@@ -1,7 +1,7 @@
 import { HostedConnectionFoot } from "./conversation/HostedConnection";
 import { HostedWordmark } from "./HostedWordmark";
-import { useCallsAvailable, useTeamFeature, useWorkspaceFeature } from "../lib/teamFeatures";
-import Link from "next/link";
+import { CallsNavRow } from "./sidebar/CallsNav";
+import { useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../lib/teamFeatures";
 import { agentName, useRootAgent } from "../hooks/useSyncAnchors";
 import { AnchorAvatar } from "./anchor/AnchorIdentity";
 import { usePathname, useRouter } from "next/navigation";
@@ -37,7 +37,7 @@ import { activeViewId, currentViewId, fitsHostedMode, VIEW_ID_KEY } from "../lib
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { toast } from "sonner";
 import { ContextMenu, CtxItem, useContextMenu } from "./ui/context-menu";
-import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, Pin, PinOff, BellOff, Lock, Phone, PhoneCall, Monitor, Smartphone, PanelRight } from "lucide-react";
+import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, Pin, PinOff, BellOff, Lock, Monitor, Smartphone, PanelRight } from "lucide-react";
 import { useBarlessShell } from "../hooks/useBarlessShell";
 import { GlobalSearch } from "./GlobalSearch";
 import { TeamSwitcher } from "./TeamSwitcher";
@@ -58,7 +58,6 @@ import { SidebarDrillStack } from "./sidebar/SidebarDrill";
 import { useSidebarDrill } from "../hooks/useSidebarDrill";
 import { FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView, orgRowsActive } from "./sidebar/SidebarNav";
 import { Surface, useHostedMode, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
-import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 
@@ -176,86 +175,6 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
 }) {
   const unread = useThreadUnread();
   return <ThreadsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} unread={unread} />;
-});
-
-// Calls' sidebar row. Isolated like ChatNavRow: presence heartbeats move
-// teammates' `in_room_key` constantly, and that must re-render one row, not
-// the rail. The live signal reads the same store fields the avatar strip
-// reads — no extra query, and honest the moment anyone joins a room.
-const CallsNavRow = memo(function CallsNavRow({
-  isActive,
-  isNarrow,
-  onMobileClose,
-}: {
-  isActive: boolean;
-  isNarrow: boolean;
-  onMobileClose?: () => void;
-}) {
-  const openCreateModal = useInboxStore((s) => s.openCreateModal);
-  // Distinct occupied rooms across the roster, plus the room I'm in myself
-  // (my own heartbeat may not have landed in the roster yet). Primitive
-  // return, so presence churn that changes nothing re-renders nobody.
-  const liveRooms = useInboxStore((s) => {
-    const keys = new Set<string>();
-    // The authoritative list (calls.getLiveRooms) plus the strip's view of it:
-    // the union keeps the dot honest before the query has landed, and adds the
-    // rooms only the server list knows about (a teammate outside my strip, a
-    // huddle whose occupants hide their room key).
-    for (const r of (s as any).liveRooms ?? []) keys.add(r.room_key);
-    for (const m of s.teamMembers ?? []) if (m?.in_room_key) keys.add(m.in_room_key);
-    if (s.call?.roomKey) keys.add(s.call.roomKey);
-    return keys.size;
-  });
-  // Calls live in the Chat window while there is one: this row is a door.
-  const away = usePoppedOut("chat");
-  return (
-    <div
-      className={`group/calls flex items-center border-l-2 transition-colors motion-reduce:transition-none ${railRowTone(isActive && !away)}${away ? " opacity-55 hover:opacity-90" : ""}`}
-    >
-      <Link
-        href="/calls"
-        onClick={onMobileClose}
-        {...paneDragProps("/calls", "Calls")}
-        data-nav-row
-        className={`flex-1 flex items-center ${isNarrow ? "justify-center" : "gap-3"} px-4 py-2.5 min-w-0`}
-        title={away ? "Calls: opens in the Chat window" : "Calls — live huddles and transcripts"}
-      >
-        <span className="relative flex-shrink-0">
-          <Phone className="w-5 h-5" strokeWidth={1.5} />
-          {/* Narrow rail is icon-only, so the live signal rides the icon. */}
-          {isNarrow && liveRooms > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-60" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-sol-green" />
-            </span>
-          )}
-        </span>
-        {!isNarrow && (
-          <>
-            <span>Calls</span>
-            {liveRooms > 0 && (
-              <span className="relative flex h-2 w-2" aria-label="Live huddle">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-60" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-sol-green" />
-              </span>
-            )}
-          </>
-        )}
-      </Link>
-      {/* Start a huddle from where you'd look for one — same modal as the
-          palette's "Start Huddle", revealed on hover like the rail's other
-          row actions. */}
-      {!isNarrow && (
-        <button
-          onClick={() => openCreateModal("huddle")}
-          className="p-1 mr-2 rounded text-sol-text-dim opacity-0 group-hover/calls:opacity-100 hover:text-sol-green transition-opacity"
-          title="Start huddle"
-        >
-          <PhoneCall className="w-3.5 h-3.5" />
-        </button>
-      )}
-    </div>
-  );
 });
 
 // The rail of pinned subsection rows — projects, saved views, channels —
@@ -453,10 +372,12 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isCalls = pathname === "/calls" || pathname?.startsWith("/calls/");
   // Per-team opt-in: no chat row (and no create-channel modal) unless the
   // active team turned chat on.
-  // The org feature is per team, default off: with it off the workspace
-  // agent row does not exist, like chat. The Org row stays: the company's
-  // goals and projects need no agents.
+  // Org and Flows are per team, default off: with one off its rows do not
+  // exist, like chat, except while the team never decided on it (an
+  // "offer"), when its row stays, marked new, and opens its landing.
   const orgOn = useWorkspaceFeature("org");
+  const orgOffer = useWorkspaceFeatureState("org") === "offer";
+  const flowsOffer = useWorkspaceFeatureState("line") === "offer";
   const changesOn = useTeamFeature("changes");
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
@@ -896,6 +817,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? (isTasks && !surfaceMode.hosted), onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? (isTasks && !surfaceMode.hosted)) })), onDrill: tasksDrill ? () => drill.open("tasks") : undefined }}
           docs={{ items: docViewItems, expanded: viewSectionOverride.docs ?? (isDocs || isPlans), onToggle: () => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) })) }}
           orgOn={orgOn}
+          offers={{ org: orgOffer, line: flowsOffer }}
           changesOn={changesOn}
           agent={{
             label: rootAgent ? agentName(rootAgent) : "Workspace agent",

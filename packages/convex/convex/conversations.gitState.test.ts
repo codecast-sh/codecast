@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { updateGitState } from "./conversations";
-import { ingestLocal } from "./repos";
+import { ingestLocal, upsertLocalCommit } from "./repos";
 import { makeFakeDb } from "./testDb";
 
 // The header's prompt line and the session link on locally published commits
@@ -47,15 +47,29 @@ describe("conversations.updateGitState", () => {
   });
 });
 
-describe("repos.ingestLocal session stamps", () => {
+describe("local commit session stamps", () => {
   const commit = (sha: string, conversation_id?: string) => ({ sha, message: "m", author_name: "a", author_email: "e", timestamp: 1, files_changed: 1, insertions: 1, deletions: 0, conversation_id });
-  test("a claimed session is written only when it belongs to the caller, and fills a row that had none", async () => {
-    const ctx = context("owner", { commits: [{ _id: "c0", sha: "0".repeat(40), repository: "acme/demo", team_id: "team", message: "m", author_name: "a", author_email: "e", timestamp: 1, files_changed: 0, insertions: 0, deletions: 0 }] });
-    ctx.db._tables.conversations.push({ _id: "foreign", user_id: "other" });
+  const unstamped = () => ({ commits: [{ _id: "c0", sha: "0".repeat(40), repository: "acme/demo", team_id: "team", message: "m", author_name: "a", author_email: "e", timestamp: 1, files_changed: 0, insertions: 0, deletions: 0 }] });
+  // CLIs up to 1.1.198 named the checkout's live session for pulled commits
+  // too, so the publish pass writes no claimed session; the reflog path does.
+  test("the publish pass ignores a claimed session", async () => {
+    const ctx = context("owner", unstamped());
     await (ingestLocal as any)._handler(ctx, {
       root: "/src/demo", repository: "acme/demo", rows: [],
-      commits: [commit("1".repeat(40), "conv"), commit("2".repeat(40), "foreign"), commit("0".repeat(40), "conv")],
+      commits: [commit("1".repeat(40), "conv"), commit("0".repeat(40), "conv")],
     });
+    for (const row of ctx.db._tables.commits) expect(row.conversation_id).toBeUndefined();
+  });
+  test("a claimed session is written only when it belongs to the caller, and fills a row that had none", async () => {
+    const ctx = context("owner", unstamped());
+    ctx.db._tables.conversations.push({ _id: "foreign", user_id: "other" });
+    const upsert = (sha: string, claimed: string) => upsertLocalCommit(ctx, {
+      userId: "owner" as any, teamId: "team" as any, repository: "acme/demo", root: "/src/demo",
+      commit: commit(sha), claimedConversationId: claimed,
+    });
+    await upsert("1".repeat(40), "conv");
+    await upsert("2".repeat(40), "foreign");
+    await upsert("0".repeat(40), "conv");
     const bySha = Object.fromEntries(ctx.db._tables.commits.map((c: any) => [c.sha[0], c]));
     expect(bySha["1"].conversation_id).toBe("conv");
     expect(bySha["2"].conversation_id).toBeUndefined();

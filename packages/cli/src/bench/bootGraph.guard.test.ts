@@ -238,7 +238,14 @@ describe("command groups stay off the boot graph", () => {
     // every config reader overlays, and the barrel's contracts/managedPolicy.ts.
     // 329 on 2026-10-26: managedInstall.ts, whether this binary is the MDM
     // .pkg's root-owned copy (self-update steps aside for it).
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(329);
+    // 327 on 2026-10-26: jsonlGenerator.ts took only encodePiCwdSlug from
+    // transcriptDirWatcher.ts, which carried recursiveWatcher.ts along; the pi
+    // slug pair moved beside claudeProjectDirName in projectPathResolver.ts.
+    // 328 on 2026-10-26: the barrel's contracts/decisionAnswers.ts, split out of
+    // contracts/machineMessages.ts for its max-lines pin. The same pass's other
+    // splits went into files already here: the resume flag readers into
+    // resumeCommand.ts, live process discovery into sessionProcessMatcher.ts.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(328);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -263,7 +270,14 @@ describe("command groups stay off the boot graph", () => {
     // overlays: contracts/managedPolicy.ts (+14.5), config/managedPolicy.ts
     // (+13.5), managedInstall.ts (+2.4), the policy guards and the enroll
     // retry hint in index.ts (4406).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4406);
+    // 4374 on 2026-10-26: the Flows feature state in contracts/teamFeatures.ts
+    // (+1.3) and the pool's flows_on read in stableContext.ts (+0.4) went past
+    // 4406; the watcher pair above leaving (-36) more than pays for them.
+    // 4379 on 2026-10-26: the max-lines splits above moved code between files
+    // already on this graph (resumeCommand.ts, sessionProcessMatcher.ts,
+    // contracts/decisionAnswers.ts), adding their headers and imports, and
+    // ccAccounts.ts grew; still under the 4406 this pass started from.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4379);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -380,7 +394,9 @@ describe("command groups stay off the boot graph", () => {
     // 515 on 2026-10-26: managedInstall.ts (above).
     // 516 on 2026-10-26: contracts/deliveryFailed.ts, the row the daemon writes
     // when it stops delivering a message (a subpath import, off the barrel).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(516);
+    // 518 on 2026-10-26, two splits for max-lines pins: tmuxPaneState.ts (the
+    // pane classifiers, out of daemon.ts) and contracts/decisionAnswers.ts (above).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(518);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

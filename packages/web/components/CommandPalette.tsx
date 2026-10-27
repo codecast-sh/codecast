@@ -85,7 +85,9 @@ import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { startHostedConversation } from "../lib/startHostedConversation";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { settleComposerAttachments } from "../lib/draftImages";
-import { chatFrecency, selectChatRail, type ChatAttachment } from "../store/chatSlice";
+import { previewQuery, withFavorites } from "../lib/paletteQuery";
+import { selectChatRail, type ChatAttachment } from "../store/chatSlice";
+import { chatFrecency } from "../store/chatFrecency";
 import { ComposerAttachButton } from "./chat/ComposerAttachButton";
 import "./chat/chat.css";
 import "./CommandPalette.css";
@@ -167,6 +169,7 @@ import {
   Shuffle,
   CalendarDays,
   Waypoints,
+  Network,
   FilePlus2,
   Terminal,
   Moon,
@@ -322,6 +325,8 @@ const GLOBAL_COMMANDS: ReadonlyArray<{
   { action: "ui.toggleShortcutsHelp", label: "Keyboard shortcuts help", icon: Keyboard, keywords: "keys bindings hotkeys cheatsheet" },
   { action: "ui.toggleLane", label: () => (isHostedMode(useInboxStore.getState()) ? LANE_SWITCH.off : LANE_SWITCH.on), icon: Sparkles, hidden: () => !simpleModeAllowedNow(), keywords: "switch everyday mode assistant mode developer mode hosted simple code terminals machines", names: ["mode", "everyday mode", "assistant mode", "developer mode"] },
   { action: "ui.openTours", label: "Tours: learn a feature on the real page", icon: Compass, keywords: "tour guide walkthrough onboarding learn how does this work help org inbox" },
+  { action: "ui.guideOrg", label: "Org guide: roles, the chart, decisions, on an example", icon: Network, keywords: "org guide tour roles head of people hire chart decisions organization agents learn turn on", names: ["org guide"] },
+  { action: "ui.guideFlows", label: "Flows guide: a change from check to ship, on an example", icon: Waypoints, keywords: "flows guide tour flow check review decide ship live flows problems line learn turn on", names: ["flows guide"] },
 ];
 
 /** A row's label, read now when it depends on state. */
@@ -1498,8 +1503,6 @@ const RECENT_RENDER_CAP = 25;
 const RECENT_IDLE_CAP = 8;
 const EMPTY_ROSTER: Device[] = [];
 
-/** A typed query as a row quotes it: trimmed, and cut short with an ellipsis
- *  so the closing quote survives the row's own truncation. */
 /** Cmd+Enter (Ctrl+Enter), drawn on the one row it runs. */
 function ModEnterCaps() {
   return (
@@ -1508,20 +1511,6 @@ function ModEnterCaps() {
       <KeyCap size="xs">&#9166;</KeyCap>
     </span>
   );
-}
-
-/** The recents pool with the person's favorites added (once each), for a
- *  typed query that ranks them all together. */
-function withFavorites<T extends { _id: unknown }>(pool: T[], favorites: T[], exclude?: readonly string[]): T[] {
-  const seen = new Set(pool.map((c) => String(c._id)));
-  const skip = new Set(exclude ?? []);
-  const added = favorites.filter((f) => !seen.has(String(f._id)) && !skip.has(String(f._id)));
-  return added.length ? [...pool, ...added] : pool;
-}
-
-function previewQuery(query: string): string {
-  const q = query.trim();
-  return q.length > 40 ? `${q.slice(0, 40)}\u2026` : q;
 }
 
 // Stable empty index handed to the mention-index selector while the palette is
