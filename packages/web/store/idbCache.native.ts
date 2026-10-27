@@ -889,3 +889,8 @@ export async function purgeLocalCache(): Promise<void> {}
 // blocked by another window. Present so the store wires one code path.
 export function setUpgradeBlockedListener(_fn: ((blocked: boolean) => void) | null) {}
 
+
+// Names the web's cross-window sync lock and channel (syncReplication.ts).
+// Mobile has one process and no other window to elect against, so any value
+// does; the real one lives in idbCache.ts beside the Dexie schema.
+export const CACHE_SCHEMA_VERSION = 0;
