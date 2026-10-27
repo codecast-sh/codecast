@@ -49,13 +49,17 @@ test("RoleIconTile renders the canonical svg, a monogram without an icon, and a 
   assert.equal(tiles[2].textContent, "F");
 });
 
-test("RoleFace draws the animal with characters on and the role's tile from the role rows with them off", async () => {
+test("RoleFace draws the animal with characters on and the role's tile from viewerRoles with them off", async () => {
   const { React, host, render } = await mount();
   const { useInboxStore } = await import("../../store/inboxStore");
   const { RoleFace } = await import("../org/RoleFace");
   const before = useInboxStore.getState();
-  afterAll(() => useInboxStore.setState({ clientState: before.clientState, orgTree: before.orgTree } as never));
-  useInboxStore.setState({ orgTree: { roles: [{ _id: "r1", short_id: "or-1", handle: "infra", name: "Infrastructure lead", icon: ICON }], anchors: [] } } as never);
+  afterAll(() => useInboxStore.setState({ clientState: before.clientState, orgTree: before.orgTree, viewerRoles: (before as any).viewerRoles } as never));
+  // The face fields live in viewerRoles; the org tree only says which role a bare handle means here.
+  useInboxStore.setState({
+    viewerRoles: { r1: { _id: "r1", short_id: "or-1", handle: "infra", name: "Infrastructure lead", icon: ICON } },
+    orgTree: { roles: [{ _id: "r1", handle: "infra" }], anchors: [] },
+  } as never);
   const face = React.createElement(RoleFace, { role: { handle: "infra", avatar: "owl" }, size: 20 });
 
   await render(face);
@@ -69,4 +73,26 @@ test("RoleFace draws the animal with characters on and the role's tile from the 
   assert.equal(host.querySelector("img"), null);
   assert.equal(tile.dataset.roleTile, ICON.concept);
   assert.equal(tile.getAttribute("aria-label"), "Infrastructure lead");
+});
+
+test("a role named by id or short id wears the rows' face; one named by handle alone keeps the face it brought", async () => {
+  const { React, host, render } = await mount();
+  const { useInboxStore } = await import("../../store/inboxStore");
+  const { RoleFace } = await import("../org/RoleFace");
+  const before = useInboxStore.getState();
+  afterAll(() => useInboxStore.setState({ clientState: before.clientState, orgTree: before.orgTree, viewerRoles: (before as any).viewerRoles } as never));
+  useInboxStore.setState((s: any) => ({
+    viewerRoles: { r1: { _id: "r1", short_id: "or-1", handle: "infra", name: "Infrastructure lead", avatar: "stag", icon: ICON } },
+    orgTree: { roles: [{ _id: "r1", handle: "infra" }], anchors: [] },
+    clientState: { ...s.clientState, ui: { ...s.clientState?.ui, show_characters: true } },
+  }) as never);
+  const both = (a: object, b: object) => React.createElement(React.Fragment, null, React.createElement(RoleFace, { role: a as never }), React.createElement(RoleFace, { role: b as never }));
+  // A chat seat names its role by short id and carries a stale face; a hire preview names a taken handle with the face being chosen.
+  await render(both({ short_id: "or-1", handle: "infra", avatar: "owl" }, { handle: "infra", avatar: "owl" }));
+  assert.deepEqual([...host.querySelectorAll("img")].map((i) => (i as HTMLElement).dataset.avatar), ["stag", "owl"]);
+
+  useInboxStore.setState((s: any) => ({ clientState: { ...s.clientState, ui: { ...s.clientState?.ui, show_characters: false } } }) as never);
+  // A template says it has no icon; it does not borrow the hired role's.
+  await render(both({ _id: "r1", handle: "infra", icon: null }, { handle: "infra", name: "Infra template", icon: null }));
+  assert.deepEqual([...host.querySelectorAll(".role-tile")].map((t) => (t as HTMLElement).dataset.roleTile), [ICON.concept, "monogram"]);
 });
