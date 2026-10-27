@@ -23,6 +23,29 @@ export function claudeProjectDirName(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
+/**
+ * Encode a working directory into pi's session-directory name, verbatim to pi's
+ * own rule (session-manager.ts): drop a leading slash, replace every `/`, `\`, `:`
+ * with `-`, and wrap in `--…--`. e.g. `/Users/ashot/src/codecast` ->
+ * `--Users-ashot-src-codecast--`, `/private/tmp` -> `--private-tmp--`.
+ */
+export function encodePiCwdSlug(cwd: string): string {
+  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+/**
+ * Best-effort inverse of encodePiCwdSlug: strip the `--…--` wrapper and turn `-` back
+ * into `/`, re-adding the leading slash. LOSSY on purpose — pi's encoder collapses
+ * `/`, `\`, `:` AND any real `-` in the path all to `-`, so a directory named
+ * `footage-app` decodes to `.../footage/app`. The session file's header `cwd`
+ * (parser.extractPiCwd) is the authoritative source for project mapping; this decoder
+ * is only the fallback for when the header is unavailable.
+ */
+export function decodePiCwdSlug(slug: string): string {
+  const inner = slug.replace(/^--/, "").replace(/--$/, "");
+  return inner ? `/${inner.replace(/-/g, "/")}` : "/";
+}
+
 export interface ResolveInput {
   // Recorded path from the conversation (often foreign — e.g. /Users/ec2-user/...)
   projectPath?: string | null;

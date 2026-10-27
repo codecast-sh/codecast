@@ -12,9 +12,9 @@ import {
   resumeReadinessPollMs,
   MAX_RESUME_READINESS_POLL_MS,
   RESUME_IN_FLIGHT_TIMEOUT_MS,
-  classifyTmuxLiveState,
   extractTmuxLiveRegion,
 } from "./daemon.js";
+import { classifyTmuxLiveState } from "./tmuxPaneState.js";
 
 // ---- 2a: readiness window tiers ----
 test("readiness floor is 30s for small/reconstituted sessions (was 15s)", () => {

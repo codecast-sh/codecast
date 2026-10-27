@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
-  classifyGlyphlessClientPaneState,
-  classifyLivePaneFor,
-  classifyTmuxLiveState,
   clientOwnsSessionStore,
   extractTmuxLiveRegion,
   mayReconstituteResumeTranscript,
 } from "./daemon.js";
+import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState } from "./tmuxPaneState.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 
 // Real settled opencode 1.18.3 TUI (captured from a live pane, whitespace trimmed

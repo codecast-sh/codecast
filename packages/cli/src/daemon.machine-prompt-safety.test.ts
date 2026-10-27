@@ -18,10 +18,12 @@ import { typedPollAnswer } from "./typedPollAnswer";
 import { redactSecrets } from "./redact";
 import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
-import { CLAUDE_TURN_STATUS_LINE } from "./daemon";
+import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 
-const source = fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
+// The fixture lifts delivery code out of daemon.ts by name; the pane classifiers
+// it calls live in tmuxPaneState.ts, so both files are read as one source.
+const source = ["./daemon.ts", "./tmuxPaneState.ts"].map(file => fs.readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); clearPromptHolds(); setPendingRedrive(null); });
 const poll = JSON.stringify({ __cc_poll: true, keys: ["Enter"], display: "Deploy" });

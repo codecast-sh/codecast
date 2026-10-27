@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { classifyTmuxLiveState, extractTmuxLiveRegion } from "./daemon.js";
+import { extractTmuxLiveRegion } from "./daemon.js";
+import { classifyTmuxLiveState } from "./tmuxPaneState.js";
 import { codexQueuedPane } from "./test-helpers/codexQueuedPane.js";
 
 describe("Codex queued-message live region", () => {

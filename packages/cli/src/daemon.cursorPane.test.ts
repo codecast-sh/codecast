@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyLivePaneFor } from "./daemon.js";
+import { classifyLivePaneFor } from "./tmuxPaneState.js";
 
 // Live cursor-agent v2026.09.28 panes, captured 2026-09-29.
 const FRESH = `  Cursor Agent

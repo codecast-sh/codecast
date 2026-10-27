@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { autoContinueArmedOnPane, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, clearUnresolvablePane, extractTmuxLiveRegion, GROK_TRUST_PANE_CAPTURE_LINES, isGrokTrustDialog, isPhantomBypassPermissionBlock, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
+import { autoContinueArmedOnPane, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, classifyBypassBlock, clearUnresolvablePane, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
+import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isGrokTrustDialog } from "./tmuxPaneState.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { CLAUDE_BYPASS_WARNING_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 

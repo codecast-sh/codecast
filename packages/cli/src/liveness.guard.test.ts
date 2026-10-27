@@ -39,10 +39,10 @@ import {
   confineToOwningDevice,
 } from "@codecast/shared/contracts";
 import {
-  livenessFromTmuxState,
   shouldMarkSessionCompleted,
   staleSessionVerdictFromProbe,
 } from "./daemon.js";
+import { livenessFromTmuxState } from "./tmuxPaneState.js";
 // The managed browser's readers, held to the same rule below (ct-49625).
 import { BrowserNotLive, isReachable, livenessProblem } from "./browser/recovery.js";
 import { authorizesReap } from "./browser/engineReap.js";

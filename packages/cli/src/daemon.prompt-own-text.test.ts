@@ -3,7 +3,8 @@
 // option 1. The delivery guard must read that as the message itself, and a
 // real dialog as a dialog.
 import { describe, expect, test } from "bun:test";
-import { classifyTmuxLiveState, extractTmuxLiveRegion, parseInteractivePrompt, promptIsOwnText } from "./daemon.js";
+import { extractTmuxLiveRegion, parseInteractivePrompt, promptIsOwnText } from "./daemon.js";
+import { classifyTmuxLiveState } from "./tmuxPaneState.js";
 
 const steps = Array.from({ length: 6 }, (_, i) => `${i + 1}. Check migration step ${i + 1} against the staging snapshot.`);
 const payload = `notes from the release review, please work through them in order.\n${steps.join("\n")}`;

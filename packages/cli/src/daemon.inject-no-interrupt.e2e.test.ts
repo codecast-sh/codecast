@@ -4,7 +4,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { awaitTmuxComposerPayload, classifyTmuxLiveState, extractTmuxLiveRegion, injectViaTmux } from "./daemon.js";
+import { awaitTmuxComposerPayload, extractTmuxLiveRegion, injectViaTmux } from "./daemon.js";
+import { classifyTmuxLiveState } from "./tmuxPaneState.js";
 import { shellQuote, spawnHarness, waitFor } from "./test-helpers/messagingHarness.js";
 import { tmuxRun } from "./tmux.js";
 import { pasteTextIntoPane } from "./tmuxPaste.js";

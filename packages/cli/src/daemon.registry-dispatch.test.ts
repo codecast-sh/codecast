@@ -15,7 +15,8 @@ import {
   parseGrokSessionFile,
   parseMuseSessionFile,
 } from "./parser.js";
-import { classifyGlyphlessClientPaneState, classifyTranscriptTailFor, sessionProcessGrepToken } from "./daemon.js";
+import { classifyTranscriptTailFor, sessionProcessGrepToken } from "./daemon.js";
+import { classifyGlyphlessClientPaneState } from "./tmuxPaneState.js";
 
 // ── Cluster 3: fresh-launch prompt-readiness pattern ────────────────────────
 // The old ternary (daemon.ts fresh-launch site) was:
