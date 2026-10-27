@@ -308,12 +308,24 @@ $project_path` (the runner now sets `$run_id`). The step asks the server
 first (`orgLineMerge.check`: the switch, the grant and its expiry, today's
 count against the limit), then lands the branch: with a pull request named in
 the handoff's evidence, `gh pr merge --rebase` once every check is green and
-the PR is open and mergeable; without one, a fast forward push of the branch
-head onto the default branch, refused when the branch is behind it. Then it
+the PR is open and mergeable; without one, a fast forward push onto the
+default branch. A branch the default branch has moved past lands its own
+commits replayed on top (authors, messages and session trailers kept, merges
+of the default branch into it dropped), but only when the default branch
+changed none of the files the branch touches since they parted and the replay
+comes out as the two merged; a branch whose files the default branch also
+changed is left, to be built again on it. A push that loses a race with
+another push to the default branch reads it again, up to three times. Then it
 records the merge (`orgLineMerge.record`): the role's `counters.merges` for
 today, `workflow_runs.merge` (sha, branch, target, PR), a `review` comment on
 the task as the role, and one line into the role's standing session so the
 role reports the merge to the person it reports to in its own words. Every
-refusal (off, no grant, limit reached, red checks, behind) prints one line
-saying the merge is left to a person and exits 0: an approved task whose
-merge waits for a person is not a failed run.
+refusal (off, no grant, limit reached, red checks, files in common with the
+default branch) prints one line saying the merge is left to a person and
+exits 0: an approved task whose merge waits for a person is not a failed run.
+Its run still ends through its landing steps (the Line pages read it as
+approved, not merged), but the task stays in review rather than done, and the
+watch a graph's watch station started is cleared, since nothing is live to
+watch (workflow_runs.runEndStatus). `cast workflow resume <task> --at merge`
+picks it up again at its merge station, now or with `--queue` when its
+machine has a free slot, once what stopped the merge is gone.
