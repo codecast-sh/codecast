@@ -9,9 +9,14 @@ import { replaceGlobals } from "../../../test-helpers/globals";
 const dom = new JSDOM("<!doctype html><div id='c'></div>", { url: "https://codecast.test/" });
 const restore = replaceGlobals({ window: dom.window, document: dom.window.document });
 const { ModRuntime, modLoadTiming } = await import("../host");
-Object.assign(modLoadTiming, { timeout: 30, retryBase: 20, retryMax: 40 });
+// The retry waits far longer than the load timeout, so a busy test machine
+// stalling the event loop cannot fire both before the test looks.
+Object.assign(modLoadTiming, { timeout: 30, retryBase: 300, retryMax: 600 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const until = async (ok: () => boolean) => {
+  for (const end = Date.now() + 2000; !ok(); await sleep(5)) if (Date.now() > end) throw new Error("timed out waiting");
+};
 const container = () => dom.window.document.getElementById("c")!;
 const frames = () => [...container().querySelectorAll("iframe")];
 const fromFrame = (frame: HTMLIFrameElement, data: unknown) =>
@@ -27,10 +32,10 @@ describe("mod load timeout", () => {
     const rt = new ModRuntime(row("a"), container());
     runtimes.push(rt);
     const first = frames()[0];
-    await sleep(40);
+    await until(() => rt.status !== "loading");
     expect(rt.status).toBe("failed");
     expect(frames()).toHaveLength(0);
-    await sleep(30);
+    await until(() => rt.status !== "failed");
     expect(rt.status).toBe("loading");
     const second = frames()[0];
     expect(second).not.toBe(first);
@@ -46,7 +51,7 @@ describe("mod load timeout", () => {
     runtimes.push(rt);
     const frame = frames()[0];
     fromFrame(frame, { type: "booted" });
-    await sleep(40);
+    await until(() => rt.status !== "loading");
     expect(rt.status).toBe("failed");
     expect(frames()).toEqual([frame]);
     const statuses: string[] = [];
