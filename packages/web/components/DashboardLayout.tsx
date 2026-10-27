@@ -35,6 +35,7 @@ import { PasskeyProbationBanner } from "./PasskeyProbationBanner";
 import { TriageBar } from "./triage/TriageBar";
 import { TriageNuxGate } from "./triage/TriageNux";
 import { TourLayer, ToursPanel } from "../tours";
+import { GuideLayer } from "../tours/guides";
 import { NewSnippetsBanner } from "./NewSnippetsBanner";
 import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { ThemeIntroAnywhere } from "./theme/ThemeIntroAnywhere";
@@ -1624,6 +1625,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       <ErrorBoundary name="Tours" level="inline">
         <ToursPanel />
         <Suspense fallback={null}><TourLayer /></Suspense>
+        <GuideLayer />
       </ErrorBoundary>
       {/* The dock portals to <body>, so this wrapper is empty (and hidden)
           until the boundary trips. A dock crash used to degrade into the

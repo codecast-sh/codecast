@@ -166,6 +166,8 @@
   background: var(--sol-text); color: var(--sol-bg); box-shadow: 0 10px 30px -14px rgba(0,0,0,.6);
 }
 .gs-spot { box-shadow: 0 0 0 2px var(--guide-accent), 0 0 0 7px color-mix(in srgb, var(--guide-accent) 18%, transparent) !important; transition: box-shadow 400ms; }
+@keyframes gs-draw { from { stroke-dashoffset: 600; } to { stroke-dashoffset: 0; } }
+@keyframes gs-fly { 0% { transform: translate(0, 0); opacity: 0; } 15% { opacity: 1; } 100% { transform: translate(176px, 40px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .gs-fade, .gs-pop, .gs-token, .gs-bar > i { transition: none; }
   .gs-live, .gs-btn[data-wait] { animation: none; }

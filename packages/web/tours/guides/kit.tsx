@@ -3,7 +3,8 @@
 // kit"). A scene is absolutely laid out on the 1040x600 stage and changes
 // only data-* states as its beat moves, so every motion is a CSS transition
 // and stepping back plays it in reverse.
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
+import { useMountEffect } from "../../hooks/useMountEffect";
 import { RoleAvatar } from "../../components/org/avatars";
 import { useInboxStore } from "../../store/inboxStore";
 
@@ -141,4 +142,15 @@ export function Msg({ from, children, you, style }: { from: ReactNode; children:
       <div className="text-[12.5px] leading-[1.5] rounded-xl px-3 py-2" style={{ background: you ? "color-mix(in srgb, var(--guide-accent) 12%, var(--sol-card))" : "var(--sol-card)", border: "1px solid color-mix(in srgb, var(--sol-border) 60%, transparent)" }}>{children}</div>
     </div>
   );
+}
+
+/** False on the first frame, true right after: lets a scene move something
+ *  from where it starts as it mounts (a token setting off, findings flying). */
+export function useArrived(delay = 80): boolean {
+  const [arrived, setArrived] = useState(false);
+  useMountEffect(() => {
+    const t = window.setTimeout(() => setArrived(true), delay);
+    return () => window.clearTimeout(t);
+  });
+  return arrived;
 }

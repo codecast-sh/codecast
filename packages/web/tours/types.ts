@@ -11,7 +11,7 @@
 // one record on the store, synced across devices (tours/seen.ts): a tour that
 // starts itself the first time someone meets a feature never starts twice.
 
-export type TourArea = "org" | "inbox" | "session" | "work" | "triggers";
+export type TourArea = "org" | "flows" | "inbox" | "session" | "work" | "triggers";
 
 export type TourStep = {
   id: string;
@@ -52,8 +52,10 @@ export type TourDef = {
   /** Null: the tour runs wherever it is started. */
   route: TourRoute | null;
   /** A spotlight tour runs through TourLayer; a modal tour has its own
-   *  screens (the inbox tour) and only shares the record and the panel. */
-  kind?: "spotlight" | "modal";
+   *  screens (the inbox tour) and only shares the record and the panel; a
+   *  guide is a whole feature played on an example (tours/guides), full
+   *  screen, wherever it is started. */
+  kind?: "spotlight" | "modal" | "guide";
   steps: TourStep[];
   /** Records written before the tours existed that count as having seen it. */
   legacy?: { tips?: string[]; ui?: string[] };
@@ -65,6 +67,7 @@ export type TourRun = { id: string; step: number; replay: boolean };
 
 export const TOUR_AREAS: { area: TourArea; label: string; accent: string }[] = [
   { area: "org", label: "Org", accent: "var(--sol-violet)" },
+  { area: "flows", label: "Flows", accent: "var(--sol-cyan)" },
   { area: "inbox", label: "Inbox", accent: "var(--sol-cyan)" },
   { area: "session", label: "Sessions", accent: "var(--sol-blue)" },
   { area: "work", label: "Tasks and plans", accent: "var(--sol-orange)" },

@@ -159,7 +159,7 @@ export function TourLayer() {
     router.push(def.route.href);
   }, [run?.id, def, onRoute, router]);
 
-  if (!run || !def || def.kind === "modal" || !onRoute) return null;
+  if (!run || !def || def.kind === "modal" || def.kind === "guide" || !onRoute) return null;
   return <Spotlight key={run.id} def={def} step={run.step} />;
 }
 

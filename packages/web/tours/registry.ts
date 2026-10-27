@@ -9,9 +9,32 @@
 // threshold or a word from the capacity model.
 import type { TourDef } from "./types";
 
-const ROLE_ROUTE = { href: "/org", match: (p: string) => /^\/org\/[^/]+/.test(p) };
+// A role's page is its standing session (/conversation/<id>), the root role's
+// /anchor, or the workspace's /org/workspace. Started anywhere else (the
+// Tours panel), the tour opens the root role's page.
+const ROLE_ROUTE = { href: "/anchor", match: (p: string) => p.startsWith("/conversation/") || p.startsWith("/anchor") || /^\/org\/[^/]+/.test(p) };
 
 export const TOURS: TourDef[] = [
+  // The two feature guides lead their areas: a whole feature on an example,
+  // played full screen (tours/guides). Their scenes load only when one starts.
+  {
+    id: "org-guide",
+    title: "Org, on an example",
+    teaches: "Roles that own areas, the chart, hiring, the Head of People, how decisions climb to you, and a role's page.",
+    area: "org",
+    route: null,
+    kind: "guide",
+    steps: [],
+  },
+  {
+    id: "flows-guide",
+    title: "Flows, on an example",
+    teaches: "A change through Check, Review, Decide and Ship, then live flows that find, fix and watch problems.",
+    area: "flows",
+    route: null,
+    kind: "guide",
+    steps: [],
+  },
   {
     id: "org-role",
     title: "A role's page",

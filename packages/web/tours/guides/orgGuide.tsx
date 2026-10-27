@@ -6,7 +6,7 @@
 // the guide kit; the copy names what a person sees in the app.
 import { Check, MoreHorizontal, Pause, Play, X } from "lucide-react";
 import { Switch } from "../../components/ui/switch";
-import { Chip, Count, Dot, Face, Msg, Person, ROLES, RoleCard, SessionRow, Show, StageButton, StatePill, Win, Wires, wirePath, type RoleKey, type WorkState } from "./kit";
+import { Chip, Count, Dot, Face, Msg, Person, ROLES, RoleCard, SessionRow, Show, StageButton, StatePill, Win, Wires, useArrived, wirePath, type RoleKey, type WorkState } from "./kit";
 import type { GuideDef, SceneProps } from "./types";
 
 const ACCENT = "var(--sol-violet)";
@@ -358,7 +358,8 @@ function Ladder({ beat, act, waiting }: SceneProps) {
   const second = beat >= 2;
   const answered = beat >= 4 || (beat === 3 && !waiting);
   // Where the question is: up one rung in the first beat, all the way up in the third.
-  const tokenY = beat === 0 ? 322 : beat === 1 ? 322 : answered ? 448 : 70;
+  const arrived = useArrived(500);
+  const tokenY = beat === 0 ? (arrived ? 322 : 448) : beat === 1 ? 322 : answered ? 448 : 70;
   const node = (id: (typeof LADDER)[number]["id"]) => {
     if (id === "you") return <div className="gs-card flex items-center gap-2.5" style={{ padding: "9px 11px" }}><Person name="You" you size={30} color={YOU_COLOR} /><div className="text-[13px] font-semibold">You</div></div>;
     if (id === "hand") return <div className="gs-card flex items-center gap-2 px-3 h-[48px]"><Dot state={answered || !second ? "working" : "needs_input"} /><span className="text-[12px] font-semibold">Fix refund retries</span><span className="text-[10.5px] gs-dim ml-auto">a session</span></div>;
