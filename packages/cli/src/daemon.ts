@@ -1938,7 +1938,7 @@ const lastHookStatus = new Map<string, HookStatusData>();
 function currentAgentStatus(sessionId: string): AgentStatus | undefined {
   return lastSentAgentStatus.get(sessionId) ?? lastHookStatus.get(sessionId)?.status;
 }
-const pendingInteractivePrompts = new Map<string, { timestamp: number; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean }>();
+const pendingInteractivePrompts = new Map<string, { timestamp: number; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; deniesAt?: number }>();
 // Last synthetic-prompt uuid emitted per session. The heartbeat clears the pending
 // guard whenever the pane momentarily stops showing a menu, so a resumed session that
 // re-renders the same blocking menu would otherwise re-emit (and re-surface, since the
@@ -14531,8 +14531,8 @@ async function findTmuxPaneForTty(tty: string, candidates: string[] = []): Promi
   return null;
 }
 
-import { COMPOSER_CARET_ROW, extractAssistantProseAbovePrompt, isComposerRow, isMenuFooterRow, limitDialogOnPane, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner, type InteractivePrompt } from "./interactivePrompt.js";
-export { extractAssistantProseAbovePrompt, limitDialogOnPane, menuFooterBelowOptions, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner } from "./interactivePrompt.js";
+import { autoDenyDeadline, COMPOSER_CARET_ROW, extractAssistantProseAbovePrompt, isComposerRow, isMenuFooterRow, limitDialogOnPane, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner, type InteractivePrompt } from "./interactivePrompt.js";
+export { autoDenyDeadline, extractAssistantProseAbovePrompt, limitDialogOnPane, menuFooterBelowOptions, parseInteractivePrompt, parseSelectDialog, spendLimitDialogBanner, usageLimitMenuBanner } from "./interactivePrompt.js";
 
 // A real AskUserQuestion's full tool_input (every question, header, option label AND
 // description, multiSelect) is handed to us by the PreToolUse/PermissionRequest hook —
@@ -14973,7 +14973,8 @@ async function checkForInteractivePrompt(
     }
 
     const now = Date.now();
-    pendingInteractivePrompts.set(sessionId, { timestamp: now, options: prompt.options, isConfirmation: prompt.isConfirmation });
+    const deniesAt = autoDenyDeadline(paneContent, now) ?? undefined;
+    pendingInteractivePrompts.set(sessionId, { timestamp: now, options: prompt.options, isConfirmation: prompt.isConfirmation, deniesAt });
 
     // Content-deterministic id: the same prompt detected by racing callers
     // upserts to one server row instead of N duplicate poll cards. A menu we
@@ -15030,7 +15031,7 @@ async function checkForInteractivePrompt(
           toolCalls: [{
             id: promptUuid,
             name: "AskUserQuestion",
-            input: { questions },
+            input: { questions, ...(deniesAt !== undefined && { deniesAt }) },
           }],
         },
       ],
@@ -23485,7 +23486,8 @@ async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record
             // The menu resolved in the terminal without an answer flowing through
             // us (Esc, a local keypress, a dialog superseded by the next render).
             // Retire the scraped card too, or it stays an open question forever.
-            await closeSyntheticPrompt(sessionId, convId, syncServiceRef, "Closed in the terminal");
+            const timedOut = pending.deniesAt !== undefined && Date.now() >= pending.deniesAt;
+            await closeSyntheticPrompt(sessionId, convId, syncServiceRef, timedOut ? "Timed out in the terminal" : "Closed in the terminal");
           } else {
             pending.timestamp = Date.now();
           }

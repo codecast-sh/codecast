@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parsePollAnswers, pollClosedLabel } from "../pollPayload";
+import { parsePollAnswers, pollClosedLabel, pollDeadline } from "../pollPayload";
 
 const q = (question: string, ...labels: string[]) => ({ question, options: labels.map(label => ({ label })) });
 
@@ -47,5 +47,13 @@ describe("a question the daemon closed", () => {
     expect(pollClosedLabel(undefined, {})).toBeNull();
     expect(pollClosedLabel({ content: "Answered from the app: Yes" }, { "Do you want to proceed?": "Yes" })).toBeNull();
     expect(pollClosedLabel({ content: "The user doesn't want to proceed with this tool use. The tool use was rejected." }, {})).toBe("Closed without an answer");
+  });
+});
+
+describe("pollDeadline", () => {
+  test("counts down in M:SS and expires at the deadline", () => {
+    expect(pollDeadline(undefined, 0)).toBeNull();
+    expect(pollDeadline(100_500, 0)).toEqual({ expired: false, left: "1:41" });
+    expect(pollDeadline(5_000, 5_000)).toEqual({ expired: true, left: "0:00" });
   });
 });

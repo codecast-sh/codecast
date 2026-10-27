@@ -470,3 +470,19 @@ export function extractAssistantProseAbovePrompt(paneText: string): string {
   while (out.length && !out[out.length - 1].trim()) out.pop();
   return out.join("\n").trim().slice(0, 6000);
 }
+
+// Claude Code times out some permission dialogs on an unattended session (the
+// dangerous-rm safety check, the auto-mode denial fallback) and prints the time
+// left above the options: "… will automatically deny this request in 1:42, …",
+// or "in about 2 minutes" under reduced motion. Returns the epoch ms it denies
+// at, read against `now` (the capture time), so a card can count down and stop
+// taking answers when the terminal has already denied.
+const AUTO_DENY_IN = /will automatically deny this request in (?:(\d+):(\d{2})\b|about (\d+) (minute|second)s?\b)/;
+export function autoDenyDeadline(paneText: string, now: number): number | null {
+  const m = paneText.split("\n").slice(-60).join(" ").replace(/\s+/g, " ").match(AUTO_DENY_IN);
+  if (!m) return null;
+  const leftMs = m[1] !== undefined
+    ? (Number(m[1]) * 60 + Number(m[2])) * 1000
+    : Number(m[3]) * (m[4] === "minute" ? 60_000 : 1000);
+  return now + leftMs;
+}

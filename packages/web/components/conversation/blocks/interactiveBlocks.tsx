@@ -11,7 +11,7 @@ import { MessageReview } from "../../MessageReview";
 import { fmtDuration } from "../../triggerCadence";
 import { monitorRowsFor, effectiveMonitorStatus, isWatchHostDead, reportSaysDead, type MonitorStatus } from "../../monitorRows";
 import { OptionPreview } from "../../tools/AskUserQuestionToolView";
-import { buildPollPayload, parsePollAnswers, pollClosedLabel, pollKeyForOption, SYNTHETIC_POLL_OPTION } from "../../../lib/pollPayload";
+import { buildPollPayload, parsePollAnswers, pollClosedLabel, pollDeadline, pollKeyForOption, POLL_TIMED_OUT, SYNTHETIC_POLL_OPTION } from "../../../lib/pollPayload";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { useInboxStore } from "../../../store/inboxStore";
 import { Radar, Terminal } from "lucide-react";
@@ -236,9 +236,24 @@ function PollCheckIcon({ className }: { className?: string }) {
   );
 }
 
-export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
-  let parsedInput: { questions?: Array<{ question: string; header?: string; detail?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; multi_select?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
-  try { parsedInput = JSON.parse(tool.input); } catch {}
+type AskUserQuestionProps = { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void };
+type AskUserQuestionInput = { questions?: Array<{ question: string; header?: string; detail?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; multi_select?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string>; deniesAt?: number };
+
+export function AskUserQuestionBlock(props: AskUserQuestionProps) {
+  let parsedInput: AskUserQuestionInput = {};
+  try { parsedInput = JSON.parse(props.tool.input); } catch {}
+  // Only a terminal dialog still counting down holds a ticking clock.
+  return typeof parsedInput.deniesAt === "number" && !props.result
+    ? <TimedAskUserQuestion {...props} parsedInput={parsedInput} deniesAt={parsedInput.deniesAt} />
+    : <AskUserQuestionCard {...props} parsedInput={parsedInput} />;
+}
+
+function TimedAskUserQuestion({ deniesAt, ...props }: AskUserQuestionProps & { parsedInput: AskUserQuestionInput; deniesAt: number }) {
+  const now = useCoarseNow(1000);
+  return <AskUserQuestionCard {...props} deadline={pollDeadline(deniesAt, now)} />;
+}
+
+function AskUserQuestionCard({ tool, result, onSendMessage, parsedInput, deadline }: AskUserQuestionProps & { parsedInput: AskUserQuestionInput; deadline?: ReturnType<typeof pollDeadline> }) {
   const [sent, setSent] = useState(() => _askUserSentState.has(tool.id));
   // Per-question selections. multiSelect questions hold several entries (checkbox
   // semantics); single-select questions hold at most one.
@@ -266,8 +281,9 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
     answers = parsePollAnswers(questions, result?.content);
   }
 
-  const isInteractive = !result && !!onSendMessage && !sent;
-  const closedLabel = pollClosedLabel(result, answers);
+  const expired = !!deadline?.expired;
+  const isInteractive = !result && !!onSendMessage && !sent && !expired;
+  const closedLabel = expired ? POLL_TIMED_OUT : pollClosedLabel(result, answers);
   const allAnswered = needsSubmit && questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
   const buildPayload = (sels: typeof selections) => buildPollPayload(questions, sels);
@@ -524,9 +540,11 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
           </div>
         );
       })}
-      {closedLabel && (
+      {closedLabel ? (
         <div className="text-[11px] text-sol-text-dim">{closedLabel}</div>
-      )}
+      ) : isInteractive && deadline ? (
+        <div className="text-[11px] text-sol-yellow tabular-nums">Auto-denies in {deadline.left}</div>
+      ) : null}
       {isInteractive && needsSubmit && (
         <div className="pt-0.5">
           <Button

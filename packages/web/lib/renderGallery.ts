@@ -369,6 +369,7 @@ export function renderGalleryMessages(now: number): Row[] {
   asst("Logged it once and moved on.");
   asst("", { tool_calls: [{ id: `interactive-prompt-${GALLERY_ID_PREFIX}closed`, name: "AskUserQuestion", input: JSON.stringify({ questions: [{ question: "Do you want to proceed?", options: [{ label: "Yes" }, { label: "No" }] }] }) }] });
   user("", { tool_results: [{ tool_use_id: `interactive-prompt-${GALLERY_ID_PREFIX}closed`, content: "Closed in the terminal" }] });
+  asst("", { tool_calls: [{ id: `interactive-prompt-${GALLERY_ID_PREFIX}timed`, name: "AskUserQuestion", input: JSON.stringify({ questions: [{ question: "Do you want to proceed?", options: [{ label: "Yes" }, { label: "No" }] }], deniesAt: Date.now() + 120_000 }) }] });
   user(formatDecisionAnswer({ id: "sd-311", question: "Ship the renderer behind a flag?", answer: "Ship now" }));
 
   section("Commands and terminal");

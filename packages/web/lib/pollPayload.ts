@@ -187,3 +187,17 @@ export function pollClosedLabel(
   const text = (result.content ?? "").trim();
   return text && text.length <= 48 && !text.includes("\n") ? text : "Closed without an answer";
 }
+
+/**
+ * A terminal dialog that times itself out carries `deniesAt` (epoch ms, read by
+ * the daemon off the dialog's own countdown). `left` is the time remaining as
+ * M:SS; once it has passed the terminal has denied, whatever the card shows.
+ */
+export function pollDeadline(deniesAt: number | undefined, now: number): { expired: boolean; left: string } | null {
+  if (typeof deniesAt !== "number") return null;
+  const ms = Math.max(0, deniesAt - now);
+  const s = Math.ceil(ms / 1000);
+  return { expired: ms === 0, left: `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` };
+}
+
+export const POLL_TIMED_OUT = "Timed out in the terminal";
