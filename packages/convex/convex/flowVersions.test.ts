@@ -133,6 +133,13 @@ describe("a flow in the library", () => {
     expect(resumed.workflow.library.versions[0].snapshot.nodes[1].prompt).toBe("Fixed eval line.");
     const unmoved = await t.mutation(api.workflow_runs.getForDaemon, { api_token: TOKEN, run_id: lost.runId });
     expect(unmoved.workflow.library.versions[0].snapshot.nodes[1].prompt).toBe("Fix it.");
+    // A run that never recorded versions moves only when named.
+    const unpinned = await run("spine");
+    await t.run((ctx) => ctx.db.patch(unpinned.runId, { status: "paused", current_node_id: "fix", flow_versions: undefined } as any));
+    expect((await t.mutation((internal as any).flowVersions.repinLiveRuns, { workflow_id: flow._id, dry: true })).moved).toHaveLength(0);
+    expect((await t.mutation((internal as any).flowVersions.repinLiveRuns, { workflow_id: flow._id, run_id: unpinned.runId })).moved).toHaveLength(1);
+    const named = await t.mutation(api.workflow_runs.getForDaemon, { api_token: TOKEN, run_id: unpinned.runId });
+    expect(named.workflow.library.versions[0].snapshot.nodes[1].prompt).toBe("Fixed eval line.");
   });
 
   test("a failed run resumed with --current-flow reads the current version; its check, or a station the version lacks, moves nothing", async () => {

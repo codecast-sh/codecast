@@ -152,7 +152,7 @@ export async function repinRunForResume(ctx: any, run: Doc<"workflow_runs">, at:
  * current station the current graph lacks keeps its versions. `dry` reports.
  */
 export const repinLiveRuns = internalMutation({
-  args: { workflow_id: v.id("workflows"), started_before: v.optional(v.number()), dry: v.optional(v.boolean()) },
+  args: { workflow_id: v.id("workflows"), started_before: v.optional(v.number()), run_id: v.optional(v.id("workflow_runs")), dry: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const flow: Doc<"workflows"> | null = await ctx.db.get(args.workflow_id);
     const { flow_versions } = await runFlowVersions(ctx, args.workflow_id);
@@ -164,7 +164,8 @@ export const repinLiveRuns = internalMutation({
     for (const status of ["pending", "running", "paused"] as const) {
       const runs: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", flow.workspace).eq("status", status)).collect();
       for (const run of runs) {
-        if (String(run.workflow_id) !== String(args.workflow_id) || !run.flow_versions?.length) continue;
+        // A run that never recorded versions reads its checkout's file; only naming it (`run_id`) moves it onto the library.
+        if (String(run.workflow_id) !== String(args.workflow_id) || (args.run_id ? String(run._id) !== String(args.run_id) : !run.flow_versions?.length)) continue;
         if (args.started_before && run.created_at >= args.started_before) continue;
         if (key(run.flow_versions) === key(flow_versions)) continue;
         if (run.current_node_id && !stations.has(run.current_node_id)) { kept.push({ run: String(run._id), why: `the current graph has no ${run.current_node_id}` }); continue; }
