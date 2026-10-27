@@ -14,7 +14,7 @@ export function ChatAuthorFace({ author, size = 22, letters = 2, className }: {
   letters?: 1 | 2;
   className?: string;
 }) {
-  if (author.role) return <RoleFace role={author.role} size={size} title={author.name} className={className} />;
+  if (author.role) return <RoleFace role={{ short_id: author.role.shortId, handle: author.role.handle, avatar: author.role.avatar, name: author.role.title }} size={size} title={author.name} className={className} />;
   return (
     <CommentAvatar
       name={author.name}
