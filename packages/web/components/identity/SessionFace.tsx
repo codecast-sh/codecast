@@ -38,7 +38,7 @@ export function SessionFace({ row: rawRow, size = 18, className, title, badge }:
     <span className={`relative inline-block flex-shrink-0 ${className ?? ""}`} style={{ width: box, height: box, lineHeight: 0 }}>
       {id.kind === "tile" ? (
         <span className="block" style={{ width: box, height: box, lineHeight: 0 }} data-identity="role">
-          <RoleIconTile tile={id.tile} size={size} title={title ?? id.name} />
+          <RoleIconTile tile={id.tile} size={size} title={title ?? id.name} block />
         </span>
       ) : (
         <span

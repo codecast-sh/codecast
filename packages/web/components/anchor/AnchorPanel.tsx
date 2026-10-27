@@ -25,6 +25,8 @@ import { Pin, PinOff, Plus } from "lucide-react";
 import { DropdownMenuItem } from "../ui/dropdown-menu";
 import { ContextMenu, CtxCheckItem, CtxHeader, CtxItem, CtxLabel, CtxSeparator, useContextMenu } from "../ui/context-menu";
 import { SessionFace } from "../identity/SessionFace";
+import { paneDragProps } from "../../lib/railRow";
+import { sessionPanePath } from "../../lib/stage";
 import { RoleOffer } from "../org/scope/RoleOffer";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -407,6 +409,7 @@ function PinChip({ pin, onMenu }: { pin: ResolvedPin; onMenu: (e: React.MouseEve
         active={active}
         desktopOnly
         data-header-pin={pin.key}
+        {...(pin.conversationId ? paneDragProps(sessionPanePath(pin.conversationId), pin.name) : {})}
       >
         {pin.anchor ? <AnchorAvatar anchor={pin.anchor} size={18} /> : <SessionPinFace id={pin.conversationId ?? ""} size={18} />}
         {dot && (
