@@ -17,7 +17,8 @@ import { stoppedNeedingYes } from "../../../../../lib/line/lineNeeds";
 import { stepLabel } from "../../../../../lib/line/runReport";
 import { bucketAt, buildOverview, DEFAULT_RANGE, finderShifts, isOverviewRange, overviewWindow, problemFigures, type OverviewWindow } from "../../../../../lib/line/problemsOverview";
 import { isStatusKey, type ProblemFacts, type ProblemNeed } from "../../../../../lib/line/problemStatus";
-import { landingOutput, newestRuns, underBarOf } from "../../../../../lib/line/problemPage";
+import { landingOutput, newestRuns } from "../../../../../lib/line/problemPage";
+import { underBarOf } from "../../../../../lib/line/flowBar";
 import { useInboxStore } from "../../../../../store/inboxStore";
 import { inStartOrder, type RankTask } from "../../../../../lib/line/lineStartOrder";
 import {

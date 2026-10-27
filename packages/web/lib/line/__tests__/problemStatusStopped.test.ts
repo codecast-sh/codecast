@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { problemStand } from "../problemStatus";
-import { underBarOf } from "../problemPage";
+import { underBarOf } from "../flowBar";
 
 const history = (outcome: { tone: string; text: string }) => ({
   attempts: [{ runId: "r1", n: 1, start: 0, end: 1, live: false, outcome, ended: null, endStep: null, unapproved: false, superseded: false, card: null }],
