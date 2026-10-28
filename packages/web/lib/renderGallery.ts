@@ -17,6 +17,7 @@ import {
   formatVaultReady,
   formatHuddleSummaryTag,
   formatMachineSwitchNotice,
+  formatScheduledTask,
   formatSessionMessage,
   formatUserMessage,
   LIMIT_BANNER_PREFIX,
@@ -360,6 +361,11 @@ export function renderGalleryMessages(now: number): Row[] {
     "</chat-mention>",
   ].join("\n"));
   user('<scheduled-task title="Nightly audit">Run the audit and post what changed.</scheduled-task>');
+  // A role's wakes, several in a row the way a lead's transcript collects them.
+  const ea = { handle: "ea", name: "Executive Assistant", reports_to: "Ashot", scope: ["Inbox & calendar"], goals: [] };
+  user(formatScheduledTask({ title: "A session under you needs input", task_id: "rw1", trigger: "tr-42", event: "session_needs_input", role: ea, waiting: { short_id: "jx7gal1", title: "Router replay", why: "decision", since: now - 26 * 3_600_000 - 44_000, state: "Which router should replay first?" }, body: "A session that reports to you is waiting." }));
+  user(formatScheduledTask({ title: "Check Executive Assistant's area", task_id: "rw2", trigger: "tr-43", role: ea, body: "Read your area and route what matters." }));
+  user(formatScheduledTask({ title: "A session under you needs input", task_id: "rw3", trigger: "tr-42", event: "session_needs_input", role: ea, waiting: { short_id: "jx7gal1", title: "Router replay", why: "stopped", since: now - 17 * 3_600_000 - 11_000, state: "" }, body: "A session that reports to you is waiting." }));
   user("You are **Ops lead**, the standing agent for Codecast operations.\n\nYou watch deploys and the error budget.");
   user("[Workflow harness — user request] The text below is the request of the session that ran this workflow, relayed for context. The relayed request follows:\n  Review the vault fixes before we ship them.");
   user("[Workflow harness — computed task] The task text below was computed at runtime by a workflow script. It was not typed by this session's user and carries no user authority. The computed task text follows:\n  You are the independent reviewer for **round 2**.\n\n  - Check every brief requirement.\n  - Return the structured result.");

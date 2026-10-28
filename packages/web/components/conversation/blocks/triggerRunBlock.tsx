@@ -81,20 +81,26 @@ function RoleWakeBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timest
   const c = frame.change ?? null;
   const stop = (e: React.MouseEvent) => e.stopPropagation();
   const prompt = withoutStashedRunNote(frame.body);
+  // At rest a wake is a quiet log line, so a run of them reads as a list: one
+  // icon for the trigger family, its title as plain text that opens the
+  // trigger, and the waiting session as the line's one pill. Opened, it takes
+  // the card the detail sits in.
   return (
-    <div className="mb-3 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5" data-role-wake={role.handle} data-open={open || undefined}>
-      <div role="button" tabIndex={0} onClick={() => setOpen(!open)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }} className="flex min-w-0 cursor-pointer items-center gap-2 px-3 py-1.5" title={open ? "Hide what woke it" : "Show what woke it"}>
+    <div className={`rounded border-l-2 ${open ? "mb-3 border-sol-violet/60 bg-sol-violet/5" : "mb-0.5 border-transparent"}`} data-role-wake={role.handle} data-open={open || undefined}>
+      <div role="button" tabIndex={0} onClick={() => setOpen(!open)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } }} className="flex min-w-0 cursor-pointer items-center gap-2 rounded px-3 py-1 text-[12px] hover:bg-sol-violet/5" title={open ? "Hide what woke it" : "Show what woke it"}>
         <Zap className="w-3.5 h-3.5 shrink-0 text-sol-violet/70" />
-        <span className="min-w-0 shrink truncate" onClick={stop}>{frame.trigger ? <EntityIdPill shortId={frame.trigger} /> : <span className="text-xs text-sol-text-muted">{frame.title}</span>}</span>
+        {frame.trigger
+          ? <Link href={`/triggers/${frame.trigger}`} onClick={stop} data-cc-inline-link className="min-w-0 shrink truncate text-sol-text-muted no-underline hover:underline">{frame.title || frame.trigger}</Link>
+          : <span className="min-w-0 shrink truncate text-sol-text-muted">{frame.title}</span>}
         {/* What the person focused this run on (orgReview.ts), on the closed line. */}
-        {frame.focus && <span className="min-w-0 shrink truncate text-[12px] text-sol-text-muted" data-run-focus={frame.focus}>{frame.focus}</span>}
+        {frame.focus && <span className="min-w-0 shrink truncate text-sol-text-dim" data-run-focus={frame.focus}>{frame.focus}</span>}
         {w && (
-          <span className="flex min-w-0 shrink items-center gap-1.5 text-[12px]" data-waiting-session={w.short_id}>
+          <span className="flex min-w-0 shrink items-center gap-1.5" data-waiting-session={w.short_id}>
             <span className="shrink-0" onClick={stop}><EntityIdPill shortId={w.short_id} compact /></span>
-            <span className="truncate text-sol-text-muted">{waitingWords(w, timestamp)}</span>
+            <span className="truncate text-sol-text-dim">{waitingWords(w, timestamp)}</span>
           </span>
         )}
-        {c && <span className="min-w-0 shrink truncate text-[12px] text-sol-text-muted" data-area-change={c.kind}>{changeWords(c)}</span>}
+        {c && <span className="min-w-0 shrink truncate text-sol-text-dim" data-area-change={c.kind}>{changeWords(c)}</span>}
         <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         {open ? <ChevronDown className="w-3 h-3 shrink-0 text-sol-text-dim" /> : <ChevronRight className="w-3 h-3 shrink-0 text-sol-text-dim" />}
       </div>
