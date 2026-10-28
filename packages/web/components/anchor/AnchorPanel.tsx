@@ -12,7 +12,7 @@
 import { useAssistantScope } from "../../lib/surfaces";
 import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { TopbarButton } from "../TopbarButton";
-import { lazy, Suspense, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, X } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -20,11 +20,13 @@ import { agentName, agentTitle, deriveAnchorStatus, useAnchors, useRootAgent, ty
 import { AnchorAvatar, AnchorScopePill } from "./AnchorIdentity";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { anchorIdentityWords, defaultPinOf, globalAssistantOf, isHeaderPinned, readHeaderPins, resolveHeaderPins, toggleHeaderPin, type ResolvedPin } from "../../lib/headerPins";
+import { anchorIdentityWords, defaultPinOf, globalAssistantOf, HEADER_PIN_DRAG_TYPE, isHeaderPinned, moveHeaderPin, readHeaderPins, resolveHeaderPins, toggleHeaderPin, type ResolvedPin } from "../../lib/headerPins";
 import { Pin, PinOff, Plus } from "lucide-react";
 import { DropdownMenuItem } from "../ui/dropdown-menu";
 import { ContextMenu, CtxCheckItem, CtxHeader, CtxItem, CtxLabel, CtxSeparator, useContextMenu } from "../ui/context-menu";
-import { SessionFace } from "../identity/SessionFace";
+import { SessionGlyph } from "../identity/SessionGlyph";
+import { AgentTypeIcon } from "../AgentTypeIcon";
+import { sessionPanePath, startPaneDrag } from "../../lib/stage";
 import { RoleOffer } from "../org/scope/RoleOffer";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -193,12 +195,15 @@ function useHeaderPins(): ResolvedPin[] {
 }
 
 /** A pinned session's face: the row's character, read through a short
- *  signature so a heartbeat elsewhere never re-renders the header. */
+ *  signature so a heartbeat elsewhere never re-renders the header. A row
+ *  with no face to wear (no character, or the viewer's characters off) shows
+ *  its agent's mark, so the pin is never an empty button. */
 function SessionPinFace({ id, size }: { id: string; size: number }) {
-  const s = useTrackedStore([(st) => { const r = st.sessions[id]; return r ? `${r.character_avatar ?? ""}|${r.character_name ?? ""}|${r.title ?? ""}|${r.standing_role_id ?? ""}` : ""; }]);
+  const s = useTrackedStore([(st) => { const r = st.sessions[id]; return r ? `${r.character_avatar ?? ""}|${r.character_name ?? ""}|${r.title ?? ""}|${r.standing_role_id ?? ""}|${r.agent_type ?? ""}` : ""; }]);
   const row = s.sessions[id];
   if (!row) return <AnchorAvatar anchor={null} size={size} />;
-  return <SessionFace row={row as any} size={size} />;
+  const mark = <span className="inline-flex shrink-0 text-sol-text-muted" style={{ width: size, height: size }}><AgentTypeIcon agentType={row.agent_type || "claude_code"} className="w-full h-full" /></span>;
+  return <SessionGlyph row={row as any} size={size} fallback={mark} />;
 }
 
 function pinOfAnchor(a: AnchorRow | null): ResolvedPin | null {
@@ -227,12 +232,17 @@ export function HeaderPins() {
   // In hosted mode's Assistant scope the assistant is the one face: a pinned
   // agent beside it would read as a second assistant.
   const assistantOnly = useAssistantScope().only;
+  const reorder = usePinReorder(pins);
   if (!orgOn || assistantOnly || (chosen && !pins.length)) return null;
   return (
-    <span className="inline-flex items-center gap-0.5" data-header-pins>
+    // The whole row takes drops, not just its faces: in the desktop app the
+    // header is the window's drag handle, and the gaps between faces would
+    // otherwise swallow the pointer mid-reorder.
+    <span className="relative inline-flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties} data-header-pins {...reorder.row}>
       {pins.length
-        ? pins.map((p) => <PinChip key={p.key} pin={p} onMenu={(e) => menu.open(e, p)} />)
+        ? pins.map((p) => <PinChip key={p.key} pin={p} onMenu={(e) => menu.open(e, p)} drag={reorder.chip(p)} />)
         : <HirePinChip hasRoot={!!root} onMenu={(e) => menu.open(e, null)} />}
+      {reorder.marker}
       <PinMenu state={menu} />
     </span>
   );
@@ -254,6 +264,95 @@ function targetOf(pin: ResolvedPin): { kind: "anchor" | "session"; id: string } 
 function pinIdOf(pin: ResolvedPin): { kind: "role" | "session"; id: string } | null {
   if (pin.pin) return pin.pin;
   return pin.anchor?.role ? { kind: "role", id: String(pin.anchor.role._id) } : null;
+}
+
+type PinDragProps = {
+  ref: (el: HTMLElement | null) => void;
+  draggable: boolean;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+  className: string;
+};
+
+/** A row of pin faces that drag. Each face carries its session as a pane
+ *  (dropped on the stage it splits, lib/stage) and, when it is a chosen pin,
+ *  its own key: dropped back on its row it moves there, with a bar marking
+ *  where it lands. The header and the panel's strip are the same list, so a
+ *  move in either reorders both. */
+function usePinReorder(pins: ResolvedPin[]) {
+  const els = useRef(new Map<string, HTMLElement>());
+  // The face in the air, readable during dragover (the payload is sealed then).
+  const dragging = useRef<string | null>(null);
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
+  const [slot, setSlot] = useState<{ index: number; x: number } | null>(null);
+
+  const end = useCallback(() => {
+    dragging.current = null;
+    setDraggingKey(null);
+    setSlot(null);
+  }, []);
+
+  const chip = (p: ResolvedPin): PinDragProps => ({
+    ref: (el) => { if (el) els.current.set(p.key, el); else els.current.delete(p.key); },
+    draggable: !!p.pin || !!p.conversationId,
+    onDragStart: (e) => {
+      if (p.conversationId) startPaneDrag(e, { path: sessionPanePath(p.conversationId), title: p.name });
+      if (!p.pin) return;
+      e.dataTransfer.setData(HEADER_PIN_DRAG_TYPE, p.key);
+      if (!p.conversationId) e.dataTransfer.effectAllowed = "move";
+      dragging.current = p.key;
+      setDraggingKey(p.key);
+    },
+    onDragEnd: end,
+    className: draggingKey === p.key ? "opacity-40" : "",
+  });
+
+  const row = {
+    onDragOver: (e: React.DragEvent<HTMLElement>) => {
+      const key = dragging.current;
+      if (!key || !e.dataTransfer.types.includes(HEADER_PIN_DRAG_TYPE)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      // The slot is the first face whose midpoint lies right of the pointer.
+      let index = pins.length;
+      for (let i = 0; i < pins.length; i++) {
+        const r = els.current.get(pins[i].key)?.getBoundingClientRect();
+        if (r && e.clientX < r.left + r.width / 2) { index = i; break; }
+      }
+      const from = pins.findIndex((p) => p.key === key);
+      if (index === from || index === from + 1) { setSlot(null); return; }
+      // The bar sits in the gap before the slot's face, or after the last one.
+      const box = e.currentTarget.getBoundingClientRect();
+      const left = index < pins.length ? els.current.get(pins[index].key)?.getBoundingClientRect() : null;
+      const right = index > 0 ? els.current.get(pins[index - 1].key)?.getBoundingClientRect() : null;
+      const edge = left && right ? (right.right + left.left) / 2 : left ? left.left - 1 : right ? right.right + 1 : 0;
+      const x = Math.round(edge - box.left + e.currentTarget.scrollLeft);
+      setSlot((cur) => (cur && cur.index === index && cur.x === x ? cur : { index, x }));
+    },
+    onDragLeave: (e: React.DragEvent<HTMLElement>) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setSlot(null);
+    },
+    onDrop: (e: React.DragEvent<HTMLElement>) => {
+      const key = dragging.current;
+      if (!key || !e.dataTransfer.types.includes(HEADER_PIN_DRAG_TYPE)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const moved = pins.find((p) => p.key === key)?.pin;
+      if (moved && slot) moveHeaderPin(moved, pins[slot.index]?.pin ?? null);
+      end();
+    },
+  };
+
+  const marker = slot && (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute top-1/2 h-5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sol-cyan"
+      style={{ left: slot.x }}
+      data-pin-drop-marker
+    />
+  );
+
+  return { chip, row, marker };
 }
 
 /** Every role the header can pin: the person's assistant first, then each
@@ -345,25 +444,29 @@ function PinMenu({ state }: { state: ReturnType<typeof useContextMenu<ResolvedPi
  *  the Pin button that adds or removes one, where the person already is. */
 function PinStrip({ pins, shownKey }: { pins: ResolvedPin[]; shownKey: string | null }) {
   const menu = useContextMenu<ResolvedPin | null>();
+  const reorder = usePinReorder(pins);
   return (
-    <div className="shrink-0 flex items-center gap-1 px-2 h-9 border-b border-sol-border/60 overflow-x-auto scrollbar-none" data-pin-strip>
+    <div className="relative shrink-0 flex items-center gap-1 px-2 h-9 border-b border-sol-border/60 overflow-x-auto scrollbar-none" data-pin-strip {...reorder.row}>
       {pins.map((p) => {
         const on = p.key === shownKey;
+        const drag = reorder.chip(p);
         return (
           <button
             key={p.key}
             type="button"
+            {...drag}
             onClick={() => useInboxStore.getState().openAnchorPanel(targetOf(p))}
             onContextMenu={(e) => menu.open(e, p)}
             title={`${p.name} · ${p.subtitle}`}
             aria-pressed={on}
-            className={`shrink-0 inline-flex items-center gap-1.5 h-6 pl-0.5 pr-2 rounded-full text-[11.5px] transition-colors ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/50"}`}
+            className={`shrink-0 inline-flex items-center gap-1.5 h-6 pl-0.5 pr-2 rounded-full text-[11.5px] transition-[color,background-color,opacity] ${drag.className} ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/50"}`}
           >
             {p.anchor ? <AnchorAvatar anchor={p.anchor} size={18} /> : <SessionPinFace id={p.conversationId ?? ""} size={18} />}
             <span className="truncate max-w-[110px]">{p.name}</span>
           </button>
         );
       })}
+      {reorder.marker}
       <button
         type="button"
         onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); menu.openAt(r.left, r.bottom + 4, null); }}
@@ -379,7 +482,7 @@ function PinStrip({ pins, shownKey }: { pins: ResolvedPin[]; shownKey: string | 
   );
 }
 
-function PinChip({ pin, onMenu }: { pin: ResolvedPin; onMenu: (e: React.MouseEvent) => void }) {
+function PinChip({ pin, onMenu, drag }: { pin: ResolvedPin; onMenu: (e: React.MouseEvent) => void; drag: PinDragProps }) {
   const now = useCoarseNow(30_000);
   const open = useInboxStore((st) => st.anchorPanel.open);
   const target = useInboxStore((st) => st.anchorPanel.target);
@@ -407,6 +510,7 @@ function PinChip({ pin, onMenu }: { pin: ResolvedPin; onMenu: (e: React.MouseEve
         active={active}
         desktopOnly
         data-header-pin={pin.key}
+        {...drag}
       >
         {pin.anchor ? <AnchorAvatar anchor={pin.anchor} size={18} /> : <SessionPinFace id={pin.conversationId ?? ""} size={18} />}
         {dot && (

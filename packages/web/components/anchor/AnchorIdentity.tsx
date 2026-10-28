@@ -20,17 +20,17 @@ import { HEAD_OF_PEOPLE_HANDLE, HEAD_OF_PEOPLE_NAME } from "../org/orgStaffingTy
 /** The root role's face before a workspace has one (org-staffing.md S22):
  *  the head of people's default face, the same one its page shows once hired,
  *  so nothing on the way in looks like a different thing from what arrives. */
-export function HeadOfPeopleFace({ className, size = 16 }: { className?: string; size?: number }) {
-  return <RoleFace role={{ handle: HEAD_OF_PEOPLE_HANDLE, avatar: null, name: HEAD_OF_PEOPLE_NAME }} size={size} className={className} />;
+export function HeadOfPeopleFace({ className, size = 16, bare }: { className?: string; size?: number; bare?: boolean }) {
+  return <RoleFace role={{ handle: HEAD_OF_PEOPLE_HANDLE, avatar: null, name: HEAD_OF_PEOPLE_NAME }} size={size} className={className} bare={bare} />;
 }
 
 type Identity = Pick<AnchorRow, "bot_name" | "bot_avatar" | "scope_type" | "team_name"> & Partial<Pick<AnchorRow, "role" | "name">>;
 
 /** The role's face when the row is a seat; else the avatar, else the glyph on
  *  a tinted tile. Same shape at every size. */
-export function AnchorAvatar({ anchor, size = 28, className = "" }: { anchor: Identity | null | undefined; size?: number; className?: string }) {
+export function AnchorAvatar({ anchor, size = 28, className = "", bare }: { anchor: Identity | null | undefined; size?: number; className?: string; /** RoleFace bare: the glyph alone, for a nav rail. */ bare?: boolean }) {
   const name = agentName(anchor);
-  if (anchor?.role) return <RoleFace role={anchor.role} size={size} className={`shrink-0 ${className}`} title={name} />;
+  if (anchor?.role) return <RoleFace role={anchor.role} size={size} className={`shrink-0 ${className}`} title={name} bare={bare} />;
   const style = { width: size, height: size };
   const radius = size >= 32 ? "rounded-lg" : "rounded-md";
   return (
@@ -39,7 +39,7 @@ export function AnchorAvatar({ anchor, size = 28, className = "" }: { anchor: Id
       alt={name}
       className={`${radius} object-cover ${className}`}
       style={style}
-      fallback={<HeadOfPeopleFace size={size} className={`shrink-0 ${className}`} />}
+      fallback={<HeadOfPeopleFace size={size} className={`shrink-0 ${className}`} bare={bare} />}
     />
   );
 }
