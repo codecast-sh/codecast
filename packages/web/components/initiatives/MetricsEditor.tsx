@@ -5,26 +5,15 @@
 // shape (contracts/initiative InitiativeMetric).
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { INITIATIVE_METRICS_MAX, metricKeyOf, type InitiativeMetric } from "@codecast/shared/contracts/initiative";
+import { INITIATIVE_METRICS_MAX, type InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { formatSeriesValue } from "@codecast/shared/contracts/ingest";
 import type { OpsWatch } from "../ops/opsTypes";
 import { FormButtons, GhostButton } from "./formBits";
+import { draftOf, metricsOfDraft, type Draft } from "./metricsDraft";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
 const DIM = "var(--sol-text-dim)";
 const FIELD = "h-7 rounded-md border bg-transparent px-2 text-[12.5px] outline-none placeholder:text-sol-text-dim focus:border-sol-cyan/60";
-
-type Draft = { name: string; target: string; series: string; guardrail: boolean };
-const draftOf = (metrics: readonly InitiativeMetric[]): Draft[] =>
-  metrics.length ? metrics.map((m) => ({ name: m.name, target: m.target, series: m.series ?? "", guardrail: !!m.guardrail })) : [{ name: "", target: "", series: "", guardrail: false }];
-
-/** The drafts as the metrics a write takes: rows missing a name or a target are dropped. */
-export function metricsOfDraft(draft: readonly Draft[]): InitiativeMetric[] {
-  return draft
-    .map((m) => ({ name: m.name.trim(), target: m.target.trim(), series: m.series, guardrail: m.guardrail }))
-    .filter((m) => m.name && m.target)
-    .map((m) => ({ key: metricKeyOf(m.name), name: m.name, target: m.target, ...(m.series ? { series: m.series } : {}), ...(m.guardrail ? { guardrail: true } : {}) }));
-}
 
 const watchLabel = (w: OpsWatch) => `${w.name}${w.last_value !== null ? ` · ${formatSeriesValue(w.last_value, w.unit)}` : ""}`;
 

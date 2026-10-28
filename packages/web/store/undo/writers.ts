@@ -273,6 +273,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
     "Owned triggers. triggerAction pause/resume, setTriggerInterval and editTrigger carry an inverse naming the opposite verb, the prior interval or the prior prompt and schedule; run now, cancel, reactivate and delete are never undoable.",
   foreignTriggers: "Triggers the viewer manages but does not own; the same verbs and inverses as agentTasks.",
   agentDefinitions: "Written only by deletes, which are never undoable.",
+  teamKitItems: "Written only by shareToKit, a publish that creates the item, and removeKitItem, which uninstalls it on every machine; both never undoable.",
   agentChains: "Written only by deletes, which are never undoable.",
   secrets: "Written by updateSecretMeta, whose spec carries an inverse naming the prior fields; the create stub, removeSecret and setSecretAskFirst (its off direction goes through a confirm) are never undoable.",
   issueSyncSources: "Integration settings (add, update, remove a source); settings are never undoable.",

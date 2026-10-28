@@ -8,7 +8,7 @@
 import { ORG_SESSION_KINDS, sessionDestination, type OrgFileSessionChange } from "./orgSessionFiling";
 export { ORG_SESSION_KINDS, sessionDestination, type OrgFileSessionChange, type OrgSessionDestination } from "./orgSessionFiling";
 import { autonomyOn, trustForSwitch } from "./roleAutonomy";
-import { INITIATIVE_RECORD_MAX } from "./initiative";
+import { INITIATIVE_METRICS_MAX, INITIATIVE_RECORD_MAX } from "./initiative";
 import { everyWords } from "./rolePlaybook";
 export { everyWords } from "./rolePlaybook";
 import { DEFAULT_LINE_SLUG, LINE_SLUG_RE } from "./lineSlug";
@@ -192,7 +192,8 @@ export type OrgUpgradeChange = { kind: "upgrade"; instance: string; template: st
 // name. `title` on the two changes to an existing initiative is its title,
 // carried so the row reads cold in a store that does not hold the row.
 /** How a goal is measured: a name and the number to reach ("Weekly active teams", "1000"). At most two. */
-export type OrgInitiativeMetric = { name: string; target: string };
+/** A goal's number as a proposal names it: the goal's InitiativeMetric without its key (derived from the name), read live from `series` (mw-N) when it names one, and a guardrail when the work must not make it worse. */
+export type OrgInitiativeMetric = { name: string; target: string; series?: string; guardrail?: boolean };
 /** A step on the way to a goal, with the day it is due (unix ms) when one was named. */
 export type OrgInitiativeMilestone = { title: string; date?: number };
 /** The written half of a goal's intent record (I5) a change may carry: why
@@ -545,11 +546,16 @@ export function orgChangeError(raw: any): string | null {
   return null;
 }
 
-/** One or two metrics, each { name, target }, or absent. */
+/** Up to INITIATIVE_METRICS_MAX metrics, each { name, target, series?, guardrail? }, or absent. */
 function metricsError(kind: string, raw: unknown): string | null {
   if (raw === undefined) return null;
-  if (!Array.isArray(raw) || raw.length > 2) return `${kind} metrics is a list of at most two { name, target }: the numbers the goal is measured by`;
-  for (const m of raw) if (!m || typeof m !== "object" || !nonEmpty((m as any).name) || !nonEmpty((m as any).target)) return `${kind} metrics entries are { name, target }, both strings ("Weekly active teams", "1000")`;
+  if (!Array.isArray(raw) || raw.length > INITIATIVE_METRICS_MAX) return `${kind} metrics is a list of at most ${INITIATIVE_METRICS_MAX} { name, target, series?, guardrail? }: the numbers the goal is measured by`;
+  for (const m of raw) {
+    if (!m || typeof m !== "object" || !nonEmpty((m as any).name) || !nonEmpty((m as any).target)) return `${kind} metrics entries are { name, target }, both strings ("Weekly active teams", "1000")`;
+    const { series, guardrail } = m as any;
+    if (series !== undefined && (typeof series !== "string" || !/^mw-\d+$/i.test(series.trim()))) return `${kind} metrics series is a metric watch's short id (mw-N), the live series the number reads`;
+    if (guardrail !== undefined && typeof guardrail !== "boolean") return `${kind} metrics guardrail is true or false`;
+  }
   return null;
 }
 
@@ -1012,7 +1018,7 @@ function recordEffect(c: OrgInitiativeRecord): string {
   ].filter(Boolean).join(" ");
 }
 /** "Weekly active teams (target 1,000) and Paying teams (target 40)" */
-export const metricsWords = (metrics: ReadonlyArray<OrgInitiativeMetric>): string => andList(metrics.map((m) => `${m.name.trim()} (target ${m.target.trim()})`));
+export const metricsWords = (metrics: ReadonlyArray<OrgInitiativeMetric>): string => andList(metrics.map((m) => `${m.name.trim()} (${[`target ${m.target.trim()}`, m.series ? `live from ${m.series.trim().toLowerCase()}` : "", m.guardrail ? "a guardrail" : ""].filter(Boolean).join(", ")})`));
 
 /**
  * A derived ask's words, for a person reading cold: no handle, no
@@ -1087,7 +1093,7 @@ function askWords(names?: OrgAskNames) {
       case "initiative": return `A new goal, ${c.title.trim()}, appears on the goals page with ${projects(c.projects)} under it${c.owner ? ` and ${parent(c.owner)} as its owner` : " and no owner yet"}${c.parent ? `, feeding ${names?.initiative?.(c.parent) ?? c.parent}` : ""}${c.metrics?.length ? `. It is read against ${metricsWords(c.metrics)}` : ""}. ${recordEffect(c) ? `${fullStop(c.description)} ${recordEffect(c)}` : c.description.trim()}`;
       case "initiative_projects": return `${projects(c.projects)} ${c.projects.length === 1 ? "counts" : "count"} toward the goal from now on, and its owner's area grows to include ${c.projects.length === 1 ? "it" : "them"}.`;
       case "initiative_owner": return `${parent(c.owner)} drives the goal from now on: its health is what ${c.owner.trim().toLowerCase() === "me" ? "you say" : "they say"}, and the goal's projects join their area.`;
-      case "initiative_shape": return `${c.parent !== undefined ? (c.parent ? `The goal feeds ${names?.initiative?.(c.parent) ?? c.parent} from now on, and every role under it sees that chain. ` : "The goal stands on its own at the top level. ") : ""}${c.metrics !== undefined ? (c.metrics.length ? `On track means against ${metricsWords(c.metrics)}; its owner reports the numbers. ` : "It is no longer read against a number. ") : ""}${recordEffect(c)}`.trim();
+      case "initiative_shape": return `${c.parent !== undefined ? (c.parent ? `The goal feeds ${names?.initiative?.(c.parent) ?? c.parent} from now on, and every role under it sees that chain. ` : "The goal stands on its own at the top level. ") : ""}${c.metrics !== undefined ? (c.metrics.length ? `On track means against ${metricsWords(c.metrics)}; ${c.metrics.every((m) => m.series) ? "the numbers read live" : c.metrics.some((m) => m.series) ? "the live ones read themselves and its owner reports the rest" : "its owner reports the numbers"}. ` : "It is no longer read against a number. ") : ""}${recordEffect(c)}`.trim();
       default: return describeOrgChange(c);
     }
   };

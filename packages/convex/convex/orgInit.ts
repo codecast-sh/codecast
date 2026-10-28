@@ -1819,7 +1819,9 @@ export async function applyInitiativeShape(ctx: Ctx, userId: Id<"users">, bounda
   const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
   const parent = p.parent ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
   const sameParent = p.parent === undefined || String(initiative.parent_initiative_id ?? "") === String(parent?._id ?? "");
-  const sameMetrics = p.metrics === undefined || JSON.stringify((initiative.metrics ?? []).map((m: any) => [m.name, m.target])) === JSON.stringify(p.metrics.map((m) => [m.name.trim(), m.target.trim()]));
+  // A number's series and guardrail are part of it: a proposal that only links a series is a change.
+  const metricShape = (m: { name: string; target: string; series?: string; guardrail?: boolean }) => [m.name.trim(), m.target.trim(), m.series?.trim().toLowerCase() ?? null, !!m.guardrail];
+  const sameMetrics = p.metrics === undefined || JSON.stringify((initiative.metrics ?? []).map(metricShape)) === JSON.stringify(p.metrics.map(metricShape));
   // What each list gains, and what it has no room for: a full list drops the entry, never the whole change.
   const crowded: string[] = [];
   const adds = <T>(list: "milestones" | "questions" | "decisions", words: "title" | "text", given: readonly T[] | undefined, wordsOf: (e: T) => string): T[] => {

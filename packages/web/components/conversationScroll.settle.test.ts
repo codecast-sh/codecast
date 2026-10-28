@@ -36,13 +36,15 @@ function fakeFeed(rowTop: number) {
 }
 const virtualizer = { scrollToIndex() {} };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Until `ready` holds or `ms` pass: a loaded runner can be slower than any fixed sleep. */
+const until = async (ready: () => boolean, ms = 2000) => { const end = Date.now() + ms; while (!ready() && Date.now() < end) await sleep(10); };
 const rowOffset = (feed: ReturnType<typeof fakeFeed>) => feed.rowTop - feed.scrollTop;
 
 test("pins the row at the offset, reports once, and keeps correcting a re-measure above it", async () => {
   const feed = fakeFeed(3000);
   let settled = 0;
   settleTimelineItemAtOffset(feed as any, virtualizer, 7, OFFSET, { initialDelayMs: 0, watchMs: 400, onSettled: () => { settled++; } });
-  await sleep(80);
+  await until(() => settled > 0);
   expect(rowOffset(feed)).toBe(OFFSET);
   expect(settled).toBe(1);
   // Rows above measure taller: the content grows and the row moves down with it.

@@ -331,7 +331,8 @@ function OrgGraphInner(props: OrgGraphProps) {
   const markable = useCallback((id: string) => { const n = byId.get(id); return !!n && DRAGGABLE.has(n.kind) && !("ghost" in n && n.ghost) && (canDrag ? canDrag(n) : true); }, [byId, canDrag]);
   const toggleMark = useCallback((id: string) => setMarked((m) => { const next = new Set(m); if (!next.delete(id)) next.add(id); return next; }), []);
   const clearMarks = useCallback(() => setMarked((m) => (m.size ? NONE_MARKED : m)), []);
-  useEventListener("keydown", (e) => { if (e.key === "Escape") clearMarks(); });
+  // Escape lets go of the marked cards; only listening while some are marked keeps a resting chart off the window.
+  useEventListener("keydown", (e) => { if (e.key === "Escape") clearMarks(); }, marked.size ? window : null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   // The goals lens draws owner edges only for the card under the pointer or selected.
   const [hoverId, setHoverId] = useState<string | null>(null);

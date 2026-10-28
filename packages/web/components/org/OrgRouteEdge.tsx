@@ -26,7 +26,7 @@ function rounded(points: { x: number; y: number }[], r = 10): string {
   return `${d} L ${last.x},${last.y}`;
 }
 
-export function routePath(sx: number, sy: number, tx: number, ty: number, d: RouteEdgeData): string {
+function routePath(sx: number, sy: number, tx: number, ty: number, d: RouteEdgeData): string {
   const left = tx - d.tw / 2;
   const midY = ty + d.th / 2;
   if (d.route === "spine") {

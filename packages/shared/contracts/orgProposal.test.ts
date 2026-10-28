@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyProposalChanges, capsWords, extractOrgProposal, normalizeAutonomyChange, orgProposalBlock, orgProposalVerdict, recordChangeParts, changeLine } from "./orgProposal";
+import { applyProposalChanges, capsWords, extractOrgProposal, metricsWords, normalizeAutonomyChange, orgProposalBlock, orgProposalVerdict, recordChangeParts, changeLine } from "./orgProposal";
 
 describe("org proposal block", () => {
   test("round trips through a decision context", () => {
@@ -302,7 +302,7 @@ describe("goal changes", () => {
     expect(changeLine({ kind: "initiative_shape", initiative: "in-2", parent: null })).toBe("Make the goal in-2 a top level goal");
     expect(changeLine({ kind: "initiative_shape", initiative: "in-2", metrics: [] })).toBe("Put the goal in-2 with no metric");
     expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2" })).toContain("needs a parent, metrics, why");
-    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", metrics: [{ name: "A", target: "1" }, { name: "B", target: "2" }, { name: "C", target: "3" }] })).toContain("at most two");
+    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", metrics: ["A", "B", "C", "D", "E"].map((name, i) => ({ name, target: String(i + 1) })) })).toContain("at most 4");
     expect(orgChangeError({ ...GOOD.initiative, metrics: [{ name: "A" }] })).toContain("{ name, target }");
   });
   // The intent record (I5 "Proposals"): a goal change may carry why, done
@@ -1219,4 +1219,15 @@ test("a budget change can remove a daily limit: null is no limit, and reads that
   expect(capsWords({ hands_per_day: null, wakes_per_day: 12 })).toBe("may use up to 12 wakes a day and has no daily limit on hands");
   expect(capsWords({ cards: 5 })).toBe("may hold up to 5 open cards");
   expect(capsWords({})).toBe("");
+});
+
+describe("a goal's numbers in a proposal carry their series and guardrails", () => {
+  test("up to four numbers, each live from a series or marked a guardrail, check and read in words", () => {
+    const shape = (metrics: unknown) => orgChangeError({ kind: "initiative_shape", initiative: "in-9", metrics } as any);
+    expect(shape([{ name: "Dollars per intro", target: "under $250", series: "mw-12" }, { name: "Bounce rate", target: "under 3%", series: "mw-14", guardrail: true }, { name: "Intros a week", target: "40" }, { name: "Replies", target: "100" }])).toBeNull();
+    expect(shape([1, 2, 3, 4, 5].map((i) => ({ name: `n${i}`, target: "1" })))).toContain("at most 4");
+    expect(shape([{ name: "Dollars per intro", target: "under $250", series: "in-4" }])).toContain("metric watch's short id");
+    expect(shape([{ name: "Bounce rate", target: "under 3%", guardrail: "yes" }])).toContain("guardrail is true or false");
+    expect(metricsWords([{ name: "Dollars per intro", target: "under $250", series: "MW-12" }, { name: "Bounce rate", target: "under 3%", guardrail: true }])).toBe("Dollars per intro (target under $250, live from mw-12) and Bounce rate (target under 3%, a guardrail)");
+  });
 });
