@@ -479,6 +479,11 @@ host and token: cast integrations connect <provider>`,
     load: () => import("./eventsCommand.js").then((m) => m.registerEventsCommand),
   },
   {
+    token: "timeline",
+    description: "Timeline: a workspace's tasks opened/closed and changes landed (--since, --after, --digest-since)",
+    load: () => import("./timelineCommand.js").then((m) => m.registerTimelineCommand),
+  },
+  {
     token: "replay",
     description: `Replays: what a person did before something broke, as text, as frames of the page and as a repro
 

@@ -36,7 +36,7 @@ async function newest<T>(ctx: Ctx, table: string, index: string, field: string, 
 }
 
 /** A problem's task: its events (opened, merged or closed) from one row. */
-function problemEvents(t: Doc<"tasks">, ws: string, intoRef: (id: Id<"tasks">) => string | undefined): TimelineEvent[] {
+export function problemEvents(t: Doc<"tasks">, ws: string, intoRef: (id: Id<"tasks">) => string | undefined): TimelineEvent[] {
   const base = { workspace: ws, source: "line", project_id: t.project_id ? String(t.project_id) : undefined, title: t.title, task: String(t._id), task_ref: t.short_id };
   const out: TimelineEvent[] = [{
     ...base, _id: `task:${t._id}:opened`, at: t.created_at, kind: "problem_opened",
