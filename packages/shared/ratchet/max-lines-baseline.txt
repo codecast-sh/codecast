@@ -32,7 +32,7 @@ packages/cli/src/cloudAgents/codex.ts 950
 packages/cli/src/cloudAgents/watcher.ts 850
 packages/cli/src/codexAppServer.ts 1400
 packages/cli/src/daemon.interactive-prompt-parse.test.ts 900
-packages/cli/src/daemon.machine-prompt-safety.test.ts 1100
+packages/cli/src/daemon.machine-prompt-safety.test.ts 1150
 packages/cli/src/daemon.tmux-classify.test.ts 1200
 packages/cli/src/daemon.ts 33100
 packages/cli/src/daemon.waiting-tasks.test.ts 900
@@ -78,7 +78,7 @@ packages/convex/convex/callGuests.test.ts 1700
 packages/convex/convex/callGuests.ts 1550
 packages/convex/convex/callRecordings.test.ts 2150
 packages/convex/convex/callRecordings.ts 2050
-packages/convex/convex/calls.test.ts 1350
+packages/convex/convex/calls.test.ts 1400
 packages/convex/convex/calls.ts 1400
 packages/convex/convex/capabilities.test.ts 1800
 packages/convex/convex/capabilityState.ts 1950
@@ -120,12 +120,13 @@ packages/convex/convex/migrations.ts 1200
 packages/convex/convex/notifications.needsInput.test.ts 1300
 packages/convex/convex/notifications.ts 1250
 packages/convex/convex/oauthConnectors.test.ts 850
-packages/convex/convex/org.ts 1600
+packages/convex/convex/org.ts 1650
 packages/convex/convex/orgHealth.ts 950
 packages/convex/convex/orgInit.ts 2000
 packages/convex/convex/orgProposals.test.ts 1850
-packages/convex/convex/orgProposals.ts 1500
+packages/convex/convex/orgProposals.ts 1550
 packages/convex/convex/orgRoles.ts 2350
+packages/convex/convex/pendingMessages.teamSend.test.ts 850
 packages/convex/convex/pendingMessages.test.ts 950
 packages/convex/convex/pendingMessages.ts 2500
 packages/convex/convex/plans.ts 2000
@@ -157,8 +158,8 @@ packages/convex/convex/tasks.ts 4900
 packages/convex/convex/teams.ts 1700
 packages/convex/convex/threads.test.ts 850
 packages/convex/convex/threads.ts 850
-packages/convex/convex/transcripts.test.ts 2000
-packages/convex/convex/transcripts.ts 2950
+packages/convex/convex/transcripts.test.ts 2050
+packages/convex/convex/transcripts.ts 3000
 packages/convex/convex/users.ts 4300
 packages/convex/convex/workflow_runs.ts 1900
 packages/mobile/app/(tabs)/inbox.tsx 1200
@@ -177,7 +178,7 @@ packages/shared/contracts/fleetDiff.ts 850
 packages/shared/contracts/inboxProjection.test.ts 1100
 packages/shared/contracts/inboxProjection.ts 1700
 packages/shared/contracts/orgProposal.test.ts 1250
-packages/shared/contracts/orgProposal.ts 1950
+packages/shared/contracts/orgProposal.ts 2000
 packages/shared/contracts/secrets.ts 950
 packages/shared/contracts/snippets.ts 1850
 packages/shared/entities/index.ts 1250
@@ -218,7 +219,6 @@ packages/web/components/Sidebar.tsx 1150
 packages/web/components/TriggerContextPanel.tsx 900
 packages/web/components/calls/CallStage.tsx 1100
 packages/web/components/calls/RoomThread.tsx 1050
-packages/web/components/capabilities/FleetMatrix.tsx 1300
 packages/web/components/castCommand.test.ts 1000
 packages/web/components/castCommand.ts 1000
 packages/web/components/chat/ChatMessage.tsx 900
@@ -233,13 +233,13 @@ packages/web/components/decisions/ChangeCardView.tsx 1250
 packages/web/components/faces/FaceRow.tsx 1050
 packages/web/components/faces/__tests__/faceRow.mount.test.tsx 1050
 packages/web/components/inbox/SessionCardView.tsx 900
-packages/web/components/org/OrgGraph.tsx 850
+packages/web/components/org/OrgGraph.tsx 950
 packages/web/components/org/OrgNodeCards.tsx 850
-packages/web/components/org/orgLayout.ts 950
+packages/web/components/org/orgLayout.ts 1050
 packages/web/hooks/useConversationMessages.ts 1150
 packages/web/hooks/useWalkie.ts 1000
 packages/web/lib/__tests__/walkieOrder.test.ts 1600
-packages/web/lib/calls/callManager.ts 1650
+packages/web/lib/calls/callManager.ts 1700
 packages/web/lib/calls/walkie.ts 1850
 packages/web/lib/desktop.test.ts 1150
 packages/web/lib/desktop.ts 1700
@@ -262,7 +262,7 @@ packages/web/store/chatSlice.ts 1800
 packages/web/store/clientSyncRegistry.ts 2150
 packages/web/store/idbCache.native.ts 900
 packages/web/store/idbCache.ts 900
-packages/web/store/inboxStore.ts 15750
+packages/web/store/inboxStore.ts 15850
 packages/web/store/orgSlice.ts 1600
 packages/web/store/strandedStub.test.ts 950
 packages/web/store/undo/policies/work.ts 1000

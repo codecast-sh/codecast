@@ -480,7 +480,8 @@ host and token: cast integrations connect <provider>`,
   },
   {
     token: "timeline",
-    description: "Timeline: a workspace's tasks opened/closed and changes landed (--since, --after, --digest-since)",
+    description: "A workspace's work as major events, oldest first: tasks opened and closed, changes landed",
+    hasOptions: true,
     load: () => import("./timelineCommand.js").then((m) => m.registerTimelineCommand),
   },
   {

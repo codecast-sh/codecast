@@ -550,7 +550,7 @@ describe("metric readers (reader watches)", () => {
     expect(made).toMatchObject({ query_kind: "reader", state: "ok" });
     expect(made.threshold).toBeUndefined();
 
-    const read = await app.readAppMetric(w.actionCtx(), w.source._id, made.query, w.fetchImpl, { days: 30 });
+    const read = await (await import("./appMetrics")).readAppMetric(w.actionCtx(), w.source._id, made.query, w.fetchImpl, { days: 30 });
     expect(read).toEqual({ ok: true, value: 382, unit: "$", points: [{ at: Date.parse("2026-10-13T00:00:00Z"), value: 410 }, { at: Date.parse("2026-10-20T00:00:00Z"), value: 395 }, { at: 1793100000000, value: 382 }] });
     // The args ride the query string, `days` too because the reader declares it.
     const call = w.calls.find((c) => c.url.includes("/codecast/metrics/read"))!;
@@ -568,11 +568,11 @@ describe("metric readers (reader watches)", () => {
 
   test("a reader the app does not declare, or a kind its source cannot answer, says so", async () => {
     const w = await world({ manifest: METRIC_MANIFEST });
-    expect(await app.readAppMetric(w.actionCtx(), w.source._id, "metrics.nope", w.fetchImpl)).toEqual({ ok: false, error: "union declares no reader metrics.nope" });
-    expect(await app.readAppMetric(w.actionCtx(), w.source._id, "metrics.read {oops", w.fetchImpl)).toEqual({ ok: false, error: "A reader watch's args are a JSON object" });
+    expect(await (await import("./appMetrics")).readAppMetric(w.actionCtx(), w.source._id, "metrics.nope", w.fetchImpl)).toEqual({ ok: false, error: "union declares no reader metrics.nope" });
+    expect(await (await import("./appMetrics")).readAppMetric(w.actionCtx(), w.source._id, "metrics.read {oops", w.fetchImpl)).toEqual({ ok: false, error: "A reader watch's args are a JSON object" });
     const metrics = await import("../metrics");
     await expect(h(metrics.createWatch)(w.inner("u1"), { ...TEAM, source: "union", name: "x", query_kind: "hogql", query: "select 1" })).rejects.toThrow("An app source cannot watch a hogql metric (it takes reader)");
     // A required arg the query leaves out fails before any call goes out.
-    expect(await app.readAppMetric(w.actionCtx(), w.source._id, "metrics.read", w.fetchImpl)).toMatchObject({ ok: false, error: expect.stringContaining("invalid args") });
+    expect(await (await import("./appMetrics")).readAppMetric(w.actionCtx(), w.source._id, "metrics.read", w.fetchImpl)).toMatchObject({ ok: false, error: expect.stringContaining("invalid args") });
   });
 });

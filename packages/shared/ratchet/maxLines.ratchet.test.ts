@@ -75,6 +75,11 @@ import { join } from "node:path";
 // pass five more (sessionDecisions.ts by two, decideCommand.ts, the runner and
 // comments.v2 and sessionDecisions tests), re-pinned under the same decision.
 // contracts/secrets.ts fell to 950 when its pure rules moved to secretRules.ts.
+// The ship of 2026-10-28 re-pinned eleven grown files under the same decision
+// (inboxStore.ts, orgLayout.ts and OrgGraph.tsx by two steps) and listed
+// pendingMessages.teamSend.test.ts; GoalsDocument.tsx and sources/app.ts were
+// split instead (goalFields.tsx, sources/appMetrics.ts), and FleetMatrix.tsx
+// fell under the cap.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");

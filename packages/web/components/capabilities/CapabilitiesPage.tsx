@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
 import { AuthGuard } from "../AuthGuard";
@@ -91,7 +92,7 @@ function CapabilitiesContent() {
   // Keep the pane on the same thing when its data refreshes underneath it.
   const selectedRow = selection ? rowByKey.get(selection.key) : undefined;
   const selectedKit = selection ? kitByKey.get(selection.key) : undefined;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (selection && !selectedRow && !selectedKit) setSelection(null);
   }, [selection, selectedRow, selectedKit]);
 

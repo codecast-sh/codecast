@@ -21,7 +21,7 @@ import { patchSourceStats, scopeArgs, scopeOf, sourceByRef, upsertGroup } from "
 import { rowByRef } from "./lib/rowByRef";
 import { appendMetricPoint, mergeMetricHistory, mergeReaderSeries, planMetric } from "./lib/ingestGroups";
 import { connFor, fetchMetricHistory, fetchMetricValue, validWatchQuery } from "./sources/posthog";
-import { readAppMetric } from "./sources/app";
+import { readAppMetric } from "./sources/appMetrics";
 import { isTokenRefusal } from "./lib/sourceHealth";
 import { INGEST_LIMITS, INGEST_SHORT_ID_PREFIX, METRIC_WATCH_LIMITS, parseReaderQuery, type SourceProvider, type WatchKind } from "@codecast/shared/contracts/ingest";
 import { watchDirectionValidator as directionValidator, watchKindValidator } from "./ingestSchema";

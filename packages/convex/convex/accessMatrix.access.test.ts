@@ -81,6 +81,8 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "flowLibrary.sessionFlows": (ids) => [{}, { team_id: ids.T }, { team_id: ids.O }],
   // Every workspace a placement names, the owner's personal one and the viewer's own.
   "flowMap.forTeam": (ids) => [...new Set([...Object.values(ids.rows.flowMaps), ...WHO.map((w) => `user:${ids[w]}`)])].map((workspace) => ({ workspace })),
+  // Every workspace the viewer holds a key for, in one answer.
+  "teamKit.webListTeamKitItems": () => [{}],
 };
 
 // A feed whose answer is not a list of rows: what the web feeder hands the
@@ -88,6 +90,8 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
 const SELECT: Record<string, (res: any) => unknown> = {
   // useFlowMap: one row keyed by its workspace.
   "flowMap.forTeam": (m) => (m ? [{ _id: m.workspace }] : []),
+  // useSyncTeamKit: the answer's items.
+  "teamKit.webListTeamKitItems": (r) => r?.items ?? [],
 };
 
 function registeredFeeds(): Map<string, string> {
@@ -127,7 +131,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {} };
     for (const [place, p] of Object.entries(placements)) {
       rows.tasks[place] = await db.insert("tasks", { ...p, ...base(place), short_id: `ct-${++n}`, task_type: "task", priority: "medium", source: "human", status: "open" });
       rows.docs[place] = await db.insert("docs", { ...p, ...base(place), content: "body", doc_type: "note", source: "human" });
@@ -140,6 +144,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
       if (place !== "personal") rows.liveFlows[place] = await db.insert("live_flows", { ...p, workflow_id, on: false, changed_by: p.user_id, changed_at: now, created_at: now });
       // A flow map is one per workspace, so the private and personal placements share one.
       if (place !== "private") rows.flowMaps[place] = p.workspace;
+      rows.teamKitItems[place] = await db.insert("team_kit_items", { slug: `authored/${p.user_id}/skill/${place}-kit`, ...(p.team_id ? { team_id: p.team_id } : {}), workspace: p.workspace, kind: "skill", name: `${place}-kit`, author_user_id: p.user_id, current_version: 1, current_hash: `h-${place}`, surfaces: [], created_at: now, updated_at: now } as any);
     }
     return { owner, teammate, stranger, removed, outsider, T, O, rows };
   });
