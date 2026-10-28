@@ -85,6 +85,8 @@ import { agentIdentity, claimRoomRows, liveTranscriptFor, postEvent } from "./ca
 import { mayPublishCall, stopRoomRecording } from "./lib/callRecordingRuns";
 import { callGuestsOnRecord, endGuestAdmissions, noteGuestAttendance } from "./lib/callGuestAdmission";
 import { scheduleFaceJoin, scheduleFaceLeave } from "./callFace";
+import { scheduleTriggerMatch } from "./lib/triggerMatch";
+import { siteUrl } from "./lib/siteUrl";
 import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
 
 export { asrTranscriptionSession };
@@ -1395,7 +1397,10 @@ export const setSummary = internalMutation({
       ...(args.summary ? { summary: args.summary } : {}),
       ...(args.action_items ? { action_items: args.action_items } : {}),
     });
-    if (firstVerdict) await scheduleHuddleDigest(ctx, t, args);
+    if (firstVerdict) {
+      await scheduleHuddleDigest(ctx, t, args);
+      await announceCallEnded(ctx, t, args);
+    }
     // A recording is the one transcript whose owner walked away from it. They
     // pressed stop, put the phone in a pocket, and the words, the summary and
     // the action items land minutes later with nothing on screen to see them
@@ -1415,6 +1420,30 @@ export const setSummary = internalMutation({
     });
   },
 });
+
+/** Fires `call_ended` triggers (shared/contracts/triggerEvents.ts) once the
+ *  call's record is ready to read: its summary, or the words of a call too
+ *  short to summarize. A failed summary waits for its retry, which comes back
+ *  through here as the first verdict again (retryFailedSummaries), and a call
+ *  where nothing was said or filmed is not one anybody wants woken for. The
+ *  matcher wakes only owners canReadCall admits. */
+async function announceCallEnded(
+  ctx: any,
+  t: Doc<"transcripts">,
+  verdict: { summary_status: "done" | "failed" | "skipped"; title?: string },
+): Promise<void> {
+  if (verdict.summary_status === "failed") return;
+  if (t.last_seq <= 0 && !callFilmed(t)) return;
+  await scheduleTriggerMatch(ctx, {
+    event_type: "call_ended",
+    call_id: t._id,
+    event_ref: {
+      group_short_id: t.short_id,
+      title: t.title ?? verdict.title ?? "Untitled call",
+      url: t.short_id ? `${siteUrl()}/calls/${t.short_id}` : undefined,
+    },
+  });
+}
 
 /** Where a huddle's digest goes, from its room key: a chat room (a channel or
  *  a member set) gets a chat message; a session room gets a turn for its agent.
@@ -1540,7 +1569,7 @@ export const generateSummary = internalAction({
         callSummaryRequest(source, { kind, started_at: t.started_at, ended_at: t.ended_at, rolling }),
       );
       if (!response) throw new Error("ANTHROPIC_API_KEY not configured");
-      if (!response.ok) throw new Error(`Anthropic ${response.status}`);
+      if (!response.ok) throw new Error(`Anthropic ${response.status}: ${(await response.text()).slice(0, 300)}`);
       const data = await response.json();
       await ctx.runMutation(internal.transcripts.setSummary, {
         transcript_id: args.transcript_id,
@@ -1556,6 +1585,33 @@ export const generateSummary = internalAction({
         rolling,
       });
     }
+  },
+});
+
+/**
+ * Summarize again every ended call since `since` whose summary failed (the
+ * model API was down or out of credit). Each goes back to "pending", so the
+ * new verdict posts its digest again: a chat room's card is rewritten in
+ * place (chat.postCallDigest), a session room's agent gets a fresh turn.
+ *
+ *   packages/convex/run.sh transcripts:retryFailedSummaries '{"since":1793083800000}'                 (dry run)
+ *   packages/convex/run.sh transcripts:retryFailedSummaries '{"since":1793083800000,"dryRun":false}'
+ */
+export const retryFailedSummaries = internalMutation({
+  args: { since: v.number(), dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const failed = (
+      await ctx.db
+        .query("transcripts")
+        .withIndex("by_status", (q) => q.eq("status", "ended").gte("_creationTime", args.since))
+        .collect()
+    ).filter((t) => t.summary_status === "failed");
+    if (args.dryRun !== false) return { dryRun: true, calls: failed.map((t) => t.short_id ?? t._id) };
+    for (const t of failed) {
+      await ctx.db.patch(t._id, { summary_status: "pending" });
+      await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, { transcript_id: t._id });
+    }
+    return { dryRun: false, calls: failed.map((t) => t.short_id ?? t._id) };
   },
 });
 

@@ -20,6 +20,7 @@ export type TriggerMatchArgs = {
   team_id?: Id<"teams">;
   source?: string;
   workspace?: string;
+  call_id?: Id<"transcripts">;
   event_ref?: {
     external_event_id?: Id<"external_events">;
     group_short_id?: string;

@@ -71,6 +71,13 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
   metric_alert: derived("metric_alert"),
   metric_recovered: derived("metric_recovered"),
   deploy: derived("deploy"),
+
+  // ── Derived call events ──
+  // Fired once per call when its record is ready to read: the summary and
+  // action items written, or for a call too short to summarize, its words
+  // (transcripts.setSummary). Only an owner who may read the call is woken
+  // (canReadCall), so a recording or a private huddle reaches nobody else.
+  call_ended: derived("call_ended"),
 };
 
 /**
@@ -127,6 +134,7 @@ export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   metric_alert: "metric crossed its line",
   metric_recovered: "metric back inside its line",
   deploy: "deploy",
+  call_ended: "call ended",
   [SESSION_NEEDS_INPUT_EVENT]: "a session under the role needs input",
   [ORG_AREA_CHANGE_EVENT]: "an area of the company changed and it lasted",
 };
@@ -161,6 +169,13 @@ export const INGEST_TRIGGER_EVENTS = [
 
 export function isIngestTriggerEvent(name: string | undefined): boolean {
   return !!name && INGEST_TRIGGER_EVENTS.includes(name);
+}
+
+/** The events about a team call. No repository or source narrows them. */
+export const CALL_TRIGGER_EVENTS = ["call_ended"];
+
+export function isCallTriggerEvent(name: string | undefined): boolean {
+  return !!name && CALL_TRIGGER_EVENTS.includes(name);
 }
 
 /**
@@ -199,6 +214,7 @@ export function describeEventScope(filter: TriggerScopeFilter): string {
   if (isIngestTriggerEvent(filter.event_type)) {
     return `on ${name} from ${filter.source ? `source ${filter.source}` : "every source you can see"}`;
   }
+  if (isCallTriggerEvent(filter.event_type)) return `on ${name} for every call you can read`;
   const where = filter.repository
     ? `${filter.repository}${filter.pr_number ? `#${filter.pr_number}` : ""}`
     : "every repository you can see";
@@ -218,7 +234,7 @@ export function eventFilterForSave(eventName: string, prior: TriggerScopeFilter 
   const out: TriggerScopeFilter = { ...base };
   if (prior && isIngestTriggerEvent(eventName) && prior.source) out.source = prior.source;
   // --repo narrows every repository event (push, issue_*, pr_*); --pr only pull requests.
-  if (prior && !isIngestTriggerEvent(eventName) && prior.repository) out.repository = prior.repository;
+  if (prior && !isIngestTriggerEvent(eventName) && !isCallTriggerEvent(eventName) && prior.repository) out.repository = prior.repository;
   if (prior && isPrTriggerEvent(eventName) && prior.pr_number !== undefined) out.pr_number = prior.pr_number;
   return out;
 }

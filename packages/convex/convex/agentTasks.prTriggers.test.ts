@@ -268,3 +268,33 @@ describe("matchTaskTriggers pending events", () => {
     expect(ctx.db._tables.agent_tasks[0].pending_events).toBeUndefined();
   });
 });
+
+// ── Call events ──
+//
+// A call is readable by its own rule (canReadCall), so a call_ended firing
+// wakes only owners that rule admits: a recording nobody shared is its
+// creator's alone, whoever else on the team armed a trigger.
+describe("call_ended", () => {
+  const recording = { _id: "call_1", room_key: "rec:0123456789ab", team_id: TEAM_A, started_by: "user_a", participants: [] };
+  const filter = { event_type: "call_ended" };
+  const ref = { group_short_id: "cl-7", title: "Standup", url: "https://codecast.sh/calls/cl-7" };
+
+  test("only an owner who may read the call is woken", async () => {
+    const ctx = {
+      db: makeFakeDb({
+        agent_tasks: [ownedTrigger("creator", "user_a", filter), ownedTrigger("teammate", "user_b", filter)],
+        conversations: [],
+        transcripts: [recording],
+      }),
+    } as any;
+    expect(await run(ctx, { event_type: "call_ended", call_id: "call_1", event_ref: ref })).toBe(1);
+    const [creator, teammate] = ctx.db._tables.agent_tasks;
+    expect(creator.pending_events).toEqual([expect.objectContaining({ event_type: "call_ended", group_short_id: "cl-7", title: "Standup" })]);
+    expect(teammate.run_at).toBeUndefined();
+  });
+
+  test("a call that is gone wakes nobody", async () => {
+    const ctx = { db: makeFakeDb({ agent_tasks: [ownedTrigger("creator", "user_a", filter)], conversations: [], transcripts: [] }) } as any;
+    expect(await run(ctx, { event_type: "call_ended", call_id: "call_1", event_ref: ref })).toBe(0);
+  });
+});

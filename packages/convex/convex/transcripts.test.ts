@@ -652,6 +652,53 @@ describe("the huddle digest", () => {
     await call(setSummary, c, verdict);
     expect(c._scheduled).toEqual([]);
   });
+
+  // A call is something to wake for: `cast trigger add --on call_ended` runs
+  // once per call, when its record is there to read.
+  describe("call_ended triggers", () => {
+    const armed = { _id: "tr1", user_id: "ua", status: "scheduled", event_filter: { event_type: "call_ended" } };
+    const withTrigger = (row: any) => {
+      const c = ctx([row]);
+      (c.db as any)._tables.agent_tasks = [armed];
+      return c;
+    };
+    const matches = (c: any) => c._scheduled.filter((s: any) => s.name === "agentTasks:matchTaskTriggers");
+
+    test("a summarized call fires once, naming the call", async () => {
+      const c = withTrigger(huddle({ short_id: "cl-42" }));
+      await call(setSummary, c, verdict);
+      expect(matches(c).map((s: any) => s.args)).toEqual([
+        {
+          event_type: "call_ended",
+          call_id: "t1",
+          event_ref: { group_short_id: "cl-42", title: "Auth rollout", url: "https://codecast.sh/calls/cl-42" },
+        },
+      ]);
+      await call(setSummary, c, verdict);
+      expect(matches(c)).toHaveLength(1);
+    });
+
+    test("a short call fires with its words as the record", async () => {
+      const c = withTrigger(huddle());
+      await call(setSummary, c, { transcript_id: "t1", summary_status: "skipped" });
+      expect(matches(c)).toHaveLength(1);
+    });
+
+    test("a failed summary waits for its retry, and an empty call never fires", async () => {
+      const failed = withTrigger(huddle());
+      await call(setSummary, failed, { transcript_id: "t1", summary_status: "failed" });
+      expect(matches(failed)).toEqual([]);
+      const empty = withTrigger(huddle({ last_seq: 0 }));
+      await call(setSummary, empty, { transcript_id: "t1", summary_status: "skipped" });
+      expect(matches(empty)).toEqual([]);
+    });
+
+    test("a rolling recap mid-call fires nothing", async () => {
+      const c = withTrigger(huddle({ status: "live" }));
+      await call(setSummary, c, { ...verdict, rolling: true });
+      expect(matches(c)).toEqual([]);
+    });
+  });
 });
 
 // A PREWARM ROW MUST NOT EXTEND A DEAD HUDDLE'S RECORDING.

@@ -11,6 +11,7 @@
 import {
   TRIGGER_EVENT_NAMES,
   TRIGGER_EVENT_SHORTHANDS,
+  isCallTriggerEvent,
   isIngestTriggerEvent,
   isPrTriggerEvent,
   type TriggerScopeFilter,
@@ -59,6 +60,8 @@ export async function buildEventFilter(
     if (!Number.isInteger(number) || number <= 0) refuse(`--pr wants a pull request number, got "${opts.pr}".`);
     filter.pr_number = number;
   }
+
+  if (opts.repo && isCallTriggerEvent(eventName)) refuse(`--repo does not narrow ${eventName}: it fires for every call you can read.`);
 
   const repository = opts.repo !== undefined ? opts.repo : isPrTriggerEvent(eventName) ? await checkoutRepository() : undefined;
   if (repository) filter.repository = repository;
