@@ -20,6 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "claude-code-sessions",
+    title: "Finding, naming and reopening your Claude Code sessions",
+    dek: "Claude Code keeps every session as a file on the machine that ran it, named by a random id. Codecast collects those sessions, and the ones from Codex, Cursor and Gemini, from every computer you use into one list. You can search what was said in them, give them names, read the whole transcript with the code it changed, and send the next message to any of them.",
+    author: "the codecast team",
+    date: "2026-10-27",
+    dateLabel: "October 27, 2026",
+    readingMinutes: 6,
+    cover: { src: "/blog/claude-code-sessions/search.png", alt: "Codecast search for standard input, filtered to my prompts in the past week, finding the session Word count: --top N flag" },
+  },
+  {
     slug: "undo-with-a-history",
     title: "Undo, with a history you can see",
     dek: "Running several agents means a lot of small moves: pin this one, file that one as done, rename a third, stash a fourth. In Codecast every one of them can be taken back with ⌘Z, and ⌘⌥Z opens the list of what you did in this window, with a button to go back to any point in it.",
