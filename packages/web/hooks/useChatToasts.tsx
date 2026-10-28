@@ -1,5 +1,5 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
-import { desktopAppWindow, hasAppWindow } from "../lib/desktopApps";
+import { ownsChatToasts } from "../lib/chatToastWindow";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -16,7 +16,7 @@ import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
 import { knownAgentMember, memberName, sessionAuthorFor, slackAuthorFor, mentionsViewer as rowMentionsViewer, type ChatMember } from "../lib/chatViews";
 import { soundChatMessage } from "../lib/sounds";
 import { channelDisplayName } from "../lib/chatViews";
-import { dmOtherIds } from "@codecast/shared/chat";
+import { dmOtherIds, isAgentTurnInFlight } from "@codecast/shared/chat";
 
 import { useWatchEffect } from "./useWatchEffect";
 import { notificationActor } from "../lib/notificationTypes";
@@ -203,7 +203,7 @@ export function useChatToasts(): void {
       if (shownRef.current.has(messageId)) continue;
       if (last.user_id === viewerId) continue;
 
-      const full = messages[messageId];
+      const full = landedRow(messages[messageId]);
       // Named you: the full row when we have it (people only — role/session
       // entries are objects), plus a rise in the server's mention count, which
       // is what the rail can say even before the message body is loaded. The
@@ -251,10 +251,7 @@ export function useChatToasts(): void {
         recentToastsFromChannel: recent.length,
       });
       if (tier === "silent") continue;
-      // While a Chat window exists it is where chat happens, toasts
-      // included: every other window stays quiet so a message never lands
-      // twice, and the card's click opens the channel where it lives.
-      if (hasAppWindow("chat") && desktopAppWindow() !== "chat") continue;
+      if (!ownsChatToasts()) continue;
 
       recent.push(Date.now());
       burstRef.current.set(channelId, recent);
@@ -319,9 +316,9 @@ export function useChatToasts(): void {
       const messageId = n.chat_message_id ? String(n.chat_message_id) : "";
       if (!messageId || shownRef.current.has(messageId)) continue;
       if ((st.clientState?.ui?.chat_snooze_until ?? 0) > Date.now()) continue;
-      if (hasAppWindow("chat") && desktopAppWindow() !== "chat") continue;
+      if (!ownsChatToasts()) continue;
       const channelId = String(n.entity_id ?? "");
-      const full: ChatMessageRow | undefined = st.chatMessages?.[messageId];
+      const full = landedRow(st.chatMessages?.[messageId]);
       const railLast = (st.chatRail ?? []).find((r: ChatRailRow) => String(r.channel_id) === channelId)?.last_message;
       const fromRail = railLast && String(railLast._id) === messageId ? railLast : undefined;
       const threadRootId = full?.thread_root_id ?? fromRail?.thread_root_id ?? undefined;
@@ -357,6 +354,14 @@ export function useChatToasts(): void {
       );
     }
   }, [notifSig, viewerId, present]);
+}
+
+/** The store's copy of a message, unless it is still an agent's empty
+ *  placeholder. The answer fills that row in place, and the rail and the
+ *  notification carry its text before the store's copy catches up, so a
+ *  placeholder here would print an empty toast. */
+function landedRow(row: ChatMessageRow | undefined): ChatMessageRow | undefined {
+  return row && !isAgentTurnInFlight(row.agent_status) ? row : undefined;
 }
 
 /** A chat notification lands on screen only while it is this fresh. */
