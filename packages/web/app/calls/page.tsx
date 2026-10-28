@@ -76,6 +76,7 @@ import {
 import { firstName, fmtCallLength, speakerColor } from "../../components/calls/speakers";
 import { formatCallTime } from "@codecast/shared/entities";
 import { CallSessionChips } from "../../components/calls/CallSessionChips";
+import { CallFollowThrough } from "../../components/calls/CallFollowThrough";
 import { useMutation } from "convex/react";
 import {
   DropdownMenu,
@@ -1296,6 +1297,8 @@ export default function CallsPage() {
                 <CallDetailSkeleton lead={listToggle} />
               ) : selectedId ? (
                 <div className="p-8 text-sm text-sol-text-dim">Call not found (or not yours to see).</div>
+              ) : callsOn && calls.length > 0 ? (
+                <CallFollowThrough calls={calls} />
               ) : (
                 <div className="flex h-full items-center justify-center">
                   <div className="max-w-xs text-center text-sol-text-dim">
