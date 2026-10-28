@@ -3672,15 +3672,9 @@ export const toggleReaction = mutation({
       .first();
     if (existing) {
       await ctx.db.delete(existing._id);
-      // Slack holds ONE reaction per emoji for the whole codecast side, so it
-      // comes off only when the last teammate holding that emoji lets go.
-      const still = await ctx.db
-        .query("chat_reactions")
-        .withIndex("by_message", (q: any) => q.eq("message_id", args.message_id))
-        .collect();
-      if (!still.some((r) => r.emoji === args.emoji)) {
-        await queueSlackOutbound(ctx, { op: "reaction", message, emoji: args.emoji, add: false });
-      }
+      // Whose reaction comes off in Slack (theirs, or the app's once nobody
+      // it speaks for still holds the emoji) is slackSync.reactionSpeaker's call.
+      await queueSlackOutbound(ctx, { op: "reaction", message, emoji: args.emoji, add: false, user_id: userId });
       return { message_id: args.message_id, emoji: args.emoji, reacted: false };
     }
 
@@ -3700,7 +3694,7 @@ export const toggleReaction = mutation({
       emoji: args.emoji,
       created_at: Date.now(),
     });
-    await queueSlackOutbound(ctx, { op: "reaction", message, emoji: args.emoji, add: true });
+    await queueSlackOutbound(ctx, { op: "reaction", message, emoji: args.emoji, add: true, user_id: userId });
     return { message_id: args.message_id, emoji: args.emoji, reacted: true };
   },
 });

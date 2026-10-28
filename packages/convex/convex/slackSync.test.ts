@@ -9,6 +9,7 @@ import {
   commitLink,
   pushContext,
   pushReaction,
+  reactionSpeaker,
   setDmSync,
   commitDmLink,
   retargetPersonRooms,
@@ -342,7 +343,7 @@ describe("edits, deletes, reactions from Slack", () => {
 });
 
 describe("outbound hooks in chat", () => {
-  test("a typed line queues a push; a local-only line does not; a reaction removal waits for the last holder", async () => {
+  test("a typed line queues a push; a local-only line does not; every reaction toggle names who reacted", async () => {
     const ctx = context(ALICE);
     await call(sendMessage, ctx, { channel_id: CHANNEL, content: "to slack", client_id: "w1" });
     await call(sendMessage, ctx, { channel_id: CHANNEL, content: "stay home", client_id: "w2", sync_local_only: true });
@@ -355,10 +356,10 @@ describe("outbound hooks in chat", () => {
     await call(toggleReaction, bob, { message_id: target._id, emoji: "👍" });
     const adds = ctx._scheduled.filter((s: any) => s.name === "slackSync:pushReaction");
     expect(adds.length).toBe(2);
-    await call(toggleReaction, ctx, { message_id: target._id, emoji: "👍" }); // Alice lets go, Bob still holds
-    expect(ctx._scheduled.filter((s: any) => s.name === "slackSync:pushReaction" && s.args.add === false).length).toBe(0);
-    await call(toggleReaction, bob, { message_id: target._id, emoji: "👍" }); // last holder
-    expect(ctx._scheduled.filter((s: any) => s.name === "slackSync:pushReaction" && s.args.add === false).length).toBe(1);
+    expect(adds.map((s: any) => s.args.user_id)).toEqual([ALICE, BOB]);
+    await call(toggleReaction, ctx, { message_id: target._id, emoji: "👍" });
+    const removals = ctx._scheduled.filter((s: any) => s.name === "slackSync:pushReaction" && s.args.add === false);
+    expect(removals.map((s: any) => s.args.user_id)).toEqual([ALICE]);
   });
   test("a channel without a link queues nothing", async () => {
     const ctx = context(ALICE);
@@ -643,6 +644,50 @@ describe("direct messages", () => {
       globalThis.fetch = realFetch;
     }
     expect(auths).toEqual(["Bearer xoxb-test"]);
+  });
+  describe("whose name a reaction carries in Slack", () => {
+    const token = (user: any, scopes: string) => ({ _id: `slack_user_tokens_${user}` as any, installation_id: INSTALL, workspace_id: WS, user_id: user, slack_user_id: `U${user}`, token: `xoxp-${user}`, scopes, created_at: 1, updated_at: 1 });
+    async function push(tokens: any[], held: Array<{ user: any; slack_user?: string }>, args: { add: boolean; user_id: any }) {
+      const ctx = context(ALICE, { slack_user_tokens: tokens });
+      const msg = await ctx.db.insert("chat_messages", {
+        channel_id: CHANNEL, user_id: BOB, content: "said in Slack", created_at: 7_000, updated_at: 7_000,
+        external: { provider: "slack", direction: "inbound", workspace: WS, channel: SLACK_CH, ts: "7000.000001", synced_at: 7_000 },
+      } as any);
+      for (const h of held) {
+        await ctx.db.insert("chat_reactions", { message_id: msg, channel_id: CHANNEL, user_id: h.user, emoji: "👍", created_at: 1, ...(h.slack_user ? { slack_user: h.slack_user } : {}) } as any);
+      }
+      ctx.runQuery = (ref: unknown, a: any) => call(getFunctionName(ref as any).endsWith("reactionSpeaker") ? reactionSpeaker : pushContext, ctx, a);
+      const sent: Array<{ auth: string; method: string }> = [];
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = (async (url: any, init: any) => {
+        sent.push({ auth: init.headers.Authorization, method: String(url).split("/").pop()! });
+        return new Response(JSON.stringify({ ok: true }));
+      }) as any;
+      try {
+        await call(pushReaction, ctx, { message_id: msg, emoji: "👍", ...args });
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+      return sent;
+    }
+    test("a person who granted reactions:write reacts as themselves", async () => {
+      const sent = await push([token(ALICE, "chat:write,reactions:write")], [], { add: true, user_id: ALICE });
+      expect(sent).toEqual([{ auth: "Bearer xoxp-user-alice", method: "reactions.add" }]);
+    });
+    test("a person without that scope is spoken for by the app", async () => {
+      const sent = await push([token(ALICE, "chat:write")], [], { add: true, user_id: ALICE });
+      expect(sent).toEqual([{ auth: "Bearer xoxb-test", method: "reactions.add" }]);
+    });
+    test("the app keeps its reaction while it still speaks for someone, and drops it after", async () => {
+      // Bob still holds 👍 without a token of his own: the app's stays.
+      expect(await push([], [{ user: BOB }], { add: false, user_id: ALICE })).toEqual([]);
+      // Bob's 👍 came from Slack (his own reaction there), and Alice's own is gone: the app lets go.
+      expect(await push([], [{ user: BOB, slack_user: "UBOB" }], { add: false, user_id: ALICE }))
+        .toEqual([{ auth: "Bearer xoxb-test", method: "reactions.remove" }]);
+      // Bob reacts as himself in Slack, so the app speaks for nobody.
+      expect(await push([token(BOB, "reactions:write")], [{ user: BOB }], { add: false, user_id: ALICE }))
+        .toEqual([{ auth: "Bearer xoxb-test", method: "reactions.remove" }]);
+    });
   });
   test("a reaction in a mirrored DM stays here and never pauses the link", async () => {
     const ctx = context(ALICE, {
