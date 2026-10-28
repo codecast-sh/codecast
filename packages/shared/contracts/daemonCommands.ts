@@ -243,6 +243,12 @@ export const DAEMON_COMMANDS = [
   // (teamHosts.claimMember), runs the shared-host scripts locally and reports
   // each step (teamHosts.reportMember). Old daemons: "Unknown command".
   "team_host_member",
+  // The web's "Share with team" on a kit item one of this person's machines
+  // reports (docs/architecture/team-kit.md). Targeted at that device. args:
+  // { kind, name, team_id?, note? }; no team_id publishes to the personal kit.
+  // The daemon runs the same publish as `cast cap publish`. Old daemons:
+  // "Unknown command" (the item never leaves "publishing").
+  "cap_publish",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];

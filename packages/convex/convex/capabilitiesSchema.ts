@@ -298,6 +298,10 @@ export const capabilityTables = {
     consented_at: v.number(),
     /** Who clicked yes. Usually user_id; differs when an admin pre-approves. */
     actor_user_id: v.id("users"),
+    /** What the yes was to. Absent = consent to run this build's surfaces.
+     *  "adopt" = replace a file the installer did not write with the kit's
+     *  copy (a conflict resolved from the web). Never one for the other. */
+    purpose: v.optional(v.literal("adopt")),
   })
     .index("by_user_device_slug", ["user_id", "device_id", "capability_slug"]),
 
@@ -311,6 +315,7 @@ export const capabilityTables = {
     kind: v.union(
       v.literal("bind"), v.literal("unbind"), v.literal("enable"), v.literal("disable"),
       v.literal("consent"), v.literal("apply"), v.literal("conflict"), v.literal("import"),
+      v.literal("adopt"),
     ),
     actor_user_id: v.id("users"),
     device_id: v.optional(v.string()),
@@ -490,6 +495,7 @@ export interface CapabilityConsentDoc {
   manifest_hash: string;
   consented_at: number;
   actor_user_id: string;
+  purpose?: "adopt";
 }
 
 export interface CapabilityEventDoc {
@@ -497,7 +503,7 @@ export interface CapabilityEventDoc {
   _creationTime: number;
   user_id: string;
   team_id?: string;
-  kind: "bind" | "unbind" | "enable" | "disable" | "consent" | "apply" | "conflict" | "import";
+  kind: "bind" | "unbind" | "enable" | "disable" | "consent" | "apply" | "conflict" | "import" | "adopt";
   actor_user_id: string;
   device_id?: string;
   scope_kind?: string;
@@ -552,3 +558,91 @@ export interface CapabilityDb {
 export function capDb(db: unknown): CapabilityDb {
   return db as CapabilityDb;
 }
+
+/* --------------------------------------------------------------------------
+ * The kit — capabilities a workspace authored and shares (team-kit.md)
+ * -------------------------------------------------------------------------- */
+
+/** Longest stored main body (SKILL.md, a command file, an instruction
+ *  section). The reader shows it; the archive carries the real bytes. */
+export const MAX_KIT_MAIN_BODY_CHARS = 64 * 1024;
+/** Files one version may list. A skill tree past this is not a skill. */
+export const MAX_KIT_FILES = 500;
+/** Largest archive a version may point at. */
+export const MAX_KIT_ARCHIVE_BYTES = 20 * 1024 * 1024;
+/** Kit items one workspace read returns. */
+export const MAX_KIT_ITEMS = 1000;
+/** Applied-state rows one device report may carry. */
+export const MAX_KIT_APPLIED_PER_DEVICE = 500;
+
+/**
+ * Separate from `capabilityTables` because the tenant here is the WORKSPACE
+ * key, not a user: an item is filed under `team:<id>` or `user:<id>` and every
+ * read is an equality on the viewer's held keys (CLAUDE.md "Workspace access
+ * vs routing"). `team_id` is routing only and no reader consults it.
+ */
+export const teamKitTables = {
+  team_kit_items: defineTable({
+    /** `authored/<workspace owner id>/<kind>/<name>`, by formatCapabilitySlug. */
+    slug: v.string(),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.string(),
+    kind: v.string(),
+    name: v.string(),
+    description: v.optional(v.string()),
+    author_user_id: v.id("users"),
+    current_version: v.number(),
+    current_hash: v.string(),
+    /** The current version's surfaces, copied up so a listing needs no
+     *  second read. */
+    surfaces: v.array(v.string()),
+    /** Taken out of the kit. Kept as a row so the delta feed carries the
+     *  removal; every install path treats it as gone. */
+    removed_at: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    // Identity. The slug embeds the workspace owner, and every reader checks
+    // the row's workspace against the caller's held keys before returning it.
+    .index("by_slug", ["slug"])
+    // The listing and its delta: one equality per held key.
+    .index("by_workspace_updated", ["workspace", "updated_at"]),
+
+  /** Immutable: one row per (item, folder_hash). */
+  team_kit_versions: defineTable({
+    item_id: v.id("team_kit_items"),
+    workspace: v.string(),
+    version: v.number(),
+    folder_hash: v.string(),
+    storage_id: v.id("_storage"),
+    files: v.array(v.object({ path: v.string(), size: v.number(), executable: v.boolean() })),
+    main_body: v.string(),
+    /** Derived HERE from the file list and the main body's frontmatter, never
+     *  accepted from the publisher. */
+    surfaces: v.array(v.string()),
+    note: v.optional(v.string()),
+    author_user_id: v.id("users"),
+    source_device_id: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_item_version", ["item_id", "version"])
+    .index("by_item_hash", ["item_id", "folder_hash"]),
+
+  /**
+   * What one of the user's machines did with one kit slug: installed at a
+   * hash, waiting for consent, or stopped on a conflict. Reported by the
+   * reconciler, read by the web for "installed on N machines" and the Allow
+   * action. Own machines only, so the tenant is the user.
+   */
+  team_kit_applied: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    slug: v.string(),
+    hash: v.string(),
+    status: v.string(),
+    detail: v.optional(v.string()),
+    updated_at: v.number(),
+  })
+    .index("by_user_device_slug", ["user_id", "device_id", "slug"])
+    .index("by_user_updated", ["user_id", "updated_at"]),
+};
