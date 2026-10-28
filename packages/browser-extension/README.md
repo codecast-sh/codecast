@@ -66,9 +66,12 @@ boot and checks it on every alarm.
 The same throttling applies to a tab that is not visible, and every agent tab
 is opened in the background so it never takes the human's screen. On a busy
 machine that tab's renderer answers nothing for tens of seconds. Chrome's own
-switch for this is `--disable-renderer-backgrounding`; the CLI passes it when
-it starts Chrome itself, and a Chrome the human opened from the Dock keeps the
-default.
+switch for this is `--disable-renderer-backgrounding`. The CLI also passes
+`--silent-debugger-extension-api`, which drops the "started debugging this
+browser" bar Chrome otherwise pins on every attached tab. It passes both when it
+starts Chrome itself, and `cast browser chrome launcher` installs a Dock app
+that does the same; a Chrome opened from Chrome's own Dock icon keeps the
+defaults.
 
 ## Releasing to the Chrome Web Store
 

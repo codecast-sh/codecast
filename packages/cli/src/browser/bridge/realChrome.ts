@@ -152,10 +152,13 @@ export function takeWake(outage: string, now = Date.now()): Promise<boolean> {
  * priority 4, attach failed after 23 s at load 750, while the active tab's
  * renderer answered at once). This switch is Chrome's own way to keep
  * background renderers at normal priority; every browser automation tool
- * passes it. It applies only to a Chrome this command starts: a Chrome the
- * human opened from the Dock keeps Chrome's default.
+ * passes it. The second switch drops the "Codecast started debugging this
+ * browser" bar Chrome pins on every tab the extension attaches to; it holds for
+ * every extension using chrome.debugger in that Chrome. Both apply only to a
+ * Chrome this command starts: a Chrome the human opened from the Dock keeps
+ * Chrome's defaults.
  */
-export const REAL_CHROME_LAUNCH_ARGS = ["--disable-renderer-backgrounding"];
+export const REAL_CHROME_LAUNCH_ARGS = ["--disable-renderer-backgrounding", "--silent-debugger-extension-api"];
 
 export async function launchRealChrome(): Promise<boolean> {
   if (!(await takeStamp("launchedAt", LAUNCH_ONCE_MS))) return true;
@@ -248,7 +251,7 @@ export async function restartRealChrome(opts: { quitWaitMs?: number; note?: (lin
     // Chrome's singleton lock and the DevToolsActivePort file linger a beat.
     await sleep(1_500);
   }
-  note("starting Chrome with --disable-renderer-backgrounding…");
+  note(`starting Chrome with ${REAL_CHROME_LAUNCH_ARGS.join(" ")}…`);
   if (!spawnChrome([...REAL_CHROME_LAUNCH_ARGS, "--restore-last-session"])) return { restarted: false, pid: null, reason: "no Chrome binary found" };
   const deadline = Date.now() + 30_000;
   let pid: number | null = null;
@@ -260,8 +263,10 @@ export async function restartRealChrome(opts: { quitWaitMs?: number; note?: (lin
  * A minimal app bundle whose only job is to open Chrome with the switch, for
  * the Dock. It carries Chrome's own icon, its own bundle id, and a name that
  * says what it is; Chrome's bundle, updater, profile and default browser
- * registration are untouched. `open --args` hands the switch to Chrome only
- * when Chrome is not already running, which is exactly when it can apply.
+ * registration are untouched. `open -n` starts a new process even while a
+ * managed Chrome (its own profile, same bundle) runs, which plain `open -a`
+ * would only bring forward; a process started while the human's Chrome runs
+ * hands off to it, so the switches apply exactly when Chrome starts.
  */
 export function installChromeLauncher(dir = path.join(os.homedir(), "Applications")): { app: string; iconCopied: boolean } {
   const app = path.join(dir, `${CHROME_LAUNCHER_NAME}.app`);
@@ -269,10 +274,11 @@ export function installChromeLauncher(dir = path.join(os.homedir(), "Application
   fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
   fs.mkdirSync(path.join(contents, "Resources"), { recursive: true });
   const script = `#!/bin/bash
-# Opens Google Chrome with the switch that keeps background tabs and the
-# Codecast extension's worker at normal priority (see codecast:
-# packages/browser-extension/README.md). Made by \`cast browser chrome launcher\`.
-exec /usr/bin/open -a "Google Chrome" --args ${REAL_CHROME_LAUNCH_ARGS.join(" ")} "$@"
+# Opens Google Chrome with the switches that keep background tabs and the
+# Codecast extension's worker at normal priority and drop the debugging
+# bar (see codecast: packages/browser-extension/README.md). Made by
+# \`cast browser chrome launcher\`.
+exec /usr/bin/open -n -a "Google Chrome" --args ${REAL_CHROME_LAUNCH_ARGS.join(" ")} "$@"
 `;
   fs.writeFileSync(path.join(contents, "MacOS", "launch"), script, { mode: 0o755 });
   fs.writeFileSync(

@@ -314,11 +314,11 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
   // so this must exist on whichever driver is registered.
   const chrome = br
     .command("chrome")
-    .description("The human's Chrome as a process: restart it with the switch that keeps agent tabs and the extension at normal priority, or install a Dock launcher that always passes it");
+    .description("The human's Chrome as a process: restart it with the switches that keep agent tabs and the extension at normal priority and drop the debugging bar, or install a Dock launcher that always passes them");
 
   chrome
     .command("restart")
-    .description(`Quit Chrome gracefully (tabs restore) and start it with ${REAL_CHROME_LAUNCH_ARGS.join(" ")}; the switch lasts until Chrome next quits`)
+    .description(`Quit Chrome gracefully (tabs restore) and start it with ${REAL_CHROME_LAUNCH_ARGS.join(" ")}; the switches last until Chrome next quits`)
     .action(async () => {
       const r = await restartRealChrome({ note: (line) => console.log(fmt.muted(`  ${line}`)) });
       if (!r.restarted) die(r.reason ?? "Chrome did not restart");
@@ -328,11 +328,11 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
 
   chrome
     .command("launcher")
-    .description(`Install "${CHROME_LAUNCHER_NAME}.app" in ~/Applications: opens Chrome with the switch, for the Dock`)
+    .description(`Install "${CHROME_LAUNCHER_NAME}.app" in ~/Applications: opens Chrome with the switches, for the Dock`)
     .action(() => {
       const r = installChromeLauncher();
       console.log(`${OK} installed ${r.app}${r.iconCopied ? "" : " (Chrome's icon was not found; the launcher has none)"}`);
-      console.log(fmt.muted("  drag it to the Dock in place of Chrome; it opens the real Chrome with the switch when Chrome is not running"));
+      console.log(fmt.muted("  drag it to the Dock in place of Chrome; it opens the real Chrome with the switches when Chrome is not running"));
     });
 
   br.command("bridge-host", { hidden: true })
