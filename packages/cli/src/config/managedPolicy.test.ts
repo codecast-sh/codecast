@@ -79,7 +79,7 @@ test("profile and team policy merge, profile first, and each value names its sou
   expect(eff.sources.auto_update).toEqual({ kind: "profile" });
   expect(eff.sources.browser_control_disabled).toEqual({ kind: "team", team_id: "t1", team_name: "Acme" });
   expect(policyRefusal("browser_control_disabled", { team_policy: TEAM })).toBe("Agent browser control is turned off by Acme's admins.");
-  expect(policyRefusal("public_sharing_disabled", {})).toBe("Publishing and public share links is turned off by your device's management profile.");
+  expect(policyRefusal("public_sharing_disabled", {})).toBe("Public sharing is turned off by your device's management profile.");
 });
 
 test("the team half comes from config.json when no config is passed", () => {
