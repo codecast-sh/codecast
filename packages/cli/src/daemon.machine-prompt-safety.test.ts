@@ -20,6 +20,7 @@ import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
+import { planSessionTeardown } from "./sessionProcessMatcher";
 
 // The fixture lifts delivery code out of daemon.ts by name; the pane classifiers
 // it calls live in tmuxPaneState.ts, so both files are read as one source.
@@ -44,7 +45,8 @@ function fixture(transport = "tmux", cached = true) {
   const bodies: string[] = [];
   const commands: string[] = [];
   const captureSizes: number[] = [];
-  const hooks = { capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null, markWrite: undefined as undefined | ((id: string) => Promise<unknown>) };
+  const reaped: number[] = [];
+  const hooks = { resume: fail("resume") as (...args: unknown[]) => unknown, capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null, markWrite: undefined as undefined | ((id: string) => Promise<unknown>) };
   const timers: Array<{ fn: () => unknown; ms: number; cancelled: boolean }> = [];
   const clock = { now: 1_000_000, steps: 0 };
   const step = (ms = 0) => {
@@ -214,14 +216,22 @@ function fixture(transport = "tmux", cached = true) {
     classifyClaudeResumeFatalReason: fail("fatal classification"),
     resolveLiveTmuxTarget: async () => transport === "tmux"
       ? { tmuxTarget: "target:0.0", source: "started" }
-      : { tmuxTarget: null, proc: { tty: "ttys-test", termProgram: transport } },
+      : { tmuxTarget: null, proc: { pid: 4242, tty: "ttys-test", termProgram: transport } },
     markInjectedBestEffort: (_sync: unknown, id: string) => {
       const write = hooks.markWrite?.(id); if (write) injectedMarkWrites.set(id, write);
       statuses.push({ messageId: id, status: "injected" });
       injectedMessageTs.set(id, { ts: clock.now, conversationId: "conv", confirmed: false, pasted: false });
     },
     clearUnresolvablePane: () => {}, noteUnresolvablePane: fail("rebuild"),
-    autoResumeSession: fail("resume"), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
+    // herdr's API answers, but no pane holds the agent's tty: the injector's
+    // real failure when it cannot find the pane a person resumed the session in.
+    findHerdrPaneForTty: async () => null, herdrRequest: fail("herdr request"),
+    hasOpenBackgroundWork: () => false, subagentActiveAgoMs: () => Infinity,
+    planSessionTeardown, acquireSessionProcessOwnership: async () => "owned",
+    reapPidTree: async (pid: number) => { reaped.push(pid); return 1; }, sessionProcessCache: new Map(),
+    workflowAgentTranscriptPathFor: async () => null, isSessionCircuitOpen: () => false,
+    resetSessionDeliveryFailures: () => {}, materializedSessions: new Set(), postDeliveryHealthCheck: async () => {},
+    autoResumeSession: (...args: unknown[]) => hooks.resume(...args), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
     restoreSuspendedAgent: async () => false,
     prepareTmuxDelivery: async () => hooks.prepare(), TmuxDeliveryUncertainError, TmuxDeliveryExhaustedError,
     DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice,
@@ -247,13 +257,13 @@ function fixture(transport = "tmux", cached = true) {
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
-      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "herdrKey", "injectViaHerdr", "injectThroughPane", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
+      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "herdrKey", "injectViaHerdr", "noteUnreachableAgent", "injectThroughPane", "normalizeTty", "getTerminalLabel", "injectViaTerminal",
       "deliverMessage", "deliverMessageIntoSession", "launchPromptCarried", "settleLaunchPrompt", "injectedMarkSettled", "rependAfterAttempt",
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
     ];
     const constants = [
       "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
-      "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
+      "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
       "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME",
     ].map(name => {
       const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
@@ -298,7 +308,7 @@ function fixture(transport = "tmux", cached = true) {
   }
   const api = fixtureFactory(...Object.values(deps));
   return {
-    ...api, state, events, bodies, holds, commands, captureSizes, hooks, timers, clock, prompt, launchPromptCarries, directory, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
+    ...api, reaped, state, events, bodies, holds, commands, captureSizes, hooks, timers, clock, prompt, launchPromptCarries, directory, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
     deliver: (body: string, id = "update") => api.deliverMessage("conv", body, deps.conversationCache, syncService, id, {}),
     scan: async (rows: Array<{ _id: string; content: string; delivery_force?: boolean }>) => {
       for (const row of rows) messages.set(row._id, { ...row, conversation_id: "conv" });
@@ -891,6 +901,29 @@ describe("machine prompt delivery safety", () => {
     f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = menu; };
     await expect(f.deliver(session("preserve"))).rejects.toThrow("human answer");
     expect(f.events).toEqual(["paste"]);
+  });
+
+  // Issue 57: a session resumed by hand in a herdr pane got a second copy in
+  // tmux on the next send whenever the pane could not be reached, forking the
+  // transcript. A live agent's failures now hold the message; only a streak
+  // that lasts stops the agent, and the resume then replaces it.
+  test("an unreachable live agent is held, then replaced, never resumed beside", async () => {
+    const f = fixture("herdr");
+    const resumes: unknown[][] = [];
+    f.hooks.resume = (...args: unknown[]) => {
+      expect(f.reaped).toEqual([4242]);
+      resumes.push(args);
+      return true;
+    };
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      await expect(f.deliver(session("keep one copy"), `m${attempt}`)).resolves.toBe(false);
+      f.clock.now += 20_000;
+    }
+    expect(f.reaped).toEqual([]);
+    expect(resumes).toEqual([]);
+    await expect(f.deliver(session("keep one copy"), "m5")).resolves.toBe(true);
+    expect(f.reaped).toEqual([4242]);
+    expect(resumes).toHaveLength(1);
   });
 
   test("AppleScript defaults preserve human submit and explicit poll scripts", () => {
