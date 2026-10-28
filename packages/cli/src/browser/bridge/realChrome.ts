@@ -265,8 +265,8 @@ export async function restartRealChrome(opts: { quitWaitMs?: number; note?: (lin
  * says what it is; Chrome's bundle, updater, profile and default browser
  * registration are untouched. `open -n` starts a new process even while a
  * managed Chrome (its own profile, same bundle) runs, which plain `open -a`
- * would only bring forward; a process started while the human's Chrome runs
- * hands off to it, so the switches apply exactly when Chrome starts.
+ * would only bring forward. While the human's Chrome runs, the script brings
+ * that process forward instead, so a hotkey or Dock press never opens a window.
  */
 export function installChromeLauncher(dir = path.join(os.homedir(), "Applications")): { app: string; iconCopied: boolean } {
   const app = path.join(dir, `${CHROME_LAUNCHER_NAME}.app`);
@@ -278,6 +278,13 @@ export function installChromeLauncher(dir = path.join(os.homedir(), "Application
 # Codecast extension's worker at normal priority and drop the debugging
 # bar (see codecast: packages/browser-extension/README.md). Made by
 # \`cast browser chrome launcher\`.
+# The human's Chrome, when it runs, is brought forward rather than given a new
+# window; a managed Chrome (it passes --user-data-dir) is never it.
+for pid in $(pgrep -x "Google Chrome"); do
+  if ! ps -o args= -p "$pid" | grep -q -- --user-data-dir; then
+    exec /usr/bin/osascript -e "tell application \\"System Events\\" to set frontmost of (first process whose unix id is $pid) to true"
+  fi
+done
 exec /usr/bin/open -n -a "Google Chrome" --args ${REAL_CHROME_LAUNCH_ARGS.join(" ")} "$@"
 `;
   fs.writeFileSync(path.join(contents, "MacOS", "launch"), script, { mode: 0o755 });
