@@ -292,7 +292,10 @@ describe("command groups stay off the boot graph", () => {
     // metric spec, the value formatter) and contracts/rolePlaybook.ts (+5:
     // the Experiments section and the climbing guidance `cast brief` prints),
     // folded into files already here rather than two new leaves.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4397);
+    // 4400 on 2026-10-28: managed devices (MDM). contracts/managedPolicy.ts
+    // (+2: each policy's refusal words and the removed-device message) and
+    // index.ts printing that message when a team has removed the device.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4400);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
