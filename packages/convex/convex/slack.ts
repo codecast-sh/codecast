@@ -51,6 +51,8 @@ export const USER_SCOPES = [
   // Their own direct messages, read and written as them (slackSync DMs),
   // with the images shared in them.
   "im:read", "im:history", "mpim:read", "mpim:history", "chat:write", "files:read",
+  // Their reactions, shown in Slack under their own name.
+  "reactions:write",
 ].join(",");
 /** The scopes a token needs before a person's DMs can come over. */
 export const DM_SCOPES = ["im:read", "im:history", "mpim:read", "mpim:history", "chat:write", "files:read"];

@@ -91,7 +91,7 @@ type Op =
   | { op: "message"; message: Doc<"chat_messages"> }
   | { op: "edit"; message: Doc<"chat_messages"> }
   | { op: "delete"; message: Doc<"chat_messages"> }
-  | { op: "reaction"; message: Doc<"chat_messages">; emoji: string; add: boolean };
+  | { op: "reaction"; message: Doc<"chat_messages">; emoji: string; add: boolean; user_id: Id<"users"> };
 
 /** Schedule the Slack side of a chat write, when the channel's link says so.
  *  Never throws: the chat write must land whatever Slack's state is. */
@@ -114,6 +114,7 @@ export async function queueSlackOutbound(ctx: MutationCtx, args: Op): Promise<st
         message_id: args.message._id,
         emoji: args.emoji,
         add: args.add,
+        user_id: args.user_id,
       });
       return null;
     }
