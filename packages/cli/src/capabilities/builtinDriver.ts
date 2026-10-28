@@ -13,7 +13,7 @@
 // may have installed it by hand and never bound it — not ours to touch).
 
 import { SNIPPET_CATALOG, snippetBySlug } from "@codecast/shared/contracts";
-import { cutOwnedSections, getSnippetTargets, installSectionToTargets } from "../snippets.js";
+import { cutOwnedSections, getSnippetTargets, installSectionToTargets, writeOwnedSection } from "../snippets.js";
 import * as fs from "fs";
 import type { DesiredState } from "@codecast/shared/contracts";
 
@@ -66,9 +66,8 @@ export function applyBuiltins(state: DesiredState, dryRun = false): BuiltinApply
         } catch {
           continue;
         }
-        const next = cutOwnedSections(existing, spec);
-        if (next === existing) continue;
-        if (!dryRun) fs.writeFileSync(target.filePath, next.trimEnd() + "\n", { mode: 0o600 });
+        if (cutOwnedSections(existing, spec) === existing) continue;
+        if (!dryRun) writeOwnedSection(target, spec, null, `capability:builtin/${slug}`);
         removedAnywhere = true;
       }
       if (removedAnywhere) out.removed.push(slug);

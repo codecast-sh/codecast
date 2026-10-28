@@ -20,6 +20,7 @@
 
 import { writeHarnessFile } from "./harness.js";
 import * as os from "os";
+import * as path from "path";
 import { readFileSync as fsReadFileSync } from "node:fs";
 import {
   type GuidanceMode,
@@ -51,6 +52,7 @@ import {
   installSectionToFile as installSectionToFileWith,
   installSectionToTargets as installSectionToTargetsWith,
   nodeFs,
+  removeSectionFromTargets,
   resolveTargets,
   snippetStale as snippetStaleFor,
   stampSnippet as stampSnippetFor,
@@ -91,11 +93,10 @@ export type { SnippetInstallResult };
 /** One instruction file on this machine. */
 export type SnippetTarget = ResolvedTarget;
 
-export function getSnippetTargets(): SnippetTarget[] {
+export function getSnippetTargets(home = process.env.HOME || os.homedir()): SnippetTarget[] {
   // process.env.HOME first, matching the daemon: Bun's os.homedir() answers
   // from getpwuid and ignores $HOME, which breaks every fake-HOME test and any
   // user who genuinely redirects HOME.
-  const home = process.env.HOME || os.homedir();
   const candidates: TargetCandidate[] = [];
 
   for (const descriptor of Object.values(LOCAL_AGENT_CLIENTS)) {
@@ -121,6 +122,26 @@ export function getSnippetTargets(): SnippetTarget[] {
   return resolveTargets(candidates, { home, fs: nodeFs });
 }
 
+/** The project-level instruction files of the same clients getSnippetTargets
+ *  serves (CLAUDE.md, AGENTS.md at the repository root), deduplicated: two
+ *  clients that read one AGENTS.md get one target. A client counts as present
+ *  under the same rule as there. Whether a write may land in one of these is
+ *  not this function's question; projectWrites.ts answers it per file. */
+export function getProjectSnippetTargets(root: string, home = process.env.HOME || os.homedir()): SnippetTarget[] {
+  const users = new Set(getSnippetTargets(home).map((t) => t.label));
+  const seen = new Set<string>();
+  const targets: SnippetTarget[] = [];
+  for (const descriptor of Object.values(LOCAL_AGENT_CLIENTS)) {
+    const file = descriptor.agentFileTargets?.instructionFile;
+    if (!file?.user || !file.project || file.format !== "markdown" || !users.has(file.user)) continue;
+    const filePath = path.join(root, file.project);
+    if (seen.has(filePath)) continue;
+    seen.add(filePath);
+    targets.push({ filePath, dirPath: path.dirname(filePath), label: file.project });
+  }
+  return targets;
+}
+
 /**
  * Write `spec`'s section into one file, creating its directory if needed.
  *
@@ -140,8 +161,7 @@ export function getSnippetTargets(): SnippetTarget[] {
 // Every section write goes through the harness writer, so it lands in the
 // change history with the action that caused it (harness.ts). Reads and the
 // directory check stay on the plain adapter.
-function sectionFs(spec: SectionSpec): typeof nodeFs {
-  const what = `section:${snippetByEndMarker(spec.endMarker)?.slug ?? "references"}`;
+function sectionFs(spec: SectionSpec, what = `section:${snippetByEndMarker(spec.endMarker)?.slug ?? "references"}`): typeof nodeFs {
   return {
     readFile: (p) => nodeFs.readFile(p),
     exists: (p) => nodeFs.exists(p),
@@ -169,6 +189,25 @@ export function installSectionToTargets(
   update: boolean,
 ): SnippetInstallResult {
   return installSectionToTargetsWith(sectionFs(spec), getSnippetTargets(), spec, renderSection(spec, snippet), update);
+}
+
+/**
+ * Put one owned section into one file exactly as given, or cut it with `body:
+ * null`, through the same engine and harness writer as every install above.
+ * The capability driver's markdown arm and the builtin driver's removal both
+ * land here, so a section has one writer whoever wants it. No version stamp
+ * and no stub rendering: the caller hands the bytes it decided on, and plan()
+ * compared exactly those against the disk. Returns whether the file changed.
+ */
+export function writeOwnedSection(
+  target: { filePath: string; dirPath?: string },
+  spec: SectionSpec,
+  body: string | null,
+  what: string,
+): boolean {
+  const fsi = sectionFs(spec, what);
+  if (body !== null) return !installSectionToFileWith(fsi, target, spec, body, true).unchanged;
+  return removeSectionFromTargets(fsi, [target], spec);
 }
 
 // ------------------------------------------------------- what actually lands
