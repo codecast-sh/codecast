@@ -15,6 +15,11 @@ export function tokenCanPost(scopes: string | undefined | null): boolean {
   return tokenHasScope(scopes, "chat:write");
 }
 
+/** Can this person's own token react as them? */
+export function tokenCanReact(scopes: string | undefined | null): boolean {
+  return tokenHasScope(scopes, "reactions:write");
+}
+
 /** Which token may change who is in a mirrored Slack channel: the app's, once
  *  it holds the manage scope for that kind of channel; else, for a private
  *  channel, the person's own (groups:write); else nobody until the workspace
