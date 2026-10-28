@@ -4,6 +4,7 @@
 // facts are put together in lineFacts.ts; the lines themselves live beside
 // this file. State words are lowercase in every cell, so one column reads
 // as one vocabulary ("on track", "active", "paused", "working").
+import { useMetricSeries } from "../../../hooks/useMetricSeries";
 import { useMemo, type ReactNode } from "react";
 import { Flag } from "lucide-react";
 import { INITIATIVE_STATUSES, metricReadings, metricTrends, type InitiativeOwner, type InitiativeRow, type InitiativeStatus } from "@codecast/shared/contracts/initiative";
@@ -79,9 +80,10 @@ export function GoalOwnerPick({ goal, editable = true, size = 16 }: { goal: Init
 
 /** The number a goal is read by, now against its target, with its trend; nothing when it has none. */
 export function GoalMeasure({ goal, now }: { goal: InitiativeRow; now: number }) {
-  const reading = metricReadings(goal)[0];
+  const { lookup } = useMetricSeries();
+  const reading = metricReadings(goal, lookup)[0];
   if (!reading) return null;
-  return <MetricTile reading={reading} trend={metricTrends(goal)[reading.key]} now={now} size="line" named={false} />;
+  return <MetricTile reading={reading} trend={metricTrends(goal, lookup)[reading.key]} now={now} size="line" named={false} />;
 }
 
 // ---------------------------------------------------------------- projects

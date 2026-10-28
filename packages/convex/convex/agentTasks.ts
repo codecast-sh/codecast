@@ -24,12 +24,12 @@ import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
 import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/contracts/orgReview";
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, roleMachineAway, type RoleEventSpec } from "./lib/orgRoutine";
 import { runnerDeviceOf } from "./lib/runnerDevice";
-import { roleServedInitiatives } from "./lib/roleInitiatives";
-import { metricLine } from "@codecast/shared/contracts/initiative";
+import { roleServedInitiatives, servedMetricLines } from "./lib/roleInitiatives";
 import { listOnlineDevices, parkedAccountResetAt, recoveryModeOf } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
+import { canReadCall } from "./transcripts";
 import { armedTriggers } from "./lib/triggerMatch";
 import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, hostedWallCadence, type HostedRoutine } from "./assistant/routines";
 import { nextCadenceRun } from "@platform/assistant/cadence";
@@ -1000,7 +1000,7 @@ export async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefin
     goals: projects.map((p) => firstLine(p.goal, 160)).filter(Boolean).slice(0, 3),
     // What the area feeds, up to the top level goal, with each number read
     // against its target: the link from a role's day to the company's goals.
-    ...(served.length ? { initiatives: served.map((i) => ({ short_id: i.short_id, title: i.title, metrics: i.metrics.map((m) => metricLine(m)), chain: i.chain.map((c) => c.title) })) } : {}),
+    ...(served.length ? { initiatives: served.map((i) => ({ short_id: i.short_id, title: i.title, metrics: servedMetricLines(i), chain: i.chain.map((c) => c.title) })) } : {}),
   };
 }
 
@@ -2763,6 +2763,10 @@ export const matchTaskTriggers = internalMutation({
     // personal workspace, which has no team to scope by, so when this is set
     // only an owner the key admits can be woken.
     workspace: v.optional(v.string()),
+    // The call a call event is about. A call is readable by its own rule
+    // (canReadCall: a recording is its creator's, a private huddle its
+    // people's), so only an owner that rule admits can be woken.
+    call_id: v.optional(v.id("transcripts")),
     // What fired, appended to each matched trigger's pending_events so the
     // run knows what woke it. Omitted by the git events, which carry their
     // context in the session they wake.
@@ -2781,17 +2785,22 @@ export const matchTaskTriggers = internalMutation({
     const armed = (status: "scheduled" | "running"): Promise<Doc<"agent_tasks">[]> => armedTriggers(ctx, status, args.event_type).collect();
     const tasks = [...(await armed("scheduled")), ...(args.event_ref ? await armed("running") : [])];
 
+    // A call event whose call is gone wakes nobody.
+    const call = args.call_id ? await ctx.db.get(args.call_id) : null;
+    if (args.call_id && !call) return 0;
+
     // One lookup per distinct owner, not per task: a user with several armed
     // triggers is the normal case.
     const ownerVerdicts = new Map<string, boolean>();
     const ownerMayBeWoken = async (userId: Id<"users">): Promise<boolean> => {
-      if (!args.team_id && !args.workspace) return true;
+      if (!args.team_id && !args.workspace && !call) return true;
       const key = String(userId);
       const known = ownerVerdicts.get(key);
       if (known !== undefined) return known;
       const verdict =
         (!args.team_id || (await isTeamMember(ctx, userId, args.team_id))) &&
-        (!args.workspace || (await workspaceGrantsAccess(ctx, userId, args.workspace)));
+        (!args.workspace || (await workspaceGrantsAccess(ctx, userId, args.workspace))) &&
+        (!call || (await canReadCall(ctx, userId, call)));
       ownerVerdicts.set(key, verdict);
       return verdict;
     };

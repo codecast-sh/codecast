@@ -156,8 +156,10 @@ export type OpsWatch = {
   name: string;
   query_kind: WatchKind;
   query: string;
-  threshold: number;
+  /** Absent: a plain series a goal reads, with no alert line. */
+  threshold?: number;
   direction: WatchDirection;
+  unit?: string;
   interval_ms: number;
   status: "active" | "paused";
   points: { at: number; value: number }[];

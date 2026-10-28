@@ -263,9 +263,60 @@ export const PENDING_EVENTS_CAP = 20;
  * read (`cast metrics query`, `cast connector read`) hands back at most. A
  * passthrough answer goes to the caller and is never stored.
  */
-/** What a metric watch polls: a HogQL query or a PostHog insight id. */
-export const WATCH_KINDS = ["hogql", "insight"] as const;
+/**
+ * What a metric watch polls: a HogQL query or a PostHog insight id, or an app
+ * connector's reader that answers one number (`reader`, query
+ * `<reader name> [json args]`, answer METRIC_READER_ANSWER).
+ */
+export const WATCH_KINDS = ["hogql", "insight", "reader"] as const;
 export type WatchKind = (typeof WATCH_KINDS)[number];
+
+/**
+ * What a `reader` watch's reader answers: the number now, and the series it
+ * already holds, oldest first. `value` may be null when there is no reading
+ * yet. `at` is an ISO time or epoch ms. The same reader answers both the poll
+ * and the history read, so an app writes one route.
+ */
+export type MetricReaderAnswer = { value: number | null; unit?: string; points?: Array<{ at: string | number; value: number | null }> };
+
+/** A `reader` watch's query read back: the reader's name and the args it passes. */
+export function parseReaderQuery(query: string): { reader: string; args: Record<string, unknown> } | { error: string } {
+  const text = query.trim();
+  const m = /^([A-Za-z0-9_.:-]+)\s*([\s\S]*)$/.exec(text);
+  if (!m) return { error: "A reader watch names the reader first: `<reader> [json args]`" };
+  if (!m[2].trim()) return { reader: m[1], args: {} };
+  try {
+    const args = JSON.parse(m[2]);
+    if (!args || typeof args !== "object" || Array.isArray(args)) return { error: "A reader watch's args are a JSON object" };
+    return { reader: m[1], args };
+  } catch {
+    return { error: "A reader watch's args are a JSON object" };
+  }
+}
+
+/** One answer of a metric reader read as its number and its dated points; null fields when the answer holds none. */
+export function readMetricAnswer(body: unknown): { value: number | null; unit: string | null; points: Array<{ at: number; value: number }> } {
+  const b = (body && typeof body === "object" ? body : {}) as Partial<MetricReaderAnswer>;
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+  const when = (x: unknown) => (typeof x === "number" ? x : typeof x === "string" ? Date.parse(x) : NaN);
+  const points = (Array.isArray(b.points) ? b.points : [])
+    .map((p) => ({ at: when(p?.at), value: num(p?.value) }))
+    .filter((p): p is { at: number; value: number } => Number.isFinite(p.at) && p.value !== null)
+    .sort((x, y) => x.at - y.at);
+  return { value: typeof body === "number" ? num(body) : num(b.value), unit: typeof b.unit === "string" && b.unit.trim() ? b.unit.trim().slice(0, 12) : null, points };
+}
+
+/**
+ * A number in the unit its series names: "$" leads ("$382"), anything else
+ * follows ("0.12%", "4.2/day"); no unit is a bare number. Rounded the way a
+ * person writes it: whole numbers from 100 up, two significant places below.
+ */
+export function formatSeriesValue(value: number, unit?: string | null): string {
+  const abs = Math.abs(value);
+  const n = abs >= 100 ? Math.round(value).toLocaleString("en-US") : abs >= 10 ? (Math.round(value * 10) / 10).toString() : Number(value.toPrecision(2)).toString();
+  if (!unit) return n;
+  return unit === "$" ? `${value < 0 ? "-" : ""}$${n.replace(/^-/, "")}` : `${n}${/^[%/]/.test(unit) ? "" : " "}${unit}`;
+}
 
 /** Which side of the threshold alerts. */
 export const WATCH_DIRECTIONS = ["above", "below"] as const;

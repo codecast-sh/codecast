@@ -363,11 +363,14 @@ export const ingestTables = {
     short_id: v.string(), // "mw-N"
     created_by: v.id("users"),
     name: v.string(),
-    /** hogql: a HogQL query returning one number; insight: a PostHog insight id. */
+    /** hogql: a HogQL query returning one number; insight: a PostHog insight id; reader: an app connector reader and its args. */
     query_kind: watchKindValidator,
     query: v.string(),
-    threshold: v.number(),
+    /** The alert line. Absent: a plain series (a goal's live number), which never opens a group. */
+    threshold: v.optional(v.number()),
     direction: watchDirectionValidator,
+    /** How a value reads: "$" leads it, anything else ("%", "/day", "intros") follows it. */
+    unit: v.optional(v.string()),
     interval_ms: v.number(),
     status: v.union(v.literal("active"), v.literal("paused")),
     /** Absent while paused, so the poll cron's range read skips it. */

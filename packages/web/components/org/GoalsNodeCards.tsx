@@ -14,10 +14,11 @@
 // here") in plain text. Nothing on the chart is dashed. A column card wears
 // the reporting chart's marks for a role change: the stub tint, the retire
 // hatch, "was under X" for a move, a quiet line per chip.
+import { useMetricSeries } from "../../hooks/useMetricSeries";
 import { memo } from "react";
 import { BaseEdge, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
 import { AlertTriangle, Building2, Compass, Flag, FolderClosed, FolderOpen } from "lucide-react";
-import { metricTrends, milestoneCounts, nextMilestone } from "@codecast/shared/contracts/initiative";
+import { metricReadings, metricTrends, milestoneCounts, nextMilestone } from "@codecast/shared/contracts/initiative";
 import { cn } from "../../lib/utils";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInitiativeUpdates } from "../../hooks/useInitiatives";
@@ -135,7 +136,10 @@ function MissionKicker({ ghost, company }: { ghost: boolean; company?: string })
 
 export type GoalNodeData = Lit & GhostFocus & Pick<Extract<GoalsNode, { kind: "goal" }>, "goal" | "metrics" | "rows" | "refs" | "running" | "mission" | "root" | "hasChildren">;
 export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNodeData>>) {
-  const { goal: g, metrics, rows, refs, running, mission, root, hasChildren } = data;
+  const { goal: g, metrics: laid, rows, refs, running, mission, root, hasChildren } = data;
+  // The layout counts the numbers; the values are read live here, where they draw.
+  const { lookup } = useMetricSeries();
+  const metrics = g.row ? metricReadings(g.row, lookup) : laid;
   const now = useCoarseNow(60_000);
   const level = useZoomLevel();
   const ghost = proposed(g.ghost);
@@ -157,7 +161,7 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
   const close = level === "close";
   const milestone = g.row ? nextMilestone(g.row) : null;
   const closeRows = !!g.description?.trim() || metrics.length > 1 || !!milestone || (!!g.row && g.row.health !== "none") || running.length > 0;
-  const trends = close && g.row ? metricTrends(g.row) : {};
+  const trends = close && g.row ? metricTrends(g.row, lookup) : {};
   // Middle: the first metric against its target, with its bar. Close: each with its trend and the day it was read.
   const metricRow = (m: (typeof metrics)[number]) => (
     <div key={m.key} className="flex min-w-0 items-center" style={{ height: GOALS_SIZES.metricRow - 4, marginTop: close && closeRows ? 0 : 4, marginBottom: close && closeRows ? 4 : 0 }} data-goal-metric={m.key}>

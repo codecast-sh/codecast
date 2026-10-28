@@ -11,6 +11,9 @@
 //   ## Rules learned
 //   - Read the threads before the counters. Learned from: three diagnoses made from totals were wrong. (2026-09-12)
 //
+//   ## Experiments
+//   - 2026-10-20: Shorter first email for intro rate, because long ones read as templates; expect 0.12% to 0.16%, read 2026-10-27. Result: kept, 0.15%.
+//
 //   ## Refuted
 //   - The reply rate fell because the audience changed: the mix of replies by week is flat. (2026-09-06)
 //
@@ -45,24 +48,28 @@ export type MetricReading = PlaybookEntry & { number: number | null; milestone: 
 export type PlaybookRule = PlaybookEntry & { mistake: string | null };
 export type PlaybookDecision = PlaybookEntry & { who: string | null };
 export type PlaybookThread = PlaybookEntry & { due_on: string | null; due_at: number | null };
+/** One try at moving a number: the day it reads its result, and the outcome once it has one. */
+export type PlaybookExperiment = PlaybookEntry & { read_on: string | null; read_at: number | null; outcome: "kept" | "reverted" | null };
 
 export type RolePlaybook = {
   /** The number the area is read by, in the role's words, and its readings oldest first. */
   metric: { name: string; readings: MetricReading[] } | null;
   rules: PlaybookRule[];
+  experiments: PlaybookExperiment[];
   refuted: PlaybookEntry[];
   decisions: PlaybookDecision[];
   threads: PlaybookThread[];
 };
 
-export type PlaybookSectionKey = "metric" | "rules" | "refuted" | "decisions" | "threads";
+export type PlaybookSectionKey = "metric" | "rules" | "experiments" | "refuted" | "decisions" | "threads";
 
 /** The sections, in the order a brief holds them, each with the shape of a
  *  line as `cast brief` prints it for a role that has not written one yet.
  *  The shapes are placeholders, never content. */
 export const PLAYBOOK_SECTIONS: ReadonlyArray<{ key: PlaybookSectionKey; title: string; heading: RegExp; shape: string }> = [
-  { key: "metric", title: "North metric", heading: /^#{1,6}\s*North metric\b.*$/i, shape: "a first line naming the one number your area is read by and where you read it, then `- <YYYY-MM-DD>: <reading>` per reading; take a fresh one from that source when you check (write `milestone` in the ones worth keeping; keep those and the recent ones)" },
+  { key: "metric", title: "North metric", heading: /^#{1,6}\s*North metric\b.*$/i, shape: "a first line naming the one number your area is read by and where you read it, then `- <YYYY-MM-DD>: <reading>` per reading; take a fresh one from that source when you check (write `milestone` in the ones worth keeping; keep those and the recent ones). When it is a goal's or project's live number, name it (`in-N`, `mw-N`): its value and trend are read for you above, so write only the milestones" },
   { key: "rules", title: "Rules learned", heading: /^#{1,6}\s*Rules learned\b.*$/i, shape: "only what a mistake taught you: `- <the rule>. Learned from: <the mistake that taught it>. (<YYYY-MM-DD>)`" },
+  { key: "experiments", title: "Experiments", heading: /^#{1,6}\s*Experiments\b.*$/i, shape: "one try at moving a number: `- <YYYY-MM-DD>: <the change> for <which number>, because <the reason>; expect <the effect>, read <YYYY-MM-DD>. Result: <kept or reverted>, <what the number did>` (add the result on its read day; move a refuted idea to Refuted)" },
   { key: "refuted", title: "Refuted", heading: /^#{1,6}\s*Refuted\b.*$/i, shape: "`- <what turned out false, and what showed it> (<YYYY-MM-DD>)`" },
   { key: "decisions", title: "Standing decisions", heading: /^#{1,6}\s*Standing decisions\b.*$/i, shape: "what a person decided that still binds your work: `- <what was decided> (<who decided>, <YYYY-MM-DD>)`" },
   { key: "threads", title: "Open threads", heading: /^#{1,6}\s*Open threads\b.*$/i, shape: "work that waits on someone or something: `- <what is open and what it waits for> (opened <YYYY-MM-DD>, due <YYYY-MM-DD> when it has a day)`" },
@@ -135,6 +142,17 @@ function threadOf(raw: string): PlaybookThread {
   return { ...e, due_on: due && dayAt(due) !== null ? due : null, due_at: due ? dayAt(due) : null };
 }
 
+const READ_ON = new RegExp(`\\bread(?:\\s+on|\\s+by)?\\s+(${DAY})`, "i");
+function experimentOf(raw: string): PlaybookExperiment {
+  const lead = raw.match(LEADING_DATE);
+  const e = lead && dayAt(lead[1]) !== null ? { ...dated(lead[2], lead[1]), raw } : entryOf(raw);
+  const read = raw.match(READ_ON)?.[1] ?? null;
+  const result = raw.match(/\bResult:\s*(kept|reverted)\b/i)?.[1]?.toLowerCase() as "kept" | "reverted" | undefined;
+  return { ...e, read_on: read && dayAt(read) !== null ? read : null, read_at: read ? dayAt(read) : null, outcome: result ?? null };
+}
+/** An experiment past its read day with no result written yet. */
+export const experimentDue = (x: PlaybookExperiment, now: number): boolean => x.outcome === null && x.read_at !== null && now >= x.read_at;
+
 const items = (narrative: string | null | undefined, key: PlaybookSectionKey): string[] => sectionRows(narrative, headingOf(key)).flatMap((l) => listItem(l) ?? []);
 
 /** The playbook a brief holds. A section the role left out reads as empty. */
@@ -147,6 +165,7 @@ export function parsePlaybook(narrative: string | null | undefined): RolePlayboo
   return {
     metric: name || readings.length ? { name, readings } : null,
     rules: items(narrative, "rules").map(ruleOf),
+    experiments: items(narrative, "experiments").map(experimentOf),
     refuted: items(narrative, "refuted").map(entryOf),
     decisions: items(narrative, "decisions").map(decisionOf),
     threads: items(narrative, "threads").map(threadOf),
@@ -155,7 +174,7 @@ export function parsePlaybook(narrative: string | null | undefined): RolePlayboo
 
 /** How many entries each section holds; a section the brief lacks is 0. */
 export function playbookCounts(p: RolePlaybook): Record<PlaybookSectionKey, number> {
-  return { metric: p.metric ? Math.max(1, p.metric.readings.length) : 0, rules: p.rules.length, refuted: p.refuted.length, decisions: p.decisions.length, threads: p.threads.length };
+  return { metric: p.metric ? Math.max(1, p.metric.readings.length) : 0, rules: p.rules.length, experiments: p.experiments.length, refuted: p.refuted.length, decisions: p.decisions.length, threads: p.threads.length };
 }
 
 export const playbookIsEmpty = (p: RolePlaybook): boolean => Object.values(playbookCounts(p)).every((n) => n === 0);

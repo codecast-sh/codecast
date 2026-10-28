@@ -1,4 +1,5 @@
 import { resourceOffloadStubs, cancelResourceBatch } from "./resourceOffloadActions";
+import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress } from "@codecast/shared/contracts";
@@ -80,7 +81,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -558,6 +559,8 @@ export type ProjectItem = {
   // The charter (docs/architecture/org-staffing.md S7; components/charter).
   goal?: string;
   success_metrics?: string[];
+  /** Its numbers with targets, each read live from the series it names (lib/metricSeries). */
+  metrics?: InitiativeMetric[];
   priority?: "p0" | "p1" | "p2" | "p3";
   owner_role_id?: string;
   non_goals?: string[];
@@ -1883,6 +1886,8 @@ export type ClientUI = {
   // to everything the developer inbox holds (hostedOnlyInbox). Ctrl+, and the
   // panel's Assistant / Everything switch flip it.
   hosted_inbox_everything?: boolean;
+  /** A solo account's rail: More (true) lays out every row, Fewer (false) keeps it to the sessions and work (lib/railFocus.ts). */
+  rail_everything?: boolean;
   // Hosted mode's "Esc for shortcuts" under the composer has been shown: it
   // is said once, then lives in the shortcuts sheet (HostedStatusLine).
   hosted_esc_hint_seen?: boolean;
@@ -1908,10 +1913,10 @@ export type ClientUI = {
   // wears a character for this viewer (roleIcon.ts). Absent reads as on.
   show_characters?: boolean;
   // Keep a server record of the composer's quotes (lib/quoteDraftWire), so a
-  // quote shows sent, then answered, after its message goes. Off by default.
+  // quote shows sent, then answered, after its message goes. Absent reads as on.
   quote_drafts?: boolean;
   // Read conversation comments from their review_comments twins
-  // (lib/commentSource) instead of the comments table. Off by default.
+  // (lib/commentSource) instead of the comments table. Absent reads as on.
   comments_from_review?: boolean;
   // Opt in to the teammate-comment tools (the gutter "comment" handle + the
   // header toggle when a conversation has none yet). Off by default — you still
@@ -6287,6 +6292,21 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
     team_id?: string;
     client_key?: string;
   }) => void;
+  // The kit (docs/architecture/team-kit.md). Share writes a stub row that the
+  // server's item supersedes by slug once its machine uploads.
+  shareToKit: (opts: {
+    kind: string;
+    name: string;
+    description?: string;
+    device_id: string;
+    workspace: string;
+    team_id?: string;
+    owner_id: string;
+    client_key?: string;
+  }) => void;
+  removeKitItem: (itemId: string) => void;
+  grantKitConsent: (opts: { device_id: string; slug: string; hash: string }) => void;
+  adoptKitItem: (opts: { device_id: string; slug: string; hash: string }) => void;
 
   // -- Decision queue (cast decide) --
   sessionDecisions: Record<string, SessionDecisionItem>;
@@ -6625,7 +6645,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   updatePlan: (shortId: string, fields: { title?: string; project_id?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
   /** Name (or clear) a project's lead; adds the project to the role's scope when it is missing. */
   setProjectLead: (projectId: string, roleId: string | null, opts?: { leave_sessions?: boolean }) => Promise<{ scope?: string; took_over?: string } | null | undefined>;
-  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null; project_path?: string | null }) => void;
+  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null; project_path?: string | null; metrics?: InitiativeMetric[] }) => void;
 
   // -- Issue sync sources (docs/architecture/issue-sync.md S1.3) --
   addIssueSyncSource: (opts: { provider: "linear" | "github"; kind: "linear_project" | "linear_team" | "github_repo"; external_id: string; external_key?: string; name: string; url?: string; project_id?: string; project_name?: string }) => Promise<any>;
@@ -9707,6 +9727,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
       return;
     }
     const clientKey = opts.client_key ?? `cb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    // Rides to the server with the dispatch, so the real row carries it and
+    // supersedes this stub (altKey client_key) instead of sitting beside it.
+    opts.client_key = clientKey;
     this.capabilityBindings[clientKey] = {
       _id: clientKey,
       capability_slug: opts.capability_slug,
@@ -9719,6 +9742,51 @@ const inboxStoreConfig = (set: any, get: any) => ({
       updated_at: Date.now(),
     };
   }),
+
+  shareToKit: action(function (this: Draft, opts: {
+    kind: string;
+    name: string;
+    description?: string;
+    device_id: string;
+    workspace: string;
+    team_id?: string;
+    owner_id: string;
+    client_key?: string;
+  }) {
+    const slug = formatCapabilitySlug({ source: "authored", segments: [opts.owner_id, opts.kind, opts.name] });
+    if (!slug) return;
+    const items = ((this as any).teamKitItems ??= {});
+    if (Object.values(items).some((r: any) => r?.slug === slug && !r.removed_at)) return;
+    const clientKey = opts.client_key ?? `tk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    opts.client_key = clientKey;
+    items[clientKey] = {
+      _id: clientKey,
+      slug,
+      kind: opts.kind,
+      name: opts.name,
+      description: opts.description,
+      workspace: opts.workspace,
+      team_id: opts.team_id,
+      author_user_id: this.currentUser?._id ? String(this.currentUser._id) : undefined,
+      publishing: true,
+      client_key: clientKey,
+      updated_at: Date.now(),
+    };
+  }),
+
+  removeKitItem: action(function (this: Draft, itemId: string) {
+    const row = ((this as any).teamKitItems ?? {})[itemId];
+    if (row) {
+      row.removed_at = Date.now();
+      row.updated_at = Date.now();
+      for (const b of Object.values(this.capabilityBindings) as any[]) {
+        if (b.capability_slug === row.slug && b.enabled) b.enabled = false;
+      }
+    }
+  }),
+
+  grantKitConsent: action(function (this: Draft, _opts: { device_id: string; slug: string; hash: string }) {}),
+  adoptKitItem: action(function (this: Draft, _opts: { device_id: string; slug: string; hash: string }) {}),
 
   // -- Decision queue (cast decide) --
   sessionDecisions: {},

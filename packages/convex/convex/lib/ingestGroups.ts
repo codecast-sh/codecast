@@ -610,6 +610,19 @@ export function mergeMetricHistory(points: { at: number; value: number }[], hist
   return { points: merged, added: Math.max(0, merged.length - Math.min(points.length, GROUP_RULES.metric_points)) };
 }
 
+/**
+ * A metric reader's own dated series over the watch's points: the reader's
+ * value wins at a time both hold, and the newest GROUP_RULES.metric_points
+ * stay. A reader that answers its history on every read keeps the series it
+ * answers, rather than one point a poll (a daily number polled hourly would
+ * otherwise fill the row with repeats of one day).
+ */
+export function mergeReaderSeries(points: { at: number; value: number }[], series: { at: number; value: number }[]): { at: number; value: number }[] {
+  const byAt = new Map(points.map((p) => [p.at, p]));
+  for (const p of series) if (Number.isFinite(p.value)) byAt.set(p.at, p);
+  return [...byAt.values()].sort((a, b) => a.at - b.at).slice(-GROUP_RULES.metric_points);
+}
+
 const DAY_MS = 24 * 3600_000;
 
 /** What a backfill asks for: back from the oldest point the watch holds (or now), within `days`. */

@@ -106,7 +106,7 @@ describe("parsePlaybook", () => {
 
   test("the playbook leaves the standing section and other sections alone", () => {
     expect(parseStandingSection(BRIEF)).toHaveLength(1);
-    expect(playbookCounts(p)).toEqual({ metric: 4, rules: 2, refuted: 1, decisions: 2, threads: 3 });
+    expect(playbookCounts(p)).toEqual({ metric: 4, rules: 2, experiments: 0, refuted: 1, decisions: 2, threads: 3 });
   });
 
   test("a brief with no playbook is empty, never an error", () => {
@@ -127,13 +127,13 @@ describe("the budget", () => {
 
   test("cast brief prints the shape of every section, and how full the brief is once that matters", () => {
     const bare = playbookGuideLines("Docs: quiet week");
-    expect(bare).toHaveLength(6);
+    expect(bare).toHaveLength(7);
     expect(bare[1]).toStartWith("  ## North metric: ");
     expect(bare[2]).toContain("Learned from:");
     expect(playbookGuideLines(BRIEF)).toEqual(bare);
     const full = playbookGuideLines(`${BRIEF}\n${"x".repeat(BRIEF_BUDGET_CHARS)}`);
-    expect(full).toHaveLength(7);
-    expect(full[6]).toContain("over its budget");
+    expect(full).toHaveLength(8);
+    expect(full[7]).toContain("over its budget");
   });
 });
 

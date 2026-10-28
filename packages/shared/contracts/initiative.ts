@@ -15,6 +15,7 @@
 // decisions taken, and the sources that say who stated the goal and where.
 
 import { matchHandle, memberHandle } from "../chat/handles";
+import { formatSeriesValue } from "./ingest";
 import { parseEntityUrl } from "../entities";
 
 export const INITIATIVE_STATUSES = ["proposed", "planned", "active", "completed", "cancelled"] as const;
@@ -68,8 +69,23 @@ export type InitiativeMetric = {
   name: string;
   /** The number to reach, as written: "1000", "$50k", "< 5%", "at least 40". */
   target: string;
+  /**
+   * The live series it reads (a metric watch's short id, `mw-N`): its latest
+   * point is the value, and its points are the trend. Without one the value
+   * is the last report in `scoreboard`.
+   */
+  series?: string;
+  /**
+   * A number the work must not make worse while it moves the others (bounce
+   * rate under an outreach volume goal): read against its target like the
+   * rest, and never the number a role climbs.
+   */
+  guardrail?: boolean;
 };
-export const INITIATIVE_METRICS_MAX = 2;
+
+/** A live series as a reading needs it: the watch's name, unit and points, oldest first. */
+export type MetricSeries = { short_id: string; name: string; unit?: string | null; points: Array<{ at: number; value: number }>; last_error?: string | null };
+export const INITIATIVE_METRICS_MAX = 4;
 /** A reported value: the template scoreboard's own shape (orgTemplateState.ScoreState). */
 export type InitiativeScore = { value: string; observed_at: number; source: string };
 
@@ -100,19 +116,59 @@ export type MetricReading = InitiativeMetric & {
   standing: MetricStanding;
   /** How far toward a reach target, 0 to 1; null when it cannot be read. */
   progress: number | null;
+  /** The value comes from a live series rather than a report. */
+  live: boolean;
+  /** The live series' unit, for a surface that prints its other values. */
+  unit: string | null;
 };
 
-/** One metric read against its target. */
-export function metricReading(metric: InitiativeMetric, score?: InitiativeScore | null): MetricReading {
-  const value = score?.value ?? null;
+/**
+ * A metric as a person types it on the command line: `name=target`, then
+ * `@mw-N` to read it live from a series and `guardrail` to mark it one:
+ * "Dollars per intro=under $250 @mw-12", "Bounce rate=under 3% @mw-14 guardrail".
+ * Null when it is not that shape.
+ */
+export function parseMetricSpec(text: string): { name: string; target: string; series?: string; guardrail?: boolean } | null {
+  const at = text.indexOf("=");
+  if (at <= 0) return null;
+  let rest = text.slice(at + 1);
+  const series = rest.match(/(?:^|\s)@(mw-\d+)\b/i)?.[1]?.toLowerCase();
+  rest = rest.replace(/(?:^|\s)@mw-\d+\b/i, " ");
+  const guardrail = /\s+guardrail\s*$/i.test(` ${rest}`);
+  rest = rest.replace(/\s*\bguardrail\s*$/i, "");
+  const name = text.slice(0, at).trim(), target = rest.trim();
+  if (!name || !target) return null;
+  return { name, target, ...(series ? { series } : {}), ...(guardrail ? { guardrail: true } : {}) };
+}
+/** A metric back in the shape parseMetricSpec reads. */
+export const metricSpec = (m: Pick<InitiativeMetric, "name" | "target" | "series" | "guardrail">): string => `${m.name}=${m.target}${m.series ? ` @${m.series}` : ""}${m.guardrail ? " guardrail" : ""}`;
+
+/** One metric read against its target: from its live series when it names one that has a point, else from its last report. */
+export function metricReading(metric: InitiativeMetric, score?: InitiativeScore | null, series?: MetricSeries | null): MetricReading {
+  const last = series?.points[series.points.length - 1];
+  if (metric.series && series && last) {
+    return {
+      ...readAgainst(metric, formatSeriesValue(last.value, series.unit)),
+      observed_at: last.at,
+      source: `${series.short_id} ${series.name}`,
+      live: true,
+      unit: series.unit ?? null,
+    };
+  }
+  return { ...readAgainst(metric, score?.value ?? null), observed_at: score?.observed_at ?? null, source: score?.source ?? null, live: false, unit: null };
+}
+
+function readAgainst(metric: InitiativeMetric, value: string | null): Omit<MetricReading, "observed_at" | "source" | "live" | "unit"> {
   const n = metricNumber(value);
   const t = metricNumber(metric.target);
   const direction = metricDirection(metric.target);
   const standing: MetricStanding = n === null || t === null ? "unknown" : direction === "at_most" ? (n <= t ? "met" : "behind") : (n >= t ? "met" : "behind");
   const progress = n === null || t === null || t <= 0 || direction === "at_most" ? null : Math.max(0, Math.min(1, n / t));
-  return { ...metric, value, observed_at: score?.observed_at ?? null, source: score?.source ?? null, standing, progress };
+  return { ...metric, value, standing, progress };
 }
-export const metricReadings = (row: Pick<InitiativeRow, "metrics" | "scoreboard">): MetricReading[] => (row.metrics ?? []).map((m) => metricReading(m, row.scoreboard?.[m.key]));
+/** A row's metrics read against their targets; `series` finds a metric's live series by its short id. */
+export const metricReadings = (row: { metrics?: InitiativeMetric[]; scoreboard?: Record<string, InitiativeScore> }, series?: (ref: string) => MetricSeries | null | undefined): MetricReading[] =>
+  (row.metrics ?? []).map((m) => metricReading(m, row.scoreboard?.[m.key], m.series ? series?.(m.series) : null));
 
 /** Whether a value reads "of" its target: a number to reach. A number to stay under ("under 20") and a target that is not a number are named as the target instead. */
 export const metricReaches = (target: string): boolean => metricDirection(target) === "at_least" && metricNumber(target) !== null;
@@ -122,12 +178,18 @@ export function metricAgainst(r: Pick<MetricReading, "value" | "target">): strin
   return metricReaches(r.target) ? `${r.value} of ${r.target}` : `${r.value}, target ${r.target}`;
 }
 
-/** "Weekly active teams: 412 of 1,000, behind (28 Sep)" or "Weekly active teams: not reported yet, target 1,000". */
-export function metricLine(r: MetricReading, now = Date.now()): string {
-  if (r.value === null) return `${r.name}: not reported yet, ${metricAgainst(r)}`;
-  const when = r.observed_at ? ` (${dayWord(r.observed_at, now)})` : "";
+/**
+ * "Weekly active teams: 412 of 1,000, behind (28 Sep)", "Dollars per intro:
+ * $382, target under $250, behind; down from $410, toward the target (live
+ * mw-12, today)" or "Weekly active teams: not reported yet, target 1,000".
+ */
+export function metricLine(r: MetricReading, now = Date.now(), trend?: MetricTrend | null): string {
+  if (r.value === null) return `${r.name}: ${r.series ? "no reading yet from its live series" : "not reported yet"}, ${metricAgainst(r)}`;
   const word = r.standing === "met" ? "met" : r.standing === "behind" ? "behind" : "";
-  return `${r.name}: ${metricAgainst(r)}${word ? `, ${word}` : ""}${when}`;
+  const moved = trend ? trendWords(trend, r.unit) : "";
+  const when = r.observed_at ? dayWord(r.observed_at, now) : "";
+  const tail = r.live ? ` (live ${r.series}${when ? `, ${when}` : ""})` : when ? ` (${when})` : "";
+  return `${r.name}: ${metricAgainst(r)}${word ? `, ${word}` : ""}${r.guardrail ? ", a guardrail" : ""}${moved ? `; ${moved}` : ""}${tail}`;
 }
 function dayWord(at: number, now: number): string {
   // Calendar days, not elapsed 24 hour blocks: a report at noon yesterday reads "yesterday" this morning.
@@ -572,14 +634,46 @@ export function metricTrend(history: readonly InitiativeScore[] | undefined, tar
   const toward = direction === "flat" ? null : (metricDirection(target) === "at_most") === (direction === "down");
   return { direction, toward, delta: last - series[series.length - 2].n, series };
 }
-export const metricTrends = (row: Pick<InitiativeRow, "metrics" | "score_history">): Record<string, MetricTrend> => Object.fromEntries((row.metrics ?? []).map((m) => [m.key, metricTrend(row.score_history?.[m.key], m.target)]));
+/** A live series read as a trend: its points over the last week, at most `window` of them evenly picked. */
+export function seriesTrend(series: MetricSeries, target: string, window = 24): MetricTrend {
+  const last = series.points[series.points.length - 1];
+  const week = last ? series.points.filter((p) => p.at >= last.at - 7 * 86_400_000) : [];
+  const step = Math.max(1, Math.ceil(week.length / window));
+  const picked = week.filter((_, i) => (week.length - 1 - i) % step === 0);
+  return metricTrend(picked.map((p) => ({ value: String(p.value), observed_at: p.at, source: series.short_id })), target, window);
+}
+/** Each metric's trend: from its live series when it names one that has points, else from its reported history. */
+export const metricTrends = (row: { metrics?: InitiativeMetric[]; score_history?: Record<string, InitiativeScore[]> }, series?: (ref: string) => MetricSeries | null | undefined): Record<string, MetricTrend> =>
+  Object.fromEntries((row.metrics ?? []).map((m) => {
+    const live = m.series ? series?.(m.series) : null;
+    return [m.key, live?.points.length ? seriesTrend(live, m.target) : metricTrend(row.score_history?.[m.key], m.target)];
+  }));
 
 /** "up from 380, toward the target" for a terminal and a prompt; empty before two reports. */
-export function trendWords(t: MetricTrend): string {
+export function trendWords(t: MetricTrend, unit?: string | null): string {
   if (t.direction === "unknown") return "";
   if (t.direction === "flat") return "flat";
   const from = t.series[0]?.n;
-  return `${t.direction}${from !== undefined ? ` from ${formatMetricNumber(from)}` : ""}${t.toward === null ? "" : t.toward ? ", toward the target" : ", away from the target"}`;
+  const said = from === undefined ? "" : ` from ${unit ? formatSeriesValue(from, unit) : formatMetricNumber(from)}`;
+  return `${t.direction}${said}${t.toward === null ? "" : t.toward ? ", toward the target" : ", away from the target"}`;
+}
+/**
+ * The pace a number behind its target needs, against the pace it is moving
+ * at: "needs +1,070 a week to reach 10,000 by 1 Jan; moving +210 a week".
+ * Empty when it is met, has no date, or either side is not a number.
+ */
+export function paceWords(r: Pick<MetricReading, "value" | "target" | "standing" | "unit">, trend: MetricTrend | null | undefined, targetDate: number | null | undefined, now = Date.now()): string {
+  const n = metricNumber(r.value), t = metricNumber(r.target);
+  if (r.standing !== "behind" || n === null || t === null || !targetDate) return "";
+  const weeks = (targetDate - now) / (7 * 86_400_000);
+  const say = (x: number) => `${x >= 0 ? "+" : "-"}${r.unit ? formatSeriesValue(Math.abs(x), r.unit) : formatMetricNumber(Math.abs(x))}`;
+  const d = new Date(targetDate);
+  const by = `${d.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()]}`;
+  if (weeks <= 0) return `past its date (${by})`;
+  const need = `needs ${say((t - n) / weeks)} a week to reach ${r.target} by ${by}`;
+  const s = trend?.series ?? [];
+  const span = s.length >= 2 ? (s[s.length - 1].at - s[0].at) / (7 * 86_400_000) : 0;
+  return span > 0.2 ? `${need}; moving ${say((s[s.length - 1].n - s[0].n) / span)} a week` : need;
 }
 /** 1234.5 → "1,234.5"; whole numbers print whole. */
 export const formatMetricNumber = (n: number): string => (Number.isInteger(n) ? n : Math.round(n * 100) / 100).toLocaleString("en-US");

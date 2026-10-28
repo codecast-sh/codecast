@@ -63,6 +63,11 @@ function fixtures() {
       { _id: "tasks_6", user_id: STRANGER, workspace: `user:${STRANGER}`, project_id: P, status: "done", title: "f", source: "human" },
     ].map((t, i) => ({ _creationTime: i + 1, ...t })),
     plans: [{ _id: "plans_growth", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, title: "Growth plan", status: "active" }],
+    // Two live series: one in the team's workspace, one in another team's.
+    metric_watches: [
+      { _id: "mw_ours", short_id: "mw-1", workspace: WS, name: "Dollars per intro", unit: "$", points: [{ at: NOW - 7 * DAY, value: 410 }, { at: NOW - 3 * DAY, value: 395 }, { at: NOW, value: 382 }], query_kind: "reader", query: "metrics.read", direction: "below", interval_ms: 3600_000, status: "active", state: "ok", source_id: "event_sources_union", created_by: ME, created_at: 1, updated_at: 1 },
+      { _id: "mw_theirs", short_id: "mw-2", workspace: `team:${OTHER_TEAM}`, name: "Their number", points: [{ at: NOW, value: 1 }], query_kind: "reader", query: "metrics.read", direction: "below", interval_ms: 3600_000, status: "active", state: "ok", source_id: "event_sources_other", created_by: ME, created_at: 1, updated_at: 1 },
+    ],
     projects: [
       project(P, "Growth"),
       project(Q, "Billing"),
@@ -70,6 +75,9 @@ function fixtures() {
     ],
   });
 }
+
+const NOW = 1_793_000_000_000;
+const DAY = 86_400_000;
 
 const ctxOf = (db: any, who: string | null = ME) =>
   ({ db, auth: { getUserIdentity: async () => (who ? { subject: `${who}|session` } : null) } }) as any;
@@ -371,7 +379,7 @@ describe("initiatives: metrics and the chain up (I4)", () => {
     await db.insert("conversations", { user_id: ME, team_id: TEAM, session_id: "sess-growth", standing_role_id: role._id, is_private: false });
     const made = await run(create, db, { ...inTeam, title: "Reach 1k teams", owner: "@growth", metrics: [{ name: "Weekly active teams", target: "1,000" }, { name: "Paying teams", target: "40" }] });
     expect(made.row.metrics).toEqual([{ key: "weekly_active_teams", name: "Weekly active teams", target: "1,000" }, { key: "paying_teams", name: "Paying teams", target: "40" }]);
-    await expect(run(update, db, { id: "in-1", metrics: [{ name: "A", target: "1" }, { name: "B", target: "2" }, { name: "C", target: "3" }] })).rejects.toThrow("at most 2 metrics");
+    await expect(run(update, db, { id: "in-1", metrics: ["A", "B", "C", "D", "E"].map((name, i) => ({ name, target: String(i + 1) })) })).rejects.toThrow("at most 4 metrics");
     await expect(run(update, db, { id: "in-1", metrics: [{ name: "A", target: "" }] })).rejects.toThrow("a name and a target");
 
     // The role's standing session reports as the owner; a key the goal does not declare is refused; a source is required.
@@ -690,5 +698,36 @@ describe("initiatives: the intent record (I5)", () => {
     expect(write.before.scoreboard.weekly_active_teams.value).toBe("420");
     await run(update, db, { id: "in-1", metrics: [] });
     expect((await db.get(made.id)).score_history).toBeUndefined();
+  });
+});
+
+describe("initiatives: live numbers", () => {
+  test("a metric names a series in its own workspace, reads its latest point, and trends over its week", async () => {
+    const db = fixtures();
+    await run(create, db, { ...inTeam, title: "Cheaper intros", target_date: NOW + 4 * 7 * DAY, project_ids: [P] });
+    await run(update, db, { id: "in-1", metrics: [{ name: "Dollars per intro", target: "under $250", series: "MW-1" }, { name: "Bounce rate", target: "under 3%", guardrail: true }] });
+    const row = db._tables.initiatives[0];
+    expect(row.metrics).toEqual([
+      { key: "dollars_per_intro", name: "Dollars per intro", target: "under $250", series: "mw-1" },
+      { key: "bounce_rate", name: "Bounce rate", target: "under 3%", guardrail: true },
+    ]);
+    // Another workspace's series, or something that is not a series, is refused.
+    await expect(run(update, db, { id: "in-1", metrics: [{ name: "Theirs", target: "1", series: "mw-2" }] })).rejects.toThrow("No metric watch mw-2 in this workspace");
+    await expect(run(update, db, { id: "in-1", metrics: [{ name: "Odd", target: "1", series: "in-4" }] })).rejects.toThrow("metric watch's short id");
+
+    // The role card's lines: the live value against the target, which way it moved, and the pace its date needs.
+    const realNow = Date.now;
+    Date.now = () => NOW;
+    try {
+      const { seriesLookup } = await import("./lib/metricSeries");
+      const { servedMetricLines } = await import("./lib/roleInitiatives");
+      const lookup = await seriesLookup({ db }, WS, [row]);
+      const [served] = servedInitiatives([row], { project_ids: [P], role_id: "none" }, 4, lookup);
+      const owned = served;
+      expect(servedMetricLines(owned, NOW)[0]).toBe("Dollars per intro: $382, target under $250, behind; down from $410, toward the target (live mw-1, today); needs -$33 a week to reach under $250 by 23 Nov; moving -$28 a week");
+      expect(servedMetricLines(owned, NOW)[1]).toBe("Bounce rate: not reported yet, target under 3%");
+    } finally {
+      Date.now = realNow;
+    }
   });
 });

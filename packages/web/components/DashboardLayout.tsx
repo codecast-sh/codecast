@@ -1,4 +1,5 @@
 import { SeatKillDialog } from "./org/SeatKillDialog";
+import { useSyncMetricSeries } from "../hooks/useMetricSeries";
 import { HuddleStartHost } from "./calls/HuddleStartHost";
 import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, lazy, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -28,7 +29,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { ComposeHost } from "./ComposeHost";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { SquarePen, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight, Maximize2 } from "lucide-react";
+import { SquarePen, PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight, Focus } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TeamDomainBanner } from "./TeamDomainBanner";
 import { PasskeyProbationBanner } from "./PasskeyProbationBanner";
@@ -343,6 +344,9 @@ function HostFeeders() {
   useSyncIssueSyncSources();
   // Codecast mods: every mod the viewer can see; ModRuntimes runs the enabled ones.
   useSyncMods();
+  // The workspace's metric series: the live numbers goals and projects read
+  // wherever they are drawn (hooks/useMetricSeries), one subscription for all.
+  useSyncMetricSeries();
   // A profile with no timezone takes this device's (team day cuts, local clocks).
   useAdoptTimezone();
   // Hosted mode's wallet: the rail's meter, Plan and the composer's held
@@ -520,7 +524,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     return query ? new URLSearchParams(query).get("dir") : null;
   }, [activeTabPath]);
   const isZenMode = s.clientState.ui?.zen_mode ?? false;
-  const sidebarCollapsed = selectNavCollapsed(s);
   // Zen hides the sidebar, but Ctrl+[ or the left edge peek still reach it.
   const navHidden = selectNavHidden(s);
   // This document is the Chat or Work window (lib/desktopApps): the app's
@@ -1263,20 +1266,21 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>
-      {/* Zen hides this header. On the desktop app each surface's own top row
-          then stands in as the titlebar — drag region + traffic-light inset —
-          via useTitlebarHead, so no strip is needed above the page. An app
-          window (Chat, Work) replaces it with the app's own bar below. */}
+      {/* Zen keeps this bar but strips it to the window's own controls (zen,
+          sidebar, history, panels), so every page keeps its header as is and
+          the way out of zen is always where the way in was. An app window
+          (Chat, Work) replaces the bar with the app's own bar below. */}
       {appWindow && <AppWindowBar app={appWindow} />}
       {hostedMode && !appWindow && <HostedSectionKeys />}
       {/* Header spans full width */}
       {/* Hosted mode's desktop shell has no top bar (useBarlessShell): the
           sidebar carries its search, workspace, bell and account. */}
-      {!barless && <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode || appWindow ? "hidden" : ""} relative`}>
+      {!barless && <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${appWindow ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
           <div data-cc-local-corner className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
         <TopbarRow
+          zen={isZenMode}
           nav={<>
             {!hideSidebar && (
               <TopbarButton
@@ -1289,20 +1293,22 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 <Menu />
               </TopbarButton>
             )}
-            {/* The bar hides in zen, so it only ever enters; the exit is the
-                conversation header's button (ConversationView), in this same leftmost spot. */}
-            <ShortcutTooltip label="Enter zen mode" action="ui.zenToggle">
+            {/* One toggle, lit while zen is on, in the same spot in both modes. */}
+            <ShortcutTooltip label={isZenMode ? "Exit zen mode" : "Enter zen mode"} action="ui.zenToggle">
               <TopbarButton
                 onClick={(e) => { dispatchAction("ui.zenToggle"); tipActions.whisper('ui.zenToggle', e); }}
-                aria-label="Enter zen mode"
+                active={isZenMode}
+                aria-pressed={isZenMode}
+                aria-label="Zen mode"
                 desktopOnly
               >
-                <Maximize2 />
+                <Focus />
               </TopbarButton>
             </ShortcutTooltip>
-            <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
+            <ShortcutTooltip label={navHidden ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
               <TopbarButton
-                onClick={(e) => { s.setNavCollapsed(!sidebarCollapsed); tipActions.whisper('sidebar.toggleLeft', e); }}
+                onClick={(e) => { dispatchAction("sidebar.toggleLeft"); tipActions.whisper('sidebar.toggleLeft', e); }}
+                aria-label={navHidden ? "Show sidebar" : "Hide sidebar"}
                 desktopOnly
               >
                 <PanelLeft />
@@ -1466,18 +1472,23 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <ConnectionBanner />
         <StorageHealthBanner />
         <PasskeyProbationBanner />
-        <Surface name="banner.nativeApp"><NativeAppBanner /></Surface>
         <Surface name="banner.setup"><SetupPromptBanner /></Surface>
-        <TeamDomainBanner />
         <NewSnippetsBanner />
         <OrgIntroAnywhere />
         <FeatureOfferAnywhere />
         <ThemeIntroAnywhere />
         <Surface name="banner.cliOffline"><CliOfflineBanner /></Surface>
         <Surface name="banner.tmuxMissing"><TmuxMissingBanner /></Surface>
-        <NotificationNudgeBanner />
-        <SharingSetupBanner />
-        <TeamSharingNudgeBanner />
+        {/* The nudges share one slot, in priority order: only the first that
+            renders shows (globals.css [data-nudge-slot]), and dismissing it
+            brings up the next. Stacked, a new account met four at once. */}
+        <div data-nudge-slot>
+          <Surface name="banner.nativeApp"><NativeAppBanner /></Surface>
+          <TeamDomainBanner />
+          <NotificationNudgeBanner />
+          <SharingSetupBanner />
+          <TeamSharingNudgeBanner />
+        </div>
         <DeviceSetupDialog />
       </ErrorBoundary>
 

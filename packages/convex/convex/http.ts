@@ -3996,6 +3996,16 @@ cliRoute("/cli/cap/mode", async (ctx, body) => {
 cliRoute("/cli/cap/bindings", async (ctx, body) => {
   return await ctx.runQuery(api.capabilities.listBindingsForToken, body);
 });
+// The kit (docs/architecture/team-kit.md): publish an item's archive, fetch a
+// version to install, list a workspace's items, report what a machine applied.
+cliRoute("/cli/cap/kit/upload-url", async (ctx, body) => ctx.runMutation(api.teamKit.kitUploadUrl, body));
+cliRoute("/cli/cap/kit/publish", async (ctx, body) => ctx.runMutation(api.teamKit.publishKitItem, body), { forwardDeviceId: true });
+cliRoute("/cli/cap/kit/version", async (ctx, body) => ctx.runQuery(api.teamKit.getKitVersion, body));
+cliRoute("/cli/cap/kit/list", async (ctx, body) => ctx.runQuery(api.teamKit.listKitItems, body));
+cliRoute("/cli/cap/kit/remove", async (ctx, body) => ctx.runMutation(api.teamKit.removeKitItemForToken, body));
+cliRoute("/cli/cap/kit/applied", async (ctx, body) => ctx.runMutation(api.teamKit.reportKitApplied, body), { forwardDeviceId: true });
+cliRoute("/cli/cap/consents", async (ctx, body) => ctx.runQuery(api.capabilityBindings.listConsents, body), { forwardDeviceId: true });
+cliRoute("/cli/cap/kit/adoptions", async (ctx, body) => ctx.runQuery(api.capabilityBindings.listAdoptions, body), { forwardDeviceId: true });
 for (const verb of ["resolve", "why"]) {
   cliRoute(`/cli/cap/${verb}`, async () => {
     throw new ConvexError({
@@ -5277,6 +5287,8 @@ cliRoute("/cli/sources/create", async (ctx, body) => ctx.runMutation(api.ingest.
 cliRoute("/cli/sources/update", async (ctx, body) => ctx.runMutation(api.ingest.updateSource, body));
 cliRoute("/cli/sources/rotate-key", async (ctx, body) => ctx.runMutation(api.ingest.rotateKey, body));
 cliRoute("/cli/sources/remove", async (ctx, body) => ctx.runMutation(api.ingest.removeSource, body));
+// A workspace's work as major events since a cursor (workTimeline.ts): `cast timeline`.
+cliRoute("/cli/timeline", async (ctx, body) => ctx.runQuery(api.workTimeline.since, body));
 cliRoute("/cli/events/list", async (ctx, body) => ctx.runQuery(api.ingest.listEvents, body));
 cliRoute("/cli/events/groups", async (ctx, body) => ctx.runQuery(api.ingest.listGroups, body));
 cliRoute("/cli/events/group", async (ctx, body) => ctx.runQuery(api.ingest.getGroup, body));

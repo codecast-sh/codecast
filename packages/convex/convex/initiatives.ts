@@ -1,3 +1,4 @@
+import { cleanMetrics, metricArgValidator, requireSeries, seriesLookup, type MetricArg } from "./lib/metricSeries";
 import { labelsOf, noteOrgChange, partyRef, recordSubject, whereOfRecord, withOrgChange } from "./lib/orgChangeLog";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { v, type Validator } from "convex/values";
@@ -157,18 +158,8 @@ const clean = (text: string, max: number) => text.trim().slice(0, max);
 // under a key that survives the edit is kept with its history; one under a
 // key that goes is dropped with it, and a renamed metric keeps both
 // (carryMetricScores, the rule the web paints the edit with).
-function metricsPatch(raw: Array<{ key?: string; name: string; target: string }>, prior: { metrics?: InitiativeMetric[]; scoreboard?: Record<string, any>; score_history?: Record<string, any> } = {}): { metrics: InitiativeMetric[] | undefined; scoreboard: Record<string, any> | undefined; score_history: Record<string, any> | undefined } {
-  const metrics: InitiativeMetric[] = [];
-  for (const m of raw) {
-    const name = clean(String(m.name ?? ""), 80);
-    const target = clean(String(m.target ?? ""), 40);
-    const key = metricKeyOf(m.key?.trim() || name);
-    if (!name || !target) throw new Error("A metric is a name and a target");
-    if (!key) throw new Error(`A metric name needs a letter or a digit in it: "${name}"`);
-    if (metrics.some((x) => x.key === key)) throw new Error(`Two metrics read as the same key: ${key}`);
-    metrics.push({ key, name, target });
-  }
-  if (metrics.length > INITIATIVE_METRICS_MAX) throw new Error(`An initiative carries at most ${INITIATIVE_METRICS_MAX} metrics`);
+function metricsPatch(raw: MetricArg[], prior: { metrics?: InitiativeMetric[]; scoreboard?: Record<string, any>; score_history?: Record<string, any> } = {}): { metrics: InitiativeMetric[] | undefined; scoreboard: Record<string, any> | undefined; score_history: Record<string, any> | undefined } {
+  const metrics = cleanMetrics(raw);
   return { metrics: metrics.length ? metrics : undefined, scoreboard: carryMetricScores(prior.metrics, metrics, prior.scoreboard), score_history: carryMetricScores(prior.metrics, metrics, prior.score_history) };
 }
 
@@ -205,7 +196,7 @@ type Fields = {
   parent_initiative_id?: string | null;
   position?: number | null;
   /** Replaces the list; an empty list clears it. */
-  metrics?: Array<{ key?: string; name: string; target: string }>;
+  metrics?: MetricArg[];
   why?: string | null;
   done_when?: string | null;
   /** Entries to ADD to the record's lists, never a replacement: each is one `add` of applyRecordOp. */
@@ -240,7 +231,10 @@ async function fieldsPatch(ctx: Ctx, userId: Id<"users">, row: any, fields: Fiel
     patch.parent_initiative_id = fields.parent_initiative_id ? await requireParent(ctx, userId, row, fields.parent_initiative_id) : undefined;
   }
   if (fields.position !== undefined) patch.position = fields.position ?? undefined;
-  if (fields.metrics !== undefined) Object.assign(patch, metricsPatch(fields.metrics, row));
+  if (fields.metrics !== undefined) {
+    Object.assign(patch, metricsPatch(fields.metrics, row));
+    await requireSeries(ctx, row.workspace, patch.metrics ?? []);
+  }
   if (fields.why !== undefined) patch.why = (fields.why && clean(fields.why, MAX_DESCRIPTION)) || undefined;
   if (fields.done_when !== undefined) patch.done_when = (fields.done_when && clean(fields.done_when, MAX_DESCRIPTION)) || undefined;
   for (const list of INITIATIVE_RECORD_LISTS) {
@@ -252,9 +246,8 @@ async function fieldsPatch(ctx: Ctx, userId: Id<"users">, row: any, fields: Fiel
   return patch;
 }
 
-const metricArg = v.object({ key: v.optional(v.string()), name: v.string(), target: v.string() });
 const fieldArgs = {
-  metrics: v.optional(v.array(metricArg)),
+  metrics: v.optional(v.array(metricArgValidator)),
   description: v.optional(v.union(v.string(), v.null())),
   status: v.optional(statusArg),
   owner: v.optional(v.union(ownerArg, v.null())),
@@ -717,8 +710,12 @@ async function projectSummaries(ctx: Ctx, userId: Id<"users">, initiative: any) 
 
 async function forTerminal(ctx: Ctx, userId: Id<"users">, initiative: any) {
   const projects = await projectSummaries(ctx, userId, initiative);
+  // The live series its numbers read, by short id, so a terminal reads the value the page shows.
+  const lookup = await seriesLookup(ctx, initiative.workspace, [initiative]);
+  const series = Object.fromEntries((initiative.metrics ?? []).flatMap((m: InitiativeMetric) => { const found = m.series ? lookup(m.series) : undefined; return found ? [[m.series!, found]] : []; }));
   return {
     ...initiative,
+    ...(Object.keys(series).length ? { series } : {}),
     owner_label: await ownerLabel(ctx, initiative.owner),
     projects,
     task_counts: projects.reduce((sum, p) => ({

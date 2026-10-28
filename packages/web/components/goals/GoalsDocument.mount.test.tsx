@@ -5,7 +5,9 @@
 // nests a goal under the one above and Shift+Tab lifts it out, never past the
 // one level of nesting; Cmd+Shift+Down moves it among its siblings by
 // position; why it matters is written in place; and a project dragged onto
-// another goal's list leaves the first goal for the second.
+// another goal's list leaves the first goal for the second. Numbers read
+// live: a goal's metric that names a series shows the series' latest value,
+// and a project is given a live number from the editor under its line.
 // Run: bun test components/goals/GoalsDocument.mount.test.tsx
 import { test } from "bun:test";
 import { realInboxStore, restoreInboxStoreAfterAll } from "../__tests__/mockInboxStore";
@@ -30,7 +32,11 @@ async function verifyGoals() {
   const { UNION_GOALS_UPDATES } = await import("../org/goalsFixture");
   const tree = fx.COMPANY_FIXTURE_TREE as OrgTree;
   const calls: string[] = [];
-  const collections: Record<string, any[]> = { initiatives: fx.COMPANY_FIXTURE_INITIATIVES.map((g) => ({ ...g })), projects: fx.COMPANY_FIXTURE_PROJECTS, tasks: fx.COMPANY_FIXTURE_TASKS, initiativeUpdates: UNION_GOALS_UPDATES };
+  const NOW = fx.COMPANY_FIXTURE_NOW;
+  const series = { _id: "w1", short_id: "mw-7", workspace: `team:${tree.workspace.id}`, name: "Brokers sending deals", unit: "brokers", query_kind: "reader", query: "metrics.read", direction: "below", interval_ms: 3600_000, status: "active", state: "ok", points: [{ at: NOW - 6 * 86_400_000, value: 9 }, { at: NOW - 3600_000, value: 14 }], last_value: 14, last_at: NOW - 3600_000, source_name: "union", source_short_id: "src-13", source_id: "s", updated_at: NOW };
+  // in-2's first number reads live from mw-7.
+  const initiatives = fx.COMPANY_FIXTURE_INITIATIVES.map((g) => ({ ...g, ...(g.short_id === "in-2" && g.metrics?.length ? { metrics: g.metrics.map((m, i) => (i === 0 ? { ...m, series: "mw-7" } : m)) } : {}) }));
+  const collections: Record<string, any[]> = { initiatives, projects: fx.COMPANY_FIXTURE_PROJECTS.map((p) => ({ ...p })), tasks: fx.COMPANY_FIXTURE_TASKS, initiativeUpdates: UNION_GOALS_UPDATES, opsWatches: [series] };
   const TEAM = tree.workspace.id;
   const patch = (id: string, fn: (r: any) => any) => { collections.initiatives = collections.initiatives.map((r) => (r._id === id ? fn(r) : r)); };
   const state: any = {
@@ -43,6 +49,8 @@ async function verifyGoals() {
     orgProposalChanges: {},
     sessions: {},
     get initiatives() { return Object.fromEntries(collections.initiatives.map((r) => [r._id, r])); },
+    get projects() { return Object.fromEntries(collections.projects.map((r) => [r._id, r])); },
+    updateProject: (id: string, fields: any) => { calls.push(`project:${id}:${JSON.stringify(fields)}`); collections.projects = collections.projects.map((r) => (r._id === id ? { ...r, ...fields } : r)); },
     // The stand-ins write the row the way the store's actions do, so the page reads it back in the same tick.
     updateInitiative: (id: string, fields: any) => { calls.push(`update:${id}:${JSON.stringify(fields)}`); patch(id, (r) => ({ ...r, ...Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, v ?? undefined])) })); },
     createInitiative: (input: any) => { calls.push(`create:${JSON.stringify(input)}`); collections.initiatives = [...collections.initiatives, { _id: input.client_key, short_id: "", client_key: input.client_key, status: "active", project_ids: [], health: "none", workspace: `team:${TEAM}`, team_id: TEAM, user_id: "fixture-user-me", created_at: 9e15, updated_at: 9e15, ...input }]; },
@@ -176,6 +184,28 @@ async function verifyGoals() {
   await render();
   assert.ok(since(n).includes("remove:union-in-1:union-proj-quality") && since(n).includes("add:union-in-2:union-proj-quality"), "it leaves the first goal for the second, as one undo");
   assert.ok(since(n).some((c) => c.startsWith("undo:Moved")));
+
+  // A goal's number that names a series reads the series' latest point, marked live.
+  const live = q("[data-goal-section='in-2'] [data-goal-numbers] [data-metric-live='mw-7']");
+  assert.ok(live, "the live number is marked as live");
+  assert.match(live!.closest("[data-metric]")!.textContent!, /14 brokers/, "and reads the series' latest value in its unit");
+
+  // A project is given a number from the editor under its line, read from a series.
+  n = calls.length;
+  const give = q<HTMLButtonElement>("[data-goal-project='union-proj-network'] [data-project-add-number]")!;
+  assert.ok(give, "a project with no number offers to take one");
+  await act(async () => give.click());
+  await render();
+  const form = q("[data-project-numbers-form='union-proj-network']")!;
+  assert.ok(form, "the editor opens under the project");
+  const pick = form.querySelector<HTMLSelectElement>("[data-metric-series-pick]")!;
+  await act(async () => { pick.value = "mw-7"; pick.dispatchEvent(new W.Event("change", { bubbles: true })); });
+  const target = form.querySelector<HTMLInputElement>("input[aria-label='Target']")!;
+  await act(async () => { const set = Object.getOwnPropertyDescriptor(W.HTMLInputElement.prototype, "value")!.set!; set.call(target, "40"); target.dispatchEvent(new W.Event("input", { bubbles: true })); });
+  await act(async () => [...form.querySelectorAll("button")].find((b) => b.textContent === "Save")!.click());
+  await render();
+  assert.deepEqual(since(n), [`project:union-proj-network:${JSON.stringify({ metrics: [{ key: "brokers_sending_deals", name: "Brokers sending deals", target: "40", series: "mw-7" }] })}`], "picking a series names the number after it, and Save writes the project");
+  assert.ok(q("[data-project-numbers='union-proj-network'] [data-metric-live='mw-7']"), "the project's number then reads live under its line");
 
   await act(async () => root.unmount());
 }

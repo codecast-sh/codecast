@@ -4,7 +4,7 @@
 // shows a second copy. How the role wakes is read off its trigger, not its
 // words. Pure: the brief's narrative and the routine in, markup out.
 import { useMemo } from "react";
-import { briefBudget, briefBudgetWords, threadOverdue, wakeWords, type MetricReading, type PlaybookEntry, type RolePlaybook as Playbook, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
+import { briefBudget, briefBudgetWords, experimentDue, threadOverdue, wakeWords, type MetricReading, type PlaybookEntry, type RolePlaybook as Playbook, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 
 const DIM = { color: "var(--sol-text-dim)" } as const;
 const BODY = { color: "var(--sol-text-secondary)" } as const;
@@ -105,6 +105,18 @@ export function RolePlaybook({ playbook, narrative, now }: { playbook: Playbook;
         <Block title="Rules it learned" count={playbook.rules.length} section="rules">
           <ul className="space-y-1.5">
             {playbook.rules.map((r) => <Row key={r.raw} text={r.text} sub={r.mistake ? `Learned from: ${r.mistake}` : null} meta={dated(r)} tone="var(--sol-cyan)" />)}
+          </ul>
+        </Block>
+      )}
+      {playbook.experiments.length > 0 && (
+        <Block title="Experiments" count={playbook.experiments.length} section="experiments">
+          <ul className="space-y-1.5">
+            {playbook.experiments.map((x) => {
+              const due = experimentDue(x, now);
+              const tone = x.outcome === "kept" ? "var(--sol-green)" : x.outcome === "reverted" ? "var(--sol-red)" : due ? "var(--sol-yellow)" : undefined;
+              const state = x.outcome ?? (due ? "result due" : x.read_on ? `read ${shortDay(x.read_on)}` : null);
+              return <Row key={x.raw} text={x.text} meta={[state, dated(x)].filter(Boolean).join(" · ") || undefined} tone={tone} />;
+            })}
           </ul>
         </Block>
       )}

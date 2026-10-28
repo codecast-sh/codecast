@@ -303,6 +303,40 @@ has two levels, that a goal with an initiative is reshaped and never
 restated, and that a target the reviewer worked out is not a stated one.
 The goal tree focus asks for the whole tree in one run.
 
+## I4.1 Live numbers: goals and projects read their metrics from series
+
+A goal's metric, and now a project's, may name a live series: a metric watch
+(`mw-N`, external-data.md X7) in the row's own workspace. The value is then the
+series' latest point, the trend its last week, and the reading is marked live;
+without one the value is still the last report in `scoreboard`. A watch with no
+alert line is a plain series: it keeps points and never opens a group.
+
+- **Where series come from.** A PostHog HogQL query or insight, or an app
+  connector's metric reader (`query_kind: "reader"`, query
+  `<reader> [json args]`). The reader answers `{ value, unit?, points? }`
+  (contracts/ingest MetricReaderAnswer); a reader that answers its own dated
+  history has that series kept as answered (lib/ingestGroups
+  mergeReaderSeries), so a daily number polled hourly is not 60 repeats of one
+  day. Union serves its admin home's numbers as `metrics.list` and
+  `metrics.read` (union-mobile backend lib/codecastMetrics.ts).
+- **Writing.** `cast initiative edit --metric "Dollars per intro=under $250
+  @mw-12"`, `cast project update --number ...`, or the numbers editor on the
+  Goals page, the goal page and the project page: each number picks Reported or
+  a series, and may be marked a guardrail (a number the work must not make
+  worse). lib/metricSeries holds the stored shape, the write check (a series in
+  another workspace is refused) and the lookup every reader builds from.
+- **Reading.** One lookup (lib/metricSeries seriesLookup on the server,
+  hooks/useMetricSeries on the web, `series` beside a terminal read) feeds
+  every reading, so the page, the health panel, the role card and `cast brief`
+  show the same value. A role's lines carry the trend and, for a goal behind
+  its date, the pace it needs against the pace it moves at.
+- **Climbing.** When a role's area is read by any number, `cast brief` prints
+  the guidance in contracts/metricClimb: read the number whole, work the
+  limiting stage, one change at a time against a written prediction and a
+  fixed read day, keep or revert, log it under `## Experiments` (a playbook
+  section, rolePlaybook), hold the guardrails, never change the measurement,
+  and take larger or irreversible bets to a person.
+
 ## I5. The intent record: everything about a goal, in the fewest fields
 
 Written 2026-10-04 from the founder's direction: a goal should hold all of

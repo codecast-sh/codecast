@@ -16,7 +16,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Pencil, Plus, X } from "lucide-react";
 import { toast } from "sonner";
-import { INITIATIVE_HEALTH_LABEL, INITIATIVE_METRICS_MAX, INITIATIVE_UPDATE_HEALTHS, initiativeChain, metricKeyOf, metricReadings, metricTrends, parseIntentSource, type InitiativeRow, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
+import { INITIATIVE_HEALTH_LABEL, INITIATIVE_UPDATE_HEALTHS, initiativeChain, metricReadings, metricTrends, parseIntentSource, type InitiativeMetric, type InitiativeRow, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
 import { objectHref } from "@codecast/shared/entities";
 import { useInboxStore, type ProjectItem } from "../../store/inboxStore";
 import { undoAsOne } from "../../store/undoActions";
@@ -37,6 +37,9 @@ import { useLineOpen } from "../org/lines/lineOpen";
 import type { DocChange, DocGoal, DocProject } from "../company/companyModel";
 import { carriedProjects } from "../goals/goalsOutline";
 import { HealthChip, MetricTile, OwnerChip, SourceLink } from "./InitiativeAtoms";
+import { FormButtons, GhostButton } from "./formBits";
+import { MetricsEditor } from "./MetricsEditor";
+import { useMetricSeries } from "../../hooks/useMetricSeries";
 import { RecordSection as Section, Written } from "./InitiativeRecord";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
@@ -44,23 +47,6 @@ const DIM = "var(--sol-text-dim)";
 /** A report's source is free text: an address opens, anything else is read as written. */
 const metricSource = (text: string) => { const src = parseIntentSource(text); return src.kind === "note" ? null : src; };
 const projectSig = (p: ProjectItem) => `${p.title}|${p.short_id ?? ""}|${p.status}`;
-
-function GhostButton({ icon: Icon, children, onClick, ...rest }: { icon?: typeof Plus; children: React.ReactNode; onClick?: () => void } & Record<`data-${string}`, string | undefined>) {
-  return (
-    <button type="button" onClick={onClick} className="h-6 inline-flex items-center gap-1 px-1.5 rounded-md text-[11.5px] hover:bg-sol-bg-highlight/70 transition-colors" style={{ color: "var(--sol-text-muted)" }} {...rest}>
-      {Icon && <Icon className="w-3 h-3" />} {children}
-    </button>
-  );
-}
-
-function FormButtons({ submit, onCancel, onSubmit, disabled, ...rest }: { submit: string; onCancel: () => void; onSubmit?: () => void; disabled?: boolean } & Record<`data-${string}`, string | undefined>) {
-  return (
-    <>
-      <button type="button" onClick={onCancel} className="h-7 px-2.5 rounded-md text-[12px] hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-      <button type={onSubmit ? "button" : "submit"} onClick={onSubmit} disabled={disabled} className="h-7 px-3 rounded-md text-[12px] font-medium disabled:opacity-45" style={{ background: "var(--sol-text)", color: "var(--sol-bg)" }} {...rest}>{submit}</button>
-    </>
-  );
-}
 
 // ------------------------------------------------------------------- why
 
@@ -87,36 +73,20 @@ export function GoalWhy({ goal, writing = false, onWriting }: { goal: Initiative
  *  or while one is being written. A role reports the value with
  *  `cast initiative report`. */
 export function GoalMeasures({ goal, all, now, editing, onEditing }: { goal: InitiativeRow; all: readonly InitiativeRow[]; now: number; editing: boolean; onEditing: (on: boolean) => void }) {
-  const readings = metricReadings(goal);
-  const trends = metricTrends(goal);
+  const { lookup, watches } = useMetricSeries();
+  const readings = metricReadings(goal, lookup);
+  const trends = metricTrends(goal, lookup);
   const chain = useMemo(() => initiativeChain(goal, (id) => all.find((r) => r._id === id)), [goal, all]);
-  const [draft, setDraft] = useState<Array<{ name: string; target: string }>>(() => (readings.length ? readings.map((r) => ({ name: r.name, target: r.target })) : [{ name: "", target: "" }]));
   if (!readings.length && !editing) return null;
-  const open = () => { setDraft(readings.length ? readings.map((r) => ({ name: r.name, target: r.target })) : [{ name: "", target: "" }]); onEditing(true); };
-  const save = () => {
-    const metrics = draft.map((m) => ({ name: m.name.trim(), target: m.target.trim() })).filter((m) => m.name && m.target).map((m) => ({ key: metricKeyOf(m.name), name: m.name, target: m.target }));
+  const save = (metrics: InitiativeMetric[]) => {
     useInboxStore.getState().updateInitiative(goal._id, { metrics });
     onEditing(false);
   };
   return (
     <div className="mt-5">
-      <Section name="metrics" label="Measured by" action={!editing ? <GhostButton icon={Pencil} onClick={open} data-initiative-edit-metrics="">Edit</GhostButton> : undefined}>
+      <Section name="metrics" label="Measured by" action={!editing ? <GhostButton icon={Pencil} onClick={() => onEditing(true)} data-initiative-edit-metrics="">Edit</GhostButton> : undefined}>
         {editing ? (
-          <div className="space-y-1.5" data-initiative-metrics-form>
-            {draft.map((m, i) => (
-              <div key={i} className="flex items-center gap-1.5">
-                <input autoFocus={i === 0} value={m.name} onChange={(e) => setDraft(draft.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Weekly active teams" className="flex-1 min-w-0 h-7 rounded-md border bg-transparent px-2 text-[12.5px] outline-none placeholder:text-sol-text-dim focus:border-sol-cyan/60" style={{ borderColor: HAIRLINE }} aria-label="Metric name" />
-                <input value={m.target} onChange={(e) => setDraft(draft.map((x, j) => (j === i ? { ...x, target: e.target.value } : x)))} onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") { e.stopPropagation(); onEditing(false); } }} placeholder="target 1,000" className="w-[110px] h-7 rounded-md border bg-transparent px-2 text-[12.5px] tabular-nums outline-none placeholder:text-sol-text-dim focus:border-sol-cyan/60" style={{ borderColor: HAIRLINE }} aria-label="Target" />
-                <button type="button" onClick={() => setDraft(draft.filter((_, j) => j !== i))} className="inline-flex items-center justify-center w-6 h-6 rounded-md hover:bg-sol-bg-highlight/70" style={{ color: DIM }} aria-label="Remove this metric"><X className="w-3 h-3" /></button>
-              </div>
-            ))}
-            <div className="flex items-center gap-1.5">
-              {draft.length < INITIATIVE_METRICS_MAX && <GhostButton icon={Plus} onClick={() => setDraft([...draft, { name: "", target: "" }])}>Another number</GhostButton>}
-              <span className="flex-1" />
-              <FormButtons submit="Save" onCancel={() => onEditing(false)} onSubmit={save} />
-            </div>
-            <p className="text-[11px]" style={{ color: DIM }}>A target reads as a number to reach; write "under 5%" for one to stay below.</p>
-          </div>
+          <MetricsEditor metrics={goal.metrics ?? []} watches={watches} onSave={save} onCancel={() => onEditing(false)} />
         ) : (
           <div className="space-y-2">
             <div className="initiative-metric-grid grid grid-cols-1 gap-2" data-count={readings.length}>
@@ -130,7 +100,7 @@ export function GoalMeasures({ goal, all, now, editing, onEditing }: { goal: Ini
                 );
               })}
             </div>
-            {readings.every((r) => r.value === null) && (
+            {readings.every((r) => r.value === null && !r.series) && (
               <p className="text-[11.5px]" style={{ color: DIM }} title={`An agent reports it with: cast initiative report ${goal.short_id} ${readings[0].key}=<value> --source <link>`} data-initiative-no-reading>No reading yet. Ask its owner for the first one.</p>
             )}
             {chain.length > 0 && (

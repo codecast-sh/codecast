@@ -8,6 +8,7 @@ import { charterOf } from "../../../components/charter/charterMeta";
 import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { WrittenField } from "../../../components/initiatives/InitiativeRecord";
 import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
+import { ProjectMeasures } from "../../../components/initiatives/ProjectMeasures";
 
 export function ProjectAbout({ project }: { project: ProjectItem }) {
   const update = (fields: Record<string, unknown>) => useInboxStore.getState().updateProject(project._id, fields);
@@ -16,6 +17,7 @@ export function ProjectAbout({ project }: { project: ProjectItem }) {
   return (
     <div className="mx-auto flex max-w-[60rem] flex-col gap-8 px-4 py-6 sm:px-6" data-project-about-tab>
       <WrittenField name="purpose" label="What it is for" value={project.goal ?? ""} fallback={project.description} onSave={(goal) => update({ goal })} rows={4} placeholder="What this project is for, in one paragraph a new hire could act on." />
+      <ProjectMeasures project={project} />
       <CharterBlock kind="project" title={project.title} charter={charter} canEdit onChange={update} roles={roles} hideOwner hideGoal plain />
       <RepositoryLinks projectId={project._id} />
     </div>

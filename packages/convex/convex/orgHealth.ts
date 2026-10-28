@@ -9,6 +9,7 @@ import { findRoleRoutineInAnyStatus } from "./lib/orgRoutine";
 import { parseStandingSection } from "@codecast/shared/contracts/briefStanding";
 import { areaSignalsOf, areaStatusLine, areaStatusOf, emptyReached, handRouteOf, newestStandingFirst, type AreaGoal, type AreaInitiative, type AreaInput, type AreaReached, type AreaSession, type AreaStandingLine, type AreaWaitingSession, type RoleArea } from "@codecast/shared/contracts/orgAreas";
 import { readWorkspaceInitiatives, servedInitiatives } from "./lib/roleInitiatives";
+import { seriesLookup } from "./lib/metricSeries";
 import { planProjectsOf } from "./orgRoles";
 import { capsFor, countersNow, utcDay } from "./lib/orgCaps";
 import { scopeIds } from "./lib/orgScope";
@@ -362,6 +363,8 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     readWorkspaceInitiatives(ctx, teamId ? `team:${teamId}` : `user:${userId}`),
   ]);
   const tasks = work.tasks;
+  // The live series the goals' numbers read, so the health panel shows what a role's brief shows.
+  const initiativeSeries = await seriesLookup(ctx, teamId ? `team:${teamId}` : `user:${userId}`, initiativeRows);
   const plansByProject = new Map<string, any[]>();
   for (const p of plans) if (p.project_id) plansByProject.set(String(p.project_id), [...(plansByProject.get(String(p.project_id)) ?? []), p]);
   const planProjectOf = await planProjectsOf(ctx, roles.map((r) => r.scope));
@@ -668,7 +671,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
         done_7d: mine.filter((t) => t.status === "done" && (t.updated_at ?? 0) >= cut7).length,
       }];
     });
-    const initiatives: AreaInitiative[] = servedInitiatives(initiativeRows, { role_id: rid, project_ids: items.projectIds }).map(({ _id, ...i }) => ({ id: _id, ...i }));
+    const initiatives: AreaInitiative[] = servedInitiatives(initiativeRows, { role_id: rid, project_ids: items.projectIds }, undefined, initiativeSeries).map(({ _id, trends: _trends, target_date: _date, ...i }) => ({ id: _id, ...i }));
     const routine: any = standingRaw ? await findRoleRoutineInAnyStatus(ctx, role, standingRaw) : null;
     const areaInput: AreaInput = {
       role_status: role.status,

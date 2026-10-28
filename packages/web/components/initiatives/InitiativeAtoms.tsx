@@ -176,7 +176,8 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
         {series.length >= 2
           ? <SparkLine values={series} target={metricNumber(reading.target)} width={48} height={14} tone={standingColor} className="text-sol-text-dim" />
           : <MetricBar reading={reading} className="w-[56px] shrink-0" />}
-        {named && reading.observed_at ? <span className="whitespace-nowrap text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{shortDate(reading.observed_at, now)}</span> : null}
+        {reading.guardrail && <GuardrailMark />}
+        {reading.live ? <LiveMark reading={reading} now={now} /> : named && reading.observed_at ? <span className="whitespace-nowrap text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{shortDate(reading.observed_at, now)}</span> : null}
       </span>
     );
   }
@@ -185,6 +186,8 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
       <div className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--sol-text-muted)" }}>
         <MetricStandingDot standing={reading.standing} />
         <span className="truncate">{reading.name}</span>
+        {reading.guardrail && <GuardrailMark />}
+        {reading.live && <><span className="flex-1" /><LiveMark reading={reading} now={now} /></>}
       </div>
       <div className="mt-1 flex items-end gap-2 min-w-0">
         <span className="text-[22px] leading-none font-semibold tabular-nums tracking-tight" style={{ color: unreported ? "var(--sol-text-dim)" : "var(--sol-text)" }} data-metric-now>{unreported ? "not reported" : reading.value}</span>
@@ -196,11 +199,27 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
       <MetricBar reading={reading} className="mt-2 block w-full" />
       <div className="mt-1.5 text-[11px] flex items-center gap-2" style={{ color: "var(--sol-text-dim)" }}>
         <span>{reading.standing === "met" ? "Met" : reading.standing === "behind" ? "Behind" : unreported ? "Not reported yet" : metricNumber(reading.value) === null ? "Not a number" : "No number in the target"}</span>
-        {reading.observed_at ? <span>read {shortDate(reading.observed_at, now)}</span> : null}
+        {reading.observed_at && !reading.live ? <span>read {shortDate(reading.observed_at, now)}</span> : null}
         {trend?.delta !== null && trend?.delta !== undefined && trend.direction !== "flat" && <span className="tabular-nums">{trend.delta > 0 ? "+" : ""}{formatMetricNumber(trend.delta)} since last</span>}
       </div>
     </div>
   );
+}
+
+/** A number read live from a series: when its source last answered, and which series it is. */
+function LiveMark({ reading, now }: { reading: MetricReading; now: number }) {
+  const age = reading.observed_at ? compactAge(Math.max(0, now - reading.observed_at)) : null;
+  return (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={reading.source ?? reading.series} data-metric-live={reading.series}>
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--sol-cyan)" }} />
+      live{age ? ` · ${age}` : ""}
+    </span>
+  );
+}
+
+/** A number the work must not make worse while it moves the others. */
+function GuardrailMark() {
+  return <span className="whitespace-nowrap rounded px-1 text-[10.5px]" style={{ color: "var(--sol-text-muted)", background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} data-metric-guardrail>guardrail</span>;
 }
 
 /** The next milestone and its day: red when its day has passed and it is not reached; "no milestone" when none is set. */

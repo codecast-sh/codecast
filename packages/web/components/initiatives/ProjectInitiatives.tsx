@@ -7,6 +7,7 @@
 // nothing when the project is in none. With `metrics`, each goal's first
 // number stands beside its pill: the chip a goal's own row shows, or the line
 // a card has room for.
+import { useMetricSeries } from "../../hooks/useMetricSeries";
 import { useMemo } from "react";
 import { metricReadings, metricTrends } from "@codecast/shared/contracts/initiative";
 import { useInitiatives } from "../../hooks/useInitiatives";
@@ -29,17 +30,18 @@ export function ProjectInitiatives({ projectId, size = "sm", label, except, metr
   className?: string;
 }) {
   const all = useInitiatives();
+  const { lookup } = useMetricSeries();
   const rows = useMemo(() => initiativesOfProject(all, projectId).filter((r) => r._id !== except), [all, projectId, except]);
   if (rows.length === 0) return null;
   return (
     <span className={cn("inline-flex items-center gap-x-1.5 gap-y-1 flex-wrap min-w-0", size === "xs" ? "text-[11px]" : "text-[12.5px]", className)} data-project-initiatives={projectId}>
       {label && <span style={{ color: "var(--sol-text-dim)" }}>{label}</span>}
       {rows.map((r) => {
-        const reading = metrics ? metricReadings(r)[0] : undefined;
+        const reading = metrics ? metricReadings(r, lookup)[0] : undefined;
         return (
           <span key={r._id} className="inline-flex items-center gap-1.5 min-w-0 max-w-full" data-project-initiative={r.short_id || r._id}>
             <EntityIdPill type="initiative" id={r.short_id || r._id} />
-            {reading && metrics && <MetricTile reading={reading} trend={metricTrends(r)[reading.key]} now={now ?? Date.now()} size={metrics} />}
+            {reading && metrics && <MetricTile reading={reading} trend={metricTrends(r, lookup)[reading.key]} now={now ?? Date.now()} size={metrics} />}
           </span>
         );
       })}

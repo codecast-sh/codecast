@@ -1,6 +1,9 @@
 // Watched metrics (docs/architecture/external-data.md X7, X3). A watch names
-// one number a source can answer (a PostHog HogQL query or saved insight), a
-// line and a direction, and how often to look. The poll keeps the last
+// one number a source can answer (a PostHog HogQL query or saved insight, or
+// an app connector's metric reader), a line and a direction, and how often to
+// look. A watch with no line is a plain series: a goal's live number
+// (contracts/initiative InitiativeMetric.series) that keeps its points and
+// never opens a group. The poll keeps the last
 // GROUP_RULES.metric_points values on the watch and hands each one to the
 // group upsert as a `metric` occurrence, so crossing the line is a
 // metric_alert transition and coming back is metric_recovered: the same
@@ -16,16 +19,21 @@ import { invalidScope, notFound, requireUserOrToken } from "./lib/auth";
 import { nextShortId } from "./counters";
 import { patchSourceStats, scopeArgs, scopeOf, sourceByRef, upsertGroup } from "./ingest";
 import { rowByRef } from "./lib/rowByRef";
-import { appendMetricPoint, mergeMetricHistory, planMetric } from "./lib/ingestGroups";
+import { appendMetricPoint, mergeMetricHistory, mergeReaderSeries, planMetric } from "./lib/ingestGroups";
 import { connFor, fetchMetricHistory, fetchMetricValue, validWatchQuery } from "./sources/posthog";
+import { readAppMetric } from "./sources/app";
 import { isTokenRefusal } from "./lib/sourceHealth";
-import { INGEST_LIMITS, INGEST_SHORT_ID_PREFIX, METRIC_WATCH_LIMITS, type SourceProvider, type WatchKind } from "@codecast/shared/contracts/ingest";
+import { INGEST_LIMITS, INGEST_SHORT_ID_PREFIX, METRIC_WATCH_LIMITS, parseReaderQuery, type SourceProvider, type WatchKind } from "@codecast/shared/contracts/ingest";
 import { watchDirectionValidator as directionValidator, watchKindValidator } from "./ingestSchema";
 
 /** Which watch kinds a source can answer. A provider absent here has no polled metrics. */
 export const WATCH_KINDS_BY_PROVIDER: Partial<Record<SourceProvider, readonly WatchKind[]>> = {
   posthog: ["hogql", "insight"],
+  app: ["reader"],
 };
+
+const UNIT_CHARS = 12;
+const cleanUnit = (unit: string | null | undefined): string | undefined => unit?.trim().slice(0, UNIT_CHARS) || undefined;
 
 
 /** How many due watches one claim takes; a full page claims the next at once. */
@@ -39,11 +47,15 @@ export function clampInterval(ms: number | undefined): number {
 }
 
 /** Why a watch cannot be made on this source, or null. */
-export function watchProblem(provider: SourceProvider, kind: WatchKind, queryText: string, threshold: number): string | null {
+export function watchProblem(provider: SourceProvider, kind: WatchKind, queryText: string, threshold: number | undefined): string | null {
   const kinds = WATCH_KINDS_BY_PROVIDER[provider];
-  if (!kinds?.includes(kind)) return `A ${provider} source cannot watch a ${kind} metric${kinds ? ` (it takes ${kinds.join(" or ")})` : ""}`;
-  if (!Number.isFinite(threshold)) return "The threshold must be a number";
+  if (!kinds?.includes(kind)) return `${/^[aeiou]/.test(provider) ? "An" : "A"} ${provider} source cannot watch a ${kind} metric${kinds ? ` (it takes ${kinds.join(" or ")})` : ""}`;
+  if (threshold !== undefined && !Number.isFinite(threshold)) return "The threshold must be a number";
   if (kind === "hogql" || kind === "insight") return validWatchQuery(kind, queryText);
+  if (kind === "reader") {
+    const parsed = parseReaderQuery(queryText);
+    return "error" in parsed ? parsed.error : null;
+  }
   return null;
 }
 
@@ -66,8 +78,10 @@ export const createWatch = mutation({
     name: v.string(),
     query_kind: watchKindValidator,
     query: v.string(),
-    threshold: v.number(),
-    direction: directionValidator,
+    /** Absent: a series with no alert line. */
+    threshold: v.optional(v.number()),
+    direction: v.optional(directionValidator),
+    unit: v.optional(v.string()),
     interval_ms: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -87,8 +101,9 @@ export const createWatch = mutation({
       name,
       query_kind: args.query_kind,
       query: args.query.trim(),
-      threshold: args.threshold,
-      direction: args.direction,
+      ...(args.threshold !== undefined ? { threshold: args.threshold } : {}),
+      direction: args.direction ?? "below",
+      ...(cleanUnit(args.unit) ? { unit: cleanUnit(args.unit) } : {}),
       interval_ms: clampInterval(args.interval_ms),
       status: "active",
       // Due at once, so a new watch shows a value on the next cron tick.
@@ -111,8 +126,10 @@ export const updateWatch = mutation({
     watch: v.string(),
     name: v.optional(v.string()),
     query: v.optional(v.string()),
-    threshold: v.optional(v.number()),
+    /** null takes the alert line off: the watch becomes a plain series. */
+    threshold: v.optional(v.union(v.number(), v.null())),
     direction: v.optional(directionValidator),
+    unit: v.optional(v.union(v.string(), v.null())),
     interval_ms: v.optional(v.number()),
     status: v.optional(v.union(v.literal("active"), v.literal("paused"))),
   },
@@ -129,10 +146,11 @@ export const updateWatch = mutation({
       patch.name = name;
     }
     if (args.query !== undefined) patch.query = args.query.trim();
-    if (args.threshold !== undefined) patch.threshold = args.threshold;
+    if (args.threshold !== undefined) patch.threshold = args.threshold ?? undefined;
     if (args.direction) patch.direction = args.direction;
+    if (args.unit !== undefined) patch.unit = cleanUnit(args.unit);
     if (args.interval_ms !== undefined) patch.interval_ms = clampInterval(args.interval_ms);
-    const problem = watchProblem(source!.provider, row.query_kind, patch.query ?? row.query, patch.threshold ?? row.threshold);
+    const problem = watchProblem(source!.provider, row.query_kind, patch.query ?? row.query, "threshold" in patch ? patch.threshold : row.threshold);
     if (problem) invalidScope(problem);
     if (args.status) {
       patch.status = args.status;
@@ -232,7 +250,8 @@ export const pollInputs = internalQuery({
   args: { watch_id: v.id("metric_watches") },
   handler: async (ctx, args) => {
     const watch = await ctx.db.get(args.watch_id);
-    return watch && watch.status === "active" ? { query_kind: watch.query_kind, query: watch.query, source_id: watch.source_id } : null;
+    const source = watch ? await ctx.db.get(watch.source_id) : null;
+    return watch && watch.status === "active" && source ? { query_kind: watch.query_kind, query: watch.query, source_id: watch.source_id, provider: source.provider } : null;
   },
 });
 
@@ -242,6 +261,16 @@ export const pollWatch = internalAction({
   handler: async (ctx, args): Promise<{ value?: number; error?: string } | null> => {
     const watch = await ctx.runQuery(internal.metrics.pollInputs, args);
     if (!watch) return null;
+    if (watch.query_kind === "reader") {
+      const at = Date.now();
+      const read = await readAppMetric(ctx, watch.source_id, watch.query, fetch);
+      const result = read.ok
+        ? read.value === null ? { error: "The reader has no value yet" } : { value: read.value, ...(read.unit ? { unit: read.unit } : {}), ...(read.points.length ? { series: read.points } : {}) }
+        : { error: read.error };
+      await ctx.runMutation(internal.metrics.recordPoint, { watch_id: args.watch_id, at, ...result });
+      if (!read.ok && read.lost) await ctx.runMutation(internal.ingest.sourceConnectionLost, { source_id: watch.source_id, error: read.error });
+      return result;
+    }
     const source = await ctx.runQuery(internal.sources.posthog.sourceForPoll, { source_id: watch.source_id });
     if (!source || source.status !== "active") return null;
     const at = Date.now();
@@ -262,7 +291,11 @@ export const pollWatch = internalAction({
  * value through the group upsert, which decides whether it is a transition.
  */
 export const recordPoint = internalMutation({
-  args: { watch_id: v.id("metric_watches"), at: v.number(), value: v.optional(v.number()), error: v.optional(v.string()) },
+  args: {
+    watch_id: v.id("metric_watches"), at: v.number(), value: v.optional(v.number()), error: v.optional(v.string()), unit: v.optional(v.string()),
+    /** A metric reader's own dated series (mergeReaderSeries): kept as it answers it, in place of one point for this read. */
+    series: v.optional(v.array(v.object({ at: v.number(), value: v.number() }))),
+  },
   handler: async (ctx, args) => {
     const watch = await ctx.db.get(args.watch_id);
     if (!watch || watch.status !== "active") return null;
@@ -276,13 +309,23 @@ export const recordPoint = internalMutation({
       return null;
     }
     const value = args.value;
+    // The unit the source names, until a person sets one.
+    const unit = watch.unit ?? cleanUnit(args.unit);
+    const points = args.series?.length ? mergeReaderSeries(watch.points, args.series) : appendMetricPoint(watch.points, { at: args.at, value });
+    if (watch.threshold === undefined) {
+      // A plain series: the point is kept, and nothing is announced.
+      await ctx.db.patch(watch._id, { points, state: "ok", last_error: undefined, ...(unit ? { unit } : {}), updated_at: now });
+      await patchSourceStats(ctx, source, () => ({ last_poll_at: now }), now);
+      return { group_id: null, transitions: [] };
+    }
     const plan = planMetric({ short_id: watch.short_id, name: watch.name, threshold: watch.threshold, direction: watch.direction, id: String(watch._id) }, value, args.at);
     const upserted = await upsertGroup(ctx, source, [plan], {}, now);
     await ctx.db.patch(watch._id, {
-      points: appendMetricPoint(watch.points, { at: args.at, value }),
+      points,
       state: plan.occurrence.ok === false ? "alert" : "ok",
       group_id: upserted.group_id,
       last_error: undefined,
+      ...(unit ? { unit } : {}),
       updated_at: now,
     });
     // A poll is not an ingested event, so the *_today counters stay the door's.
@@ -375,6 +418,20 @@ export const readHistory = internalAction({
 async function readOneHistory(ctx: ActionCtx, args: { watch_id: Id<"metric_watches">; days?: number }): Promise<{ added?: number; note?: string } | null> {
   const watch = await ctx.runQuery(internal.metrics.historyInputs, { watch_id: args.watch_id });
   if (!watch) return null;
+  if (watch.query_kind === "reader") {
+    // The reader answers its own series with every read; `days` asks for more when it takes one.
+    const read = await readAppMetric(ctx, watch.source_id, watch.query, fetch, { days: args.days ?? METRIC_WATCH_LIMITS.backfill_days_default });
+    if (!read.ok) {
+      await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note: read.error });
+      return { note: read.error };
+    }
+    if (!read.points.length) {
+      const note = "The reader answers no dated points; the history is its polls";
+      await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note });
+      return { note };
+    }
+    return await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, points: read.points });
+  }
   const source = await ctx.runQuery(internal.sources.posthog.sourceForPoll, { source_id: watch.source_id });
   if (!source || source.status !== "active") {
     const note = source ? `The source is ${source.status}` : "The source was removed";

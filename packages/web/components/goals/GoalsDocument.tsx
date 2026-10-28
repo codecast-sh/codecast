@@ -16,11 +16,13 @@
 // the Org screen.
 import { useMemo, useRef, useState, type DragEvent } from "react";
 import Link from "next/link";
-import { ChevronRight, GripVertical, MoreHorizontal, Plus, X } from "lucide-react";
-import { metricReadings, metricTrends, type InitiativeRow } from "@codecast/shared/contracts/initiative";
+import { ChevronRight, GripVertical, Hash, MoreHorizontal, Plus, X } from "lucide-react";
+import { metricReadings, metricTrends, type InitiativeMetric, type InitiativeRow } from "@codecast/shared/contracts/initiative";
+import { useMetricSeries } from "../../hooks/useMetricSeries";
+import { MetricsEditor } from "../initiatives/MetricsEditor";
 import { objectHref } from "@codecast/shared/entities";
 import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
-import { useInboxStore } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { undoAsOne } from "../../store/undoActions";
 import { quoted } from "../../store/undo/labels";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -416,7 +418,7 @@ function GoalBody({ goal, depth, d }: { goal: DocGoal; depth: number; d: Doc }) 
   const [posting, setPosting] = useState(false);
   const [adding, setAdding] = useState(false);
   const [doneWhen, setDoneWhen] = useState(false);
-  const hasNumbers = metricReadings(row).length > 0;
+  const hasNumbers = (row.metrics?.length ?? 0) > 0;
   const hasDone = !!row.done_when?.trim();
   const kids = goal.goals.filter((g) => !g.row || !initiativeEnded(g.row.status));
   const ended = initiativeEnded(row.status);
@@ -642,14 +644,43 @@ function Prose({ goal, placeholder }: { goal: InitiativeRow; placeholder: string
 
 /** The goal's numbers, each against its target on one line; a click edits them. */
 function Numbers({ goal, now, onEdit }: { goal: InitiativeRow; now: number; onEdit: () => void }) {
-  const trends = metricTrends(goal);
+  const { lookup } = useMetricSeries();
+  const readings = metricReadings(goal, lookup);
+  const trends = metricTrends(goal, lookup);
   return (
     <div className="mt-3 flex gap-3" data-goal-numbers>
-      <span className="w-[74px] shrink-0 pt-[3px] text-[12px]" style={{ color: DIM }}>{metricReadings(goal).length === 1 ? "Number" : "Numbers"}</span>
+      <span className="w-[74px] shrink-0 pt-[3px] text-[12px]" style={{ color: DIM }}>{readings.length === 1 ? "Number" : "Numbers"}</span>
       <button type="button" onClick={onEdit} className="-mx-2 -my-0.5 flex min-w-0 flex-1 flex-col items-start gap-1 rounded-md px-2 py-0.5 text-left transition-colors hover:bg-sol-bg-highlight/40" aria-label="Edit the numbers">
-        {metricReadings(goal).map((r) => <MetricTile key={r.key} reading={r} trend={trends[r.key]} now={now} size="line" className="max-w-full" />)}
+        {readings.map((r) => <MetricTile key={r.key} reading={r} trend={trends[r.key]} now={now} size="line" className="max-w-full" />)}
       </button>
     </div>
+  );
+}
+
+/** A project's numbers under its line, read live; a click edits them. Nothing while it has none and is not being given one. */
+function ProjectNumbers({ projectId, title, now, editing, onEditing }: { projectId: string; title: string; now: number; editing: boolean; onEditing: (on: boolean) => void }) {
+  const metrics = useTrackedStore([(s) => (s.projects as any)?.[projectId]?.metrics]).projects?.[projectId]?.metrics as InitiativeMetric[] | undefined;
+  const { lookup, watches } = useMetricSeries();
+  if (editing) {
+    return (
+      <div className="mb-2 ml-6 mt-1" data-project-numbers-form={projectId}>
+        <MetricsEditor metrics={metrics ?? []} watches={watches} onCancel={() => onEditing(false)} onSave={(next) => { useInboxStore.getState().updateProject(projectId, { metrics: next }); onEditing(false); }} />
+      </div>
+    );
+  }
+  if (!metrics?.length) {
+    return (
+      <button type="button" onClick={() => onEditing(true)} className="absolute -right-14 top-[14px] inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md opacity-0 transition-opacity hover:bg-sol-bg-highlight/70 group-hover/project:opacity-100" style={{ color: DIM }} aria-label={`Give ${title} a number`} title="Give it a number" data-project-add-number>
+        <Hash className="h-3.5 w-3.5" />
+      </button>
+    );
+  }
+  const row = { metrics };
+  const trends = metricTrends(row, lookup);
+  return (
+    <button type="button" onClick={() => onEditing(true)} className="mb-1 ml-6 flex max-w-full flex-wrap items-center gap-x-4 gap-y-0.5 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-sol-bg-highlight/40" aria-label="Edit the project's numbers" data-project-numbers={projectId}>
+      {metricReadings(row, lookup).map((r) => <MetricTile key={r.key} reading={r} trend={trends[r.key]} now={now} size="line" className="max-w-full" />)}
+    </button>
   );
 }
 
@@ -717,6 +748,7 @@ function WordsInPlace({ value, onSave, placeholder, label, className, start = fa
 function Projects({ goal, d, depth, adding = false, onAdding }: { goal: DocGoal; d: Doc; depth: number; adding?: boolean; onAdding?: (on: boolean) => void }) {
   const row = goal.row;
   const carried = useMemo(() => (row ? carriedProjects(goal, row.project_ids) : []), [goal, row]);
+  const [numbering, setNumbering] = useState<string | null>(null);
   if (!row) return null;
   const takes = d.drag?.kind === "project";
   if (carried.length === 0 && !adding && !takes) return null;
@@ -748,6 +780,7 @@ function Projects({ goal, d, depth, adding = false, onAdding }: { goal: DocGoal;
                 ghost={project.ghost ? { ...(project.ghost.proposal ? { proposal: project.ghost.proposal } : {}), changeIds: [project.ghost.change_id] } : undefined}
                 sub={project.ghost ? "would move here" : under ? <span title={`Also listed under ${under}`}>also under {under}</span> : undefined}
               />
+              {live && <ProjectNumbers projectId={project.id} title={project.title} now={d.now} editing={numbering === project.id} onEditing={(on) => setNumbering(on ? project.id : null)} />}
               {live && (
                 <button type="button" onClick={() => useInboxStore.getState().removeInitiativeProject(row._id, project.id)} className="absolute -right-7 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md opacity-0 transition-opacity hover:bg-sol-bg-highlight/70 hover:text-sol-red group-hover/project:opacity-100" style={{ color: DIM }} aria-label={`Take ${project.title} off this goal`} title="Take it off this goal" data-project-remove>
                   <X className="h-3.5 w-3.5" />

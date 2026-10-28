@@ -1,12 +1,14 @@
 // `cast metrics` (docs/architecture/external-data.md X7, X10): watched
 // numbers. A watch names one number a source answers (a PostHog HogQL query
-// or saved insight), a line and a direction; crossing the line is a
-// metric_alert transition like any other group's. `query` passes a HogQL
-// query through and stores nothing.
+// or saved insight, or an app's metric reader), and optionally a line and a
+// direction; crossing the line is a metric_alert transition like any other
+// group's. A watch with no line is a plain series, the live number a goal or
+// project reads (`cast initiative edit --metric "Name=target@mw-N"`). `query`
+// passes a HogQL query through and stores nothing.
 //
 //   cast metrics ls [--source s] | show mw-N | rm mw-N
 //   cast metrics backfill [mw-N] [--source s] [--days 30]
-//   cast metrics add <name> --source s --hogql "<q>"|--insight <id> --above N|--below N [--every 1h]
+//   cast metrics add <name> --source s --hogql "<q>"|--insight <id>|--reader <name> [--args '{}'] [--above N|--below N] [--unit $] [--every 1h]
 //   cast metrics query "<hogql>" --source s
 //
 // Routes: /cli/metrics/* in http.ts (metrics.ts, sources/posthog.ts).
@@ -17,7 +19,7 @@ import { commandGroup } from "./commandGroups.js";
 import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, scopedRead, scopedWrite, sparkline } from "./externalDataCli.js";
 import { stdinText } from "./sendBody.js";
 import { formatDuration, parseDuration } from "@codecast/shared/time";
-import type { WatchDirection, WatchKind } from "@codecast/shared/contracts/ingest";
+import { formatSeriesValue, type WatchDirection, type WatchKind } from "@codecast/shared/contracts/ingest";
 
 export interface WatchRow {
   _id: string;
@@ -25,8 +27,9 @@ export interface WatchRow {
   name: string;
   query_kind: WatchKind;
   query: string;
-  threshold: number;
+  threshold?: number;
   direction: WatchDirection;
+  unit?: string;
   interval_ms: number;
   status: "active" | "paused";
   state?: string;
@@ -42,36 +45,50 @@ export interface MetricAddOptions {
   source?: string;
   hogql?: string;
   insight?: string;
+  reader?: string;
+  args?: string;
   above?: string;
   below?: string;
+  unit?: string;
   every?: string;
 }
 
 /** The wire body for `cast metrics add`, or the one line that says what is wrong. */
 export function metricAddBody(name: string, o: MetricAddOptions): Record<string, unknown> {
   if (!o.source?.trim()) throw new Error("cast metrics add needs --source <name>");
-  if (!!o.hogql === !!o.insight) throw new Error("Pass exactly one of --hogql \"<query>\" or --insight <id>");
-  if ((o.above === undefined) === (o.below === undefined)) throw new Error("Pass exactly one of --above <n> or --below <n>");
-  const raw = (o.above ?? o.below)!;
-  const threshold = Number(raw);
-  if (raw.trim() === "" || !Number.isFinite(threshold)) throw new Error(`"${raw}" is not a number`);
+  if ([o.hogql, o.insight, o.reader].filter(Boolean).length !== 1) throw new Error("Pass exactly one of --hogql \"<query>\", --insight <id> or --reader <name>");
+  if (o.args && !o.reader) throw new Error("--args goes with --reader");
+  if (o.above !== undefined && o.below !== undefined) throw new Error("Pass at most one of --above <n> or --below <n>");
+  const raw = o.above ?? o.below;
+  const threshold = raw === undefined ? undefined : Number(raw);
+  if (raw !== undefined && (raw.trim() === "" || !Number.isFinite(threshold))) throw new Error(`"${raw}" is not a number`);
+  if (!o.reader && raw === undefined) throw new Error("Pass --above <n> or --below <n>: a PostHog watch alerts on a line");
+  if (o.args) {
+    try {
+      const parsed = JSON.parse(o.args);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    } catch {
+      throw new Error("--args is a JSON object, like '{\"key\":\"dollars_per_intro\"}'");
+    }
+  }
+  const query = o.reader ? `${o.reader.trim()}${o.args ? ` ${o.args.trim()}` : ""}` : (o.hogql ?? o.insight)!.trim();
   return {
     source: o.source.trim(),
     name: name.trim(),
-    query_kind: o.hogql ? "hogql" : "insight",
-    query: (o.hogql ?? o.insight)!.trim(),
-    threshold,
-    direction: o.above !== undefined ? "above" : "below",
+    query_kind: o.reader ? "reader" : o.hogql ? "hogql" : "insight",
+    query,
+    ...(threshold !== undefined ? { threshold, direction: o.above !== undefined ? "above" : "below" } : {}),
+    ...(o.unit?.trim() ? { unit: o.unit.trim() } : {}),
     ...(o.every ? { interval_ms: parseDuration(o.every) } : {}),
   };
 }
 
 export function formatWatchLine(w: WatchRow, now: number = Date.now()): string {
-  const value = w.last_value === null ? fmt.muted("no value yet") : String(w.last_value);
+  const value = w.last_value === null ? fmt.muted("no value yet") : formatSeriesValue(w.last_value, w.unit);
   const alert = w.state && w.state !== "ok" ? fmt.error(w.state) : "";
   const status = w.status === "paused" ? fmt.warning("paused") : "";
-  const line = `${w.direction === "above" ? ">" : "<"} ${w.threshold}`;
-  return [fmt.id(w.short_id), w.name, value, fmt.muted(`(alert ${line})`), alert, status, fmt.muted(`${w.source_name ?? "?"} · ${ago(w.last_at, now)}`), sparkline(w.points.map((p) => p.value))].filter(Boolean).join("  ");
+  const line = w.threshold === undefined || w.threshold === null ? fmt.muted("(series)") : fmt.muted(`(alert ${w.direction === "above" ? ">" : "<"} ${w.threshold})`);
+  return [fmt.id(w.short_id), w.name, value, line, alert, status, fmt.muted(`${w.source_name ?? "?"} · ${ago(w.last_at, now)}`), sparkline(w.points.map((p) => p.value))].filter(Boolean).join("  ");
 }
 
 export function formatWatchList(rows: WatchRow[], now: number = Date.now()): string {
@@ -123,13 +140,16 @@ export function registerMetricsCommand(program: Command, deps: PublishDeps): voi
 
   metrics
     .command("add")
-    .description("Watch a number: crossing the line is a metric_alert, coming back a metric_recovered")
+    .description("Watch a number: crossing its line is a metric_alert, coming back a metric_recovered; with no line it is a series a goal can read")
     .argument("<name>", "What the number is")
-    .option("--source <name>", "The source that answers it (PostHog)")
+    .option("--source <name>", "The source that answers it (PostHog, or an app)")
     .option("--hogql <query>", stdinText("A HogQL query whose first cell is the number"))
     .option("--insight <id>", "A saved insight id")
+    .option("--reader <name>", "An app's metric reader, answering { value, unit?, points? }")
+    .option("--args <json>", "With --reader: the args it takes, as a JSON object")
     .option("--above <n>", "Alert when the value goes above this")
     .option("--below <n>", "Alert when the value goes below this")
+    .option("--unit <unit>", "How a value reads: $ leads it, anything else (%, /day) follows it")
     .option("--every <duration>", "How often to look (default 1h)")
     .option(...TEAM_OPTION)
     .option(...JSON_OPTION)

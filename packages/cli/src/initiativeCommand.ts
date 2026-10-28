@@ -36,6 +36,7 @@ import {
   type InitiativeUpdateHealth,
   type IntentSource,
   type MetricReading,
+  type MetricSeries,
   type MetricStanding,
   type MetricTrend,
 } from "@codecast/shared/contracts/initiative";
@@ -89,6 +90,9 @@ export function progressText(counts?: { total: number; done: number }): string {
   return `${counts.done}/${counts.total} done (${Math.round((counts.done / counts.total) * 100)}%)`;
 }
 
+/** The live series a terminal read carries beside the row (initiatives.forTerminal), by short id. */
+export const liveSeries = (row: { series?: Record<string, MetricSeries> }) => (ref: string): MetricSeries | undefined => row.series?.[ref];
+
 /** One row of `cast goal ls`. */
 export function initiativeLine(c: Palette, row: any): string {
   const facts = [
@@ -97,7 +101,7 @@ export function initiativeLine(c: Palette, row: any): string {
     `${row.projects?.length ?? row.project_ids?.length ?? 0} projects`,
     progressText(row.task_counts),
     row.target_date ? `target ${targetDayOf(row.target_date)}` : null,
-    row.metrics?.length ? `${c.reset}${metricStandingText(c, initiativeStanding(metricReadings(row)))}${c.dim} against ${row.metrics.length === 1 ? "its target" : "its targets"}` : null,
+    row.metrics?.length ? `${c.reset}${metricStandingText(c, initiativeStanding(metricReadings(row, liveSeries(row))))}${c.dim} against ${row.metrics.length === 1 ? "its target" : "its targets"}` : null,
   ].filter(Boolean);
   const icon = INITIATIVE_STATUS_ICONS[row.status as InitiativeStatus] ?? "?";
   return `  ${icon} ${c.cyan}${row.short_id}${c.reset} ${c.bold}${row.title}${c.reset} ${healthText(c, row.health, row.health_at)} ${c.dim}${facts.join(" | ")}${c.reset}`;
@@ -394,7 +398,7 @@ export function sourceFillIn(write: RecordWrite, result: any): { write?: RecordW
 
 /** One metric as `show` and `report` print it: now against its target, the standing and the date in the standing's color, then which way it is moving. */
 export function metricRecordLine(c: Palette, m: MetricReading, trend?: MetricTrend, now = Date.now()): string {
-  const moving = trend ? trendWords(trend) : "";
+  const moving = trend ? trendWords(trend, m.unit) : "";
   return `${standingColor(c, m.standing)}${metricLine(m, now)}${c.reset}${moving ? ` ${c.dim}· ${moving}${c.reset}` : ""}`;
 }
 
@@ -485,9 +489,9 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
   if (row.done_when) out.push(head("Done when"), ...indented(row.done_when));
   out.push(`${head("Owner")} ${row.owner_label ?? `${c.yellow}none${c.reset}`}`);
 
-  const readings = metricReadings(row);
+  const readings = metricReadings(row, liveSeries(row));
   if (readings.length) {
-    const trends = metricTrends(row);
+    const trends = metricTrends(row, liveSeries(row));
     out.push(head("Metrics", "each number against its target"));
     for (const m of readings) out.push(`  ${metricRecordLine(c, m, trends[m.key], now)} ${c.dim}· ${m.key}${m.source ? ` · ${m.source}` : ""}${c.reset}`);
     out.push(hint(`Report a value: cast goal report ${row.short_id} ${readings[0].key}=<value> --source <link or short id>`));

@@ -21,7 +21,8 @@ import { lineSlotsValidator } from "./lib/lineSlotsValidator";
 import { workflowEdgeValidator, workflowNodeValidator, workflowSnapshotValidator } from "./lib/workflowGraphValidators";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
-import { capabilityTables } from "./capabilitiesSchema";
+import { metricValidator } from "./lib/metricSeries";
+import { capabilityTables, teamKitTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { publishedLineProfileValidator } from "./lib/lineProfileValidator";
@@ -139,6 +140,7 @@ export default defineSchema({
   // own module so the capability functions and their tests share one source;
   // spread here because a deploy only ships what this file names.
   ...capabilityTables,
+  ...teamKitTables,
   ...machineResourceTables,
   ...teamHostTables,
   ...accountPoolTables,
@@ -1351,6 +1353,12 @@ export default defineSchema({
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
     .index("by_team_user_updated", ["team_id", "user_id", "updated_at"])
+    // A member's ACTIVE rows in the window (the org scan, collectOrgSessions).
+    // Filtering status on by_team_user_updated still read every completed row:
+    // one Union member's 30 days held 16,009 rows, 12,214 of them completed
+    // workflow children, 60 MB of a 100 MB read limit (2026-10-27).
+    .index("by_team_user_status_updated", ["team_id", "user_id", "status", "updated_at"])
+    .index("by_user_status_updated", ["user_id", "status", "updated_at"])
     // (Removed: by_owner_updated. The owner's inbox merge and feed --mine now
     // read the canonical owner SET from session_owners — a single owner_user_id
     // can't express multiple owners. It was also not free: Convex indexes every
@@ -5547,6 +5555,9 @@ export default defineSchema({
     // what could go wrong, and the daily budget the owner role may spend.
     goal: v.optional(v.string()),
     success_metrics: v.optional(v.array(v.string())),
+    // Its numbers, the goal's shape (lib/metricSeries): each with a target,
+    // read live from the metric watch it names (projects.projectMetricsPatch).
+    metrics: v.optional(v.array(metricValidator)),
     priority: v.optional(v.union(v.literal("p0"), v.literal("p1"), v.literal("p2"), v.literal("p3"))),
     owner_role_id: v.optional(v.id("org_roles")),
     non_goals: v.optional(v.array(v.string())),
@@ -5681,7 +5692,7 @@ export default defineSchema({
     // at most two numbers with a target each. The reported values live in
     // `scoreboard` by key, the template scoreboard's own shape, written by
     // the same recordScores path `cast org template report` uses.
-    metrics: v.optional(v.array(v.object({ key: v.string(), name: v.string(), target: v.string() }))),
+    metrics: v.optional(v.array(metricValidator)),
     scoreboard: v.optional(v.record(v.string(), scoreValidator)),
     // The intent record (I5, lib/initiativeValidators): every reported value
     // by metric key oldest first, written only with `scoreboard`; why it

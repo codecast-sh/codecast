@@ -24,8 +24,8 @@ import { findRoleRoutine } from "./lib/orgRoutine";
 import { roleWakeOf } from "@codecast/shared/contracts/rolePlaybook";
 import { extractPlanTitleForWeb } from "./docs";
 import { computeReportingPeople, type BriefPerson } from "./orgGoals";
-import { roleServedInitiatives } from "./lib/roleInitiatives";
-import { metricLine, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { roleProjectNumbers, roleServedInitiatives, servedMetricLines } from "./lib/roleInitiatives";
+import { type IntentSource } from "@codecast/shared/contracts/initiative";
 import { parseCallRef } from "@codecast/shared/entities";
 import { isActiveTask } from "@codecast/shared/tasks";
 import { findInitiative } from "./lib/initiativeRef";
@@ -82,8 +82,6 @@ function orderSessions(rows: OrgSession[]): OrgSession[] {
 export const parentKeyOf = (p: { kind: "user"; user_id: any } | { kind: "role"; role_id: any }): ParentKey =>
   p.kind === "user" ? `user:${p.user_id.toString()}` : `role:${p.role_id.toString()}`;
 
-const scanFilter = (q: any) => q.eq(q.field("status"), "active");
-
 // The workspace's sessions, filed. Shared by `tree` and `sessionsUnder` so a
 // cluster expand lists exactly what its count promised.
 export async function collectOrgSessions(
@@ -102,6 +100,10 @@ export async function collectOrgSessions(
   // beside it: the scope feed filters these by task, plan and project path.
   sessions: Map<string, { session: OrgSession; raw: any }>;
   truncated: boolean;
+  // The scope feed's workspace windows (a member's newest docs, pages and
+  // decisions, the workspace's newest runs), read once per scan: they do not
+  // depend on the scope, and the analyzer reads a feed for every role.
+  windows: Map<string, Promise<any[]>>;
 }> {
   const cutoff = now - ORG_WINDOW_MS;
   let truncated = false;
@@ -115,20 +117,26 @@ export async function collectOrgSessions(
   const memberships: any[] = teamFilter ? teamFilter.memberships : [];
   const memberIds: Id<"users">[] = teamFilter ? memberships.map((m: any) => m.user_id) : [userId];
 
-  // The scan: one indexed range per member (team) or the caller's own range
-  // (personal), newest first, bounded by the row cap across all of them.
+  // The scan: each member's ACTIVE rows in the window, newest first, through
+  // an index that carries status, so a completed row is never read. A filter
+  // on status still read them all: one Union member's window held 12k
+  // completed workflow children, 60 MB of the 100 MB read limit (2026-10-27).
+  // The row cap is shared fairly: every member first gets an even share, and
+  // what the light members leave goes to the heavy ones in a second read.
+  // Spent first come, first served, one member's workflow children used the
+  // whole cap and no other member's sessions were read at all.
+  const activeRange = (memberId: Id<"users">, atOrBelow?: number) => {
+    const range = (q: any) => {
+      const r = q.gte("updated_at", cutoff);
+      return atOrBelow === undefined ? r : r.lte("updated_at", atOrBelow);
+    };
+    return (teamId
+      ? ctx.db.query("conversations").withIndex("by_team_user_status_updated", (q: any) => range(q.eq("team_id", teamId).eq("user_id", memberId).eq("status", "active")))
+      : ctx.db.query("conversations").withIndex("by_user_status_updated", (q: any) => range(q.eq("user_id", memberId).eq("status", "active")))
+    ).order("desc");
+  };
   const rows: any[] = [];
-  let budget = ORG_ROW_CAP;
-  for (const memberId of memberIds) {
-    if (budget <= 0) { truncated = true; break; }
-    const range = teamId
-      ? ctx.db.query("conversations").withIndex("by_team_user_updated", (q: any) =>
-        q.eq("team_id", teamId).eq("user_id", memberId).gte("updated_at", cutoff))
-      : ctx.db.query("conversations").withIndex("by_user_updated", (q: any) =>
-        q.eq("user_id", memberId).gte("updated_at", cutoff));
-    const got: any[] = await range.order("desc").filter(scanFilter).take(budget + 1);
-    if (got.length > budget) { truncated = true; got.length = budget; }
-    budget -= got.length;
+  const accept = (got: any[]) => {
     for (const c of got) {
       if (c.inbox_killed_at || c.inbox_dismissed_at) continue;
       // A teammate's private row is theirs alone; the caller's own rows are
@@ -136,6 +144,30 @@ export async function collectOrgSessions(
       if (teamFilter && c.user_id.toString() !== userId.toString() && !teamFilter.isVisible(c)) continue;
       rows.push(c);
     }
+  };
+  const share = Math.max(1, Math.floor(ORG_ROW_CAP / Math.max(1, memberIds.length)));
+  let budget = ORG_ROW_CAP;
+  const heavy: Array<{ memberId: Id<"users">; edge: number; atEdge: Set<string> }> = [];
+  for (const memberId of memberIds) {
+    if (budget <= 0) { truncated = true; break; }
+    const take = Math.min(share, budget);
+    const got: any[] = await activeRange(memberId).take(take + 1);
+    if (got.length > take) {
+      got.length = take;
+      const edge = got[take - 1].updated_at;
+      heavy.push({ memberId, edge, atEdge: new Set(got.filter((c) => c.updated_at === edge).map((c) => String(c._id))) });
+    }
+    budget -= got.length;
+    accept(got);
+  }
+  for (const { memberId, edge, atEdge } of heavy) {
+    if (budget <= 0) { truncated = true; break; }
+    // Continue below the first read's last row; rows sharing its timestamp
+    // come back once more and are dropped by id.
+    const got: any[] = (await activeRange(memberId, edge).take(budget + atEdge.size + 1)).filter((c: any) => !atEdge.has(String(c._id)));
+    if (got.length > budget) { truncated = true; got.length = budget; }
+    budget -= got.length;
+    accept(got);
   }
 
   // Subagents are counted under the session they nest in and never emitted;
@@ -199,7 +231,7 @@ export async function collectOrgSessions(
     if (list) list.push(session); else byParent.set(key, [session]);
   }
   for (const list of byParent.values()) orderSessions(list);
-  return { memberIds, memberships, roles, anchors, anchorSessions, byParent, sessions, truncated };
+  return { memberIds, memberships, roles, anchors, anchorSessions, byParent, sessions, truncated, windows: new Map() };
 }
 
 function tallyOf(rows: OrgSession[]): StateCounts {
@@ -856,6 +888,17 @@ export async function computeScopeFeed(
   // stays reachable from its own tab and the item's page.
   const take = limit + 1;
   const members = await scopeMemberIds(ctx, resolved);
+  // A window that does not depend on the scope, shared through the caller's
+  // scan: twenty three Union roles each read the same 200 newest runs, 1.9 MB
+  // a role, until the org slice passed the read limit (2026-10-27).
+  const windowOf = (key: string, read: () => Promise<any[]>): Promise<any[]> => {
+    const cache = opts.scan?.windows;
+    if (!cache) return read();
+    const k = `${key}|${take}`;
+    let hit = cache.get(k);
+    if (!hit) { hit = read(); cache.set(k, hit); }
+    return hit;
+  };
   const taskShortIds = new Map(resolved.tasks.map((t) => [t._id.toString(), t.short_id]));
   const planShortIds = new Map(resolved.plans.map((p) => [p._id.toString(), p.short_id]));
   const projectIds = new Set(resolved.projects.map((p) => p._id.toString()));
@@ -912,10 +955,10 @@ export async function computeScopeFeed(
     // or plan in scope.
     const docById = new Map<string, any>();
     for (const uid of members) {
-      const rows: any[] = await ctx.db.query("docs")
+      const rows: any[] = await windowOf(`doc|${uid}|${cursor.doc?.ts ?? ""}`, () => ctx.db.query("docs")
         .withIndex("by_user_updated", (q: any) => before(q.eq("user_id", uid), "updated_at", "doc"))
         .order("desc")
-        .take(take);
+        .take(take));
       for (const d of rows) {
         if ((d.project_id && projectIds.has(d.project_id.toString())) || (d.plan_id && planShortIds.has(d.plan_id.toString()))) docById.set(d._id.toString(), d);
       }
@@ -943,7 +986,7 @@ export async function computeScopeFeed(
     // page in through both is one row, keyed by slug.
     const pageBySlug = new Map<string, any>();
     for (const uid of members) {
-      const pages: any[] = await ctx.db.query("artifacts").withIndex("by_user", (q: any) => q.eq("user_id", uid)).order("desc").take(ARTIFACTS_PER_MEMBER);
+      const pages: any[] = await windowOf(`artifact|${uid}`, () => ctx.db.query("artifacts").withIndex("by_user", (q: any) => q.eq("user_id", uid)).order("desc").take(ARTIFACTS_PER_MEMBER));
       for (const a of pages) {
         const owned = !!a.session_conversation_id && sessionIds.has(a.session_conversation_id.toString());
         const attached = !!a.task_id && taskShortIds.has(a.task_id.toString());
@@ -975,10 +1018,10 @@ export async function computeScopeFeed(
     const decisionById = new Map<string, any>();
     for (const uid of members) {
       for (const status of DECISION_STATUSES) {
-        const asked: any[] = await ctx.db.query("session_decisions")
+        const asked: any[] = await windowOf(`decision|${uid}|${status}|${cursor.decision?.ts ?? ""}`, () => ctx.db.query("session_decisions")
           .withIndex("by_user_status_created", (q: any) => before(q.eq("user_id", uid).eq("status", status), "created_at", "decision"))
           .order("desc")
-          .take(take);
+          .take(take));
         for (const d of asked) {
           const onTask = !!d.task_id && taskShortIds.has(d.task_id.toString());
           const openAsk = !d.task_id && d.status === "pending" && sessionIds.has(d.conversation_id.toString());
@@ -1087,12 +1130,12 @@ export async function computeScopeFeed(
     const runById = new Map<string, any>();
     const runShortId = new Map<string, string>();
     const key = workspaceKey(resolved.teamId ? { type: "team", teamId: resolved.teamId } : { type: "personal", userId: resolved.userId });
-    const candidates: any[] = await ctx.db.query("workflow_runs")
+    const candidates: any[] = [...await windowOf(`run|${key}|${cursor.run?.ts ?? ""}`, () => ctx.db.query("workflow_runs")
       .withIndex("by_workspace_updated", (q: any) => before(q.eq("workspace", key), "updated_at", "run"))
       .order("desc")
-      .take(RUNS_PER_WORKSPACE);
+      .take(RUNS_PER_WORKSPACE))];
     if (!resolved.teamId) {
-      const legacy: any[] = await ctx.db.query("workflow_runs").withIndex("by_user_id", (q: any) => q.eq("user_id", resolved.userId)).order("desc").take(RUNS_PER_WORKSPACE);
+      const legacy: any[] = await windowOf(`run-legacy|${resolved.userId}`, () => ctx.db.query("workflow_runs").withIndex("by_user_id", (q: any) => q.eq("user_id", resolved.userId)).order("desc").take(RUNS_PER_WORKSPACE));
       for (const r of legacy) if (!r.workspace) candidates.push(r);
     }
     for (const r of candidates) {
@@ -1363,6 +1406,8 @@ export type BriefFacts = {
   hands: BriefHand[];
   // The initiatives the role owns or its projects carry, owned first.
   initiatives: BriefInitiative[];
+  /** The numbers of the projects it looks after, each line read like an initiative's. */
+  project_numbers: Array<{ short_id: string; title: string; metrics: string[] }>;
   // The role's own standing session, or null before provision.
   standing: BriefStanding | null;
   // The people who report to the role (org-roles-run-work.md R6): their goals
@@ -1465,8 +1510,10 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
   // projects carry, each with its health as last said and when.
   const initiatives: BriefInitiative[] = (await roleServedInitiatives(ctx, role)).map((i) => ({
     short_id: i.short_id, title: i.title, status: i.status, health: i.health, health_at: i.health_at, owned: i.owned,
-    metrics: i.metrics.map((m) => metricLine(m, now)), chain: i.chain.map((c) => c.title),
+    metrics: servedMetricLines(i, now), chain: i.chain.map((c) => c.title),
   }));
+  // The numbers of the projects it looks after, read the same way.
+  const project_numbers = (await roleProjectNumbers(ctx, role)).map((p) => ({ short_id: p.short_id, title: p.title, metrics: servedMetricLines(p, now) }));
   const standingEntry = standing ? scan.sessions.get(String(standing._id))?.session : undefined;
   const standingFacts: BriefStanding | null = standing ? { short_id: standing.short_id ?? null, state: standingEntry?.state ?? null, ...stateOf(standing) } : null;
 
@@ -1485,6 +1532,7 @@ export async function computeBriefFacts(ctx: Ctx, viewerId: Id<"users">, role: a
     plans: summary.plans,
     hands,
     initiatives,
+    project_numbers,
     standing: standingFacts,
     people,
     changed,

@@ -1,3 +1,4 @@
+import { cleanMetrics, metricArgValidator, requireSeries, type MetricArg } from "./lib/metricSeries";
 import { v } from "convex/values";
 import { charterPatch, projectCharterArgs } from "./lib/orgCharter";
 import type { Id } from "./_generated/dataModel";
@@ -119,6 +120,19 @@ export const get = query({
   },
 });
 
+/**
+ * A project's numbers (the goal's InitiativeMetric shape, lib/metricSeries):
+ * a list replaces the last, an empty one clears it, and each live series must
+ * be a watch in the project's own workspace. A project has no reported
+ * scoreboard: its numbers read from their series.
+ */
+async function projectMetricsPatch(ctx: { db: any }, project: { workspace?: string }, metrics: MetricArg[] | undefined) {
+  if (metrics === undefined) return {};
+  const cleaned = cleanMetrics(metrics);
+  await requireSeries(ctx, project.workspace ?? "", cleaned);
+  return { metrics: cleaned.length ? cleaned : undefined };
+}
+
 export const update = mutation({
   args: {
     api_token: v.string(),
@@ -138,6 +152,7 @@ export const update = mutation({
     // The charter (org-staffing.md S7); `--owner @handle` resolves inside the
     // project's own workspace. Access is the project's, unchanged.
     ...projectCharterArgs,
+    metrics: v.optional(v.array(metricArgValidator)),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -146,7 +161,7 @@ export const update = mutation({
     const project = await ctx.db.get(args.id);
     if (!project || !(await canAccessProject(ctx, auth.userId, project))) throw new Error("Project not found");
 
-    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, args, "projects")) };
+    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, args, "projects")), ...(await projectMetricsPatch(ctx, project, args.metrics)) };
     if (args.title) updates.title = args.title;
     if (args.description !== undefined) updates.description = args.description;
     if (args.status) updates.status = args.status;
@@ -332,6 +347,7 @@ export const webUpdate = mutation({
     // The folder (S35): editable on the page; null clears it.
     project_path: v.optional(v.union(v.string(), v.null())),
     ...projectCharterArgs,
+    metrics: v.optional(v.array(metricArgValidator)),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -341,8 +357,8 @@ export const webUpdate = mutation({
     if (!project || !(await canAccessProject(ctx, userId, project))) throw new Error("Project not found");
 
     // The charter fields ride the same patch; `owner` is a ref, never stored.
-    const { id, goal, success_metrics, priority, owner, non_goals, risks, budget, ...fields } = args;
-    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, { goal, success_metrics, priority, owner, non_goals, risks, budget }, "projects")) };
+    const { id, goal, success_metrics, priority, owner, non_goals, risks, budget, metrics, ...fields } = args;
+    const updates: any = { updated_at: Date.now(), ...(await charterPatch(ctx, project, { goal, success_metrics, priority, owner, non_goals, risks, budget }, "projects")), ...(await projectMetricsPatch(ctx, project, metrics)) };
     for (const [k, val] of Object.entries(fields)) {
       if (val !== undefined) updates[k] = val === null ? undefined : val;
     }

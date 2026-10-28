@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { authorityLine, briefCharterLines, briefHandLine, briefInitiativeLines, standingSessionLine, wakeLine } from "./briefLines";
+import { authorityLine, briefCharterLines, briefHandLine, briefInitiativeLines, briefProjectNumberLines, briefServesNumbers, standingSessionLine, wakeLine } from "./briefLines";
 import { stripAnsi } from "@platform/cli-kit/render";
 
 // The brief's hand line reads the server's BriefHand shape: `state`, not
@@ -77,5 +77,17 @@ describe("authorityLine", () => {
     const now = new Date(2026, 9, 12).getTime(), day = 86_400_000;
     const line = stripAnsi(authorityLine({ authority: [{ kind: "spend", label: "Ads", expires_at: now + 90 * day }, { kind: "write", label: "Old", expires_at: now - day }] }, now));
     expect(line).toBe("  authority outside codecast: spend (Ads, until Jan 10, 2027)");
+  });
+});
+
+describe("an area read by numbers", () => {
+  test("project numbers print under their project, and only an area with a number is told how to move it", () => {
+    expect(briefProjectNumberLines([{ short_id: "pj-3", title: "Outreach", metrics: ["Cold emails a day: 1,000/day of 10,000, behind (live mw-1, today)"] }]).map(stripAnsi)).toEqual([
+      "  project numbers:",
+      "    pj-3 Outreach · Cold emails a day: 1,000/day of 10,000, behind (live mw-1, today)",
+    ]);
+    expect(briefServesNumbers({ initiatives: [{ metrics: [] }], project_numbers: [] })).toBe(false);
+    expect(briefServesNumbers({ initiatives: [{ metrics: ["x"] }] })).toBe(true);
+    expect(briefServesNumbers({ project_numbers: [{ metrics: ["x"] }] })).toBe(true);
   });
 });

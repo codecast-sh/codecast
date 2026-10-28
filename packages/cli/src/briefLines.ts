@@ -9,6 +9,7 @@ import { usedOf } from "@codecast/shared/contracts/orgCapacity";
 import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { autonomyOn, autonomyWords } from "@codecast/shared/contracts/roleAutonomy";
 import { formatDateSmart, formatShortDate, relTimeShort } from "@codecast/shared/time";
+import { metricClimbLines } from "@codecast/shared/contracts/metricClimb";
 import { WAKE_TUNE_HINT, playbookGuideLines, roleWakeOf, wakeWords, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 
 /** A role in one line, as every `cast role` and `cast brief` read heads it. */
@@ -56,6 +57,16 @@ export function briefInitiativeLines(rows: BriefInitiativeRow[], now: number): s
     ...rows.map((r) => `    ${c.dim}${r.short_id}${c.reset} ${r.title} ${c.dim}· ${r.owned ? "owns it" : "its project carries it"} · ${health(r)}${r.chain.length ? ` · under ${r.chain.join(", under ")}` : ""}${r.metrics.length ? ` · ${r.metrics.join("; ")}` : ""}${c.reset}`),
   ];
 }
+
+/** The numbers of the projects a role looks after, read like its initiatives' numbers. */
+export function briefProjectNumberLines(rows: Array<{ short_id: string; title: string; metrics: string[] }>): string[] {
+  if (!rows.length) return [];
+  return [`  project numbers:`, ...rows.map((r) => `    ${c.dim}${r.short_id}${c.reset} ${r.title} ${c.dim}· ${r.metrics.join("; ")}${c.reset}`)];
+}
+
+/** Whether the brief's area is read by any number, the goals' or the projects'. */
+export const briefServesNumbers = (f: { initiatives?: Array<{ metrics: string[] }>; project_numbers?: Array<{ metrics: string[] }> }): boolean =>
+  [...(f.initiatives ?? []), ...(f.project_numbers ?? [])].some((r) => r.metrics.length > 0);
 
 /** The grants a role holds outside codecast, the expired ones left out. */
 export function authorityLine(role: { authority?: Array<{ kind: string; label: string; expires_at?: number | null }> }, now: number): string {
@@ -160,6 +171,7 @@ export function briefTextLines(brief: any, now: number): string[] {
     `  tasks: ${f.tasks.total} in scope, ${f.tasks.open} open${st ? ` · ${st}` : ""}${pr ? ` · priority ${pr}` : ""}`,
     ...briefPlanLines(f.plans),
     ...briefInitiativeLines(f.initiatives ?? [], now),
+    ...briefProjectNumberLines(f.project_numbers ?? []),
     `  decisions: ${f.decisions.open} open, ${f.decisions.answered_today} answered today`,
     // What moved since the role last read this (S25): the section its scheduled check acts on.
     `  changed since ${formatDateSmart(f.changed_since, now)}:${f.changed.length ? "" : " nothing"}`,
@@ -168,6 +180,8 @@ export function briefTextLines(brief: any, now: number): string[] {
     ...(f.hands.length ? [`  sessions under it:`, ...f.hands.map(briefHandLine)] : []),
     ...(f.people?.length ? [`  people who report to it:`, ...briefPeopleLines(f.people, now)] : []),
     ...briefCharterLines(String(brief.charter ?? "")),
+    // How to move them, only for an area read by a number (contracts/metricClimb).
+    ...(briefServesNumbers(f) ? ["", ...metricClimbLines().map((line, i) => (i === 0 ? `  ${c.bold}${line}${c.reset}` : `  ${line}`))] : []),
     "",
     `  ${c.bold}## Brief${c.reset}`,
     ...String(brief.narrative || "(no narrative yet: cast brief edit -)").split("\n").map((line) => `  ${line}`),

@@ -98,6 +98,7 @@
     "./contracts/redirectWords": "./contracts/redirectWords.ts",
     "./contracts/orgRoute": "./contracts/orgRoute.ts",
     "./contracts/initiative": "./contracts/initiative.ts",
+    "./contracts/metricClimb": "./contracts/metricClimb.ts",
     "./contracts/orgAssignee": "./contracts/orgAssignee.ts",
     "./contracts/cloudAgents": "./contracts/cloudAgents.ts",
     "./contracts/sessionCharacter": "./contracts/sessionCharacter.ts",

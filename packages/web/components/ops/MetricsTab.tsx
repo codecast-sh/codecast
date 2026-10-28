@@ -2,6 +2,7 @@
 // line with the threshold drawn across, the side of it that alerts shaded.
 // "Load history" reads each watch's past values from its source
 // (metrics.loadHistory), so a chart is full at once instead of one poll at a time.
+import { formatSeriesValue } from "@codecast/shared/contracts/ingest";
 import Link from "next/link";
 import { useMemo } from "react";
 import { useInboxStore } from "../../store/inboxStore";
@@ -64,9 +65,9 @@ export function MetricsTab({ source }: { source: string | null }) {
                 </span>
               </div>
               <div className="flex items-baseline gap-2 mt-2">
-                <span className="ops-watch-value">{w.last_value === null ? "?" : fmt(w.last_value)}</span>
+                <span className="ops-watch-value">{w.last_value === null ? "?" : w.unit ? formatSeriesValue(w.last_value, w.unit) : fmt(w.last_value)}</span>
                 <span className="ops-dim text-[11.5px]">
-                  alerts {w.direction} {fmt(w.threshold)}
+                  {w.threshold === undefined ? "series" : `alerts ${w.direction} ${fmt(w.threshold)}`}
                 </span>
               </div>
               <MetricChart watch={w} />
@@ -99,19 +100,20 @@ function HistoryLine({ watch, now }: { watch: OpsWatch; now: number }) {
 export function MetricChart({ watch, width = 260, height = 56 }: { watch: Pick<OpsWatch, "points" | "threshold" | "direction" | "state">; width?: number; height?: number }) {
   const pts = watch.points;
   const values = pts.map((p) => p.value);
-  const lo = Math.min(watch.threshold, ...values);
-  const hi = Math.max(watch.threshold, ...values);
+  const line_ = watch.threshold;
+  const lo = Math.min(...(line_ === undefined ? [] : [line_]), ...values);
+  const hi = Math.max(...(line_ === undefined ? [] : [line_]), ...values);
   const span = hi - lo || 1;
   const pad = 4;
   const y = (v: number) => pad + (1 - (v - lo) / span) * (height - pad * 2);
   const x = (i: number) => (pts.length <= 1 ? width : (i / (pts.length - 1)) * width);
-  const ty = y(watch.threshold);
+  const ty = line_ === undefined ? null : y(line_);
   const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
   const ink = watch.state === "alert" ? "var(--sol-orange)" : "var(--sol-text-muted)";
   return (
-    <svg className="w-full mt-2" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" height={height} role="img" aria-label={`last ${pts.length} values, threshold ${watch.threshold}`}>
-      <rect x={0} y={watch.direction === "above" ? 0 : ty} width={width} height={watch.direction === "above" ? ty : height - ty} style={{ fill: "color-mix(in srgb, var(--sol-orange) 7%, transparent)" }} />
-      <line x1={0} x2={width} y1={ty} y2={ty} style={{ stroke: "var(--sol-orange)" }} strokeDasharray="4 3" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+    <svg className="w-full mt-2" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" height={height} role="img" aria-label={`last ${pts.length} values${line_ === undefined ? "" : `, threshold ${line_}`}`}>
+      {ty !== null && <rect x={0} y={watch.direction === "above" ? 0 : ty} width={width} height={watch.direction === "above" ? ty : height - ty} style={{ fill: "color-mix(in srgb, var(--sol-orange) 7%, transparent)" }} />}
+      {ty !== null && <line x1={0} x2={width} y1={ty} y2={ty} style={{ stroke: "var(--sol-orange)" }} strokeDasharray="4 3" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
       {pts.length > 1 && <path d={line} fill="none" style={{ stroke: ink }} strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />}
       {pts.length > 0 && <circle cx={x(pts.length - 1)} cy={y(pts[pts.length - 1].value)} r={2.5} style={{ fill: ink }} />}
     </svg>
