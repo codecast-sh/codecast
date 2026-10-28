@@ -66,7 +66,9 @@ export function useForkActions({ conversation, currentUser, hasMoreAbove, convCo
   // Gate every fork affordance on the client's fork capability: claude/codex/opencode
   // can branch into a live session carrying the copied history; cursor/gemini/pi can't,
   // so the control is HIDDEN (undefined handler) rather than shown as a false success.
-  const forkHandler = agentSupportsFork(conversation?.agent_type) ? handleForkFromMessage : undefined;
+  // A share-link viewer is refused by the server (owners and team members only).
+  const canFork = agentSupportsFork(conversation?.agent_type) && conversation?.access_level !== "shared";
+  const forkHandler = canFork ? handleForkFromMessage : undefined;
 
   // Fork from an ARBITRARY branch — the branch map's "fork higher" drill lets you
   // pick a message in the current branch OR any ancestor/sibling. For the current
@@ -147,7 +149,7 @@ export function useForkActions({ conversation, currentUser, hasMoreAbove, convCo
   // Same capability gate as forkHandler: hide fork-and-send where forks can't run.
   // The composer sends into the fork's stub id itself, so its images ride along.
   const forkTailId = useCallback(async () => (await forkFromTail())?.conversationId ?? null, [forkFromTail]);
-  const forkTailHandler = agentSupportsFork(conversation?.agent_type) ? forkTailId : undefined;
+  const forkTailHandler = canFork ? forkTailId : undefined;
 
-  return { handleForkFromMessage, forkHandler, handleForkFromBranch, handleForkReply, forkTailHandler };
+  return { handleForkFromMessage, forkHandler, handleForkFromBranch, handleForkReply: canFork ? handleForkReply : undefined, forkTailHandler };
 }

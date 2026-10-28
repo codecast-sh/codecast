@@ -2447,6 +2447,9 @@ export const getConversationWithMeta = query({
       git_behind: (conversationLight as any).git_behind ?? null,
       git_dirty: (conversationLight as any).git_dirty ?? null,
       is_own: !!isOwner,
+      // A share-link viewer reads but may not fork or steer: forkFromMessage
+      // admits owners and team members only, so the web hides those actions.
+      access_level: access,
       title,
       effective_team_visibility,
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
@@ -6094,13 +6097,18 @@ export const forkFromMessage = mutation({
     // session stays team-visible — and forking someone else's session follows
     // YOUR mappings, never inadvertently broadcasting under their settings.
     // Agent-switch forks are pure continuations and inherit the source's exact
-    // visibility instead.
-    const forkMappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    const { teamId: forkTeamId, isPrivate: forkIsPrivate, autoShared: forkAutoShared } =
-      resolveTeamForPath(forkMappings, original.git_root || original.project_path, original.team_id);
+    // visibility instead. The repository matters as much as the path: forking a
+    // teammate's session hands over THEIR checkout path, which none of the
+    // forker's path mappings name, while the forker's repo mapping does.
+    const { team_id: forkTeamId, is_private: forkIsPrivate, auto_shared: forkAutoShared } =
+      await resolveCreationPrivacy(
+        ctx,
+        userId,
+        original.git_root || original.project_path,
+        original.team_id,
+        undefined,
+        original.git_remote_url,
+      );
 
     // The fork lives where the parent's transcript lives: route daemon commands
     // to the parent's owner device (it has the JSONL and the checkout). Falls
@@ -6151,7 +6159,7 @@ export const forkFromMessage = mutation({
       updated_at: now,
       message_count: 0,
       is_private: isAgentSwitch ? original.is_private : forkIsPrivate,
-      auto_shared: isAgentSwitch ? original.auto_shared : (forkAutoShared || undefined),
+      auto_shared: isAgentSwitch ? original.auto_shared : forkAutoShared,
       status: "active",
       forked_from: isAgentSwitch ? undefined : original._id,
       parent_message_uuid: isAgentSwitch ? "agent-switch" : args.message_uuid,

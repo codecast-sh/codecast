@@ -66,6 +66,7 @@ export type ConversationData = {
   _id: Id<"conversations">;
   user_id?: string;
   is_own?: boolean;
+  access_level?: "owner" | "team" | "shared";
   title?: string;
   session_id?: string;
   agent_type?: string;

@@ -1510,13 +1510,14 @@ function GuestJoinCTA() {
 // scope so auth-context re-renders don't cascade through the tooltip ref chain.
 export function NonOwnerMessageInput({ conversation, onForkReply, autoFocusInput }: {
   conversation: ConversationData;
-  onForkReply: (content: string) => void;
+  onForkReply?: (content: string) => void;
   autoFocusInput?: boolean;
 }) {
   const { isAuthenticated, isLoading } = useConvexAuth();
   if (!isAuthenticated && !isLoading) return <GuestJoinCTA />;
   // Signed-in non-owner: a grant-aware composer that can co-write, request send
-  // access, send into the live session once granted, or fork as a fallback.
+  // access, send into the live session once granted, or fork as a fallback
+  // when the viewer may fork (owner or team access, not a share link).
   return (
     <CollabComposer
       conversation={conversation}

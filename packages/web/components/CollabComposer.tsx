@@ -232,7 +232,7 @@ export const CollabComposer = memo(function CollabComposer({
   autoFocusInput,
 }: {
   conversation: ConversationData;
-  onForkReply: (content: string) => void;
+  onForkReply?: (content: string) => void;
   autoFocusInput?: boolean;
 }) {
   const { isAuthenticated } = useConvexAuth();
@@ -331,7 +331,7 @@ export const CollabComposer = memo(function CollabComposer({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (canSend) handleSend();
-      else if (message.trim()) onForkReply(message.trim());
+      else if (message.trim()) onForkReply?.(message.trim());
     }
   }
 
@@ -391,7 +391,7 @@ export const CollabComposer = memo(function CollabComposer({
         )}
       </div>
       <form
-        onSubmit={(e) => { e.preventDefault(); if (canSend) handleSend(); else if (message.trim()) onForkReply(message.trim()); }}
+        onSubmit={(e) => { e.preventDefault(); if (canSend) handleSend(); else if (message.trim()) onForkReply?.(message.trim()); }}
         className="mx-auto conv-col px-2 sm:px-4 pb-3 pt-1.5"
       >
         <div className={`flex items-end gap-2 border px-4 py-2 rounded-2xl bg-sol-bg-alt shadow-lg ${canSend ? "border-sol-cyan/30" : "border-sol-border/50"}`}>
@@ -410,8 +410,8 @@ export const CollabComposer = memo(function CollabComposer({
             {shared.active && <SharedCarets inputRef={textareaRef} text={message} rows={shared.others} editors={shared.editors} />}
           </div>
 
-          {/* Fork is always available — copy the session and continue as your own. */}
-          {message.trim() && (
+          {/* Fork: copy the session and continue as your own (owner or team access). */}
+          {onForkReply && message.trim() && (
             <button
               type="button"
               onClick={() => onForkReply(message.trim())}
