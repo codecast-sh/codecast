@@ -39,7 +39,6 @@ import {
 } from "lucide-react";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
-import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { installKeyboardCursor } from "../lib/keyboardCursor";
 
 // Hosted lists draw their keyboard cursor only once the keyboard moves it.
@@ -665,7 +664,6 @@ export function GenericListView<T>({
 }: GenericListViewProps<T>) {
   const paletteKeys = useShortcutParts("palette.toggle");
   const router = useRouter();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const currentPath = usePathname();
 
   // Open/close a row's detail by driving the URL: navigating to the row's route
@@ -1209,7 +1207,7 @@ export function GenericListView<T>({
           panel narrows — a container can't query its own width, only a child's. */}
       {/* The header's own rule (.cc-panel__head) is the one line under it. */}
       <div className={`cq-container ${hosted ? HOSTED_LIST_TOP : ""}`}>
-        <div ref={titlebarRef} className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
+        <div className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
         <div className="flex items-center gap-2 min-w-0">
           {/* Hosted mode names the page the way Whisk does, with its count;
               the developer header keeps the name for screen readers only. */}
