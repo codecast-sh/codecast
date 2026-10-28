@@ -19,8 +19,15 @@ log=$(mktemp)
 export CODECAST_SPAWN_TRACE=$(mktemp)
 trap 'rm -f "$log" "$CODECAST_SPAWN_TRACE"' EXIT
 
-"$@" > >(tee -a "$log") 2>&1 &
+# The command writes straight into the log, a regular file, and tail streams
+# it to the job. Through a pipe, bun 1.3.14 under --isolate registers fd 1 with
+# epoll again for every test file's stdout and some file fails at load with
+# "EEXIST: file already exists, epoll_ctl" (ct-71000). A regular file is never
+# polled.
+"$@" >> "$log" 2>&1 &
 pid=$!
+tail -n +1 -f --pid="$pid" "$log" &
+tailpid=$!
 
 size=-1
 still=0
@@ -56,6 +63,10 @@ while kill -0 "$pid" 2>/dev/null; do
   pkill -KILL -P "$pid" 2>/dev/null
   kill -KILL "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
+  wait "$tailpid" 2>/dev/null
   exit 124
 done
 wait "$pid"
+status=$?
+wait "$tailpid" 2>/dev/null
+exit "$status"
