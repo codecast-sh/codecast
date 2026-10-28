@@ -309,7 +309,7 @@
 .face-row[data-density="float"] .face-seat[data-stacked] .face {
   --edge-w: 3px;
 }
-.face-seat[data-stacked] :is(.face-pres, .face-bot, .face-unread, .face-ask, .face-mute, .face-name) {
+.face-seat[data-stacked] :is(.face-pres, .face-bot, .face-unread, .face-mute, .face-name) {
   display: none;
 }
 /* Pointed at, the stack wakes up: it is the way back to the team. */
@@ -792,20 +792,7 @@
   100% { transform: translate(50%, -50%) scale(var(--mark-k, 1)); }
 }
 
-.face-ask {
-  position: absolute;
-  top: var(--mark-at);
-  left: var(--mark-at);
-  transform: translate(-50%, -50%) scale(var(--mark-k, 1));
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 1.5px solid var(--sol-bg);
-  background: var(--sol-cyan);
-  pointer-events: none;
-}
-
-/* The mute badge is a mark on the person, like the count and the ask: on the
+/* The mute badge is a mark on the person, like the count: on the
  * circle's edge, in the presence badge's corner (an engaged face wears no
  * presence badge, so the two never meet), cut out of the ring by the same
  * band of background the presence badge uses (`--pres-cut`). Inside the

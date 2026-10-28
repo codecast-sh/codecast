@@ -240,7 +240,7 @@ describe("one focus mark for the row and its band", () => {
 describe("the marks on the person sit on the circle's edge", () => {
   // The mute badge lived inside the circle, the call circles' own spot, and
   // the circle's clip cut it to a D and the icon with it. It is a mark like
-  // the count and the ask: on the edge, cut out of the ring by the same band
+  // the count: on the edge, cut out of the ring by the same band
   // of background the presence badge uses, filled with its colour.
   test("the mute badge is outside the clip, in the presence badge's corner, cut by the background", () => {
     const rule = css.split(".face-row .face-mute {")[1]?.split("}")[0] ?? "";
@@ -257,7 +257,7 @@ describe("the marks on the person sit on the circle's edge", () => {
   // centred on the 45 degree point of the circle, a share of the diameter.
   test("every mark centres on the circle's 45 degree edge point, at any size", () => {
     expect(cssVar(".face-seat {", "--mark-at")).toBe("calc(var(--face) * 0.1464)");
-    for (const sel of [".face-unread {", ".face-ask {", ".face-seat .face-pres {", ".face-bot {"]) {
+    for (const sel of [".face-unread {", ".face-seat .face-pres {", ".face-bot {"]) {
       const rule = css.split(sel)[1]?.split("}")[0] ?? "";
       expect(rule).toMatch(/(top|bottom): var\(--mark-at\);/);
       expect(rule).toMatch(/(left|right): var\(--mark-at\);/);

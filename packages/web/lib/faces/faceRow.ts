@@ -97,8 +97,6 @@ export type FaceEntry = {
   joinedAgo: number | null;
   /** Unread messages in the viewer's DM with them. */
   unread: number;
-  /** Their sessions waiting on the viewer. */
-  ask: number;
   /** An agent, not a person: drawn as one, and offers no call or message. */
   bot?: boolean;
   /** Somebody from outside the team, in the viewer's call on a guest link:
@@ -238,7 +236,6 @@ export type FaceRowInput = {
   };
   announcement: JoinAnnouncement | null;
   unread: ReadonlyMap<string, number>;
-  ask: ReadonlyMap<string, number>;
   /** The engaged room's name (describeRoomLive); the named teammate's name
    *  stands in for a people room when absent. */
   roomLabel?: string;
@@ -593,7 +590,6 @@ export function deriveFaceRow(raw: FaceRowInput, prev: FaceRow | null): FaceRow 
       followed: input.followLeaderId === id,
       joinedAgo: inMyRoom && stamp ? Math.max(0, input.now - stamp) : null,
       unread: input.unread.get(id) ?? 0,
-      ask: input.ask.get(id) ?? 0,
       ...(m.is_bot ? { bot: true } : {}),
     };
     rows.push({ entry, member: m, linked });
@@ -630,7 +626,6 @@ export function deriveFaceRow(raw: FaceRowInput, prev: FaceRow | null): FaceRow 
           followed: false,
           joinedAgo: g.joined_at ? Math.max(0, input.now - g.joined_at) : null,
           unread: 0,
-          ask: 0,
           guest: true,
         },
         member: { _id: id, name: g.name },
@@ -685,7 +680,6 @@ export function deriveFaceRow(raw: FaceRowInput, prev: FaceRow | null): FaceRow 
       followed: false,
       joinedAgo: null,
       unread: 0,
-      ask: 0,
     };
   }
 
@@ -793,10 +787,7 @@ export function faceRowInputSig(
   ].join("\u0001");
 }
 
-/** The model's input, gathered from the store and the engine. `ask` (their
- *  sessions waiting on the viewer) is the one field not read here: it is a
- *  walk of every session, and hooks/useFaceRow overlays it from the fleet
- *  summaries it already keeps. */
+/** The model's input, gathered from the store and the engine. */
 export function faceRowInputFrom(
   st: any,
   walkie: WalkieStatus,
@@ -837,14 +828,11 @@ export function faceRowInputFrom(
     rings: { incoming: st.myCalls?.incoming ?? [], outgoing: st.myCalls?.outgoing ?? [] },
     announcement,
     unread: dmUnreadByMember(st),
-    ask: EMPTY_ASK,
     roomLabel: room ? describeRoomLive(room, st).label : undefined,
     roomPrivate: room ? roomIsPrivate(st, room) : false,
     now,
   };
 }
-
-const EMPTY_ASK: ReadonlyMap<string, number> = new Map();
 
 let lastSig = "";
 let lastRow: FaceRow = EMPTY_ROW;

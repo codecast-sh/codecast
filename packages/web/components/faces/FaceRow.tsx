@@ -236,7 +236,6 @@ function FaceSeat({
       data-face-id={entry.id}
       data-card={cardOpen ? "1" : undefined}
       data-hold={key.holding ? "1" : undefined}
-      data-ask={entry.ask > 0 ? entry.ask : undefined}
       data-stacked={stacked ? "1" : undefined}
       data-folded={folded ? "1" : undefined}
       aria-hidden={folded || undefined}
@@ -278,7 +277,7 @@ function FaceSeat({
         <CircleFace videoRef={videoRef} track={track} frame={frame} image={image} name={entry.name} diameter={diameter} />
       </button>
       {/* The marks on the person sit on the circle's EDGE, outside its clip:
-          the presence badge, the mute badge, the unread count, the ask. The
+          the presence badge, the mute badge, the unread count. The
           mute badge inside the circle (the call circles' own spot) was cut
           to a D by the circle's clip, and its icon with it. */}
       {entry.muted && (
@@ -323,7 +322,6 @@ function FaceSeat({
           {unread > 99 ? "99+" : unread}
         </button>
       )}
-      {entry.ask > 0 && <span className="face-ask" aria-label={`${entry.ask} waiting on you`} />}
       {/* Nothing hangs under the chin, in either density: the card is the
           one thing that opens under a face, and it names the person. A name
           pill under the float's faces sat in the gap the card now hangs in. */}

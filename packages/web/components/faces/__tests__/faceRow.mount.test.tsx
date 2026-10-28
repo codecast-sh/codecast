@@ -144,7 +144,6 @@ function entry(id: string, name: string, over: Partial<FaceEntry> = {}): FaceEnt
     followed: false,
     joinedAgo: null,
     unread: 0,
-    ask: 0,
     ...over,
   };
 }
@@ -245,18 +244,15 @@ describe("one circle, one attribute", () => {
     expect(h.circle(ANN).className).toBe("face");
   });
 
-  test("the marks on a person: mute, unread, ask, followed, the join", async () => {
+  test("the marks on a person: mute, unread, followed, the join", async () => {
     const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
     expect(h.q(".face-mute")).toBeNull();
     expect(h.q(".face-unread")).toBeNull();
-    expect(h.q(".face-ask")).toBeNull();
     await h.draw(
-      bar(rowOf([entry(ANN, "Ann", { state: "live-with-me", muted: true, unread: 3, ask: 2, followed: true })])),
+      bar(rowOf([entry(ANN, "Ann", { state: "live-with-me", muted: true, unread: 3, followed: true })])),
     );
     expect(h.q(".face-mute")).not.toBeNull();
     expect(h.q(".face-unread")!.textContent).toBe("3");
-    expect(h.q(".face-ask")).not.toBeNull();
-    expect(h.q(`[data-face-id="${ANN}"]`)!.getAttribute("data-ask")).toBe("2");
     expect(h.circle(ANN).getAttribute("data-followed")).toBe("true");
     // The join is the ring and the card's words, never a label under the
     // chin: the card in the band would cover it.

@@ -47,7 +47,6 @@ function input(over: Partial<FaceRowInput> = {}): FaceRowInput {
     rings: { incoming: [], outgoing: [] },
     announcement: null,
     unread: new Map(),
-    ask: new Map(),
     now: NOW,
     ...over,
   };
@@ -335,14 +334,13 @@ describe("every link kind", () => {
     expect(entry(row, ANN).video).toBe("remote");
   });
 
-  test("followed rides the follow leader; unread and ask ride their maps", () => {
+  test("followed rides the follow leader; unread rides its map", () => {
     const row = deriveFaceRow(
-      input({ followLeaderId: BOB, unread: new Map([[ANN, 3]]), ask: new Map([[CY, 2]]) }),
+      input({ followLeaderId: BOB, unread: new Map([[ANN, 3]]) }),
       null,
     );
     expect(entry(row, BOB).followed).toBe(true);
     expect(entry(row, ANN).unread).toBe(3);
-    expect(entry(row, CY).ask).toBe(2);
   });
 });
 
@@ -794,7 +792,7 @@ describe("a guest in my call", () => {
   test("is a face of their own, linked to me by the call and marked a guest", () => {
     const row = deriveFaceRow(inCall(), null);
     const g = entry(row, GUEST);
-    expect(g).toMatchObject({ name: "Ada", tier: "linked", state: "live-with-me", guest: true, unread: 0, ask: 0 });
+    expect(g).toMatchObject({ name: "Ada", tier: "linked", state: "live-with-me", guest: true, unread: 0 });
     expect(g.joinedAgo).toBe(60_000);
     expect(row.links).toContainEqual({ from: ME, to: GUEST, kind: "call" });
   });

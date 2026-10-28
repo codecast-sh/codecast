@@ -89,7 +89,7 @@ const ANN = "u-ann";
 const BO = "u-bo";
 
 function entry(id: string, name: string, over: Partial<FaceEntry> = {}): FaceEntry {
-  return { id, name, me: false, tier: "online", state: "online", level: null, video: null, muted: false, followed: false, joinedAgo: null, unread: 0, ask: 0, ...over };
+  return { id, name, me: false, tier: "online", state: "online", level: null, video: null, muted: false, followed: false, joinedAgo: null, unread: 0, ...over };
 }
 const me = (over: Partial<FaceEntry> = {}) => entry(ME, "Me", { me: true, tier: "me", state: "in-call", ...over });
 function rowOf(entries: FaceEntry[], links: Link[] = []): FaceRowModel {

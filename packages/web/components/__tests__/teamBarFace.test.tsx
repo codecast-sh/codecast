@@ -169,7 +169,6 @@ function entry(id: string, name: string, over: Partial<FaceEntry> = {}): FaceEnt
     followed: false,
     joinedAgo: null,
     unread: 0,
-    ask: 0,
     ...over,
   };
 }
