@@ -28,7 +28,7 @@ Live huddle transcripts reach fed sessions through `transcripts.deliverRoutes`. 
 
 `packages/evals/org-comms/monitor.py` reruns the measurement:
 1. Exports from prod.
-2. Places each sender against its recipient. Codecast's own notices (a reporting line moved, a send still queued) are counted apart and left out of both the huddle and the agent numbers. A short id shared by several sessions resolves to the one closest to the recipient's line.
+2. Places each sender against its recipient. Codecast's own notices (a reporting line moved, a send still queued) are counted apart and left out of both the huddle and the agent numbers. A short id shared by several sessions resolves to the one closest to the recipient's line. Sessions older than the export are looked up by id, and role anchors come from each team's org listing.
 3. Reads a random sample inside the recipients' transcripts, drawn only from sessions the person owns: a message they sent into a teammate's session is counted and never opened. A huddle chunk is unnamed talk only when its header says nobody named the agent; a voice handoff, a chat line and the attach briefing are asks or one-offs.
 4. Labels the sample through `prompt-dry-run.ts`.
 5. Writes `report.json` and `report.md` under `$CODECAST_EVALS_HOME/org-comms/runs/<date>/`, set against `baseline.json` (the founding study) and every earlier run.
@@ -107,3 +107,15 @@ First week under the policy and the huddle gap (700 messages, 109 agent to agent
 - **Week totals:** idle messages with asked-for results left out 6.0% (baseline 14.8%), the lowest yet; agent noise 4.0%; peer share 10.2%; out-of-line direction followed 68% (baseline 64%); hub share with a recipient's own workers left out 34%. Volume 0.54 messages per new session, still led by orchestrators and their workers.
 - **Huddle:** 3 unnamed chunks all week, none inside the gap.
 - **No wording change.** The remaining noise comes from long-running sessions and should shrink as they pick the guidance up at their next compaction or resume. Next run: re-test noise with the Oct 27 sample pooled in, comparing within parent-to-worker only.
+
+### 2026-10-27
+
+2,239 messages over Oct 20 to 27 (2,624 last week), 120 agent to agent cases read, no huddle cases.
+
+- **Messages per new session fell to 0.17 (0.54), and traffic did not.** The denominator moved: Ashot's account created 13,478 sessions this week (5,880 on Oct 23), most of them agentwatch and judge_review harness runs that send no messages. Read this row against the message count until the monitor counts only sessions that ran the start hook.
+- **The monitor left 221 messages (10%) unplaced. Fixed for 88 of them.** Every user together now creates about 27,000 sessions a week, so the newest-70,000 export reached back only to Sep 30. The by-id fallback (`cast sessions`) searches only the person's inbox. That missed role anchor sessions, which belong to each role's bot user (the Market Growth and Calling leads among them, 83 messages), and teammates' private or deleted sessions, which Ashot cannot open (`cast read` says not found). The export now takes 100,000 rows, the most one `convex data` call returns, and anchors are placed from `cast org ls --json` for each of the person's teams. 133 stay unplaced; most come from sessions the person cannot see, which is correct.
+- **Out-of-line direction followed 85% (33 of 39 directing cases outside the spawn line).** Reading them, none is a peer steering a peer. 23 involve role sessions: landing requests to the Release Captain, leads answering or redirecting work in their area, a hold on a stray controller. 11 are a Line run handing its brief back to the session at a station; the run is that session's driver, and the monitor files it as peer or unplaced because a station is not a spawn parent. No wording change.
+- **Hub share with a recipient's own workers left out 38% (34%).** The top hubs are roles: Agent Quality lead (114 messages from 35 senders), Release Captain (112 from 48), Eval Suite lead (81 from 30). Leads hearing from many is the policy, and the Release Captain is AC5's integration owner, now seated. No informal hub outside a role in the top five.
+- **Noise separates again with three weeks pooled.** Over 517 distinct cases from the Oct 20, 22 and 27 samples: 1.9% (6 of 321) from senders that saw the guidance against 6.9% (11 of 159), Fisher p = 0.007. Within parent to worker it is 2 of 77 against 7 of 71 (p = 0.065), close but not separated; elsewhere 4 of 244 against 4 of 88. This week alone: noise 2.5%, idle messages with asked-for results left out 7.5%, peer share 8.6%, changed recipient 68%.
+- **Huddle:** 2 unnamed chunks, none inside the gap.
+- **Next run:** whether unplaced messages stay near 6%; place Line station hand-backs as the session's own line; keep pooling parent-to-worker noise.

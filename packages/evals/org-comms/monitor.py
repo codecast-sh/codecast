@@ -83,7 +83,20 @@ def fill_long_lived(convs, short, msgs, user):
     """The export holds the newest sessions, so a long-lived one (a role's
     standing session above all) falls out of it while still sending every
     day. Look those up by id; such a session runs at the top of its line, so
-    only its role is needed to place it."""
+    only its role is needed to place it. A role's anchor session belongs to
+    the role's bot user, so the person's own session list never returns it:
+    the org listing of each of their teams names those."""
+    def add(row):
+        convs.setdefault(row["_id"], row)
+        if convs[row["_id"]] not in short[row["short_id"]]: short[row["short_id"]].append(convs[row["_id"]])
+    teams = re.findall(r"\bk97[a-z0-9]{29}\b", subprocess.run(["cast", "teams"], capture_output=True, text=True).stdout)
+    for team in teams:
+        out = subprocess.run(["cast", "org", "ls", "--team", team, "--json"], capture_output=True, text=True, timeout=300).stdout
+        try: anchors = json.loads(out).get("anchors", [])
+        except Exception: continue
+        for x in anchors:
+            add({"_id": x["conversation_id"], "short_id": x["short_id"], "title": x.get("name"), "parent_conversation_id": None,
+                 "standing_role_id": x.get("org_role_id"), "session_id": None, "user_id": x.get("bot_user_id")})
     want = {m["conversation_id"] for m in msgs if m["conversation_id"] not in convs}
     want |= {m["sender"] for m in msgs if m["sender"] not in ("unknown", "codecast") and not short.get(m["sender"])}
     want = sorted(want)
@@ -92,11 +105,9 @@ def fill_long_lived(convs, short, msgs, user):
         try: rows = json.loads(out).get("sessions", [])
         except Exception: continue
         for r in rows:
-            row = {"_id": r["id"], "short_id": r["id"][:7], "title": r.get("title"), "parent_conversation_id": None,
-                   "standing_role_id": (r.get("role") or {}).get("handle"), "session_id": r.get("session_id"),
-                   "user_id": user if r.get("owned_by_me") else None}
-            convs.setdefault(r["id"], row)
-            if row not in short[row["short_id"]]: short[row["short_id"]].append(convs[r["id"]])
+            add({"_id": r["id"], "short_id": r["id"][:7], "title": r.get("title"), "parent_conversation_id": None,
+                 "standing_role_id": (r.get("role") or {}).get("handle"), "session_id": r.get("session_id"),
+                 "user_id": user if r.get("owned_by_me") else None})
     return len(want)
 
 
@@ -149,7 +160,10 @@ def main():
     if not a.skip_export:
         print("exporting pending_messages and conversations from prod…", flush=True)
         convex_data("pending_messages", 60000, os.path.join(exp, "pending.jsonl"))
-        convex_data("conversations", 70000, os.path.join(exp, "convs.jsonl"))
+        # 100,000 is the most one `convex data` call returns (about four
+        # weeks of every user's sessions in late October); fill_long_lived
+        # places the older senders.
+        convex_data("conversations", 100000, os.path.join(exp, "convs.jsonl"))
 
     keep = ["_id", "_creationTime", "short_id", "title", "user_id", "parent_conversation_id", "standing_role_id", "org_role_id", "session_id"]
     convs = {r["_id"]: {k: r.get(k) for k in keep} for r in load_jsonl(os.path.join(exp, "convs.jsonl"))}
