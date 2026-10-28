@@ -17,7 +17,7 @@ describe("orgLayout", () => {
     }
   });
 
-  it("a parent is centred over its children", () => {
+  it("a parent sits over the row of what hangs under it, one level up", () => {
     const { nodes, edges } = layoutOrgTree(ORG_FIXTURE, none);
     const m = byId(nodes);
     const me = m.get(personNodeId("fixture-user-me"))!;
@@ -25,9 +25,22 @@ describe("orgLayout", () => {
     expect(kids.length).toBeGreaterThan(1);
     const left = Math.min(...kids.map((k) => k.x));
     const right = Math.max(...kids.map((k) => k.x + k.w));
-    expect(me.x + me.w / 2).toBeCloseTo((left + right) / 2, 5);
-    // Children sit one level below the parent.
-    for (const k of kids) expect(k.y).toBe(me.y + me.h + ORG_SIZES.levelGap);
+    expect(me.x + me.w / 2).toBeGreaterThan(left);
+    expect(me.x + me.w / 2).toBeLessThan(right);
+    expect(Math.min(...kids.map((k) => k.y))).toBe(me.y + me.h + ORG_SIZES.levelGap);
+  });
+
+  it("shallow branches stack into lanes, so a wide org grows down before it grows across", () => {
+    // Twelve leaf roles under one person: a plain tidy tree is twelve cards wide.
+    const me = ORG_FIXTURE.people[0];
+    const leaves = Array.from({ length: 12 }, (_, i) => ({ ...ORG_FIXTURE.roles[0], _id: `leaf-${i}`, handle: `leaf${i}`, name: `Leaf ${i}`, reports_to: { kind: "user" as const, user_id: me.user_id }, sessions: [], total: 0 }));
+    const tree = { ...ORG_FIXTURE, people: [me], roles: leaves, anchors: [] };
+    const { nodes, width, height } = layoutOrgTree(tree, none, undefined, "far");
+    const roles = nodes.filter((n) => n.kind === "role");
+    expect(roles.length).toBe(12);
+    expect(new Set(roles.map((r) => r.x)).size).toBeLessThan(4);
+    expect(width).toBeLessThan(height * 2);
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) expect(rectsOverlap(nodes[i], nodes[j])).toBe(false);
   });
 
   it("sessions under a parent form a vertical stack ending in a cluster", () => {
@@ -47,11 +60,11 @@ describe("orgLayout", () => {
     // The parent card carries the same overflow count for its tally.
     const meNode = m.get(me)!;
     if (meNode.kind === "person") expect(meNode.overflow).toBe(22 - ORG_STACK_VISIBLE);
-    // One tree edge into the top of the stack, then a chain.
+    // Every row of the stack hangs off the parent: a tree edge into the first, quieter stack edges into the rest.
     const first = sessionNodeId(ORG_FIXTURE.people[0].sessions[0]._id);
     expect(edges.some((e) => e.source === me && e.target === first && e.kind === "tree")).toBe(true);
     expect(edges.filter((e) => e.source === me).length).toBe(
-      1 /* stack head */ + 1 /* role */,
+      ORG_STACK_VISIBLE + 1 /* cluster */ + 1 /* role */,
     );
   });
 

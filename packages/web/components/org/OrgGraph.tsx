@@ -29,6 +29,9 @@ import {
 import "@xyflow/react/dist/style.css";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useTheme } from "../ThemeProvider";
+import { RouteEdge, type RouteEdgeData } from "./OrgRouteEdge";
+import { SESSION_DRAG_TYPE } from "../../lib/stage";
+import { selectionIdsFor } from "../../lib/inboxSelection";
 import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutEdge, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget, ORG_SIZES, roleNodeId } from "./orgLayout";
 import { ClusterCard, GroupCard, HealthRoleCard, PersonCard, RoleCard, SessionCard, type HealthRoleNodeData } from "./OrgNodeCards";
 import { productLayer } from "./orgProductLayer";
@@ -53,7 +56,7 @@ const SPINE = { w: ORG_SIZES.healthRole.w, h: ORG_SIZES.healthRole.h };
 const FLOW_READABLE_ZOOM = 0.42;
 
 const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, session: SessionCard, cluster: ClusterCard, healthRole: HealthRoleCard, group: GroupCard, ...GOALS_NODE_TYPES };
-const ORG_EDGE_TYPES = { ...ORG_FLOW_EDGE_TYPES, ...GOALS_EDGE_TYPES };
+const ORG_EDGE_TYPES = { ...ORG_FLOW_EDGE_TYPES, ...GOALS_EDGE_TYPES, orgRoute: RouteEdge };
 
 /** Which picture the canvas draws (org-staffing.md S36, S40): everything (the
  *  goal outline with every person and role beside it), the goals alone, or
@@ -76,6 +79,8 @@ function nodeIdOfObject(nodes: readonly { id: string }[], o: OrgGraphObject | nu
 
 export type OrgReparentRequest = {
   subject: { kind: "session" | "role" | "person"; id: string; title: string };
+  /** The rest of a multi-selection dragged with `subject`: they move together. */
+  also?: { kind: "session" | "role" | "person"; id: string; title: string }[];
   target: OrgParentRef;
   targetTitle: string;
   /** Screen position of the drop, for the confirm popover. */
@@ -93,6 +98,8 @@ export type OrgGraphProps = {
   onExpandCluster: (parentId: string) => void;
   onCollapseCluster: (parentId: string) => void;
   onReparentRequest: (req: OrgReparentRequest) => void;
+  /** Sessions dragged in from the inbox, dropped on a person or role card (conversation ids). */
+  onDropSessions?: (conversationIds: string[], target: OrgParentRef, targetTitle: string) => void;
   onNodeContextMenu: (e: React.MouseEvent, node: OrgLayoutNode) => void;
   onOpenSession?: (conversationId: string) => void;
   /** Bumped by the page after a cancelled move, to snap the card back. */
@@ -165,8 +172,16 @@ export type OrgGraphProps = {
 const DRAGGABLE = new Set(["session", "role", "person"]);
 
 // The chart's own gestures; chrome off swaps in STILL_FLOW_PROPS for them.
-const CHART_FLOW_PROPS = { nodesConnectable: false, elementsSelectable: true, panOnScroll: true, zoomOnDoubleClick: false } as const;
+const CHART_FLOW_PROPS = { nodesConnectable: false, elementsSelectable: true, panOnScroll: true, zoomOnDoubleClick: false, deleteKeyCode: null } as const;
 const DROP_TARGETS = new Set(["person", "role"]);
+const NONE_MARKED: ReadonlySet<string> = new Set();
+
+function moveSubjectOf(n: OrgLayoutNode): OrgReparentRequest["subject"] | null {
+  if (n.kind === "session") return { kind: "session", id: n.session._id, title: n.session.title || n.session.short_id };
+  if (n.kind === "role") return { kind: "role", id: n.role._id, title: n.role.name };
+  if (n.kind === "person") return { kind: "person", id: n.person.user_id, title: n.person.name };
+  return null;
+}
 
 function titleOf(n: OrgLayoutNode): string {
   switch (n.kind) {
@@ -190,7 +205,7 @@ function flagsSigOf(flags: Record<string, OrgHealth["roles"][number]["flags"]>):
   return Object.keys(flags).sort().map((id) => `${id}:${flags[id].map((f) => `${f.code}/${f.severity}`).join(",")}`).join("|");
 }
 
-function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTargetId: string | null, draggingId: string | null, loading: ReadonlySet<string>, handlers: {
+function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, marked: ReadonlySet<string>, dropTargetId: string | null, draggingId: string | null, loading: ReadonlySet<string>, handlers: {
   onToggleCollapse: (id: string) => void; onExpandCluster: (id: string) => void; onCollapseCluster: (id: string) => void; onToggleOpen?: (id: string) => void;
 }, canDrag: ((node: OrgLayoutNode) => boolean) | undefined, ghosts: GhostHandlers, flags: Record<string, OrgHealth["roles"][number]["flags"]>, ledgers: Record<string, OrgHealth["roles"][number]["ledger"]>): Node[] {
   return layout.map((n) => {
@@ -204,12 +219,14 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
       height: n.h,
       draggable: !stub && DRAGGABLE.has(n.kind) && (canDrag ? canDrag(n) : true),
       selectable: true,
+      // React Flow drags every selected node together: the marked cards are the selection.
+      selected: marked.has(n.id),
       connectable: false,
       zIndex: n.id === draggingId ? 1000 : n.kind === "session" || n.kind === "cluster" ? 1 : 2,
     };
     // The change in focus lights the card that carries it (its stub, its retire or move, one of its chips), the way a click would.
     const carries = !!ghosts.focusChangeId && (n.kind === "person" || n.kind === "role" || n.kind === "session") && (n.ghost?.change_id === ghosts.focusChangeId || n.retire?.change_id === ghosts.focusChangeId || n.move?.change_id === ghosts.focusChangeId || !!n.chips?.some((c) => c.change_id === ghosts.focusChangeId));
-    const common = { selected: n.id === selectedId || carries, dropTarget: n.id === dropTargetId, dragging: n.id === draggingId, ...handlers, flags: flags[n.id] };
+    const common = { selected: n.id === selectedId || marked.has(n.id) || carries, dropTarget: n.id === dropTargetId, dragging: n.id === draggingId, ...handlers, flags: flags[n.id] };
     const decor = n.kind === "person" || n.kind === "role" || n.kind === "session"
       ? (n.ghost || n.retire || n.move || n.chips ? { ghost: n.ghost, retire: n.retire, move: n.move, chips: n.chips, ...ghosts } : {})
       : {};
@@ -231,7 +248,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view: baseView, selectedId: pickedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, canDropPerson, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople, ring = null, dimGoals = false, onOpenObject, onOpenChange, onTalk, onMoveRole, onToggleOpen, product } = props;
+  const { tree, view: baseView, selectedId: pickedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onDropSessions, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, canDropPerson, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople, ring = null, dimGoals = false, onOpenObject, onOpenChange, onTalk, onMoveRole, onToggleOpen, product } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -308,6 +325,13 @@ function OrgGraphInner(props: OrgGraphProps) {
   const ledgerByNode = useMemo(() => Object.fromEntries((health?.roles ?? []).map((r) => [roleNodeId(r.role_id), r.ledger])), [ledgerSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  // Cards marked to move together: Cmd/Ctrl/Shift-click toggles one, a Shift-drag box marks every movable card in it.
+  const [marked, setMarked] = useState<ReadonlySet<string>>(NONE_MARKED);
+  const boxing = useRef(false);
+  const markable = useCallback((id: string) => { const n = byId.get(id); return !!n && DRAGGABLE.has(n.kind) && !("ghost" in n && n.ghost) && (canDrag ? canDrag(n) : true); }, [byId, canDrag]);
+  const toggleMark = useCallback((id: string) => setMarked((m) => { const next = new Set(m); if (!next.delete(id)) next.add(id); return next; }), []);
+  const clearMarks = useCallback(() => setMarked((m) => (m.size ? NONE_MARKED : m)), []);
+  useEventListener("keydown", (e) => { if (e.key === "Escape") clearMarks(); });
   const [draggingId, setDraggingId] = useState<string | null>(null);
   // The goals lens draws owner edges only for the card under the pointer or selected.
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -316,7 +340,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   const ghostHandlers = useMemo<GhostHandlers>(() => ({ focusChangeId, onFocusChange: (id) => onFocusChange?.(id) }), [focusChangeId, onFocusChange]);
   const flowNodes = useMemo(() => {
     if (goals) return goalsFlowNodes(goals, selectedId, ghostHandlers, dimGoals, !!onMoveRole, dropTargetId);
-    const nodes = toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode);
+    const nodes = toFlowNodes(layout.nodes, selectedId, marked, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode);
     if (!flow) return nodes;
     // The health map: a role draws its week instead of its sessions.
     return nodes.map((n) => {
@@ -325,7 +349,7 @@ function OrgGraphInner(props: OrgGraphProps) {
       const data: HealthRoleNodeData = { role: f.role, selected: n.id === selectedId, flow: f, days: flow.days };
       return { ...n, type: "healthRole", draggable: false, data };
     });
-  }, [goals, layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode, flow, dimGoals]);
+  }, [goals, layout, selectedId, marked, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode, flow, dimGoals]);
   // A project's cross edge to a goal in another branch shows only while either end is pointed at or selected.
   const litId = hoverId ?? selectedId;
   const flowEdges = useMemo<Edge[]>(
@@ -336,7 +360,8 @@ function OrgGraphInner(props: OrgGraphProps) {
       id: e.id,
       source: e.source,
       target: e.target,
-      type: e.kind === "stack" ? "straight" : "smoothstep",
+      type: e.route ? "orgRoute" : e.kind === "stack" ? "straight" : "smoothstep",
+      ...(e.route ? { data: { route: e.route, sw: byId.get(e.source)?.w ?? 0, tw: byId.get(e.target)?.w ?? 0, th: byId.get(e.target)?.h ?? 0 } satisfies RouteEdgeData } : {}),
       selectable: false,
       focusable: false,
       style: e.kind === "stack"
@@ -347,7 +372,7 @@ function OrgGraphInner(props: OrgGraphProps) {
           : { stroke: "color-mix(in srgb, var(--sol-border) 70%, transparent)", strokeWidth: 1.5, opacity: e.faded ? 0.3 : 1 },
       pathOptions: e.kind === "stack" ? undefined : { borderRadius: 14 },
     } as Edge)),
-    [goals, layout, flow, selectedId, hoverId, focusChangeId, litId],
+    [goals, layout, byId, flow, selectedId, hoverId, focusChangeId, litId],
   );
 
   // Controlled nodes so a drag moves the card; every layout change re-seeds.
@@ -357,8 +382,8 @@ function OrgGraphInner(props: OrgGraphProps) {
   useWatchEffect(() => {
     setNodes((prev) => {
       if (!draggingId) return flowNodes;
-      const held = prev.find((n) => n.id === draggingId);
-      return held ? flowNodes.map((n) => (n.id === draggingId ? { ...n, position: held.position, dragging: true } : n)) : flowNodes;
+      const held = new Map(prev.filter((n) => n.dragging || n.id === draggingId).map((n) => [n.id, n.position]));
+      return held.size ? flowNodes.map((n) => (held.has(n.id) ? { ...n, position: held.get(n.id)!, dragging: true } : n)) : flowNodes;
     });
   }, [flowNodes, setNodes, resetKey]);
   useWatchEffect(() => { setEdges(flowEdges); }, [flowEdges, setEdges]);
@@ -502,7 +527,7 @@ function OrgGraphInner(props: OrgGraphProps) {
     // A ghost stub has the type of a role but is a change, not a seat: a drop
     // on it would confirm a move to a change id, so it never lights up.
     const isStub = (id: string) => { const n = byId.get(id); return !!n && (n.kind === "person" || n.kind === "role" || n.kind === "session") && !!n.ghost; };
-    const hits = rf.getIntersectingNodes(node).filter((n) => DROP_TARGETS.has(n.type ?? "") && n.id !== node.id && !isStub(n.id));
+    const hits = rf.getIntersectingNodes(node).filter((n) => DROP_TARGETS.has(n.type ?? "") && n.id !== node.id && !marked.has(n.id) && !isStub(n.id));
     if (hits.length === 0) return null;
     // A role dropped on its own subtree is not a move.
     const subject = byId.get(node.id);
@@ -537,7 +562,7 @@ function OrgGraphInner(props: OrgGraphProps) {
       return da - db;
     });
     return byId.get(candidates[0].id) ?? null;
-  }, [rf, byId, tree, canDropPerson]);
+  }, [rf, byId, tree, canDropPerson, marked]);
 
   /** On the Everything chart: the person or role card a dragged role would
    *  report to, never itself, one of its own reports, or where it already is. */
@@ -589,16 +614,46 @@ function OrgGraphInner(props: OrgGraphProps) {
     }
     const ref = parentRefOfNodeId(target.id)!;
     const me = e as unknown as { clientX: number; clientY: number };
+    // A marked card carries the rest of the marks with it.
+    const also = marked.has(node.id) ? [...marked].filter((id) => id !== node.id).map((id) => byId.get(id)).flatMap((n) => (n ? [moveSubjectOf(n)].filter((x) => !!x) : [])) : [];
     onReparentRequest({
-      subject: subject.kind === "session"
-        ? { kind: "session", id: subject.session._id, title: subject.session.title || subject.session.short_id }
-        : subject.kind === "role" ? { kind: "role", id: subject.role._id, title: subject.role.name }
-        : { kind: "person", id: subject.person.user_id, title: subject.person.name },
+      subject: moveSubjectOf(subject)!,
+      ...(also.length ? { also } : {}),
       target: ref,
       targetTitle: titleOf(target),
       at: { x: me.clientX, y: me.clientY },
     });
-  }, [findDropTarget, findOwnerTarget, goals, onMoveRole, byId, onReparentRequest, setNodes, flowNodes]);
+    if (also.length) clearMarks();
+  }, [findDropTarget, findOwnerTarget, goals, onMoveRole, byId, onReparentRequest, setNodes, flowNodes, marked, clearMarks]);
+
+  // A session dragged in from the inbox (one card, or its whole ticked
+  // selection) lands on the person or role card under the pointer.
+  const inboxDropTarget = useCallback((e: React.DragEvent): OrgLayoutNode | null => {
+    const at = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    return layout.nodes.find((n) => DROP_TARGETS.has(n.kind) && !("ghost" in n && n.ghost && !n.ghost.solid)
+      && at.x >= n.x && at.x <= n.x + n.w && at.y >= n.y && at.y <= n.y + n.h) ?? null;
+  }, [rf, layout]);
+  const dropProps = onDropSessions && !goals ? {
+    onDragOver: (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes(SESSION_DRAG_TYPE)) return;
+      const t = inboxDropTarget(e);
+      setDropTargetId(t?.id ?? null);
+      if (!t) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    },
+    onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as globalThis.Node)) setDropTargetId(null); },
+    onDrop: (e: React.DragEvent) => {
+      setDropTargetId(null);
+      const id = e.dataTransfer.getData(SESSION_DRAG_TYPE);
+      const t = inboxDropTarget(e);
+      const ref = t && parentRefOfNodeId(t.id);
+      if (!id || !t || !ref) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onDropSessions(selectionIdsFor(id), ref, titleOf(t));
+    },
+  } : undefined;
 
   /** A ghost card is a change: the page that answers it in the conversation
    *  sends the reader there (D8); otherwise a click focuses it on the map. */
@@ -606,8 +661,10 @@ function OrgGraphInner(props: OrgGraphProps) {
     if (onOpenChange) onOpenChange(changeId);
     else onFocusChange?.(changeId === focusChangeId ? null : changeId);
   }, [onOpenChange, onFocusChange, focusChangeId]);
-  const onNodeClick: NodeMouseHandler = useCallback((_e, node) => {
+  const onNodeClick: NodeMouseHandler = useCallback((e, node) => {
     if (node.type === "cluster") return;
+    if (!goals && (e.metaKey || e.ctrlKey || e.shiftKey)) { if (markable(node.id)) toggleMark(node.id); return; }
+    clearMarks();
     if (goals) {
       // A ghost goal or project is a change: a click focuses it, as a role ghost's does.
       const g = goals.nodes.find((x) => x.id === node.id);
@@ -644,7 +701,7 @@ function OrgGraphInner(props: OrgGraphProps) {
     const o: OrgGraphObject | null = n?.kind === "role" ? { kind: "role", id: n.role._id } : n?.kind === "person" ? { kind: "person", id: n.person.user_id } : null;
     if (onOpenObject && o && onOpenObject(o) !== false) return;
     onSelect(node.id === pickedId ? null : node.id);
-  }, [onSelect, pickedId, byId, ghostClick, goals, onOpenObject, onOpenSession, projects]);
+  }, [onSelect, pickedId, byId, ghostClick, goals, onOpenObject, onOpenSession, projects, markable, toggleMark, clearMarks]);
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_e, node) => {
     if (node.type === "owner") {
       const g = goals?.nodes.find((x) => x.id === node.id);
@@ -667,7 +724,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   }, [byId, onNodeContextMenu]);
 
   return (
-    <div ref={wrapRef} className="relative w-full h-full" onPointerMove={(e) => { pointer.current = { x: e.clientX, y: e.clientY }; }} onPointerLeave={() => { pointer.current = null; }}>
+    <div ref={wrapRef} className="relative w-full h-full" {...dropProps} onPointerMove={(e) => { pointer.current = { x: e.clientX, y: e.clientY }; }} onPointerLeave={() => { pointer.current = null; }}>
     <ReactFlow
       nodes={nodes}
       edges={edges}
@@ -679,7 +736,10 @@ function OrgGraphInner(props: OrgGraphProps) {
       onNodeContextMenu={onContext}
       onNodeMouseEnter={goals || product ? (_e, n) => setHoverId(n.id) : undefined}
       onNodeMouseLeave={goals || product ? () => setHoverId(null) : undefined}
-      onPaneClick={() => { if (pickedId) onSelect(null); }}
+      onPaneClick={() => { clearMarks(); if (pickedId) onSelect(null); }}
+      onSelectionStart={() => { boxing.current = true; }}
+      onSelectionEnd={() => { boxing.current = false; }}
+      onSelectionChange={({ nodes: picked }) => { if (boxing.current) setMarked(new Set(picked.map((n) => n.id).filter(markable))); }}
       onMoveStart={(event) => { if (event) userMoved.current = true; }}
       onNodeDragStart={onNodeDragStart}
       onNodeDrag={onNodeDrag}

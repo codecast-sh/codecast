@@ -63,7 +63,9 @@ export type OrgLayoutNode =
  *  another branch, drawn only while either end is pointed at or selected. */
 export type OrgLayoutEdge = { id: string; source: string; target: string; kind: "tree" | "stack" | "ghost" | "cross"; faded?: boolean; change_id?: string;
   /** Drawn as a spine down the parent's left edge into the card's side (the health map's columns). */
-  spine?: boolean };
+  spine?: boolean;
+  /** How the edge is drawn on the tree: `lane` from the parent's bottom along a bus and down a spine left of the lane into the card's side; `spine` down the source's left edge into the card's side (a block's indented rows). Absent: a plain elbow, parent bottom to child top. */
+  route?: "lane" | "spine" };
 
 export type OrgLayoutView = {
   /** Node ids (person:<user_id> / role:<role_id>) whose subtree is folded. */
@@ -132,6 +134,11 @@ export const ORG_SIZES = {
   levelGap: 56,
   stackGap: 8,
   rootGap: 96,
+  /** Shallow branches (orgLayout measure): a row's indent under its card (rows are stackGap apart), the gap between blocks in a lane, and a lane's height floor. */
+  indent: 28,
+  laneGap: 20,
+  /** The people at the top wrap into rows to make the whole chart about this wide for its height. */
+  chartAspect: 2,
   /** The health map's columns (layoutOrgColumns): a report's indent, the gap between cards and between columns. */
   columnIndent: 28,
   columnGap: 22,
@@ -245,13 +252,6 @@ function sessionHeight(s: OrgSession, sz: SessionSizing): number {
   if (sz.stubs?.[sessionNodeId(s._id)]?.kind === "adopt") return ORG_SIZES.session.h + ORG_SIZES.adoptRow;
   if (sz.far) return ORG_SIZES.session.h;
   return sessionCardRows(s, sz.details?.[s._id], !!sz.opened?.has(sessionNodeId(s._id))).h;
-}
-
-function stackHeight(stack: Stack, sz: SessionSizing): number {
-  const n = stack.sessions.length + (stack.hasMoreNode ? 1 : 0);
-  if (n === 0) return 0;
-  const rows = stack.sessions.reduce((h, s) => h + sessionHeight(s, sz) + ORG_SIZES.stackGap, 0);
-  return rows + (stack.hasMoreNode ? ORG_SIZES.cluster.h + ORG_SIZES.stackGap : 0) - ORG_SIZES.stackGap;
 }
 
 function subtreeCount(b: Branch): number {
@@ -436,61 +436,140 @@ function parentOfSession(tree: OrgTree, s: OrgSession): OrgParentRef | null {
 }
 
 // ---------------------------------------------------------------- measure + place
+//
+// A wide, shallow org drawn as a plain tidy tree is a single row thousands of
+// pixels long: every goal, every lead and every session stack takes a column
+// of its own. So only a branch with depth (a child that has children of its
+// own with children) spreads sideways. Everything shallow under a parent (a
+// leaf, a lead whose reports are all leaves, the parent's own sessions) is a
+// BLOCK: its card with what hangs under it indented below, joined by a spine.
+// The blocks pack top to bottom into lanes, as many lanes as make the group
+// about as wide as it is tall (never shorter than the tallest branch beside
+// it), and the people at the top wrap into rows the same way, so the chart
+// keeps a screen's proportions however many seats it has.
+
+type Block = { /** The branch the block draws, or null for the parent's own stack. */ b: Branch | null; w: number; h: number };
+type Plan = { lanes: { blocks: Block[]; w: number; h: number }[]; wide: Branch[] };
+
+const plans = new WeakMap<Branch, Plan>();
+
+const isShallow = (c: Branch) => c.children.every((k) => k.children.length === 0);
+
+/** Height of a stack drawn as indented rows (sessions, then the cluster card). */
+function stackRows(st: Stack, sz: SessionSizing): number {
+  return st.sessions.reduce((h, s) => h + sessionHeight(s, sz) + ORG_SIZES.stackGap, 0) + (st.hasMoreNode ? ORG_SIZES.cluster.h + ORG_SIZES.stackGap : 0);
+}
+const stackWidth = (st: Stack | null) => (st && (st.sessions.length || st.hasMoreNode) ? Math.max(ORG_SIZES.session.w, ORG_SIZES.cluster.w) : 0);
+
+/** A shallow branch as a block: its card, each leaf child indented with that child's sessions indented again, then its own sessions. */
+function blockOf(c: Branch, sz: SessionSizing): Block {
+  const I = ORG_SIZES.indent;
+  let h = c.h + ORG_SIZES.stackGap;
+  let w = c.w;
+  for (const k of c.children) {
+    h += k.h + ORG_SIZES.stackGap;
+    w = Math.max(w, I + k.w);
+    if (k.stack) { h += stackRows(k.stack, sz); w = Math.max(w, 2 * I + stackWidth(k.stack)); }
+  }
+  if (c.stack) { h += stackRows(c.stack, sz); w = Math.max(w, I + stackWidth(c.stack)); }
+  return { b: c, w, h: h - ORG_SIZES.stackGap };
+}
+
+/** How tall a lane may grow: k lanes of width w and height H/k come out square when H/k = sqrt(H·w). */
+function laneCap(blocks: Block[], wide: Branch[]): number {
+  if (!blocks.length) return 0;
+  const total = blocks.reduce((h, k) => h + k.h + ORG_SIZES.laneGap, -ORG_SIZES.laneGap);
+  const w = blocks.reduce((a, k) => a + k.w, 0) / blocks.length;
+  return Math.max(Math.sqrt(total * w), ...blocks.map((k) => k.h), ...wide.map((c) => c.height));
+}
 
 function measure(b: Branch, sz: SessionSizing): void {
-  for (const c of b.children) measure(c, sz);
-  const parts: number[] = b.children.map((c) => c.width);
-  if (b.stack) parts.push(ORG_SIZES.session.w);
+  const wide = b.children.filter((c) => !isShallow(c));
+  for (const c of wide) measure(c, sz);
+  const blocks: Block[] = b.children.filter(isShallow).map((c) => blockOf(c, sz));
+  if (b.stack && (b.stack.sessions.length || b.stack.hasMoreNode)) blocks.push({ b: null, w: stackWidth(b.stack), h: stackRows(b.stack, sz) - ORG_SIZES.stackGap });
+  const cap = laneCap(blocks, wide);
+  const lanes: Plan["lanes"] = [];
+  for (const k of blocks) {
+    const lane = lanes[lanes.length - 1];
+    if (lane && lane.h + ORG_SIZES.laneGap + k.h <= cap) { lane.blocks.push(k); lane.h += ORG_SIZES.laneGap + k.h; lane.w = Math.max(lane.w, k.w); }
+    else lanes.push({ blocks: [k], w: k.w, h: k.h });
+  }
+  plans.set(b, { lanes, wide });
+  const parts = [...lanes.map((l) => l.w), ...wide.map((c) => c.width)];
   const childrenWidth = parts.length ? parts.reduce((a, w) => a + w, 0) + ORG_SIZES.siblingGap * (parts.length - 1) : 0;
   b.width = Math.max(b.w, childrenWidth);
-  const childHeights = b.children.map((c) => c.height);
-  if (b.stack) childHeights.push(stackHeight(b.stack, sz));
-  const below = childHeights.length ? Math.max(...childHeights) : 0;
+  const below = Math.max(0, ...lanes.map((l) => l.h), ...wide.map((c) => c.height));
   b.height = b.h + (below > 0 ? ORG_SIZES.levelGap + below : 0);
 }
 
-function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges: OrgLayoutEdge[], sz: SessionSizing): void {
-  const x = left + (b.width - b.w) / 2;
-  const y = top;
+function pushCard(b: Branch, x: number, y: number, out: OrgLayoutNode[]): void {
   const box = { id: b.id, x, y, w: b.w, h: b.h };
   if (b.kind === "person") out.push({ ...box, kind: "person", person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
   else if (b.kind === "role") out.push({ ...box, kind: "role", role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}), ...(b.opened ? { opened: true, open: b.open } : {}) });
   else if (b.kind === "group") out.push({ ...box, kind: "group", label: b.label ?? "", count: b.count ?? 0 });
   else out.push({ ...box, kind: b.kind, data: b.data ?? {} });
+}
 
-  const parts: number[] = b.children.map((c) => c.width);
-  if (b.stack) parts.push(ORG_SIZES.session.w);
+/** A stack's sessions and cluster card as rows from (x, y), each on `route` from `holder`. Returns the y below the last row. */
+function placeStack(st: Stack, holder: string, x: number, y: number, route: "lane" | "spine", out: OrgLayoutNode[], edges: OrgLayoutEdge[], sz: SessionSizing): number {
+  let sy = y;
+  st.sessions.forEach((s, i) => {
+    const id = sessionNodeId(s._id);
+    const h = sessionHeight(s, sz);
+    const detail = sz.far ? undefined : sz.details?.[s._id];
+    const opened = !sz.far && !!sz.opened?.has(id);
+    out.push({ id, kind: "session", x, y: sy, w: ORG_SIZES.session.w, h, session: s, parent: st.parent, ...(detail ? { detail } : {}), ...(opened ? { opened } : {}) });
+    edges.push({ id: `e:${holder}->${id}`, source: holder, target: id, kind: i === 0 ? "tree" : "stack", route });
+    sy += h + ORG_SIZES.stackGap;
+  });
+  if (st.hasMoreNode) {
+    const id = clusterNodeId(holder);
+    out.push({
+      id, kind: "cluster", x, y: sy, w: ORG_SIZES.cluster.w, h: ORG_SIZES.cluster.h, parent: st.parent,
+      remaining: Math.max(0, st.total - st.sessions.length), loaded: st.sessions.length, total: st.total, counts: st.counts, fullyLoaded: st.fullyLoaded,
+    });
+    edges.push({ id: `e:${holder}->${id}`, source: holder, target: id, kind: st.sessions.length ? "stack" : "tree", route });
+    sy += ORG_SIZES.cluster.h + ORG_SIZES.stackGap;
+  }
+  return sy;
+}
+
+function placeBlock(c: Branch, parent: string, x: number, y: number, out: OrgLayoutNode[], edges: OrgLayoutEdge[], sz: SessionSizing): void {
+  const I = ORG_SIZES.indent;
+  pushCard(c, x, y, out);
+  edges.push({ id: `e:${parent}->${c.id}`, source: parent, target: c.id, kind: "tree", route: "lane" });
+  let cy = y + c.h + ORG_SIZES.stackGap;
+  for (const k of c.children) {
+    pushCard(k, x + I, cy, out);
+    edges.push({ id: `e:${c.id}->${k.id}`, source: c.id, target: k.id, kind: "tree", route: "spine" });
+    cy += k.h + ORG_SIZES.stackGap;
+    if (k.stack) cy = placeStack(k.stack, k.id, x + 2 * I, cy, "spine", out, edges, sz);
+  }
+  if (c.stack) placeStack(c.stack, c.id, x + I, cy, "spine", out, edges, sz);
+}
+
+function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges: OrgLayoutEdge[], sz: SessionSizing): void {
+  pushCard(b, left + (b.width - b.w) / 2, top, out);
+  const plan = plans.get(b)!;
+  const parts = [...plan.lanes.map((l) => l.w), ...plan.wide.map((c) => c.width)];
   if (parts.length === 0) return;
   const childrenWidth = parts.reduce((a, w) => a + w, 0) + ORG_SIZES.siblingGap * (parts.length - 1);
   let cx = left + (b.width - childrenWidth) / 2;
-  const cy = y + b.h + ORG_SIZES.levelGap;
-  for (const c of b.children) {
+  const cy = top + b.h + ORG_SIZES.levelGap;
+  for (const lane of plan.lanes) {
+    let y = cy;
+    for (const k of lane.blocks) {
+      if (k.b) placeBlock(k.b, b.id, cx, y, out, edges, sz);
+      else placeStack(b.stack!, b.id, cx, y, "lane", out, edges, sz);
+      y += k.h + ORG_SIZES.laneGap;
+    }
+    cx += lane.w + ORG_SIZES.siblingGap;
+  }
+  for (const c of plan.wide) {
     place(c, cx, cy, out, edges, sz);
     edges.push({ id: `e:${b.id}->${c.id}`, source: b.id, target: c.id, kind: "tree" });
     cx += c.width + ORG_SIZES.siblingGap;
-  }
-  if (b.stack) {
-    const st = b.stack;
-    let sy = cy;
-    let prev = b.id;
-    st.sessions.forEach((s, i) => {
-      const id = sessionNodeId(s._id);
-      const h = sessionHeight(s, sz);
-      const detail = sz.far ? undefined : sz.details?.[s._id];
-      const opened = !sz.far && !!sz.opened?.has(id);
-      out.push({ id, kind: "session", x: cx, y: sy, w: ORG_SIZES.session.w, h, session: s, parent: st.parent, ...(detail ? { detail } : {}), ...(opened ? { opened } : {}) });
-      edges.push({ id: `e:${prev}->${id}`, source: prev, target: id, kind: i === 0 ? "tree" : "stack" });
-      prev = id;
-      sy += h + ORG_SIZES.stackGap;
-    });
-    if (st.hasMoreNode) {
-      const id = clusterNodeId(b.id);
-      out.push({
-        id, kind: "cluster", x: cx, y: sy, w: ORG_SIZES.cluster.w, h: ORG_SIZES.cluster.h, parent: st.parent,
-        remaining: Math.max(0, st.total - st.sessions.length), loaded: st.sessions.length, total: st.total, counts: st.counts, fullyLoaded: st.fullyLoaded,
-      });
-      edges.push({ id: `e:${prev}->${id}`, source: prev, target: id, kind: st.sessions.length ? "stack" : "tree" });
-    }
   }
 }
 
@@ -511,13 +590,21 @@ export function layoutOrgTree(tree: OrgTree, view: OrgLayoutView, ghosts?: OrgGh
   for (const r of roots) measure(r, sz);
   const nodes: OrgLayoutNode[] = [];
   const edges: OrgLayoutEdge[] = [];
+  // Roots wrap into rows: a row is as wide as makes the whole chart chartAspect wide for its height, and never narrower than its widest root.
+  const area = roots.reduce((a, r) => a + (r.width + ORG_SIZES.rootGap) * (r.height + ORG_SIZES.rootGap), 0);
+  const rowW = Math.max(Math.sqrt(area * ORG_SIZES.chartAspect), ...roots.map((r) => r.width));
   let x = 0;
-  let height = 0;
+  let y = 0;
+  let rowH = 0;
+  let width = 0;
   for (const r of roots) {
-    place(r, x, 0, nodes, edges, sz);
+    if (x > 0 && x + r.width > rowW) { y += rowH + ORG_SIZES.rootGap; x = 0; rowH = 0; }
+    place(r, x, y, nodes, edges, sz);
+    width = Math.max(width, x + r.width);
     x += r.width + ORG_SIZES.rootGap;
-    height = Math.max(height, r.height);
+    rowH = Math.max(rowH, r.height);
   }
+  const height = y + rowH;
   if (ghosts) decorate(nodes, edges, ghosts);
   if (view.product) {
     const parentOf = new Map(edges.filter((e) => e.kind === "tree").map((e) => [e.target, e.source]));
@@ -531,7 +618,7 @@ export function layoutOrgTree(tree: OrgTree, view: OrgLayoutView, ghosts?: OrgGh
       }
     }
   }
-  return { nodes, edges, width: Math.max(0, x - ORG_SIZES.rootGap), height };
+  return { nodes, edges, width, height };
 }
 
 /**

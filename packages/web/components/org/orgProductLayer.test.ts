@@ -56,8 +56,8 @@ describe("the Everything chart", () => {
     const unled = ["union-proj-matching", "union-proj-callers", "union-proj-network", "union-proj-outreach", "union-proj-launch"];
     for (const id of unled) expect(l.parent.get(projectNodeIdOf(id))).toBe(UNOWNED_NODE_ID);
     expect(group.kind === "group" && group.count).toBe(l.edges.filter((e) => e.source === UNOWNED_NODE_ID && e.kind === "tree").length);
-    // Roots run left to right: the mission first, the group last.
-    const roots = l.nodes.filter((n) => n.y === 0).sort((a, b) => a.x - b.x);
+    // Roots run in reading order (they wrap into rows): the mission first, the group last.
+    const roots = l.nodes.filter((n) => !l.parent.has(n.id) && n.kind !== "session" && n.kind !== "cluster").sort((a, b) => a.y - b.y || a.x - b.x);
     expect(roots[0].id).toBe(MISSION_NODE_ID);
     expect(roots.at(-1)!.id).toBe(UNOWNED_NODE_ID);
   });

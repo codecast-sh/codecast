@@ -75,7 +75,7 @@ type OrgMapProps = {
 };
 
 /** What the page hands the People filter to drive it (useOrgPeopleView, useOrgMoves). */
-export type OrgPeopleControls = Pick<OrgGraphProps, "view" | "loadingClusters" | "onToggleCollapse" | "onExpandCluster" | "onCollapseCluster" | "onReparentRequest" | "onNodeContextMenu" | "canDrag" | "canDropPerson" | "resetKey" | "onToggleOpen"> & {
+export type OrgPeopleControls = Pick<OrgGraphProps, "view" | "loadingClusters" | "onToggleCollapse" | "onExpandCluster" | "onCollapseCluster" | "onReparentRequest" | "onDropSessions" | "onNodeContextMenu" | "canDrag" | "canDropPerson" | "resetKey" | "onToggleOpen"> & {
   /** Which project each session works on: with it, Everything is the people chart with the goals and projects joined in. */
   sessionProject?: Readonly<Record<string, string>>;
 };
@@ -184,6 +184,7 @@ export function OrgMap({ tree, goals, health: healthProp, proposal, filter, asPr
             onExpandCluster={live?.onExpandCluster ?? noop}
             onCollapseCluster={live?.onCollapseCluster ?? noop}
             onReparentRequest={live?.onReparentRequest ?? noop}
+            onDropSessions={live?.onDropSessions}
             onNodeContextMenu={live?.onNodeContextMenu ?? noop}
             onOpenSession={onOpenSession}
             canDrag={live?.canDrag ?? never}

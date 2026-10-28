@@ -312,6 +312,7 @@ export function OrgChart() {
             onExpandCluster: people.loadMore,
             onCollapseCluster: people.collapseCluster,
             onReparentRequest: moves.requestMove,
+            onDropSessions: moves.dropSessions,
             onNodeContextMenu,
             canDrag: moves.canDrag,
             canDropPerson: moves.canDropPerson,

@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { ArrowRightLeft, ArrowUpToLine, Search } from "lucide-react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
-import { useInboxStore } from "../../store/inboxStore";
+import { sessionWorkState, useInboxStore, type InboxSession } from "../../store/inboxStore";
 import { orgPersonReparentMakesCycle, orgRoleReparentMakesCycle, reparentToastLine } from "../../store/orgSlice";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { Avatar } from "../tasks/TaskCommentStream";
@@ -43,6 +43,8 @@ export type OrgMoves = {
   requestMove: (req: OrgReparentRequest) => void;
   /** A move the person already chose (the menu, the picker, a drop on the Everything chart). */
   move: (subject: MoveSubject, target: OrgParentRef | null, targetTitle: string) => void;
+  /** Sessions dropped from the inbox (one card or its whole selection): each moves at once, then one toast. */
+  dropSessions: (conversationIds: readonly string[], target: OrgParentRef, targetTitle: string) => void;
   /** Every person and live role a subject could report to, minus where it would close a loop. */
   targetsFor: (subject: MoveSubject) => MoveTarget[];
   openPicker: (subject: MoveSubject) => void;
@@ -78,28 +80,30 @@ export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "f
   const canDrag = useCallback((n: OrgLayoutNode) => (n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : n.kind === "person" ? !!teamId : false), [canMoveSession, canEditRole, teamId]);
 
   const { findSession, currentParentOf, movePagedSession } = people;
-  const commit = useCallback((subject: MoveSubject, target: OrgParentRef | null, targetTitle: string) => {
+  /** `quiet`: part of a group move, which says it once. */
+  const commit = useCallback((subject: MoveSubject, target: OrgParentRef | null, targetTitle: string, quiet = false) => {
+    const say = (line: string) => { if (!quiet) toast.success(line); };
     const st = useInboxStore.getState();
     if (subject.kind === "person") {
       if (!teamId || (target && target.kind !== "user")) return;
       st.reparentOrgPerson(teamId, subject.id, target?.user_id ?? null);
-      toast.success(target ? `${subject.title} now reports to ${targetTitle}` : `${subject.title} now reports to nobody`);
+      say(target ? `${subject.title} now reports to ${targetTitle}` : `${subject.title} now reports to nobody`);
       return;
     }
     if (!target) return;
     if (subject.kind === "session") {
-      // The row may live only in a loaded page (past the tree's top N): the
-      // slice gets it so counts move, and the pages draw it once, under the target.
-      const row = findSession(subject.id);
+      // The row may live only in a loaded page (past the tree's top N) or only
+      // in the inbox: the slice gets it so counts move, and the pages draw it once, under the target.
+      const row = findSession(subject.id) ?? inboxOrgSession(subject.id, st.sessions[subject.id]);
       movePagedSession(subject.id, target, row);
       void st.reparentOrgSession(subject.id, target, { row })
-        .then((r) => { if (r) toast.success(reparentToastLine(r.short_id ?? row?.short_id ?? "The session", targetTitle, "session", r.told)); })
+        .then((r) => { if (r) say(reparentToastLine(r.short_id ?? "The session", targetTitle, "session", r.told)); })
         .catch(() => {});
     } else {
       // One toast says both things (S11): the role, and how many hands were told.
       const handle = tree?.roles.find((r) => r._id === subject.id)?.handle;
       void st.reparentOrgRole(subject.id, target)
-        .then((r) => { if (r) toast.success(reparentToastLine(handle ? `@${handle}` : subject.title, targetTitle, "role", r.told)); })
+        .then((r) => { if (r) say(reparentToastLine(handle ? `@${handle}` : subject.title, targetTitle, "role", r.told)); })
         .catch(() => {});
     }
   }, [tree, teamId, findSession, movePagedSession]);
@@ -117,27 +121,40 @@ export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "f
       if (target.kind === "role" && target.role_id === subject.id) return false;
       if (orgRoleReparentMakesCycle(tree, subject.id, target)) return false;
     } else {
+      // A session the chart does not hold yet comes from the inbox; the server decides who may file it.
       const s = findSession(subject.id);
-      if (!s || !canMoveSession(s)) return false;
+      if (s ? !canMoveSession(s) : !useInboxStore.getState().sessions[subject.id]) return false;
     }
     return !sameTarget(currentParentOf(subject), target);
   }, [tree, canEditRole, canMoveSession, canMovePerson, findSession, currentParentOf]);
 
   const requestMove = useCallback((req: OrgReparentRequest) => {
-    if (!allowed(req.subject, req.target)) { bump(); return; }
-    setPending(req);
+    // A multi-selection moves what may move; the rest stays where it is.
+    const [subject, ...also] = [req.subject, ...(req.also ?? [])].filter((x) => allowed(x, req.target));
+    if (!subject) { bump(); return; }
+    setPending({ ...req, subject, also });
   }, [allowed, bump]);
   const move = useCallback((subject: MoveSubject, target: OrgParentRef | null, targetTitle: string) => {
     if (!allowed(subject, target)) return;
     setPicker(null);
     commit(subject, target, targetTitle);
   }, [allowed, commit]);
+  /** Several subjects under one target, said once. */
+  const commitAll = useCallback((subjects: MoveSubject[], target: OrgParentRef, targetTitle: string) => {
+    if (subjects.length === 1) { commit(subjects[0], target, targetTitle); return; }
+    for (const x of subjects) commit(x, target, targetTitle, true);
+    toast.success(`${subjects.length} now report to ${targetTitle}.`);
+  }, [commit]);
+  const dropSessions = useCallback((ids: readonly string[], target: OrgParentRef, targetTitle: string) => {
+    const subjects = ids.map((id): MoveSubject => ({ kind: "session", id, title: "" })).filter((x) => allowed(x, target));
+    if (subjects.length) commitAll(subjects, target, targetTitle);
+  }, [allowed, commitAll]);
   const confirm = useCallback(() => {
     if (!pending) return;
-    commit(pending.subject, pending.target, pending.targetTitle);
+    commitAll([pending.subject, ...(pending.also ?? [])], pending.target, pending.targetTitle);
     setPending(null);
     bump();
-  }, [pending, commit, bump]);
+  }, [pending, commitAll, bump]);
   const cancel = useCallback(() => { setPending(null); bump(); }, [bump]);
 
   const allTargets = useMemo<MoveTarget[]>(() => (tree ? [
@@ -160,7 +177,13 @@ export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "f
       {picker && <MovePicker subject={picker} current={currentParentOf(picker)} targets={targetsFor(picker)} onPick={(t) => move(picker, t.ref, t.title)} onClose={() => setPicker(null)} />}
     </>
   );
-  return { canEditRole, canMoveSession, canMovePerson, canDropPerson, canDrag, requestMove, move, targetsFor, openPicker: setPicker, resetKey, ui };
+  return { canEditRole, canMoveSession, canMovePerson, canDropPerson, canDrag, requestMove, move, dropSessions, targetsFor, openPicker: setPicker, resetKey, ui };
+}
+
+/** An inbox row the chart does not hold yet, as the chart's session row, so the move paints under its target at once. */
+function inboxOrgSession(id: string, s: InboxSession | undefined): OrgSession | null {
+  if (!s) return null;
+  return { _id: id, short_id: id.slice(0, 7), title: s.title ?? "", agent_type: s.agent_type, state: sessionWorkState(s), updated_at: s.updated_at, subagent_count: 0, is_anchor: false, project_path: s.project_path, git_branch: s.git_branch };
 }
 
 // ---------------------------------------------------------------- confirm popover
@@ -181,7 +204,7 @@ export function MoveConfirm({ req, onConfirm, onCancel }: { req: OrgReparentRequ
       <div className="fixed inset-0 z-40" onMouseDown={onCancel} />
       <div ref={ref} className="fixed z-50 rounded-xl border p-3 org-pop-in" style={{ left: x, top: y, width: w, background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", boxShadow: "0 18px 48px -18px rgba(0,0,0,0.5), 0 3px 10px rgba(0,0,0,0.12)" }} role="dialog" aria-modal="false" aria-label="Confirm move" data-move-confirm>
         <div className="text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>
-          Move <b className="font-semibold">{req.subject.title}</b> under <b className="font-semibold">{req.targetTitle}</b>?
+          Move <b className="font-semibold">{req.subject.title}</b>{req.also?.length ? <> and {req.also.length} more</> : null} under <b className="font-semibold">{req.targetTitle}</b>?
         </div>
         <div className="mt-1 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
           {req.subject.kind === "session"

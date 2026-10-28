@@ -104,6 +104,8 @@ export function StageDropLayer({
   const onDragOver = useCallback(
     (e: React.DragEvent) => {
       if (!enabled || !dragCarriesPane(e.dataTransfer)) return;
+      // A target inside the stage took this drag (an org card, an inbox section): it is not a split.
+      if (e.isDefaultPrevented()) { setHover(null); return; }
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
       const el = ref.current;
