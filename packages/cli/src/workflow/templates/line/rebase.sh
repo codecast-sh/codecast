@@ -35,42 +35,22 @@ touched=()
 while IFS= read -r f; do touched+=("$f"); done < <(git diff --name-only --no-renames "$fork" "$was")
 
 if ! git rebase --autostash "$upstream" > "$dir/rebase.log" 2>&1; then
-  files="$(git diff --name-only --diff-filter=U | head -20 | tr '\n' ' ')"
+  conflicted=()
+  while IFS= read -r f; do conflicted+=("$f"); done < <(git diff --name-only --diff-filter=U | head -20)
   git rebase --abort > /dev/null 2>&1
-  # The default branch can already carry the change, reworked by edits made
-  # after review (the shared tree committed while the card waited). It counts
-  # as carried only when every file the change touched reads nearer the
-  # reviewed branch on the default branch than at the fork: a file whose
-  # reviewed edit never landed leaves a plain conflict. Nearer is not proof
-  # the whole edit is there, and a rework of the change's own lines looks the
-  # same as a part that never landed, so the run stops and names the files
-  # that differ for a person to read, rather than asking for a conflict to be
-  # resolved in favour of a change that is largely there already.
-  apart() { git diff --numstat "$1" "$was" -- "$2" | awk '{ n += $1 + $2 } END { print n + 0 }'; }
-  carries() { for f in "${touched[@]}"; do [ "$(apart "$1" "$f")" -lt "$(apart "$fork" "$f")" ] || return 1; done; }
-  landed=""
-  if [ "${#touched[@]}" -gt 0 ] && carries "$upstream"; then
-    landed="$(git log --reverse --format=%H "$fork..$upstream" -- "${touched[@]}" | while read -r c; do carries "$c" && { echo "$c"; break; }; done)"
-  fi
-  if [ -n "$landed" ]; then
-    # Each file that differs either holds the reviewed edit with more around
-    # it, or does not hold it as written (reworked after review, or never
-    # fully landed); the note names which, so nobody reads one as the other.
-    idx="$dir/upstream.index"
-    GIT_INDEX_FILE="$idx" git read-tree "$upstream"
-    extra=""; missing=""
-    for f in "${touched[@]}"; do
-      [ "$(git rev-parse -q --verify "$upstream:$f")" = "$(git rev-parse -q --verify "$was:$f")" ] && continue
-      if git diff --binary -U0 "$fork" "$was" -- "$f" | GIT_INDEX_FILE="$idx" git apply --cached --check -R --unidiff-zero - > /dev/null 2>&1; then extra="$extra$f "; else missing="$missing$f "; fi
-    done
-    rm -f "$idx"
-    cast task comment $task_id "$upstream already carries most of $br as ${landed:0:10}, but not as reviewed.${extra:+ Holds the reviewed edit plus edits no review saw: $extra.}${missing:+ Does not hold the reviewed edit as written (reworked after review, or part of it never landed): $missing.} \`git diff ${was:0:10} $upstream -- $extra$missing\` shows each difference; read them before the task is done." -t review > /dev/null
-    answer false false "mostly on $upstream as ${landed:0:10}, not as reviewed:${extra:+ more than reviewed in $extra}${missing:+ reviewed edit not as written in $missing}"
-    exit 1
-  fi
   said="$(tail -n 5 "$dir/rebase.log" | tr '\n' ' ')"
-  cast task comment $task_id "Rebasing $br onto $upstream conflicted${files:+ in $files}. The branch is as it was before the rebase. Rebase it onto $upstream, resolve the conflict keeping the approved change, run the check, and hand off again. Git said: $said" -t review > /dev/null
-  answer false false "rebase onto $upstream conflicted${files:+ in $files}"
+  # The default branch changed these files after the branch forked, and one of
+  # those commits may already carry the change, reworked after review (the
+  # shared tree is committed while a change waits for its answer). Which side
+  # holds what is for whoever resolves it to read, so the note names the
+  # commits and asks to keep both sides, never to overwrite the default branch.
+  where=""
+  for f in "${conflicted[@]}"; do
+    where="$where${where:+; }$f: $(git log --format='%h %s' "$fork..$upstream" -- "$f" | head -5 | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"
+  done
+  names="${conflicted[*]}"
+  cast task comment $task_id "Rebasing $br onto $upstream conflicted${names:+ in $names}. The branch is as it was before the rebase. $upstream changed those files after the branch forked ($where), and one of those commits may already carry part or all of this change, reworked after review. Rebase onto $upstream keeping both sides: drop the branch's side of a hunk only where $upstream already holds it, and never overwrite $upstream's own edits. Say on the task what $upstream already had. Then run the check and hand off again. Git said: $said" -t review > /dev/null
+  answer false false "rebase onto $upstream conflicted${names:+ in $names} ($where)"
   exit 1
 fi
 
