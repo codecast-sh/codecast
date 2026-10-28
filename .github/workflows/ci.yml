@@ -219,12 +219,6 @@ jobs:
     if: needs.code_paths.outputs.run_test_cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # ct-71000: on Linux a spawnSync can miss its child's exit and spin beside
-    # the zombie, on bun 1.3.13 and still on 1.3.14, where the event loop watches
-    # each child's pidfd. The waiter thread reaps children with waitpid instead;
-    # whether that ends the hangs is measured on this job's runs.
-    env:
-      BUN_FEATURE_FLAG_FORCE_WAITER_THREAD: "1"
     steps:
       # fetch-depth 2 is what the injection-path filter below needs to diff a
       # push; a pull_request fetches its base branch itself.
