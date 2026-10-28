@@ -16,7 +16,7 @@
 import { Track } from "livekit-client";
 import { getRoom, mediaFailureReason } from "./callManager";
 import { bindPrewarmMic } from "./roomPrewarm";
-import { micConstraints, readJoinPrefs } from "./joinPrefs";
+import { micConstraints, onChosenDevice, readJoinPrefs } from "./joinPrefs";
 
 /** The track already published into the room this client is sitting in —
  *  hold-to-reply inside a huddle borrows it rather than opening a second. */
@@ -51,9 +51,14 @@ let micIdleTimer: ReturnType<typeof setTimeout> | null = null;
  *  does not. */
 let micGranted = false;
 
+// A held microphone is only worth handing out while it is the one the person
+// chose. Every prewarmed room and every burst publishes a clone of it, so a
+// pick made after it opened would otherwise never reach a call: the track
+// outlives each burst, and every hover pushes its release out again. A burst
+// in flight keeps its device until it ends.
 function heldMic(): MediaStreamTrack | null {
-  if (mic && mic.readyState === "live") return mic;
-  mic = null;
+  if (mic && mic.readyState === "live" && (inUse() || onChosenDevice(mic, "audioinput"))) return mic;
+  stopMic();
   return null;
 }
 

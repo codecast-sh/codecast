@@ -62,6 +62,14 @@ export function resolveDevice(rank: string[] | undefined, devices: Device[], fal
   return (devices.find((d) => d.deviceId === "default") ?? devices[0]).deviceId;
 }
 
+/** Whether a live capture is on this device: by id, or by label where the
+ *  browser reports the id another way. */
+export function trackOnDevice(track: MediaStreamTrack, kind: DeviceKind, deviceId: string): boolean {
+  if (track.getSettings?.().deviceId === deviceId) return true;
+  const label = knownDevices(kind)?.find((d) => d.deviceId === deviceId)?.label;
+  return !!label && label === track.label;
+}
+
 // ── what is plugged in ────────────────────────────────────────────────────
 // A join reads its devices synchronously, so the current lists are kept here,
 // listed once at load and again whenever a device comes or goes. Listing never

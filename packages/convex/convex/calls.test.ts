@@ -1277,6 +1277,34 @@ describe("prewarm: a connection held open by somebody who is not here", () => {
     expect(inserted).toEqual([]);
   });
 
+  async function leave(ctx: any, args: any) {
+    const { leaveRoom } = await import("./calls");
+    const handler = (leaveRoom as any)._handler ?? (leaveRoom as any).handler;
+    return handler(ctx, { room_key: "channel:ch1", ...args });
+  }
+
+  test("letting a prewarm go never touches a seat in that room", async () => {
+    // The desktop case: the main window warmed the room on a hover, the voice
+    // host then sat in it on the same (user, room) row, and the main window's
+    // idle release came 90s later. Deleting the seat and stamping a hang-up
+    // made the person's next heartbeat leave their own call.
+    const { ctx, deleted, inserted } = prewarmCtx([
+      seat({ _id: "live1", room_key: "channel:ch1", last_seen: now }),
+    ]);
+    await leave(ctx, { prewarm: true });
+    expect(deleted).toEqual([]);
+    expect(inserted).toEqual([]);
+  });
+
+  test("letting a prewarm go drops its row and records no hang-up", async () => {
+    const { ctx, deleted, inserted } = prewarmCtx([
+      seat({ _id: "warm1", room_key: "channel:ch1", last_seen: now, prewarm: true }),
+    ]);
+    await leave(ctx, { prewarm: true });
+    expect(deleted).toContain("warm1");
+    expect(inserted.filter((r) => r._table === "call_hangups")).toEqual([]);
+  });
+
   test("a recorded room refuses it: everyone in a recording is told, and a prewarm is nobody", async () => {
     // The client skips recorded rooms on its own; this is the server's half,
     // so an older bundle cannot drop a muted, unseated tile into the composite.

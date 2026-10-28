@@ -165,8 +165,16 @@ describe("shouldRejoinAfterDisconnect", () => {
     }
   });
 
-  it("lets a removal or our own disconnect end the call", () => {
-    for (const reason of [1, 4, "CLIENT_INITIATED", "PARTICIPANT_REMOVED", "participant-removed"]) {
+  it("rejoins livekit's own disconnect: a frozen page, not a hang-up", () => {
+    // Our own disconnects never reach the handler (listeners come off first),
+    // and an unloading window answers before asking.
+    for (const reason of [1, "CLIENT_INITIATED"]) {
+      expect(shouldRejoinAfterDisconnect(reason)).toBe(true);
+    }
+  });
+
+  it("lets a removal end the call", () => {
+    for (const reason of [4, "PARTICIPANT_REMOVED", "participant-removed"]) {
       expect(shouldRejoinAfterDisconnect(reason)).toBe(false);
     }
   });

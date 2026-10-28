@@ -2,7 +2,7 @@
 // that, so "headphones when they are on, the display otherwise" holds after
 // the person picks the display while the headphones are off.
 import { describe, expect, test } from "bun:test";
-import { rankAfterPick, resolveDevice } from "../calls/deviceRank";
+import { noteDevices, rankAfterPick, resolveDevice, trackOnDevice } from "../calls/deviceRank";
 
 const d = (deviceId: string, label: string) => ({ deviceId, label });
 const DEFAULT = d("default", "Default - MacBook Pro Microphone");
@@ -42,5 +42,20 @@ describe("device rank", () => {
   test("an unranked fallback id is used only while plugged in", () => {
     expect(resolveDevice(["Gone Mic"], [DEFAULT, MBP], "mbp")).toBe("mbp");
     expect(resolveDevice([], [DEFAULT, MBP], "gone")).toBe("default");
+  });
+});
+
+describe("trackOnDevice", () => {
+  const track = (deviceId: string, label: string) => ({ getSettings: () => ({ deviceId }), label }) as unknown as MediaStreamTrack;
+
+  test("a capture is on a device by its id", () => {
+    expect(trackOnDevice(track("studio", "Studio Display Microphone"), "audioinput", "studio")).toBe(true);
+    expect(trackOnDevice(track("mbp", "MacBook Pro Microphone"), "audioinput", "studio")).toBe(false);
+  });
+
+  test("or by the listed device's label, where the browser reports the id another way", () => {
+    noteDevices("audioinput", [STUDIO, MBP]);
+    expect(trackOnDevice(track("", "Studio Display Microphone"), "audioinput", "studio")).toBe(true);
+    expect(trackOnDevice(track("", "MacBook Pro Microphone"), "audioinput", "studio")).toBe(false);
   });
 });

@@ -30,10 +30,10 @@ import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, settleRingIn, unsettle
 import { getScribeStatus, startScribe, stopScribe } from "./transcription";
 import type { ScribeRoute } from "./scribeEngine";
 import { chosenDevice, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
-import { DEVICE_KINDS, onDevicesChanged } from "./deviceRank";
+import { DEVICE_KINDS, knownDevices, onDevicesChanged, refreshDevices, trackOnDevice, type DeviceKind } from "./deviceRank";
 import { switchRecorderMic } from "./recorder";
-import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
-import { bindPrewarmAudio, bindPrewarmConvex, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
+import { huddleRoomOptions, micConstraints, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
+import { bindPrewarmAudio, bindPrewarmConvex, releasePrewarm, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
 import {
   hasCallPanel,
@@ -476,9 +476,17 @@ export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> 
   // never crosses a window; it cannot reach here from a remote anyway.
   if (voiceHostElsewhere() && !opts?.micTrack) {
     const { micTrack: _t, ...rest } = opts ?? {};
-    if (await sendVoiceCommand("joinCall", [roomKey, rest])) return;
+    if (await seatViaHost("joinCall", [roomKey, rest])) return;
   }
   return joinCallHere(roomKey, opts);
+}
+
+/** Send a join to the voice host. A room this window warmed cannot cross to
+ *  the host, and left connected it holds our identity in the very room the
+ *  host is about to join, so it is let go first. */
+function seatViaHost(command: "joinCall" | "startHuddle" | "acceptInvite", args: unknown[]): Promise<boolean> {
+  releasePrewarm();
+  return sendVoiceCommand(command, args);
 }
 
 async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
@@ -589,6 +597,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     r = warm ?? new Room(huddleRoomOptions(prefs));
     room = r;
     currentRoomKey = roomKey;
+    const self = r;
 
     r.on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
       setCall({ speaking: speakers.map((s) => s.identity) });
@@ -649,6 +658,15 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
       }
     });
     r.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+      // ONLY THE ROOM HOLDING THE CALL MAY END IT. A join superseded by a newer
+      // join of the SAME room disconnects its own Room with these listeners
+      // still on (`superseded`, the catch below), and that CLIENT_INITIATED
+      // read as the call's own drop: it left the room the newer join had just
+      // seated, and the far side saw the person leave and come back.
+      if (room !== self) return;
+      // A window going away: its unload hook already settled the seat, as a
+      // handoff or a leave, and there is nothing left here to rejoin.
+      if (pageLeaving) return;
       if (useInboxStore.getState().call.roomKey !== roomKey) return;
       // Another WINDOW of mine took this call over (the call panel popping out,
       // or the main window taking it back as the panel closes). Not a
@@ -688,7 +706,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     // gave up on ends it, above.
     r.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
       const call = useInboxStore.getState().call;
-      if (call.roomKey !== roomKey) return;
+      if (room !== self || call.roomKey !== roomKey) return;
       const repairing = state === ConnectionState.Reconnecting || state === ConnectionState.SignalReconnecting;
       if (repairing && !call.reconnecting) setCall({ reconnecting: true });
       if (state === ConnectionState.Connected && (call.phase !== "connected" || call.reconnecting)) {
@@ -753,6 +771,9 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
       await openMicForJoin(r.localParticipant, { intent: opts?.intent });
     }
     if (superseded(r)) return;
+    // Whichever way the mic arrived (a warm room's, a burst's, a fresh open),
+    // it ends on the device the person chose.
+    void applyChosenDevices(r);
     // The bookkeeping catches up here, and a refusal is still this join's
     // failure — it falls to the catch below, which frees the row and tears the
     // media down exactly as it always did.
@@ -1026,7 +1047,11 @@ async function setMutedHere(muted: boolean, opts?: { remember?: boolean }): Prom
     // Only UNMUTING can clear it. Muting a seat that has no microphone
     // succeeds trivially — there is nothing to turn off — and reading that as
     // "the device works now" would erase a denial nobody has fixed.
-    if (!muted) setCall({ micDenied: false });
+    if (!muted) {
+      setCall({ micDenied: false });
+      const want = chosenDevice("audioinput");
+      if (want) await applyDevice(room, "audioinput", want).catch(() => {});
+    }
   }
   pushFlags();
 }
@@ -1168,23 +1193,55 @@ export async function switchDevice(
   // A meeting recording holds its own microphone, outside any room.
   if (kind === "audioinput") void switchRecorderMic(deviceId);
   if (!room) return;
-  try {
-    await room.switchActiveDevice(kind, deviceId);
-  } catch {}
+  await applyDevice(room, kind, deviceId).catch(() => {});
+}
+
+/**
+ * Put the room's capture on this device, and know it happened.
+ *
+ * The microphone is judged by the track itself, never by the room's record of
+ * an active device: a mic the room was handed (a walkie burst's clone, a
+ * prewarm's) carries no such record. And livekit defers a switch on a MUTED
+ * track to its unmute, which it never applies to a track it was handed, so a
+ * join that opened on the wrong mic stayed there until the person picked a
+ * device again with the mic open. A muted mic is left for `setMutedHere`,
+ * which calls this again on the unmute: restarting it now would open a fresh
+ * capture that livekit does not know to keep silent.
+ */
+async function applyDevice(r: Room, kind: DeviceKind, want: string): Promise<void> {
+  if (kind !== "audioinput") {
+    if ((r.getActiveDevice(kind) ?? "default") !== want) await r.switchActiveDevice(kind, want);
+    return;
+  }
+  const mic = () => r.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
+  const track = mic();
+  if (track && trackOnDevice(track.mediaStreamTrack, kind, want)) return;
+  await r.switchActiveDevice(kind, want);
+  const after = mic();
+  if (after && !after.isMuted && !trackOnDevice(after.mediaStreamTrack, kind, want)) {
+    await after.restartTrack({ ...micConstraints(), deviceId: { exact: want } });
+  }
+}
+
+/** Every device kind onto the person's current choice. Lists the devices first
+ *  when they were never listed with ids, which is a browser before its first
+ *  microphone grant: the join that just opened the mic is that grant. */
+async function applyChosenDevices(r: Room): Promise<void> {
+  if (!knownDevices("audioinput")) await refreshDevices();
+  for (const kind of DEVICE_KINDS) {
+    const want = chosenDevice(kind);
+    if (!want || r !== room) continue;
+    await applyDevice(r, kind, want).catch(() => {});
+  }
 }
 
 // A device that comes or goes mid-call moves the call to the best-ranked one
 // plugged in: headphones put on during a call carry it, and pulling them off
 // falls back to the next device the person ranked rather than the OS's pick.
 onDevicesChanged(() => {
-  for (const kind of DEVICE_KINDS) {
-    const want = chosenDevice(kind);
-    if (!want) continue;
-    if (kind === "audioinput") void switchRecorderMic(want);
-    if (room && (room.getActiveDevice(kind) ?? "default") !== want) {
-      void room.switchActiveDevice(kind, want).catch(() => {});
-    }
-  }
+  const want = chosenDevice("audioinput");
+  if (want) void switchRecorderMic(want);
+  if (room) void applyChosenDevices(room);
 });
 
 // ── ringing ───────────────────────────────────────────────────────────────
@@ -1205,7 +1262,7 @@ export type StartHuddleOpts = {
 };
 
 export async function startHuddle(opts: StartHuddleOpts): Promise<void> {
-  if (voiceHostElsewhere() && (await sendVoiceCommand("startHuddle", [opts]))) return;
+  if (voiceHostElsewhere() && (await seatViaHost("startHuddle", [opts]))) return;
   return startHuddleHere(opts);
 }
 
@@ -1342,7 +1399,7 @@ async function roomStillLive(roomKey: string): Promise<boolean> {
 
 export async function acceptInvite(inviteId: string, roomKey: string): Promise<void> {
   stopRinging(inviteId);
-  if (voiceHostElsewhere() && (await sendVoiceCommand("acceptInvite", [inviteId, roomKey]))) return;
+  if (voiceHostElsewhere() && (await seatViaHost("acceptInvite", [inviteId, roomKey]))) return;
   return acceptInviteHere(inviteId, roomKey);
 }
 
@@ -1568,8 +1625,20 @@ export async function runCallCommand(cmd: string, args: unknown[]): Promise<void
 // chasing the same bug one file over, and it meant this guard had never once
 // done its job: every tab that died mid-call left its row for the lease to
 // clear. See lib/keepaliveMutation.
+// Set the moment the page starts to go, before livekit's own page-leave
+// handlers run (they are added on connect, these at load), so the Room's
+// `Disconnected` can tell a window closing from a page the browser froze. A
+// cancelled unload clears it.
+let pageLeaving = false;
+
 if (typeof window !== "undefined") {
+  const leaving = () => {
+    pageLeaving = true;
+    setTimeout(() => (pageLeaving = false), 5_000);
+  };
+  window.addEventListener("pagehide", leaving);
   window.addEventListener("beforeunload", () => {
+    leaving();
     // `callOutlivesWindow` is the call panel closing on purpose: the seat is
     // shared with the window taking the call back, so freeing it here would
     // evict the window that is mid-join. The row is not ours alone to drop.

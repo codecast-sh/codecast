@@ -164,6 +164,12 @@ export function prewarmAllowed(roomKey: string, state: any): boolean {
   if (!roomKey) return false;
   const call = state.call ?? {};
   if (call.roomKey || call.phase === "connecting" || call.phase === "connected") return false;
+  // Or ANOTHER window holds it: a desktop's voice host sits in the call while
+  // this window's `call` slice is idle, and the seat it took is the only sign
+  // of it here.
+  const me = state.currentUser?._id?.toString?.();
+  const occupancy: Record<string, { user_id?: unknown }[]> = state.callOccupancy ?? {};
+  if (me && Object.values(occupancy).some((rows) => rows?.some((m) => String(m?.user_id ?? "") === me))) return false;
   // Somebody is in there. Either a burst is already playing, in which case the
   // join that matters is the receiver's and it is already under way, or a
   // huddle is running and walking in is a decision, not a guess. Connecting
@@ -364,7 +370,9 @@ export function releasePrewarm(): void {
     held.micClone?.stop();
   } catch {}
   void held.room.disconnect();
-  void convex?.mutation(api.calls.leaveRoom, { room_key: held.roomKey }).catch(() => {});
+  // Only the prewarm row: another window of ours may be seated in this room
+  // by now, on the same (user, room) row.
+  void convex?.mutation(api.calls.leaveRoom, { room_key: held.roomKey, prewarm: true }).catch(() => {});
 }
 
 /** Does the room being handed to a join already carry our microphone?

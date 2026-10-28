@@ -25,7 +25,7 @@
 // engine's own opens and closes (a walkie burst, a snooze, a join applying
 // these very prefs) pass `remember: false` and leave the choice alone.
 import { useInboxStore } from "../../store/inboxStore";
-import { DEVICE_RANK_KEY, knownDevices, rankAfterPick, resolveDevice, type DeviceKind } from "./deviceRank";
+import { DEVICE_RANK_KEY, knownDevices, rankAfterPick, resolveDevice, trackOnDevice, type DeviceKind } from "./deviceRank";
 
 export type JoinPrefs = {
   /** The microphone to open. Undefined means "whatever the browser picks". */
@@ -80,6 +80,13 @@ export function chosenDevice(kind: DeviceKind, devices = knownDevices(kind)): st
   const legacy = u[LEGACY_DEVICE_KEY[kind]] || undefined;
   if (!devices?.length) return legacy;
   return resolveDevice(u[DEVICE_RANK_KEY[kind]], devices, legacy) || undefined;
+}
+
+/** Whether a capture is on the device a join would open now. True while
+ *  nothing is chosen, since then any device is the browser's pick. */
+export function onChosenDevice(track: MediaStreamTrack, kind: DeviceKind): boolean {
+  const want = chosenDevice(kind);
+  return !want || trackOnDevice(track, kind, want);
 }
 
 /** The person picked a device in a picker: it now outranks every device that

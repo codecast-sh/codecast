@@ -579,7 +579,12 @@ export const leaveRoom = mutation({
   // `hangup`: the person pressed End, on purpose. A reload, a closed tab or
   // a failed join leaves without it, and only those can be a leave that is
   // about to come back.
-  args: { room_key: v.optional(v.string()), hangup: v.optional(v.boolean()) },
+  //
+  // `prewarm`: a held connection let go (roomPrewarm). It drops a prewarm row
+  // and never a seat: the window that warmed a room is often not the one that
+  // then sat in it (a desktop's voice host joins for the main window), and
+  // deleting that seat put the person out of their own call.
+  args: { room_key: v.optional(v.string()), hangup: v.optional(v.boolean()), prewarm: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
     const now = Date.now();
@@ -589,6 +594,7 @@ export const leaveRoom = mutation({
       .collect();
     const left = new Map<string, Doc<"call_members"> | null>();
     for (const m of mine) {
+      if (args.prewarm && isSeat(m)) continue;
       if (!args.room_key || m.room_key === args.room_key) {
         await ctx.db.delete(m._id);
         // The seat this person sat in, if they sat (a prewarm row held the
@@ -596,8 +602,11 @@ export const leaveRoom = mutation({
         left.set(m.room_key, isSeat(m) ? m : (left.get(m.room_key) ?? null));
       }
     }
-    for (const roomKey of left.keys()) await markHangup(ctx, userId, roomKey, now);
-    await settleOutboundRings(ctx, userId, args.room_key, now);
+    // Only a seat leaves a call. A prewarm row was nobody's call, so letting it
+    // go records no hang-up (a heartbeat reads one as "End was pressed
+    // elsewhere" and leaves) and cancels no ring.
+    for (const [roomKey, seat] of left) if (seat) await markHangup(ctx, userId, roomKey, now);
+    if (!args.prewarm) await settleOutboundRings(ctx, userId, args.room_key, now);
     // The last one out starts the huddle's grace: its record ends at this
     // moment unless somebody is back within HUDDLE_GRACE_MS, and the room
     // itself is stamped with the moment it emptied, so the grace holds with

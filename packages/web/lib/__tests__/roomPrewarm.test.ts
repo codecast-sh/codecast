@@ -356,6 +356,11 @@ describe("a prewarm takes nothing from anybody", () => {
     // A room being recorded is walked into through its notice, never warmed.
     expect(prewarm.prewarmAllowed(ROOM, { call: {}, callOccupancy: {}, callRooms: { [ROOM]: { recording: true } } })).toBe(false);
     expect(prewarm.prewarmAllowed(ROOM, { call: {}, callOccupancy: {}, callRooms: { [ROOM]: { recording: false } } })).toBe(true);
+    // Seated in a call another window holds (a desktop's voice host): this
+    // window's call slice is idle, and the seat is the only sign of it.
+    const me = { _id: "me" };
+    expect(prewarm.prewarmAllowed(ROOM, { call: {}, currentUser: me, callOccupancy: { [OTHER]: [{ user_id: "me" }] } })).toBe(false);
+    expect(prewarm.prewarmAllowed(ROOM, { call: {}, currentUser: me, callOccupancy: { [OTHER]: [{ user_id: "them" }] } })).toBe(true);
   });
 });
 
@@ -393,6 +398,9 @@ describe("bounded: one room, and not for long", () => {
     expect(prewarm.prewarmedRoomKey()).toBe(null);
     expect(FakeRoom.made[0].disconnects).toBe(1);
     expect(named(mutations, "leaveRoom")).toHaveLength(1);
+    // Named as a prewarm, so the server drops only the prewarm row: by now
+    // another window of ours may be seated in this room on the same row.
+    expect(named(mutations, "leaveRoom")[0].args).toMatchObject({ room_key: ROOM, prewarm: true });
   });
 
   test("a fresh signal pushes the release out rather than stacking a second one", async () => {
