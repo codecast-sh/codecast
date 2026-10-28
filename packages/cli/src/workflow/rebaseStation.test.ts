@@ -161,7 +161,8 @@ exit 1
     expect(r.json.why).toContain("untracked working tree files would be overwritten");
     expect(r.json.why).not.toContain("conflicted");
     expect(r.comments).toContain("could not start");
-    expect(r.comments).toContain("resume the run at ship__rebase");
+    expect(r.comments).toContain("the rebase then has to run again");
+    expect(r.comments).not.toContain("ship__rebase");
     expect(git(work, "rev-parse", "HEAD")).toBe(before);
   });
 

@@ -65,8 +65,9 @@
 //               open with why and asks nobody (on_failure=stop)
 //   rebase      the branch put on the default branch as the remote has it, and
 //               the project's check run on the result, since a card waits and
-//               the default branch moves; a conflict or a failing check goes
-//               back to implement with what happened on the task, and a change
+//               the default branch moves; a conflict, a rebase git refused to
+//               start, or a failing check goes back to implement with what
+//               happened on the task, and a change
 //               already on the default branch goes on to watch
 //   ship        the project's ship command, when it has one: it lands the
 //               change its own way and says in one line what is true now;

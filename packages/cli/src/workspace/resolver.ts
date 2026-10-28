@@ -21,9 +21,11 @@
  * scope for v1 — see plan.
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { AGENT_CONTEXT_ROOTS, collectProjectContext } from "../cloud/mirror/discovery.js";
 import { readLocalConfig } from "../config/readLocalConfig.js";
+import { spawnSync } from "../proc.js";
 import { detectProject } from "./detect.js";
 import { DEFAULT_BROWSER, MANIFEST_REL_PATH, parseManifest } from "./manifest.js";
 import type { BrowserSpec, WorkspaceManifest } from "./types.js";
@@ -59,16 +61,54 @@ export function withAgentConfigCopies(
   root: string,
   opts: { isInputRoot: boolean; warn?: (m: string) => void },
 ): WorkspaceManifest {
-  // Agent context only: an untracked doc or script in the source checkout is
-  // someone's work in progress, and a copy of it in the worktree blocks the
-  // checkout of the commit that later tracks it (a rebase onto main refused).
+  // Agent context and what it requires only: any other untracked doc or
+  // script in the source checkout is someone's work in progress, and a copy of
+  // it in the worktree blocks the checkout of the commit that later tracks it
+  // (a rebase onto main refused).
   const context = collectProjectContext({ root, includeTracked: opts.isInputRoot, agentContextOnly: true, includeAncestors: false, tolerateMissing: true, config: readLocalConfig() });
   for (const skipped of context.skipped) opts.warn?.(`agent config ${skipped.path} skipped: ${skipped.reason}`);
   const existing = manifest.setup.copy;
-  const additions = context.files.filter((f) => f.scope === "project")
-    .map((f) => f.relativePath)
+  const configs = context.files.filter((f) => f.scope === "project");
+  const additions = [...configs.map((f) => f.relativePath), ...hookScripts(root, configs)]
+    .filter((rel, i, all) => all.indexOf(rel) === i)
     .filter((rel) => !existing.some((entry) => entry === rel || rel.startsWith(`${entry.replace(/\/+$/, "")}/`)));
   return additions.length ? { ...manifest, setup: { ...manifest.setup, copy: [...existing, ...additions] } } : manifest;
+}
+
+/**
+ * The untracked project files Claude settings run as commands (a Stop hook's
+ * `bash scripts/hook.sh`, `$CLAUDE_PROJECT_DIR/.../x.sh`, a statusline). The
+ * settings travel to the worktree, so a script they run must travel too or
+ * the hook breaks there; a tracked one is already in the worktree.
+ */
+function hookScripts(root: string, configs: ReadonlyArray<{ relativePath: string; bytes: Buffer }>): string[] {
+  const commands: string[] = [];
+  const collect = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(collect);
+    else if (value && typeof value === "object") {
+      for (const [key, item] of Object.entries(value)) {
+        if (key === "command" && typeof item === "string") commands.push(item);
+        else collect(item);
+      }
+    }
+  };
+  for (const file of configs) {
+    if (!/^\.claude\/settings(?:\.local)?\.json$/.test(file.relativePath)) continue;
+    try { collect(JSON.parse(file.bytes.toString("utf8"))); } catch { /* not ours to judge */ }
+  }
+  const found = new Set<string>();
+  for (const command of commands) {
+    for (const raw of command.split(/[\s;&|()]+/)) {
+      const token = raw.replace(/["']/g, "").replace(/^(?:\$CLAUDE_PROJECT_DIR|\$\{CLAUDE_PROJECT_DIR\})\//, "");
+      if (!token || token.startsWith("-") || token.startsWith("~") || token.includes("$") || !token.includes("/")) continue;
+      const abs = path.resolve(root, token);
+      const rel = path.relative(root, abs);
+      if (rel.startsWith("..") || path.isAbsolute(rel) || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) continue;
+      if (spawnSync("git", ["-C", root, "ls-files", "--error-unmatch", "--", rel], { stdio: "ignore" }).status === 0) continue;
+      found.add(rel);
+    }
+  }
+  return [...found];
 }
 
 /** Pure merge of two manifests (used by resolveManifest and by tests). */

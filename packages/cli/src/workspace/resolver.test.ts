@@ -315,6 +315,24 @@ describe("withAgentConfigCopies", () => {
     expect(copyOf(m)).not.toContain("scripts/try.sh");
   });
 
+  test("an untracked script that agent config runs travels with it", () => {
+    // A personal Stop hook that runs an uncommitted script breaks in every worktree without the script.
+    commit("README.md");
+    write(".claude/settings.local.json", JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "bash scripts/hook.sh" }] }] },
+      statusLine: { type: "command", command: "\"$CLAUDE_PROJECT_DIR\"/tools/status.sh --short" },
+    }));
+    write("scripts/hook.sh", "echo stop\n");
+    write("tools/status.sh", "echo ok\n");
+    commit("scripts/tracked.sh");
+    write("scripts/unrelated.sh", "echo draft\n");
+    const m = resolveManifest(repo);
+    expect(copyOf(m)).toContain(".claude/settings.local.json");
+    expect(copyOf(m)).toContain("scripts/hook.sh");
+    expect(copyOf(m)).toContain("tools/status.sh");
+    expect(copyOf(m)).not.toContain("scripts/unrelated.sh");
+  });
+
   test("a file under a symlinked component is skipped with a warning; the rest still ships", () => {
     commit("README.md");
     const shared = fs.mkdtempSync(path.join(os.tmpdir(), "ws-shared-"));

@@ -7,8 +7,10 @@
 #   exit 0: on the default branch and checked, or nothing of the change is left
 #           on the branch because it is already there (landed: true, the run
 #           goes to watch rather than shipping it twice)
-#   exit 1: the rebase conflicted or the check failed on the rebased branch;
-#           what happened goes on the task and the run goes back to implement
+#   exit 1: the rebase conflicted, git refused to start it (an untracked file
+#           the default branch tracks), or the check failed on the rebased
+#           branch; what happened goes on the task and the run goes back to
+#           implement, or stops where the flow has no implement
 #   exit 2: no worktree here, the default branch could not be fetched, or the
 #           rebased branch could not be pushed; ship decides on the branch as it is
 target=$default_branch
@@ -45,7 +47,7 @@ if ! git rebase --autostash "$upstream" > "$dir/rebase.log" 2>&1; then
     # conflict to resolve. Git's own first complaint says what to fix.
     why="$(grep -m 1 -E '^(error|fatal):' "$dir/rebase.log" | sed -E 's/^(error|fatal): //')"
     [ -n "$why" ] || why="$said"
-    cast task comment $task_id "Rebasing $br onto $upstream could not start, so nothing of the change was tried and the branch is as it was. Git said: $(tr '\n' ' ' < "$dir/rebase.log") Fix that in the run's worktree $worktree, then resume the run at ship__rebase." -t review > /dev/null
+    cast task comment $task_id "Rebasing $br onto $upstream could not start, so nothing of the change was tried and the branch is as it was. Git said: $(tr '\n' ' ' < "$dir/rebase.log") Fix that in the run's worktree $worktree; the rebase then has to run again." -t review > /dev/null
     answer false false "rebase could not start: $why"
     exit 1
   fi
