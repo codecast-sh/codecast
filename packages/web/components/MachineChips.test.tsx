@@ -126,3 +126,17 @@ test("a teammate's shared machine is announced on the pill and grouped under tea
   expect(shared).toBe(1);
   unmount();
 });
+
+test("a team that turned cloud hosting off locks the cloud chip and names why", () => {
+  const picks: SessionMachine[] = [];
+  const refusal = "Cloud hosting is turned off by Acme's admins.";
+  const { host, unmount } = mount(
+    <MachineChips machines={[laptop, cloud]} selectedDeviceId="laptop" open onOpen={() => {}} onPick={(d) => picks.push(d)} cloudRefusal={refusal} />,
+  );
+  const chip = Array.from(host.querySelectorAll("button")).find((b) => b.textContent?.includes("Cloud Linux"))!;
+  expect(chip.disabled).toBe(true);
+  expect(chip.title).toBe(refusal);
+  act(() => chip.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
+  expect(picks).toEqual([]);
+  unmount();
+});

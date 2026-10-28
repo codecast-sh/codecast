@@ -5,6 +5,7 @@ import {
   parseManagedProfile,
   parseTeamPolicy,
   policyBlockedMessage,
+  policyTeamOf,
 } from "./managedPolicy";
 
 const team = { kind: "team" as const, team_id: "t1", team_name: "Littlebird" };
@@ -82,4 +83,20 @@ test("mobileconfig carries settings as profile keys and escapes values", () => {
   expect(xml).toContain("Codecast for Little &amp; bird");
   expect(xml).toContain("&quot;sh.codecast.desktop&quot;");
   expect(xml).toContain("com.apple.TCC.configuration-profile-policy");
+});
+
+describe("policyTeamOf", () => {
+  test("a conversation answers to its team only when it is visible to it", () => {
+    expect(policyTeamOf("conversations", { team_id: "t1", is_private: false })).toBe("t1");
+    expect(policyTeamOf("conversations", { team_id: "t1", is_private: true })).toBeNull();
+    expect(policyTeamOf("conversations", { team_id: "t1", is_private: true, team_visibility: "summary" })).toBe("t1");
+    expect(policyTeamOf("conversations", { team_id: "t1", is_private: true, auto_shared: true })).toBe("t1");
+  });
+  test("any other row answers to its workspace key's team, else its team tag", () => {
+    expect(policyTeamOf("tasks", { workspace: "team:t2", team_id: "t1" })).toBe("t2");
+    expect(policyTeamOf("tasks", { workspace: "user:u1", team_id: "t1" })).toBeNull();
+    expect(policyTeamOf("docs", { team_id: "t1" })).toBe("t1");
+    expect(policyTeamOf("docs", {})).toBeNull();
+    expect(policyTeamOf("docs", null)).toBeNull();
+  });
 });

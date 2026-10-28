@@ -215,6 +215,35 @@ describe("finishing an enrollment on the authorize page", () => {
     expect(reenroll?.status).toBe("revoked");
   });
 
+  test("a removed device says who removed it, its person sees it in their device list, and allow again lets it re-enroll", async () => {
+    const { t, team, admin, newcomer, enrollmentId, as } = await pending();
+    const { token } = await as(newcomer).mutation(api.managedDevices.completeEnrollment, { enrollment_id: enrollmentId, name: "nia-mbp", device_id: DEVICE });
+    await t.mutation(api.users.daemonHeartbeat, { api_token: presentToken(token, DEVICE), version: "1.1.198", platform: "darwin", pid: 1, device_id: DEVICE });
+    const listed = async () => ((await as(newcomer).query(api.devices.listDevices, {})) as any[]).find((d) => d.device_id === DEVICE)?.managed;
+    expect(await listed()).toMatchObject({ team_id: String(team), team_name: "Acme", state: "managed" });
+
+    await as(admin).mutation(api.managedDevices.revokeDeviceEnrollment, { enrollment_id: enrollmentId as Id<"device_enrollments"> });
+    expect(await listed()).toMatchObject({ team_name: "Acme", state: "removed" });
+
+    await as(admin).mutation(api.managedDevices.restoreDeviceEnrollment, { enrollment_id: enrollmentId as Id<"device_enrollments"> });
+    const row = await t.run(async (ctx) => ctx.db.get(enrollmentId as Id<"device_enrollments">));
+    expect(row).toMatchObject({ status: "pending" });
+    expect(row?.revoked_at).toBeUndefined();
+    const again = await as(newcomer).mutation(api.managedDevices.completeEnrollment, { enrollment_id: enrollmentId, name: "nia-mbp", device_id: DEVICE });
+    expect(again.team_name).toBe("Acme");
+    expect(await listed()).toMatchObject({ state: "managed" });
+  });
+
+  test("the enroll endpoint names the team that removed a device", async () => {
+    const { t, admin, team, newcomer, enrollmentId, as } = await pending();
+    await as(newcomer).mutation(api.managedDevices.completeEnrollment, { enrollment_id: enrollmentId, name: "nia-mbp", device_id: DEVICE });
+    await as(admin).mutation(api.managedDevices.revokeDeviceEnrollment, { enrollment_id: enrollmentId as Id<"device_enrollments"> });
+    const { token } = await as(admin).mutation(api.managedDevices.createEnrollmentToken, { team_id: team, name: "Jamf 2" });
+    const res = await enrollOverHttp(t, { enrollment_token: token, device_id: DEVICE });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ ok: false, removed_by: "Acme" });
+  });
+
   test("an unmanaged device's heartbeat carries no team policy", async () => {
     const { t, member } = await setup();
     const apiToken = await laptop(t, member);
