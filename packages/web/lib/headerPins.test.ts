@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { defaultPinOf, resolveHeaderPins } from "./headerPins";
+import { defaultPinOf, movePin, resolveHeaderPins } from "./headerPins";
 import type { AnchorRow } from "../hooks/useSyncAnchors";
 
 // S30: with no pins chosen, the header shows the person's global Executive
@@ -26,5 +26,35 @@ describe("resolveHeaderPins", () => {
   test("an emptied list resolves nothing, and the default still names the assistant", () => {
     expect(resolveHeaderPins([], [head, assistant("active")], {}, "t1")).toEqual([]);
     expect(defaultPinOf([head, assistant("active")], "t1")?.key).toBe("anchor:ea");
+  });
+});
+
+describe("movePin", () => {
+  const a = { kind: "role", id: "a" } as const;
+  const b = { kind: "session", id: "b" } as const;
+  const c = { kind: "role", id: "c" } as const;
+  const hidden = { kind: "session", id: "gone" } as const;
+
+  test("moves a pin before another, or to the end", () => {
+    expect(movePin([a, b, c], c, a)).toEqual([c, a, b]);
+    expect(movePin([a, b, c], a, c)).toEqual([b, a, c]);
+    expect(movePin([a, b, c], a, null)).toEqual([b, c, a]);
+  });
+
+  test("dropping a pin before itself changes nothing", () => {
+    const list = [a, b, c];
+    expect(movePin(list, b, b)).toBe(list);
+  });
+
+  // A pin the viewer cannot draw (another workspace's session) keeps its
+  // place relative to the others instead of being dropped or reshuffled.
+  test("pins the header cannot draw keep their places", () => {
+    expect(movePin([a, hidden, b, c], c, b)).toEqual([a, hidden, c, b]);
+    expect(movePin([a, hidden, b], a, null)).toEqual([hidden, b, a]);
+  });
+
+  test("a kind and an id together name a pin", () => {
+    const sessionA = { kind: "session", id: "a" } as const;
+    expect(movePin([a, sessionA, b], b, sessionA)).toEqual([a, b, sessionA]);
   });
 });

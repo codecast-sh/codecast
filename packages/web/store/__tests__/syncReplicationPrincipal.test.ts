@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createReplicationFollower, createReplicationHost, type ReplicationChannel, type ReplicationMessage } from "@platform/engine";
+import { CACHE_SCHEMA_VERSION } from "../idbCache";
 import { replicationChannelName, replicationLockName, replicationTransport, startSyncReplication, stopSyncReplication } from "../syncReplication";
 import { useInboxStore } from "../inboxStore";
 
@@ -10,8 +11,8 @@ import { useInboxStore } from "../inboxStore";
 
 describe("replication names", () => {
   it("carry the principal", () => {
-    expect(replicationChannelName("userA")).toBe("codecast-replication-v1:userA");
-    expect(replicationLockName("userA")).toBe("codecast-sync-host:userA");
+    expect(replicationChannelName("userA")).toBe(`codecast-replication-v1:${CACHE_SCHEMA_VERSION}:userA`);
+    expect(replicationLockName("userA")).toBe(`codecast-sync-host:${CACHE_SCHEMA_VERSION}:userA`);
     expect(replicationChannelName("userA")).not.toBe(replicationChannelName("userB"));
   });
 });
@@ -88,9 +89,9 @@ describe("startSyncReplication", () => {
     await new Promise((r) => setTimeout(r, 0));
     // The account's shared channel, and this window's own for snapshots addressed to it.
     expect(hub.opened).toHaveLength(2);
-    expect(hub.opened[0]).toBe("codecast-replication-v1:userA");
-    expect(hub.opened[1]).toStartWith("codecast-replication-v1:userA:to:");
-    expect(hub.locks).toEqual(["codecast-sync-host:userA"]);
+    expect(hub.opened[0]).toBe(replicationChannelName("userA"));
+    expect(hub.opened[1]).toStartWith(`${replicationChannelName("userA")}:to:`);
+    expect(hub.locks).toEqual([replicationLockName("userA")]);
     expect((window as any).__syncReplication().principalId).toBe("userA");
   });
 
@@ -99,7 +100,7 @@ describe("startSyncReplication", () => {
     stopSyncReplication();
     // A fresh start for the next account opens that account's channel, not the old one.
     startSyncReplication({ eligible: false, principalId: "userB" });
-    expect(hub.opened.filter((n) => !n.includes(":to:"))).toEqual(["codecast-replication-v1:userA", "codecast-replication-v1:userB"]);
+    expect(hub.opened.filter((n) => !n.includes(":to:"))).toEqual([replicationChannelName("userA"), replicationChannelName("userB")]);
     expect(useInboxStore.getState().syncRole).toBe("host");
   });
 });
