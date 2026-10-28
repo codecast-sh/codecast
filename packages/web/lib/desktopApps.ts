@@ -16,7 +16,7 @@ import {
   placeRoute,
   sectionForRoute,
 } from "../../electron/appWindows.mjs";
-import { bridge, getDesktopWindowRole, isDetachedTabWindow, isElectron } from "./desktop";
+import { bridge, getDesktopWindowRole, isDetachedTabWindow, isElectron, isSatelliteWindow, navigateMainWindow } from "./desktop";
 import { appForRoute as appOfRoute } from "../../electron/appWindows.mjs";
 import { appWindowPresence, requestAppWindowOpen } from "./appWindowRegistry";
 import { isNonTabRoute } from "./tabRoutes";
@@ -132,6 +132,11 @@ export function runPlaced<T>(fn: () => T): T {
  */
 export function routeElsewhere(path: string): boolean {
   if (placedByShell) return false;
+  // The call and people windows are stood in, not browsed: every path but the
+  // window's own goes to the main window. Following a link there would boot
+  // the dashboard inside the call and drop the huddle. Asked directly, since
+  // the shell's router places a path that no app owns back in the sender.
+  if (isSatelliteWindow()) return path.split(/[?#]/)[0] !== window.location.pathname && navigateMainWindow(path);
   const place = routeOwner(path);
   if (place === "here") return false;
   const route = bridge("routeNavigate");

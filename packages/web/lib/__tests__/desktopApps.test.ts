@@ -12,7 +12,7 @@ const original = (globalThis as any).window;
 
 /** Stand a desktop shell up: which app THIS window is, which app windows exist. */
 function shell(
-  opts: { appWindow?: string | null; apps?: Record<string, boolean>; verbs?: boolean; tab?: boolean; path?: string } | null,
+  opts: { appWindow?: string | null; apps?: Record<string, boolean>; verbs?: boolean; tab?: boolean; path?: string; callPanel?: boolean } | null,
 ) {
   const sent: string[] = [];
   if (opts === null) {
@@ -25,6 +25,7 @@ function shell(
     __CODECAST_ELECTRON__: {
       appWindow: opts.appWindow ?? null,
       isTabWindow: opts.tab === true,
+      isCallPanelWindow: opts.callPanel === true,
       // An older shell has the palette verb and none of the app window ones.
       paletteNavigate: (p: string) => sent.push(`main:${p}`),
       ...(verbs ? { routeNavigate: (p: string) => (sent.push(p), Promise.resolve(true)), openAppWindow: () => Promise.resolve(true) } : {}),
@@ -52,6 +53,14 @@ describe("routeElsewhere", () => {
     expect(routeElsewhere("/inbox?s=c1")).toBe(false);
     expect(routeElsewhere("/tasks/ct-1")).toBe(false); // no Work window
     expect(sent).toEqual(["/chat/ch1?m=9", "/calls"]);
+  });
+
+  it("hands every link out of the call window to the main window, and keeps its own route", () => {
+    const sent = shell({ callPanel: true, path: "/call-panel", apps: { chat: true } });
+    expect(routeElsewhere("/conversation/c1")).toBe(true);
+    expect(routeElsewhere("/tasks/ct-1")).toBe(true);
+    expect(routeElsewhere("/call-panel?room=r1&mic=1")).toBe(false);
+    expect(sent).toEqual(["main:/conversation/c1", "main:/tasks/ct-1"]);
   });
 
   it("keeps chat in the main window while no Chat window exists", () => {
