@@ -33,6 +33,7 @@ import { rewriteNotificationMessage } from "../lib/notificationActor";
 import { deliver } from "./send";
 import { notificationDigest, type DigestEntry, type DigestSection } from "./templates";
 import { BRAND } from "./render";
+import { decisionOwnerOf } from "@codecast/shared/contracts/decisionAreas";
 
 // The scheduling policy — grace, window, cooldown, presence, lookback, the
 // per-sweep and per-section caps, the sweep loop, the unsubscribe token and its
@@ -227,7 +228,7 @@ export const sweep = internalMutation({
             if (!n.read && EMAIL_WORTHY.has(n.type)) ids.push(n.recipient_user_id.toString());
           }
           // A trial's decisions wait in the trial's own stack, never in an email.
-          for (const d of recentDecisions) if (!d.trial) ids.push(d.user_id.toString());
+          for (const d of recentDecisions) if (!d.trial) ids.push(digestOwnerOf(d));
           return ids;
         },
 
@@ -278,6 +279,26 @@ export const sweep = internalMutation({
     );
   },
 });
+
+/** Who a decision's email goes to: its owner (passed to, held by, or asked of them), else the asking session's owner. */
+export function digestOwnerOf(d: Pick<Doc<"session_decisions">, "passed_to" | "holder" | "asked_user_ids" | "user_id">): string {
+  const owner = decisionOwnerOf(d as Parameters<typeof decisionOwnerOf>[0]);
+  return owner?.kind === "user" ? owner.id : String(d.user_id);
+}
+
+/** The open decisions a person owns: the ones in their queue they own, and the older rows asked of nobody that their sessions asked. */
+const OWNED_READ_CAP = 500;
+async function ownedPendingDecisions(ctx: { db: any }, userId: Id<"users">): Promise<Doc<"session_decisions">[]> {
+  const out = new Map<string, Doc<"session_decisions">>();
+  const queued = await ctx.db.query("decision_inbox").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).take(OWNED_READ_CAP);
+  for (const r of queued) {
+    const d: Doc<"session_decisions"> | null = await ctx.db.get(r.decision_id);
+    if (d) out.set(String(d._id), d);
+  }
+  const asked: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).take(OWNED_READ_CAP);
+  for (const d of asked) out.set(String(d._id), d);
+  return [...out.values()].filter((d) => d.status === "pending" && !d.trial && digestOwnerOf(d) === String(userId));
+}
 
 async function buildDigestForUser(
   ctx: { db: any },
@@ -339,11 +360,7 @@ async function buildDigestForUser(
   const handed = worthy.filter((n) => !personalTypes.has(n.type));
 
   // --- Pending decisions (cast decide) ---
-  const pendingDecisions: Doc<"session_decisions">[] = await ctx.db
-    .query("session_decisions")
-    .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending"))
-    .collect()
-    .then((rows: Doc<"session_decisions">[]) => rows.filter((d) => !d.trial));
+  const pendingDecisions = await ownedPendingDecisions(ctx, userId);
   const newDecisions = pendingDecisions.filter(
     (d) => d.created_at > since && d.created_at <= cutoff,
   );
@@ -416,7 +433,7 @@ async function buildDigestForUser(
         excerpt: d.context_md
           ? plainPreview(d.context_md, 200)
           : d.options.map((o) => o.label).join(" / "),
-        url: `${base}/conversation/${d.conversation_id}`,
+        url: `${base}/decisions/${d.short_id ?? d._id}`,
         linkLabel: d.blocking ? "Answer — the agent is parked on this" : "Review",
       }),
     );

@@ -61,6 +61,7 @@ export const PREFERENCE_MAP: Record<string, string> = {
   // A decision handed to you by name, with a note: a mention's class too.
   decision_passed: "mention",
   decision_escalated: "mention",
+  decision_assigned: "mention",
   // Someone asking into your team (yours to decide), and being let into one:
   // both addressed to one person by name, the same class as a mention.
   team_join_request: "mention",

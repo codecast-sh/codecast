@@ -86,6 +86,7 @@ export const NOTIFICATION_TYPE = v.union(
   // A decision passed or escalated to the recipient, with the sender's note.
   v.literal("decision_passed"),
   v.literal("decision_escalated"),
+  v.literal("decision_assigned"),
   // Finding a team by work email: a request to its admins, then the approval.
   v.literal("team_join_request"),
   v.literal("team_join_approved"),

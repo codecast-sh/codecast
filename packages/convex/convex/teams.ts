@@ -588,6 +588,9 @@ export const getTeamMembers = query({
           // face row leaves them out, they cannot be called or messaged here).
           bot_kind: user.is_bot ? user.bot_kind : undefined,
           role: m.role,
+          // Who decides for which areas (decisionAreas.ts): whether they take decisions, and the projects they cover.
+          takes_decisions: m.takes_decisions !== false,
+          focus_project_ids: m.focus_project_ids ?? [],
           daemon_last_seen: user.daemon_last_seen,
           github_username: user.github_username,
           github_avatar_url: user.github_avatar_url,

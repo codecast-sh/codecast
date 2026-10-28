@@ -3,25 +3,21 @@
 // facts. The Decisions page and Flows' For you both arrange their rows here,
 // so the two lists agree on every row's owner, group and order. Pure.
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
+import { decisionOwnerOf, type DecisionOwnerRef } from "@codecast/shared/contracts/decisionAreas";
 import type { SessionDecisionItem } from "../../store/inboxStore";
 
 type Row = Pick<SessionDecisionItem, "_id" | "status" | "blocking" | "created_at" | "category" | "workflow_run_id" | "gate_node_id" | "task_id" | "trial" | "card"
   | "holder" | "passed_to" | "asked_user_ids" | "user_id" | "escalated" | "area_project_id" | "source_flow" | "problem_severity" | "problem_findings" | "problem_reach" | "resolved_at">;
 
-export type DecisionOwner = { kind: "user" | "role"; id: string };
+export type DecisionOwner = DecisionOwnerRef;
 
 /**
  * The one person (or role) expected to answer: whoever it was passed to, else
  * the holder routing chose, else the single person it was asked of. Null when
  * nobody is expected, the Unassigned group. Anyone who can read it may still
- * answer it.
+ * answer it. The server reads the same rule (contracts/decisionAreas).
  */
-export function decisionOwner(d: Row): DecisionOwner | null {
-  if (d.passed_to) return { kind: d.passed_to.kind, id: String(d.passed_to.id) };
-  if (d.holder) return { kind: d.holder.kind, id: String(d.holder.id) };
-  if (d.asked_user_ids) return d.asked_user_ids.length > 0 ? { kind: "user", id: String(d.asked_user_ids[0]) } : null;
-  return d.user_id ? { kind: "user", id: String(d.user_id) } : null;
-}
+export const decisionOwner = (d: Row): DecisionOwner | null => decisionOwnerOf(d as Parameters<typeof decisionOwnerOf>[0]);
 
 export const ownerKey = (o: DecisionOwner | null): string => (o ? `${o.kind}:${o.id}` : "none");
 export const ownedBy = (d: Row, userId: string | null | undefined): boolean => {

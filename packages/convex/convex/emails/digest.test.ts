@@ -181,6 +181,7 @@ function sweepCtx(over: Partial<Record<string, any[]>> = {}) {
     users: [],
     notifications: [],
     session_decisions: [],
+    decision_inbox: [],
     user_presence: [],
     team_memberships: [],
     chat_channels: [],
@@ -346,6 +347,35 @@ describe("digest sweep", () => {
     expect(c.scheduled[0].sections[0].entries[0].linkLabel).toBe(
       "Answer — the agent is parked on this",
     );
+  });
+
+  test("a decision's email goes to its owner, not to the session's owner", async () => {
+    const now = Date.now();
+    const GRACE = "users_grace";
+    const shared = {
+      _id: "session_decisions_2",
+      short_id: "sd-9",
+      user_id: ADA,
+      status: "pending",
+      question: "Which buyer first?",
+      options: [{ label: "Lloyds" }, { label: "Marex" }],
+      blocking: false,
+      conversation_id: "conversations_1",
+      created_at: now - 20 * MIN,
+      holder: { kind: "user", id: GRACE },
+      holder_key: `user:${GRACE}`,
+      asked_user_ids: [GRACE],
+    };
+    const c = sweepCtx({
+      users: [user(), user({ _id: GRACE, email: "grace@example.com", name: "Grace" })],
+      session_decisions: [shared],
+      decision_inbox: [{ _id: "decision_inbox_1", decision_id: shared._id, user_id: GRACE, status: "pending", created_at: shared.created_at }],
+    });
+
+    expect(await runSweep(c.ctx)).toEqual({ candidates: 1, sent: 1 });
+    expect(c.scheduled.map((s) => s.to)).toEqual(["grace@example.com"]);
+    expect(c.scheduled[0].sections[0].entries[0].title).toBe("**Which buyer first?**");
+    expect(c.scheduled[0].sections[0].entries[0].url).toMatch(/\/decisions\/sd-9$/);
   });
 
   test("a user with no email address is skipped", async () => {

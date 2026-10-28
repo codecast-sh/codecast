@@ -527,3 +527,35 @@ export function kitRemoveLedger(r: { name: string; kit: string; members: number 
     keep: "Cancel",
   };
 }
+
+/** Share out (decisions/DecisionAreas): who would get which open decisions, as convex decisionShareOut.preview reads it. */
+export type ShareOutPreview = {
+  moves: Array<{ decision_id: string; from: string | null; to: string; short_id?: string; question: string }>;
+  to: Array<{ user_id: string; name: string; count: number }>;
+  considered: number;
+  unmatched: number;
+};
+
+/** Share out's review: how many move, to whom, and what stays. Pure, so it is tested without a browser. */
+export function shareOutLedger(p: ShareOutPreview): SwitchLedger {
+  const stays = p.considered - p.moves.length;
+  return {
+    name: "Share out",
+    subject: `${p.considered} open decision${p.considered === 1 ? "" : "s"} with an area`,
+    shift: null,
+    figures: [
+      { value: String(p.moves.length), label: "move", tone: p.moves.length ? "warn" : undefined },
+      { value: String(p.to.length), label: p.to.length === 1 ? "person" : "people" },
+      { value: String(stays), label: "stay" },
+      { value: String(p.unmatched), label: "no one covers" },
+    ],
+    rows: [
+      ...p.to.map((t) => ({ k: t.name, v: `${t.count}`, list: p.moves.filter((m) => m.to === t.user_id).map((m) => `${m.short_id ? `${m.short_id} ` : ""}${m.question}`) })),
+      { k: "Each person", v: "Told once" },
+      { k: "Kept as is", v: "Passed, --to, protected" },
+    ],
+    confirm: p.moves.length ? `Share out ${p.moves.length}` : "Share out",
+    keep: "Cancel",
+    ...(p.moves.length ? {} : { blocked: "Nothing to move" }),
+  };
+}

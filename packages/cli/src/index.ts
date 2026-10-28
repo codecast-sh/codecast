@@ -6462,21 +6462,20 @@ program
     "Your teams, their people, and which directories share with them\n\n" +
     "Examples:\n" +
     "  cast teams                      # List your teams\n" +
-    "  cast teams members [team]       # The team's people and their @handles (message one: cast chat dm)\n" +
+    "  cast teams members [team]       # The team's people and their @handles (message one: cast chat dm)\n  cast team focus \"<words>\"      # Who decides for which areas: \"Sam: deals, intros; Jo: desk\" (--dry-run previews)\n" +
     "  cast teams mappings             # Show directory-to-team mappings\n" +
     "  cast teams map <path> <team>    # Share a directory with a team (asks about past sessions)\n" +
     "  cast teams map <path> <team> --new-only   # Share sessions from today on\n" +
     "  cast teams lock <path>          # Never share: no rule can share the folder\n" +
     "  cast teams unmap <path>         # Remove a directory mapping or a lock"
   )
-  .argument("[action]", "Action: members, mappings, map, lock, unmap")
-  .argument("[path]", "Directory path (for map/lock/unmap), or the team (for members)")
-  .argument("[team]", "Team ID or name (for map)")
+  .argument("[action]", "Action: members, focus, mappings, map, lock, unmap")
+  .argument("[path]", "Directory path (for map/lock/unmap), the team (for members), or who covers what (for focus)")
+  .argument("[team]", "Team ID or name (for map and focus)")
   .option("--include-past", "Share every session already in the directory (no prompt)")
-  .option("--new-only", "Share only sessions started from now on (no prompt)")
-  .action(async (action, pathArg, teamArg, options: { includePast?: boolean; newOnly?: boolean }) => {
+  .option("--new-only", "Share only sessions started from now on (no prompt)").option("--dry-run", "focus: show the map the words make, change nothing")
+  .action(async (action, pathArg, teamArg, options: { includePast?: boolean; newOnly?: boolean; dryRun?: boolean }) => {
     const config = readConfig();
-
     if (!config?.auth_token) {
       console.error("Not authenticated. Run: cast auth");
       process.exit(1);
@@ -6510,6 +6509,7 @@ program
       return;
     }
 
+    if (action === "focus") return void await (await import("./teamFocusCommand.js")).runTeamFocus(cliPost, await readWorkspace(teamArg), workspaceLabel, pathArg, !!options.dryRun);
     if (action === "members" || action === "people") {
       const ws = await readWorkspace(pathArg);
       if (ws.kind !== "team") {

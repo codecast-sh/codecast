@@ -20,6 +20,12 @@ export function isDecisionCategory(value: unknown): value is DecisionCategory {
   return typeof value === "string" && (DECISION_CATEGORIES as readonly string[]).includes(value);
 }
 
+// Production, billing, data, access, external and product: a person's call
+// that keeps the ask-time routing it always had, never shared out by area.
+export function isProtectedCategory(category: string | undefined): boolean {
+  return !!category && (PROTECTED_CATEGORIES as readonly string[]).includes(category);
+}
+
 // Human held, never grantable to a role.
 export function isHumanOnlyCategory(category: string | undefined): boolean {
   return (

@@ -465,6 +465,18 @@ export default defineSchema({
     // IANA zone the team's day is cut in (Changes editions, lib/teamDay.ts).
     // Unset: the earliest admin's users.timezone, else UTC.
     timezone: v.optional(v.string()),
+    // Who decides for which areas (decisionAreas.ts): when the members' areas
+    // were last set and by whom, and the "Who decides for which areas?" card
+    // asked of the admins while none are set, with the split it proposes.
+    decision_areas: v.optional(v.object({
+      set_at: v.optional(v.number()),
+      set_by: v.optional(v.id("users")),
+      card_id: v.optional(v.id("session_decisions")),
+      declined_at: v.optional(v.number()),
+      // When the card last found nothing to ask (a solo team, no projects, no admin): asks skip it for a day.
+      checked_at: v.optional(v.number()),
+      proposal: v.optional(v.array(v.object({ user_id: v.id("users"), project_ids: v.array(v.id("projects")) }))),
+    })),
     // The one team whose "community" chat channels are the product's public
     // space (codecast.sh/community). Set by an operator
     // (chat.designateCommunityTeam), never by a team's own members: the flag
@@ -581,6 +593,12 @@ export default defineSchema({
     // member of the same team. Routing for the chart and the inbox's By
     // reports lens only: it grants no access to anyone's sessions.
     reports_to_user_id: v.optional(v.id("users")),
+    // Decision areas (decisionAreas.ts): whether this member takes the team's
+    // decisions, and the projects they decide for. Routing only; an
+    // unaddressed decision about one of these projects may be shared to them
+    // (decisionRouting.ts).
+    takes_decisions: v.optional(v.boolean()),
+    focus_project_ids: v.optional(v.array(v.id("projects"))),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
@@ -4562,6 +4580,7 @@ export default defineSchema({
       // or escalated to them as the owner's manager or an admin (decisionHandoff.ts).
       v.literal("decision_passed"),
       v.literal("decision_escalated"),
+      v.literal("decision_assigned"),
       // Finding a team by work email (teamDiscovery.ts): someone asked to
       // join (to its admins), and an admin let them in (to them).
       v.literal("team_join_request"),
@@ -4911,6 +4930,8 @@ export default defineSchema({
     // Sent up to the owner's manager, else the workspace admins (escalateCore):
     // who sent it, why, when, and whom it went to. It sorts first for them; a later pass or unassign clears it.
     escalated: v.optional(v.object({ by: v.id("users"), at: v.number(), note: v.string(), to: v.array(v.id("users")) })),
+    // Asked of named people (`cast decide --to`): Share out leaves it with them (decisionRouting.ts).
+    addressed: v.optional(v.boolean()),
     // The people it is visible to; materialized one row each in decision_inbox.
     asked_user_ids: v.optional(v.array(v.id("users"))),
     // The ladder: roles from the asker up to the first person, in order. A

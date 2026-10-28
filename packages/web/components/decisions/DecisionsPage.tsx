@@ -5,7 +5,8 @@
 // Escalated and Answered are the same list cut another way. Mine also keeps
 // the card-by-card ways of answering: the cards (stacks, scopes, "Waiting in a
 // terminal") and the stepper (`?mode=step`, or `?s=<conversation>` from an
-// inbox card). /decisions/<id> opens a decision over the list.
+// inbox card). /decisions/<id> opens a decision over the list. Team carries
+// the admins' area controls: Change areas and Share out (DecisionAreas).
 import { useCallback, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LayoutList, Rows3, StepForward } from "lucide-react";
@@ -16,6 +17,7 @@ import { DecisionQueue } from "../DecisionQueue";
 import { DecisionQueueList } from "./DecisionQueueList";
 import { DecisionDocument } from "./DecisionDocument";
 import { DecisionList } from "./DecisionList";
+import { TeamAreaControls } from "./DecisionAreas";
 import { LineDecision } from "../line/widgets/LineDecision";
 import { useModeWords } from "../../lib/surfaces";
 import { useDecisionView } from "../../hooks/useDecisionView";
@@ -80,7 +82,7 @@ export function DecisionsList({ activeId }: { activeId?: string }) {
       renderPreview={(d, onClose) => <DecisionPeek d={d} onClose={onClose} />}
       activeItemId={activeId ? rows.mine.find((d) => d.short_id === activeId || d._id === activeId)?._id : undefined}
       savedViews
-      headerExtra={step}
+      headerExtra={state.view.tab === "team" ? <TeamAreaControls workspace={rows.workspaceKey} /> : step}
       displayExtra={mineControls}
       customContent={cards ? () => <div className="flex-1 overflow-y-auto"><DecisionQueueList /></div> : undefined}
     />

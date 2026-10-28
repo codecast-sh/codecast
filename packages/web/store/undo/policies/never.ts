@@ -302,6 +302,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   passDecision: never("send: the decision reaches the person or role it was passed to, who is told at once"),
   escalateDecision: never("send: the decision reaches the owner's manager or the admins, who are told at once with the note"),
   unassignDecision: never("send: the decision leaves the assignee's queue and is routed again; assigning it is the way back"),
+  applyDecisionAreas: never("settings: new decisions route by the new areas at once; applying the earlier map is the way back"),
+  shareOutDecisions: never("send: each decision reaches its new owner, who is told at once; passing it on is the way back"),
   setModLocalDevice: SETTINGS,
   setTeamBudget: SETTINGS,
   setTeamPolicy: SETTINGS,

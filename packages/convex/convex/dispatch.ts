@@ -9,6 +9,9 @@ import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionChar
 import type { CodeAnchorText } from "@codecast/shared/comments";
 import { answerRefusal, guardClientResolution, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
 import { escalateCore, passCore, type PassTarget, unassignCore } from "./decisionHandoff";
+import { applyAreasCore } from "./decisionAreas";
+import { shareOutCore } from "./decisionShareOut";
+import type { AreaAssignment } from "@codecast/shared/contracts/decisionAreas";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { discussCore } from "./decisionDiscussion";
 import { sendLineChatCore } from "./lineChat";
@@ -609,6 +612,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   escalateDecision: async (ctx, userId, [decisionId, note]: [string, string]) => escalateCore(ctx, userId, decisionId, note),
   // A person takes a pass or an escalation back: the decision is routed as its session would route it now.
   unassignDecision: async (ctx, userId, [decisionId]: [string]) => unassignCore(ctx, userId, decisionId),
+  // Who decides for which areas, from the map "Change areas" previewed; and Share out's previewed moves (decisionAreas.ts, decisionShareOut.ts).
+  applyDecisionAreas: async (ctx, userId, [teamId, map]: [string, AreaAssignment[]]) => applyAreasCore(ctx, userId, teamId as Id<"teams">, map),
+  shareOutDecisions: async (ctx, userId, [teamId, moves]: [string, Array<{ decision_id: string; to: string }>]) => shareOutCore(ctx, userId, teamId as Id<"teams">, moves),
   // A person's words to the session that owns a decision (decisionDiscussion.ts).
   // A refusal is returned, not thrown: the outbox would redrive a throw forever.
   discussDecision: async (ctx, userId, [decisionId, text, clientId]: [string, string, string]) =>

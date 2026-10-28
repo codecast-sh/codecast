@@ -34,6 +34,10 @@ import { projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgA
 import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { gateResponseOf } from "./lib/gateChoices";
 import { assignCategory, isHumanOnlyCategory } from "./lib/decisionCategory";
+import { syncDecisionInbox } from "./lib/decisionInbox";
+import { noticeAreaOwner, routeByArea } from "./decisionRouting";
+import { settleAreasCard } from "./decisionAreas";
+export { syncDecisionInbox };
 import { artifactUrl } from "./artifacts";
 import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
@@ -313,43 +317,10 @@ async function workspaceAdmins(ctx: Ctx, teamId: Id<"teams"> | undefined): Promi
   return admins;
 }
 
-// Keep decision_inbox in lockstep with asked_user_ids: insert missing pending
-// rows, delete rows for people who are no longer in the set. Deleting is
-// required — a done inbox row for a still-pending decision still lists in
-// listForUserCore, so marking it done would leave the card on their stack.
-// `queue: false` (a role hears the decision, routeFor) inserts nothing: a
-// row already in front of a person stays there, and no new one is made.
-export async function syncDecisionInbox(
-  ctx: Ctx,
-  decisionId: Id<"session_decisions">,
-  people: Id<"users">[],
-  now: number,
-  queue = true,
-): Promise<void> {
-  const wanted = new Set(people.map(String));
-  const existing = await ctx.db
-    .query("decision_inbox")
-    .withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId))
-    .collect();
-  const have = new Set<string>();
-  for (const row of existing) {
-    const key = String(row.user_id);
-    if (wanted.has(key)) {
-      have.add(key);
-      if (row.status !== "pending") await ctx.db.patch(row._id, { status: "pending" });
-    } else {
-      await ctx.db.delete(row._id);
-    }
-  }
-  for (const userId of queue ? people : []) {
-    if (have.has(String(userId))) continue;
-    await ctx.db.insert("decision_inbox", { decision_id: decisionId, user_id: userId, status: "pending", created_at: now });
-  }
-}
-
 // Recompute people, inbox rows and holder for every open decision on this
 // session. Called after ownership changes so the question stack follows
-// assignment instead of staying with the runner or the role parent.
+// assignment instead of staying with the runner or the role parent. A
+// decision shared out by area stays with its owner while they cover it.
 export async function reroutePendingDecisionsForConversation(
   ctx: Ctx,
   conversationId: Id<"conversations">,
@@ -379,7 +350,11 @@ export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, 
   // A proposal's decision asked by another session keeps routing as the station that proposed it.
   const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
   const asStation = proposal?.conversation_id && String(proposal.conversation_id) !== String(conversation._id) ? await ctx.db.get(proposal.conversation_id) : undefined;
-  const { people, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
+  const { role, people: chain, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
+  // Shared out by area (decisionRouting.ts): its owner keeps it while they still cover its project.
+  const kept = row.holder?.kind === "user" ? (row.holder.id as Id<"users">) : row.asked_user_ids?.[0];
+  const areaOwner = await routeByArea(ctx, { conversation, task, role, category: row.category ?? "unknown", team_id: row.team_id, addressed: !!row.addressed, trial: trial ?? (row.trial ? "owner" : null), workflow_run_id: row.workflow_run_id, keep: kept, now });
+  const people = areaOwner ? [areaOwner] : chain;
   // A row asked with no ladder takes the one it now climbs, and its first
   // role hears; a row that has one keeps it and the recommendations on it.
   const climbs = !row.hops?.length && ladder.hops.length > 0;
@@ -826,6 +801,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await noticeAnsweredForPeople(ctx, row, verdict, by);
   // An expectations proposal's card applies or drops it (LM5).
   await settleExpectationCard(ctx, row, verdict, by, now);
+  // The admins' "Who decides for which areas?" card applies its answer (decisionAreas.ts).
+  await settleAreasCard(ctx, row, verdict, by, now);
   // A Vault Ask first read's decision grants or denies that session (vault.md).
   await settleSecretApproval(ctx, row, verdict, by, now);
   // Tasks waiting on this decision settle (task-graph.md TG2).
@@ -1138,12 +1115,15 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   if (addressed && "error" in addressed) return addressed;
   // An addressed card (--to) is the named people's alone: the ladder does not
   // hear it and nobody else is asked.
-  const { role, ladder, people, hears } = addressed
+  const { role, ladder, people: routedPeople, hears } = addressed
     ? { ...routed, ladder: { ...routed.ladder, activeRoles: [], hops: [] }, people: addressed.people, hears: null }
     : routed;
   // Its team (routing): the problem's, else the asking conversation's; a re-ask without a task keeps the one it had.
   const teamTask = task ?? (existing?.task_id ? await ctx.db.get(existing.task_id) : null);
   const team_id = decisionTeamOf(conversation, teamTask);
+  // Shared out by area (decisionRouting.ts): the member covering its project owns it; no match keeps the chain's people.
+  const areaOwner = await routeByArea(ctx, { conversation, task, role, category, team_id, addressed: !!addressed, trial: routed.trial, workflow_run_id: args.workflow_run_id, keep: existing?.asked_user_ids?.[0], now });
+  const people = areaOwner ? [areaOwner] : routedPeople;
   if (existing) {
     // A question a person gave to a teammate or escalated (decisionHandoff.ts) stays theirs when it is asked again.
     const given = existing.passed_to?.kind === "user" ? existing.asked_user_ids ?? [existing.passed_to.id as Id<"users">] : null;
@@ -1228,6 +1208,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     hops: ladder.hops,
     scope_keys: scopeKeys,
     team_id,
+    ...(addressed ? { addressed: true } : {}),
     created_at: now,
     asked_message_count: conversation.message_count,
     session_title: conversation.title,
@@ -1236,6 +1217,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   // The role hears first; when it cannot, the decision is the people's.
   const woken = await tellHearingRole(ctx, hears, { _id: id, short_id, question: args.question, conversation_id: conversation._id }, now);
   await syncDecisionInbox(ctx, id, people, now, woken.length === 0 && routed.trial !== "owner");
+  if (areaOwner && woken.length === 0) await noticeAreaOwner(ctx, areaOwner, { question: args.question, short_id, conversation_id: conversation._id }, conversation.user_id);
   if (stack) await joinStack(ctx, stack, { _id: id, stack_id: stack._id, scope_keys: scopeKeys }, now);
 
   return {

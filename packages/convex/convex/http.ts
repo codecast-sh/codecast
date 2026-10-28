@@ -1626,6 +1626,9 @@ cliRoute("/cli/decide/pass-to", (ctx, body) =>
 cliRoute("/cli/decide/escalate", (ctx, body) =>
   ctx.runMutation(api.decisionHandoff.escalateForCli, { api_token: body.api_token, decision_id: body.decision_id, note: body.note }),
 );
+cliRoute("/cli/team/focus", (ctx, body) =>
+  ctx.runAction(api.decisionAreas.focusForCli, { api_token: body.api_token, team_id: body.team_id, words: body.words, dry_run: body.dry_run }),
+);
 cliRoute("/cli/decide/show", (ctx, body) =>
   ctx.runMutation(api.sessionDecisions.showForCli, { api_token: body.api_token, decision_id: body.decision_id }),
 );

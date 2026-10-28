@@ -17,6 +17,7 @@
 // of what each edit does to a tree.
 import { create, current, isDraft } from "mutative";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
+import { createDecisionAreasSlice, type DecisionAreasSliceActions } from "./decisionAreasSlice";
 import {
   countStates,
   sameParent,
@@ -273,7 +274,7 @@ export type OrgUpdateRoleInput = {
   keeps_reports_inside?: boolean;
 };
 
-export type OrgSliceActions = {
+export type OrgSliceActions = DecisionAreasSliceActions & {
   /** Move a session under a person (ownership) or a role (org_role_id) — the one
    *  path for the chart drag AND the ownership menu (org-staffing.md S11). The
    *  target carries the menu's owner-set arithmetic ({ owners, mode }); the
@@ -1332,6 +1333,8 @@ export const ORG_SYNC_REGISTRY = {
 
 export function createOrgSlice(): OrgSliceImpl {
   return {
+    // Who decides for which areas, and Share out (store/decisionAreasSlice.ts).
+    ...createDecisionAreasSlice(),
     orgTree: null,
 
     orgTreeServer: null,

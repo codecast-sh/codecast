@@ -44,6 +44,7 @@ export const socialTypes = new Set([
   // A decision passed or escalated to you, with a note.
   "decision_passed",
   "decision_escalated",
+  "decision_assigned",
   "team_join_request",
   "team_join_approved",
   "passkey_changed",
@@ -110,6 +111,7 @@ export const typeLabels: Record<string, string> = {
   decision_answered_for_you: "answered for you",
   decision_passed: "passed you a decision",
   decision_escalated: "escalated a decision to you",
+  decision_assigned: "gave you decisions in your areas",
   team_join_request: "asked to join your team",
   team_join_approved: "let you into a team",
   passkey_changed: "changed your passkeys",
@@ -152,6 +154,7 @@ export const typeColors: Record<string, string> = {
   decision_answered_for_you: "text-sol-yellow",
   decision_passed: "text-sol-yellow",
   decision_escalated: "text-sol-orange",
+  decision_assigned: "text-sol-yellow",
   team_join_request: "text-sol-violet",
   team_join_approved: "text-sol-violet",
   passkey_changed: "text-red-400",
