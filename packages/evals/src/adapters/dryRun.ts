@@ -60,12 +60,16 @@ function mergeUsage(all: CallResult['modelUsage'][]): CallResult['modelUsage'] {
 /**
  * Why a harness run never got the model's answer for a reason the prompt did
  * not cause, or undefined: no out.json at all, or an API error such as a
- * revoked login, a rate limit or an overloaded server. A 400 or 413 is the
- * request's own fault, so it stays a graded failure.
+ * revoked login, a rate limit, an overloaded server or an account out of
+ * credit. Any other 400, and a 413, is the request's own fault, so it stays a
+ * graded failure. The API answers an empty credit balance with a 400 whose
+ * only mark is its message.
  */
 export function harnessFailure(out: any, exitCode: number): string | undefined {
   if (!out) return `the harness wrote no out.json (exit ${exitCode})`;
-  if (out.terminal_reason !== 'api_error' || out.api_error_status === 400 || out.api_error_status === 413) return undefined;
+  if (out.terminal_reason !== 'api_error') return undefined;
+  const outOfCredit = out.api_error_status === 400 && /credit balance/i.test(String(out.result ?? ''));
+  if (!outOfCredit && (out.api_error_status === 400 || out.api_error_status === 413)) return undefined;
   return `API error ${out.api_error_status ?? 'with no status'}: ${String(out.result ?? '').slice(0, 200)}`;
 }
 

@@ -60,6 +60,13 @@ describe('a call rep posted with the evals key', () => {
     expect(r.harnessFailure).toBeUndefined();
   }, 30_000);
 
+  test('an account out of credit answers 400 but is a harness failure, so the rep crashes instead of scoring 0', async () => {
+    fakeApi([{ status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.' } } }]);
+    const run = join(mkdtempSync(join(tmpdir(), 'evals-apicall-')), 'run');
+    expect(await postCall(req, run, 'sk-test')).toBe(1);
+    expect(readCallRun(req, run, 1, 5).harnessFailure).toContain('credit balance');
+  }, 30_000);
+
   test('a service that stays down is a harness failure, so the rep crashes instead of scoring 0', async () => {
     fakeApi([{ status: 529, body: { error: { message: 'overloaded' } } }]);
     const run = join(mkdtempSync(join(tmpdir(), 'evals-apicall-')), 'run');
