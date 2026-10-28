@@ -104,6 +104,38 @@ export function toggleHeaderPin(kind: HeaderPin["kind"], id: string): void {
   store.updateClientUI({ header_pins: next });
 }
 
+/** A header pin's own drag type, beside the pane payload it also carries:
+ *  dropped back on the header it reorders, dropped on the stage it splits. */
+export const HEADER_PIN_DRAG_TYPE = "codecast/header-pin";
+
+const samePin = (a: HeaderPin, b: HeaderPin) => a.kind === b.kind && a.id === b.id;
+
+/** Move one pin to sit just before another (null: last). Positions are in the
+ *  stored list, which may hold pins this viewer cannot draw; they keep their
+ *  places relative to the rest. */
+export function movePin(list: HeaderPin[], from: HeaderPin, before: HeaderPin | null): HeaderPin[] {
+  if (before && samePin(from, before)) return list;
+  const rest = list.filter((p) => !samePin(p, from));
+  const at = before ? rest.findIndex((p) => samePin(p, before)) : -1;
+  return at < 0 ? [...rest, from] : [...rest.slice(0, at), from, ...rest.slice(at)];
+}
+
+/** Where a dragged face lands in its row: the index of the first face whose
+ *  midpoint lies right of the pointer (the row's length past the last one),
+ *  or null when that slot is the face's own place on either side of it. */
+export function pinDropSlot(midpoints: number[], x: number, from: number): number | null {
+  let index = midpoints.findIndex((mid) => x < mid);
+  if (index < 0) index = midpoints.length;
+  return index === from || index === from + 1 ? null : index;
+}
+
+export function moveHeaderPin(from: HeaderPin, before: HeaderPin | null): void {
+  const store = useInboxStore.getState() as any;
+  const current = readHeaderPins(store) ?? defaultPinsOf(store);
+  const next = movePin(current, from, before);
+  if (next !== current) store.updateClientUI({ header_pins: next });
+}
+
 /** The default as a pin list, so a first pin keeps what the header showed. */
 export function defaultPinsOf(state: any): HeaderPin[] {
   const anchors: AnchorRow[] = Object.values(state.anchors ?? {}).filter((a: any) => a.status !== "decommissioned") as AnchorRow[];
