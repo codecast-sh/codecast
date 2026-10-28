@@ -3,7 +3,7 @@
 // or saved insight, or an app's metric reader), and optionally a line and a
 // direction; crossing the line is a metric_alert transition like any other
 // group's. A watch with no line is a plain series, the live number a goal or
-// project reads (`cast initiative edit --metric "Name=target@mw-N"`). `query`
+// project reads (`cast initiative set --metric "Name=target@mw-N"`). `query`
 // passes a HogQL query through and stores nothing.
 //
 //   cast metrics ls [--source s] | show mw-N | rm mw-N
@@ -19,7 +19,8 @@ import { commandGroup } from "./commandGroups.js";
 import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, scopedRead, scopedWrite, sparkline } from "./externalDataCli.js";
 import { stdinText } from "./sendBody.js";
 import { formatDuration, parseDuration } from "@codecast/shared/time";
-import { formatSeriesValue, type WatchDirection, type WatchKind } from "@codecast/shared/contracts/ingest";
+import type { WatchDirection, WatchKind } from "@codecast/shared/contracts/ingest";
+import { formatSeriesValue } from "@codecast/shared/contracts/initiative";
 
 export interface WatchRow {
   _id: string;

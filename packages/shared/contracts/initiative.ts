@@ -15,7 +15,6 @@
 // decisions taken, and the sources that say who stated the goal and where.
 
 import { matchHandle, memberHandle } from "../chat/handles";
-import { formatSeriesValue } from "./ingest";
 import { parseEntityUrl } from "../entities";
 
 export const INITIATIVE_STATUSES = ["proposed", "planned", "active", "completed", "cancelled"] as const;
@@ -88,6 +87,18 @@ export type MetricSeries = { short_id: string; name: string; unit?: string | nul
 export const INITIATIVE_METRICS_MAX = 4;
 /** A reported value: the template scoreboard's own shape (orgTemplateState.ScoreState). */
 export type InitiativeScore = { value: string; observed_at: number; source: string };
+
+/**
+ * A number in the unit its series names: "$" leads ("$382"), anything else
+ * follows ("0.12%", "4.2/day"); no unit is a bare number. Rounded the way a
+ * person writes it: whole numbers from 100 up, two significant places below.
+ */
+export function formatSeriesValue(value: number, unit?: string | null): string {
+  const abs = Math.abs(value);
+  const n = abs >= 100 ? Math.round(value).toLocaleString("en-US") : abs >= 10 ? (Math.round(value * 10) / 10).toString() : Number(value.toPrecision(2)).toString();
+  if (!unit) return n;
+  return unit === "$" ? `${value < 0 ? "-" : ""}$${n.replace(/^-/, "")}` : `${n}${/^[%/]/.test(unit) ? "" : " "}${unit}`;
+}
 
 export const metricKeyOf = (name: string): string => name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48);
 

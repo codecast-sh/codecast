@@ -9,7 +9,7 @@ import { usedOf } from "@codecast/shared/contracts/orgCapacity";
 import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { autonomyOn, autonomyWords } from "@codecast/shared/contracts/roleAutonomy";
 import { formatDateSmart, formatShortDate, relTimeShort } from "@codecast/shared/time";
-import { metricClimbLines } from "@codecast/shared/contracts/metricClimb";
+import { metricClimbLines } from "@codecast/shared/contracts/rolePlaybook";
 import { WAKE_TUNE_HINT, playbookGuideLines, roleWakeOf, wakeWords, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 
 /** A role in one line, as every `cast role` and `cast brief` read heads it. */

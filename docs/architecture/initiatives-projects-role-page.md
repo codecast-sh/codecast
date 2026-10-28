@@ -319,7 +319,7 @@ alert line is a plain series: it keeps points and never opens a group.
   mergeReaderSeries), so a daily number polled hourly is not 60 repeats of one
   day. Union serves its admin home's numbers as `metrics.list` and
   `metrics.read` (union-mobile backend lib/codecastMetrics.ts).
-- **Writing.** `cast initiative edit --metric "Dollars per intro=under $250
+- **Writing.** `cast initiative set --metric "Dollars per intro=under $250
   @mw-12"`, `cast project update --number ...`, or the numbers editor on the
   Goals page, the goal page and the project page: each number picks Reported or
   a series, and may be marked a guardrail (a number the work must not make
@@ -331,7 +331,7 @@ alert line is a plain series: it keeps points and never opens a group.
   show the same value. A role's lines carry the trend and, for a goal behind
   its date, the pace it needs against the pace it moves at.
 - **Climbing.** When a role's area is read by any number, `cast brief` prints
-  the guidance in contracts/metricClimb: read the number whole, work the
+  the guidance in contracts/rolePlaybook (METRIC_CLIMB_GUIDANCE): read the number whole, work the
   limiting stage, one change at a time against a written prediction and a
   fixed read day, keep or revert, log it under `## Experiments` (a playbook
   section, rolePlaybook), hold the guardrails, never change the measurement,

@@ -5,8 +5,7 @@
 // shape (contracts/initiative InitiativeMetric).
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { INITIATIVE_METRICS_MAX, type InitiativeMetric } from "@codecast/shared/contracts/initiative";
-import { formatSeriesValue } from "@codecast/shared/contracts/ingest";
+import { INITIATIVE_METRICS_MAX, formatSeriesValue, type InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import type { OpsWatch } from "../ops/opsTypes";
 import { FormButtons, GhostButton } from "./formBits";
 import { draftOf, metricsOfDraft, type Draft } from "./metricsDraft";

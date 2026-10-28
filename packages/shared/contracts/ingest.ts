@@ -306,17 +306,6 @@ export function readMetricAnswer(body: unknown): { value: number | null; unit: s
   return { value: typeof body === "number" ? num(body) : num(b.value), unit: typeof b.unit === "string" && b.unit.trim() ? b.unit.trim().slice(0, 12) : null, points };
 }
 
-/**
- * A number in the unit its series names: "$" leads ("$382"), anything else
- * follows ("0.12%", "4.2/day"); no unit is a bare number. Rounded the way a
- * person writes it: whole numbers from 100 up, two significant places below.
- */
-export function formatSeriesValue(value: number, unit?: string | null): string {
-  const abs = Math.abs(value);
-  const n = abs >= 100 ? Math.round(value).toLocaleString("en-US") : abs >= 10 ? (Math.round(value * 10) / 10).toString() : Number(value.toPrecision(2)).toString();
-  if (!unit) return n;
-  return unit === "$" ? `${value < 0 ? "-" : ""}$${n.replace(/^-/, "")}` : `${n}${/^[%/]/.test(unit) ? "" : " "}${unit}`;
-}
 
 /** Which side of the threshold alerts. */
 export const WATCH_DIRECTIONS = ["above", "below"] as const;

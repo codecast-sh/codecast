@@ -2,7 +2,7 @@
 // line with the threshold drawn across, the side of it that alerts shaded.
 // "Load history" reads each watch's past values from its source
 // (metrics.loadHistory), so a chart is full at once instead of one poll at a time.
-import { formatSeriesValue } from "@codecast/shared/contracts/ingest";
+import { formatSeriesValue } from "@codecast/shared/contracts/initiative";
 import Link from "next/link";
 import { useMemo } from "react";
 import { useInboxStore } from "../../store/inboxStore";

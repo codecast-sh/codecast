@@ -287,7 +287,12 @@ describe("command groups stay off the boot graph", () => {
     // commandGroups.ts (ct-70247); timelineCommand.ts loads lazily.
     // 4384 on 2026-10-27: snippets.ts's one section writer the capability
     // driver shares, and project instruction targets (ct-42887, ct-74443).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4384);
+    // 4397 on 2026-10-28: goals and projects read live numbers from metric
+    // series. contracts/initiative.ts (+6.4: series readings, pace, the
+    // metric spec, the value formatter) and contracts/rolePlaybook.ts (+5:
+    // the Experiments section and the climbing guidance `cast brief` prints),
+    // folded into files already here rather than two new leaves.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4397);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
