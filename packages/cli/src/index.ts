@@ -36,8 +36,8 @@ import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { matchProject, looksLikeConvexId } from "./projectRef.js";
 import { groundUpdateBody } from "@codecast/shared/contracts/goalsBrief";
-import { SOURCE_NEEDED, answerWrite, healthText, initiativeLine, initiativeShowLines, metricRecordLine, milestoneWrite, parseInitiativeHealth, parseInitiativeStatus, pickRecordEntry, readDayArg, readMilestoneArg, readMomentArg, readSourceArg, recordVerb, recordWriteLines, removeWrite, saidWrite, scopeSentence, sourceFillIn, sourceWrite, unread, type Read, type RecordWrite } from "./initiativeCommand.js";
-import { INITIATIVE_RECORD_LISTS, metricReadings, metricTrends, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { SOURCE_NEEDED, answerWrite, healthText, initiativeLine, initiativeShowLines, liveSeries, metricRecordLine, milestoneWrite, parseInitiativeHealth, parseInitiativeStatus, pickRecordEntry, readDayArg, readMilestoneArg, readMomentArg, readSourceArg, recordVerb, recordWriteLines, removeWrite, saidWrite, scopeSentence, sourceFillIn, sourceWrite, unread, type Read, type RecordWrite } from "./initiativeCommand.js";
+import { INITIATIVE_RECORD_LISTS, metricReadings, metricTrends, parseMetricSpec, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { ORG_CONTEXT_GUIDANCE, orgWhereLines } from "@codecast/shared/contracts/orgWhere";
 import { targetDayStamp } from "@codecast/shared/time";
 import {
@@ -17634,7 +17634,8 @@ projectCmd
   .option("--status <status>", "New status: planning, active, paused, done")
   .option("--labels <labels>", "Comma-separated labels (replaces existing)")
   .option("--deadline <date>", "Target date (YYYY-MM-DD; 'none' clears) — drives the burndown deadline")
-  .option("--path <dir>", "The project's folder, where its work lives ('none' clears it); it holds no session, so changing it moves nothing");
+  .option("--path <dir>", "The project's folder, where its work lives ('none' clears it); it holds no session, so changing it moves nothing")
+  .option("--number <name=target>", "A number the project is read by, with its target, live from a series with @mw-N: \"Dollars per intro=under $250 @mw-12\" (repeatable, replaces; 'none' clears)", collectRepeatable);
 charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true)
   .action(async (ref: string, options: any) => {
     const body: Record<string, any> = { id: await resolveProjectId(ref), ...charterBody(options) };
@@ -17644,8 +17645,9 @@ charterOptions(projectCmd.commands.find((x: any) => x.name() === "update"), true
     if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
     if (options.deadline) body.target_date = parseDeadlineDate(options.deadline);
     if (options.path !== undefined) body.project_path = NONE(options.path) ? null : path.resolve(options.path);
+    if (options.number?.length) body.metrics = initiativeMetricsArg(options.number, "--number");
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to update — pass --title, --description, --status, --labels, --deadline, --path, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens)");
+      console.error("Nothing to update — pass --title, --description, --status, --labels, --deadline, --path, --number, or a charter flag (--goal, --metric, --priority, --owner, --non-goal, --risk, --budget-tokens)");
       process.exit(1);
     }
     await cliPost("/cli/projects/update", body);
@@ -17900,13 +17902,14 @@ function initiativeHealthArg(text: string): string {
   return health;
 }
 
-// "Weekly active teams=1000" is a metric with its target; 'none' clears the list.
-function initiativeMetricsArg(raw: string[]): Array<{ name: string; target: string }> {
+// "Weekly active teams=1000" is a metric with its target, "@mw-N" reads it
+// live from a series, "guardrail" marks one (parseMetricSpec); 'none' clears.
+function initiativeMetricsArg(raw: string[], flag = "--metric"): Array<{ name: string; target: string; series?: string; guardrail?: boolean }> {
   if (raw.length === 1 && NONE(raw[0])) return [];
   return raw.map((entry) => {
-    const at = entry.indexOf("=");
-    if (at <= 0 || !entry.slice(at + 1).trim()) { console.error(`Invalid --metric "${entry}": use name=target, like "Weekly active teams=1000"`); process.exit(1); }
-    return { name: entry.slice(0, at).trim(), target: entry.slice(at + 1).trim() };
+    const spec = parseMetricSpec(entry);
+    if (!spec) { console.error(`Invalid ${flag} "${entry}": use name=target, like "Weekly active teams=1000" or "Dollars per intro=under $250 @mw-12"`); process.exit(1); }
+    return spec;
   });
 }
 
@@ -17938,7 +17941,7 @@ initiativeCmd
   .option("--priority <p>", "p0, p1, p2, p3")
   .option("--project <ref>", "A project it carries (repeatable): id, short id or title substring", collectRepeatable)
   .option("--parent <in-N>", "The top level goal this one feeds (one level)")
-  .option("--metric <name=target>", "A number the goal is measured by, with its target (repeatable, at most two): \"Weekly active teams=1000\"", collectRepeatable)
+  .option("--metric <name=target>", "A number the goal is measured by, with its target (repeatable, at most four): \"Weekly active teams=1000\"; add @mw-N to read it live from a series, and guardrail for a number the work must not make worse", collectRepeatable)
   .option("--why <text>", stdinText("Why it matters"))
   .option("--done-when <text>", stdinText("What done looks like: the sentence a result is checked against"))
   .option("--milestone <title[=YYYY-MM-DD]>", "A step on the way, with the day it is due (repeatable): \"Private beta open=2026-11-01\"", collectRepeatable)
@@ -18061,7 +18064,7 @@ initiativeCmd
   .option("--target <date>", "Target date (YYYY-MM-DD; 'none' clears)")
   .option("--priority <p>", "p0, p1, p2, p3 ('none' clears)")
   .option("--parent <in-N>", "The top level goal this one feeds ('none' clears)")
-  .option("--metric <name=target>", "The numbers the goal is measured by, with targets (repeatable, at most two; replaces; 'none' clears)", collectRepeatable)
+  .option("--metric <name=target>", "The numbers the goal is measured by, with targets (repeatable, at most four; replaces; 'none' clears): add @mw-N to read one live from a series, guardrail to mark one", collectRepeatable)
   .option("--why <text>", stdinText("Why it matters ('none' clears)"))
   .option("--done-when <text>", stdinText("What done looks like: the sentence a result is checked against ('none' clears)"))
   .option("--labels <labels>", "Comma-separated labels (replaces; 'none' clears)")
@@ -18105,8 +18108,8 @@ initiativeCmd
     const result = await cliPost("/cli/initiatives/report", body);
     console.log(`${c.green}ok${c.reset} Reported ${Object.keys(result.written).join(", ")} on ${c.cyan}${result.short_id}${c.reset}`);
     // Each value against its target, then which way its history is moving.
-    const trends = metricTrends(result.row);
-    for (const m of metricReadings(result.row)) console.log(`  ${metricRecordLine(c, m, trends[m.key])}`);
+    const trends = metricTrends(result.row, liveSeries(result.row));
+    for (const m of metricReadings(result.row, liveSeries(result.row))) console.log(`  ${metricRecordLine(c, m, trends[m.key])}`);
   });
 
 // The intent record (I5): four lists on the goal, each written one entry at a

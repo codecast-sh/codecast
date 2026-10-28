@@ -105,11 +105,11 @@ function readOrNull(file: string): string | null {
 }
 
 /** Record a change made without the writers below (a symlink, a directory). */
-export function recordHarnessChange(file: string, action: HarnessAction, what: string, before: string | null = null, after: string | null = null): void {
+export function recordHarnessChange(file: string, action: HarnessAction, what: string, before: string | Uint8Array | null = null, after: string | Uint8Array | null = null): void {
   record(file, action, what, before, after);
 }
 
-function record(file: string, action: HarnessAction, what: string, before: string | null, after: string | null): void {
+function record(file: string, action: HarnessAction, what: string, before: string | Uint8Array | null, after: string | Uint8Array | null): void {
   const cause = currentHarnessCause();
   const entry: HarnessChange = {
     at: Date.now(),
@@ -153,16 +153,26 @@ function trimLedger(ledger: string): void {
  * file already holds exactly these bytes. An existing file keeps its own mode;
  * `mode` applies only when this write creates the file. `executable` repairs a
  * hook script's exec bit even when the bytes already match, because a hook
- * without it fails silently inside the agent.
+ * without it fails silently inside the agent. A Uint8Array is written and
+ * compared as raw bytes, for files that are not text (an image in a skill).
  */
 export function writeHarnessFile(
   file: string,
-  next: string,
+  next: string | Uint8Array,
   what: string,
   opts: { mode?: number; executable?: boolean } = {},
 ): boolean {
-  const before = readOrNull(file);
-  if (before !== next) {
+  let before: string | Buffer | null;
+  if (typeof next === "string") before = readOrNull(file);
+  else {
+    try {
+      before = fs.readFileSync(file);
+    } catch {
+      before = null;
+    }
+  }
+  const same = before !== null && (typeof next === "string" ? before === next : Buffer.compare(before as Buffer, next) === 0);
+  if (!same) {
     atomicWriteFile(file, next, before === null && opts.mode !== undefined ? { mode: opts.mode } : {});
     record(file, before === null ? "created" : "modified", what, before, next);
   }
@@ -172,7 +182,7 @@ export function writeHarnessFile(
       if ((mode & 0o111) !== 0o111) fs.chmodSync(file, mode | 0o755);
     } catch { /* raced a removal: nothing to repair */ }
   }
-  return before !== next;
+  return !same;
 }
 
 /** Remove a harness file codecast owns. Returns false when it was not there. */

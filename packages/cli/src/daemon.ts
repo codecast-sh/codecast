@@ -5608,13 +5608,16 @@ async function sendHeartbeat(): Promise<void> {
         .catch((err) => log(`[SNIPPET] gated reconcile failed: ${String(err).slice(0, 160)}`));
     }
     if (config.user_id) {
-      void reconcileFromHeartbeat({
+      const userId = config.user_id;
+      const apiToken = config.auth_token;
+      void import("./capabilities/projectWrites.js").then(({ projectWritesSetting }) => reconcileFromHeartbeat({
         siteUrl,
-        apiToken: config.auth_token,
-        userId: config.user_id,
+        apiToken,
+        userId,
         home: process.env.HOME || require("os").homedir(),
+        projectWrites: projectWritesSetting(readConfig()),
         log,
-      }).catch((err) => log(`[capabilities] reconcile failed: ${String(err).slice(0, 160)}`));
+      })).catch((err) => log(`[capabilities] reconcile failed: ${String(err).slice(0, 160)}`));
     }
 
     for (const [source, { field }] of Object.entries(CLOUD_SESSION_SOURCES) as [CloudSessionSource, (typeof CLOUD_SESSION_SOURCES)[CloudSessionSource]][]) {
@@ -6543,6 +6546,20 @@ async function executeRemoteCommand(
         });
         setTimeout(() => void runSelfUpdate("remote update command"), 1000);
         return;
+      }
+      case "cap_publish": {
+        const { runCapPublishCommand } = await import("./capabilities/kitPublish.js");
+        const outcome = await runCapPublishCommand(commandArgs, {
+          siteUrl,
+          apiToken: config.auth_token,
+          userId: config.user_id,
+          home: process.env.HOME || require("os").homedir(),
+          deviceId: deviceId(),
+        });
+        if ("error" in outcome) error = outcome.error;
+        else result = outcome.result;
+        log(`[capabilities] cap_publish ${"error" in outcome ? `failed: ${outcome.error.slice(0, 160)}` : "published"}`);
+        break;
       }
       case "reinstall": {
         const currentVersion = daemonVersion || "unknown";
@@ -20592,6 +20609,19 @@ export function noteUnresolvablePane(
   store = unresolvablePanes,
 ): boolean {
   if (!UNRESOLVABLE_PANE_ERRORS.test(errorMessage)) return false;
+  return noteUnreachableAgent(sessionId, now, store);
+}
+
+/** The same streak for an agent outside tmux (iTerm, Kitty, WezTerm, herdr)
+ *  whose terminal refused the message. Any failure counts: a terminal injector
+ *  has no screen classifier to sort them by, and a live agent must never get a
+ *  second copy started beside it, so the only ways out are a delivery that
+ *  lands or a replacement once the streak is earned. */
+export function noteUnreachableAgent(
+  sessionId: string,
+  now = Date.now(),
+  store = unresolvablePanes,
+): boolean {
   const prev = store.get(sessionId);
   // Too soon after the last counted failure: same episode, already counted.
   if (prev && now - prev.last < PANE_REBUILD_MIN_GAP_MS) return false;
@@ -26562,6 +26592,31 @@ async function deliverMessageIntoSession(
         if (err instanceof PendingDeliveryHeldError) throw err;
         if (isDeliveryVerdict(err)) throw err;
         logDelivery(`${termLabel} injection failed for ${live.proc.tty}: ${err instanceof Error ? err.message : String(err)}`);
+        // The agent is alive, so a resume here would run a second copy beside it
+        // and fork the transcript (issue 57: a session resumed by hand in a herdr
+        // pane got a tmux twin on the next send). Hold the message while the
+        // failures are fresh; once they have lasted, stop this copy so the resume
+        // below replaces it rather than doubling it.
+        if (detectedType !== "codex") {
+          if (!noteUnreachableAgent(sessionId)) {
+            logDelivery(`Live process pid=${live.proc.pid} unreachable; holding the message rather than resuming beside it`);
+            return false;
+          }
+          if (hasOpenBackgroundWork(sessionId) || subagentActiveAgoMs(sessionId) !== Infinity) {
+            logDelivery(`[REBUILD] ${resumeShortId(sessionId)}: pid=${live.proc.pid} unreachable ${PANE_REBUILD_THRESHOLD}x but holds open background work — not replacing`);
+            clearUnresolvablePane(sessionId);
+            return false;
+          }
+          if (!planSessionTeardown(await acquireSessionProcessOwnership(sessionId)).reapPidTree) {
+            logDelivery(`[REBUILD] ${resumeShortId(sessionId)}: pid=${live.proc.pid} unreachable ${PANE_REBUILD_THRESHOLD}x but its ownership is unproven — not replacing`);
+            return false;
+          }
+          logDelivery(`[REBUILD] ${resumeShortId(sessionId)}: pid=${live.proc.pid} on ${termLabel} unreachable ${PANE_REBUILD_THRESHOLD}x — stopping it so the resume replaces it`);
+          await reapPidTree(live.proc.pid);
+          sessionProcessCache.delete(sessionId);
+          clearUnresolvablePane(sessionId);
+          agentDetectedDead = true;
+        }
       }
     }
     if (detectedType === "codex") {
@@ -26574,7 +26629,9 @@ async function deliverMessageIntoSession(
       logDelivery(`Live Codex process pid=${live.proc.pid} could not be reached; not auto-resuming beside it (message stays pending)`);
       return false;
     }
-    logDelivery(`All injection methods failed for live process pid=${live.proc.pid}, falling back to auto-resume`);
+    logDelivery(agentDetectedDead
+      ? `Stopped unreachable process pid=${live.proc.pid}, resuming in its place`
+      : `All injection methods failed for live process pid=${live.proc.pid}, falling back to auto-resume`);
   } else if (!live.tmuxTarget && !live.proc) {
     logDelivery(`No running process found for session=${sessionId.slice(0, 12)} type=${detectedType}`);
   }

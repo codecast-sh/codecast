@@ -15,6 +15,8 @@ import { registerCapStatus } from "./status.js";
 import { registerCapLs } from "./ls.js";
 import { registerCapShow } from "./show.js";
 import { registerCapEquip } from "./equip.js";
+import { registerCapPublish, registerCapUnpublish } from "./publish.js";
+import { registerCapPromote } from "./promote.js";
 import { commandGroup } from "../commandGroups.js";
 
 export function registerCapabilityCommand(program: Command, deps: PublishDeps): void {
@@ -25,4 +27,7 @@ export function registerCapabilityCommand(program: Command, deps: PublishDeps): 
   registerCapLs(cap, deps);
   registerCapShow(cap, deps);
   registerCapEquip(cap, deps);
+  registerCapPublish(cap, deps);
+  registerCapUnpublish(cap, deps);
+  registerCapPromote(cap, deps);
 }

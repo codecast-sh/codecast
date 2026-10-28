@@ -283,7 +283,11 @@ describe("command groups stay off the boot graph", () => {
     // ccAccounts.ts grew; still under the 4406 this pass started from.
     // 4380 on 2026-10-27: `cast workflow resume --current-flow` in index.ts
     // (+0.25), which moves a failed run onto its flow's current version.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4380);
+    // 4380 on 2026-10-27: the timeline group's one help line in
+    // commandGroups.ts (ct-70247); timelineCommand.ts loads lazily.
+    // 4384 on 2026-10-27: snippets.ts's one section writer the capability
+    // driver shares, and project instruction targets (ct-42887, ct-74443).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4384);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -406,7 +410,9 @@ describe("command groups stay off the boot graph", () => {
     // lived in resourceMonitor.ts, which processTable.ts reads at load time
     // through the cycle processTable -> resourceMonitor -> sessionProcessMatcher
     // -> tmux, so loading resourceMonitor first threw a TDZ ReferenceError.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(519);
+    // 521 on 2026-10-27: handEdit.ts and projectWrites.ts, which the capability
+    // driver's markdown_section arm judges every owned region with (ct-42887).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(521);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
