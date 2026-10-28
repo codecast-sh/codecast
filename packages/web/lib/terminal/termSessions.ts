@@ -13,6 +13,7 @@ import { termWsUrl, type TerminalEndpoint } from "./endpoint";
 import { buildTerminalTheme, observeTheme } from "./theme";
 import { connectRemotePane, frameToBytes, type RemotePaneSource } from "./remotePane";
 import { PaneStreamFilter } from "./paneStreamFilter";
+import { setLiveScreenReader } from "./liveScreen";
 
 // "offline" = the socket closed before it ever opened: nothing answered, so
 // there's no terminal server to reach (daemon down / remote machine). Kept
@@ -133,7 +134,7 @@ export function getInstance(id: string): { term: Terminal; state: TermTabState }
 /** The live screen of an attached pane for `target` (tmux session name).
  *  Reads the bottom of the buffer, not the scrolled viewport, so a person
  *  looking through history still reports what the agent is drawing now. */
-export function readLiveScreenText(target: string): string | null {
+function readLiveScreenText(target: string): string | null {
   if (!target) return null;
   for (const inst of instances.values()) {
     if (inst.state.target !== target && inst.state.sessionName !== target) continue;
@@ -152,6 +153,7 @@ export function readLiveScreenText(target: string): string | null {
   }
   return null;
 }
+setLiveScreenReader(readLiveScreenText);
 
 export function applyTerminalTheme(theme: ITheme, fontFamily?: string): void {
   currentTheme = theme;

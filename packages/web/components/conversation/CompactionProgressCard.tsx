@@ -6,7 +6,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore } from "../../store/inboxStore";
 import { agentStatusAt } from "../../lib/liveness";
-import { readLiveScreenText } from "../../lib/terminal/termSessions";
+import { readLiveScreenText } from "../../lib/terminal/liveScreen";
 import {
   parseCompactionProgress,
   type CompactionProgress,
