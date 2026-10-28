@@ -20,6 +20,8 @@ import { SlackDmSwitch } from "../chat/SlackDmSwitch";
 import { UserRound } from "lucide-react";
 import { QuietButton } from "./parts";
 import { slackLinksSig } from "../../store/chatWakeSigs";
+import { useSlackConnect } from "../../hooks/useSlackConnect";
+import { SlackLogo } from "../SlackLogo";
 import type { ChatSlackLinkRow } from "../../store/chatSlice";
 
 export function SlackMirrorsSummary() {
@@ -32,7 +34,7 @@ export function SlackMirrorsSummary() {
   const [browsing, setBrowsing] = useState(false);
   const [people, setPeople] = useState(false);
   const team = useQueryNoThrow(api.slackSync.getTeamSlack, teamId ? ({ team_id: teamId } as any) : "skip").data as
-    | { missing_scopes?: string[]; is_admin?: boolean }
+    | { missing_scopes?: string[]; is_admin?: boolean; you_missing_scopes?: string[] }
     | null
     | undefined;
   const [dmsOpen, setDmsOpen] = useState(false);
@@ -71,6 +73,9 @@ export function SlackMirrorsSummary() {
       </div>
       {teamId && !!team?.missing_scopes?.length && (
         <SlackReconnect teamId={teamId} returnTo="/settings/integrations?slack=connected" isAdmin={!!team.is_admin} isPrivate={false} />
+      )}
+      {teamId && !!team?.you_missing_scopes?.length && (
+        <SelfReconnect teamId={teamId} reactions={team.you_missing_scopes.includes("reactions:write")} />
       )}
       {teamId && <div className="mt-2"><SlackDmSwitch teamId={teamId} compact /></div>}
       {dmRows.length > 0 && (
