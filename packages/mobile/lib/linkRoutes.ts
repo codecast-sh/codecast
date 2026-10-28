@@ -91,6 +91,7 @@ export function mobileEntityRoute(type: EntityType, id: string): string | null {
  *  segment of the Tasks tab, which reads `segment` from its address. */
 const PAGE_ROUTES: Record<string, string> = {
   '/inbox': '/(tabs)/inbox',
+  '/decisions': '/decisions',
   '/questions': '/decisions',
   '/calls': '/calls',
   '/plans': '/(tabs)/tasks?segment=plans',

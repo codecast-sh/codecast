@@ -43,6 +43,7 @@ describe('mobileRouteForUrl', () => {
   test('web pages the phone has a screen for open there', () => {
     expect(mobileRouteForUrl('https://codecast.sh/inbox')).toBe('/(tabs)/inbox');
     expect(mobileRouteForUrl('https://codecast.sh/questions')).toBe('/decisions');
+    expect(mobileRouteForUrl('https://codecast.sh/decisions?tab=team')).toBe('/decisions');
     expect(mobileRouteForUrl('https://codecast.sh/settings/plan?billing=done')).toBe('/settings/plan');
     expect(mobileRouteForUrl('https://codecast.sh/settings/integrations')).toBe('/settings/mail');
   });

@@ -154,7 +154,7 @@ const Chat = lazy(() => import("@/app/chat/page"));
 const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
-const Questions = lazy(() => import("@/app/questions/page"));
+const Decisions = lazy(() => import("@/app/decisions/page"));
 const Line = lazy(() => import("@/app/line/page"));
 const Expectations = lazy(() => import("@/app/expectations/page"));
 const Trial = lazy(() => import("@/app/trial/page"));
@@ -376,7 +376,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "search", component: cast(Search), layout: "dashboardShell", tab: "/search" },
   { path: "notifications", component: cast(Notifications), layout: "dashboardShell", tab: "/notifications" },
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, so no `fullWidth` flag here.
-  { path: "questions", component: cast(Questions), layout: "dashboardShell", tab: "/questions" },
+  { path: "decisions", component: cast(Decisions), layout: "dashboardShell", tab: "/decisions" },
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, like /questions.
   { path: "flows", component: cast(Flows), layout: "dashboardShell", tab: "/flows" },
   { path: "line", component: cast(Line), layout: "dashboardShell", tab: "/line" },
@@ -548,10 +548,11 @@ export const ROUTES: RouteEntry[] = [
   { path: "welcome", component: cast(Welcome), layout: "welcome", guestOk: true, guestKind: "public" },
   { path: "simple/*", component: cast(LaneRedirect), layout: "redirect" },
   // The hosted page names as addresses (lib/laneRedirect.ts PAGE_ALIASES):
-  // /approvals is /questions, /plan and /mail are settings sections. Ahead of
+  // /approvals and /questions are /decisions, /plan and /mail are settings sections. Ahead of
   // the :username catch-all, so a typed or shared name never reads as a
   // profile 404.
   { path: "approvals", component: cast(LaneRedirect), layout: "redirect" },
+  { path: "questions", component: cast(LaneRedirect), layout: "redirect" },
   { path: "plan", component: cast(LaneRedirect), layout: "redirect" },
   { path: "mail", component: cast(LaneRedirect), layout: "redirect" },
   { path: "integrations", component: cast(LaneRedirect), layout: "redirect" },

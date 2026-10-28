@@ -61,7 +61,7 @@ export type SavedViewRow = {
   name: string;
   // "workspace" = a layout workbench: the saved arrangement of the chrome
   // itself (store/workbench.ts), riding the same rows as the list views.
-  page: "tasks" | "docs" | "plans" | "workspace";
+  page: "tasks" | "docs" | "plans" | "decisions" | "workspace";
   prefs: TaskViewPrefs | DocViewPrefs | PlanViewPrefs | WorkbenchSnapshot;
   /** Visible to the whole team's rail, not just its author's. */
   shared?: boolean;
@@ -131,4 +131,20 @@ export type ClientTips = {
   completed?: string[];
   level?: 'all' | 'subtle' | 'none';
   _inlineSuppressed?: boolean;
+};
+
+/** The Decisions list's view, as stored in the ui bag and a saved view (lib/decisions/decisionRows viewFields). */
+export type DecisionViewPrefs = Record<string, string>;
+
+/** What the decision feeds stamp on a row for the Decisions list (convex lib/decisionRowFacts, decisionTeamList). */
+export type DecisionRowStamps = {
+  /** Its task's project: the area the list filters and groups by. */
+  area_project_id?: string | null;
+  /** The flow whose run asked it; null for a session's own question. */
+  source_flow?: string | null;
+  /** Its problem's findings, and the people they reached (the task's cause); null when it is about no problem. */
+  problem_findings?: number | null;
+  problem_reach?: number | null;
+  /** The workspace the Team view read it from (decisionTeamList.listForTeam); that feed prunes by it. */
+  team_workspace?: string;
 };

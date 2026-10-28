@@ -3980,7 +3980,7 @@ function SessionListPanelImpl({
         {renderSection(words.sectionQuestions, statusQuestions, "text-sol-violet", undefined, undefined, {
           key: "questions",
           count: countOf(statusQuestions, placedQuestions, placed.counts.questions),
-          onSelect: (session) => router.push(`/questions?s=${session._id}`),
+          onSelect: (session) => router.push(`/decisions?s=${session._id}`),
         })}
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { count: countOf(statusPinned, pinned, placed.counts.pinned) })}
         {renderSection(words.sectionNew, statusNew, "text-sol-blue", undefined, undefined, { key: "new", count: countOf(statusNew, newSessions, placed.counts.newSessions) })}

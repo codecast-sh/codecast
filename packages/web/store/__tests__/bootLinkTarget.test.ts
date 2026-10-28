@@ -18,7 +18,7 @@ describe("bootLinkTarget", () => {
   });
 
   test("any other shell page restores nothing, so the page in the URL stays", () => {
-    for (const path of ["/questions?zq=r4b", "/triggers", "/tasks", "/docs/"]) {
+    for (const path of ["/decisions?zq=r4b", "/triggers", "/tasks", "/docs/"]) {
       expect(bootLinkTarget(sessions, path)).toBeNull();
     }
   });

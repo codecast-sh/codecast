@@ -139,7 +139,7 @@ export function DecisionQueueList() {
           {(mine > 0 || onDefault > 0 || withLead > 0 || terminal.length > 0) && <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{onDefault ? ` · ${onDefault} going ahead` : ""}{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>}
           {internals && <div className="ml-auto flex items-center gap-2 text-[11px]">
             {pending.length > 0 && (
-              <Link href="/questions?mode=step" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors">
+              <Link href="/decisions?mode=step" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors">
                 <ListChecks className="w-3.5 h-3.5" />one at a time
               </Link>
             )}
@@ -192,7 +192,7 @@ export function DecisionQueueList() {
               <ul className="space-y-1.5">
                 {terminal.map((item) => (
                   <li key={item.key}>
-                    <Link href={`/questions?s=${item.conversationId}`} className="flex items-center gap-2 rounded-lg border border-sol-border/70 hover:border-sol-border bg-sol-card/40 px-4 py-2.5 text-sm">
+                    <Link href={`/decisions?s=${item.conversationId}`} className="flex items-center gap-2 rounded-lg border border-sol-border/70 hover:border-sol-border bg-sol-card/40 px-4 py-2.5 text-sm">
                       <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse shrink-0" />
                       <span className="text-sol-text truncate">{item.session?.title || "Session"}</span>
                       {item.session?.project_path && <span className="text-[11px] text-sol-text-dim truncate">{getProjectName(item.session.project_path)}</span>}

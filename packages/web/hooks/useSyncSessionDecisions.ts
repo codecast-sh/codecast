@@ -46,3 +46,15 @@ export function useSyncTeamLineDecisions(workspaces: ReadonlyArray<string>) {
   }, [key]);
   return useSyncCollection("sessionDecisions", api.sessionDecisions.listOpenForLines, args as any, opts);
 }
+
+/** Feeder: every decision of one workspace (a team's or the viewer's own) the viewer may read, the Decisions page's
+ *  Team view; its open line decisions come from useSyncTeamLineDecisions beside it. The feed answers for the rows it
+ *  brought that are not in the viewer's queue. */
+export function useSyncTeamDecisions(workspace: string | null) {
+  const args = useMemo(() => (workspace ? { workspace } : "skip"), [workspace]);
+  const opts = useMemo(
+    () => ({ syncOpts: { isDelta: true, pruneAbsentScope: (r: SessionDecisionItem) => r.in_queue === false && r.team_workspace === workspace } }),
+    [workspace],
+  );
+  return useSyncCollection("sessionDecisions", api.decisionTeamList.listForTeam, args as any, opts);
+}

@@ -153,9 +153,9 @@ idle(() => {
   if (!onAppPath && !hasAuth) return;
   void import("@/app/inbox/page");
   void import("@/app/team/activity/page");
-  // The decision queue opens on every Questions-card click — it must open
-  // instantly, so it warms with the hot set even in dev.
-  void import("@/app/questions/page");
+  // The decision stepper opens on every inbox question card's click: it must
+  // open instantly, so it warms with the hot set even in dev.
+  void import("@/app/decisions/page");
   // Ctrl+N paints the compose backdrop at once, so the composer's module must
   // already be held when the key lands (see lib/composeViewLoader).
   void import("../lib/composeViewLoader").then((module) => module.loadComposeView());

@@ -9,7 +9,7 @@ describe("the simple lane's addresses lead into the main app", () => {
   it("sends each lane page to its main-app equivalent", () => {
     expect(laneRedirectTarget(LANE_PATHS.home)).toBe("/inbox");
     expect(laneRedirectTarget(`${LANE_PATHS.home}/`)).toBe("/inbox");
-    expect(laneRedirectTarget(LANE_PATHS.approvals)).toBe("/questions");
+    expect(laneRedirectTarget(LANE_PATHS.approvals)).toBe("/decisions");
     expect(laneRedirectTarget(LANE_PATHS.routines)).toBe("/triggers");
     expect(laneRedirectTarget(LANE_PATHS.connections)).toBe("/settings/integrations");
     expect(laneRedirectTarget(LANE_PATHS.plan)).toBe("/settings/plan");
@@ -35,8 +35,12 @@ describe("the simple lane's addresses lead into the main app", () => {
   });
 
   it("takes the hosted page names as addresses, query kept", () => {
-    expect(pageAliasTarget("/approvals")).toBe("/questions");
-    expect(pageAliasTarget("/approvals/", "?zq=1")).toBe("/questions?zq=1");
+    expect(pageAliasTarget("/approvals")).toBe("/decisions");
+    // The decision queue's old page is the Decisions page now, its stepper's query kept.
+    expect(pageAliasTarget("/questions")).toBe("/decisions");
+    expect(pageAliasTarget("/questions", "?s=jx7abc")).toBe("/decisions?s=jx7abc");
+    expect(pageAliasTarget("/questions/", "?mode=step")).toBe("/decisions?mode=step");
+    expect(pageAliasTarget("/approvals/", "?zq=1")).toBe("/decisions?zq=1");
     expect(pageAliasTarget("/routines")).toBe("/triggers");
     expect(settingsSectionForPath(pageAliasTarget("/plan")!)?.section).toBe("plan");
     expect(settingsSectionForPath(pageAliasTarget("/mail")!)?.section).toBe("integrations");

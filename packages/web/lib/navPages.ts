@@ -28,7 +28,7 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Dashboard", path: "/team/activity", icon: "grid", keywords: "home sessions main activity feed team" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting", action: "nav.inbox" },
   // "Approvals" in hosted mode (SurfaceMode.page), where Cmd+2 opens it.
-  { label: "Questions", path: "/questions", icon: "bell", keywords: "ok approve approvals questions decisions waiting answer" },
+  { label: "Decisions", path: "/decisions", icon: "bell", keywords: "ok approve approvals questions decisions waiting answer team mine" },
   { label: "Threads", path: "/threads", icon: "message", keywords: "threads replies comments conversations unread mentions dms" },
   { label: "Chat", path: "/chat", icon: "message", keywords: "channels team talk messages rooms", feature: "chat" },
   { label: "Community", path: "/community", icon: "message", keywords: "public rooms codecast users support questions" },

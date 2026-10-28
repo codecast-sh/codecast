@@ -38,7 +38,7 @@ function StackBody({ stack }: { stack: DecisionStackItem }) {
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="flex items-center gap-3 text-[11px] text-sol-text-dim">
-          <Link href="/questions" className="inline-flex items-center gap-1 hover:text-sol-text transition-colors no-underline">
+          <Link href="/decisions" className="inline-flex items-center gap-1 hover:text-sol-text transition-colors no-underline">
             <ArrowLeft className="w-3 h-3" /> The queue
           </Link>
         </div>
@@ -87,7 +87,7 @@ export function StacksIndex() {
   return (
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <Link href="/questions" className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors no-underline">
+        <Link href="/decisions" className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors no-underline">
           <ArrowLeft className="w-3 h-3" /> The queue
         </Link>
         <header className="mt-4 flex items-center gap-3 flex-wrap">

@@ -341,6 +341,8 @@ describe("the team's open line decisions", () => {
       const id = await ctx.db.insert("session_decisions", {
         conversation_id: s.conv, user_id: s.ana, task_id: task._id, workflow_run_id: s.run, short_id: "sd-9", gate_node_id: "decide", status: "pending", question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }],
         asked_user_ids: [s.ana], created_at: 4,
+        // The team askCore stamps on it (lib/decisionTeam.ts): the Line reads the team's rows by it.
+        team_id: s.team,
       } as any);
       await ctx.db.insert("decision_inbox", { decision_id: id, user_id: s.ana, status: "pending", created_at: 4 } as any);
       // An answered one and a decision with no run are not open line decisions.

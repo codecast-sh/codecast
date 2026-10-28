@@ -73,7 +73,7 @@ const Community = lazy(() => import("@/app/community/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Explore = lazy(() => import("@/app/explore/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
-const Questions = lazy(() => import("@/app/questions/page"));
+const Decisions = lazy(() => import("@/app/decisions/page"));
 const Line = lazy(() => import("@/app/line/page"));
 const Flows = lazy(loadFlowsPage);
 const Expectations = lazy(() => import("@/app/expectations/page"));
@@ -299,7 +299,6 @@ export function App() {
               <Route path="community/:channelId" element={<E name="Community"><Community /></E>} />
               <Route path="search" element={<E name="Search"><Search /></E>} />
               <Route path="notifications" element={<E name="Notifications"><Notifications /></E>} />
-              <Route path="questions" element={<E name="Questions"><Questions /></E>} />
               <Route path="flows" element={<E name="Flows"><Flows /></E>} />
               <Route path="line" element={<E name="Line"><Line /></E>} />
               <Route path="expectations" element={<E name="Expectations"><Expectations /></E>} />
@@ -311,6 +310,7 @@ export function App() {
               <Route path="flows/settings" element={<E name="Flow settings"><FlowSettings /></E>} />
               <Route path="flows/trace/:ref" element={<E name="Flow trace"><FlowTrace /></E>} />
               <Route path="flows/:flow" element={<E name="Flow"><Flow /></E>} />
+              <Route path="decisions" element={<E name="Decisions"><Decisions /></E>} />
               <Route path="decisions/stacks" element={<E name="DecisionStacks"><DecisionStacks /></E>} />
               <Route path="decisions/stacks/:id" element={<E name="DecisionStack"><DecisionStack /></E>} />
               <Route path="decisions/:id" element={<E name="DecisionDetail"><DecisionDetail /></E>} />
@@ -473,6 +473,7 @@ export function App() {
             {/* The hosted page names as addresses (lib/laneRedirect.ts
                 PAGE_ALIASES), above ":username" so none reads as a profile. */}
             <Route path="approvals" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
+            <Route path="questions" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="plan" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="mail" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="integrations" element={<E name="LaneRedirect"><LaneRedirect /></E>} />

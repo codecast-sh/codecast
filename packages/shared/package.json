@@ -61,6 +61,7 @@
     "./contracts/codecastSignature": "./contracts/codecastSignature.ts",
     "./contracts/codecastConfig": "./contracts/codecastConfig.ts",
     "./contracts/changeCard": "./contracts/changeCard.ts",
+    "./contracts/problemReach": "./contracts/problemReach.ts",
     "./contracts/superseded": "./contracts/superseded.ts",
     "./contracts/proposalCard": "./contracts/proposalCard.ts",
     "./contracts/causeHistory": "./contracts/causeHistory.ts",

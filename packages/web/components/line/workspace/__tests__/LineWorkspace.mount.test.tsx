@@ -26,6 +26,11 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 dom.window.HTMLElement.prototype.scrollTo = () => {};
+// For you's list is the Decisions page's (a virtualized GenericListView): rows need a height to be drawn.
+Object.defineProperties(dom.window.HTMLElement.prototype, {
+  offsetHeight: { get() { return this.hasAttribute("data-index") ? 40 : 4000; } },
+  offsetWidth: { get: () => 1200 },
+});
 const { createRoot } = await import("react-dom/client");
 
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
@@ -161,24 +166,23 @@ test("Problems carries the project filter, and only Problems", async () => {
   await act(async () => { other.root.unmount(); });
 }, 30_000);
 
-test("Decisions lists the fix decision by what it asks in a table, opens nothing by itself, and a row click is a history entry", async () => {
+test("Decisions lists the fix decision by what it asks, opens nothing by itself, and a row click is a history entry", async () => {
   search = "view=foryou";
   useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship the resume fix?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  const row = host.querySelector<HTMLElement>(".fy-tr[data-line-need-ref='sd-9']");
-  expect(row?.querySelector(".fy-ask")?.textContent).toBe("Ship the resume fix?");
+  const row = host.querySelector<HTMLElement>("[data-decision-row='sd-9']");
+  expect(row?.textContent).toContain("Ship the resume fix?");
   expect(host.querySelector("[data-line-foryou-reader]")).toBeNull();
   expect(moves).toEqual([]);
-  await act(async () => { row!.click(); });
+  await act(async () => { (row!.closest("[data-list-row-state], [data-index] > div") as HTMLElement).click(); });
   expect(pushed).toEqual(["/flows?need=sd-9"]);
   await act(async () => { root.unmount(); });
   pushed.length = 0;
   search = "need=sd-9";
   const named = await mount(React.createElement(LineWorkspace));
-  // Opened, the list sits beside the reader, and the reader is the decision itself.
-  expect(named.host.querySelector("[data-line-need-row='decision']")?.getAttribute("aria-current")).toBe("true");
+  // Opened, the list sits beside the reader, the open row marked, and the reader is the decision itself.
+  expect(named.host.querySelector("[data-decision-row='sd-9']")?.closest("[data-list-row-state]")?.getAttribute("data-list-row-state")).toBe("active");
   expect(named.host.querySelector("[data-line-foryou-reader] [data-line-decision]")).not.toBeNull();
-  await act(async () => { named.host.querySelector<HTMLElement>("[data-line-need-row='decision']")!.click(); });
   expect(pushed).toEqual([]);
   await act(async () => { named.root.unmount(); });
   moves.length = 0;

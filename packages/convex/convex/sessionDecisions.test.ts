@@ -208,6 +208,16 @@ describe("category assignment", () => {
 });
 
 describe("ask: people, inbox, ladder, holder", () => {
+  test("stamps the team it routes to (lib/decisionTeam.ts), the task's on a re-ask that names one", async () => {
+    const { ctx, tables } = seed();
+    tables.teams.push({ _id: "teams_other" });
+    await askApproach(ctx);
+    expect(tables.session_decisions[0].team_id).toBe(TEAM);
+    tables.tasks[0].team_id = "teams_other";
+    await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Keep the engine vendored?", options: twoOptions, category: "approach", task: "ct-7" });
+    expect(tables.session_decisions.map((d: any) => d.team_id)).toEqual(["teams_other"]);
+  });
+
   test("materializes one inbox row per person and records the ladder up to the first person", async () => {
     const { ctx, tables } = seed();
     const r = await askApproach(ctx);

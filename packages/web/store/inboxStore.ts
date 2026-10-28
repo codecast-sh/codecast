@@ -1461,7 +1461,7 @@ export type SessionDecisionItem = {
   // Who asked, as a snapshot (see schema); the live session row wins at render.
   session_title?: string;
   project_path?: string;
-};
+} & DecisionRowStamps;
 
 // What the stack page hands setStackPolicy: the mutation's own argument names.
 export type StackPolicyPatch = {
@@ -1755,7 +1755,7 @@ export type DocDetail = DocItem & {
 
 import type { KeyBindingOverride } from "@codecast/shared/contracts/keyBindings";
 export type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
-import type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
+import type { TaskViewPrefs, DocViewPrefs, PlanViewPrefs, DecisionViewPrefs, DecisionRowStamps, SavedView, SavedViewRow, InboxViewMode, ClientLayouts, ClientDismissed, ClientTips } from "./clientPrefsTypes";
 
 /** What the header slide-over shows (components/anchor/AnchorPanel). */
 export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "session"; id: string };
@@ -1839,6 +1839,7 @@ export type ClientUI = {
   task_view?: TaskViewPrefs;
   doc_view?: DocViewPrefs;
   plan_view?: PlanViewPrefs;
+  decision_view?: DecisionViewPrefs;
   saved_views?: SavedView[];
   show_subagents?: boolean;
   // Trigger rows under inbox cards: expanded (full row per trigger — name,
@@ -5697,7 +5698,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setCloudStartFrom: (val: "checkout" | "origin_main") => void;
 
   // -- Unified command palette --
-  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger' | null; initialMode: string; initialQuery?: string; pick?: PalettePick };
+  palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger' | 'decision' | null; initialMode: string; initialQuery?: string; pick?: PalettePick };
   // Follow mode (hooks/useFollowMode), ephemeral and per window: the teammate
   // this window mirrors, whether their view is somewhere this person cannot
   // open, who mirrors this window, and this window's place in a transcript
@@ -5713,7 +5714,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // `pick` opens the palette as an entity chooser (see lib/palettePick.ts):
   // the caller's title/extras on top, the usual recents + search below, and
   // the choice returned through `pick.onPick` instead of navigating.
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger'; mode?: string; initialQuery?: string; pick?: PalettePick }) => void;
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger' | 'decision'; mode?: string; initialQuery?: string; pick?: PalettePick }) => void;
   openSessionRename: (session: any) => void;
   closePalette: () => void;
   togglePalette: () => void;
@@ -6135,7 +6136,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   updateClientTips: (partial: Partial<ClientTips>) => void;
 
   // -- Saved views --
-  createSavedView: (opts: { name: string; page: "tasks" | "docs" | "plans" | "workspace"; prefs: any; shared?: boolean; icon?: string; client_key?: string; team_id?: string }) => any;
+  createSavedView: (opts: { name: string; page: "tasks" | "docs" | "plans" | "decisions" | "workspace"; prefs: any; shared?: boolean; icon?: string; client_key?: string; team_id?: string }) => any;
   updateSavedView: (id: string, fields: Record<string, any>) => void;
   deleteSavedView: (id: string) => void;
   /** Turn a mod on or off (lib/mods). The running set follows the row at once. */
@@ -9438,7 +9439,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set({ viewAnchor: anchor });
   },
 
-  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger'; mode?: string; initialQuery?: string; pick?: PalettePick }) => {
+  openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session' | 'project' | 'trigger' | 'decision'; mode?: string; initialQuery?: string; pick?: PalettePick }) => {
     set({
       palette: {
         open: true,
@@ -11552,7 +11553,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // server echo reconciles, superseding the stub via the client_key altKey.
   createSavedView: action(function (this: Draft, opts: {
     name: string;
-    page: "tasks" | "docs" | "plans" | "workspace";
+    page: "tasks" | "docs" | "plans" | "decisions" | "workspace";
     prefs: any;
     shared?: boolean;
     icon?: string;

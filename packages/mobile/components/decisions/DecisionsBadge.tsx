@@ -2,18 +2,17 @@ import { StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Text } from '@/components/Themed';
 import { useTheme, CHROME_FONT_CAP } from '@/constants/Theme';
-import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
-import { waitingOnPerson } from '@codecast/web/lib/decisionQueue';
+import { useOwnedDecisionCount } from '@codecast/web/hooks/useDecisionRows';
 import { useModeWords } from '@codecast/web/lib/surfaces';
 
-// The decisions waiting on you, beside the inbox title: the same count web's
-// sidebar shows (rows a lead holds left out), in the mode's words so it
-// matches the inbox section it counts. Nothing renders at zero.
+// The open decisions you own, beside the inbox title: the same count web's
+// sidebar shows (useOwnedDecisionCount), in the mode's words. Nothing renders
+// at zero.
 export function DecisionsBadge() {
   const Theme = useTheme();
   const router = useRouter();
   const words = useModeWords();
-  const count = waitingOnPerson(useDecisionQueue()).length;
+  const count = useOwnedDecisionCount();
   if (count === 0) return null;
   return (
     <TouchableOpacity

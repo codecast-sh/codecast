@@ -19,10 +19,17 @@ const restoreGlobals = replaceGlobals({
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window), IS_REACT_ACT_ENVIRONMENT: true, CSS: { escape: (s: string) => s }, MutationObserver: dom.window.MutationObserver, CustomEvent: dom.window.CustomEvent, DocumentFragment: dom.window.DocumentFragment, NodeFilter: dom.window.NodeFilter, requestAnimationFrame: (f: any) => setTimeout(f, 0), cancelAnimationFrame: clearTimeout, ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
 });
 dom.window.HTMLElement.prototype.scrollIntoView = () => {};
+dom.window.HTMLElement.prototype.scrollTo = () => {};
+// The list is the Decisions page's (a virtualized GenericListView): rows need a height to be drawn.
+Object.defineProperties(dom.window.HTMLElement.prototype, {
+  offsetHeight: { get() { return this.hasAttribute("data-index") ? 40 : 4000; } },
+  offsetWidth: { get: () => 1200 },
+});
 const { createRoot } = await import("react-dom/client");
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
-mock.module("next/navigation", () => ({ useRouter: () => ({ push() {} }), useSearchParams: () => new URLSearchParams(), usePathname: () => "/line" }));
+const pushed: string[] = [];
+mock.module("next/navigation", () => ({ useRouter: () => ({ push: (u: string) => pushed.push(u), replace() {} }), useSearchParams: () => new URLSearchParams(), usePathname: () => "/line" }));
 const convexReact = await import("convex/react");
 mock.module("convex/react", () => ({ ...convexReact, useQuery: () => undefined, useQueries: () => ({}), useMutation: () => async () => undefined, useAction: () => async () => ({ ok: false, error: "no app in a test" }), useConvex: () => ({ query: async () => null, mutation: async () => null }) }));
 const noThrow = await import("../../../../hooks/useQueryNoThrow");
@@ -33,7 +40,6 @@ const { ForYouView } = await import("../views/ForYouView");
 const { WaitingItem } = await import("../../widgets/WaitingItem");
 const { lineNeeds } = await import("../../../../lib/line/lineNeeds");
 const { readLineSelection } = await import("../../../../lib/line/lineWorkspaceUrl");
-const { ageShort } = await import("../../../../lib/lineFlow");
 
 const now = Date.UTC(2026, 9, 12, 12);
 const H = 3_600_000;
@@ -61,6 +67,11 @@ const empty = { problems: [], allInbox: [], rows: { tasks: [], signals: [] } };
 
 useInboxStore.setState({
   currentUser: { _id: "u1" }, projects: { p1: { _id: "p1", title: "Callers" } }, tasks: {}, teamMembers: [{ _id: "u1", name: "Me" }, { _id: "u2", name: "Sam" }, { _id: "u3", name: "Jo" }],
+  // The decision rows the two needs stand on: the list For you draws is these rows, as the Decisions page draws them.
+  sessionDecisions: {
+    d3: { _id: "d3", short_id: "sd-3", conversation_id: "c", session_id: "s", question: "Quinn or Riley", options: [{ label: "Quinn" }, { label: "Riley" }], blocking: true, status: "pending", created_at: now - 9 * H, workflow_run_id: "r3", task_id: "3", gate_node_id: "decide", holder: { kind: "user", id: "u2" }, problem_severity: 8, area_project_id: "p1", in_queue: false, line_workspace: "team:t1" },
+    d5: { _id: "d5", short_id: "sd-5", conversation_id: "c", session_id: "s", question: "Card names come out cut", options: [{ label: "Fix" }, { label: "Leave" }], blocking: true, status: "pending", created_at: now - H, workflow_run_id: "r5", task_id: "5", asked_user_ids: [], area_project_id: "p1", in_queue: false, line_workspace: "team:t1" },
+  },
   workflowRuns: { r6: { _id: "r6", task_id: "6", status: "failed", created_at: now - 5 * H, updated_at: now - 4 * H, node_statuses: [{ node_id: "prove", label: "Prove", status: "completed", session: { result: "The fix is ready, but it still needs Cameron's yes before it ships." } }] } },
 } as any);
 
@@ -69,75 +80,58 @@ document.body.appendChild(host);
 const root = createRoot(host);
 const selects: any[] = [];
 const q = (s: string) => host.querySelector(s) as HTMLElement | null;
+const listed = () => [...host.querySelectorAll<HTMLElement>("[data-decision-row]")].map((r) => `${r.dataset.decisionRow}@${r.dataset.decisionOwner}`);
 /** A need read where its problem names it (the problem's band), as For you no longer lists what a station asked early. */
 async function renderNeed(need: any) {
   await act(async () => { root.render(React.createElement(WaitingItem, { key: need.key, need, now, head: false, asked: false, onProblem() {}, onRun() {} })); });
 }
 async function render(search: string, ws: any = workspace) {
-  await act(async () => { root.render(React.createElement(ForYouView, { model: { steps: {}, runs: [] } as any, workspace: ws, selection: readLineSelection(new URLSearchParams(search)), select: (p: any, _c: any, o: any) => selects.push([p, o]), href: (p: any) => `/line?view=${p.view ?? ""}` })); });
+  await act(async () => { root.render(React.createElement(ForYouView, { model: { steps: {}, runs: [] } as any, workspace: ws, selection: readLineSelection(new URLSearchParams(search)), select: (p: any, _c: any, o: any) => selects.push([p, o]), href: (p: any) => `/line?view=${p.view ?? ""}${p.need ? `&need=${p.need}` : ""}` })); });
 }
 
-test("with nothing open the decisions are a table across the page, one fact a column, grouped by area; nothing opens by itself", async () => {
+test("with nothing open the flows' decisions are the Decisions list across the page, grouped by area; nothing opens by itself", async () => {
   selects.length = 0;
+  pushed.length = 0;
   await render("");
   expect(q("[data-line-foryou]")?.dataset.mode).toBe("table");
-  expect([...host.querySelectorAll<HTMLElement>("tbody[data-line-need-group]")].map((g) => `${g.dataset.lineNeedGroup}:${g.querySelectorAll(".fy-tr").length}`)).toEqual(["p1:2"]);
-  expect(q(".fy-tgroup")?.textContent).toBe("Callers2");
-  expect([...host.querySelectorAll<HTMLElement>(".fy-table thead th")].map((th) => th.textContent)).toEqual(["", "Decision", "From", "Sev", "Kind", "People", "Findings", "Assignee", "Waiting"]);
-  // The facts a person picks by, a column each, and who holds it.
-  const row = q(".fy-tr[data-line-need-ref='sd-3']")!;
-  expect(row.querySelector(".fy-t-ask .fy-ask")?.textContent).toBe("Quinn or Riley");
-  expect(row.querySelector(".fy-t-sev")?.textContent).toBe("8");
-  expect(row.querySelector(".fy-sev")?.getAttribute("data-sev")).toBe("high");
-  expect(row.querySelector(".fy-t-kind")?.textContent).toBe("Fix");
-  expect([row.querySelector(".fy-t-people")?.textContent, row.querySelector(".fy-t-findings")?.textContent]).toEqual(["4", "6"]);
-  expect(row.querySelector(".fy-t-age")?.textContent).toBe(ageShort(9 * H));
-  expect([...host.querySelectorAll<HTMLElement>(".fy-t-who [data-line-foryou-assign]")].map((x) => x.dataset.lineForyouAssign)).toEqual(["u2", ""]);
-  expect(q(".fy-tr[data-line-need-ref='sd-5'] .fy-t-kind")?.textContent).toBe("Judge");
   expect(q("[data-line-foryou]")?.dataset.lineForyou).toBe("2");
+  // The same rows and owners as the Decisions page's Team list: Sam holds sd-3, nobody sd-5.
+  expect(listed()).toEqual(["sd-3@user:u2", "sd-5@none"]);
+  expect([...host.querySelectorAll("[data-list-tabs] button")].map((b) => b.textContent)).toEqual(["Team2", "Mine", "Unassigned1", "Escalated"]);
+  const row = q("[data-decision-row='sd-3']")!;
+  expect(row.textContent).toContain("Quinn or Riley");
+  expect(row.textContent).toContain("Fix");
   // A question, a new problem to confirm, a step that finished mid-run and a problem assigned by hand wait on nobody here.
-  for (const ref of ["ct-30", "ct-31", "ct-6", "ct-40"]) expect(q(`[data-line-need-ref='${ref}']`)).toBeNull();
-  // Nothing points elsewhere, and nothing is opened for the person.
+  for (const ref of ["ct-30", "ct-31", "ct-6", "ct-40"]) expect(q(`[data-decision-row='${ref}']`)).toBeNull();
   expect(host.querySelectorAll("[data-line-pointer]").length).toBe(0);
   expect(selects).toEqual([]);
-  // A column head orders by its column; a row opens its decision.
-  await act(async () => { [...host.querySelectorAll<HTMLButtonElement>(".fy-th")].find((b) => b.textContent === "Sev")!.click(); });
-  expect(selects.at(-1)).toEqual([{ order: "severity" }, { replace: true }]);
-  await act(async () => { row.click(); });
-  expect(selects.at(-1)?.[0]).toEqual({ need: "sd-3", decision: null, card: null });
+  // A row opens its decision in For you's reader.
+  await act(async () => { (row.closest("[data-list-row-state], [data-index] > div") as HTMLElement).click(); });
+  expect(pushed.at(-1)).toBe("/line?view=&need=sd-3");
 });
 
-test("open, the list sits beside the reader; its head is who holds it, the problem and the pager, and nothing said twice", async () => {
+test("open, the list sits beside the reader; its head is the problem and the pager, and nothing said twice", async () => {
   await render("need=sd-3");
   expect(q("[data-line-foryou]")?.dataset.mode).toBe("read");
-  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-group]")].map((g) => `${g.dataset.lineNeedGroup}:${g.querySelectorAll(".fy-row").length}`)).toEqual(["p1:2"]);
-  expect(q(".fy-row[aria-current='true']")?.dataset.lineNeedRef).toBe("sd-3");
+  expect(listed()).toEqual(["sd-3@user:u2", "sd-5@none"]);
   const head = q("[data-line-foryou-head]")!;
   expect(head.textContent).not.toContain("ct-3");
   expect(head.textContent).not.toContain("Quinn or Riley");
   expect(head.textContent).not.toContain("Callers");
-  expect(head.textContent).not.toContain("waiting");
   expect(q("[data-line-foryou-problem]")?.textContent).toBe("Open the problem");
-  expect(head.querySelector("[data-line-foryou-assign]")?.textContent).toContain("Sam");
   expect(q(".fy-pos")?.textContent).toBe("1 of 2");
   expect(head.querySelectorAll("[aria-label='Previous'], [aria-label='Next']").length).toBe(2);
-  // The row under the list carries its facts and its holder's face.
-  const facts = q("[data-line-need-ref='sd-3'] .fy-facts")!;
-  expect(facts.querySelector(".fy-sev")?.textContent).toBe("8");
-  expect([...facts.querySelectorAll(".fy-n")].map((x) => x.textContent)).toEqual(["4", "6"]);
-  expect([...host.querySelectorAll<HTMLElement>(".fy-li > [data-line-foryou-assign]")].map((x) => x.dataset.lineForyouAssign)).toEqual(["u2", ""]);
   // One item: nothing to page through.
   await render("need=sd-3", { ...workspace, needs: needs.filter((n: any) => n.ref === "sd-3") });
   expect(q(".fy-pos")).toBeNull();
   expect(q("[data-line-foryou-head] [aria-label='Previous']")).toBeNull();
 });
 
-test("J moves to the next need without leaving the list; a question is read, with its answer box, where its problem names it", async () => {
+test("the pager opens the next decision in the list's order; a question is read, with its answer box, where its problem names it", async () => {
   selects.length = 0;
   await render("need=sd-3");
   expect(q("[data-line-foryou-reader]")?.dataset.lineForyouReader).toBe("decision");
-  q("[data-line-need-ref='sd-3']")!.focus();
-  await act(async () => { q(".fy-list")!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "j", bubbles: true })); });
+  await act(async () => { q<HTMLButtonElement>("[data-line-foryou-head] [aria-label='Next']")!.click(); });
   expect(selects.at(-1)).toEqual([{ need: "sd-5", decision: null, card: null }, { replace: true }]);
   await renderNeed(needs.find((n: any) => n.ref === "ct-30"));
   expect(q("[data-line-ask-box]")).not.toBeNull();
@@ -240,41 +234,6 @@ test("an item answered while open leaves the list and the next one opens in its 
   selects.length = 0;
   await render("need=sd-3", { ...workspace, needs: needs.filter((n: any) => n.ref !== "sd-3") });
   expect(selects.at(-1)).toEqual([{ need: "sd-5", decision: null, card: null }, { replace: true }]);
-});
-
-test("keys: J walks the table, X picks rows, A assigns every picked one at once, Esc clears, and Esc steps out of an open one", async () => {
-  useInboxStore.setState({ teamMembers: [{ _id: "u1", name: "Me" }, { _id: "u2", name: "Sam" }, { _id: "u3", name: "Jo" }] } as any);
-  const passed: any[] = [];
-  const passDecision = useInboxStore.getState().passDecision;
-  useInboxStore.setState({ passDecision: (id: string, to: any) => passed.push([id, to]) } as any);
-  selects.length = 0;
-  await render("");
-  const key = async (k: string) => { await act(async () => { (document.activeElement ?? host).dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true })); }); };
-  q<HTMLElement>(".fy-tr")!.focus();
-  await key("j");
-  await key("x");
-  await key("j");
-  await key("x");
-  expect(q("[data-line-foryou-bar]")?.dataset.picking).toBe("");
-  expect(q(".fy-shown")?.textContent).toBe("2");
-  await key("a");
-  const menu = q("[data-line-foryou-bar] [role=listbox]")!;
-  const jo = [...menu.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes("Jo"))!;
-  await act(async () => { jo.click(); });
-  expect(passed.map((p) => p[0]).sort()).toEqual(["d3", "d5"]);
-  expect(passed.every((p) => p[1].id === "u3")).toBe(true);
-  // The keys are drawn as keys.
-  expect([...host.querySelectorAll("[data-line-foryou-keys] kbd, [data-line-foryou-keys] .keycap, [data-line-foryou-keys] span")].length).toBeGreaterThan(0);
-  q<HTMLElement>(".fy-tr")!.focus();
-  await key("Escape");
-  expect(q("[data-line-foryou-bar]")?.dataset.picking).toBeUndefined();
-  // Open, Esc goes back to every decision.
-  await render("need=sd-3");
-  selects.length = 0;
-  q<HTMLElement>(".fy-row")!.focus();
-  await key("Escape");
-  expect(selects.at(-1)?.[0]).toEqual({ need: null, decision: null, card: null });
-  useInboxStore.setState({ passDecision } as any);
 });
 
 test("a new problem is confirmed real in one press, a note optional (ct-58683)", async () => {
@@ -422,28 +381,11 @@ test("a trial card no session presented is the same one line, never a panel of i
   await act(async () => { useInboxStore.setState({ workflowRuns: before } as any); });
 });
 
-test("the list narrows to who holds it and to a kind, and a teammate's pick assigns the open decision at once", async () => {
-  useInboxStore.setState({ teamMembers: [{ _id: "u1", name: "Me" }, { _id: "u2", name: "Sam" }, { _id: "u3", name: "Jo" }] } as any);
+test("an older address's who and group open the list on the matching tab and owner", async () => {
   await render("who=u2&group=none");
-  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-ref]")].map((x) => x.dataset.lineNeedRef)).toEqual(["sd-3"]);
-  // Not grouped by area, the table carries the area as a column.
-  expect(q(".fy-t-area")).not.toBeNull();
+  expect(listed()).toEqual(["sd-3@user:u2"]);
   await render("who=none");
-  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-ref]")].map((x) => x.dataset.lineNeedRef)).toEqual(["sd-5"]);
-  await render("kind=judge&group=none");
-  expect([...host.querySelectorAll<HTMLElement>("[data-line-need-ref]")].map((x) => x.dataset.lineNeedRef)).toEqual(["sd-5"]);
+  expect(listed()).toEqual(["sd-5@none"]);
   await render("who=me");
-  expect(q("[data-line-foryou-filtered]")).not.toBeNull();
-  // The reader's head names who holds it; picking a teammate passes the decision to them.
-  const passed: any[] = [];
-  const passDecision = useInboxStore.getState().passDecision;
-  useInboxStore.setState({ passDecision: (id: string, to: any) => passed.push([id, to]) } as any);
-  await render("need=sd-5");
-  const head = q("[data-line-foryou-head] > [data-line-foryou-assign]")!;
-  expect(head.textContent).toContain("Assign");
-  await act(async () => { (head.querySelector("button") as HTMLButtonElement).click(); });
-  const jo = [...head.querySelectorAll<HTMLButtonElement>("[role=listbox] button")].find((b) => b.textContent?.includes("Jo"))!;
-  await act(async () => { jo.click(); });
-  expect(passed).toEqual([["d5", { kind: "user", id: "u3" }]]);
-  useInboxStore.setState({ passDecision } as any);
+  expect(listed()).toEqual([]);
 });

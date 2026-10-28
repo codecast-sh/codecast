@@ -253,7 +253,7 @@ describe("one rule for actions in the palette and the shortcuts sheet", () => {
   test("the palette's pages hide what the rail hides", () => {
     for (const path of ["/threads", "/plans", "/community", "/team", "/team/charts", "/company", "/org", "/goals", "/initiatives"]) expect(hosted.showsPage(path)).toBe(false);
     // The roster is a company page; a teammate's profile under it is not.
-    for (const path of ["/inbox", "/questions", "/tasks", "/docs", "/triggers", "/team/samvit"]) expect(hosted.showsPage(path)).toBe(true);
+    for (const path of ["/inbox", "/decisions", "/tasks", "/docs", "/triggers", "/team/samvit"]) expect(hosted.showsPage(path)).toBe(true);
   });
   test("a person's Org address opens their profile in hosted mode too", () => {
     // Every person link is /org/@handle; it leads to /team/<handle>, which
@@ -302,7 +302,7 @@ describe("the route guard reads the rail's rule", () => {
 
   test("developer mode and the pages hosted mode keeps never redirect", () => {
     for (const path of SURFACE_PAGE_PATHS) expect(hiddenPageRedirect(path, DEVELOPER_MODE)).toBeNull();
-    for (const path of ["/inbox", "/triggers", "/tasks", "/docs", "/questions", "/settings", "/team/samvit"]) expect(hiddenPageRedirect(path, hosted)).toBeNull();
+    for (const path of ["/inbox", "/triggers", "/tasks", "/docs", "/decisions", "/settings", "/team/samvit"]) expect(hiddenPageRedirect(path, hosted)).toBeNull();
   });
 });
 

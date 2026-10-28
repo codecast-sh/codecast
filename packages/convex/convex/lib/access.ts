@@ -16,6 +16,7 @@ import { forbidden, notFound } from "./auth";
 import { roleDropForVisibility } from "../sessionOwnership";
 import { invalidateForConversation } from "./changesDirty";
 import { recordAuthorityEvent } from "./authorityEvents";
+import { restampDecisionTeams } from "./decisionTeam";
 import {
   accessStampFor,
   accessStampFromDoc,
@@ -232,6 +233,8 @@ export async function patchConversationVisibility(
     detail: { before: pick(conversation), after: pick(after) },
   });
   await invalidateForConversation(ctx, after);
+  // A decision's team is routing (lib/decisionTeam.ts): it follows the conversation to its new team.
+  if ("team_id" in updates && String(updates.team_id ?? "") !== String(conversation.team_id ?? "")) await restampDecisionTeams(ctx, conversation._id);
   return recomputeWorkspaceForConversation(ctx, after);
 }
 

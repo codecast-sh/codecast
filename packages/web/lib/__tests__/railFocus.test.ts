@@ -39,7 +39,7 @@ describe("what it folds", () => {
   });
 
   test("the inbox, tasks and docs stay, and other surfaces follow the base mode", () => {
-    for (const path of ["/inbox", "/tasks", "/docs", "/questions"]) expect(mode.showsPage(path)).toBe(true);
+    for (const path of ["/inbox", "/tasks", "/docs", "/decisions"]) expect(mode.showsPage(path)).toBe(true);
     expect(mode.shows("terminal")).toBe(true);
     expect(mode.hosted).toBe(false);
   });

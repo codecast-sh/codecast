@@ -21,8 +21,7 @@ import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore, isConvexId, showInboxHome } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount, useNewResultsCount } from "../hooks/useNeedsInputCount";
-import { useScopedDecisionQueue } from "../hooks/useDecisionQueue";
-import { waitingOnPerson } from "../lib/decisionQueue";
+import { useOwnedDecisionCount } from "../hooks/useDecisionRows";
 import { useChatRail, useChatMembers, supersededChannelId } from "../hooks/useChatSync";
 import { useThreadUnread } from "../hooks/useThreadsSync";
 import { ChannelContextMenu } from "./chat/ChannelMenu";
@@ -145,14 +144,9 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   isNarrow: boolean;
   onMobileClose?: () => void;
 }) {
-  // Count what the QUEUE holds, not just the authored `cast decide` rows: the
-  // queue also carries sessions parked on an AskUserQuestion or permission
-  // prompt. Counting only decisions hid this row at zero while the queue still
-  // had work — removing the only way in. One hook defines "pending" for both.
-  // Minus the rows a lead holds under a grant: those are the lead's to clear.
-  // In hosted mode's Assistant scope, only the assistant's asks count, as the
-  // page lists them (useScopedDecisionQueue).
-  const pending = waitingOnPerson(useScopedDecisionQueue()).length;
+  // The open decisions the viewer owns, as Mine lists them. A session parked
+  // on a terminal question counts on the inbox's Needs Input instead.
+  const pending = useOwnedDecisionCount();
   const words = useModeWords();
   const onlyWhenWaiting = useSurface("rail.questionsOnlyWhenWaiting");
   if (pending === 0 && onlyWhenWaiting) return null;
@@ -488,11 +482,14 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     [savedViews, surfaceMode.hosted],
   );
   const docViews = useMemo(() => savedViews.filter((v: any) => v.page === "docs" || v.page === "plans"), [savedViews]);
+  const decisionViews = useMemo(() => savedViews.filter((v: any) => v.page === "decisions"), [savedViews]);
+  const isDecisions = pathname === "/decisions";
 
   // Which view the list is currently arranged as — a view is a set of prefs, not
   // a route, so "selected" is a comparison against the live prefs (lib/savedViews).
   const taskPrefs = useInboxStore((s) => s.clientState.ui?.task_view);
   const docPrefs = useInboxStore((s) => s.clientState.ui?.doc_view);
+  const decisionPrefs = useInboxStore((s) => s.clientState.ui?.decision_view);
   // The stamped view wins: it stays right while you edit filters, where
   // matching would go blank. Matching is the fallback for a list that simply
   // happens to be arranged like a view you never opened.
@@ -521,7 +518,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     [updateClientUI],
   );
   const applyView = useCallback((view: any) => {
-    const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : "plan_view";
+    const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : view.page === "decisions" ? "decision_view" : "plan_view";
     // Stamp which view this is, so the page can still name it after you change
     // a filter — the moment matching alone stops being able to answer.
     updateClientUI({ [pagePrefsKey]: { ...(view.prefs ?? {}), [VIEW_ID_KEY]: view._id } });
@@ -601,6 +598,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const savedViewsShown = surfaceMode.shows("nav.savedViews");
   const taskViewItems = useMemo(() => (savedViewsShown ? viewItems(taskViews, activeTaskViewId) : []), [savedViewsShown, viewItems, taskViews, activeTaskViewId]);
   const docViewItems = useMemo(() => (savedViewsShown ? viewItems(docViews, activeDocViewId) : []), [savedViewsShown, viewItems, docViews, activeDocViewId]);
+  const activeDecisionViewId = isDecisions ? currentViewId(decisionPrefs) ?? activeViewId(decisionViews.map((v: any) => ({ id: v._id, prefs: v.prefs })), decisionPrefs) : undefined;
+  const decisionViewItems = useMemo(() => (savedViewsShown && isDecisions ? viewItems(decisionViews, activeDecisionViewId) : []), [savedViewsShown, isDecisions, viewItems, decisionViews, activeDecisionViewId]);
 
   // Chat and Tasks are doors in the wide developer rail: their lists are a
   // level of the sidebar of their own (SidebarDrill). A section living in an
@@ -775,13 +774,15 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             />
           }
           feed={activeTeam && <FeedNavRowView team={activeTeam} isActive={!!isTeamActivity} isNarrow={isNarrow} unread={teamUnreadCount} />}
-          questions={
+          questions={<>
             <QuestionsNavRow
-              isActive={pathname === "/questions"}
+              isActive={pathname === "/decisions" || (pathname?.startsWith("/decisions/") ?? false)}
               isNarrow={isNarrow}
               onMobileClose={onMobileClose}
             />
-          }
+            {/* The page's saved views, while it is open. */}
+            {!isNarrow && decisionViewItems.map((row) => <SectionRow key={row.id} row={row} className="pl-8" />)}
+          </>}
           chat={chatOn && !railIsFocused && <ChatNavRow
             isActive={!!isChat}
             isNarrow={isNarrow}

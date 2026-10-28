@@ -289,9 +289,9 @@ export const MODE_WORDS = {
     loadingOlderKilled: "Loading older kills…",
     noOlderKilled: "No older kills",
     loadOlderKilledFailed: "Couldn't load older killed sessions",
-    // The approvals page and its rail row.
-    questionsPage: "Questions",
-    questionsTip: "Decisions waiting on you",
+    // The decisions page and its rail row.
+    questionsPage: "Decisions",
+    questionsTip: "Decisions you own, and the team's",
     queueEmptyTitle: "Nothing needs you.",
     queueEmptyLede: "Your agents are working. New decisions appear here the moment an agent asks.",
     // The rail's names for the lists the assistant fills, matching what its
@@ -326,7 +326,7 @@ export const MODE_WORDS = {
     teamConnectionsLede: "Shared by everyone on the team picked here, for their work inside it. The keys stay with Codecast: your agents ask Codecast to act and never hold them.",
     personalConnectionsLede: "Yours alone, and they follow you: in any workspace you work in that has no connection of its own, an agent acting for you acts through these.",
     // The inbox's section names for whose move it is.
-    sectionQuestions: "Questions",
+    sectionQuestions: "Decisions",
     sectionNew: "New",
     sectionNeedsInput: "Needs Input",
     sectionDormant: "Dormant",
@@ -654,7 +654,7 @@ export function helpContextSurface(when: string | undefined): DevSurface | null 
  *  the same list. */
 export const HOSTED_SECTION_KEYS: ReadonlyArray<{ action: "app.section1" | "app.section2" | "app.section3" | "app.section4" | "app.section5"; path: string; label: string }> = [
   { action: "app.section1", path: "/inbox", label: "Inbox" },
-  { action: "app.section2", path: "/questions", label: "Approvals" },
+  { action: "app.section2", path: "/decisions", label: "Approvals" },
   { action: "app.section3", path: "/tasks", label: "To-dos" },
   { action: "app.section4", path: "/docs", label: "Notes" },
   { action: "app.section5", path: "/triggers", label: "Routines" },
@@ -752,7 +752,7 @@ export const SURFACE_PAGE_PATHS: readonly string[] = [...Object.keys(PAGE_SURFAC
  *  named by mode: the rail rows (SurfaceMode.page), the palette's Pages rows,
  *  tabs, the window title and the recent list (pathLabel, modePathLabel) all
  *  read it. */
-const MODE_PAGES: Record<string, keyof ModeWords> = { "/triggers": "triggers", "/questions": "questionsPage", "/tasks": "tasksPage", "/docs": "docsPage" };
+const MODE_PAGES: Record<string, keyof ModeWords> = { "/triggers": "triggers", "/decisions": "questionsPage", "/tasks": "tasksPage", "/docs": "docsPage" };
 
 /** The mode's name for the page at `path`, or null when the page's name is
  *  the same in both modes. */

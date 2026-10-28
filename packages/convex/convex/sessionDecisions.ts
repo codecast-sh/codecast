@@ -20,6 +20,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib/access";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
+import { withDecisionFacts } from "./lib/decisionRowFacts";
+import { decisionTeamOf } from "./lib/decisionTeam";
 import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, decisionAnswerLabel, advisoryAnswerOpen, isHostedAgentType } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { emitNotification } from "./notificationRouter";
@@ -1139,6 +1141,9 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const { role, ladder, people, hears } = addressed
     ? { ...routed, ladder: { ...routed.ladder, activeRoles: [], hops: [] }, people: addressed.people, hears: null }
     : routed;
+  // Its team (routing): the problem's, else the asking conversation's; a re-ask without a task keeps the one it had.
+  const teamTask = task ?? (existing?.task_id ? await ctx.db.get(existing.task_id) : null);
+  const team_id = decisionTeamOf(conversation, teamTask);
   if (existing) {
     // A question a person gave to a teammate or escalated (decisionHandoff.ts) stays theirs when it is asked again.
     const given = existing.passed_to?.kind === "user" ? existing.asked_user_ids ?? [existing.passed_to.id as Id<"users">] : null;
@@ -1163,6 +1168,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       ...(args.workflow_run_id ? { workflow_run_id: args.workflow_run_id, gate_node_id: args.gate_node_id } : {}),
       ...joined,
       ...(trialProject ? { trial: true, hops: ladder.hops } : {}),
+      team_id,
       created_at: now,
       asked_message_count: conversation.message_count,
       session_title: conversation.title,
@@ -1221,6 +1227,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     asked_user_ids: people,
     hops: ladder.hops,
     scope_keys: scopeKeys,
+    team_id,
     created_at: now,
     asked_message_count: conversation.message_count,
     session_title: conversation.title,
@@ -2421,7 +2428,8 @@ const OPEN_PROBLEM_STATUSES = ["backlog", "open", "in_progress", "in_review"] as
  * currentDecisions): each check reads the run, its problem and its workflow
  * per row, so a feed runs it once.
  */
-async function decisionRowsForViewer(ctx: Ctx, rows: DecisionRow[], inQueue: (row: DecisionRow) => boolean | Promise<boolean>, extra: Record<string, unknown> = {}) {
+export async function decisionRowsForViewer(ctx: Ctx, given: DecisionRow[], inQueue: (row: DecisionRow) => boolean | Promise<boolean>, extra: Record<string, unknown> = {}) {
+  const rows = await withDecisionFacts(ctx, given);
   const severity = new Map<string, number | null>();
   const out = [];
   for (const r of rows) {
@@ -2441,7 +2449,7 @@ async function decisionRowsForViewer(ctx: Ctx, rows: DecisionRow[], inQueue: (ro
 }
 
 /** Whether a decision sits in the viewer's own queue: an inbox row of theirs, or (an older row) they asked it. */
-async function inViewerQueue(ctx: Ctx, row: DecisionRow, userId: Id<"users">): Promise<boolean> {
+export async function inViewerQueue(ctx: Ctx, row: DecisionRow, userId: Id<"users">): Promise<boolean> {
   if (row.asked_user_ids === undefined) return String(row.user_id) === String(userId);
   if (!row.asked_user_ids.some((id) => String(id) === String(userId))) return false;
   const inbox = await ctx.db.query("decision_inbox").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).collect();
@@ -2452,11 +2460,13 @@ async function inViewerQueue(ctx: Ctx, row: DecisionRow, userId: Id<"users">): P
  * Every open decision a line asks about a problem in one workspace (a team's,
  * or the viewer's own), whoever it was asked of or given to: the Line page's
  * decision inbox, the same for every member of the team. Read by index: a
- * trial's through its waiting cards, a line project's from the pending
- * decisions themselves, newest first, kept when a run asked them about an open
- * problem of the workspace. Reading through each project's open problems
- * instead stopped at a page of the oldest, so in a workspace holding thousands
- * of open problems the newest ones' decisions never showed.
+ * trial's through its waiting cards, a line project's from the workspace's own
+ * pending decisions (a team's by its routing stamp, by_team_status_created;
+ * the personal workspace's the viewer's own), newest first, kept when a run
+ * asked them about an open problem of the workspace. Reading through each
+ * project's open problems instead stopped at a page of the oldest, so in a
+ * workspace holding thousands of open problems the newest ones' decisions
+ * never showed.
  * `line_workspace` names the workspace each row came from: the web's feed
  * prunes by it. The workspaces are the ones the Line page reads at once.
  */
@@ -2466,13 +2476,17 @@ export const listOpenForLines = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const out = [];
-    const pending: DecisionRow[] = await ctx.db.query("session_decisions").withIndex("by_status_created", (q: any) => q.eq("status", "pending")).order("desc").take(PENDING_DECISIONS_CAP);
-    const asked = pending.filter((d) => d.workflow_run_id && d.task_id);
     const askedTasks = new Map<string, Doc<"tasks"> | null>();
-    for (const d of asked) if (!askedTasks.has(String(d.task_id))) askedTasks.set(String(d.task_id), await ctx.db.get(d.task_id as Id<"tasks">));
     for (const workspace of [...new Set(args.workspaces)].slice(0, 20)) {
       const [kind, id] = workspace.split(":");
       if (kind === "user" ? id !== String(userId) : kind !== "team" || !(await isTeamMember(ctx, userId, id as Id<"teams">))) continue;
+      // The workspace's own pending rows: a team's routed to it (session_decisions.team_id, lib/decisionTeam.ts), the
+      // personal workspace's asked by the viewer's own sessions.
+      const pending: DecisionRow[] = kind === "team"
+        ? await ctx.db.query("session_decisions").withIndex("by_team_status_created", (q: any) => q.eq("team_id", id as Id<"teams">).eq("status", "pending")).order("desc").take(PENDING_DECISIONS_CAP)
+        : await ctx.db.query("session_decisions").withIndex("by_user_status_created", (q: any) => q.eq("user_id", userId).eq("status", "pending")).order("desc").take(PENDING_DECISIONS_CAP);
+      const asked = pending.filter((d) => d.workflow_run_id && d.task_id);
+      for (const d of asked) if (!askedTasks.has(String(d.task_id))) askedTasks.set(String(d.task_id), await ctx.db.get(d.task_id as Id<"tasks">));
       const projects = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).collect();
       const trialProjects = new Set(projects.filter((p: Doc<"projects">) => p.line_trial).map((p: Doc<"projects">) => String(p._id)));
       const rows: DecisionRow[] = [];

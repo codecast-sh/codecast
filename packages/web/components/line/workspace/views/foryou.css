@@ -210,3 +210,7 @@ a.fy-head:focus-visible { outline: 2px solid color-mix(in srgb, var(--lw-person)
 .fy-from { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lw-ink-2); font-weight: 550; }
 .fy-t-from { max-width: 12rem; }
 .fy-origin { margin-bottom: var(--lw-s3); padding-bottom: var(--lw-s3); border-bottom: 1px solid var(--lw-rule-2); }
+
+/* The list is the Decisions page's own (DecisionList), filling its column. */
+.fy-pane { min-height: 0; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--lw-rule); }
+.fy[data-mode="table"] .fy-pane { border-right: 0; }

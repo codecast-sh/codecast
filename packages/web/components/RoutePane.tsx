@@ -69,7 +69,7 @@ const Vault = lazyPage("@/app/vault/page", () => import("@/app/vault/page"));
 const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts/page"));
 const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
 // The decision queue: one question at a time, full width.
-const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
+const Decisions = lazyPage("@/app/decisions/page", () => import("@/app/decisions/page"));
 // The flows app: every flow, from a finding to a shipped, watched change (the-line-end-to-end.md LE13).
 const Flows = lazyPage("@/app/flows/page", () => import("@/app/flows/page"));
 const FlowSettings = lazyPage("@/app/flows/settings/page", () => import("@/app/flows/settings/page"));
@@ -208,7 +208,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/ops$/, paramNames: [], component: Ops },
   { pattern: /^\/ops\/(.+)$/, paramNames: ["rest"], component: Ops },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
-  { pattern: /^\/questions$/, paramNames: [], component: Questions },
+  { pattern: /^\/decisions$/, paramNames: [], component: Decisions },
   { pattern: /^\/flows$/, paramNames: [], component: Flows },
   { pattern: /^\/line$/, paramNames: [], component: Line },
   { pattern: /^\/expectations$/, paramNames: [], component: Expectations },

@@ -5,7 +5,9 @@
   "files": [
     "app/decisions/[id]/page.tsx",
     "app/decisions/stacks/[id]/page.tsx",
-    "app/questions/QuestionsPageClient.tsx",
+    "app/decisions/page.tsx",
+    "components/decisions/DecisionsPage.tsx",
+    "components/decisions/DecisionList.tsx",
     "app/tasks/[id]/page.tsx",
     "app/tasks/page.tsx",
     "components/decisions/DecisionAnswerControls.tsx",

@@ -1,25 +1,40 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { FlatList, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { Text } from '@/components/Themed';
 import { Spacing, BorderRadius, themedStyles, useTheme } from '@/constants/Theme';
 import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
 import { waitingOnPerson, type QueueItem } from '@codecast/web/lib/decisionQueue';
+import { useOwnedDecisionCount } from '@codecast/web/hooks/useDecisionRows';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
+import { TeamDecisionList } from '@/components/decisions/TeamDecisionList';
 
-// Every open decision, in the queue's order (lib/decisionQueue: blocked and
-// reachable first, oldest first within a tier). A `cast decide` row opens the
+// Decisions, Mine and Team as on the web's Decisions page. Mine is the
+// viewer's queue, in its order (lib/decisionQueue: blocked and reachable
+// first, oldest first within a tier): a `cast decide` row opens the
 // one-at-a-time screen; a terminal prompt (an AskUserQuestion, a permission)
-// has no authored payload and is answered inside its session.
+// has no authored payload and is answered inside its session. Team is every
+// open decision of the workspace with its owner (TeamDecisionList).
 export default function DecisionsScreen() {
   const Theme = useTheme();
   const router = useRouter();
   const queue = useDecisionQueue();
   const now = useCoarseNow(60_000);
-  const mine = waitingOnPerson(queue).length;
-  const withLead = queue.length - mine;
+  // Yours as the web counts them (useOwnedDecisionCount); the queue also lists terminal prompts and asks a lead holds.
+  const mine = useOwnedDecisionCount();
+  const withLead = queue.length - waitingOnPerson(queue).length;
   const firstDecide = useMemo(() => queue.find((i) => i.source === 'decide' && !i.heldByRole), [queue]);
+  const [view, setView] = useState<'mine' | 'team'>('mine');
+  const switcher = (
+    <View style={[styles.switcher, { borderColor: Theme.borderLight }]}>
+      {(['mine', 'team'] as const).map((v) => (
+        <TouchableOpacity key={v} style={[styles.seg, view === v && { backgroundColor: Theme.card }]} onPress={() => setView(v)} accessibilityRole="tab" accessibilityState={{ selected: view === v }}>
+          <Text style={[styles.segText, view === v && { color: Theme.text }]}>{v === 'mine' ? 'Mine' : 'Team'}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
 
   const open = (item: QueueItem) => {
     if (item.source === 'decide' && item.decisionId) router.push(`/decisions/${item.decisionId}`);
@@ -29,13 +44,14 @@ export default function DecisionsScreen() {
   return (
     <>
       <Stack.Screen options={{ title: 'Decisions', headerBackTitle: 'Inbox' }} />
-      <FlatList
+      {view === 'team' ? <TeamDecisionList header={switcher} /> : <FlatList
         style={{ backgroundColor: Theme.bg }}
         contentContainerStyle={styles.list}
         data={queue}
         keyExtractor={(i) => i.key}
         ListHeaderComponent={queue.length > 0 ? (
           <View style={styles.header}>
+            {switcher}
             <Text style={styles.summary}>
               {mine} waiting on you{withLead ? ` · ${withLead} with a lead` : ''}
             </Text>
@@ -49,7 +65,7 @@ export default function DecisionsScreen() {
               </TouchableOpacity>
             ) : null}
           </View>
-        ) : null}
+        ) : switcher}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>Nothing needs you.</Text>
@@ -63,7 +79,7 @@ export default function DecisionsScreen() {
             {askingSessionLine(item) ? <Text style={styles.session} numberOfLines={1}>{askingSessionLine(item)}</Text> : null}
           </TouchableOpacity>
         )}
-      />
+      />}
     </>
   );
 }
@@ -71,6 +87,9 @@ export default function DecisionsScreen() {
 const styles = themedStyles((Theme) => StyleSheet.create({
   list: { padding: Spacing.lg, gap: Spacing.md, flexGrow: 1 },
   header: { gap: Spacing.md, marginBottom: Spacing.xs },
+  switcher: { flexDirection: 'row', borderWidth: StyleSheet.hairlineWidth, borderRadius: BorderRadius.lg, padding: 2, marginBottom: Spacing.xs },
+  seg: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: BorderRadius.md },
+  segText: { fontSize: 14, fontWeight: '600', color: Theme.textMuted },
   summary: { fontSize: 13, color: Theme.textMuted },
   start: { borderRadius: BorderRadius.lg, paddingVertical: 14, alignItems: 'center' },
   startText: { color: '#fff', fontSize: 15, fontWeight: '600' },

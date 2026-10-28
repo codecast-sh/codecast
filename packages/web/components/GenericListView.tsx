@@ -531,7 +531,8 @@ export interface GenericListViewProps<T> {
   emptyIcon?: ReactNode;
   emptyMessage?: ReactNode;
 
-  onCreate: () => void;
+  /** Absent on a list nothing is made from (decisions arrive; nobody files one): no create button, no "Create one". */
+  onCreate?: () => void;
   /** What the create button says in hosted mode ("New note"), drawn as a
    *  labelled secondary button in place of the bare +. A list with a
    *  quickAdd row needs neither: the row is the way to add one. */
@@ -545,7 +546,7 @@ export interface GenericListViewProps<T> {
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
 
-  paletteTargetType?: 'task' | 'doc';
+  paletteTargetType?: 'task' | 'doc' | 'decision';
   /** Short-ID ref for an item (e.g. a task's `ct-…`). When provided, Ctrl+N with
    *  rows multi-selected opens the new-session composer pre-filled with the
    *  selection's refs, so the first message can just say what to do with them
@@ -1003,10 +1004,10 @@ export function GenericListView<T>({
         return;
       }
       if (matchesAction(e, "list.search") && getSearchText) { stop(); setShowSearch(true); return; }
-      if (matchesAction(e, "list.create")) {
+      if (matchesAction(e, "list.create") && (quickAddRef.current || onCreate)) {
         stop();
         if (quickAddRef.current) quickAddRef.current.focus();
-        else onCreate();
+        else onCreate?.();
         return;
       }
       if (matchesAction(e, "list.first")) { stop(); setFocusIndex(0); return; }
@@ -1310,7 +1311,7 @@ export function GenericListView<T>({
           >
             {paletteKeys ? paletteKeys.map((k, i) => <KeyCap key={i} size="xs">{k}</KeyCap>) : <Command className="w-3 h-3" />}
           </button>}
-          {hosted && quickAdd ? null : hosted && createLabel ? (
+          {!onCreate || (hosted && quickAdd) ? null : hosted && createLabel ? (
             <button
               onClick={onCreate}
               data-cc-list-create
@@ -1488,7 +1489,7 @@ export function GenericListView<T>({
                 {emptyIcon}
                 <p className="text-sm mt-2">{searchQuery ? "No results" : (emptyMessage || "No items found")}</p>
                 {/* The add row above is the way to make one. */}
-                {!searchQuery && !quickAdd && (
+                {!searchQuery && !quickAdd && onCreate && (
                   <button onClick={onCreate} className="mt-3 text-sm text-sol-cyan hover:underline">
                     Create one
                   </button>

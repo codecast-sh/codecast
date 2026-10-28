@@ -70,7 +70,7 @@ describe("scope page rules", () => {
     expect(feedLinkIsServerOwned("/a/some-slug")).toBe(true);
     expect(feedLinkIsServerOwned("/tasks/ct-12")).toBe(false);
     expect(feedLinkIsServerOwned("/commit/o/r/abc")).toBe(false);
-    expect(feedLinkIsServerOwned("/questions?s=x")).toBe(false);
+    expect(feedLinkIsServerOwned("/decisions?s=x")).toBe(false);
   });
 
   test("only the root and an unscoped Head of People read the whole workspace; any other role reads its own scope", () => {

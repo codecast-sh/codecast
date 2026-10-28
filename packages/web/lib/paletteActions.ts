@@ -16,7 +16,7 @@ export type PaletteEntityType = "session" | "task" | "doc" | "plan" | "project" 
 /** Plus the company's objects the palette opens on the Org screen: a goal, a
  *  role, and a "person", a teammate, whose row is a PalettePerson built where
  *  the palette drills into them (CommandPalette), never read from a collection. */
-export type PaletteTargetType = PaletteEntityType | "initiative" | "role" | "person";
+export type PaletteTargetType = PaletteEntityType | "initiative" | "role" | "person" | "decision";
 
 /** A teammate as a palette target: the roster member plus the facts its
  *  verbs branch on, read live while the palette is drilled into them. */
@@ -45,6 +45,7 @@ export type PaletteAction = {
 export function paletteObjectPath(type: PaletteTargetType, target: any): string {
   if (type === "person") return objectHref("person", personRefOf({ _id: target._id, github_username: target.member?.github_username ?? target.github_username }));
   if (isOrgObjectKind(type)) return objectHref(type, target.short_id || target._id);
+  if (type === "decision") return `/decisions/${target.short_id || target._id}`;
   const route = { session: "conversation", task: "tasks", doc: "docs", plan: "plans", trigger: "triggers" }[type];
   return `/${route}/${target._id}`;
 }
@@ -62,6 +63,8 @@ function isPersonified(target: { _id: string; character_avatar?: string | null; 
 export function paletteActions(type: PaletteTargetType | null, targets: any[], userId?: string, chatOn = false, mode: SurfaceMode = DEVELOPER_MODE, prefs: IdentityPrefs = DEFAULT_IDENTITY_PREFS): PaletteAction[] {
   const target = targets[0];
   if (!type || !target) return [];
+  // A decision selection's verbs are DecisionPalette's own.
+  if (type === "decision") return [];
   const single = targets.length === 1;
   const row = (key: string, label: string, icon: PaletteAction["icon"], hotkey?: string, shortcutAction?: ShortcutAction): PaletteAction => ({ key, label, icon, hotkey: shortcutAction ? undefined : hotkey, shortcutAction });
   // A teammate: where they are first (follow), then the ways to reach them,

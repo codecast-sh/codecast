@@ -93,6 +93,7 @@ import "./chat/chat.css";
 import "./CommandPalette.css";
 import { PalettePickHeader } from "./PalettePickPreview";
 import { groupClass, itemClass, paletteClass, paletteInputClass } from "./paletteStyles";
+import { DecisionPalette } from "./decisions/DecisionPalette";
 import { NavIcon, PaletteSearchBar, PaletteSessionRow, PaletteSearchResultRow, PaletteTaskRow } from "./PaletteRows";
 import { formatDateSmart } from "@codecast/shared/time";
 
@@ -2443,6 +2444,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Read before the action and pick views return early, so the hook order
   // holds whichever view renders.
   const askHold = useHostedAskGate(!standalone);
+  // A selection of decisions has its own verbs (components/decisions/DecisionPalette).
+  if (open && targetType === "decision" && hasTargets) return <DecisionPalette targets={targets} mode={initialMode} standalone={standalone} onClose={closePalette} />;
 
   // Action submenu mode. The workspace modes ("view", layout CRUD) are global,
   // so they need no target entity — and show no entity header. The `open` check
@@ -2817,7 +2820,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // last few places visited, then the pages. The fleet's views and layouts wait for a query.
   const quietRoot = hostedMode && !standalone && !picking && !drilled && !query.trim();
   // The open object's kind in the viewer's words ("to-do", "note").
-  const targetKind = targetType === "trigger" ? modeWords.trigger.toLowerCase() : targetType === "initiative" ? "goal" : targetType === "role" ? "role" : targetType && targetType !== "person" ? visitObjectLabel(targetType, modeWords).toLowerCase() : "";
+  const targetKind = targetType === "trigger" ? modeWords.trigger.toLowerCase() : targetType === "initiative" ? "goal" : targetType === "role" ? "role" : targetType && targetType !== "person" && targetType !== "decision" ? visitObjectLabel(targetType, modeWords).toLowerCase() : "";
   const drillTarget = () => setDrilled({ type: targetType as PaletteTargetType, row: targets[0], query: "" });
 
   // Root mode: navigation + context actions

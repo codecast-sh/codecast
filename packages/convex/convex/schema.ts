@@ -4959,6 +4959,10 @@ export default defineSchema({
     // this row alone, and the sessions collection on that device may not hold
     // the asking conversation (pruned, or a teammate's). Derived at render
     // from the live session row when present (lib/liveEntities rule).
+    // ROUTING, never access (lib/decisionTeam.ts): the team whose Decisions
+    // page lists it, its problem's team, else the asking conversation's.
+    // Unset for a personal decision. Reads still answer to userMayRead.
+    team_id: v.optional(v.id("teams")),
     session_title: v.optional(v.string()),
     project_path: v.optional(v.string()),
     // Last `cast decide edit`. created_at stays the ask time because the queue
@@ -4997,7 +5001,9 @@ export default defineSchema({
     // org.health and the analyzer inputs: one workspace's week, member by
     // member, never the deployment's newest rows.
     .index("by_user_status_created", ["user_id", "status", "created_at"])
-    .index("by_user_status_resolved", ["user_id", "status", "resolved_at"]),
+    .index("by_user_status_resolved", ["user_id", "status", "resolved_at"])
+    // A team's Decisions page and its Flows' decisions: one team's rows, never the deployment's.
+    .index("by_team_status_created", ["team_id", "status", "created_at"]),
 
   // One row per person a decision is visible to (D2): the queue reads
   // (user, pending) here and joins the decision. `done` once the decision is
@@ -6093,7 +6099,7 @@ export default defineSchema({
     name: v.string(),
     // "workspace" = a layout workbench: a saved arrangement of the chrome
     // itself (rails, panels, sizes) rather than of a list page's filters.
-    page: v.union(v.literal("tasks"), v.literal("docs"), v.literal("plans"), v.literal("workspace")),
+    page: v.union(v.literal("tasks"), v.literal("docs"), v.literal("plans"), v.literal("decisions"), v.literal("workspace")),
     // The list preferences this view restores. Deliberately loose: the pages own
     // their own pref vocabularies and grow new filters often, and a view is only
     // ever handed straight back to the page that wrote it.

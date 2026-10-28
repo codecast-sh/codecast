@@ -104,9 +104,9 @@ export function QuestionsNavRowView({
 }) {
   return (
     <Link
-      href="/questions"
+      href="/decisions"
       onClick={onMobileClose}
-      {...paneDragProps("/questions", label)}
+      {...paneDragProps("/decisions", label)}
       className={railRowClass(isActive, isNarrow, "border-sol-violet")}
       title={tip}
     >

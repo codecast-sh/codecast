@@ -10,7 +10,7 @@ describe("isOnThreadRoute", () => {
 
   test("the decision page is not the thread", () => {
     expect(isOnThreadRoute("/decisions/sd-1")).toBe(false);
-    expect(isOnThreadRoute("/questions")).toBe(false);
+    expect(isOnThreadRoute("/decisions")).toBe(false);
     expect(isOnThreadRoute("/tasks/ct-1")).toBe(false);
   });
 });

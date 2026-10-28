@@ -15,9 +15,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   // Browsing a repository: history, source and blame all own their canvas.
   /^\/repo(\/|$)/,
   /^\/inbox(\/|$)/,
-  // The decision queue deletes layout by construction: one card, full width.
-  /^\/questions(\/|$)/,
-  // A decision's document page and a stack own their reading column.
+  // The Decisions list, its stepper, a decision's document page and a stack own their canvas.
   /^\/decisions(\/|$)/,
   // The trial's review page: a card list beside the card, each its own scroll.
   /^\/trial$/,

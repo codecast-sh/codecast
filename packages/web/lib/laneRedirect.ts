@@ -14,7 +14,7 @@ import { RENAMED_PAGES, RENAMED_PAGE_ROOTS, currentPagePath } from "./renamedPag
 
 const PAGES: Record<string, string> = {
   [LANE_PATHS.home]: HOSTED_HOME,
-  [LANE_PATHS.approvals]: "/questions",
+  [LANE_PATHS.approvals]: "/decisions",
   [LANE_PATHS.routines]: "/triggers",
   [LANE_PATHS.connections]: settingsPathFor("integrations"),
   [LANE_PATHS.plan]: settingsPathFor("plan"),
@@ -35,6 +35,8 @@ export const PAGE_ALIASES: Readonly<Record<string, string>> = {
   ),
   "/integrations": settingsPathFor("integrations"),
   "/mail": settingsPathFor("integrations"),
+  // The decision queue's old page: one Decisions page holds Mine and the team's.
+  "/questions": "/decisions",
   // The non-developer funnel's address: the landing page with its For
   // everyone section first (app/(marketing)/page.tsx assistantFirst).
   "/everyone": "/?for=assistant",
@@ -58,7 +60,7 @@ export function laneRedirectTarget(pathname: string, search = "", hash = ""): st
 }
 
 /** The page a hosted page name or a renamed page's address stands for
- *  (/approvals is /questions, /goals/in-7 is /org/goals/in-7), or null. */
+ *  (/approvals and /questions are /decisions, /goals/in-7 is /org/goals/in-7), or null. */
 export function pageAliasTarget(pathname: string, search = "", hash = ""): string | null {
   const path = trimmed(pathname);
   const renamed = currentPagePath(path);

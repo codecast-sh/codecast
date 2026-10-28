@@ -15,7 +15,7 @@ import { isTeamMember } from "./privacy";
 
 // "workspace" is the layout workbenches: a view of the chrome arrangement
 // itself (which rails/panels are open, how wide) rather than of a list page.
-const PAGE = v.union(v.literal("tasks"), v.literal("docs"), v.literal("plans"), v.literal("workspace"));
+const PAGE = v.union(v.literal("tasks"), v.literal("docs"), v.literal("plans"), v.literal("decisions"), v.literal("workspace"));
 
 /** Owner, or a member of the team a SHARED view belongs to. A private view is
  *  owner-only no matter which team it is tagged with. */

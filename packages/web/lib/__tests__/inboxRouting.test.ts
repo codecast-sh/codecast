@@ -20,9 +20,9 @@ describe("inboxRouting", () => {
 // commits first, the layout's default landed on top, and the rail highlighted
 // the inbox's conversation instead of the question).
 describe("pageOwnsRailHighlight", () => {
-  it("is the questions page, and nothing else", () => {
-    expect(pageOwnsRailHighlight("/questions")).toBe(true);
-    expect(pageOwnsRailHighlight("/questions/")).toBe(true);
+  it("is the Decisions page, and nothing else", () => {
+    expect(pageOwnsRailHighlight("/decisions")).toBe(true);
+    expect(pageOwnsRailHighlight("/decisions/sd-4")).toBe(false);
     expect(pageOwnsRailHighlight("/inbox")).toBe(false);
     expect(pageOwnsRailHighlight("/tasks")).toBe(false);
     expect(pageOwnsRailHighlight("/conversation/abc")).toBe(false);
@@ -50,9 +50,8 @@ describe("railPointerOnNavigate", () => {
     expect(railPointerOnNavigate("/conversation/abc", "inbox")).toBe("keep");
   });
 
-  it("leaves the questions page alone — it publishes the pointer itself", () => {
-    expect(railPointerOnNavigate("/questions")).toBe("keep");
-    expect(railPointerOnNavigate("/questions/ds-4")).toBe("keep");
+  it("leaves the Decisions page alone: its stepper publishes the pointer itself", () => {
+    expect(railPointerOnNavigate("/decisions")).toBe("keep");
   });
 });
 

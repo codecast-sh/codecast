@@ -662,7 +662,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
                     <ChevronLeft className="w-3.5 h-3.5" />
                   </button>
                 )}
-                <Link href="/questions" className="flex items-center gap-1 px-1.5 py-0.5 hover:text-sol-text hover:bg-sol-card transition-colors no-underline" title="All decisions waiting on you">
+                <Link href="/decisions" className="flex items-center gap-1 px-1.5 py-0.5 hover:text-sol-text hover:bg-sol-card transition-colors no-underline" title="All decisions waiting on you">
                   <List className="w-3 h-3" />
                   <span className="decision-head-wide">{stepper.position} of {stepper.total}</span>
                   <span className="decision-head-short">{stepper.position}/{stepper.total}</span>

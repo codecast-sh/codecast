@@ -13,7 +13,7 @@ export function preloadHostedPages(): void {
     void import("@/app/tasks/page");
     void import("@/app/docs/page");
     void import("@/app/triggers/page");
-    void import("@/app/questions/page");
+    void import("@/app/decisions/page");
   };
   const idle = (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
   if (idle) idle(load, { timeout: 4000 });

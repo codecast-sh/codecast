@@ -20,15 +20,7 @@ type AssignableRow = { passed_to?: { kind: string; id: string } | null } | null 
  */
 export const decisionAssignee = (d: AssignableRow): string | null => (d?.passed_to?.kind === "user" ? String(d.passed_to.id) : null);
 
-/** The distinct contacts a problem's evidence names (fingerprints "evidence:contacts/<id>:..."): the people it reached. */
-export function contactsOf(fingerprints: ReadonlyArray<string> | null | undefined): number {
-  const ids = new Set<string>();
-  for (const f of fingerprints ?? []) {
-    const m = /^evidence:contacts\/([^:]+)/.exec(f);
-    if (m) ids.add(m[1]);
-  }
-  return ids.size;
-}
+export { contactsOf } from "@codecast/shared/contracts/problemReach";
 
 export type SeverityBand = "high" | "mid" | "low";
 

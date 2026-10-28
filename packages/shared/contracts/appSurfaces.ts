@@ -42,7 +42,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("chat", "human channels and direct messages"),
   dash("search", "search across sessions, docs, tasks and people"),
   dash("notifications", "notification list"),
-  dash("questions", "agent questions waiting for an answer"),
+  dash("decisions", "decisions you own, and the team's"),
   dash("flows", "the team's flows, one per owner role, and the pool run by hand; findings, problems, runs, cards, watch and closed"),
   dash("expectations", "every project's expectations: how its product should behave, with breaks per line"),
   dash("trial", "trial runs of a flow: each gate a card, answered as a rehearsal that ships nothing"),

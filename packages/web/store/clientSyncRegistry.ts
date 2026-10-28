@@ -294,11 +294,14 @@ export const CLIENT_SYNC_REGISTRY = {
   // (question, options, context) is server-owned and stays undispatchable.
   // The one home of every decision row: the viewer's queue (listForUser) and
   // the team's open line decisions the Line page reads (listOpenForLines),
-  // each feed pruning only its own rows (hooks/useSyncSessionDecisions);
+  // and every decision of the workspace the Decisions page's Team view reads
+  // (listForTeam), each feed pruning only its own rows (hooks/useSyncSessionDecisions);
   // `in_queue` marks the viewer's own, which the queue surfaces read.
   sessionDecisions: {
     writtenBy: ["sessionDecisions"],
-    feeds: ["sessionDecisions.listForUser", "sessionDecisions.listOpenForLines"],
+    feeds: ["sessionDecisions.listForUser", "sessionDecisions.listOpenForLines", "decisionTeamList.listForTeam"],
+    // The Team feed's stamp survives the queue feed's push of the same row, so the row stays in the Team view.
+    sync: { preserveFields: ["team_workspace"] },
     persistence: { kind: "collection", key: "sessionDecisions" },
     hydration: { phase: "deferred" },
     localFirst: true,
