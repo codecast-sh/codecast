@@ -525,6 +525,7 @@ import type * as slackSchema from "../slackSchema.js";
 import type * as slackSync from "../slackSync.js";
 import type * as smallViewContracts from "../smallViewContracts.js";
 import type * as sources_app from "../sources/app.js";
+import type * as sources_appMetrics from "../sources/appMetrics.js";
 import type * as sources_appViews from "../sources/appViews.js";
 import type * as sources_posthog from "../sources/posthog.js";
 import type * as sources_replayBackfill from "../sources/replayBackfill.js";
@@ -1110,6 +1111,7 @@ declare const fullApi: ApiFromModules<{
   slackSync: typeof slackSync;
   smallViewContracts: typeof smallViewContracts;
   "sources/app": typeof sources_app;
+  "sources/appMetrics": typeof sources_appMetrics;
   "sources/appViews": typeof sources_appViews;
   "sources/posthog": typeof sources_posthog;
   "sources/replayBackfill": typeof sources_replayBackfill;
