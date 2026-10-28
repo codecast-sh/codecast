@@ -505,9 +505,12 @@ const LONG_RUNNING_RECENT_MS = 7 * 24 * 60 * 60 * 1000;
 async function longRunningSessions(ctx: Ctx, scan: OrgScanResult, now: number, work: AnalysisHandoff, userId: Id<"users">, teamId: Id<"teams"> | undefined) {
   // The live recurring routines, by the session each wakes, read once ahead
   // of the ranking so every old session is judged by the same facts.
+  // Each member's own routines, never the server's: a routine runs as the
+  // person who armed it, and that person is a member of the workspace whose
+  // session it wakes.
   const routinesBySession = new Map<string, any[]>();
-  for (const status of ["scheduled", "running"] as const) {
-    const routineRows: any[] = await ctx.db.query("agent_tasks").withIndex("by_status_run_at", (q: any) => q.eq("status", status)).collect();
+  for (const memberId of scan.memberIds) for (const status of ["scheduled", "running"] as const) {
+    const routineRows: any[] = await ctx.db.query("agent_tasks").withIndex("by_user_status", (q: any) => q.eq("user_id", memberId).eq("status", status)).collect();
     for (const routine of routineRows) {
       if (routine.schedule_type === "once" || !routine.originating_conversation_id) continue;
       const k = String(routine.originating_conversation_id);
