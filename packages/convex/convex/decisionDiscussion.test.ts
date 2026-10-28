@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { decisionOwner, discussCore, discussionTurns } from "./decisionDiscussion";
+import { decisionOwner, discussionTurns } from "./decisionDiscussion";
 import { formatDecisionDiscussion, parseDecisionDiscussion } from "@codecast/shared/contracts";
 
 // Every decision has a session to discuss it with (ct-58330): the session
 // that presents it, falling to the run's starter, the project lead's standing
 // session, then the workspace agent, and a person's words reach it on the
-// pending message rail with the owner's reply read back from its transcript.
+// pending message rail (decisionThread.test.ts) with the owner's reply read
+// back from its transcript.
 
 const HOST = "users_host" as any;
 const BOT = "users_bot" as any; // an agent account: runs sessions, reads no queue
@@ -141,43 +142,6 @@ describe("decisionOwner", () => {
     tables.org_roles[0].status = "retired";
     const owner = await decisionOwner(ctx, decision({ conversation_id: "conversations_runlog", workflow_run_id: "workflow_runs_detached" }) as any);
     expect(owner?.via).toBe("workspace");
-  });
-});
-
-describe("discussCore", () => {
-  test("the words reach the owner as a decision-discussion frame and the ask is recorded", async () => {
-    const { ctx, tables } = seed({ session_decisions: [decision({ conversation_id: "conversations_runlog", workflow_run_id: "workflow_runs_detached" })] });
-    const r = await discussCore(ctx, HOST, { decision: "sd-9", text: "Why does this need a new table?", client_id: "c1" });
-    expect(r).toEqual({ ok: true, conversation_id: "conversations_lead" as any });
-    const sent = tables.pending_messages.find((m) => m.client_id === "c1");
-    expect(String(sent.conversation_id)).toBe("conversations_lead");
-    expect(sent.human).toBe(true);
-    const frame = parseDecisionDiscussion(sent.content);
-    expect(frame).toEqual({ decision: "sd-9", from: "Ashot", about: 'About sd-9 ("Ship the cart fix?"):', body: "Why does this need a new table?" });
-    const row = tables.session_decisions[0];
-    expect(row.discussion).toHaveLength(1);
-    expect(row.discussion[0]).toMatchObject({ conversation_id: "conversations_lead", text: "Why does this need a new table?", client_id: "c1" });
-  });
-
-  test("a redelivered send is one ask and one message", async () => {
-    const { ctx, tables } = seed({ session_decisions: [decision()] });
-    await discussCore(ctx, HOST, { decision: "session_decisions_d1", text: "hm?", client_id: "c2" });
-    await discussCore(ctx, HOST, { decision: "session_decisions_d1", text: "hm?", client_id: "c2" });
-    expect(tables.session_decisions[0].discussion).toHaveLength(1);
-    expect(tables.pending_messages.filter((m) => m.client_id === "c2")).toHaveLength(1);
-  });
-
-  test("someone who cannot read the decision cannot discuss it", async () => {
-    const { ctx, tables } = seed({ session_decisions: [decision({ conversation_id: "conversations_lead" })] });
-    tables.conversations.find((c) => c._id === "conversations_lead")!.is_private = true;
-    const r = await discussCore(ctx, OUTSIDER, { decision: "sd-9", text: "let me in", client_id: "c3" });
-    expect(r).toEqual({ error: "Decision not found" });
-    expect(tables.pending_messages).toHaveLength(0);
-  });
-
-  test("an empty message is refused", async () => {
-    const { ctx } = seed({ session_decisions: [decision()] });
-    expect(await discussCore(ctx, HOST, { decision: "sd-9", text: "   ", client_id: "c4" })).toEqual({ error: "The message is empty" });
   });
 });
 

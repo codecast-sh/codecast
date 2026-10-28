@@ -28,6 +28,9 @@ const restoreGlobals = replaceGlobals({
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
+  // The chat's composer (the shared comment composer) measures and watches itself.
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+  MutationObserver: dom.window.MutationObserver,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 

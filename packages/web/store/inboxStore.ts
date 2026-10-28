@@ -23,6 +23,7 @@ import { parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 import { create } from "zustand";
+import { decisionCommentStub, decisionCommentStubId, type DecisionCommentRow, type DecisionThreadItem } from "./decisionThreadTypes";
 import { useSyncExternalStore, useRef } from "react";
 import {
   mutativeMiddleware,
@@ -1510,29 +1511,8 @@ export type HandledDecisionItem = SessionDecisionItem & {
 // The document page's context (sessionDecisions.getWithDoc), keyed by the
 // decision id: the doc body, the task, the stack, the ladder with role names,
 // the people, the holder role, and the grant offer.
-// The discussion of one decision (convex decisionDiscussion.discussion): who
-// owns it, resolved now, and each ask with the owner's reply read from its
-// transcript. One row per decision viewed, keyed by the decision's Convex id.
-export type DecisionDiscussionOwnerVia = "asker" | "run" | "lead" | "workspace";
-export type DecisionDiscussionTurn = {
-  client_id: string;
-  text: string;
-  at: number;
-  user_id: string;
-  by: string;
-  conversation_id: string;
-  delivered: boolean;
-  reply: { text: string; at: number } | null;
-};
-export type DecisionDiscussionItem = {
-  _id: string;
-  decision_short_id?: string;
-  owner: { conversation_id: string; short_id?: string; name: string; via: DecisionDiscussionOwnerVia } | null;
-  turns: DecisionDiscussionTurn[];
-};
-/** A person's words to a decision's owner on their way: painted at once,
- *  retired when the server's row carries the same client id. */
-export type DecisionDiscussionSend = { client_id: string; text: string; at: number };
+// A decision's team thread (convex decisionThread.ts): store/decisionThreadTypes.ts.
+export type { DecisionThreadItem, DecisionCommentRow, DecisionThreadOwnerVia } from "./decisionThreadTypes";
 
 export type DecisionDetailItem = {
   _id: string;
@@ -6319,15 +6299,18 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   decisionStacks: Record<string, DecisionStackItem>;
   handledDecisions: Record<string, HandledDecisionItem>;
   decisionDetails: Record<string, DecisionDetailItem>;
-  decisionDiscussions: Record<string, DecisionDiscussionItem>;
-  // Local echoes of discussDecision, by decision id. Ephemeral like
-  // questionResolutions: a reload reads server truth.
-  discussionSends: Record<string, DecisionDiscussionSend[]>;
-  // A person's words to the session that owns a decision (decisionDiscussion.ts).
-  // Resolves with the server's answer; a refusal comes back as { error } (sendDiscussion).
-  discussDecision: (decisionId: string, text: string, clientId: string) => Promise<unknown>;
-  // Takes back a local echo the server refused.
-  dropDiscussionSend: (decisionId: string, clientId: string) => void;
+  decisionThreads: Record<string, DecisionThreadItem>;
+  decisionComments: Record<string, DecisionCommentRow>;
+  // A comment in a decision's team thread, relayed to the session that owns it (decisionThread.ts).
+  // Resolves with the server's answer; a refusal comes back as { error } (lib/decisionThread sendDecisionComment).
+  commentOnDecision: (decisionId: string, text: string, clientId: string, parentId?: string) => Promise<unknown>;
+  // Takes back a stub the server refused.
+  dropDecisionComment: (clientId: string) => void;
+  // Ask the decision's session about its thread: a "thinking" placeholder its answer fills.
+  askDecisionSession: (decisionId: string, clientId: string) => Promise<unknown>;
+  editDecisionComment: (commentId: string, text: string) => Promise<unknown>;
+  deleteDecisionComment: (commentId: string) => Promise<unknown>;
+  resolveDecisionThread: (decisionId: string, resolved: boolean) => void;
   // Resolve a decision locally (status flips instantly; patch rides the
   // outbox) and, for answers, send the chosen option into the session as a
   // normal user message. `text` is the free-form escape hatch. The promise is
@@ -9802,8 +9785,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   decisionStacks: {},
   handledDecisions: {},
   decisionDetails: {},
-  decisionDiscussions: {},
-  discussionSends: {},
+  decisionThreads: {},
+  decisionComments: {},
   questionResolutions: {},
   // sync(): local-only bookkeeping — the mark never dispatches; server truth
   // arrives on its own rail (awaiting_input / agent_status) and expires it.
@@ -9819,21 +9802,33 @@ const inboxStoreConfig = (set: any, get: any) => ({
     adoptDecisionDraft(this, decisionId);
     answerDecisionDraft(this, decisionId, answer);
   }),
-  // The words paint at once as a local echo; the discussDecision side effect
-  // delivers them to the owner and records the ask, and the discussion feed's
-  // row carrying the same client id retires the echo (lib/decisionDiscussion).
-  // A refusal (discussCore's { error }) is returned, not thrown, so the caller
-  // awaits it and takes the echo back (lib/decisionDiscussion sendDiscussion).
-  discussDecision: asyncAction(function (this: Draft, decisionId: string, text: string, clientId: string) {
-    const sends = (this.discussionSends[decisionId] ??= []);
-    if (!sends.some((x) => x.client_id === clientId)) sends.push({ client_id: clientId, text: text.trim(), at: Date.now() });
+  // The comment paints at once as a stub; the commentOnDecision side effect
+  // writes the row and relays it to the session that owns the decision, and
+  // the thread feed's row with the same client id supersedes the stub. A
+  // refusal (commentCore's { error }) is returned, not thrown, so the caller
+  // awaits it and takes the stub back (lib/decisionThread sendDecisionComment).
+  commentOnDecision: asyncAction(function (this: Draft, decisionId: string, text: string, clientId: string, parentId?: string) {
+    const me = (this as any).currentUser as { _id?: string; name?: string } | undefined;
+    const stub = decisionCommentStub({ decisionId, text, clientId, parentId, me });
+    this.decisionComments[stub._id] = stub;
   }),
-  dropDiscussionSend: sync(function (this: Draft, decisionId: string, clientId: string) {
-    const sends = this.discussionSends[decisionId];
-    if (!sends) return;
-    const kept = sends.filter((x) => x.client_id !== clientId);
-    if (kept.length) this.discussionSends[decisionId] = kept;
-    else delete this.discussionSends[decisionId];
+  dropDecisionComment: sync(function (this: Draft, clientId: string) {
+    delete this.decisionComments[decisionCommentStubId(clientId)];
+  }),
+  askDecisionSession: asyncAction(function (this: Draft, decisionId: string, clientId: string) {
+    const stub = decisionCommentStub({ decisionId, text: "", clientId, me: undefined });
+    this.decisionComments[stub._id] = { ...stub, author_kind: "agent", agent_status: "thinking", author_name: "" };
+  }),
+  editDecisionComment: asyncAction(function (this: Draft, commentId: string, text: string) {
+    const row = this.decisionComments[commentId];
+    if (row) { row.content = text.trim(); row.updated_at = Date.now(); }
+  }),
+  deleteDecisionComment: asyncAction(function (this: Draft, commentId: string) {
+    delete this.decisionComments[commentId];
+  }),
+  resolveDecisionThread: action(function (this: Draft, decisionId: string, resolved: boolean) {
+    const now = Date.now();
+    for (const row of Object.values(this.decisionComments)) if (row.decision_id === decisionId) row.resolved_at = resolved ? now : undefined;
   }),
   // A decision the viewer may answer but whose queue row they lack: a role on
   // its ladder heard it first (org-staffing.md S28), or it was asked of

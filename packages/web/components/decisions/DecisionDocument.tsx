@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ArrowLeft, Check, MessageSquare, MessagesSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionDetailItem } from "../../store/inboxStore";
 import { useSyncTaskEvidence, useTaskEvidenceByShortId } from "../../hooks/useSyncTaskEvidence";
-import { useDecisionDiscussion } from "../../hooks/useDecisionDiscussion";
+import { useDecisionThread } from "../../hooks/useDecisionThread";
 import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
 import { DoubtChip } from "../line/DoubtChip";
 import { formatTimeAgo } from "../../lib/messageNavigator";
@@ -54,7 +54,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   // A card's cause task may carry the author's change guide; its evidence row holds it.
   useSyncTaskEvidence(a.cardTask);
   const guide = useTaskEvidenceByShortId(a.cardTask)?.change_guide ?? null;
-  const discussion = useDecisionDiscussion(decision._id);
+  const discussion = useDecisionThread(decision._id);
   const [discussOpen, setDiscussOpen] = useState(false);
 
   // The page stands on the thread that asked: scrolling up off its top opens
@@ -140,17 +140,14 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           >
             <MessagesSquare className="w-3.5 h-3.5" />Thread
           </button>
-          {(discussion.owner || discussion.thread.length > 0) && (<>
-            <button
-              type="button"
-              onClick={() => { setDiscussOpen(true); requestAnimationFrame(() => document.getElementById("discuss")?.scrollIntoView({ block: "nearest", behavior: "smooth" })); }}
-              className="inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-cyan/60 hover:text-sol-cyan transition-colors"
-              data-decision-discuss-button
-            >
-              <MessageSquare className="w-3.5 h-3.5" />{discussion.thread.length ? "Reply in the discussion" : "Discuss"}
-            </button>
-            {discussion.owner && <span className="text-[12px] text-sol-text-dim">Opens a thread with {discussion.owner.name ?? "the session that asked"} about this {decision.card ? "card" : "decision"}.</span>}
-          </>)}
+          <button
+            type="button"
+            onClick={() => { setDiscussOpen(true); requestAnimationFrame(() => document.getElementById("discuss")?.scrollIntoView({ block: "nearest", behavior: "smooth" })); }}
+            className="inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-cyan/60 hover:text-sol-cyan transition-colors"
+            data-decision-discuss-button
+          >
+            <MessageSquare className="w-3.5 h-3.5" />Comment{discussion.rows.length > 0 && <span className="text-sol-text-dim">{discussion.rows.length}</span>}
+          </button>
         </div>
 
         {/* Sticky, so it is a sibling of the page's sections, not inside the header. */}
@@ -222,11 +219,11 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           )}
         </section>}
 
-        {/* ── Discuss: with the session that owns the decision (ct-58330);
-            the button by the status opens it, so it shows once in use ── */}
-        {(discussOpen || discussion.thread.length > 0) && (
+        {/* ── The team thread (ct-74449): people and the session that owns the
+            decision; the button by the status opens it, so it shows once in use ── */}
+        {(discussOpen || discussion.rows.length > 0) && (
           <section className="mt-8" id="discuss" data-decision-discuss-section>
-            <h2 className="decision-kicker mb-3">Discussion</h2>
+            <h2 className="decision-kicker mb-3">Comments</h2>
             <DecisionDiscussion decisionId={decision._id} open={discussOpen} onOpenChange={setDiscussOpen} bare />
           </section>
         )}

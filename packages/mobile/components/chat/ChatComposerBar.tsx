@@ -7,6 +7,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { useConvex } from 'convex/react';
 import { useTypingReporter } from '@codecast/web/hooks/useChatTyping';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MentionStrip, type MentionCandidate } from './MentionStrip';
 import {
@@ -25,6 +26,9 @@ import { NativePressable } from '@/lib/gestureHandler';
 //
 // Typing is web's own useTypingReporter: a throttled chatTyping.set while
 // composing, a clear on send / empty / scope change / unmount.
+//
+// `draftKey` keeps the draft in the store's drafts (the web composer's key for
+// the same box), so it survives leaving the screen and follows to the web.
 
 export type ComposerEdit = { messageId: string; content: string };
 
@@ -38,6 +42,7 @@ export function ChatComposerBar({
   onCancelEdit,
   onSubmitEdit,
   onSend,
+  draftKey,
 }: {
   channelId: string | undefined;
   threadRootId?: string;
@@ -51,9 +56,11 @@ export function ChatComposerBar({
   onCancelEdit?: () => void;
   onSubmitEdit?: (messageId: string, content: string) => void;
   onSend: (content: string, attachments: ChatAttachmentArg[]) => void;
+  draftKey?: string;
 }) {
   const Theme = useTheme();
   const convex = useConvex();
+  const [storedDraft] = useState(() => (draftKey ? String(useInboxStore.getState().drafts[draftKey]?.draft_message ?? '') : ''));
   const {
     value: draft,
     setValue: setDraft,
@@ -61,7 +68,7 @@ export function ChatComposerBar({
     epoch,
     inputRef,
     clearAfterSend,
-  } = useComposerField('');
+  } = useComposerField(storedDraft);
   const [images, setImages] = useState<PickedImage[]>([]);
 
   // ── Edit mode ─────────────────────────────────────────────────────────────
@@ -83,11 +90,25 @@ export function ChatComposerBar({
   // ── Typing report ─────────────────────────────────────────────────────────
   const { onTyping: reportTyping, stop: stopTyping } = useTypingReporter(channelId, threadRootId);
 
+  // The stored draft follows the box on a debounce, never per keystroke.
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const keepDraft = useCallback((text: string) => {
+    if (!draftKey) return;
+    clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      const st = useInboxStore.getState();
+      if (text.trim()) st.setDraft(draftKey, { draft_message: text });
+      else st.clearDraft(draftKey);
+    }, 400);
+  }, [draftKey]);
+  useEffect(() => () => clearTimeout(draftTimer.current), []);
+
   const onChangeText = useCallback((text: string) => {
     applyChange(text);
+    if (!editing) keepDraft(text);
     if (text.trim()) reportTyping();
     else stopTyping();
-  }, [applyChange, reportTyping, stopTyping]);
+  }, [applyChange, reportTyping, stopTyping, keepDraft, editing]);
 
   // ── Attachments ───────────────────────────────────────────────────────────
   const onAttach = useCallback(async () => {
@@ -131,10 +152,11 @@ export function ChatComposerBar({
     // restore the just-sent buffer.
     clearAfterSend(content);
     setImages([]);
+    if (draftKey) { clearTimeout(draftTimer.current); useInboxStore.getState().clearDraft(draftKey); }
     stopTyping();
     if (Platform.OS === 'ios') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onSend(content, attachments);
-  }, [draft, images, editing, onSubmitEdit, onCancelEdit, onSend, stopTyping, clearAfterSend, inputRef]);
+  }, [draft, images, editing, onSubmitEdit, onCancelEdit, onSend, stopTyping, clearAfterSend, inputRef, draftKey]);
 
   return (
     <RNView>

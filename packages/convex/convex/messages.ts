@@ -48,6 +48,7 @@ import { countMatches, parseSearchTerms } from "@codecast/shared/search";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
 import { nextAgentStatusOnAddMessages, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, parkWalk, liftsPark, isBannerTurn, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { markAnsweredReviewNotes } from "./lib/reviewAnswered";
+import { relayDecisionReply } from "./decisionThread";
 import { extractFileChanges, extractCommitHashFromContent, extractCommitBranchFromContent, hasFileChangeToolCall, type FileChange, type FileChangeBody, type FileChangeRef } from "./fileChanges/extractor";
 import { activityLine } from "@codecast/shared/render";
 import type { SessionActivity } from "@codecast/shared/contracts";
@@ -1318,6 +1319,7 @@ export const addMessage = mutation({
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     if (args.role === "assistant") await markAnsweredReviewNotes(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp });
+    if (args.role === "assistant") await relayDecisionReply(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp, subtype: args.subtype });
     const newMessageCount = conversation.message_count + 1;
     const now = Date.now();
 
@@ -2005,6 +2007,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     if (msg.role === "assistant") await markAnsweredReviewNotes(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp });
+    if (msg.role === "assistant") await relayDecisionReply(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp, subtype: msg.subtype });
     if (msg.role === "user") lastUserContentStored = contentToStore;
   }
 

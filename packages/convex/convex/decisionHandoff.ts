@@ -11,6 +11,9 @@
 // whom), so it sorts first in the queues of the people it went to. A later
 // pass clears the flag: the decision has a deliberately chosen owner again.
 //
+// Both leave an entry in the decision's thread (decisionThread.ts): who
+// handed it to whom, with the note.
+//
 // Unassign: a pass or an escalation taken back; the decision returns to the
 // people it was asked of before the first hand-off.
 //
@@ -27,6 +30,7 @@ import { emitNotification } from "./notificationRouter";
 import { userCanAccessRole } from "./lib/orgAccess";
 import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { resolveAskedPeople } from "./lib/decisionAudience";
+import { recordHandoffEntry } from "./decisionThread";
 import { HOSTED_ANSWER_REFUSED, refreshHolder, rerouteRow, syncDecisionInbox, tellHearingRole } from "./sessionDecisions";
 
 type Ctx = { db: any; scheduler?: any };
@@ -98,6 +102,7 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
     await ctx.db.patch(row._id, { passed_to, escalated: undefined, holder: { kind: "user", id: to.id }, holder_key: `user:${to.id}`, asked_user_ids: [target._id], updated_at: now });
     await syncDecisionInbox(ctx, row._id, [target._id], now);
     await noticeHandoff(ctx, row, "decision_passed", userId, [target._id], note);
+    await recordHandoffEntry(ctx, row, { event: "passed", by: userId, to: { kind: "user", ids: [String(target._id)] }, note, at: now });
     return { passed: true };
   }
   const role = await ctx.db.get(to.id as Id<"org_roles">);
@@ -110,6 +115,7 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
     ? row.hops
     : [...(row.hops ?? []), { role_id: role._id, at: now }];
   await ctx.db.patch(row._id, { passed_to, escalated: undefined, holder: { kind: "role", id: to.id }, holder_key: `role:${to.id}`, hops, updated_at: now });
+  await recordHandoffEntry(ctx, row, { event: "passed", by: userId, to: { kind: "role", ids: [String(role._id)] }, note, at: now });
   return { passed: true };
 }
 
@@ -151,6 +157,7 @@ export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: st
   });
   await syncDecisionInbox(ctx, row._id, to, now);
   await noticeHandoff(ctx, row, "decision_escalated", userId, to, note);
+  await recordHandoffEntry(ctx, row, { event: "escalated", by: userId, to: { kind: "user", ids: to.map(String) }, note, at: now });
   return { escalated: true, to };
 }
 

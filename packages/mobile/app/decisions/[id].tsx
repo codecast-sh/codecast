@@ -19,6 +19,7 @@ import { AnswerButton, AnswerControls, appAnswerLook } from '@/components/decisi
 import { decisionAnswerLabel } from '@codecast/shared/contracts';
 import { approvesSecretRead } from '@codecast/shared/contracts/secrets';
 import { confirmPresence } from '@/lib/presence';
+import { DecisionThread } from '@/components/decisions/DecisionThread';
 
 const pageUrl = (slug: string) => `https://codecast.sh/a/${slug}`;
 
@@ -197,6 +198,7 @@ export default function DecisionScreen() {
             ) : null}
           </View>
           {handoff ? <HandoffPanel key={handoff} mode={handoff} decisionId={decisionId} holderKey={row?.holder_key} onDone={goNext} /> : null}
+          <DecisionThread decisionId={decisionId} conversationId={item?.conversationId ?? row?.conversation_id} />
         </ScrollView>
       </KeyboardAvoidingView>
     </>

@@ -52,6 +52,12 @@ export type Comment = {
   // row supersedes the stub via the comments altKey config.
   client_id?: string | null;
   user?: CommentUser | null;
+  /** An agent row that names its own speaker (a decision thread's comments
+   *  come from whichever session was asked), over the surface's agent name. */
+  author_name?: string | null;
+  /** A thread event rather than words: "passed to Samvit". Drawn as one line
+   *  under its author, with the content as its note; no reply or edit. */
+  event?: string | null;
 };
 
 export type CommentThread = {
@@ -143,7 +149,7 @@ export function isAgentComment(c: Comment): boolean {
  *  (useConversationSpeaker): a role's given name, a character's, or the
  *  agent's product name. */
 export function commentAuthorName(c: Comment, currentUserId?: string, agentName?: string): string {
-  if (isAgentComment(c)) return agentName ?? agentDisplayName(undefined);
+  if (isAgentComment(c)) return c.author_name || (agentName ?? agentDisplayName(undefined));
   const u = c.user;
   const name = u?.name || u?.github_username || "";
   if (name) return name;
@@ -158,4 +164,24 @@ export function commentAuthorAvatar(c: Comment): string | undefined {
 
 export function isOwnComment(c: Comment, currentUserId?: string): boolean {
   return !!currentUserId && !isAgentComment(c) && c.user_id === currentUserId;
+}
+
+/** Where a thread's news starts for the reader: the first comment past their
+ *  read mark that someone else wrote (an agent's always counts). -1 for none. */
+export function firstUnreadIndex(comments: Comment[], readAt: number | undefined, currentUserId?: string): number {
+  if (readAt === undefined) return -1;
+  return comments.findIndex((c) => c.created_at > readAt && !isOwnComment(c, currentUserId) && !(c.agent_status === "thinking" && !c.content));
+}
+
+/** The text with each uploaded image appended as a markdown image. */
+export async function withImages(
+  text: string,
+  images: Array<{ storageId?: string }> | undefined,
+  urlsFor: (ids: string[]) => Promise<Record<string, string | null>>,
+): Promise<string> {
+  const ids = (images ?? []).map((i) => i.storageId).filter((id): id is string => !!id);
+  if (ids.length === 0) return text;
+  const urls = await urlsFor(ids);
+  const marks = ids.map((id) => urls[id]).filter((u): u is string => !!u).map((u) => `![image](${u})`);
+  return [text.trim(), ...marks].filter(Boolean).join("\n\n");
 }

@@ -17,13 +17,14 @@ import { isSilentAgentRow } from "@codecast/shared/chat";
 import { commentThreadRootKey } from "@codecast/shared/comments";
 import { isHumanOrigin } from "@codecast/shared/tasks";
 
-export type ThreadKind = "chat" | "comment" | "task" | "page" | "code";
+export type ThreadKind = "chat" | "comment" | "task" | "page" | "code" | "decision";
 export const threadKindValidator = v.union(
   v.literal("chat"),
   v.literal("comment"),
   v.literal("task"),
   v.literal("page"),
   v.literal("code"),
+  v.literal("decision"),
 );
 
 /** How many participants one touch may file. A thread with more readers than
@@ -109,6 +110,8 @@ export type ThreadRefs = {
   repository?: string;
   ref?: string;
   pull_request_id?: Id<"pull_requests">;
+  // Decision kind only: the session decision the thread hangs on.
+  decision_id?: Id<"session_decisions">;
 };
 
 export type TouchThreadOptions = {

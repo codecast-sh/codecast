@@ -18,6 +18,7 @@ import {
   markViewRead,
   newVisit,
   serverCards,
+  withoutThreadedQuestions,
   sortCards,
   unreadByChip,
   visibleChips,
@@ -112,7 +113,7 @@ export function ThreadsView({ present, reading }: { present: boolean; reading: b
     const tasks = st.tasks as Record<string, { short_id?: string }>;
     const pages = st.pageThreads as Record<string, { slug?: string }>;
     const server = serverCards(rows, (id) => railById.get(id)?.kind, (id) => tasks[id]?.short_id, (id) => pages[id]?.slug, viewerId);
-    return [...server, ...dmCards(chatOn ? rail : []), ...sessionCardList, ...questionCardList];
+    return [...server, ...dmCards(chatOn ? rail : []), ...sessionCardList, ...withoutThreadedQuestions(questionCardList, rows)];
     // taskShortSig / pageSlugSig are the wakes for the id lookups.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, rail, chatOn, sessionCardList, questionCardList, taskShortSig, pageSlugSig, viewerId]);

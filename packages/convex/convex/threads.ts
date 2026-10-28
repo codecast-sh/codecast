@@ -37,6 +37,7 @@ import { canAccessComment, codeThreadRows } from "./codeComments";
 import { canAccessConversation, canAccessTask } from "./lib/access";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
 import { matchHandle } from "./lib/mentionResolve";
+import { decisionThreadKind } from "./decisionThread";
 import {
   THREAD_BADGE_SCAN,
   agentCommentLevelOf,
@@ -80,6 +81,9 @@ export type ThreadInboxEntry = {
   repository?: string;
   ref?: string;
   pull_request_id?: string;
+  decision_id?: string;
+  /** The thread's subject when the kind names one: a decision's question. */
+  title?: string;
   last_activity_at: number;
   last_read_at: number;
   updated_at: number;
@@ -198,6 +202,7 @@ type ThreadKindResolver = {
   /** The reply the collapsed row previews: the newest one that is news for
    *  the viewer, else the newest at all. */
   preview(ctx: ReadCtx, userId: Id<"users">, row: ThreadRead, cache: PageCache): Promise<ThreadLastReply | null>;
+  title?(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<string | undefined>;
 };
 
 // ── chat ────────────────────────────────────────────────────────────────────
@@ -619,6 +624,8 @@ const THREAD_KINDS: Record<ThreadKind, ThreadKindResolver> = {
   task: taskKind,
   page: pageKind,
   code: codeKind,
+  // A decision's team thread (decisionThread.ts).
+  decision: decisionThreadKind as ThreadKindResolver,
 };
 
 // ── Queries ─────────────────────────────────────────────────────────────────
@@ -693,6 +700,8 @@ export const listMine = query({
         repository: row.repository,
         ref: row.ref,
         pull_request_id: row.pull_request_id,
+        decision_id: row.decision_id,
+        title: kind.title ? await kind.title(ctx, row, cache) : undefined,
         last_activity_at: row.last_activity_at,
         last_read_at: row.last_read_at,
         updated_at: row.updated_at,

@@ -28,7 +28,7 @@ import type { DecisionDetailItem, InboxSession, SessionDecisionItem } from "../.
 import { useInboxStore } from "../../../store/inboxStore";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../hooks/useSyncDecisionDetail";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-import { useDecisionDiscussion } from "../../../hooks/useDecisionDiscussion";
+import { useDecisionThread } from "../../../hooks/useDecisionThread";
 import { useTrialCards, useTrialHref, useTrialProjects } from "../../../hooks/useSyncTrial";
 import { bareVerbAnswers, recommendedOption, trialWords } from "../../../lib/line/fixDecision";
 import { cardAsRead, cardProse, proposalAsRead } from "../../../lib/trialEvidence";
@@ -178,7 +178,7 @@ export function LineDecisionBody({ decision, detail, answerable, source, onProbl
   const askingSession = useInboxStore((s) => s.sessions[decision.conversation_id] as InboxSession | undefined);
   const talkable = !((decision.status === "withdrawn" || decision.status === "dismissed") && (!askingSession || !!askingSession.inbox_killed_at || askingSession.status === "completed"));
   // The chat stays folded to one line until it holds a message or the person opens it: an empty column is noise beside the decision.
-  const { thread: talkThread } = useDecisionDiscussion(decision._id, talkable);
+  const { rows: talkThread } = useDecisionThread(decision._id, talkable);
   const [talkOpen, setTalkOpen] = useState(false);
   // Closed by its own Esc, a chat that holds messages stays closed until it is asked for again.
   const [talkClosed, setTalkClosed] = useState(false);
@@ -365,7 +365,7 @@ function Asker({ decision, label }: { decision: SessionDecisionItem; label?: str
  * session that asked, so nobody mistakes one for the other.
  */
 function Talk({ decision, label, onClose }: { decision: SessionDecisionItem; label?: string; onClose: () => void }) {
-  const { owner, thread } = useDecisionDiscussion(decision._id);
+  const { owner, rows: thread } = useDecisionThread(decision._id);
   const elsewhere = !!owner && owner.via !== "asker";
   // The session the words go to: its messages are the transcript above the box.
   const sessionId = owner?.conversation_id ?? decision.conversation_id;
@@ -392,13 +392,13 @@ function Talk({ decision, label, onClose }: { decision: SessionDecisionItem; lab
       {session && (earlier ? (
         <div className="ld-talk-said" data-line-decision-said>
           <PublishedPagesAsLinks.Provider value>
-            <SessionInlineThread session={session} seen={false} maxRows={6} foot={false} composer={false} before={thread[0]?.at} />
+            <SessionInlineThread session={session} seen={false} maxRows={6} foot={false} composer={false} before={thread[0]?.created_at} />
           </PublishedPagesAsLinks.Provider>
         </div>
       ) : (
         <button type="button" className="ld-talk-earlier" onClick={() => setEarlier(true)} data-line-decision-earlier>Its work before it asked</button>
       ))}
-      <DecisionDiscussion decisionId={decision._id} open onOpenChange={(o) => { if (!o) onClose(); }} askerName={label ? label.replace(/^The /, "the ") : undefined} />
+      <DecisionDiscussion decisionId={decision._id} open askFirst onOpenChange={(o) => { if (!o) onClose(); }} askerName={label ? label.replace(/^The /, "the ") : undefined} />
     </>
   );
 }

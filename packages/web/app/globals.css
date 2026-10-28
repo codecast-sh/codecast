@@ -3092,6 +3092,23 @@ diffs-container {
 }
 .cc-cmt-replying svg { color: var(--cc-accent); opacity: 0.75; }
 
+/* Where the reader's news starts, and the news itself. */
+.cc-thread-new {
+  display: flex; align-items: center; gap: 0.4rem; margin: 0.2rem 0.25rem;
+  font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-cyan);
+}
+.cc-thread-new::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--sol-cyan) 45%, transparent); }
+.cc-cmt-new .cc-cmt-name::before {
+  content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 999px;
+  background: var(--sol-cyan); margin-right: 0.3rem; vertical-align: 1px;
+}
+/* A thread event (a hand-off): the author and what they did, on one line. */
+.cc-cmt-event .cc-cmt-main { padding-left: 0.1rem; }
+.cc-cmt-event-words { font-size: 0.72rem; color: var(--sol-text-muted); }
+/* Resolve / Reopen under the thread. */
+.cc-thread-resolve { display: flex; align-items: center; gap: 0.5rem; padding: 0.1rem 0.5rem 0.2rem; }
+.cc-thread-resolved { font-size: 0.66rem; color: var(--sol-green); }
+
 /* Composer Cancel footer (matches the left editor footer). */
 .cc-cmt-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.25rem; }
 /* Ping <agent> button — agent logo + name, clean (no violet, no sparkle). */

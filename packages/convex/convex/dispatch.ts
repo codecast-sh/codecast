@@ -13,7 +13,7 @@ import { applyAreasCore } from "./decisionAreas";
 import { shareOutCore } from "./decisionShareOut";
 import type { AreaAssignment } from "@codecast/shared/contracts/decisionAreas";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
-import { discussCore } from "./decisionDiscussion";
+import { askCore as askDecisionCore, commentCore, deleteCore as deleteDecisionCommentCore, editCore as editDecisionCommentCore, resolveCore as resolveDecisionThreadCore } from "./decisionThread";
 import { sendLineChatCore } from "./lineChat";
 import { clearHoldCore, setOnCore, startLiveFlowCore } from "./liveFlows";
 import type { ThreadKind } from "./threadReads";
@@ -615,10 +615,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Who decides for which areas, from the map "Change areas" previewed; and Share out's previewed moves (decisionAreas.ts, decisionShareOut.ts).
   applyDecisionAreas: async (ctx, userId, [teamId, map]: [string, AreaAssignment[]]) => applyAreasCore(ctx, userId, teamId as Id<"teams">, map),
   shareOutDecisions: async (ctx, userId, [teamId, moves]: [string, Array<{ decision_id: string; to: string }>]) => shareOutCore(ctx, userId, teamId as Id<"teams">, moves),
-  // A person's words to the session that owns a decision (decisionDiscussion.ts).
+  // A decision's team thread (decisionThread.ts): comment, ask its session, edit or delete your own, resolve.
   // A refusal is returned, not thrown: the outbox would redrive a throw forever.
+  askDecisionSession: async (ctx, userId, [decisionId, clientId]: [string, string]) => askDecisionCore(ctx, userId, { decision: decisionId, client_id: clientId }),
+  editDecisionComment: async (ctx, userId, [commentId, text]: [string, string]) => editDecisionCommentCore(ctx, userId, { comment_id: commentId, text }),
+  deleteDecisionComment: async (ctx, userId, [commentId]: [string]) => deleteDecisionCommentCore(ctx, userId, { comment_id: commentId }),
+  resolveDecisionThread: async (ctx, userId, [decisionId, resolved]: [string, boolean]) => resolveDecisionThreadCore(ctx, userId, { decision: decisionId, resolved }),
+  commentOnDecision: async (ctx, userId, [decisionId, text, clientId, parentId]: [string, string, string, string | undefined]) =>
+    commentCore(ctx, userId, { decision: decisionId, text, client_id: clientId, ...(parentId ? { parent_id: parentId } : {}) }),
+  // The name bundles from before the thread send under.
   discussDecision: async (ctx, userId, [decisionId, text, clientId]: [string, string, string]) =>
-    discussCore(ctx, userId, { decision: decisionId, text, client_id: clientId }),
+    commentCore(ctx, userId, { decision: decisionId, text, client_id: clientId }),
   // A person's words to the session that answers a project's line (lineChat.ts),
   // refused the same way: returned, never thrown.
   sendLineChat: async (ctx, userId, [projectId, text, clientId, graph, focus]: [string, string, string, string | null, string | null]) =>

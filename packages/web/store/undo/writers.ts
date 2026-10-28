@@ -256,6 +256,8 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
     "Written by resolveCommentThread and editComment, whose specs carry an inverse with the prior value; adds, deletes and agent asks are never undoable.",
   codeComments:
     "Written by resolveCodeCommentThread and editCodeComment, whose specs carry an inverse with the prior value; posts and deleteCodeComment are never undoable.",
+  decisionComments:
+    "Written by resolveDecisionThread and editDecisionComment, whose specs carry an inverse with the prior value; comments, asks and deleteDecisionComment are never undoable.",
   projectUpdates:
     "Written by editProjectUpdate, whose spec carries an inverse with the prior body; posts, comments and deletes are never undoable.",
   sessionReads: "Read state; never undoable.",

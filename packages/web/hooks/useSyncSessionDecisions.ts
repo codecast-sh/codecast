@@ -27,6 +27,8 @@ export function useSyncSessionDecisions() {
   // feed sends it again, so clearing them is safe; afterwards each prune's exclude carries `pruned` and needs none.
   useWatchEffect(() => { useInboxStore.getState().clearTombstones("sessionDecisions"); }, []);
   const { data: result } = useQueryNoThrow(api.sessionDecisions.listForUser, {});
+  // The viewer's decision threads with their unread (decisionThread.myThreads), so a decision's row shows its news.
+  useSyncCollection("threadInbox", api.decisionThread.myThreads, {});
   const syncTable = useInboxStore((s) => s.syncTable);
 
   useConvexSync(result, useCallback((data: any) => {

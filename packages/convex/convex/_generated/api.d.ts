@@ -121,6 +121,8 @@ import type * as decisionShareOut from "../decisionShareOut.js";
 import type * as decisionStacks from "../decisionStacks.js";
 import type * as decisionTeamBackfill from "../decisionTeamBackfill.js";
 import type * as decisionTeamList from "../decisionTeamList.js";
+import type * as decisionThread from "../decisionThread.js";
+import type * as decisionThreadBackfill from "../decisionThreadBackfill.js";
 import type * as decisions from "../decisions.js";
 import type * as deploys from "../deploys.js";
 import type * as deploysBackfill from "../deploysBackfill.js";
@@ -717,6 +719,8 @@ declare const fullApi: ApiFromModules<{
   decisionStacks: typeof decisionStacks;
   decisionTeamBackfill: typeof decisionTeamBackfill;
   decisionTeamList: typeof decisionTeamList;
+  decisionThread: typeof decisionThread;
+  decisionThreadBackfill: typeof decisionThreadBackfill;
   decisions: typeof decisions;
   deploys: typeof deploys;
   deploysBackfill: typeof deploysBackfill;

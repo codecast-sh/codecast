@@ -1,18 +1,25 @@
 import { X } from "lucide-react";
+import { useConvex } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDocPresence } from "../../hooks/useDocPresence";
 import { MessageInput } from "../MessageInput";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { PingAgentButton } from "./PingAgentButton";
 import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
-import { presenceDocId, commentAuthorName, type Comment } from "../../lib/commentThread";
+import { presenceDocId, commentAuthorName, withImages, type Comment } from "../../lib/commentThread";
 
 // Composer for one thread. Reuses the conversation's own MessageInput (mentions,
 // image paste, auto-grow, and a submit path that clears the box synchronously) in
 // `bareComposer` mode — no session chrome. The draft lives under an isolated
 // `comment:<thread>` key so it never collides with the conversation's own draft,
-// and we read it back to broadcast typing presence. The agent affordance lives in
-// the thread, not here.
+// and we read it back to broadcast typing presence. A thread that is not a
+// conversation's (a decision's) passes `scopeKey`, which keys both instead.
+// Pasted images upload as MessageInput uploads them and post as markdown
+// images, so every comment surface renders them. The agent affordance lives
+// in the thread, not here.
+
+const api = _api as any;
 
 export function CommentComposer({
   conversationId,
@@ -31,6 +38,7 @@ export function CommentComposer({
   className,
   mentionTeamId,
   chatMentionMode,
+  scopeKey,
 }: {
   conversationId: string;
   messageId?: string;
@@ -55,13 +63,16 @@ export function CommentComposer({
   mentionTeamId?: string;
   /** Insert a person as `@handle`, the form the server resolves. */
   chatMentionMode?: boolean;
+  /** Keys the draft and typing presence for a thread that is not a conversation's. */
+  scopeKey?: string;
 }) {
+  const convex = useConvex();
   const agentName = useConversationSpeaker(conversationId, agentType).name;
-  const draftKey = `comment:${conversationId}:${messageId ?? "global"}`;
+  const draftKey = scopeKey ? `comment:${scopeKey}` : `comment:${conversationId}:${messageId ?? "global"}`;
   const draft = useInboxStore((s) => (s.drafts[draftKey]?.draft_message as string | undefined) ?? "");
 
   const present = useDocPresence({
-    docId: presenceDocId(conversationId, messageId),
+    docId: scopeKey ? `comment:${scopeKey}` : presenceDocId(conversationId, messageId),
     draftText: draft,
     enabled: authed && enabled,
     forceBroadcast: draft.trim().length > 0,
@@ -113,7 +124,12 @@ export function CommentComposer({
           autoFocusInput={autoFocus}
           mentionTeamId={mentionTeamId}
           chatMentionMode={chatMentionMode}
-          onGateSend={async (text) => { await onSubmit(text); onCancelReply?.(); }}
+          onGateSend={async (text, images) => {
+            const content = await withImages(text, images, (ids) => (convex ? convex.query(api.images.getImageUrls, { storageIds: ids }) : Promise.resolve({})));
+            if (!content.trim()) return;
+            await onSubmit(content);
+            onCancelReply?.();
+          }}
         />
       </div>
 

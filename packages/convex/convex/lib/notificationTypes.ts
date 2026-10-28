@@ -87,6 +87,8 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("decision_passed"),
   v.literal("decision_escalated"),
   v.literal("decision_assigned"),
+  // A comment in a decision's thread the recipient owns or takes part in.
+  v.literal("decision_comment"),
   // Finding a team by work email: a request to its admins, then the approval.
   v.literal("team_join_request"),
   v.literal("team_join_approved"),

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { lineChatBrief, lineChatOwner, lineChatTurns, sendLineChatCore } from "./lineChat";
 import { formatLineChat, parseLineChat, lineFenceGuide, lineFenceHint, LINE_WIDGETS } from "@codecast/shared/contracts/lineChat";
-import { discussCore } from "./decisionDiscussion";
+import { askCore } from "./decisionThread";
 
 // A conversation with a project's line (line-workspace.md LW4): a session of
 // its own answers, started at the person's first message and nested under the
@@ -168,7 +168,7 @@ describe("a line decision's discussion", () => {
         question: "Ship the fee fix?", options: [{ label: "Ship" }], blocking: true, status: "pending", created_at: NOW, workflow_run_id: "workflow_runs_r1", task_id: "tasks_t1",
       }],
     });
-    const res = await discussCore(ctx, HOST, { decision: "sd-9", text: "Show me what Dissolve said", client_id: "d1" });
+    const res = await askCore(ctx, HOST, { decision: "sd-9", client_id: "d1" });
     expect("ok" in res && res.ok).toBe(true);
     expect(tables.pending_messages[0].content).toContain(lineFenceHint("pj-aq"));
   });

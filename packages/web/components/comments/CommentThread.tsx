@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
-import { type Comment, type CommentThread as Thread, commentAuthorName } from "../../lib/commentThread";
+import { Fragment, useState, type ReactNode } from "react";
+import { CheckCircle2, ChevronDown, RotateCcw } from "lucide-react";
+import { type Comment, type CommentThread as Thread, commentAuthorName, firstUnreadIndex, isOwnComment } from "../../lib/commentThread";
 import { CommentCard } from "./CommentCard";
 import { CommentComposer } from "./CommentComposer";
 import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
@@ -8,6 +8,9 @@ import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
 // One thread (the global conversation thread, or a per-message anchored thread):
 // an optional header, the chat cards oldest→newest, then the composer. Owns the
 // local "replying to" target so a reply threads under the right comment.
+// Optional: a read mark (`readAt`) draws a "New" line where the reader's news
+// starts; `onResolve` adds Resolve / Reopen; `scopeKey` keys the draft and
+// typing presence when the thread is not a conversation's (a decision's).
 
 export function CommentThread({
   thread,
@@ -27,6 +30,11 @@ export function CommentThread({
   onAskAgent,
   agentBusy,
   agentType,
+  readAt,
+  onResolve,
+  scopeKey,
+  placeholder,
+  mentionTeamId,
 }: {
   thread: Thread;
   conversationId: string;
@@ -46,12 +54,20 @@ export function CommentThread({
   onAskAgent?: (messageId?: string) => void | Promise<void>;
   agentBusy?: boolean;
   agentType?: string;
+  /** The reader's read mark: comments past it from someone else are news. */
+  readAt?: number;
+  /** Resolve (true) or reopen (false) the whole thread. */
+  onResolve?: (resolved: boolean) => void;
+  scopeKey?: string;
+  placeholder?: string;
+  mentionTeamId?: string;
 }) {
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
   const [collapsed, setCollapsed] = useState(false);
 
   const agentName = useConversationSpeaker(conversationId, agentType).name;
   const nameById = new Map(thread.comments.map((c) => [c._id, commentAuthorName(c, currentUserId, agentName)]));
+  const firstNew = firstUnreadIndex(thread.comments, readAt, currentUserId);
 
   return (
     <div className={"cc-thread cc-thread-" + variant + (collapsed ? " cc-thread-collapsed" : "")}>
@@ -76,11 +92,13 @@ export function CommentThread({
         {thread.comments.length === 0 && emptyHint && (
           <div className="cc-thread-empty">{emptyHint}</div>
         )}
-        {thread.comments.map((c) => (
+        {thread.comments.map((c, i) => (
+          <Fragment key={c._id}>
+          {i === firstNew && <div className="cc-thread-new" data-comment-new-line>New</div>}
           <CommentCard
             conversationId={conversationId}
-            key={c._id}
             comment={c}
+            fresh={firstNew >= 0 && i >= firstNew && !isOwnComment(c, currentUserId)}
             currentUserId={currentUserId}
             agentType={agentType}
             replyingToName={c.parent_comment_id ? nameById.get(c.parent_comment_id) : undefined}
@@ -89,8 +107,17 @@ export function CommentThread({
             onDelete={onDelete}
             onRetryAgent={onAskAgent ? () => onAskAgent(thread.messageId) : undefined}
           />
+          </Fragment>
         ))}
       </div>
+      )}
+      {!collapsed && onResolve && thread.comments.length > 0 && (
+        <div className="cc-thread-resolve">
+          <button type="button" className="cc-comment-btn" onClick={() => onResolve(!thread.resolved)} data-comment-resolve={thread.resolved ? "reopen" : "resolve"}>
+            {thread.resolved ? <><RotateCcw className="w-3 h-3" /> Reopen</> : <><CheckCircle2 className="w-3 h-3" /> Resolve</>}
+          </button>
+          {thread.resolved && <span className="cc-thread-resolved">Resolved</span>}
+        </div>
       )}
       {!collapsed && canWrite && (
         <CommentComposer
@@ -105,7 +132,10 @@ export function CommentThread({
           agentType={agentType}
           autoFocus={composerAutoFocus}
           className={composerClassName}
-          placeholder={variant === "anchored" ? "Reply…" : "Comment on this conversation…"}
+          scopeKey={scopeKey}
+          mentionTeamId={mentionTeamId}
+          chatMentionMode={!!mentionTeamId}
+          placeholder={placeholder ?? (variant === "anchored" ? "Reply…" : "Comment on this conversation…")}
           onSubmit={(content) =>
             onAdd({ content, messageId: thread.messageId, parentCommentId: replyTo?._id })
           }

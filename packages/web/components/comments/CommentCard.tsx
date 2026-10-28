@@ -23,8 +23,11 @@ function CommentCardImpl({
   onEdit,
   onDelete,
   onRetryAgent,
+  fresh,
 }: {
   comment: Comment;
+  /** Past the reader's read mark: drawn as news. */
+  fresh?: boolean;
   /** The conversation whose agent writes the agent comments. */
   conversationId: string;
   currentUserId?: string;
@@ -66,8 +69,23 @@ function CommentCardImpl({
     else setDraft(comment.content);
   };
 
+  if (comment.event) {
+    return (
+      <div className={"cc-cmt cc-cmt-event" + (fresh ? " cc-cmt-new" : "")} data-comment-event>
+        <div className="cc-cmt-main">
+          <div className="cc-cmt-head">
+            <span className="cc-cmt-name">{name}</span>
+            <span className="cc-cmt-event-words">{comment.event}</span>
+            <span className="cc-cmt-time">{relTimeShort(comment.created_at)}</span>
+          </div>
+          {comment.content && <div className="cc-cmt-body"><CommentMarkdown content={comment.content} /></div>}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={"cc-cmt group" + (agent ? " cc-cmt-agent" : " cc-cmt-user")}>
+    <div className={"cc-cmt group" + (agent ? " cc-cmt-agent" : " cc-cmt-user") + (fresh ? " cc-cmt-new" : "")} data-comment-fresh={fresh ? "" : undefined}>
       <CommentAvatar name={name} image={avatar} isAgent={agent} agentType={agentType} identity={speaker.row} />
       <div className="cc-cmt-main">
         <div className="cc-cmt-head">

@@ -23,21 +23,21 @@
 // kind (single|multi|rank|form), a category proposal, a markdown document,
 // option bodies, a JSON spec, and bind to a task, station and stack. The
 // hand-offs (decisionHandoff.ts): `pass <sd-N> --to <person> --note` gives it
-// to a teammate, `escalate <sd-N> --note` sends it to the owner's manager. The
-// race verbs: `recommend` for a role on the ladder, `answer`
-// for a person the decision was asked of or the holder role under a grant,
+// to a teammate, `escalate <sd-N> --note` sends it to the owner's manager, and
+// `comment <sd-N> "words"` writes in its team thread (decideComment.ts). The race verbs:
+// `recommend` for a role on the ladder, `answer` for a person the decision was asked of or the holder role under a grant,
 // `show` to read one decision with its document and ladder. Ids are the
 // `sd-N` short ids the server prints (raw Convex ids still work).
 //
-// Registered from index.ts via registerDecideCommand(program, deps) — same
-// deps contract as the publish command, so it reuses cliFetch auth and the
-// artifact publish payload builder rather than growing its own plumbing.
+// Registered from index.ts via registerDecideCommand(program, deps), with the publish command's deps
+// contract, so it reuses cliFetch auth and the artifact publish payload builder rather than its own plumbing.
 import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { buildPublishPayload } from "./publish.js";
+import { commentOnDecision } from "./decideComment.js";
 import { stdinText } from "./sendBody.js";
 import { DECISION_KIT_GUIDE, DECISION_KIT_LINE, previewDecisionPage, usesDecisionKit } from "./decisionKit.js";
 // What a decision put to a person is, on any line: the brief a presenting station reads first.
@@ -305,7 +305,7 @@ export function isStaleDecision(row: DecisionRow, now: number = Date.now()): boo
   return now - row.created_at >= STALE_AGE_MS || (row.messages_since ?? 0) >= STALE_MESSAGES_SINCE;
 }
 
-const DECIDE_SUBCOMMANDS = new Set(["edit", "cancel", "rm", "withdraw", "ls", "list", "show", "recommend", "pass", "escalate", "answer"]);
+const DECIDE_SUBCOMMANDS = new Set(["edit", "cancel", "rm", "withdraw", "ls", "list", "show", "recommend", "pass", "escalate", "answer", "comment"]);
 
 // An `sd-N` short id, or a raw Convex id (opaque lowercase alphanumerics of
 // 20+ chars); nothing else an agent types here (a question, a subcommand)
@@ -655,7 +655,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if ((question === "ls" || question === "list") && options.answeredSince !== undefined) return listAnsweredSince(deps, options);
       const sessionId: string | null = options.session || deps.detectCurrentSessionId();
       // A person hands a decision on from a plain shell too: pass --to and escalate need no session.
-      const handoff = question === "escalate" || (question === "pass" && (options.to as string[]).length > 0);
+      const handoff = question === "escalate" || question === "comment" || (question === "pass" && (options.to as string[]).length > 0);
       if (!sessionId && question !== "answer" && !handoff) fail("No session detected. Run inside a codecast session or pass --session <id>.");
 
       const sub = question && DECIDE_SUBCOMMANDS.has(question) ? question : null;
@@ -696,10 +696,10 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       }
 
       // ── show / recommend / answer: the race verbs, by sd-N ──
-      if (sub === "show" || sub === "recommend" || sub === "pass" || sub === "escalate" || sub === "answer") {
+      if (sub === "show" || sub === "recommend" || sub === "pass" || sub === "escalate" || sub === "answer" || sub === "comment") {
         const target = rest[0];
-        if (!looksLikeDecisionId(target)) fail(`Usage: cast decide ${sub} <sd-N> ${sub === "recommend" ? "<n> [--note -]" : sub === "pass" ? "[--to <person>] [--note -]" : sub === "escalate" ? "--note -" : sub === "answer" ? '<n | "1,3" | "2>1>3" | --form k=v>' : ""}`.trim());
-        if (handoff) return handOff(deps, sub as "pass" | "escalate", target, options);
+        if (!looksLikeDecisionId(target)) fail(`Usage: cast decide ${sub} <sd-N> ${sub === "recommend" ? "<n> [--note -]" : sub === "pass" ? "[--to <person>] [--note -]" : sub === "escalate" ? "--note -" : sub === "answer" ? '<n | "1,3" | "2>1>3" | --form k=v>' : sub === "comment" ? '"<words>"' : ""}`.trim());
+        if (handoff) return sub === "comment" ? commentOnDecision((body, route) => decideApi(deps, body, route), target, rest.slice(1), options, sessionId) : handOff(deps, sub as "pass" | "escalate", target, options);
         if (sub === "show") {
           const result = await decideApi(deps, { decision_id: target }, "/cli/decide/show");
           if (options.json) {

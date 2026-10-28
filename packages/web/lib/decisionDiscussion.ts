@@ -1,8 +1,9 @@
-// A decision's discussion as a surface draws it (convex decisionDiscussion.ts):
-// the server's asks with the owner's replies, then the person's words still
-// on their way (the store's local echoes), each once. Pure, so every
-// decision surface reads the same thread.
-import { useInboxStore, type DecisionDiscussionItem, type DecisionDiscussionSend } from "../store/inboxStore";
+// A conversation with a session through a surface (a line's chat, convex
+// lineChat.ts): the server's asks with the session's replies, then the
+// person's words still on their way (local echoes), each once. Pure. A
+// decision's thread reads its own rows (lib/decisionThread.ts) and shares the
+// owner words and the echo settling below.
+import type { DecisionThreadItem } from "../store/inboxStore";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 
 export type DiscussionEntryState = "sending" | "delivering" | "waiting" | "answered";
@@ -16,10 +17,13 @@ export type DiscussionEntry = {
   reply: { text: string; at: number } | null;
 };
 
-/** The asks a surface's row carries: a decision's discussion, a line's chat. */
+/** Words on their way: painted at once, retired when the row carries the same client id. */
+type EchoedSend = { client_id: string; text: string; at: number };
+
+/** The asks a surface's row carries: a line's chat. */
 type ThreadTurn = { client_id: string; text: string; by?: string | null; at: number; delivered: boolean; reply: { text: string; at: number } | null };
 
-export function discussionThread(row: { turns?: readonly ThreadTurn[] } | undefined, sends: readonly DecisionDiscussionSend[] | undefined): DiscussionEntry[] {
+export function discussionThread(row: { turns?: readonly ThreadTurn[] } | undefined, sends: readonly EchoedSend[] | undefined): DiscussionEntry[] {
   const turns = row?.turns ?? [];
   const known = new Set(turns.map((t) => t.client_id));
   const out: DiscussionEntry[] = turns.map((t) => ({
@@ -37,7 +41,7 @@ export function discussionThread(row: { turns?: readonly ThreadTurn[] } | undefi
 }
 
 /** Why the owner answers for it, in a person's words. */
-export function ownerReason(via: NonNullable<DecisionDiscussionItem["owner"]>["via"]): string {
+export function ownerReason(via: NonNullable<DecisionThreadItem["owner"]>["via"]): string {
   switch (via) {
     case "asker": return "It asked this question.";
     case "run": return "It started the run that asks this.";
@@ -52,17 +56,6 @@ export function waitingWords(state: DiscussionEntryState, owner: string): string
   if (state === "delivering") return `On its way to ${owner}`;
   if (state === "waiting") return `${owner} has it and is answering`;
   return null;
-}
-
-/** Send a person's words about a decision: they paint at once, and a send
- *  the server refuses (discussCore's { error }, or a refused dispatch) is
- *  taken back so it never waits as "Sending…". Resolves with the refusal's
- *  reason, or null once the words are on their way. */
-export async function sendDiscussion(decisionId: string, text: string, clientId: string): Promise<string | null> {
-  return settleEchoedSend(
-    useInboxStore.getState().discussDecision(decisionId, text, clientId),
-    () => useInboxStore.getState().dropDiscussionSend(decisionId, clientId),
-  );
 }
 
 /** A send painted as a local echo, settled: a refusal (the side effect's

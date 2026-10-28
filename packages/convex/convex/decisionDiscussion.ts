@@ -10,10 +10,12 @@
 // With none of those, the workspace's own agent owns it. The rule is read
 // at every turn, so a decision whose owner died gets the next one in line.
 //
-// A person's words reach the owner on the ordinary pending message rail as a
-// <decision-discussion> frame (shared machineMessages), recorded on the row
-// as an ask. The owner's reply is the last thing it says after reading the
-// ask, read back from its transcript: no second copy of what it said.
+// A person's words reach the owner through the decision's team thread
+// (decisionThread.ts), which relays each comment as a <decision-discussion>
+// frame and records the owner's reply as an agent comment. The asks older
+// rows carry in session_decisions.discussion[] are read here with their
+// replies placed from the transcript: the thread's backfill brings them over,
+// and `discussion` serves bundles from before the thread.
 
 import { query } from "./functions";
 import { v } from "convex/values";
@@ -21,11 +23,9 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { findDecision, peopleFor, userMayRead } from "./sessionDecisions";
 import { projectLeadRole } from "./lib/orgAccess";
-import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
+import { reachableRole } from "./pendingMessages";
 import { workspaceAnchorFor } from "./anchors";
-import { resolveActor } from "./lib/actor";
-import { formatDecisionDiscussion, isToolResultCarrier, parseDecisionDiscussion } from "@codecast/shared/contracts";
-import { lineFenceHint } from "@codecast/shared/contracts/lineChat";
+import { isToolResultCarrier, parseDecisionDiscussion } from "@codecast/shared/contracts";
 
 type Ctx = { db: any };
 type DecisionRow = Doc<"session_decisions">;
@@ -84,49 +84,6 @@ export async function decisionOwner(ctx: Ctx, row: Pick<DecisionRow, "conversati
 export async function ownerName(ctx: Ctx, conv: any): Promise<string> {
   const role = conv.standing_role_id ? await ctx.db.get(conv.standing_role_id) : null;
   return role?.name ?? (conv.title || conv.short_id || "the session");
-}
-
-/**
- * A person says something about a decision to the session that owns it. The
- * decision is the authority: whoever may read it may ask its owner about it,
- * the way a person asked a question may ask the asker what it meant, even
- * when they cannot otherwise write into that session. Idempotent on the
- * client id, so the outbox can redeliver.
- */
-export async function discussCore(
-  ctx: any,
-  userId: Id<"users">,
-  args: { decision: string; text: string; client_id: string },
-): Promise<{ ok: true; conversation_id: Id<"conversations"> } | { error: string }> {
-  const row: DecisionRow | null = await findDecision(ctx, args.decision);
-  if (!row || !(await userMayRead(ctx, userId, row))) return { error: "Decision not found" };
-  const text = (args.text ?? "").trim();
-  if (!text) return { error: "The message is empty" };
-  if (text.length > DISCUSSION_MAX_CHARS) return { error: `A message about a decision can be at most ${DISCUSSION_MAX_CHARS.toLocaleString("en-US")} characters` };
-  const already = row.discussion?.find((a) => a.client_id === args.client_id);
-  if (already) return { ok: true, conversation_id: already.conversation_id };
-  const owner = await decisionOwner(ctx, row);
-  if (!owner) return { error: `${row.short_id ?? "This decision"} has no session to discuss it with` };
-  const from = (await resolveActor(ctx, userId, null)).name ?? "A person";
-  const now = Date.now();
-  await enqueuePendingMessage(ctx, owner.conversation, userId, {
-    content: formatDecisionDiscussion({ decision: row.short_id ?? String(row._id), question: row.question, from, body: text, note: await lineWidgetsNote(ctx, row) }),
-    client_id: args.client_id,
-    human: true,
-  });
-  const ask = { conversation_id: owner.conversation._id, user_id: userId, text, client_id: args.client_id, at: now };
-  await ctx.db.patch(row._id, { discussion: [...(row.discussion ?? []), ask].slice(-DISCUSSION_MAX_ASKS) });
-  return { ok: true, conversation_id: owner.conversation._id };
-}
-
-/** A decision a line run asked, on a project's cause: its reply can draw the
- *  line's widgets, which render in the Discuss thread like anywhere else. */
-async function lineWidgetsNote(ctx: any, row: DecisionRow): Promise<string | null> {
-  if (!row.workflow_run_id) return null;
-  const run = await ctx.db.get(row.workflow_run_id);
-  const task = (row.task_id ?? run?.task_id) ? await ctx.db.get(row.task_id ?? run.task_id) : null;
-  const project = task?.project_id ? await ctx.db.get(task.project_id) : null;
-  return project ? lineFenceHint(project.short_id ?? String(project._id)) : null;
 }
 
 const squash = (s: string) => s.replace(/\s+/g, " ").trim();

@@ -3,7 +3,7 @@
 // streams — as threads.listMine returns them. The shape mirrors the server's
 // ThreadInboxEntry (convex/threads.ts); keep the two in step.
 
-export type ThreadKind = "chat" | "comment" | "task" | "page" | "code";
+export type ThreadKind = "chat" | "comment" | "task" | "page" | "code" | "decision";
 
 /** The newest counted reply of a thread, for the collapsed card's preview. */
 export type ThreadLastReply = {
@@ -46,6 +46,9 @@ export type ThreadInboxRow = {
   repository?: string;
   ref?: string;
   pull_request_id?: string;
+  /** Decision kind: the session decision the thread hangs on, and its question. */
+  decision_id?: string;
+  title?: string;
   last_activity_at: number;
   last_read_at: number;
   updated_at: number;

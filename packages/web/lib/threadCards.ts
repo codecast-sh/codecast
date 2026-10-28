@@ -157,6 +157,17 @@ export const THREAD_KIND_META: Record<ThreadCardKind, ThreadKindMeta> = {
     countsTowardBadge: true,
     emptyCopy: "Comments on pages you published land here.",
   },
+  // A decision's team thread (convex decisionThread.ts). It files under
+  // Questions: a decision with a thread is one card, never two.
+  decision: {
+    key: "decision",
+    label: "Questions",
+    icon: CircleHelp,
+    tone: "red",
+    chip: "question",
+    countsTowardBadge: true,
+    emptyCopy: "When an agent queues a decision for you, it lands here.",
+  },
   question: {
     key: "question",
     label: "Questions",
@@ -235,6 +246,8 @@ export function serverCards(
       href = slug ? `/a/${slug}` : `/a`;
     } else if (row.kind === "code") {
       href = codeThreadHref(row);
+    } else if (row.kind === "decision") {
+      href = `/decisions/${row.decision_id ?? row.root_key.replace(/^decision:/, "")}`;
     } else {
       const taskId = String(row.task_id ?? row.root_key);
       href = `/tasks/${taskShortIdOf(taskId) ?? taskId}`;
@@ -416,6 +429,12 @@ export function readerFold(times: number[], newSince: number | undefined): { hid
   return { hidden, firstNew };
 }
 
+/** Question cards minus the decisions a team thread already shows (kind decision): one card per decision. */
+export function withoutThreadedQuestions(questions: ThreadCardModel[], rows: ThreadInboxRow[]): ThreadCardModel[] {
+  const threaded = new Set(rows.filter((r) => r.kind === "decision").map((r) => String(r.decision_id)));
+  return threaded.size ? questions.filter((c) => !threaded.has(String((c.source as SessionDecisionItem)._id))) : questions;
+}
+
 /** Newest activity first. One merge sort across every source. */
 export function sortCards(cards: ThreadCardModel[]): ThreadCardModel[] {
   return [...cards].sort((a, b) => b.activityAt - a.activityAt);
@@ -442,7 +461,7 @@ export function unreadByChip(cards: ThreadCardModel[]): Record<ChipKey, number> 
  *  to archive. DM, session and question cards are projections of other state
  *  with their own lifecycles. */
 export function isDismissible(card: ThreadCardModel): boolean {
-  return card.kind === "chat" || card.kind === "comment" || card.kind === "code" || card.kind === "task" || card.kind === "page";
+  return card.kind === "chat" || card.kind === "comment" || card.kind === "code" || card.kind === "task" || card.kind === "page" || card.kind === "decision";
 }
 
 // ── The cursor ──────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import { TaskExpanded, TaskLabel, TaskMeta } from "../components/threads/kinds/T
 import { SessionExpanded, SessionLabel } from "../components/threads/kinds/SessionKind";
 import { PageExpanded, PageLabel } from "../components/threads/kinds/PageKind";
 import { QuestionExpanded, QuestionLabel } from "../components/threads/kinds/QuestionKind";
+import { DecisionThreadExpanded, DecisionThreadLabel } from "../components/threads/kinds/DecisionThreadKind";
 
 // The Threads page's kind registry: one spec per card kind, each saying how a
 // thread's head is labelled, what its body shows, and how it marks itself read. The
@@ -75,6 +76,7 @@ export const THREAD_KIND_SPECS: Record<ThreadCardKind, ThreadKindSpec> = {
   page: { ...THREAD_KIND_META.page, Label: PageLabel, Expanded: PageExpanded, markRead: markServerRead },
   // A question's status IS its read mark: answering or dismissing resolves the
   // row, so there is nothing separate to mark.
+  decision: { ...THREAD_KIND_META.decision, Label: DecisionThreadLabel, Expanded: DecisionThreadExpanded, markRead: markServerRead },
   question: { ...THREAD_KIND_META.question, Label: QuestionLabel, Expanded: QuestionExpanded, markRead: () => {} },
 };
 
@@ -95,9 +97,12 @@ export function markViewRead(
     for (const c of cards) if (c.unread > 0 && (c.kind === "dm" || c.kind === "chat")) THREAD_KIND_SPECS[c.kind].markRead(c);
     return;
   }
-  // Questions have no separate read mark (their status is the mark), and the
-  // session cards never join a sweep.
-  if (chip === "question") return;
+  // Questions have no separate read mark (their status is the mark); a
+  // decision's thread is marked card by card. Session cards never join a sweep.
+  if (chip === "question") {
+    for (const c of cards) if (c.unread > 0 && c.kind === "decision") THREAD_KIND_SPECS.decision.markRead(c);
+    return;
+  }
   if (chip === "all") {
     // "all" is an explicit sentinel on the wire: a one-argument call is the
     // legacy chat-only sweep, and absence must not widen it.

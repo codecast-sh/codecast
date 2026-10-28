@@ -134,6 +134,7 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   decision_passed: ["decision passed to you", "decisions passed to you"],
   decision_escalated: ["decision escalated to you", "decisions escalated to you"],
   decision_assigned: ["decision in your areas", "decisions in your areas"],
+  decision_comment: ["comment on a decision", "comments on decisions"],
   team_join_request: ["request to join", "requests to join"],
   team_join_approved: ["team you joined", "teams you joined"],
   passkey_changed: ["passkey change", "passkey changes"],

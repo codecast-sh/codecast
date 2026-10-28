@@ -19,7 +19,7 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   chatChannels: "fed by useChatSync's channel list, which the sim does not mount; the lines are compared by INV-chat",
   chatReads: "per-viewer read marks fed by useChatSync, which the sim does not mount",
   chatSlackLinks: "Slack bridge state, outside the sim",
-  threadInbox: "fed by useThreadsSync, a bespoke hook the sim does not mount",
+  decisionThreads: "who a decision's thread talks to, fed by useDecisionThreadFeed, a per-view hook the sim does not mount",
   chatRail: "a client fold over chat rows, derived at read time",
   notifications: "fed by the notification bell component, which the sim does not mount",
   clientState: "UI preferences the window's boot sets; replicated, compared host against follower",

@@ -342,16 +342,27 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["superseded"] },
     feeds: ["sessionDecisions.getWithDoc"],
   },
-  // A decision's discussion (decisionDiscussion.discussion): its owner and
-  // each ask with the owner's reply, one row per decision viewed. Delta: each
-  // surface feeds its own row and must not evict the others.
-  decisionDiscussions: {
-    persistence: { kind: "collection", key: "decisionDiscussions" },
+  // A decision's team thread (decisionThread.thread, store/decisionThreadTypes.ts).
+  // decisionThreads: who the thread talks to, one row per decision viewed.
+  // decisionComments: every entry, keyed by its review_comments id. Delta:
+  // each surface feeds its own decision and must not evict the others. A
+  // comment paints from its stub, keyed by the client id it was sent with,
+  // until the server row carrying that client id supersedes it.
+  decisionThreads: {
+    persistence: { kind: "collection", key: "decisionThreads" },
     hydration: { phase: "deferred" },
-    // Only the owner and the turns move on a row (no scalar does), so both
-    // compare by content.
-    sync: { isDelta: true, deepFields: ["turns", "owner"] },
-    feeds: ["decisionDiscussion.discussion"],
+    // Only the owner moves on a row, so it compares by content.
+    sync: { isDelta: true, deepFields: ["owner"] },
+    feeds: ["decisionThread.thread"],
+  },
+  decisionComments: {
+    persistence: { kind: "collection", key: "decisionComments" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, altKey: "client_id", deepFields: ["event_to_names"] },
+    // Edit, delete and resolve paint here first and are held until the echo.
+    localFirst: true,
+    indexes: "_id, decision_id, created_at",
+    feeds: ["decisionThread.thread"],
   },
   // Task evidence (the-line.md L6): the one object taskEvidence.get computes
   // for a task (pages by station, docs, images, files, PR, verdict), one row
@@ -616,7 +627,8 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
     indexes: "_id, kind, team_id, channel_id, conversation_id, task_id",
-    feeds: ["threads.listMine"],
+    // decisionThread.myThreads: the viewer's decision threads, so a decision's row shows its unread.
+    feeds: ["threads.listMine", "decisionThread.myThreads"],
   },
   // The Threads badge (threads.unreadCount): a scalar, live-synced app-wide
   // next to the chat rail; a stale cached count must not clobber a fresh one.
@@ -1911,7 +1923,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   handledDecisions: "shared",
   decisionDetails: "shared",
   orgTemplateInstances: "shared",
-  decisionDiscussions: "shared",
+  decisionThreads: "shared",
+  decisionComments: "shared",
   taskEvidence: "shared",
   projectExpectations: "shared",
   expectationsOverview: "shared",

@@ -3852,7 +3852,22 @@ export default defineSchema({
       v.literal("error"),
     )),
     fork_conversation_id: v.optional(v.id("conversations")),
+    // ── A decision's team thread (decisionThread.ts) ──
+    // A comment on a session decision, anchored by decision_id ALONE: never
+    // conversation_id (conversation readers would take it in), never a twin,
+    // a quote or a pending note. An agent row is a session's answer, written
+    // as a placeholder (agent_status "thinking") when someone asks it;
+    // `decision_session_id` names that session, and `decision_waiting` holds
+    // while its reply can still land or grow. A pass or an escalation writes
+    // an entry with `decision_event` and whom it went to.
+    decision_id: v.optional(v.id("session_decisions")),
+    decision_session_id: v.optional(v.id("conversations")),
+    decision_waiting: v.optional(v.boolean()),
+    decision_event: v.optional(v.union(v.literal("passed"), v.literal("escalated"))),
+    decision_event_to: v.optional(v.object({ kind: v.union(v.literal("user"), v.literal("role")), ids: v.array(v.string()) })),
   })
+    .index("by_decision", ["decision_id", "created_at"])
+    .index("by_decision_waiting", ["decision_session_id", "decision_waiting"])
     .index("by_source_comment", ["source_comment_id"])
     .index("by_disposition_due", ["disposition", "due_at"])
     .index("by_owner_role", ["owner_role_id", "resolved"])
@@ -4581,6 +4596,8 @@ export default defineSchema({
       v.literal("decision_passed"),
       v.literal("decision_escalated"),
       v.literal("decision_assigned"),
+      // A comment in the thread of a decision the recipient owns or takes part in (decisionThread.ts).
+      v.literal("decision_comment"),
       // Finding a team by work email (teamDiscovery.ts): someone asked to
       // join (to its admins), and an admin let them in (to them).
       v.literal("team_join_request"),
@@ -8943,13 +8960,14 @@ export default defineSchema({
   // (personal is a value, not a missing pointer). Bots never get a row.
   thread_reads: defineTable({
     user_id: v.id("users"),
-    kind: v.union(v.literal("chat"), v.literal("comment"), v.literal("task"), v.literal("page"), v.literal("code")),
+    kind: v.union(v.literal("chat"), v.literal("comment"), v.literal("task"), v.literal("page"), v.literal("code"), v.literal("decision")),
     // chat: root chat_messages id. comment: `${conversation_id}:${anchorKey}`
     // where anchorKey is `msg:<message_id>` | `file:<path>:<line>` | `global`
     // (commentAnchorKey in @codecast/shared/comments). task: task id.
     // page: artifact id (one card per page discussion). code:
     // `${repository}@${ref}#${anchorKey}` (codeThreadRootKey), one thread of
     // review_comments on a commit, a pull request head or a line of either.
+    // decision: `decision:<session_decisions id>`, one thread per decision.
     root_key: v.string(),
     team_id: v.optional(v.id("teams")),
     last_activity_at: v.number(),
@@ -8968,6 +8986,8 @@ export default defineSchema({
     repository: v.optional(v.string()),
     ref: v.optional(v.string()),
     pull_request_id: v.optional(v.id("pull_requests")),
+    // Decision kind only.
+    decision_id: v.optional(v.id("session_decisions")),
   })
     .index("by_user_team_activity", ["user_id", "team_id", "last_activity_at"])
     .index("by_user_kind_root", ["user_id", "kind", "root_key"])

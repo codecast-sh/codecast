@@ -62,6 +62,8 @@ export const PREFERENCE_MAP: Record<string, string> = {
   decision_passed: "mention",
   decision_escalated: "mention",
   decision_assigned: "mention",
+  // A comment on a decision you own or discuss: a reply's class.
+  decision_comment: "mention",
   // Someone asking into your team (yours to decide), and being let into one:
   // both addressed to one person by name, the same class as a mention.
   team_join_request: "mention",

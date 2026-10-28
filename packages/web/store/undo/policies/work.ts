@@ -676,6 +676,24 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
         cellsOf(ctx, "codeComments", "content").map((c) => call("editCodeComment", c.id, typeof c.before === "string" ? c.before : "")),
     },
   },
+  // A decision's team thread (decisionThread.ts): an edit goes back to the
+  // words it replaced; a resolve is reopened, and a reopen resolved again.
+  editDecisionComment: {
+    spec: {
+      label: () => "Edited a comment on a decision",
+      inverse: (ctx) =>
+        cellsOf(ctx, "decisionComments", "content").map((c) => call("editDecisionComment", c.id, typeof c.before === "string" ? c.before : "")),
+    },
+  },
+  resolveDecisionThread: {
+    spec: {
+      label: (ctx) => (ctx.args[1] ? "Resolved a decision's thread" : "Reopened a decision's thread"),
+      inverse: (ctx) => {
+        const [decisionId, resolved] = ctx.args as [string, boolean];
+        return cellsOf(ctx, "decisionComments", "resolved_at").length ? [call("resolveDecisionThread", decisionId, !resolved)] : null;
+      },
+    },
+  },
   editProjectUpdate: {
     spec: {
       label: () => "Edited a project update",

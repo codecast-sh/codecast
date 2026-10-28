@@ -1629,6 +1629,10 @@ cliRoute("/cli/decide/escalate", (ctx, body) =>
 cliRoute("/cli/team/focus", (ctx, body) =>
   ctx.runAction(api.decisionAreas.focusForCli, { api_token: body.api_token, team_id: body.team_id, words: body.words, dry_run: body.dry_run }),
 );
+// A comment in a decision's team thread (decisionThread.ts); from the session the thread talks to, the agent's.
+cliRoute("/cli/decide/comment", (ctx, body) =>
+  ctx.runMutation(api.decisionThread.commentForCli, { api_token: body.api_token, decision_id: body.decision_id, text: body.text, client_id: body.client_id, parent_id: body.parent_id, session_id: body.session_id }),
+);
 cliRoute("/cli/decide/show", (ctx, body) =>
   ctx.runMutation(api.sessionDecisions.showForCli, { api_token: body.api_token, decision_id: body.decision_id }),
 );

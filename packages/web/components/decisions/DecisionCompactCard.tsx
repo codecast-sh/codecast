@@ -7,6 +7,7 @@ import { ArrowUpRight, Layers, LayoutTemplate, ShieldCheck, Workflow } from "luc
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { DecisionAnswerControls, DecisionRecordedAnswer } from "./DecisionAnswerControls";
 import { DecisionDiscussion } from "./DecisionDiscussion";
+import { DecisionThreadUnread } from "./DecisionThreadUnread";
 import { askingSessionName, decisionHref, gateRunLabel, ladderRecommendation, runHref } from "../../lib/decisionLinks";
 import { optionPageSlugs } from "../../lib/decisionQueue";
 import { useSyncWorkflowRun } from "../../hooks/useSyncWorkflows";
@@ -237,6 +238,7 @@ export function DecisionCompactCardView({
             ...(!pending ? [{ key: "state", className: `cc-nowrap ${SETTLED_STATE[decision.status]?.className ?? "text-sol-text-dim"}`, node: SETTLED_STATE[decision.status]?.label ?? decision.status }] : []),
             { key: "chips", plain: true, className: "flex-wrap items-center gap-2 min-w-0", node: (
               <>
+                <DecisionThreadUnread decisionId={decision._id} href={decisionHref(decision)} />
                 {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
                 {askedOf && <span className="px-1.5 py-0.5 rounded border border-sol-border text-sol-text-muted" title={`Asked of ${askedOf}. Your answer counts, and they are told you answered.`} data-decision-asked-of>for {askedOf}</span>}
                 {/* The category decides who may answer, and only a real one says
@@ -366,7 +368,7 @@ export function DecisionCompactCardView({
           )}
         </div>
       )}
-      {/* Ask the session that owns it, without leaving the queue (ct-58330). */}
+      {/* The team thread, with the session that owns it, without leaving the queue (ct-74449). */}
       {!folded && !hostedApproval && (
         <div className="px-4 pb-3"><DecisionDiscussion decisionId={decision._id} compact /></div>
       )}
