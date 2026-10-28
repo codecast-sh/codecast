@@ -32,7 +32,6 @@ import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { TriggerContextPanel } from "../../components/TriggerContextPanel";
 import { animatedHideSession } from "../../store/undoActions";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { devRenderCount } from "../../lib/devRenderCount";
 import { InboxShortcuts } from "../../components/inbox/InboxEffects";
 import { useOrgScope, useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
@@ -367,7 +366,6 @@ export function SessionPage(props: InboxConversationProps) {
 
 export function QueuePageClient() {
   const searchParams = useSearchParams();
-  const homeTitlebarRef = useTitlebarHead<HTMLDivElement>();
   // When this inbox lives inside a tab, only the ACTIVE tab owns global view
   // state (currentSessionId, the URL, the sidebar highlight). A background tab
   // stays mounted but renders FROZEN on its own ?s= param so its conversation
@@ -805,7 +803,7 @@ export function QueuePageClient() {
         ) : (
           <div className="h-full overflow-y-auto" data-main-scroll>
             <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
-              <div ref={homeTitlebarRef} className="flex justify-end pb-2">
+              <div className="flex justify-end pb-2">
                 <InboxHomeToggle />
               </div>
               <ErrorBoundary name="ActivityFeed" level="inline">
