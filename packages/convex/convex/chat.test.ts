@@ -3119,6 +3119,16 @@ describe("postCallDigest", () => {
     expect(messagesIn(ctx).length).toBe(1);
   });
 
+  test("a summary retried after a failure rewrites the card it left", async () => {
+    const ctx = context(null);
+    const failed = { ...digest(`channel:${CHANNEL}`), content: "**Huddle** · 152 min huddle\n\nThe summary could not be generated." };
+    const first = await call(postCallDigest, ctx, failed);
+    const second = await call(postCallDigest, ctx, digest(`channel:${CHANNEL}`));
+    expect(second.message_id).toBe(first.message_id);
+    expect(messagesIn(ctx).length).toBe(1);
+    expect(messagesIn(ctx)[0].content).toContain("Ship it.");
+  });
+
   // The scribe authors the row only because the transcript is theirs. What the
   // other people are told about names the huddle, as the chat row itself does:
   // the bell and the phone, and the rail a toast reads when the body is not
@@ -4133,6 +4143,10 @@ describe("session thinking rows", () => {
     // The host's token still posts there, and the line is the role's.
     const sent = await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "numbers are in", ...asRole });
     expect(messagesIn(ctx).find((m: any) => m._id === sent.message_id)).toMatchObject({ user_id: "user-growth-bot", author_kind: "agent" });
+    // Alice's bell names the role too, not the host the session ran as: the
+    // row's actor is the bot, so every client draws the role's face, never Bob's.
+    const bell = ctx._emitted.find((e: any) => String(e.args.chat_message_id) === String(sent.message_id))?.args;
+    expect(bell).toMatchObject({ event_type: "chat_dm", direct_recipient_id: ALICE, actor_user_id: "user-growth-bot", actor_name: "Head of Growth" });
 
     // Bringing the host in is the role's choice: name them.
     const group = await call(openDm, ctx, { team_id: TEAM, handles: ["alice", "bob"], ...asRole });

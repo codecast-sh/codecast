@@ -2343,7 +2343,17 @@ export const postCallDigest = internalMutation({
     if (!channel || channel.archived_at) return { posted: false };
     const clientId = `${HUDDLE_DIGEST_CLIENT_ID_PREFIX}${args.transcript_id}`;
     const already = await findByClientId(ctx, channel._id, clientId);
-    if (already) return { posted: false, message_id: already._id };
+    if (already) {
+      // A summary retried after a failure (transcripts.retryFailedSummaries)
+      // rewrites the card it already left, so the room reads the summary in
+      // place of "could not be generated" rather than a second card.
+      if (!already.deleted_at && already.content !== args.content) {
+        await patchChat(ctx, already._id, { content: args.content });
+        const updated = await ctx.db.get(already._id);
+        if (updated) await queueSlackOutbound(ctx, { op: "edit", message: updated });
+      }
+      return { posted: false, message_id: already._id };
+    }
     const { messageId } = await postChatMessage(ctx, {
       channel,
       root: null,
@@ -2731,7 +2741,9 @@ export async function postChatMessage(
   // the snapshot on the row is who actually spoke, and bells must name them.
   // A huddle's digest is authored by its scribe only because the transcript is
   // theirs: the bell and the phone name the huddle, as the transcript does.
-  const actorLabel = originSession?.title ?? opts.externalAuthor?.name ?? (opts.call ? "Huddle" : undefined);
+  // A line voiced as a role (above) is the role's: its bells name the bot.
+  const voiced = authorUserId !== authorId;
+  const actorLabel = (voiced ? undefined : originSession?.title) ?? opts.externalAuthor?.name ?? (opts.call ? "Huddle" : undefined);
   const { hereCount, actorName } = opts.history
     ? { hereCount: 0, actorName: await actorNameFor(ctx, authorId, actorLabel) }
     : await announceChatMessage(ctx, {
@@ -2748,6 +2760,7 @@ export async function postChatMessage(
       agentLine: !!opts.agent || opts.origin === "agent",
       actorLabel,
       actorAvatar: opts.externalAuthor?.avatar_url,
+      actorUserId: voiced ? authorUserId : undefined,
     });
 
   return { messageId, mentions, roles: resolved.roles, sessions: resolved.sessions, hereCount, actorName, createdAt: now };
@@ -2823,6 +2836,11 @@ async function announceChatMessage(
      *  inbound line uses the mirrored person's name, not the workspace bridge. */
     actorLabel?: string;
     actorAvatar?: string;
+    /** Who the bells name when it is not the author: a session speaking as
+     *  its role stores the line under the role's bot, and the notification
+     *  must carry that bot (its face, its agent mark), not the human the
+     *  session ran as. The author stays the one never notified. */
+    actorUserId?: Id<"users">;
     /** Push body when the words are empty: an image send says what it carries,
      *  a burst whose transcript came back blank says "Voice note". */
     pushFallback?: string;
@@ -2840,7 +2858,8 @@ async function announceChatMessage(
   // has no read position and no bell.
   if (!opts.agent) await upsertRead(ctx, authorId, channel.team_id, channel._id, now, messageId, undefined);
 
-  const actorName = await actorNameFor(ctx, authorId, opts.actorLabel);
+  const actorId = opts.actorUserId ?? authorId;
+  const actorName = await actorNameFor(ctx, actorId, opts.actorLabel);
   const actorAvatar = opts.actorAvatar;
   const preview = plainPreview(content);
   // The banner's "where" line. A 1:1 DM gets none — the title already names
@@ -2857,7 +2876,7 @@ async function announceChatMessage(
     notified.add(recipientId.toString());
     await notifyChat(ctx, {
       eventType: "chat_mention",
-      actorUserId: authorId,
+      actorUserId: actorId,
       agentLine: opts.agentLine,
       actorName,
       actorAvatar,
@@ -2877,7 +2896,7 @@ async function announceChatMessage(
       notified.add(recipientId.toString());
       await notifyChat(ctx, {
         eventType: "chat_reply",
-        actorUserId: authorId,
+        actorUserId: actorId,
         agentLine: opts.agentLine,
         actorName,
         actorAvatar,
@@ -2914,7 +2933,7 @@ async function announceChatMessage(
       hereCount++;
       await notifyChat(ctx, {
         eventType: "chat_here",
-        actorUserId: authorId,
+        actorUserId: actorId,
         agentLine: opts.agentLine,
         actorName,
         actorAvatar,
@@ -2939,7 +2958,7 @@ async function announceChatMessage(
       notified.add(recipientId.toString());
       await notifyChat(ctx, {
         eventType: "chat_post",
-        actorUserId: authorId,
+        actorUserId: actorId,
         agentLine: opts.agentLine,
         actorName,
         actorAvatar,
@@ -2966,7 +2985,7 @@ async function announceChatMessage(
       notified.add(recipientId.toString());
       await notifyChat(ctx, {
         eventType: "chat_dm",
-        actorUserId: authorId,
+        actorUserId: actorId,
         agentLine: opts.agentLine,
         actorName,
         actorAvatar,
