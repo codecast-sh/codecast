@@ -974,6 +974,10 @@ export function parseEntityUrl(
   if (orgObject) return { type: orgObject.kind, id: orgObject.ref };
   const type = SEGMENT_TYPE[segs[0].toLowerCase()];
   if (!type) return null;
+  // A link carrying its share token (`/conversation/<id>?share=…`) is a grant
+  // to whoever holds it. A reference keeps only the id, which a reader outside
+  // the owner's team cannot open, so the link stays the link.
+  if (search && new URLSearchParams(search).has("share")) return null;
 
   // Query-addressed links (/org?proposal=op-N, old /triggers?task=<id>). For
   // a query-only type a deeper path is another object's page (/org/<or-N> is

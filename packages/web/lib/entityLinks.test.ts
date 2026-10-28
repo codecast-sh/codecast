@@ -177,6 +177,11 @@ describe("parseEntityUrl", () => {
     expect(parseEntityUrl(`https://codecast.sh/projects/${CONVEX_ID}`)?.type).toBe("project");
   });
 
+  test("a link carrying its share token stays a link: a pill would drop the token", () => {
+    expect(parseEntityUrl(`https://codecast.sh/conversation/${CONVEX_ID}?share=45539c23-e9a1-46f1-9d23-7261c49f11ec`)).toBeNull();
+    expect(parseEntityUrl(`/conversation/${CONVEX_ID}?share=abc#msg-x`)).toBeNull();
+  });
+
   test("short ids keep their original form", () => {
     expect(parseEntityUrl("https://codecast.sh/tasks/ct-33527")).toEqual({ type: "task", id: "ct-33527" });
     expect(parseEntityUrl("https://codecast.sh/plans/pl-77")).toEqual({ type: "plan", id: "pl-77" });
