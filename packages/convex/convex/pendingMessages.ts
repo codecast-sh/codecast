@@ -946,15 +946,18 @@ export async function performSessionSend(
   // Waking a stale session is the expensive send: past the prompt cache
   // lifetime the recipient rebuilds its whole context before it reads a word,
   // and a killed one is restarted for it. A session to session send says so
-  // and stops, unless the sender chose to wake it. Two recipients expect a wake
-  // however long they waited: the session that started the sender (a worker
-  // reporting back) and one that declared itself dormant. Only callers that
-  // ask for the check get it (wake: false); older CLIs and relays send as before.
+  // and stops, unless the sender chose to wake it. Some recipients expect a wake
+  // however long they waited: a role's seat (it exists to be woken), the line
+  // between a session and the session that started it, either way, and one
+  // that declared itself dormant. Only callers that ask for the check get it
+  // (wake: false); older CLIs and relays send as before.
   if (args.wake === false && senderConversation && !args.raw && !args.direct && !roleTarget) {
     const cost = wakeCost({ ...target, ...wakeFieldsOf(target) }, Date.now());
-    const reportingBack = [senderConversation.spawned_by_conversation_id, senderConversation.parent_conversation_id]
-      .some((id) => id != null && String(id) === String(target._id));
-    const expectsWake = reportingBack || target.thread_state_status === "dormant";
+    const startedBy = (row: any, other: any) => [row.spawned_by_conversation_id, row.parent_conversation_id]
+      .some((id) => id != null && String(id) === String(other._id));
+    const sameLine = startedBy(senderConversation, target) || startedBy(target, senderConversation);
+    const roleSeat = !!(target.anchor_id || target.standing_role_id);
+    const expectsWake = sameLine || roleSeat || target.thread_state_status === "dormant";
     if (cost.killed || (cost.cacheCold && !expectsWake)) {
       throw new Error(staleSendMessage(target.short_id ?? String(target._id).slice(0, 7), cost));
     }
@@ -1037,8 +1040,8 @@ export function staleSendMessage(shortId: string, cost: ReturnType<typeof wakeCo
     : "";
   const why = cost.killed
     ? `${shortId} was killed. Sending would restart it and load its whole context${size} before it reads your message.`
-    : `${shortId} has not run for ${formatIdle(cost.idleMs)}, so its prompt cache has expired. Your message would make it rebuild its whole context${size} before it reads a word, and sessions idle this long rarely have anything to add.`;
-  return `Not sent. ${why} To learn what it did, read it instead: cast read ${shortId}, cast diff ${shortId}. If it has to act on this and nobody else can, send again with --wake.`;
+    : `${shortId} has not run for ${formatIdle(cost.idleMs)}, so its prompt cache has expired. Your message would make it rebuild its whole context${size} before it reads a word.`;
+  return `Not sent. ${why} If it owns work this message changes, send again with --wake: that is what the rebuild is for. To ask what it did, read it instead: cast read ${shortId}, cast diff ${shortId}.`;
 }
 
 // "@handle" → the standing session of the live role with that handle in the

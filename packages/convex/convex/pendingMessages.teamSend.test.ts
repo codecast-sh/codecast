@@ -754,7 +754,7 @@ describe("stale target — the send that would rebuild a whole context", () => {
     const { ctx, tables } = staleWorld(idle);
     await expect(
       performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "any update?", wake: false }),
-    ).rejects.toThrow(/Not sent\. jxbob01 has not run for 3h.*480k tokens.*cast read jxbob01.*--wake/);
+    ).rejects.toThrow(/Not sent\. jxbob01 has not run for 3h.*480k tokens.*--wake.*cast read jxbob01/);
     expect(tables.pending_messages).toHaveLength(0);
   });
 
@@ -788,6 +788,16 @@ describe("stale target — the send that would rebuild a whole context", () => {
     const legacy = staleWorld(idle);
     await performSessionSend(legacy.ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "old cli" });
     expect(legacy.tables.pending_messages).toHaveLength(1);
+  });
+
+  test("a role's seat and a lead's own worker deliver however long they idled", async () => {
+    const seat = staleWorld({ ...idle, standing_role_id: "role1" });
+    await performSessionSend(seat.ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "the review command works again", wake: false });
+    expect(seat.tables.pending_messages).toHaveLength(1);
+
+    const worker = staleWorld({ ...idle, spawned_by_conversation_id: "convAlice" });
+    await performSessionSend(worker.ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "one more fix", wake: false });
+    expect(worker.tables.pending_messages).toHaveLength(1);
   });
 
   test("a killed session stays held even for the worker it started", async () => {
