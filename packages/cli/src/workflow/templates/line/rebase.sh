@@ -39,6 +39,16 @@ if ! git rebase --autostash "$upstream" > "$dir/rebase.log" 2>&1; then
   while IFS= read -r f; do conflicted+=("$f"); done < <(git diff --name-only --diff-filter=U | head -20)
   git rebase --abort > /dev/null 2>&1
   said="$(tail -n 5 "$dir/rebase.log" | tr '\n' ' ')"
+  if [ "${#conflicted[@]}" -eq 0 ]; then
+    # No file conflicted: git refused before replaying anything (an untracked
+    # file the default branch tracks, a lock, a dirty index), so it is no
+    # conflict to resolve. Git's own first complaint says what to fix.
+    why="$(grep -m 1 -E '^(error|fatal):' "$dir/rebase.log" | sed -E 's/^(error|fatal): //')"
+    [ -n "$why" ] || why="$said"
+    cast task comment $task_id "Rebasing $br onto $upstream could not start, so nothing of the change was tried and the branch is as it was. Git said: $(tr '\n' ' ' < "$dir/rebase.log") Fix that in the run's worktree $worktree, then resume the run at ship__rebase." -t review > /dev/null
+    answer false false "rebase could not start: $why"
+    exit 1
+  fi
   # The default branch changed these files after the branch forked, and one of
   # those commits may already carry the change, reworked after review (the
   # shared tree is committed while a change waits for its answer). Which side

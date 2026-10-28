@@ -149,6 +149,22 @@ exit 1
     expect(r.json.why).not.toContain("intro.txt");
   });
 
+  test("a rebase git refuses to start is reported with git's reason, never as a conflict", () => {
+    // ct-74465: the run's worktree held an untracked copy of a file main had since tracked.
+    const before = git(work, "rev-parse", "HEAD");
+    landOnMain("team-kit.md", "tracked on main\n", "main tracks team-kit.md");
+    fs.writeFileSync(path.join(work, "team-kit.md"), "an untracked copy\n");
+    const r = station();
+    expect(r.code).toBe(1);
+    expect(r.json).toMatchObject({ rebased: false, landed: false });
+    expect(r.json.why).toStartWith("rebase could not start: ");
+    expect(r.json.why).toContain("untracked working tree files would be overwritten");
+    expect(r.json.why).not.toContain("conflicted");
+    expect(r.comments).toContain("could not start");
+    expect(r.comments).toContain("resume the run at ship__rebase");
+    expect(git(work, "rev-parse", "HEAD")).toBe(before);
+  });
+
   test("a check that fails on the rebased branch goes back to implement, and the branch returns to where it was", () => {
     const before = git(work, "rev-parse", "HEAD");
     landOnMain("other.txt", "y\n", "someone else's change");

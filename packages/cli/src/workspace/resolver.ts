@@ -59,7 +59,10 @@ export function withAgentConfigCopies(
   root: string,
   opts: { isInputRoot: boolean; warn?: (m: string) => void },
 ): WorkspaceManifest {
-  const context = collectProjectContext({ root, includeTracked: opts.isInputRoot, includeAncestors: false, tolerateMissing: true, config: readLocalConfig() });
+  // Agent context only: an untracked doc or script in the source checkout is
+  // someone's work in progress, and a copy of it in the worktree blocks the
+  // checkout of the commit that later tracks it (a rebase onto main refused).
+  const context = collectProjectContext({ root, includeTracked: opts.isInputRoot, agentContextOnly: true, includeAncestors: false, tolerateMissing: true, config: readLocalConfig() });
   for (const skipped of context.skipped) opts.warn?.(`agent config ${skipped.path} skipped: ${skipped.reason}`);
   const existing = manifest.setup.copy;
   const additions = context.files.filter((f) => f.scope === "project")
