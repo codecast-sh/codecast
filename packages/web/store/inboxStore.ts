@@ -158,7 +158,7 @@ import { awaitingOkIds, decisionDraftKey, pendingDecisionConvIds, sessionHasOpen
 import type { LocalMirror, MergeBackStatus, OpenTaskReport, SessionActivity, SubagentCaps, SubagentSlot } from "@codecast/shared/contracts";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
-import { escalationTargetIds } from "@codecast/shared/contracts";
+import { escalationTargetIds } from "@codecast/shared/contracts/decisionEscalation";
 import { isAgentSpawnedConversation, isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";

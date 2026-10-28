@@ -94,7 +94,6 @@ export * from "./sanitizeText";
 // send classifier must agree on what a human-typed message is.
 export * from "./machineMessages";
 export * from "./decisionAnswers";
-export * from "./decisionEscalation";
 export * from "./mcpRegistry";
 export * from "./usageLimits";
 // The connectable-apps catalog (the /capabilities Apps tab): Convex answers
