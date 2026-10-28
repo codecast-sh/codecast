@@ -217,6 +217,19 @@ export const CLIENT_SYNC_REGISTRY = {
     // tuples; a singleton would make every device's report clobber the fleet.
     sync: {},
   },
+  // The kit (docs/architecture/team-kit.md): every item in the viewer's
+  // workspaces, team and personal. Delta feed; a removed item arrives with
+  // `removed_at` rather than vanishing. A web "Share" writes a stub carrying
+  // the item's slug, superseded by the real row when it publishes.
+  teamKitItems: {
+    persistence: { kind: "collection", key: "teamKitItems" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    localFirst: true,
+    validRow: (row: any) => typeof row?.slug === "string" && typeof row?.workspace === "string",
+    sync: { isDelta: true, altKey: "slug" },
+    feeds: ["teamKit.webListTeamKitItems"],
+  },
   // What codecast changed in each device's agent harness (CLAUDE.md, hooks,
   // ~/.claude/settings.json), for Settings > Harness. Server truth about a
   // machine's disk, so not localFirst. Delta: the feed is scoped to the device
@@ -1886,6 +1899,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   tasks: "shared",
   capabilityBindings: "shared",
   capabilityState: "shared",
+  teamKitItems: "shared",
   harnessChanges: "shared",
   docs: "shared",
   docDetails: "shared",

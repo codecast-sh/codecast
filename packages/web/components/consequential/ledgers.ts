@@ -465,3 +465,65 @@ export function redrawIconLedger(r: { title: string; handle: string; concept: st
     keep: "Cancel",
   };
 }
+
+/** Sharing one of your machine's skills, commands or subagents into the workspace kit. */
+export function kitShareLedger(r: { name: string; kindLabel: string; kit: string; members: number; runs: "prose" | "code" | "unknown"; machine: string }): SwitchLedger {
+  return {
+    name: "Share",
+    subject: `${r.kindLabel} · ${r.name}`,
+    shift: null,
+    figures: [
+      { value: String(r.members), label: r.members === 1 ? "person can see it" : "people can see it" },
+      r.runs === "code"
+        ? { value: "Code", label: "runs on their machines", tone: "warn" as const }
+        : r.runs === "prose"
+          ? { value: "Text", label: "read by their agents" }
+          : { value: "Scanned", label: "on upload; code asks each machine" },
+    ],
+    rows: [
+      { k: "Into", v: r.kit },
+      { k: "From", v: r.machine },
+      { k: "Turned on", v: "By each person, or an admin for all" },
+      { k: "Undo", v: "Remove it from the kit" },
+    ],
+    confirm: "Share",
+    keep: "Cancel",
+  };
+}
+
+/** An admin turning a kit item on for every member's machines. */
+export function kitTeamLedger(r: { name: string; kit: string; members: number; runsCode: boolean }): SwitchLedger {
+  return {
+    name: "On for the team",
+    subject: r.name,
+    shift: ["Off", "Team"],
+    figures: [
+      { value: String(r.members), label: r.members === 1 ? "person's machines" : "people's machines" },
+      { value: r.runsCode ? "Code" : "Text", label: r.runsCode ? "each machine asks first" : "installs on next sync", ...(r.runsCode ? { tone: "warn" as const } : {}) },
+    ],
+    rows: [
+      { k: "Kit", v: r.kit },
+      { k: "Members can", v: "Turn it off for themselves" },
+    ],
+    stop: "Switch back to Me or Off",
+    confirm: "Turn on for everyone",
+    keep: "Cancel",
+  };
+}
+
+/** Taking an item out of the kit: it uninstalls from every machine that has it through the kit. */
+export function kitRemoveLedger(r: { name: string; kit: string; members: number }): SwitchLedger {
+  return {
+    name: "Remove from kit",
+    subject: r.name,
+    shift: null,
+    alert: "Uninstalls on every machine",
+    figures: [{ value: String(r.members), label: r.members === 1 ? "person affected" : "people affected", tone: "warn" }],
+    rows: [
+      { k: "Kit", v: r.kit },
+      { k: "Versions", v: "Kept; share again to restore" },
+    ],
+    confirm: "Remove",
+    keep: "Cancel",
+  };
+}

@@ -15,7 +15,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
-import { capDb } from "./capabilitiesSchema";
+import { capDb, type CapabilityBindingDoc } from "./capabilitiesSchema";
 import { SWEEP_BATCH } from "./capabilityState";
 
 /* ==========================================================================
@@ -27,6 +27,44 @@ import { SWEEP_BATCH } from "./capabilityState";
  * is one fact, and the second click must not spawn a second row for the sweep
  * and the audit trail to disagree over.
  */
+export async function recordConsent(
+  ctx: any,
+  userId: string,
+  args: { device_id: string; capability_slug: string; manifest_hash: string },
+  purpose?: "adopt",
+) {
+  const db = capDb(ctx.db);
+  const existing = await db
+    .query("capability_consents")
+    .withIndex("by_user_device_slug", (q: any) =>
+      q.eq("user_id", userId).eq("device_id", args.device_id).eq("capability_slug", args.capability_slug),
+    )
+    .collect();
+  const match = existing.find((row) => row.manifest_hash === args.manifest_hash && row.purpose === purpose);
+  if (match) return { status: purpose ? ("already_adopted" as const) : ("already_consented" as const) };
+
+  await db.insert("capability_consents", {
+    user_id: userId,
+    device_id: args.device_id,
+    capability_slug: args.capability_slug,
+    manifest_hash: args.manifest_hash,
+    consented_at: Date.now(),
+    actor_user_id: userId,
+    ...(purpose ? { purpose } : {}),
+  });
+  await db.insert("capability_events", {
+    user_id: userId,
+    kind: purpose ?? "consent",
+    actor_user_id: userId,
+    device_id: args.device_id,
+    capability_slug: args.capability_slug,
+    manifest_hash: args.manifest_hash,
+    created_at: Date.now(),
+  });
+  await bumpCapabilityRevision(ctx, userId);
+  return { status: purpose ? ("adopted" as const) : ("consented" as const) };
+}
+
 export const grantConsent = mutation({
   args: {
     api_token: v.string(),
@@ -37,55 +75,45 @@ export const grantConsent = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
-    const db = capDb(ctx.db);
-    const existing = await db
-      .query("capability_consents")
-      .withIndex("by_user_device_slug", (q: any) =>
-        q.eq("user_id", auth.userId).eq("device_id", args.device_id).eq("capability_slug", args.capability_slug),
-      )
-      .collect();
-    const match = existing.find((row) => row.manifest_hash === args.manifest_hash);
-    if (match) return { status: "already_consented" as const };
-
-    await db.insert("capability_consents", {
-      user_id: auth.userId as unknown as string,
-      device_id: args.device_id,
-      capability_slug: args.capability_slug,
-      manifest_hash: args.manifest_hash,
-      consented_at: Date.now(),
-      actor_user_id: auth.userId as unknown as string,
-    });
-    await db.insert("capability_events", {
-      user_id: auth.userId as unknown as string,
-      kind: "consent",
-      actor_user_id: auth.userId as unknown as string,
-      device_id: args.device_id,
-      capability_slug: args.capability_slug,
-      manifest_hash: args.manifest_hash,
-      created_at: Date.now(),
-    });
-    return { status: "consented" as const };
+    const { api_token: _token, ...rest } = args;
+    return await recordConsent(ctx, auth.userId as unknown as string, rest);
   },
 });
 
+async function consentRowsFor(ctx: any, apiToken: string, deviceId: string) {
+  const auth = await verifyApiToken(ctx, apiToken);
+  if (!auth) throw new Error("Unauthorized");
+  return await capDb(ctx.db)
+    .query("capability_consents")
+    .withIndex("by_user_device_slug", (q: any) => q.eq("user_id", auth.userId).eq("device_id", deviceId))
+    .collect();
+}
+
 /** Every consent this user holds for a device — what the resolver's consent
- *  gate reads. Owner only by construction (index leads with user_id). */
+ *  gate reads. Owner only by construction (index leads with user_id).
+ *  Adoptions are not consents and never appear here. */
 export const listConsents = query({
   args: { api_token: v.string(), device_id: v.string() },
   handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) throw new Error("Unauthorized");
-    const db = capDb(ctx.db);
-    const rows = await db
-      .query("capability_consents")
-      .withIndex("by_user_device_slug", (q: any) =>
-        q.eq("user_id", auth.userId).eq("device_id", args.device_id),
-      )
-      .collect();
-    return rows.map((row) => ({
+    const rows = await consentRowsFor(ctx, args.api_token, args.device_id);
+    return rows.filter((row) => !row.purpose).map((row) => ({
       capability_slug: row.capability_slug,
       manifest_hash: row.manifest_hash,
       consented_at: row.consented_at,
+    }));
+  },
+});
+
+/** The device's adoptions: (slug, hash) pairs whose conflicting file the
+ *  person chose to replace with the kit's copy. */
+export const listAdoptions = query({
+  args: { api_token: v.string(), device_id: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await consentRowsFor(ctx, args.api_token, args.device_id);
+    return rows.filter((row) => row.purpose === "adopt").map((row) => ({
+      slug: row.capability_slug,
+      hash: row.manifest_hash,
+      adopted_at: row.consented_at,
     }));
   },
 });
@@ -204,6 +232,11 @@ export async function upsertBinding(ctx: any, userId: string, args: UpsertBindin
       // write into whatever sits at that path on someone else's machine.
       if (!scopeKeyValidForTeam(args.scope_key)) {
         return { status: "rejected" as const, reason: "local_key_never_team" };
+      }
+      // A kit item belongs to one workspace (authored/<owner>/...). A team may
+      // turn on only its own items; a personal item has no team scope at all.
+      if (args.capability_slug.startsWith("authored/") && args.capability_slug.split("/")[1] !== String(args.team_id)) {
+        return { status: "rejected" as const, reason: "kit_item_not_in_team" };
       }
     }
 
@@ -356,80 +389,73 @@ export const unbindCapability = mutation({
 import { getAuthUserId } from "@convex-dev/auth/server";
 
 /**
- * Every binding this user can see: their own at any scope, plus team bindings
- * for the teams they belong to. Shaped for the store's syncTable — a plain
- * list, `since` watermark for delta, opaque enough that the resolver in
- * packages/shared stays the only interpreter.
+ * THE bindings reader: every binding that applies to this user. Their own at
+ * any scope, plus TEAM-scope bindings for every team they belong to (a
+ * teammate's own user or device binding carries a team_id for routing but
+ * applies only to that teammate, so it never rides in). The web store and the
+ * daemon's reconciler both read through here, so they can never disagree on
+ * which wishes exist. `since` trims to rows updated after the watermark.
  */
+export async function listVisibleBindings(ctx: any, userId: string, since?: number) {
+  const db = capDb(ctx.db);
+  const fresh = (q: any) => (since === undefined ? q : q.gt("updated_at", since));
+  const mine = await db
+    .query("capability_bindings")
+    .withIndex("by_user_updated", (q: any) => fresh(q.eq("user_id", userId)))
+    .collect();
+
+  // The membership rows are the tenant gate the by_team_updated exception in
+  // the schema was justified on.
+  const memberships = await (ctx.db as any)
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const teamRows: CapabilityBindingDoc[] = [];
+  for (const m of memberships) {
+    const rows = await db
+      .query("capability_bindings")
+      .withIndex("by_team_updated", (q: any) => fresh(q.eq("team_id", m.team_id)))
+      .collect();
+    for (const r of rows) {
+      if (r.user_id !== String(userId) && r.scope_kind === "team") teamRows.push(r);
+    }
+  }
+
+  return [...mine, ...teamRows].map((r) => ({
+    _id: r._id,
+    user_id: r.user_id,
+    team_id: r.team_id,
+    capability_slug: r.capability_slug,
+    scope_kind: r.scope_kind,
+    scope_key: r.scope_key,
+    enabled: r.enabled,
+    config: r.config,
+    client_filter: r.client_filter,
+    min_client_version: r.min_client_version,
+    client_key: r.client_key,
+    created_by: r.created_by,
+    updated_at: r.updated_at,
+  }));
+}
+
+/** The web's read, shaped for the store's syncTable (`since` for delta). */
 export const webListBindings = query({
   args: { since: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { items: [] as any[] };
-    const db = capDb(ctx.db);
-    const mine = await db
-      .query("capability_bindings")
-      .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId))
-      .collect();
-
-    // Team bindings ride in from every team the user is a member of. The
-    // membership rows are the tenant gate the by_team_updated exception in the
-    // schema was justified on.
-    const memberships = await (ctx.db as any)
-      .query("team_memberships")
-      .withIndex("by_user_team", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const teamRows: any[] = [];
-    for (const m of memberships) {
-      const rows = await db
-        .query("capability_bindings")
-        .withIndex("by_team_updated", (q: any) => q.eq("team_id", m.team_id))
-        .collect();
-      for (const r of rows) if (r.user_id !== (userId as unknown as string)) teamRows.push(r);
-    }
-
-    const all = [...mine, ...teamRows].filter(
-      (r) => args.since === undefined || r.updated_at > args.since,
-    );
-    return {
-      items: all.map((r) => ({
-        _id: r._id,
-        user_id: r.user_id,
-        team_id: r.team_id,
-        capability_slug: r.capability_slug,
-        scope_kind: r.scope_kind,
-        scope_key: r.scope_key,
-        enabled: r.enabled,
-        config: r.config,
-        client_filter: r.client_filter,
-        min_client_version: r.min_client_version,
-        client_key: r.client_key,
-        created_by: r.created_by,
-        updated_at: r.updated_at,
-      })),
-    };
+    return { items: await listVisibleBindings(ctx, userId as unknown as string, args.since) };
   },
 });
 
-/** The CLI's read of its own bindings (token auth). Same rows as
- *  webListBindings, keyed for a terminal listing. */
+/** The CLI's read (token auth): the same rows the web sees, which is what the
+ *  daemon's reconciler resolves. */
 export const listBindingsForToken = query({
   args: { api_token: v.string() },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
-    const db = capDb(ctx.db);
-    const rows = await db
-      .query("capability_bindings")
-      .withIndex("by_user_updated", (q: any) => q.eq("user_id", auth.userId))
-      .collect();
-    return rows.map((r) => ({
-      capability_slug: r.capability_slug,
-      scope_kind: r.scope_kind,
-      scope_key: r.scope_key,
-      enabled: r.enabled,
-      updated_at: r.updated_at,
-    }));
+    return await listVisibleBindings(ctx, auth.userId as unknown as string);
   },
 });
 

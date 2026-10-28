@@ -876,6 +876,35 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       team_id: opts.team_id,
     });
   },
+  // The kit (teamKit.ts). Share asks the machine that holds the item to
+  // upload it; the stub row the store wrote is superseded by slug.
+  shareToKit: async (ctx, _userId, [opts]: [any]) => {
+    return await ctx.runMutation!((api as any).teamKit.requestTeamKitPublish, {
+      device_id: opts.device_id,
+      kind: opts.kind,
+      name: opts.name,
+      ...(opts.team_id ? { team_id: opts.team_id } : {}),
+      ...(opts.client_key ? { client_key: opts.client_key } : {}),
+    });
+  },
+  removeKitItem: async (ctx, _userId, [itemId]: [string]) => {
+    if (!itemId || itemId.startsWith("tk_")) return null;
+    return await ctx.runMutation!((api as any).teamKit.removeItem, { item_id: itemId });
+  },
+  adoptKitItem: async (ctx, _userId, [opts]: [any]) => {
+    return await ctx.runMutation!((api as any).teamKit.adoptKitItem, {
+      device_id: opts.device_id,
+      slug: opts.slug,
+      hash: opts.hash,
+    });
+  },
+  grantKitConsent: async (ctx, _userId, [opts]: [any]) => {
+    return await ctx.runMutation!((api as any).teamKit.grantConsent, {
+      device_id: opts.device_id,
+      slug: opts.slug,
+      hash: opts.hash,
+    });
+  },
   createCapabilityBinding: async (ctx, userId, [opts]: [any]) => {
     return await upsertBinding(ctx, userId as unknown as string, {
       capability_slug: opts.capability_slug,
