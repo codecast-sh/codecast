@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changeLine, deriveAsks, orgChangeError, orgProposalWork } from "./orgProposal";
+import { changeLine, deriveAsks, orgChangeError, orgProposalWork, orgProposalWorkErrors } from "./orgProposal";
 import { changeWords } from "./orgChangeWords";
 import { sessionDestination } from "./orgSessionFiling";
 
@@ -30,5 +30,18 @@ describe("a filing", () => {
     const asks = deriveAsks(rows);
     expect(asks).toHaveLength(1);
     expect(asks[0]).toMatchObject({ title: "File 4 sessions where they belong", effect: "2 under @growth, 1 onto tasks and 1 closed as done. They leave your inbox; nothing stops running.", seqs: [1, 2, 3, 4] });
+  });
+
+  test("under a role the same proposal creates, rides in that role's ask as one structure proposal", () => {
+    const role = { seq: 1, change: { kind: "role" as const, handle: "mobile", name: "Head of Mobile", reports_to: "@cam" } as any, status: "proposed" as const, rationale: "" };
+    const rows = [role, row(2, "jx7ios1", "@mobile", "iOS app launch"), row(3, "jx7and1", "@mobile", "Android app store release")];
+    expect(orgProposalWork(rows)).toBe("structure");
+    expect(orgProposalWorkErrors(rows)).toEqual([]);
+    const asks = deriveAsks(rows);
+    expect(asks).toHaveLength(1);
+    expect(asks[0].seqs).toEqual([1, 2, 3]);
+    expect(asks[0].effect).toContain('The session "iOS app launch" moves under it.');
+    // A filing under a role that already exists is still its own kind of work.
+    expect(orgProposalWorkErrors([role, row(4, "jx7old1", "@growth")])[0]).toContain("mixes");
   });
 });

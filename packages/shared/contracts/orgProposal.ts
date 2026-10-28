@@ -249,23 +249,44 @@ export type OrgChangeKind = OrgChange["kind"];
 // held 9 changes and the first goal tree 11 (op-55, op-54, 2026-10-06); 12
 // holds both and refuses the 64-row record shape that has no place here.
 // The person's sessions filed where they belong are a fourth kind, uncapped
-// like the records: a tidy files every loose session it can place.
+// like the records: a tidy files every loose session it can place. A filing
+// under a role the same proposal creates belongs to that role's structure
+// (hire a lead and give it its threads in one approval) and is not counted
+// against the structure cap.
 export type OrgProposalWork = "records" | "structure" | "goals" | "sessions";
 export const ORG_PROPOSAL_WORKS: readonly OrgProposalWork[] = ["records", "structure", "goals", "sessions"];
 export const ORG_PROPOSAL_MAX: Record<OrgProposalWork, number | null> = { records: null, structure: 12, goals: 12, sessions: null };
 export function orgWorkOfChange(c: { kind: string }): OrgProposalWork {
   return (ORG_SYNC_KINDS as readonly string[]).includes(c.kind) ? "records" : (ORG_GOAL_KINDS as readonly string[]).includes(c.kind) ? "goals" : (ORG_SESSION_KINDS as readonly string[]).includes(c.kind) ? "sessions" : "structure";
 }
+/** The handles of the roles the changes create. */
+const createdHandles = (changes: ReadonlyArray<{ change: { kind: string } }>) =>
+  new Set(changes.filter((c) => c.change.kind === "role").map((c) => askHandle(c.change as OrgChange)).filter((h): h is string => !!h));
+/** The role a change acts on, by handle: the role a session is filed
+ *  under, else the role the change names. A change on a role the same
+ *  proposal creates rides on that role and cannot apply without it. */
+export function roleActedOn(c: { kind: string }): string | null {
+  if (c.kind === "file_session") { const to = sessionDestination((c as any).to ?? ""); return to?.kind === "role" ? to.handle : null; }
+  return askHandle(c as OrgChange);
+}
+/** A session filed under a role the same changes create, its handle; else null. */
+function filingUnderCreated(c: { kind: string }, created: ReadonlySet<string>): string | null {
+  const h = c.kind === "file_session" ? roleActedOn(c) : null;
+  return h && created.has(h) ? h : null;
+}
 /** The work the changes hold, or null when they mix kinds. */
 export function orgProposalWork(changes: ReadonlyArray<{ change: { kind: string } }>): OrgProposalWork | null {
-  const works = new Set(changes.map((c) => orgWorkOfChange(c.change)));
+  const created = createdHandles(changes);
+  const works = new Set(changes.filter((c) => !filingUnderCreated(c.change, created)).map((c) => orgWorkOfChange(c.change)));
   return works.size === 1 ? [...works][0] : null;
 }
 /** Why the changes are not one proposal: mixed work, or a structure or goal proposal too large to read whole. */
 export function orgProposalWorkErrors(changes: ReadonlyArray<{ change: { kind: string } }>): string[] {
   if (!changes.length) return [];
+  const created = createdHandles(changes);
   const byWork = new Map<OrgProposalWork, string[]>();
-  for (const c of changes) { const w = orgWorkOfChange(c.change); byWork.set(w, [...(byWork.get(w) ?? []), c.change.kind]); }
+  for (const c of changes) {
+    if (filingUnderCreated(c.change, created)) continue; const w = orgWorkOfChange(c.change); byWork.set(w, [...(byWork.get(w) ?? []), c.change.kind]); }
   if (byWork.size > 1) {
     const noun: Record<OrgProposalWork, string> = { records: "record", structure: "structure", goals: "goal", sessions: "session filing" };
     const parts = ORG_PROPOSAL_WORKS.filter((w) => byWork.has(w)).map((w) => { const kinds = byWork.get(w)!; return `${kinds.length} ${noun[w]} ${kinds.length === 1 ? "change" : "changes"} (${[...new Set(kinds)].join(", ")})`; });
@@ -1028,6 +1049,7 @@ function askWords(names?: OrgAskNames) {
       case "adopt": return ` The session ${c.conversation} becomes it.`;
       case "authority": return ` Outside codecast it may ${authorityWords(c.authority)}, inside the limits you set.`;
       case "hire": return ` It is hired from the template ${c.template} ${c.version}, and leads ${c.project}.`;
+      case "file_session": return ` The session ${c.title?.trim() ? `"${c.title.trim()}"` : c.session} moves under it.`;
       case "move": return c.reports_to ? ` A separate change puts it under ${parent(c.reports_to)}; skip that and it keeps reporting to whoever runs it today.` : "";
       default: return "";
     }
@@ -1093,8 +1115,10 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   const live = orderOrgChanges(changes.filter((c) => c.status !== "removed"), (c) => c.change);
   const records = live.filter((c) => ORG_SYNC_KINDS.includes(c.change.kind));
   const goals = live.filter((c) => isOrgGoalChange(c.change));
-  const filings = live.filter((c) => (ORG_SESSION_KINDS as readonly string[]).includes(c.change.kind));
   const created = new Map<string, AskRow>(live.filter((c) => c.change.kind === "role").map((c) => [askHandle(c.change)!, c]));
+  const createdSet = new Set(created.keys());
+  // A session filed under a role this proposal creates rides in that role's ask.
+  const filings = live.filter((c) => (ORG_SESSION_KINDS as readonly string[]).includes(c.change.kind) && !filingUnderCreated(c.change, createdSet));
   // A move of a role this proposal creates rides in that role's ask (a named
   // session put under an existing role, R2), so the person can accept the
   // name and skip the move from one card; any other move is its own ask.
@@ -1103,7 +1127,7 @@ export function deriveAsks(changes: ReadonlyArray<AskRow>, names?: OrgAskNames):
   const rest: AskRow[] = [];
   for (const c of live) {
     if (records.includes(c) || goals.includes(c) || filings.includes(c) || own.includes(c)) continue;
-    const role = created.get(askHandle(c.change) ?? "");
+    const role = created.get(roleActedOn(c.change) ?? "");
     if (role) riders.set(role, [...(riders.get(role) ?? []), c]);
     else rest.push(c);
   }

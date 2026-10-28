@@ -53,6 +53,7 @@ import {
   type OrgVerdictSeen,
   orgRecordRedundancyErrors,
   ORG_SESSION_KINDS,
+  roleActedOn,
 } from "@codecast/shared/contracts/orgProposal";
 import { orgAppliedDiff } from "@codecast/shared/contracts/orgChange";
 import { humanizeConvexError } from "@codecast/shared/contracts/convexErrors";
@@ -484,7 +485,30 @@ async function skipOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, cha
     }
   }
   await ctx.db.patch(change._id, { status: "skipped", decided_by: userId, decided_at: now, ...(note ? { applied_note: note, applied_at: now } : {}) });
+  // A role this proposal would create is not coming, so the changes that act
+  // on it (its filings, its move, its standing session) cannot apply either.
+  const handle = change.change.kind === "role" ? roleActedOn(change.change) : null;
+  if (handle && !(await liveHandle(ctx, proposal, handle))) {
+    for (const rider of (await changesOf(ctx, proposal._id)).filter((r) => r._id !== change._id && decidable(r) && roleActedOn(r.change) === handle)) {
+      await ctx.db.patch(rider._id, { status: "skipped", decided_by: userId, decided_at: now, applied_note: `skipped with @${handle}, which it acts on`, applied_at: now });
+    }
+  }
   return { change_id: change._id, seq: change.seq, status: "skipped", note, line: describeOrgChange(change.change) };
+}
+
+/** Whether a live role in the proposal's workspace holds the handle. */
+async function liveHandle(ctx: Ctx, proposal: ProposalRow, handle: string): Promise<boolean> {
+  return (await rolesInBoundary(ctx, boundaryOf(proposal))).some((r: any) => r.handle === handle);
+}
+
+/** Why a change cannot be accepted on its own yet: it acts on a role this
+ *  proposal creates, and that role's change has not applied. Null otherwise. */
+async function waitsOnCreatedRole(ctx: Ctx, proposal: ProposalRow, change: ChangeRow): Promise<string | null> {
+  if (change.change.kind === "role") return null;
+  const handle = roleActedOn(change.change);
+  if (!handle || await liveHandle(ctx, proposal, handle)) return null;
+  const role = (await changesOf(ctx, proposal._id)).find((r) => r.change.kind === "role" && roleActedOn(r.change) === handle);
+  return role && role.status !== "applied" ? `${proposal.short_id}#${change.seq} acts on @${handle}, which this proposal creates in #${role.seq}: accept #${role.seq} first, or both from the role's card` : null;
 }
 
 /** A verdict is read against the proposal as the page showed it (`seen`);
@@ -512,6 +536,8 @@ export async function performDecideChange(
   // An amend keeps the row's id and replaces what it says (S18), so the id
   // alone does not say which content the person read.
   refuseIfRevised(proposal, await changesOf(ctx, proposal._id), args.seen);
+  const waits = args.verdict === "accept" ? await waitsOnCreatedRole(ctx, proposal, change) : null;
+  if (waits) throw new Error(waits);
   const now = Date.now();
   const out = args.verdict === "skip"
     ? await skipOne(ctx, userId, proposal, change, now, args.provision ?? true)
@@ -577,7 +603,12 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   // The person's own call says what it read; a continuation and an ask's
   // accept were checked by the call that started them.
   if (!args.continuation) refuseIfRevised(proposal, rows, args.seen);
-  const all = orderForApply(rows.filter(approvable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !seqs || seqs.has(c.seq)).filter((c) => !triedSet.has(String(c._id))));
+  const batch = rows.filter(approvable).filter((c) => !kinds || kinds.has(c.change.kind)).filter((c) => !seqs || seqs.has(c.seq)).filter((c) => !triedSet.has(String(c._id)));
+  // A change on a role this proposal creates goes only with that role (it
+  // applies first, by rank) or after it; otherwise it waits, undecided.
+  const live = new Set((await rolesInBoundary(ctx, boundaryOf(proposal))).map((r: any) => r.handle));
+  const roleRow = (h: string | null) => (h && !live.has(h) ? rows.find((r) => r.change.kind === "role" && roleActedOn(r.change) === h) : undefined);
+  const all = orderForApply(batch.filter((c) => { if (c.change.kind === "role") return true; const role = roleRow(roleActedOn(c.change)); return !role || role.status === "applied" || batch.includes(role); }));
   // One call applies one chunk and hands the rest to its own transaction
   // (acceptAllContinue): a hundred records, each plan close cascading over its
   // tasks, do not fit one read and write budget, and a late failure must not
@@ -645,10 +676,15 @@ export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, arg
   const now = Date.now();
   const inAsk = new Set(ask.seqs);
   const results = [];
-  for (const change of rows.filter(decidable).filter((c) => inAsk.has(c.seq))) results.push(await skipOne(ctx, userId, proposal, change, now, args.provision ?? true));
+  // Fresh reads: skipping a role skips its riders, which may sit in this ask.
+  for (const seq of rows.filter((c) => inAsk.has(c.seq)).map((c) => c._id)) {
+    const change = await ctx.db.get(seq) as ChangeRow | null;
+    if (change && decidable(change)) results.push(await skipOne(ctx, userId, proposal, change, now, args.provision ?? true));
+  }
   await ctx.db.patch(proposal._id, { updated_at: now });
   const resolved = await resolveIfDone(ctx, proposal, now);
-  return { ask: args.ask, title: ask.title, proposal: proposal.short_id, results, resolved, remaining: 0, applied: 0, failed: 0, skipped: results.length };
+  const skipped = (await changesOf(ctx, proposal._id)).filter((c) => inAsk.has(c.seq) && c.status === "skipped" && c.decided_at === now).length;
+  return { ask: args.ask, title: ask.title, proposal: proposal.short_id, results, resolved, remaining: 0, applied: 0, failed: 0, skipped };
 }
 
 // ── Hires: a role's own permanent reports ───────────────────────────────────

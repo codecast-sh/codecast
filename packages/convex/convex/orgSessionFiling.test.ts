@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performAcceptAll, performCreateProposal } from "./orgProposals";
+import { performAcceptAll, performCreateProposal, performDecideAsk, performDecideChange } from "./orgProposals";
 import { looseSessionsOf } from "./lib/orgSessionFiling";
 import { newSinceLook, syncInboxLook } from "./orgInbox";
 import { HEAD_INBOX_EVERY_MS, HEAD_INBOX_TITLE } from "./lib/orgRoutine";
@@ -89,6 +89,49 @@ describe("filing the person's sessions", () => {
   test("a filing to nowhere is refused at post", async () => {
     const db = fixtures();
     await expect(performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, spec: spec([filing("jxtweet", "growth")]) })).rejects.toThrow('to is "@handle"');
+  });
+});
+
+describe("a new lead and its threads in one proposal", () => {
+  const hire = [
+    { change: { kind: "role", name: "Head of Mobile", handle: "mobile", reports_to: "@growth" }, rationale: "nobody owns the apps" },
+    filing("jxtweet", "@mobile"),
+    filing("jxrefnd", "@mobile"),
+  ];
+
+  test("posts as one structure proposal with one card, and accepting it seats the lead and files both sessions under it", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "conversations_hop", spec: spec(hire) });
+    expect(r.status).toBe("open");
+    await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false });
+    const mobile = (await db.query("org_roles").collect()).find((x: any) => x.handle === "mobile");
+    expect(mobile).toBeTruthy();
+    expect(await db.get("conversations_tweet")).toMatchObject({ org_role_id: mobile._id });
+    expect(await db.get("conversations_refund")).toMatchObject({ org_role_id: mobile._id });
+    expect((await db.query("org_proposal_changes").collect()).map((c: any) => c.status)).toEqual(["applied", "applied", "applied"]);
+  });
+
+  test("a filing cannot run ahead of its role: refused alone, held back from a narrowed accept, skipped with its role", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "conversations_hop", spec: spec(hire) });
+    const rows = await db.query("org_proposal_changes").collect();
+    const bySeq = (n: number) => rows.find((c: any) => c.seq === n)!;
+    await expect(performDecideChange(ctxOf(db), ME as any, { change_id: String(bySeq(2)._id), verdict: "accept" })).rejects.toThrow("accept #1 first");
+    const narrowed = await performAcceptAll(ctxOf(db), ME as any, { proposal: r.short_id, kinds: ["file_session"] });
+    expect(narrowed.applied + narrowed.failed).toBe(0);
+    await performDecideChange(ctxOf(db), ME as any, { change_id: String(bySeq(1)._id), verdict: "skip" });
+    const after = await db.query("org_proposal_changes").collect();
+    expect(after.map((c: any) => c.status)).toEqual(["skipped", "skipped", "skipped"]);
+    expect(after[1].applied_note).toContain("skipped with @mobile");
+  });
+
+  test("skipping the lead's card leaves its threads where they were", async () => {
+    const db = fixtures();
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "conversations_hop", spec: spec(hire) });
+    await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "skip" });
+    expect((await db.query("org_roles").collect()).some((x: any) => x.handle === "mobile")).toBe(false);
+    expect((await db.get("conversations_tweet") as any).org_role_id).toBeUndefined();
+    expect((await db.get("conversations_refund") as any).org_role_id).toBeUndefined();
   });
 });
 
