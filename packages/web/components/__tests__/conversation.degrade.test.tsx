@@ -65,7 +65,7 @@ test("a cached conversation opens with its header and messages while every query
       "conversations:listMessagesTail",
       "conversations:getTranscriptWatermark",
       "conversations:getUserMessages",
-      "comments:getConversationCommentSummary",
+      "commentTwins:conversationComments",
       "collab:collabRequests",
     ]) {
       expect(backend.refused).toContain(fn);

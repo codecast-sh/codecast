@@ -13,9 +13,9 @@ import { commentsFromReviewOn } from "../lib/commentSource";
 // phone's session screen mounts the same feed and reads the same rows as the
 // web conversation view.
 
-/** One conversation's comments, live from the server: from `comments`, or
- *  from their review_comments twins when the person turned
- *  `comments_from_review` on (lib/commentSource). Same rows either way. */
+/** One conversation's comments, live from the server: from their
+ *  review_comments twins, or from `comments` when the person set
+ *  `comments_from_review` to false (lib/commentSource). Same rows either way. */
 export function useConversationCommentSummary(conversationId: string | undefined) {
   const canQuery = !!conversationId && isConvexId(conversationId);
   const fromReview = useInboxStore(commentsFromReviewOn);

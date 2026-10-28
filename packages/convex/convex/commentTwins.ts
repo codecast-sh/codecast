@@ -46,7 +46,7 @@ export async function conversationCommentRowsFromTwins(
 /**
  * getConversationCommentSummary, answered from review_comments. Same access
  * rule (canAccessConversation on the conversation), same row shape, same
- * order. Read only by clients whose person turned `comments_from_review` on.
+ * order. Read by every client unless its person set `comments_from_review` to false.
  */
 export const conversationComments = query({
   args: { conversation_id: v.id("conversations") },

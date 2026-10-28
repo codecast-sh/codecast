@@ -2,10 +2,10 @@
 //
 // The batch (`reviewComments`, lib/reviewActions) is where a quote is written
 // while it waits for the next send, and it stays the composer's only source.
-// With the person's `quote_drafts` preference on, each batch write also hands
-// the touched quotes to the server (store saveQuoteDrafts / removeQuoteDrafts),
-// so a quote has a record once its message goes: sent, then answered. Off, the
-// batch is purely local, as it has always been.
+// Each batch write also hands the touched quotes to the server (store
+// saveQuoteDrafts / removeQuoteDrafts), so a quote has a record once its
+// message goes: sent, then answered. A person whose `quote_drafts` preference
+// is false keeps the batch purely local.
 //
 // Pure: no store import, so the store's own writers can use it.
 
@@ -25,9 +25,9 @@ export type QuoteDraftWire = {
 
 type UiState = { clientState?: { ui?: { quote_drafts?: boolean } | null } | null };
 
-/** The person's opt-in: per user, off unless set (clientState.ui.quote_drafts). */
+/** On for everyone unless the person set clientState.ui.quote_drafts to false. */
 export function quoteDraftsOn(state: UiState): boolean {
-  return state.clientState?.ui?.quote_drafts === true;
+  return state.clientState?.ui?.quote_drafts !== false;
 }
 
 /**

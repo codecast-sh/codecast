@@ -184,25 +184,25 @@ async function withUi(ui: Record<string, unknown>) {
   return [...subscribed];
 }
 
-describe("flag off: nothing changes", () => {
-  test("unset or false subscribes to getConversationCommentSummary and the badge with its old args", async () => {
-    for (const ui of [{}, { comments_from_review: false }]) {
-      subscribed.length = 0;
-      const calls = await withUi(ui);
-      expect(calls.some((c) => c.ref === named(api.comments.getConversationCommentSummary))).toBe(true);
-      expect(calls.some((c) => c.ref === named(api.commentTwins.conversationComments))).toBe(false);
-      const badge = calls.filter((c) => c.ref === named(api.threads.unreadCount));
-      expect(badge.length).toBeGreaterThan(0);
-      for (const call of badge) expect(call.args).toEqual({});
-    }
+describe("the flag", () => {
+  test("false subscribes to getConversationCommentSummary and the badge with its old args", async () => {
+    const calls = await withUi({ comments_from_review: false });
+    expect(calls.some((c) => c.ref === named(api.comments.getConversationCommentSummary))).toBe(true);
+    expect(calls.some((c) => c.ref === named(api.commentTwins.conversationComments))).toBe(false);
+    const badge = calls.filter((c) => c.ref === named(api.threads.unreadCount));
+    expect(badge.length).toBeGreaterThan(0);
+    for (const call of badge) expect(call.args).toEqual({});
   });
 
-  test("on, the feeder reads the twins and the Threads reads ask for them", async () => {
-    const calls = await withUi({ comments_from_review: true });
-    expect(calls.some((c) => c.ref === named(api.commentTwins.conversationComments))).toBe(true);
-    expect(calls.some((c) => c.ref === named(api.comments.getConversationCommentSummary))).toBe(false);
-    for (const call of calls.filter((c) => c.ref === named(api.threads.unreadCount))) {
-      expect(call.args).toEqual({ comments_from_review: true });
+  test("unset or true, the feeder reads the twins and the Threads reads ask for them", async () => {
+    for (const ui of [{}, { comments_from_review: true }]) {
+      subscribed.length = 0;
+      const calls = await withUi(ui);
+      expect(calls.some((c) => c.ref === named(api.commentTwins.conversationComments))).toBe(true);
+      expect(calls.some((c) => c.ref === named(api.comments.getConversationCommentSummary))).toBe(false);
+      for (const call of calls.filter((c) => c.ref === named(api.threads.unreadCount))) {
+        expect(call.args).toEqual({ comments_from_review: true });
+      }
     }
   });
 });
