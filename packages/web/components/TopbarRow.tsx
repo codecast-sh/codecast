@@ -13,6 +13,9 @@
 // controls (the search icon and New), so when the row runs out of room it
 // overflows, and useSqueezeToFit sheds the lowest-value pieces until it fits
 // again (levels in globals.css, `[data-cc-topbar-row][data-squeeze]`).
+//
+// Zen keeps only the window's own controls: nav at the left, panels at the
+// right. Everything else in the row is about the team and the fleet.
 
 import { useRef, type ReactNode } from "react";
 import { TopbarDivider } from "./TopbarButton";
@@ -22,6 +25,7 @@ import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 const TOPBAR_SQUEEZE_LEVELS = 4;
 
 export function TopbarRow({
+  zen = false,
   nav,
   workspace,
   search,
@@ -29,6 +33,7 @@ export function TopbarRow({
   actions,
   panels,
 }: {
+  zen?: boolean;
   nav: ReactNode;
   workspace: ReactNode;
   search: ReactNode;
@@ -41,12 +46,16 @@ export function TopbarRow({
   return (
     <div ref={rowRef} data-cc-topbar-row className="px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3">
       <div className="flex items-center gap-0.5 flex-shrink-0">{nav}</div>
-      <div className="hidden sm:flex items-center gap-2 flex-shrink-0 min-w-0">{workspace}</div>
-      <div data-cc-topbar-search className="hidden sm:flex flex-1 items-center justify-center gap-2 min-w-min">{search}</div>
+      {!zen && <>
+        <div className="hidden sm:flex items-center gap-2 flex-shrink-0 min-w-0">{workspace}</div>
+        <div data-cc-topbar-search className="hidden sm:flex flex-1 items-center justify-center gap-2 min-w-min">{search}</div>
+      </>}
       <div data-cc-topbar-actions className="ml-auto flex items-center gap-1.5 sm:gap-3 flex-shrink-0">
-        {status}
-        <div data-cc-topbar-group className="flex items-center gap-0.5">{actions}</div>
-        <TopbarDivider />
+        {!zen && <>
+          {status}
+          <div data-cc-topbar-group className="flex items-center gap-0.5">{actions}</div>
+          <TopbarDivider />
+        </>}
         <div data-cc-topbar-group className="flex items-center gap-0.5">{panels}</div>
       </div>
     </div>

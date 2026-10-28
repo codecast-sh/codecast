@@ -22,7 +22,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
-import { useShortcutContext, useShortcuts, usePaneShortcutAction, isMac, hasOpenModal, withShortcut } from "../shortcuts";
+import { useShortcutContext, usePaneShortcutAction, isMac, hasOpenModal, withShortcut } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { composerAgentStatus, useManagedSessionFields, useSessionEscape } from "../hooks/useSessionComposerControls";
 import { useStorageImageUrls } from "../hooks/useStorageImageUrl";
@@ -127,14 +127,13 @@ import { buildCompositeTimeline, mergeTimelineMessages } from "../lib/compositeT
 import { useMessageSelection } from "../hooks/useMessageSelection";
 import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
-import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import { AskSessionPanel } from "./conversation/AskSessionPanel";
 import { useAskSession } from "../hooks/useAskSession";
 import { openSessionAtMessage } from "../lib/openSessionAtMessage";
 import type { MentionItem } from "./editor/MentionList";
 import { HeaderPinMenuItem } from "./anchor/AnchorPanel";
-import { Headphones, MessageSquare, Minimize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree, ChevronLeft } from "lucide-react";
+import { Headphones, MessageSquare, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree, ChevronLeft } from "lucide-react";
 import { filesHref } from "../lib/vault/vaultHref";
 import { openFiles } from "../lib/filesPane";
 import { openForwardToChat } from "../lib/forwardToChat";
@@ -481,12 +480,6 @@ const ConversationViewInner = (
   const stickyDisabled = stickyPrefDisabled || !stickyPrompt || !stickyShown;
   const updateUI = useInboxStore(s => s.updateClientUI);
   const headerRef = useRef<HTMLElement>(null);
-  // Zen mode on desktop: the head ROW is the window titlebar (drag +
-  // traffic-light inset). The ref goes on the inner cc-panel__head — the
-  // element that paints the head background and bottom border — so the inset
-  // padding shares its surface; on the outer wrapper the padding area showed
-  // the wrapper's own darker background as a 78px block with a hard seam.
-  const titlebarHeadRef = useTitlebarHead<HTMLDivElement>();
   // The header row sheds chip detail level by level until the title fits
   // (see hooks/useSqueezeToFit and the .cq-sq* tiers in globals.css).
   const squeezeRowRef = useRef<HTMLDivElement>(null);
@@ -2080,8 +2073,6 @@ const ConversationViewInner = (
     return () => ro.disconnect();
   }, []);
 
-  const isZenMode = useInboxStore(s => s.clientState.ui?.zen_mode ?? false);
-  const { dispatchAction } = useShortcuts();
   const [deskClass, setDeskClass] = useState("");
   useMountEffect(() => {
     setDeskClass(desktopHeaderClass());
@@ -3948,23 +3939,9 @@ const ConversationViewInner = (
       )}
       <ConversationHeaderBar
         headerRef={bindHeader}
-        headRef={titlebarHeadRef}
         squeezeRowRef={squeezeRowRef}
         className={`${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}
         lead={<>
-            {/* Zen hides the top bar and its enter button, so the way out
-                sits here. */}
-            {isZenMode && (
-              <ShortcutTooltip label="Exit zen mode" action="ui.zenToggle" side="bottom">
-                <button
-                  onClick={() => dispatchAction("ui.zenToggle")}
-                  aria-label="Exit zen mode"
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text transition-colors"
-                >
-                  <Minimize2 className="w-3.5 h-3.5" />
-                </button>
-              </ShortcutTooltip>
-            )}
             {headerLeft}
             {/* On a phone a hosted conversation has a plain way back to the
                 inbox, rather than only the menu. */}

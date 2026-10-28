@@ -6,7 +6,7 @@
 //
 // With `?path=` it is the history of one file, and with `?author=` the history
 // of one person.
-import { Fragment, useCallback, useMemo, type RefCallback } from "react";
+import { Fragment, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { FileCode2, GitCommitHorizontal, History as HistoryIcon } from "lucide-react";
@@ -24,7 +24,6 @@ import {
   useExternalEvents,
   useSyncRepositoryExternalEvents,
 } from "../../../../../../hooks/useSyncExternalEvents";
-import { useTitlebarHead } from "../../../../../../hooks/useTitlebarHead";
 import { externalEventRowToExternalEvent } from "../../../../../../lib/externalEvents";
 import {
   commitPageHref,
@@ -71,12 +70,10 @@ function CommitsContent({
   repository,
   refName,
   family,
-  headRef,
 }: {
   repository: string;
   refName: string;
   family: RepoRouteFamily;
-  headRef: RefCallback<HTMLElement>;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -100,7 +97,6 @@ function CommitsContent({
   return (
     <div className="repo-page h-full overflow-y-auto" data-main-scroll style={{ ["--repo-accent" as string]: "var(--sol-cyan)" }}>
       <RepoHeader
-        headRef={headRef}
         repository={repository}
         tab="commits"
         refName={branch || "HEAD"}
@@ -278,13 +274,12 @@ function CommitsContent({
 export default function RepoCommitsPage() {
   const params = useParams();
   const family = useRepoFamily();
-  const titlebarRef = useTitlebarHead<HTMLElement>();
   const repository = `${params.owner as string}/${params.name as string}`;
   const refName = decodeURIComponent((params.ref as string) ?? "");
 
   return (
     <RepoPageShell repository={repository}>
-      <CommitsContent repository={repository} refName={refName} family={family} headRef={titlebarRef} />
+      <CommitsContent repository={repository} refName={refName} family={family} />
     </RepoPageShell>
   );
 }

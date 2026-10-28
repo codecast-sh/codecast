@@ -1,5 +1,4 @@
 import { memo } from "react";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { Hash, Lock, Plus, BellOff, Users, SquarePen, Bot } from "lucide-react";
 import type { ChatChannelView } from "./chatTypes";
 import { OccupancyChip } from "../calls/OccupancyChip";
@@ -214,14 +213,9 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   // The section never opens empty: teammates without an open room are listed
   // right below the real conversations, dimmer, one click from becoming one.
   const suggested = onOpenDm ? suggestedDmMembers(dms, members, viewer) : [];
-  // Zen mode on desktop: the rail is the leftmost surface, so a lent strip
-  // clears the traffic lights; it has height only while it measures as the
-  // titlebar (same pattern as PageShell).
-  const titlebarStripRef = useTitlebarHead<HTMLDivElement>();
   return (
     <TooltipProvider delayDuration={200} skipDelayDuration={400}>
     <nav className="ch-rail" aria-label="Channels">
-      <div ref={titlebarStripRef} className="titlebar-strip shrink-0" />
       {pinned.length > 0 && (<>
       <div className="ch-rail-head">
         <span className="ch-rail-title">Pinned</span>

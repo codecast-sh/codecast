@@ -75,7 +75,6 @@ mock.module("../../hooks/useSeedOwnership", () => ({ useSeedOwnership: () => {} 
 const realOrgTree = { ...(await import("../../hooks/useSyncOrgTree")) };
 mock.module("../../hooks/useSyncOrgTree", () => ({ ...realOrgTree, useSyncOrgTreeFeeder: () => ({ ready: true, missing: false, refused: false, retry: () => {} }) }));
 mock.module("../../hooks/useMissingSessionRow", () => ({ useMissingSessionRow: () => undefined, useMissingSessionLookup: () => ({ row: undefined, failed: false }) }));
-mock.module("../../hooks/useTitlebarHead", () => ({ useTitlebarHead: () => ({ current: null }) }));
 mock.module("../../hooks/useConversationMessages", () => ({
   useConversationMessages: (id: string) => ({
     conversation: { _id: id, messages: [], is_own: true, updated_at: Date.now() },

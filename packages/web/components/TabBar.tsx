@@ -16,7 +16,6 @@ import { identityRowOf } from "../lib/sessionIdentity";
 import { LivenessDot } from "./LivenessDot";
 import { sessionLivenessState } from "../lib/liveness";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
-import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
 export function TabBar() {
   // A detached tab window (desktop breakout) renders its one surface with no
@@ -43,7 +42,6 @@ export function TabBar() {
     // And for a page named by a mode word (the triggers page): the mode.
     isHostedMode,
   ]);
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const tabs = s.tabs;
@@ -195,7 +193,6 @@ export function TabBar() {
 
   return (
     <div
-      ref={titlebarRef}
       data-cc-tabbar
       onDragOver={stripDragOver}
       onDragLeave={() => setDropHot(false)}

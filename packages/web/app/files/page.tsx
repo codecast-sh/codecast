@@ -73,7 +73,6 @@ import {
   setVaultModeScope,
   type VaultViewMode,
 } from "../../lib/vault/viewMode";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 // sigma + graphology are ~40kB gzip: nobody who doesn't open the graph pays.
 const VaultGraphView = lazy(() =>
@@ -95,7 +94,6 @@ const LEFT_TABS: { id: "files" | "search"; label: string; icon: React.ComponentT
 
 function VaultContent() {
   const convex = useConvex();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
   const searchParams = useSearchParams();
   const connection = useVaultStore((s) => s.connection);
@@ -446,7 +444,7 @@ function VaultContent() {
   // overlay drawer (narrow pane).
   const treePane = (
           <div className="h-full flex flex-col border-r-0 bg-sol-bg-alt/40">
-            <div ref={titlebarRef} className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
               <VaultPicker
                 vaults={vaults}
                 remoteVaults={remoteVaults}

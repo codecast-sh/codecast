@@ -2198,8 +2198,8 @@ diffs-container {
 /* Desktop: titlebar drag region for the overlay titlebar.
    --titlebar-inset clears the macOS traffic lights (main.js places them at
    x:16,y:12). .electron-drag-region is the global header; .titlebar-head is
-   any surface's top row standing in for it while zen mode hides that header
-   (hooks/useTitlebarHead). */
+   a top row standing in for it in a window without that header (the
+   chromeless call window, lib/desktop attachTitlebarHead). */
 :root {
   --titlebar-inset: 78px;
 }
@@ -2219,16 +2219,6 @@ diffs-container {
 .titlebar-head.titlebar-head--edge {
   /* Set per element by attachTitlebarHead: the lights' width minus the row's own left. */
   padding-left: var(--titlebar-edge-inset, var(--titlebar-inset)) !important;
-}
-/* A lent strip on a surface with no stable top row (PageShell pages, the chat
-   rail): it has height only while it measures as the titlebar, so it vanishes
-   under a tab bar or when another row covers the band. */
-.titlebar-strip.titlebar-head {
-  height: 36px;
-  min-height: 36px;
-}
-.titlebar-strip.titlebar-head + [data-main-scroll] {
-  padding-top: 8px;
 }
 /* Too narrow to indent (an icon-only rail): the row sits below the lights. */
 .titlebar-head.titlebar-head--under {
@@ -4931,6 +4921,12 @@ diffs-container {
 /* The notice under the top bar (notifications off) is one quiet row at the
    row size, in one ink, with a plain text action and no tint, on the same
    ground as the top bar and the panel heads around it. */
+/* One nudge at a time: later nudges in the shell's slot wait for the first
+   to be dismissed or acted on (DashboardLayout). */
+[data-nudge-slot] > [data-nudge] ~ [data-nudge] {
+  display: none;
+}
+
 .minimal-style [data-cc-banner] {
   border-bottom: 1px solid var(--cc-panel-rule);
   background: var(--sol-bg);

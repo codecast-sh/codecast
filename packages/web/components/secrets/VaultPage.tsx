@@ -17,7 +17,6 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useDerivedSize } from "../../hooks/useDerivedSize";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useTabActive } from "../../hooks/usePagePresence";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { formatRelativeTime, formatFullTimestamp } from "../../lib/conversationFormat";
@@ -467,7 +466,6 @@ export function VaultPage() {
 function VaultBody({ fit }: { fit: Fit }) {
   const router = useRouter();
   const params = useSearchParams();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const isTabActive = useTabActive();
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -601,7 +599,7 @@ function VaultBody({ fit }: { fit: Fit }) {
   // Narrow, the filters keep their words and Search waits as an icon until it is focused (a click or /), then takes a line of its own.
   const searchShut = fit === "narrow" && !searching && !query;
   const header = (
-    <div ref={titlebarRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-sol-border/40 px-5 pb-2.5 pt-4">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-sol-border/40 px-5 pb-2.5 pt-4">
       <h1 className="text-xl font-semibold text-sol-text">Vault</h1>
       {sample && (
         <span className="self-center rounded border border-sol-violet/50 px-1.5 text-[11px] font-medium leading-[18px] text-sol-violet" data-vault-sample>

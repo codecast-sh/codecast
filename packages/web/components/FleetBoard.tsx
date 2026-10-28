@@ -23,7 +23,6 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { animatedHideSession } from "../store/undoActions";
 import { getSessionRenderKey } from "../store/inboxStore";
 import { splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress, type FleetBand, type FleetBands } from "./fleetBands";
-import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { overlayConversationId } from "../store/workspace";
 import { useContextMenu, ContextMenu } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
@@ -335,7 +334,6 @@ export function FleetBoard() {
     (st) => st.pendingSessionCreates,
     (st) => st.blockedReviveRequestedAt,
   ]);
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   // Time-driven freshness (elapsed clocks, liveness TTL, blocked-state aging)
   // gets its own low-frequency ticker; the data subscription above only wakes
   // on structural change. 15s is well under every TTL in play.
@@ -384,7 +382,7 @@ export function FleetBoard() {
     <div className="relative h-full">
       <div className="h-full overflow-y-auto" data-main-scroll>
         <div className="mx-auto max-w-6xl px-4 pb-8 pt-4 sm:px-6">
-          <div ref={titlebarRef} className="mb-3 flex items-center justify-between gap-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-baseline gap-3">
               <h2 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.2em] text-sol-text">
                 <LivePulseDot className="h-1.5 w-1.5" />

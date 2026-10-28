@@ -1,4 +1,5 @@
 import { HIBERNATED_COPY } from "@codecast/shared/contracts";
+import { cliNeverConnected } from "../lib/cliConnected";
 import React, { Fragment, useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvex, useMutation, useQuery } from "convex/react";
@@ -90,7 +91,6 @@ import { useUpgradesOpen } from "./simple/billing";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
-import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { PaneControls } from "./stage/PaneControls";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useAssistantScope, useHostedMode, useModeWords, useSurface } from "../lib/surfaces";
@@ -2200,7 +2200,6 @@ function SessionListPanelImpl({
   // Hosted mode lists the assistant's conversations unless widened
   // (hostedOnlyInbox); chipFilterOpts carries it into every list below.
   const hostedOnly = hostedOnlyInbox(s.clientState.ui);
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
@@ -2272,6 +2271,8 @@ function SessionListPanelImpl({
   const convex = useConvex();
   const words = useModeWords();
   const hostedMode = useHostedMode();
+  // No machine has ever connected: nothing can have been killed yet.
+  const noMachineYet = useInboxStore((st) => cliNeverConnected(st.currentUser));
   // The Assistant scope's fold is fixed (Your turn, Working on it, Done,
   // Scheduled), so its head carries no view controls.
   const { only: assistantOnly } = useAssistantScope();
@@ -3669,7 +3670,7 @@ function SessionListPanelImpl({
           onClear={clearSelection}
         />
       )}
-      <div ref={titlebarRef} className="cc-panel__head min-w-0">
+      <div className="cc-panel__head min-w-0">
         {hostedMode && !favoritesView && <HostedInboxHead outOfScope={outOfScope} />}
         {favoritesView && (
           <button
@@ -4076,9 +4077,10 @@ function SessionListPanelImpl({
           // The rows above are this replica's cached kills (recent by kill time)
           // plus what the shelf already paged in; older or never-cached kills
           // are one click away. Chip filters apply to shelf rows like any other.
-          // In hosted mode the list waits for something to hold: an empty
-          // "Closed" under a newcomer's first conversation offers nothing.
-          footer: hostedMode && filteredDismissed.length === 0 && s.killedShelf.ids.length === 0 ? undefined : s.killedShelf.complete ? (
+          // In hosted mode, and for an account no machine has connected to
+          // yet, the list waits for something to hold: an empty "Closed" or
+          // "Killed" under a newcomer's first screen offers nothing.
+          footer: (hostedMode || noMachineYet) && filteredDismissed.length === 0 && s.killedShelf.ids.length === 0 ? undefined : s.killedShelf.complete ? (
             s.killedShelf.ids.length > 0 && (
               <div className="w-full px-3 py-1.5 text-[10px] text-sol-text-dim/60 border-b border-sol-border/30">{words.noOlderKilled}</div>
             )

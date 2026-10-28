@@ -9,7 +9,6 @@ import { useParams } from "next/navigation";
 import { RepoHeader, type RepoTab } from "./RepoChrome";
 import { RepoPageShell } from "./RepoPageShell";
 import { useRepoFamily } from "./useRepoFamily";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import "./repo.css";
 
 export function RepoSectionPage({
@@ -28,7 +27,6 @@ export function RepoSectionPage({
 }) {
   const params = useParams();
   const family = useRepoFamily();
-  const titlebarRef = useTitlebarHead<HTMLElement>();
   const repository = `${params.owner as string}/${params.name as string}`;
 
   return (
@@ -36,7 +34,7 @@ export function RepoSectionPage({
       {/* One scroller, like a web page: the header goes up with the content. */}
       <div className="repo-page h-full overflow-y-auto flex flex-col" data-main-scroll style={{ ["--repo-accent" as string]: accent }}>
         <RepoHeader
-          headRef={titlebarRef}
+         
           repository={repository}
           tab={tab}
           refName={refName}

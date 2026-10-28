@@ -1447,16 +1447,12 @@ const TRAFFIC_LIGHTS_H = 24;
 // Rows starting within this band act as the titlebar (drag surface).
 const TITLEBAR_H = 36;
 
-// Zen mode hides the global header, yet a desktop window still needs a
-// surface to drag by and the traffic lights cleared. Rather than a dedicated
-// strip, the top row of whatever surface is showing plays that role: while it
-// lies in the titlebar band it becomes the drag region (the .titlebar-head
-// rules), and when it also sits at the window's left edge it indents past the
-// lights. Both are measured, not declared, because which row is topmost and
-// leftmost depends on layout — a tab bar, a breadcrumb trail, or a rail may or
-// may not be open. Re-measured when the row resizes (horizontal layout changes
-// reach it that way) and when it moves through the band (an IntersectionObserver
-// whose root is the band — vertical shifts from rows appearing above it).
+// A framed desktop window without the global header (the call window on older
+// builds) still needs a surface to drag by and the traffic lights cleared, so
+// its top row plays that role: while it lies in the titlebar band it becomes
+// the drag region (the .titlebar-head rules), and when it also sits at the
+// window's left edge it indents past the lights. Re-measured when the row
+// resizes and when it moves through the band.
 export function attachTitlebarHead(el: HTMLElement): () => void {
   const measure = () => {
     const r = el.getBoundingClientRect();

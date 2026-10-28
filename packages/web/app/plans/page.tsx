@@ -40,7 +40,6 @@ import { useTeamFeature } from "../../lib/teamFeatures";
 import { toast } from "sonner";
 import { LivePulseHalo } from "../../components/LivenessDot";
 import { planLivenessState } from "../../lib/liveness";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 
 type PlanStatus = "draft" | "active" | "paused" | "done" | "abandoned";
 
@@ -203,7 +202,6 @@ function StatusGroup({
 
 export default function PlansPage() {
   const router = useRouter();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const searchParams = useSearchParams();
   const selectedPlan = searchParams.get("plan");
   const [showDone, setShowDone] = useState(false);
@@ -328,7 +326,7 @@ export default function PlansPage() {
           closeHref="/plans"
           list={
             <div className="flex flex-col h-full bg-sol-bg">
-            <div ref={titlebarRef} className="cc-panel__head justify-between">
+            <div className="cc-panel__head justify-between">
               {/* The tab bar already says "Plans"; repeating it here was the
                   doubled title. Identity stays as the glyph alone. */}
               <div className="flex items-center gap-2">
@@ -488,10 +486,9 @@ function MobileList({
   setPlanSource: (v: string) => void;
   hiddenAgentCount: number;
 }) {
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   return (
     <div className="h-full flex flex-col">
-      <div ref={titlebarRef} className="px-4 py-3 border-b border-sol-border/30 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-sol-border/30 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Target className="w-4 h-4 text-sol-cyan" />
           <h1 className="text-base font-semibold text-sol-text">Plans</h1>

@@ -1,7 +1,7 @@
 // The chrome every repository page shares: the header band with the
 // repository's name, the ref it is showing, a way out to GitHub, a way into a
 // window of its own, and the six tabs with their keyboard shortcuts.
-import { useCallback, useRef, useState, type ReactNode, type RefCallback } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -132,15 +132,12 @@ export function RepoHeader({
   middle,
   trailing,
   below,
-  headRef,
 }: {
   repository: string;
   tab: RepoTab;
   /** The branch, tag or sha the page is showing; the tree and commit tabs follow it. */
   refName?: string;
   family?: RepoRouteFamily;
-  /** Zen mode on the desktop makes this band the window titlebar. */
-  headRef?: RefCallback<HTMLElement>;
   /** The branch picker, or whatever the page wants beside the name. */
   middle?: ReactNode;
   trailing?: ReactNode;
@@ -157,13 +154,6 @@ export function RepoHeader({
   // answer the same keypress and move a page nobody is looking at.
   // offsetParent is null exactly then.
   const bandRef = useRef<HTMLElement | null>(null);
-  const setBand = useCallback(
-    (el: HTMLElement | null) => {
-      bandRef.current = el;
-      headRef?.(el);
-    },
-    [headRef],
-  );
 
   const tabs: { key: RepoTab; label: string; href: string; icon: typeof History; digit: string }[] = [
     { key: "code", label: "Code", href: repoTreeHref(repository, refName, undefined, family), icon: Code2, digit: "1" },
@@ -185,7 +175,7 @@ export function RepoHeader({
   });
 
   return (
-    <header ref={setBand} className="repo-band border-b border-sol-border/60 shrink-0">
+    <header ref={bandRef} className="repo-band border-b border-sol-border/60 shrink-0">
       {/* Every repository page carries this header, so mounting the finder here
           is what makes `t` work on all of them, GitHub's own behaviour. */}
       <RepoFileFinder repository={repository} refName={refName} family={family} anchorRef={bandRef} />

@@ -1,7 +1,4 @@
 import { ReactNode } from "react";
-import { useInboxStore } from "../store/inboxStore";
-import { isElectron } from "./desktop";
-import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
 // A route is "full-width" when the page owns its entire canvas — its own scroll
 // container, width, padding, and sometimes its own background (the zinc-themed
@@ -101,19 +98,6 @@ function pageMaxWidth(pathname: string): string {
   return "max-w-4xl";
 }
 
-// Zen mode on the desktop app: a page with no header row pinned at the top
-// has nothing to stand in as the titlebar (hooks/useTitlebarHead), so it
-// lends an empty one — a drag strip that sits level with the traffic lights.
-// It is mounted only then, so the web and the headered pages pay nothing.
-// A page whose header scrolls with its content lends one too: a header that
-// has scrolled away cannot be the titlebar.
-export function TitlebarStrip() {
-  const zen = useInboxStore((s) => s.clientState.ui?.zen_mode ?? false);
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
-  if (!zen || !isElectron()) return null;
-  return <div ref={titlebarRef} className="titlebar-strip shrink-0" />;
-}
-
 // The global page frame for non-full-width views: one scroll container, symmetric
 // edge padding, and a centered max-width column. `data-main-scroll` marks it as
 // the page's primary scroller (same marker the inbox and old non-tab path use).
@@ -126,7 +110,6 @@ export function PageShell({
 }) {
   return (
     <div className="h-full flex flex-col">
-      <TitlebarStrip />
       <div
         data-main-scroll
         className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 lg:px-8 py-6"

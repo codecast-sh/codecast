@@ -12,7 +12,6 @@ import { Breadcrumb } from "../../../../../../components/repo/TreeContent";
 import { useRepoFamily } from "../../../../../../components/repo/useRepoFamily";
 import { BlobContent } from "../../../../../../components/repo/BlobContent";
 import { RepoHeader } from "../../../../../../components/repo/RepoChrome";
-import { useTitlebarHead } from "../../../../../../hooks/useTitlebarHead";
 import { repoTreeHref } from "../../../../../../lib/repoView";
 import "../../../../../../components/repo/repo.css";
 
@@ -20,7 +19,6 @@ export default function RepoBlobPage() {
   const params = useParams();
   const searchParams = useSearchParams();
   const family = useRepoFamily();
-  const titlebarRef = useTitlebarHead<HTMLElement>();
   const repository = `${params.owner as string}/${params.name as string}`;
   const refName = decodeURIComponent((params.ref as string) ?? "");
   const path = searchParams.get("path") ?? "";
@@ -33,7 +31,7 @@ export default function RepoBlobPage() {
         style={{ ["--repo-accent" as string]: "var(--sol-blue)" }}
       >
         <RepoHeader
-          headRef={titlebarRef}
+         
           repository={repository}
           tab="code"
           refName={refName}

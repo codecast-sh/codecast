@@ -13,7 +13,6 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { ContextChatInput } from "../../components/ContextChatInput";
 import { WorkflowGraphView, type WFNode, type WFEdge } from "../../components/WorkflowGraphView";
 import { GitBranch, Clock, ChevronRight, X, Terminal, Bot, User, Zap, GitFork, Merge, Play, Pause, CheckCircle, XCircle, Loader2, ExternalLink, Square, Timer, AlertCircle, CheckSquare, ListChecks, MessageCircleQuestionMark, Workflow } from "lucide-react";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useSyncRuns, useWorkspaceRuns, type LineRun } from "../../hooks/useSyncRuns";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -420,9 +419,6 @@ function WorkflowsContent() {
   // Store-fed (hooks/useSyncWorkflows): paints from the cache synchronously;
   // `undefined` only while the cache is empty AND the first answer is in flight.
   const { workflows: workflowRows, ready: workflowsReady } = useWorkflows();
-  
-  const mainTitlebarRef = useTitlebarHead<HTMLDivElement>();
-  const railTitlebarRef = useTitlebarHead<HTMLDivElement>();
   const workflows = (workflowsReady || workflowRows.length > 0 ? workflowRows : undefined) as Workflow[] | undefined;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<WFNode | null>(null);
@@ -471,7 +467,7 @@ function WorkflowsContent() {
     <div className="flex h-full bg-sol-bg">
       {sidebarOpen && (
         <div className="w-52 flex-shrink-0 border-r border-sol-border/20 flex flex-col bg-sol-bg-alt">
-          <div ref={railTitlebarRef} className="px-3 py-2.5 border-b border-sol-border/20">
+          <div className="px-3 py-2.5 border-b border-sol-border/20">
             <span className="text-[10px] text-sol-text-dim uppercase tracking-widest">Routines</span>
           </div>
           <div className="flex-1 overflow-y-auto">
@@ -517,7 +513,7 @@ function WorkflowsContent() {
       <div className="flex-1 min-w-0 flex flex-col relative">
         {selected && (
           <>
-            <div ref={mainTitlebarRef} className="flex items-center gap-3 px-4 py-2.5 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
+            <div className="flex items-center gap-3 px-4 py-2.5 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
               <button
                 onClick={() => setSidebarOpen(v => !v)}
                 className="text-sol-text-dim hover:text-sol-text-muted transition-colors"
@@ -653,12 +649,11 @@ export function RunsTab() {
   const { ready } = useSyncRuns(useMemo(() => ({ limit: 100 }), []));
   const runs = useWorkspaceRuns();
   const forks = useLineForks();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   if (!ready && runs.length === 0) return <AppLoader className="min-h-[16rem] h-full" />;
   return (
     <div className="h-full overflow-y-auto bg-sol-bg">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-5">
-        <div ref={titlebarRef} className="flex items-baseline gap-2 mb-3">
+        <div className="flex items-baseline gap-2 mb-3">
           <Workflow className="w-4 h-4 text-sol-cyan self-center" />
           <h1 className="text-lg font-semibold text-sol-text">Runs</h1>
           <span className="text-xs text-sol-text-dim">every run of a flow, newest first</span>

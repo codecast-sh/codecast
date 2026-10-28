@@ -14,7 +14,6 @@ import { LoadingSkeleton } from "../../components/LoadingSkeleton";
 import { useRepositories } from "../../hooks/useRepoBrowse";
 import { useExternalEvents } from "../../hooks/useSyncExternalEvents";
 import { useSyncPullRequests, usePullRequests } from "../../hooks/useSyncTimeline";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { serverErrorText } from "../../lib/errorCause";
 import { externalEventRowToExternalEvent } from "../../lib/externalEvents";
 import { repoHomeHref } from "../../lib/repoView";
@@ -109,13 +108,12 @@ function RepoList() {
 }
 
 export default function RepositoriesPage() {
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
 
   return (
     <AuthGuard>
       <DashboardLayout>
         <div className="repo-page h-full flex flex-col">
-          <header ref={titlebarRef} className="repo-band border-b border-sol-border/60 px-4 py-3 shrink-0">
+          <header className="repo-band border-b border-sol-border/60 px-4 py-3 shrink-0">
             <h1 className="repo-rise font-serif text-[20px] leading-none text-sol-text">Repositories</h1>
             <p className="repo-rise mt-1.5 text-[12px] text-sol-text-muted" style={{ ["--d" as string]: "60ms" }}>
               History, source and every commit, with the sessions and tasks behind them.

@@ -6,6 +6,8 @@ import { agentName, useRootAgent } from "../hooks/useSyncAnchors";
 import { AnchorAvatar } from "./anchor/AnchorIdentity";
 import { usePathname, useRouter } from "next/navigation";
 import { lazy, Suspense, useState, useMemo, useCallback, useRef, memo } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { focusRailMode, railFocused, railFocusOffered } from "../lib/railFocus";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { AvatarImg } from "../lib/avatarCache";
@@ -52,7 +54,6 @@ import { WorkbenchSection } from "./WorkbenchSection";
 import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
 import { ShellUsageMeter } from "./plan/UsageMeter";
 import { ChatNavRow, ChatDrillList } from "./sidebar/ChatNav";
-import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { channelSignals } from "../lib/chatRowSignals";
 import { SidebarDrillStack } from "./sidebar/SidebarDrill";
 import { useSidebarDrill } from "../hooks/useSidebarDrill";
@@ -365,6 +366,16 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // Hosted mode's rows and words (lib/surfaces.ts).
   const surfaceMode = useSurfaceMode();
   const words = useModeWords();
+  // A solo account's rail opens on its sessions and work (lib/railFocus.ts).
+  const focusFacts = useInboxStore(useShallow((st) => ({
+    hosted: surfaceMode.hosted,
+    createdAt: st.currentUser?._creationTime as number | undefined,
+    teams: st.teams,
+    everything: st.clientState.ui?.rail_everything,
+  })));
+  const railMoreOffered = railFocusOffered(focusFacts);
+  const railIsFocused = railFocused(focusFacts);
+  const railMode = useMemo(() => (railIsFocused ? focusRailMode(surfaceMode) : surfaceMode), [railIsFocused, surfaceMode]);
   const barless = useBarlessShell();
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
@@ -599,7 +610,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const drillOn = !isNarrow && !surfaceMode.hosted;
   const chatDrills = drillOn && chatOn && !chatAway && !peek;
   const tasksDrill = drillOn && !workAway && taskViewItems.length > 0;
-  const titlebarStripRef = useTitlebarHead<HTMLDivElement>();
   const drill = useSidebarDrill(isChat ? "chat" : isTasks ? "tasks" : null, { chat: chatDrills, tasks: tasksDrill });
 
   // Pinned projects read their title from the store (PinnedRail).
@@ -740,7 +750,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             keeps its pins after Work. */}
         {!isNarrow && !surfaceMode.hosted && pinnedRail}
         <SidebarNavView
-          mode={surfaceMode}
+          mode={railMode}
+          railMore={railMoreOffered ? { focused: railIsFocused, onToggle: () => useInboxStore.getState().updateClientUI({ rail_everything: railIsFocused }) } : undefined}
           isNarrow={isNarrow}
           scope={scope}
           onMobileClose={onMobileClose}
@@ -771,7 +782,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               onMobileClose={onMobileClose}
             />
           }
-          chat={chatOn && <ChatNavRow
+          chat={chatOn && !railIsFocused && <ChatNavRow
             isActive={!!isChat}
             isNarrow={isNarrow}
             pathname={pathname}
@@ -781,7 +792,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             onDrill={chatDrills ? () => drill.open("chat") : undefined}
             onMobileClose={onMobileClose}
           />}
-          calls={callsOn && (<>
+          calls={callsOn && !railIsFocused && (<>
             <CallsNavRow
               isActive={!!isCalls}
               isNarrow={isNarrow}
@@ -946,9 +957,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             environment-level sections — it configures the frame, not the work. */}
         {/* Both are developer machinery (a fleet's layouts, its repo folders),
             gated on the mode rather than on the visual style. */}
-        <Surface name="actions.fleet">
-          <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />
-        </Surface>
+        {!railIsFocused && (
+          <Surface name="actions.fleet">
+            <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />
+          </Surface>
+        )}
 
         {!isNarrow && computedDirectories.length > 0 && surfaceMode.shows("nav.projects") && (
           <div data-rail-group="workspaces" className="mt-4">
@@ -999,9 +1012,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         ${isMobileOpen ? 'shadow-xl' : 'hidden md:flex'}
       `}
     >
-      {/* Zen mode on desktop: the sidebar is the leftmost surface, so a lent
-          strip clears the traffic lights (same pattern as the chat rail). */}
-      <div ref={titlebarStripRef} className="titlebar-strip shrink-0" />
       <SidebarDrillStack
         level={drill.level}
         shown={drill.shown}

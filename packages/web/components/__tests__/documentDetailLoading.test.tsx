@@ -62,9 +62,6 @@ mock.module("../../hooks/useMentionQuery", () => ({
 mock.module("../../hooks/useImageUpload", () => ({
   useImageUpload: () => async () => "",
 }));
-mock.module("../../hooks/useTitlebarHead", () => ({
-  useTitlebarHead: () => ({ current: null }),
-}));
 const { mockInboxStore } = await import("./mockInboxStore");
 mockInboxStore(() => ({ reviewComments: {} }));
 

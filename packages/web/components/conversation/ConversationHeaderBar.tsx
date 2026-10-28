@@ -49,7 +49,6 @@ export function ConversationHeaderTitle({
  */
 export function ConversationHeaderBar({
   headerRef,
-  headRef,
   squeezeRowRef,
   className = "",
   lead,
@@ -63,7 +62,6 @@ export function ConversationHeaderBar({
   children,
 }: {
   headerRef?: Ref<HTMLElement>;
-  headRef?: Ref<HTMLDivElement>;
   squeezeRowRef?: Ref<HTMLDivElement>;
   className?: string;
   /** Before the title: zen exit, the caller's headerLeft, the identity face. */
@@ -85,7 +83,7 @@ export function ConversationHeaderBar({
   return (
     <header ref={headerRef} data-sv-convhead className={`cq-container shrink-0 relative ${className}`}>
       <div>
-        <div ref={headRef} className="cc-panel__head gap-2 min-w-0">
+        <div className="cc-panel__head gap-2 min-w-0">
           <div ref={squeezeRowRef} className="cq-squeeze-row flex items-center gap-2 min-w-0 overflow-hidden flex-1">
             {lead}
             {title}

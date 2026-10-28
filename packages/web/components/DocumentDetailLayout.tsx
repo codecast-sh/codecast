@@ -18,7 +18,6 @@ import { ArrowLeft, Edit3, MoreHorizontal, Copy, Check, MessageSquareQuote } fro
 import Link from "next/link";
 import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
-import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { matchesAction } from "../shortcuts";
 import { leadingHeading, stripTitleHeading } from "@codecast/shared/docs";
@@ -102,7 +101,6 @@ export function DocumentDetailLayout({
   drafting,
 }: DocumentDetailLayoutProps) {
   const router = useRouter();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   // Edit mode is the default: the doc opens as the live collaborative editor
   // (rich pills, dates, checkboxes in place). Review mode is the opt-in
   // toggle — the body re-renders as quotable blocks (hover any block to
@@ -172,7 +170,7 @@ export function DocumentDetailLayout({
       {/* Wraps the action cluster to a second row rather than letting it overflow
           (and clip its trailing icons) once the back/type/watch cluster and the
           icons can no longer share one line — e.g. a narrow split-pane doc view. */}
-      <div ref={titlebarRef} data-page-head className="cc-panel__head justify-between">
+      <div data-page-head className="cc-panel__head justify-between">
         <div className="flex items-center gap-3">
           {!embedded && (
             <Link

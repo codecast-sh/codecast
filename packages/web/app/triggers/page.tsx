@@ -52,7 +52,6 @@ import {
   Pencil,
   X,
 } from "lucide-react";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
@@ -1136,7 +1135,6 @@ function TriggersContent() {
   // synchronously; the feeder keeps it fresh. `undefined` only while the cache
   // is empty AND the first answer is in flight.
   const { tasks: taskRows, ready: tasksReady } = useTriggers();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const words = useModeWords();
   const cliHint = useSurface("hint.cli");
   // Hosted mode starts an empty page from examples rather than a blank form.
@@ -1255,7 +1253,7 @@ function TriggersContent() {
       <div className={`${HOSTED_PAGE_FRAME} ${fleet ? "px-5 sm:px-6 py-8" : `${HOSTED_PAGE_PAD} ${HOSTED_PAGE_TOP} pb-8`}`}>
         {/* Hosted: the row's items start at its top, so the New button never
             pushes the title below where To-dos and Approvals put theirs. */}
-        <div ref={titlebarRef} className={`flex gap-2 ${fleet ? "items-center mb-5" : "items-start flex-wrap gap-y-2 mb-1.5"}`}>
+        <div className={`flex gap-2 ${fleet ? "items-center mb-5" : "items-start flex-wrap gap-y-2 mb-1.5"}`}>
           {fleet ? (
             <>
               <Zap className="w-4 h-4 text-sol-amber" />
