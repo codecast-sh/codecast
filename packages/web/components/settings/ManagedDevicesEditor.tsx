@@ -31,7 +31,7 @@ import { ConfirmButton } from "../integrations/parts";
 import { ConsequentialSwitch, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { DEFAULT_MDM_VENDOR, MDM_VENDORS, type MdmVendorId } from "@codecast/convex/convex/lib/mdmVendors";
 
-export const MDM_PKG_URL = "https://dl.codecast.sh/desktop/mdm/Codecast.pkg";
+const MDM_PKG_URL = "https://dl.codecast.sh/desktop/mdm/Codecast.pkg";
 
 const RESTRICTIONS = MANAGED_POLICY.filter((d) => d.team && d.kind === "restriction");
 const AUTO_UPDATE = MANAGED_POLICY.find((d) => d.key === "auto_update")!;
@@ -47,7 +47,7 @@ type DeviceRow = { _id: string; hostname: string | null; platform: string | null
 type Overview = { tokens: TokenRow[]; devices: DeviceRow[] };
 
 /** The admin overview of a team's managed devices, from the settings cache. */
-export function useManagedDevicesOverview(teamId: string | null | undefined): Overview | undefined {
+function useManagedDevicesOverview(teamId: string | null | undefined): Overview | undefined {
   return useSettingsData("managedDevices", teamId ? String(teamId) : undefined).data as Overview | undefined;
 }
 

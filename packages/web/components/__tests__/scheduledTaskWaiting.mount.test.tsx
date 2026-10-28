@@ -26,6 +26,7 @@ const restoreGlobals = replaceGlobals({
 });
 const { createRoot } = await import("react-dom/client");
 const React = await import("react");
+const { MemoryRouter } = await import("react-router");
 // The pills resolve through Convex; here they stand as their ids.
 const pills = await import("../EntityIdPill");
 mock.module("../EntityIdPill", () => ({
@@ -44,7 +45,7 @@ test("a needs-input run names the session, why it waits, for how long, its state
   });
   const host = document.createElement("div");
   document.body.appendChild(host);
-  await act(async () => createRoot(host).render(React.createElement(ScheduledTaskBlock, { content, timestamp: firedAt })));
+  await act(async () => createRoot(host).render(React.createElement(MemoryRouter, null, React.createElement(ScheduledTaskBlock, { content, timestamp: firedAt }))));
   const line = host.querySelector("[data-waiting-session]") as HTMLElement;
   expect(line.getAttribute("data-waiting-session")).toBe("jx7781p");
   expect(line.textContent).toContain("is blocked");
@@ -67,9 +68,12 @@ test("a role's run is one line at rest and opens inline to its card, the waiting
   });
   const host = document.createElement("div");
   document.body.appendChild(host);
-  await act(async () => createRoot(host).render(React.createElement(ScheduledTaskBlock, { content, timestamp: firedAt })));
+  await act(async () => createRoot(host).render(React.createElement(MemoryRouter, null, React.createElement(ScheduledTaskBlock, { content, timestamp: firedAt }))));
   const block = host.querySelector("[data-role-wake=calling]") as HTMLElement;
   expect(block.textContent).toContain("is blocked for 9m");
+  // The trigger reads as its title and opens the trigger; the waiting session is the line's one pill.
+  expect(block.querySelector("a[href='/triggers/tr-1168']")!.textContent).toBe("A session under you needs input");
+  expect(block.querySelector("[data-pill='tr-1168']")).toBeNull();
   expect(host.querySelector("[data-role-wake-detail]")).toBeNull();
   await act(async () => (block.querySelector("[role=button]") as HTMLElement).click());
   const detail = host.querySelector("[data-role-wake-detail]") as HTMLElement;

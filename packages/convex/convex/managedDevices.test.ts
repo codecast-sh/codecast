@@ -266,7 +266,7 @@ describe("server gates", () => {
     // From the web (no device) the personal row is not the team's.
     expect(await place(personalConv)).toMatchObject({ placed: true });
     const teamConv = await conversation(t, member, team);
-    await expect(place(teamConv)).rejects.toThrow(/Cloud hosts/);
+    await expect(place(teamConv)).rejects.toThrow(/Cloud hosting/);
   });
 
   test("a session move to a cloud host is refused from an enrolled device", async () => {
@@ -277,7 +277,7 @@ describe("server gates", () => {
     await t.run((ctx) => ctx.db.insert("devices", { user_id: member, device_id: "cloud-1", label: "Linux - host", platform: "linux", last_seen: 1, is_remote: true }));
     await expect(
       t.mutation(api.sessionMigrations.createBatch, { api_token: apiToken, conversation_ids: [String(conv)], to_device_id: "cloud-1", dry_run: true }),
-    ).rejects.toThrow(/Cloud hosts/);
+    ).rejects.toThrow(/Cloud hosting/);
   });
 
   test("the guard names nothing when no team restricts the key", async () => {

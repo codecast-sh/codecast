@@ -306,6 +306,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setTeamPolicy: SETTINGS,
   revokeEnrollmentToken: never("sharing: a revoked enrollment token stays revoked; minting a new one is the way back"),
   revokeDeviceEnrollment: never("machine control: the device is signed out at once; enrolling it again is the way back"),
+  restoreDeviceEnrollment: never("machine control: lets a removed device enroll again; removing it again is the way back"),
 
   // A project's expectations (LM5): every change is a version judges grade against
   editExpectations: never("send: a line or a retirement becomes a proposal a person reads, and an applied one is a version judges grade against; a later retirement takes a line back"),
