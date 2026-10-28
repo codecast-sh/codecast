@@ -47,7 +47,6 @@ import { resolveChatMentions, slackPersonForHandle, teamRoster } from "./lib/men
 import { chatPermalink, isValidEmoji, MAX_CHAT_CONTENT, normalizeChannelName, oneLine } from "./chatText";
 import { botHandle, dmKeyFor, extractMentionHandles, memberHandle } from "@codecast/shared/chat";
 import {
-  emojiToShortcode,
   markdownToSlack,
   hasStandalonePreviewLink,
   isSharedMessage,
@@ -193,7 +192,7 @@ async function linkByWorkspaceChannel(ctx: ReadCtx, workspace: string, channel: 
 
 // The person's own Slack token for this installation, if they connected their
 // account. Used only to see and open the private channels they are in.
-async function userTokenFor(ctx: ReadCtx, installationId: Id<"slack_installations">, userId: Id<"users">): Promise<Doc<"slack_user_tokens"> | null> {
+export async function userTokenFor(ctx: ReadCtx, installationId: Id<"slack_installations">, userId: Id<"users">): Promise<Doc<"slack_user_tokens"> | null> {
   return await ctx.db
     .query("slack_user_tokens")
     .withIndex("by_installation_user", (q: any) => q.eq("installation_id", installationId).eq("user_id", userId))
@@ -3079,7 +3078,7 @@ async function recoverNotInChannel(install: Install, link: Link, error: string |
 // The push context for a line the mirror may still act on in Slack, or null.
 // `ours` demands a line the bot itself posted: Slack refuses chat.update and
 // chat.delete on anybody else's message.
-async function pushableContext(
+export async function pushableContext(
   ctx: ActionCtx,
   messageId: Id<"chat_messages">,
   opts: { option: "edits" | "reactions"; ours: boolean },
@@ -3092,7 +3091,7 @@ async function pushableContext(
 }
 
 // One place the link's error strip learns a push went wrong.
-async function noteOutboundFailure(ctx: ActionCtx, link: Link, error: string): Promise<void> {
+export async function noteOutboundFailure(ctx: ActionCtx, link: Link, error: string): Promise<void> {
   await ctx.runMutation(internal.slackSync.recordOutboundFailure, { link_id: link._id, error });
 }
 
@@ -3175,68 +3174,6 @@ export const pushDelete = internalAction({
     const resp = await slackApi(c.install.bot_token, "chat.delete", { channel: c.link.slack_channel_id, ts: c.message.external!.ts });
     if (!resp.ok && resp.error !== "message_not_found") {
       await noteOutboundFailure(ctx, c.link, `delete: ${resp.error}`);
-    }
-  },
-});
-
-// Who a reaction is said by in Slack. A person who connected Slack with
-// reactions:write reacts as themselves, under their own name. Everyone else is
-// spoken for by the app, which holds ONE reaction per emoji for all of them, so
-// it lets go only when nobody it speaks for still holds that emoji. Rows that
-// came in from Slack are those people's own reactions, never the app's.
-export const reactionSpeaker = internalQuery({
-  args: { message_id: v.id("chat_messages"), user_id: v.id("users"), emoji: v.string() },
-  handler: async (ctx, args): Promise<{ personal: string | null; app_holds_for_others: boolean }> => {
-    const message = await ctx.db.get(args.message_id);
-    const link = message ? await slackLinkForChannel(ctx, message.channel_id) : null;
-    if (!message || !link) return { personal: null, app_holds_for_others: false };
-    const reacts = async (userId: Id<"users">) => {
-      const token = await userTokenFor(ctx, link.installation_id, userId);
-      return token && tokenCanReact(token.scopes) ? token.token : null;
-    };
-    const holders = await ctx.db
-      .query("chat_reactions")
-      .withIndex("by_message", (q: any) => q.eq("message_id", args.message_id))
-      .collect();
-    let appHolds = false;
-    for (const r of holders) {
-      if (r.emoji !== args.emoji || r.slack_user || r.user_id === args.user_id) continue;
-      if (!(await reacts(r.user_id))) { appHolds = true; break; }
-    }
-    return { personal: await reacts(args.user_id), app_holds_for_others: appHolds };
-  },
-});
-
-export const pushReaction = internalAction({
-  args: { message_id: v.id("chat_messages"), emoji: v.string(), add: v.boolean(), user_id: v.optional(v.id("users")) },
-  handler: async (ctx, args) => {
-    const c = await pushableContext(ctx, args.message_id, { option: "reactions", ours: false });
-    // The app is not in a person's DM, so Slack answers channel_not_found, and
-    // that answer pauses the whole link. The reaction stays here.
-    if (!c || c.link.kind === "dm") return;
-    const name = emojiToShortcode(args.emoji);
-    if (!name) return;
-    // Never c.install.bot_token: the context swaps in the message AUTHOR's own
-    // token when they connected Slack, which is right for posting their line
-    // but would put someone else's reaction under the author's name.
-    const appToken = c.app_token ?? c.install.bot_token;
-    const who = args.user_id
-      ? await ctx.runQuery(internal.slackSync.reactionSpeaker, { message_id: args.message_id, user_id: args.user_id, emoji: args.emoji })
-      : { personal: null, app_holds_for_others: false };
-    const send = (token: string) => slackApi(token, args.add ? "reactions.add" : "reactions.remove", {
-      channel: c.link.slack_channel_id, timestamp: c.message.external!.ts, name,
-    });
-    if (who.personal) {
-      const mine = await send(who.personal);
-      if (mine.ok || mine.error === "already_reacted") return;
-    }
-    // The app takes it when the person cannot react as themselves, including a
-    // removal that finds nothing because the app reacted for them before they
-    // connected. Its reaction stays while it still speaks for someone else.
-    if (!args.add && who.app_holds_for_others) return;
-    const resp = await send(appToken);
-    if (!resp.ok && resp.error !== "already_reacted" && resp.error !== "no_reaction" && resp.error !== "invalid_name") {
-      await noteOutboundFailure(ctx, c.link, `reaction: ${resp.error}`);
     }
   },
 });

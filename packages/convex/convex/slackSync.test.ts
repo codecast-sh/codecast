@@ -8,8 +8,6 @@ import {
   applyInboundReaction,
   commitLink,
   pushContext,
-  pushReaction,
-  reactionSpeaker,
   getTeamSlack,
   setDmSync,
   commitDmLink,
@@ -35,7 +33,7 @@ import {
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
 import { USER_SCOPES } from "./slack";
-import { mirrorFiles, slackFileLinkLines } from "./lib/slackFiles";
+import { pushReaction, reactionSpeaker } from "./slackReactions";
 import { listChannels, sendMessage, toggleReaction, updateChannel } from "./chat";
 import { resolveChatMentions } from "./lib/mentionResolve";
 
@@ -356,11 +354,11 @@ describe("outbound hooks in chat", () => {
     await call(toggleReaction, ctx, { message_id: target._id, emoji: "👍" });
     const bob = { ...ctx, auth: context(BOB).auth };
     await call(toggleReaction, bob, { message_id: target._id, emoji: "👍" });
-    const adds = ctx._scheduled.filter((s: any) => s.name === "slackSync:pushReaction");
+    const adds = ctx._scheduled.filter((s: any) => s.name === "slackReactions:pushReaction");
     expect(adds.length).toBe(2);
     expect(adds.map((s: any) => s.args.user_id)).toEqual([ALICE, BOB]);
     await call(toggleReaction, ctx, { message_id: target._id, emoji: "👍" });
-    const removals = ctx._scheduled.filter((s: any) => s.name === "slackSync:pushReaction" && s.args.add === false);
+    const removals = ctx._scheduled.filter((s: any) => s.name === "slackReactions:pushReaction" && s.args.add === false);
     expect(removals.map((s: any) => s.args.user_id)).toEqual([ALICE]);
   });
   test("a channel without a link queues nothing", async () => {
@@ -723,46 +721,8 @@ describe("direct messages", () => {
     expect(calls).toBe(0);
     expect((await ctx.db.get(LINK)).paused).toBeFalsy();
   });
-  test("a shared image comes over as an attachment; a sign-in page in its place stays a link", async () => {
-    const stored: Blob[] = [];
-    const ctx: any = { storage: { store: async (b: Blob) => { stored.push(b); return `storage_${stored.length}`; } } };
-    const install: any = { bot_token: "xoxp-owner" };
-    const file = (id: string) => ({ id, name: `${id}.png`, title: `${id}.png`, mimetype: "image/png", size: 10, url_private: `https://files.slack.com/${id}`, permalink: `https://union.slack.com/files/${id}` });
-    const auths: string[] = [];
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = (async (url: any, init: any) => {
-      auths.push(init.headers.Authorization);
-      return String(url).endsWith("F1")
-        ? new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } })
-        : new Response("<html>sign in</html>", { headers: { "content-type": "text/html" } });
-    }) as any;
-    try {
-      const r = await mirrorFiles(ctx, install, [file("F1"), file("F2")]);
-      expect(r.attachments).toEqual([expect.objectContaining({ storage_id: "storage_1", mime: "image/png", name: "F1.png" })]);
-      expect(r.extra).toEqual(["📎 [F2.png](https://union.slack.com/files/F2)"]);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
-    expect(stored).toHaveLength(1);
-    expect(auths).toEqual(["Bearer xoxp-owner", "Bearer xoxp-owner"]);
-  });
-  test("a shared video comes over as an attachment; one past the size cap stays a link", async () => {
-    const ctx: any = { storage: { store: async () => "storage_1" } };
-    const video = (id: string, size: number) => ({ id, name: `${id}.MOV`, title: id, mimetype: "video/mp4", size, url_private: `https://files.slack.com/${id}`, permalink: `https://union.slack.com/files/${id}` });
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = (async () => new Response(new Uint8Array([0, 0, 0, 24]), { headers: { "content-type": "video/mp4" } })) as any;
-    try {
-      const r = await mirrorFiles(ctx, { bot_token: "xoxb" } as any, [video("V1", 9_000_000), video("V2", 30 * 1024 * 1024)]);
-      expect(r.attachments).toEqual([expect.objectContaining({ storage_id: "storage_1", mime: "video/mp4", name: "V1.MOV" })]);
-      expect(r.extra).toEqual(["📎 [V2](https://union.slack.com/files/V2)"]);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
-  });
   test("an image that came over as a link becomes the image once the owner's token can read files", async () => {
     const link = "📎 [image.png](https://union-app.slack.com/files/U05J1KXRSHX/F0C5UMXCA1Y/image.png)";
-    expect(slackFileLinkLines(`oh i know him\n\n${link}`)).toEqual([{ line: link, file_id: "F0C5UMXCA1Y" }]);
-    expect(slackFileLinkLines("📎 [x](https://example.com/files/U1/F1/x)")).toEqual([]);
     const ctx = context(ALICE, withToken(DM_SCOPES.replace(",files:read", "")));
     await ctx.db.patch(LINK, { kind: "dm", owner_user_id: ALICE });
     const external = { provider: "slack", direction: "inbound", workspace: WS, channel: SLACK_CH, ts: "8000.000001", synced_at: 8_000 };

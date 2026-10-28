@@ -526,6 +526,7 @@ import type * as ship from "../ship.js";
 import type * as signalRepairs from "../signalRepairs.js";
 import type * as signals from "../signals.js";
 import type * as slack from "../slack.js";
+import type * as slackReactions from "../slackReactions.js";
 import type * as slackSchema from "../slackSchema.js";
 import type * as slackSync from "../slackSync.js";
 import type * as smallViewContracts from "../smallViewContracts.js";
@@ -1117,6 +1118,7 @@ declare const fullApi: ApiFromModules<{
   signalRepairs: typeof signalRepairs;
   signals: typeof signals;
   slack: typeof slack;
+  slackReactions: typeof slackReactions;
   slackSchema: typeof slackSchema;
   slackSync: typeof slackSync;
   smallViewContracts: typeof smallViewContracts;

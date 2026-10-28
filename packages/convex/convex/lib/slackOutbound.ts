@@ -110,7 +110,7 @@ export async function queueSlackOutbound(ctx: MutationCtx, args: Op): Promise<st
     if (args.op === "reaction") {
       if (!link.options.reactions) return "reactions_off";
       if (!ext) return "not_mirrored";
-      await ctx.scheduler.runAfter(0, internal.slackSync.pushReaction, {
+      await ctx.scheduler.runAfter(0, internal.slackReactions.pushReaction, {
         message_id: args.message._id,
         emoji: args.emoji,
         add: args.add,
