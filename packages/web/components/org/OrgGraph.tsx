@@ -35,7 +35,7 @@ import { selectionIdsFor } from "../../lib/inboxSelection";
 import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutEdge, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget, ORG_SIZES, roleNodeId } from "./orgLayout";
 import { ClusterCard, GroupCard, HealthRoleCard, PersonCard, RoleCard, SessionCard, type HealthRoleNodeData } from "./OrgNodeCards";
 import { productLayer } from "./orgProductLayer";
-import { bandOrigin, computeOrgViewport, FIT_PAD, hiddenRoots, panIntoView } from "./orgViewport";
+import { bandOrigin, computeOrgViewport, FIT_PAD, freeCanvasSize, hiddenRoots, panIntoView } from "./orgViewport";
 import { useZoomLevel, zoomLevelOf, type ZoomLevel } from "./orgZoom";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
 import { GHOST, healthFlagsByNode } from "./orgMeta";
@@ -726,6 +726,7 @@ function OrgGraphInner(props: OrgGraphProps) {
 
   return (
     <div ref={wrapRef} className="relative w-full h-full" {...dropProps} onPointerMove={(e) => { pointer.current = { x: e.clientX, y: e.clientY }; }} onPointerLeave={() => { pointer.current = null; }}>
+    <div className="absolute left-0 top-0" style={freeCanvasSize(panelWidth, panelHeightFraction)}>
     <ReactFlow
       nodes={nodes}
       edges={edges}
@@ -768,6 +769,7 @@ function OrgGraphInner(props: OrgGraphProps) {
         />
       )}
     </ReactFlow>
+    </div>
     {chrome && <EdgeCue side="left" hidden={edgeCue.left} onPan={panTo} offset={0} />}
     {chrome && <EdgeCue side="right" hidden={edgeCue.right} onPan={panTo} offset={panelWidth} />}
     </div>

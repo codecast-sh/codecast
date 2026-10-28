@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { bandOrigin, computeOrgViewport, FIT_PAD, fitTarget, hiddenRoots, MIN_READABLE_ZOOM, panIntoView } from "./orgViewport";
+import { bandOrigin, computeOrgViewport, FIT_PAD, fitTarget, freeCanvasSize, hiddenRoots, MIN_READABLE_ZOOM, panIntoView } from "./orgViewport";
 import { layoutGoals } from "./goalsLayout";
 import { UNION_GOALS_DATA, UNION_GOALS_TREE } from "./goalsFixture";
 import { layoutOrgTree, personNodeId } from "./orgLayout";
@@ -263,5 +263,17 @@ describe("crossing a zoom stop (orgZoom)", () => {
     expect(bandOrigin(prev, next, { x: 50, y: 112 })).toEqual({ x: 0, y: 70 });
     expect(bandOrigin(prev, next.slice(0, 2), { x: 50, y: 290 })).toEqual({ x: 0, y: 70 });
     expect(bandOrigin(prev, [], { x: 50, y: 50 })).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe("freeCanvasSize", () => {
+  // React Flow auto-pans a dragged card at its container's edge: the canvas
+  // must end where the panel begins, or a drag toward a far manager never scrolls.
+  it("ends the canvas at the panel's edge and above the sheet", () => {
+    expect(freeCanvasSize(620)).toEqual({ width: "calc(100% - 620px)", height: "100%" });
+    expect(freeCanvasSize(0, 0.4)).toEqual({ width: "100%", height: "60%" });
+  });
+  it("fills the pane when nothing covers it", () => {
+    expect(freeCanvasSize(0)).toEqual({ width: "100%", height: "100%" });
   });
 });

@@ -87,6 +87,18 @@ export function computeOrgViewport(
   return { x, y, zoom, whole };
 }
 
+/** The size of the box React Flow fills: the free area alone, left of the panel and above
+ *  the sheet. React Flow auto-pans a dragged card when the pointer nears its
+ *  container's edge, so a canvas running on under the panel would only scroll
+ *  once the pointer crossed the whole panel, and a far manager stayed out of
+ *  reach. The viewport's origin is the container's top left either way. */
+export function freeCanvasSize(panelWidth: number, panelHeightFraction = 0): { width: string; height: string } {
+  return {
+    width: panelWidth > 0 ? `calc(100% - ${panelWidth}px)` : "100%",
+    height: panelHeightFraction > 0 ? `${(1 - panelHeightFraction) * 100}%` : "100%",
+  };
+}
+
 /** The pan along one axis that brings a span of `size` at `pos` into
  *  `extent`, landing FIT_PAD inside the edge it was past (the near edge wins
  *  when it cannot fit whole), then held to the tree: a tree longer than the
