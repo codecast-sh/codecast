@@ -158,9 +158,26 @@ exit 1
     expect(r.code).toBe(0);
     expect(r.json).toMatchObject({ rebased: true, landed: false });
     expect(fs.readFileSync(path.join(work, "team-kit.md"), "utf-8")).toBe("tracked on main\n");
-    expect(fs.readFileSync(path.join(root, "run", "aside", "team-kit.md"), "utf-8")).toBe("an untracked copy\n");
+    const [attempt] = fs.readdirSync(path.join(root, "run", "aside"));
+    expect(fs.readFileSync(path.join(root, "run", "aside", attempt, "team-kit.md"), "utf-8")).toBe("an untracked copy\n");
     expect(fs.readFileSync(path.join(work, "draft.md"), "utf-8")).toBe("untracked, not on main\n");
     expect(r.comments).toContain("Moved 1 untracked file(s) that origin/main tracks");
+  });
+
+  test("files moved aside go back into the worktree when the rebase conflicts or the check fails", () => {
+    landOnMain("intro.txt", "something else entirely\n", "a conflicting change");
+    landOnMain("kit é.md", "tracked on main\n", "main tracks kit é.md");
+    fs.writeFileSync(path.join(work, "kit é.md"), "an untracked copy\n");
+    expect(station().code).toBe(1);
+    expect(fs.readFileSync(path.join(work, "kit é.md"), "utf-8")).toBe("an untracked copy\n");
+
+    git(work, "reset", "-q", "--hard", "origin/codecast/line-ct-1");
+    landOnMain("intro.txt", "say who offers what\n", "main puts intro.txt back");
+    landOnMain("other.txt", "y\n", "someone else's change");
+    const r = station("echo the check is red; false");
+    expect(r.code).toBe(1);
+    expect(r.json).toMatchObject({ rebased: true, landed: false });
+    expect(fs.readFileSync(path.join(work, "kit é.md"), "utf-8")).toBe("an untracked copy\n");
   });
 
   test("a rebase git refuses to start is reported with git's reason, never as a conflict", () => {
