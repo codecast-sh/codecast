@@ -23,7 +23,7 @@ export function SharingSetupBanner() {
   const take = () => useInboxStore.getState().updateClientDismissed("sharing_setup", Date.now());
 
   return (
-    <div data-cc-banner className="bg-gradient-to-r from-sol-cyan/10 via-sol-cyan/5 to-sol-cyan/10 border-b border-sol-cyan/30">
+    <div data-cc-banner data-nudge className="bg-gradient-to-r from-sol-cyan/10 via-sol-cyan/5 to-sol-cyan/10 border-b border-sol-cyan/30">
       <div className="px-4 py-2 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <Sparkles className="w-4 h-4 text-sol-cyan flex-shrink-0" />

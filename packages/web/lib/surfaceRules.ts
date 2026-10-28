@@ -340,7 +340,7 @@ export const MODE_WORDS = {
     stopWorking: "Stop the agent",
     // The notification nudge (NotificationNudgeBanner): at rest, after news
     // went unshown, and after a named person's message went unshown.
-    notificationsOff: "Desktop notifications are off, so messages from your team arrive silently.",
+    notificationsOff: "Desktop notifications are off, so you won't hear when an agent needs you.",
     notificationMissed: "Codecast had news for you but couldn't show a notification.",
     notificationMissedFrom: "messaged you, and Codecast couldn't show a notification.",
   },

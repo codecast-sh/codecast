@@ -10,7 +10,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Flag, FolderGit2, FolderKanban, Globe, KeyRound, Network, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper } from "lucide-react";
+import { ChevronsDown, ChevronsUp, Flag, FolderGit2, FolderKanban, Globe, KeyRound, Network, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
@@ -233,6 +233,7 @@ export function SidebarNavView({
   changesOn,
   agent,
   mode = DEVELOPER_MODE,
+  railMore,
 }: {
   isNarrow: boolean;
   scope?: "work";
@@ -260,6 +261,9 @@ export function SidebarNavView({
   agent: { label: string; title: string; icon: ReactNode };
   /** Hosted mode's rows and words (lib/surfaces.ts); developer mode when absent. */
   mode?: SurfaceMode;
+  /** A solo account's More/Fewer row (lib/railFocus.ts): `focused` while the
+   *  team and fleet rows are folded away. Absent for everyone else. */
+  railMore?: { focused: boolean; onToggle: () => void };
 }) {
   const { words, page, showsPage, shows } = mode;
   const agentsGroup = shows("nav.agentsGroup");
@@ -364,7 +368,7 @@ export function SidebarNavView({
           icon={<DocsNavIcon />}
         />
         {/* Hosted mode files the routines with the rest of the person's work. */}
-        {!agentsGroup && scope !== "work" && routines}
+        {!agentsGroup && scope !== "work" && showsPage("/triggers") && routines}
         {showsPage("/repo") && <NavSection
           label={page("/repo", "Code")}
           href="/repo"
@@ -449,6 +453,20 @@ export function SidebarNavView({
         />}
       </div>
       </>)}
+      {railMore && scope !== "work" && (
+        <button
+          type="button"
+          onClick={railMore.onToggle}
+          title={railMore.focused ? "Show every page in the rail" : "Keep the rail to your sessions and work"}
+          className={`${railRowClass(false, isNarrow)} mt-2 text-sm text-sol-text-dim`}
+          data-rail-more
+        >
+          {railMore.focused
+            ? <ChevronsDown className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
+            : <ChevronsUp className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+          {!isNarrow && <span>{railMore.focused ? "More" : "Fewer"}</span>}
+        </button>
+      )}
     </>
   );
 }

@@ -70,7 +70,9 @@ export function NotificationNudgeBanner() {
   const iconColor = escalated ? "text-sol-magenta" : "text-sol-blue";
 
   return (
-    <div data-cc-banner className={wrap}>
+    // A missed message is news and always shows; the plain ask waits its
+    // turn in the shell's nudge slot (DashboardLayout).
+    <div data-cc-banner data-nudge={escalated ? undefined : ""} className={wrap}>
       <div className="px-4 py-2 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <Icon className={`w-4 h-4 ${iconColor} flex-shrink-0`} />

@@ -32,7 +32,7 @@ export function NativeAppBanner() {
   const Icon = app === "mac" ? Monitor : Smartphone;
 
   return (
-    <div className="bg-gradient-to-r from-sol-cyan/10 via-sol-blue/10 to-sol-cyan/10 border-b border-sol-cyan/30">
+    <div data-cc-banner data-nudge className="bg-gradient-to-r from-sol-cyan/10 via-sol-blue/10 to-sol-cyan/10 border-b border-sol-cyan/30">
       <div className="px-3 sm:px-4 py-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <Icon className="w-4 h-4 text-sol-cyan flex-shrink-0" />

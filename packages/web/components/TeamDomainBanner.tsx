@@ -93,7 +93,7 @@ export function TeamDomainBanner() {
   }
 
   return (
-    <div data-cc-banner className="border-b border-sol-violet/30 bg-sol-violet/10">
+    <div data-cc-banner data-nudge className="border-b border-sol-violet/30 bg-sol-violet/10">
       <div className="flex items-center justify-between gap-4 px-4 py-2">
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <Users className="h-4 w-4 shrink-0 text-sol-violet" />

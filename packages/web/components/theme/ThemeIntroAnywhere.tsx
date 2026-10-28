@@ -4,7 +4,9 @@
 // theme: pressing one applies it on the spot, so the card is the picker in
 // small. Done or All themes, or a swipe, answers it, and theme_intro_seen
 // keeps it down on every device. It waits its turn: never over a call, a
-// tour, a half-typed composer, a phone, hosted mode, or another rising card.
+// tour, a half-typed composer, a phone, hosted mode, or another rising card,
+// and never before a machine has connected (a new account's first screen is
+// about getting its sessions in, not the colors).
 
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -18,6 +20,7 @@ import { settingsPathFor } from "../../lib/settingsSections";
 import { RisingCard } from "../RisingCard";
 import { useColorThemes } from "../../hooks/useColorThemes";
 import { ThemeDot } from "./ThemePicker";
+import { cliNeverConnected } from "../../lib/cliConnected";
 
 const TOAST_ID = "theme-intro";
 /** After the org card's settle, so the two never rise together. */
@@ -73,9 +76,10 @@ export function ThemeIntroAnywhere() {
     (st) => st.currentUser?._id,
     (st) => st.clientState.ui?.theme_intro_seen,
     (st) => isHostedMode(st),
+    (st) => cliNeverConnected(st.currentUser),
   ]);
   const risen = useRef(false);
-  const ready = s.clientStateInitialized && !!s.currentUser?._id && !phone && !isHostedMode(s);
+  const ready = s.clientStateInitialized && !!s.currentUser?._id && !phone && !isHostedMode(s) && !cliNeverConnected(s.currentUser);
   const seen = s.clientState.ui?.theme_intro_seen === true;
 
   // Answered on another device while the card is up: it goes.
