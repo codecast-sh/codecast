@@ -10,6 +10,7 @@ import {
   pushContext,
   pushReaction,
   reactionSpeaker,
+  getTeamSlack,
   setDmSync,
   commitDmLink,
   retargetPersonRooms,
@@ -33,6 +34,7 @@ import {
   applyFileRepair,
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
+import { USER_SCOPES } from "./slack";
 import { mirrorFiles, slackFileLinkLines } from "./lib/slackFiles";
 import { listChannels, sendMessage, toggleReaction, updateChannel } from "./chat";
 import { resolveChatMentions } from "./lib/mentionResolve";
@@ -644,6 +646,14 @@ describe("direct messages", () => {
       globalThis.fetch = realFetch;
     }
     expect(auths).toEqual(["Bearer xoxb-test"]);
+  });
+  test("a person whose Slack connection predates a scope is told what it lacks", async () => {
+    const ctx = context(ALICE, {
+      slack_user_tokens: [{ _id: "slack_user_tokens_9" as any, installation_id: INSTALL, workspace_id: WS, user_id: ALICE, slack_user_id: "UALICE", token: "xoxp-alice", scopes: USER_SCOPES.replace(",reactions:write", ""), created_at: 1, updated_at: 1 }],
+    });
+    expect((await call(getTeamSlack, ctx, { team_id: TEAM }))?.you_missing_scopes).toEqual(["reactions:write"]);
+    await ctx.db.patch("slack_user_tokens_9" as any, { scopes: USER_SCOPES });
+    expect((await call(getTeamSlack, ctx, { team_id: TEAM }))?.you_missing_scopes).toEqual([]);
   });
   describe("whose name a reaction carries in Slack", () => {
     const token = (user: any, scopes: string) => ({ _id: `slack_user_tokens_${user}` as any, installation_id: INSTALL, workspace_id: WS, user_id: user, slack_user_id: `U${user}`, token: `xoxp-${user}`, scopes, created_at: 1, updated_at: 1 });

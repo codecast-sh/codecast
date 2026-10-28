@@ -20,6 +20,8 @@ import { SlackDmSwitch } from "../chat/SlackDmSwitch";
 import { UserRound } from "lucide-react";
 import { QuietButton } from "./parts";
 import { slackLinksSig } from "../../store/chatWakeSigs";
+import { useSlackConnect } from "../../hooks/useSlackConnect";
+import { SlackLogo } from "../SlackLogo";
 import type { ChatSlackLinkRow } from "../../store/chatSlice";
 
 export function SlackMirrorsSummary() {
@@ -32,7 +34,7 @@ export function SlackMirrorsSummary() {
   const [browsing, setBrowsing] = useState(false);
   const [people, setPeople] = useState(false);
   const team = useQueryNoThrow(api.slackSync.getTeamSlack, teamId ? ({ team_id: teamId } as any) : "skip").data as
-    | { missing_scopes?: string[]; is_admin?: boolean }
+    | { missing_scopes?: string[]; is_admin?: boolean; you_missing_scopes?: string[] }
     | null
     | undefined;
   const [dmsOpen, setDmsOpen] = useState(false);
@@ -71,6 +73,9 @@ export function SlackMirrorsSummary() {
       </div>
       {teamId && !!team?.missing_scopes?.length && (
         <SlackReconnect teamId={teamId} returnTo="/settings/integrations?slack=connected" isAdmin={!!team.is_admin} isPrivate={false} />
+      )}
+      {teamId && !!team?.you_missing_scopes?.length && (
+        <SelfReconnect teamId={teamId} reactions={team.you_missing_scopes.includes("reactions:write")} />
       )}
       {teamId && <div className="mt-2"><SlackDmSwitch teamId={teamId} compact /></div>}
       {dmRows.length > 0 && (
@@ -144,6 +149,23 @@ export function SlackMirrorsSummary() {
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+// The person's own Slack connection predates a scope codecast now asks for.
+function SelfReconnect({ teamId, reactions }: { teamId: string; reactions: boolean }) {
+  const conn = useSlackConnect(teamId, "/settings/integrations?slack=connected", "self");
+  return (
+    <div className="ch-roster-reconnect">
+      <SlackLogo className="w-3 h-3 shrink-0" muted />
+      <span className="flex-1 min-w-0">
+        {reactions ? "Your reactions show in Slack as Codecast" : "Your Slack account needs a newer permission"}
+        {conn.error && <span className="ch-roster-err-inline"> {conn.error}</span>}
+      </span>
+      <button type="button" className="ch-roster-reconnect-btn" disabled={conn.busy} onClick={conn.connect}>
+        {conn.started ? "Opened" : conn.busy ? "Opening" : "Reconnect"}
+      </button>
     </div>
   );
 }

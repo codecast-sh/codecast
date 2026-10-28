@@ -69,7 +69,7 @@ import {
 } from "./lib/slackOutbound";
 import {
   type BackfillWindow, DIRECTION_FLOW, DIRECTION_SENTENCE, LINK_DEFAULTS, mergeLinkOptions, nextSlackMembers, slackMemberWriter, tokenCanReact, tokenHasScope } from "./lib/slackMirror";
-import { BOT_SCOPES, tokenCanPost, tokenHasDmScopes, webBaseUrl } from "./slack";
+import { BOT_SCOPES, USER_SCOPES, tokenCanPost, tokenHasDmScopes, webBaseUrl } from "./slack";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 type Link = Doc<"slack_channel_links">;
@@ -328,6 +328,9 @@ export const getTeamSlack = query({
       // The caller connected their own Slack account: private channels they
       // are in can be added without a manual /invite.
       you_connected: !!myToken,
+      // What the person's own connection is asked for today that theirs never
+      // granted (it predates the scope): they reconnect to fix it.
+      you_missing_scopes: myToken ? USER_SCOPES.split(",").filter((sc) => !tokenHasScope(myToken.scopes, sc)) : [],
       dm_ready: !!myToken && tokenHasDmScopes(myToken.scopes),
       dm_sync: myToken?.dm_sync ?? null,
       links: visible,
