@@ -19,7 +19,6 @@ import {
 } from "../../store/inboxStore";
 import { deriveTriageFlags } from "./triageFlags";
 import { ACTIVE_AGENT_STATUSES, HEARTBEAT_ALIVE_MS } from "@codecast/shared/contracts";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { sessionStructuralSig } from "../../store/inboxStore";
 
@@ -327,7 +326,6 @@ export function SessionsView() {
   // Store-fed (hooks/useSyncManagedSessions): the fleet table paints from the
   // cached rows synchronously; "loading" shows only for a genuinely cold cache.
   const { sessions: managedRows, ready: managedReady } = useManagedSessions();
-  const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const sessions = managedReady || managedRows.length > 0 ? managedRows : undefined;
   // Triage state (pinned / needs-input / working / dismissed) lives on the
   // conversation row — the inbox's own synced sessions collection, joined by
@@ -548,7 +546,7 @@ export function SessionsView() {
     <div className="h-full min-h-0 overflow-y-auto bg-zinc-950 text-zinc-100">
       <div className="max-w-[1200px] mx-auto px-6 py-6">
         {/* Header */}
-        <div ref={titlebarRef} className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
           <div className="flex flex-wrap items-center gap-4">
             <Link href="/inbox" className="text-zinc-500 hover:text-zinc-300 transition-colors">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
