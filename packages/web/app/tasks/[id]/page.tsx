@@ -4,6 +4,7 @@ import { ShortId } from "../../../components/ShortId";
 import { taskRepository } from "../../../lib/repoNavigation";
 import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { ShareControl } from "../../../components/ShareControl";
+import { policyTeamOf } from "@codecast/shared/contracts";
 import { copyToClipboard, formatDateFull, formatRelative } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useTabActive } from "../../../hooks/usePagePresence";
@@ -615,7 +616,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
               {isInline && onOpen && (
                 <button onClick={onOpen} className="text-xs px-2 py-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors" title="Open full page">Open</button>
               )}
-              <ShareControl label="task" path={`/tasks/${data.short_id}`} publicShare={{ kind: "task", id: data._id, token: data.share_token }} />
+              <ShareControl label="task" path={`/tasks/${data.short_id}`} publicShare={{ kind: "task", id: data._id, token: data.share_token, team: policyTeamOf("tasks", data) }} />
               <OverflowMenu>
                 <WatchButton entityType="task" entityId={data._id} variant="menuItem" />
               </OverflowMenu>

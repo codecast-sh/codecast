@@ -15,12 +15,12 @@ import {
   parseTeamPolicy,
   policyBlockedMessage,
   policyBlocks,
+  policyTeamOf,
   type HeartbeatTeamPolicy,
   type TeamPolicy,
   type TeamPolicyKey,
 } from "@codecast/shared/contracts";
 import { parseWorkspaceKey } from "./accessKeys";
-import { teamVisibleConvTeam } from "../privacy";
 
 type DbCtx = { db: any };
 type RestrictionKey = Extract<TeamPolicyKey, `${string}_disabled`>;
@@ -76,16 +76,47 @@ export async function activeEnrollmentTeam(ctx: { db: any }, userId: Id<"users">
   return active?.team_id;
 }
 
-/** The workspace key a row answers to for policy: its stored key, else its
- *  team tag. A conversation has no key; its team is the one it is visible to. */
-export function policyWorkspaceOf(table: string, row: any): string | null {
-  if (!row) return null;
-  if (table === "conversations") {
-    const teamId = teamVisibleConvTeam(row);
-    return teamId ? `team:${teamId}` : null;
+/** What a person's device shows about its management: enrolled in a team,
+ *  or taken out by that team's admins (its sign-in was revoked with it). */
+export type DeviceManagement = { team_id: string; team_name: string; state: "managed" | "removed"; at: number };
+
+/** The management of each of a person's devices that has any, by device id. */
+export async function deviceManagementFor(
+  ctx: DbCtx,
+  userId: Id<"users">,
+  deviceIds: string[],
+): Promise<Map<string, DeviceManagement>> {
+  const out = new Map<string, DeviceManagement>();
+  const teamNames = new Map<string, string | null>();
+  for (const deviceId of deviceIds) {
+    const rows = (await ctx.db
+      .query("device_enrollments")
+      .withIndex("by_device", (q: any) => q.eq("device_id", deviceId))
+      .collect()).filter((r: any) => r.user_id === userId && r.status !== "pending");
+    const row = rows.find((r: any) => r.status === "active")
+      ?? rows.sort((a: any, b: any) => (b.revoked_at ?? 0) - (a.revoked_at ?? 0))[0];
+    if (!row) continue;
+    const key = String(row.team_id);
+    if (!teamNames.has(key)) {
+      const team = await ctx.db.get(row.team_id);
+      teamNames.set(key, team && !team.deleted_at ? team.name : null);
+    }
+    const teamName = teamNames.get(key);
+    if (!teamName) continue;
+    out.set(deviceId, {
+      team_id: key,
+      team_name: teamName,
+      state: row.status === "active" ? "managed" : "removed",
+      at: (row.status === "active" ? row.enrolled_at : row.revoked_at) ?? row.created_at,
+    });
   }
-  if (typeof row.workspace === "string" && row.workspace) return row.workspace;
-  return row.team_id ? `team:${row.team_id}` : null;
+  return out;
+}
+
+/** The workspace key a row answers to for policy (policyTeamOf, shared with the web's locks). */
+export function policyWorkspaceOf(table: string, row: any): string | null {
+  const teamId = policyTeamOf(table, row);
+  return teamId ? `team:${teamId}` : null;
 }
 
 /** Where a request stands: the workspace of the row it touches and the token it came with. */

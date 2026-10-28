@@ -15,6 +15,7 @@
 
 import { useMemo, useState } from "react";
 import { ShareControl } from "../../../components/ShareControl";
+import { policyTeamOf } from "@codecast/shared/contracts";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -296,7 +297,7 @@ export default function TriggerDetailPage() {
               <div className="min-w-0 flex-1">
                 <div data-page-head className="flex items-center gap-2.5 flex-wrap">
                   <h1 className="text-xl font-semibold text-sol-text leading-tight">{title}</h1>
-                  <ShareControl label="trigger" path={`/triggers/${t._id}`} publicShare={{ kind: "trigger", id: t._id, token: (t as any).share_token }} />
+                  <ShareControl label="trigger" path={`/triggers/${t._id}`} publicShare={{ kind: "trigger", id: t._id, token: (t as any).share_token, team: policyTeamOf("triggers", t) }} />
                   {(t.short_id || t._id) && (
                     <ShortcutTooltip label={idCopied ? "Copied" : "Copy id"}>
                       <button

@@ -64,7 +64,7 @@ describe("mergePolicies", () => {
 });
 
 test("refusal names who turned it off", () => {
-  expect(policyBlockedMessage("public_sharing_disabled", team)).toBe("Publishing and public share links is turned off by Littlebird's admins.");
+  expect(policyBlockedMessage("public_sharing_disabled", team)).toBe("Public sharing is turned off by Littlebird's admins.");
   expect(policyBlockedMessage("browser_control_disabled", { kind: "profile" })).toBe("Agent browser control is turned off by your device's management profile.");
 });
 

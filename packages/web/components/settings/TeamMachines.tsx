@@ -8,6 +8,7 @@ import { splitStaleMachines } from "../../lib/staleMachines";
 import { DeviceDot, DeviceIcon, deviceDisplayName, useDevices, type Device } from "../DeviceBadge";
 import { DeviceShareControl } from "./DeviceShareControl";
 import { TeamMachineCard } from "./TeamMachineCard";
+import { ManagedDevicePill } from "./ManagedDevicePill";
 import { SettingsSection } from "./ui";
 import { useSyncTeamMachines } from "../../hooks/useSyncTeamMachines";
 import { teamMachineOfDevice } from "../../lib/teamMachines";
@@ -68,6 +69,7 @@ function Row({ d, note, bot, children }: { d: Device; note: string; bot?: boolea
       <span className="min-w-0 flex-1 truncate text-sm text-sol-text">
         {deviceDisplayName(d)} <span className="text-[11px] text-sol-text-dim">{note}</span>
       </span>
+      <ManagedDevicePill d={d} />
       <DeviceDot online={d.online} />
       {children}
     </div>

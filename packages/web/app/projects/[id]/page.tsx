@@ -8,6 +8,7 @@
 // project by its `pj-` id; an older link by its Convex id moves to that form
 // once the store names it.
 import { ShareControl } from "../../../components/ShareControl";
+import { policyTeamOf } from "@codecast/shared/contracts";
 import { ProjectAbout } from "./ProjectAbout";
 import { useMemo, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -151,7 +152,7 @@ function ProjectDetailContent() {
           <ProjectInitiatives projectId={project._id} size="xs" label="Serves" />
         </>}
         actions={<>
-          <ShareControl label="project" path={`/projects/${project.short_id || project._id}`} publicShare={{ kind: "project", id: project._id, token: project.share_token }} />
+          <ShareControl label="project" path={`/projects/${project.short_id || project._id}`} publicShare={{ kind: "project", id: project._id, token: project.share_token, team: policyTeamOf("projects", project) }} />
         </>}
         tabs={<IntentTabs tabs={tabs} active={tab} onTab={setTab} accent={PROJECT_ACCENT} bare />}
       />

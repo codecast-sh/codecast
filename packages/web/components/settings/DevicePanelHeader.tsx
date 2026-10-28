@@ -7,6 +7,7 @@ import {
   relativeSeen,
   type Device,
 } from "../DeviceBadge";
+import { ManagedDevicePill } from "./ManagedDevicePill";
 
 /**
  * The shared head of a device-scoped settings surface: optional pills to pick
@@ -68,6 +69,7 @@ export function DevicePanelHeader({
               {selected.device_id === localDeviceId ? "this computer" : deviceKindLabel(selected)}
             </span>
           )}
+          <ManagedDevicePill d={selected} />
         </div>
         <span className="shrink-0 text-[11px] text-sol-text-muted">
           {note === "apply"

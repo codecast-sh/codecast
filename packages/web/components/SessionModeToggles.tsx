@@ -25,6 +25,8 @@ export type SessionModeTogglesProps = {
   cloudMode: boolean;
   /** False when the toggle would have nowhere to go (a cloud-only roster). */
   cloudToggleEnabled: boolean;
+  /** Why the session's team turns cloud hosting off (Managed devices); the cloud choice is locked. */
+  cloudRefusal?: string | null;
   onToggleCloud: () => void;
   isolated: boolean;
   onToggleIsolated: () => void;
@@ -191,7 +193,7 @@ function CloudAgentOptions({ cloudAgent }: { cloudAgent: CloudAgent }) {
   );
 }
 
-export function SessionModeToggles({ cloudHost, cloudMode, cloudToggleEnabled, onToggleCloud, isolated, onToggleIsolated, shared = false, onToggleShared, startFrom = "checkout", onSetStartFrom, cloudAgent }: SessionModeTogglesProps) {
+export function SessionModeToggles({ cloudHost, cloudMode, cloudToggleEnabled, cloudRefusal, onToggleCloud, isolated, onToggleIsolated, shared = false, onToggleShared, startFrom = "checkout", onSetStartFrom, cloudAgent }: SessionModeTogglesProps) {
   const effectiveStartFrom = shared ? "origin_main" : startFrom;
   if (cloudAgent) {
     const { spec, on, onToggle } = cloudAgent;
@@ -229,8 +231,8 @@ export function SessionModeToggles({ cloudHost, cloudMode, cloudToggleEnabled, o
           on={cloudMode}
           accent="violet"
           label="run in the cloud"
-          disabled={!cloudToggleEnabled}
-          title={cloudToggleEnabled
+          disabled={!cloudToggleEnabled || (!!cloudRefusal && !cloudMode)}
+          title={cloudRefusal && !cloudMode ? cloudRefusal : cloudToggleEnabled
             ? `Run this session on ${deviceDisplayName(cloudHost)}, in its own worktree there. The host boots itself when the session starts; turn off 'isolated worktree' to use the host's main checkout.`
             : `${deviceDisplayName(cloudHost)} is the only machine you have — sessions run there`}
           onClick={onToggleCloud}
@@ -260,16 +262,17 @@ export type SessionPlacement = "checkout" | "worktree" | "cloud";
  * onto its transitions (onPick). On a host, the workspace and start-from
  * choices sit in the menu; a cloud agent's options follow it in the row.
  */
-export function SessionPlacementMenu({ cloudHost, cloudMode, cloudToggleEnabled, isolated, shared = false, onToggleShared, startFrom = "checkout", onSetStartFrom, cloudAgent, onPick }: SessionModeTogglesProps & { onPick: (p: SessionPlacement) => void }) {
+export function SessionPlacementMenu({ cloudHost, cloudMode, cloudToggleEnabled, cloudRefusal, isolated, shared = false, onToggleShared, startFrom = "checkout", onSetStartFrom, cloudAgent, onPick }: SessionModeTogglesProps & { onPick: (p: SessionPlacement) => void }) {
   const cloudOn = cloudAgent ? cloudAgent.on : cloudMode;
   const current: SessionPlacement = cloudOn ? "cloud" : isolated ? "worktree" : "checkout";
   const cloudName = cloudAgent ? cloudAgentPlace(cloudAgent) : cloudHost ? deviceDisplayName(cloudHost) : null;
   // A cloud-only roster has nowhere local to go.
   const localLocked = !cloudAgent && cloudMode && !cloudToggleEnabled;
-  const rows: { key: SessionPlacement; icon: typeof Folder; label: string; hint: string; disabled?: boolean }[] = [
+  const hostLocked = !cloudAgent && !cloudMode && !!cloudRefusal;
+  const rows: { key: SessionPlacement; icon: typeof Folder; label: string; hint: string; disabled?: boolean; title?: string }[] = [
     { key: "checkout", icon: Folder, label: "This checkout", hint: "edits the folder in place", disabled: localLocked },
     { key: "worktree", icon: GitBranch, label: "Isolated worktree", hint: "its own branch", disabled: localLocked },
-    ...(cloudName ? [{ key: "cloud" as const, icon: Cloud, label: cloudName, hint: cloudAgent ? cloudAgent.spec.vendor : "cloud host" }] : []),
+    ...(cloudName ? [{ key: "cloud" as const, icon: Cloud, label: cloudName, hint: cloudAgent ? cloudAgent.spec.vendor : hostLocked ? "turned off" : "cloud host", disabled: hostLocked, title: hostLocked ? cloudRefusal! : undefined }] : []),
   ];
   const now = rows.find((r) => r.key === current) ?? rows[0];
   const Icon = now.icon;
@@ -288,7 +291,7 @@ export function SessionPlacementMenu({ cloudHost, cloudMode, cloudToggleEnabled,
         <DropdownMenuContent align="start" className="min-w-[15rem]">
           <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Runs in</DropdownMenuLabel>
           {rows.map((r) => (
-            <DropdownMenuItem key={r.key} disabled={r.disabled} onSelect={() => { if (r.key !== current) onPick(r.key); }} className="flex items-center gap-2 text-xs">
+            <DropdownMenuItem key={r.key} disabled={r.disabled} title={r.title} onSelect={() => { if (r.key !== current) onPick(r.key); }} className="flex items-center gap-2 text-xs">
               {check(r.key === current)}
               <r.icon className="w-3.5 h-3.5 text-sol-text-dim" />
               <span className={r.key === current ? "text-sol-text font-medium" : ""}>{r.label}</span>

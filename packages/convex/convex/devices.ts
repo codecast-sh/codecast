@@ -34,6 +34,7 @@ import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unpa
 import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 import { queueMoveContinueIfMidTurn } from "./moveContinue";
+import { deviceManagementFor } from "./lib/teamPolicyGuard";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -1207,6 +1208,7 @@ export const listDevices = query({
       .collect();
     const sharedTeams = (deviceId: string) =>
       shares.filter((sh: any) => sh.device_id === deviceId).map((sh: any) => sh.team_id.toString()).sort();
+    const management = await deviceManagementFor(ctx, userId, rows.map((d: any) => d.device_id));
     return rows
       .map((d: any) => ({
         device_id: d.device_id,
@@ -1217,6 +1219,8 @@ export const listDevices = query({
         // The teams this machine is open to (device_shares), sorted so the
         // roster signature holds still.
         shared_team_ids: sharedTeams(d.device_id),
+        // The team that manages it through an MDM, or that took it out.
+        managed: management.get(d.device_id),
         // Bucketed to the minute: every device beats every 30s, and the raw
         // value re-pushed this whole roster — each row carrying a model
         // inventory of several KB. The clients render it as a relative age and

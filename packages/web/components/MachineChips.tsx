@@ -28,6 +28,8 @@ export type MachineChipsProps = {
   /** Team machines you are not on yet, by name; a chip opens where you join one. */
   joinable?: ReadonlyArray<{ id: string; name: string }>;
   onJoin?: (id: string) => void;
+  /** Why the session's team turns cloud hosting off: cloud host chips are locked. */
+  cloudRefusal?: string | null;
 };
 
 /** A machine someone on your team opened to you, or an agent box. */
@@ -45,7 +47,7 @@ function chipLabel(d: SessionMachine, roster: SessionMachine[], load?: HostLoad)
   );
 }
 
-export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen, onPick, onShare, loads, joinable = [], onJoin }: MachineChipsProps) {
+export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen, onPick, onShare, loads, joinable = [], onJoin, cloudRefusal }: MachineChipsProps) {
   // Notes and titles judge each chip against the whole roster (a host is
   // "gone" relative to its siblings); only the row leaves dead machines out.
   const machines = listedMachines(roster, selectedDeviceId);
@@ -55,15 +57,17 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
   if (open) {
     const chip = (d: SessionMachine) => {
       const selected = d.device_id === selectedDeviceId;
+      const locked = !selected && d.is_remote && !!cloudRefusal;
       return (
         <button
           key={d.device_id}
           onClick={() => onPick(d)}
-          title={machineChipTitle(d, roster)}
+          disabled={locked}
+          title={locked ? cloudRefusal! : machineChipTitle(d, roster)}
           className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
             selected
               ? `${deviceAccentClasses(d)} font-medium !border-current`
-              : `border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 ${d.online ? "" : "opacity-50"}`
+              : `border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 disabled:cursor-not-allowed disabled:line-through disabled:hover:text-sol-text-dim ${d.online && !locked ? "" : "opacity-50"}`
           }`}
         >
           <DeviceIcon d={d} className="w-3 h-3 shrink-0" />

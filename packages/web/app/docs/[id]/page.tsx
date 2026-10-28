@@ -15,6 +15,7 @@ import { docTypeStyle } from "../../../lib/docTypeStyle";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
 import { EntryTimeline, type TimelineEntry } from "../../../components/EntryTimeline";
 import { ShareControl } from "../../../components/ShareControl";
+import { policyTeamOf } from "@codecast/shared/contracts";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { FeedCard } from "../../../components/ActivityFeed";
 import { WatchButton } from "../../../components/WatchButton";
@@ -234,7 +235,7 @@ function DocDetailContent() {
           }
           topBarRight={
             <>
-              <ShareControl label="doc" path={`/docs/${doc._id}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token }} />
+              <ShareControl label="doc" path={`/docs/${doc._id}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token, team: policyTeamOf("docs", doc) }} />
               <button
                 onClick={handlePin}
                 className={`p-1.5 rounded-md transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-yellow"}`}

@@ -32,6 +32,7 @@ import { NOT_CONFIRMED } from "@codecast/shared/contracts/secrets";
 import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, List } from "lucide-react";
 import Link from "next/link";
 import { ShareControl } from "./ShareControl";
+import { policyTeamOf } from "@codecast/shared/contracts";
 import "./decisions/decisions.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -681,7 +682,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             {/* A hosted approval is the person's own: no link to share it, and
                 its conversation is one tap away in the escape hatch. */}
             {shareHref && decideId && !hosted && (
-              <ShareControl label="decision" path={shareHref} publicShare={{ kind: "decision", id: decideId, token: ((decisionRow ?? detail?.decision) as any)?.share_token }} className="shrink-0" />
+              <ShareControl label="decision" path={shareHref} publicShare={{ kind: "decision", id: decideId, token: ((decisionRow ?? detail?.decision) as any)?.share_token, team: policyTeamOf("decisions", decisionRow ?? detail?.decision) }} className="shrink-0" />
             )}
             {!hosted && <button
               onClick={shrink}

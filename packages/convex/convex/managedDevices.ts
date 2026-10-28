@@ -115,6 +115,16 @@ export const adminOverview = query({
       people.set(id, await ctx.db.get(id as Id<"users">));
     }
     const tokenNames = new Map(tokens.map((t) => [String(t._id), t.name]));
+    // When each enrolled Mac last checked in, from the device row its sign-in made.
+    const lastSeen = new Map<string, number>();
+    for (const e of enrollments) {
+      if (!e.user_id || e.status !== "active") continue;
+      const device = await ctx.db
+        .query("devices")
+        .withIndex("by_user_device", (q) => q.eq("user_id", e.user_id!).eq("device_id", e.device_id))
+        .first();
+      if (device) lastSeen.set(String(e._id), device.last_seen);
+    }
     return {
       tokens: tokens
         .sort((a, b) => b.created_at - a.created_at)
@@ -142,6 +152,8 @@ export const adminOverview = query({
             token_name: tokenNames.get(String(e.token_id)) ?? null,
             created_at: e.created_at,
             enrolled_at: e.enrolled_at ?? null,
+            // Bucketed to the minute: the device row moves on every heartbeat.
+            last_seen: lastSeen.has(String(e._id)) ? Math.floor(lastSeen.get(String(e._id))! / 60_000) * 60_000 : null,
           };
         }),
     };
@@ -209,6 +221,23 @@ export const revokeDeviceEnrollment = mutation({
 });
 
 /**
+ * Admin-only: let a removed device back in. The enrollment returns to
+ * pending, so the device's next `cast mdm enroll` (at login, or run by hand)
+ * signs its person in again and the enrollment completes as it did the first time.
+ */
+export const restoreDeviceEnrollment = mutation({
+  args: { enrollment_id: v.id("device_enrollments") },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const row = await ctx.db.get(args.enrollment_id);
+    if (!row) throw new Error("No such device");
+    await requireTeamAdmin(ctx, userId, row.team_id);
+    if (row.status !== "revoked") return;
+    await ctx.db.patch(row._id, { status: "pending", revoked_at: undefined });
+  },
+});
+
+/**
  * Admin-only: the configuration profile for one token, with the team's
  * current policy and the chosen MDM's email variable as the person
  * (lib/mdmVendors: $EMAIL for Jamf and Kandji, {{mail}} for Intune, %Email%
@@ -269,7 +298,7 @@ export const enroll = internalMutation({
       .withIndex("by_team_device", (q) => q.eq("team_id", row.team_id).eq("device_id", deviceId))
       .first();
     if (existing?.status === "revoked") {
-      return { ok: false, error: `${team.name}'s admins removed this device. Ask them to enroll it again.` };
+      return { ok: false, error: `${team.name}'s admins removed this device. Ask them to allow it again.`, removed_by: team.name };
     }
     const facts = {
       token_id: row._id,

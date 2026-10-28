@@ -212,7 +212,7 @@ describe("publish route evidence binding", () => {
   });
 
   test("a device enrolled in a team that turned public sharing off is a 403 before any blob is stored", async () => {
-    const { ctx, stored, mutations } = makePublishCtx(() => ({ binding: {}, error: null }), "Publishing and public share links is turned off by Acme's admins.");
+    const { ctx, stored, mutations } = makePublishCtx(() => ({ binding: {}, error: null }), "Public sharing is turned off by Acme's admins.");
     const res = await (publish as any)._handler(ctx, publishRequest({}));
     expect(res.status).toBe(403);
     expect((await res.json()).error).toContain("Acme's admins");

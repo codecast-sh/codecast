@@ -133,3 +133,21 @@ export async function requestEnrollment(
 export function enrollRequest(token: string, deviceId: string, email: string | undefined): EnrollRequest {
   return { enrollment_token: token, device_id: deviceId, email, hostname: os.hostname(), platform: process.platform };
 }
+
+/**
+ * Why this machine's sign-in stopped working, when its team's admins took it
+ * out: the team's name, asked of /cli/enroll with the profile's token (the
+ * enrollment refuses a removed device and names the team). Null for anything
+ * else, including a machine with no enrollment token.
+ */
+export async function removedByTeam(
+  siteUrl: string,
+  deviceId: string,
+  profile = readManagedProfile(),
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  const token = profile.enrollment_token;
+  if (!token || !isEnrollmentToken(token)) return null;
+  const result = await requestEnrollment(siteUrl, enrollRequest(token, deviceId, profile.user_email), fetchImpl);
+  return !result.ok && result.removed_by ? result.removed_by : null;
+}

@@ -6,6 +6,8 @@ import { useTeamShareActions } from "../hooks/useTeamShareActions";
 import { useInboxStore } from "../store/inboxStore";
 import { shareOrigin } from "../lib/utils";
 import { SharePopover } from "./SharePopover";
+import { policyTeamOf } from "@codecast/shared/contracts";
+import { usePolicyRefusal } from "../lib/managedPolicy";
 import { Switch } from "./ui/switch";
 
 export function ConversationSharePopover({ conversation, canManage }: { conversation: any; canManage: boolean }) {
@@ -14,6 +16,7 @@ export function ConversationSharePopover({ conversation, canManage }: { conversa
   const setShareLink = useInboxStore((s) => s.setShareLink);
   const setGuestSuggestions = useInboxStore((s) => s.setGuestSuggestions);
   const pageUrl = `${shareOrigin()}/conversation/${convId}`;
+  const policyRefusal = usePolicyRefusal("public_sharing_disabled", policyTeamOf("conversations", conversation));
   // The link that works for anyone must PRESENT the token (?share=): a bare
   // conversation id grants nothing to anonymous viewers or link unfurlers
   // (issue #27).
@@ -37,6 +40,7 @@ export function ConversationSharePopover({ conversation, canManage }: { conversa
       shareUrl={conversation.share_token ? withToken(conversation.share_token) : null}
       pageUrl={pageUrl}
       forwardLabel="session"
+      openRefusal={policyRefusal}
       // The repo whose team mapping shared this session, so the popover can say why.
       sharedVia={conversation.auto_shared ? (conversation.git_root || conversation.project_path || null) : null}
       // Guests without an account can suggest messages; each one waits above

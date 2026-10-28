@@ -1411,6 +1411,8 @@ interface DaemonState {
   pendingSyncNoProgressMs?: number;
   timestamp?: number;
   authExpired?: boolean;
+  /** The team whose admins removed this machine (its sign-in was revoked with it). */
+  removedBy?: string;
   authFailureCount?: number;
   lastWatchdogCheck?: number;
   watchdogRestarts?: number;
@@ -9484,12 +9486,22 @@ function handleAuthFailure(): boolean {
   if (currentCount >= AUTH_FAILURE_THRESHOLD) {
     logError(`Auth failed ${currentCount} times consecutively - marking auth as expired`);
     saveDaemonState({ authExpired: true, authFailureCount: currentCount });
+    void noteTeamRemoval();
     return true;
   }
 
   log(`Auth failure ${currentCount}/${AUTH_FAILURE_THRESHOLD} - will retry`);
   saveDaemonState({ authFailureCount: currentCount });
   return false;
+}
+
+/** A managed machine whose team took it out says so (daemon state removedBy) instead of only "expired". */
+async function noteTeamRemoval(): Promise<void> {
+  const siteUrl = getSiteUrl();
+  if (!siteUrl) return;
+  const { removedByTeam } = await import("./mdm.js");
+  const team = await removedByTeam(siteUrl, deviceId()).catch(() => null);
+  if (team) saveDaemonState({ removedBy: team });
 }
 
 function resetAuthFailureCount(): void {

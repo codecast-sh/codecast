@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowUpRight, Blocks, Check, Search } from "lucide-react";
+import { ArrowUpRight, Blocks, Check, Lock, Search } from "lucide-react";
 import {
   FEATURE_EXPLAINERS,
   SNIPPET_CATALOG,
@@ -30,6 +30,7 @@ import { FeatureDialog, NewPill, STABLE_NAME } from "./FeatureDetail";
 import { featureIcon, featureTone, TONE } from "./featureLook";
 import { AgentToolSetupPanel } from "../conversation/blocks/AgentToolSetupCard";
 import { useAgentToolSetup } from "../../lib/useAgentToolSetup";
+import { featureLock, useDevicePolicy } from "../../lib/managedPolicy";
 
 /**
  * /agent-features: what codecast can teach your agents. The web twin of
@@ -134,7 +135,10 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
     router.replace(slug ? `${pathname}?feature=${encodeURIComponent(slug)}` : pathname ?? "/agent-features");
 
   const stableMode: StableMode = d.settings?.stable_mode ?? "off";
-  const isOn = (s: SnippetDescriptor) => snippetEnabledOn(d.settings ?? undefined, s);
+  // A feature the device's team holds off (Managed devices) reads off and locked.
+  const devicePolicy = useDevicePolicy(d);
+  const lockOf = (s: SnippetDescriptor) => featureLock(devicePolicy, s.slug);
+  const isOn = (s: SnippetDescriptor) => !lockOf(s) && snippetEnabledOn(d.settings ?? undefined, s);
   const toggle = (s: SnippetDescriptor, next: boolean) => {
     // A feature with a one-time step on the machine opens on its steps the
     // moment it is switched on, so the next thing to do is in front of you.
@@ -231,7 +235,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
 
         <div className="min-w-0 space-y-12">
           {visible.map((g) => {
-            const off = g.all.filter((s) => !isOn(s));
+            const off = g.all.filter((s) => !isOn(s) && !lockOf(s));
             return (
               <section key={g.id} id={`af-${g.id}`} className="scroll-mt-4">
                 <div className="mb-4 flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
@@ -266,7 +270,8 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
                       s={s}
                       d={d}
                       on={isOn(s)}
-                      disabled={!d.online || pending.has(s.slug)}
+                      disabled={!d.online || pending.has(s.slug) || !!lockOf(s)}
+                      lock={lockOf(s)}
                       onToggle={(next) => toggle(s, next)}
                       onOpen={() => setOpen(s.slug)}
                     />
@@ -301,7 +306,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
               {isOn(openFeature) ? "On" : "Off"}
               <Switch
                 checked={isOn(openFeature)}
-                disabled={!d.online || pending.has(openFeature.slug)}
+                disabled={!d.online || pending.has(openFeature.slug) || !!lockOf(openFeature)}
                 onCheckedChange={(next) => toggle(openFeature, next)}
                 aria-label={openFeature.name}
               />
@@ -396,6 +401,7 @@ function FeatureCard({
   d,
   on,
   disabled,
+  lock,
   onToggle,
   onOpen,
 }: {
@@ -403,6 +409,8 @@ function FeatureCard({
   d: Device;
   on: boolean;
   disabled: boolean;
+  /** Why the device's team holds it off, if it does. */
+  lock?: string | null;
   onToggle: (next: boolean) => void;
   onOpen: () => void;
 }) {
@@ -420,9 +428,11 @@ function FeatureCard({
       }
       control={<Switch checked={on} disabled={disabled} onCheckedChange={onToggle} aria-label={s.name} />}
       footer={
-        isAgentSetupTool(s.slug) && on && d.online
-          ? <SetupFooter tool={s.slug} d={d} />
-          : <CardFooter left={null} />
+        lock
+          ? <CardFooter mono={false} left={<span className="inline-flex items-center gap-1 text-sol-text-muted"><Lock className="h-3 w-3" /> {lock}</span>} />
+          : isAgentSetupTool(s.slug) && on && d.online
+            ? <SetupFooter tool={s.slug} d={d} />
+            : <CardFooter left={null} />
       }
     />
   );

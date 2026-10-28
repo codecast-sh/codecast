@@ -1,4 +1,6 @@
 import { LogoIcon } from "../Logo";
+import { policyTeamOf } from "@codecast/shared/contracts";
+import { usePolicyRefusal } from "../../lib/managedPolicy";
 import { useSyncTeamMachines } from "../../hooks/useSyncTeamMachines";
 import { myMembership } from "../../lib/teamMachines";
 import { AssistantIntro } from "../AssistantIntro";
@@ -621,6 +623,8 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   }, [pickList, hi, filter, pickOption, descendInto, exitPicker]);
 
   const hostLoads = useHostLoads();
+  // The session's team may turn cloud hosting off (Managed devices); its choices lock.
+  const cloudRefusal = usePolicyRefusal("cloud_hosts_disabled", policyTeamOf("conversations", conversation));
   useSyncTeamMachines(machineChipsShown);
   // Team machines you are not on: a string, so a machine's minute-by-minute
   // load moving re-renders nothing here.
@@ -646,6 +650,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
       onShare={() => useInboxStore.getState().openSettingsModal("devices")}
       joinable={joinable}
       onJoin={() => useInboxStore.getState().openSettingsModal("devices")}
+      cloudRefusal={cloudRefusal}
     />
   );
 
@@ -654,6 +659,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
     cloudHost,
     cloudMode,
     cloudToggleEnabled: cloudToggleAvailable(machineChips, cloudMode),
+    cloudRefusal,
     onToggleCloud: toggleCloudMode,
     isolated,
     onToggleIsolated: () => {

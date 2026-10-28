@@ -6,6 +6,7 @@ import { sharePath } from "@codecast/shared/entities";
 import { useInboxStore, type PublicShareKind } from "../store/inboxStore";
 import { shareOrigin, sharePageUrl } from "../lib/utils";
 import { SharePopover } from "./SharePopover";
+import { usePolicyRefusal } from "../lib/managedPolicy";
 
 export interface PublicShare {
   kind: PublicShareKind;
@@ -16,6 +17,8 @@ export interface PublicShare {
   /** Why this viewer may close the link but not open it (SharePopover
    *  openRefusal); absent when they may do both. */
   openRefusal?: string | null;
+  /** The team whose policy governs the object (policyTeamOf): its admins may turn public links off. */
+  team?: string | null;
 }
 
 export function ShareControl({
@@ -41,6 +44,7 @@ export function ShareControl({
   defaultOpen?: boolean;
 }) {
   const setObjectShareLink = useInboxStore((s) => s.setObjectShareLink);
+  const policyRefusal = usePolicyRefusal("public_sharing_disabled", publicShare?.team);
   const token = publicShare?.token ?? null;
   const publicUrl = (t: string) => `${shareOrigin()}${sharePath(publicShare!.kind, t)}`;
   const control = (
@@ -58,7 +62,7 @@ export function ShareControl({
       }}
       onRevokeShareLink={async () => setObjectShareLink(publicShare!.kind, publicShare!.id, null)}
       linkExtra={linkExtra}
-      openRefusal={publicShare?.openRefusal}
+      openRefusal={publicShare?.openRefusal ?? policyRefusal}
       defaultOpen={defaultOpen}
     />
   );

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { LogIn, Terminal } from "lucide-react";
+import { LogIn, ShieldOff, Terminal } from "lucide-react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { bridge } from "../lib/desktop";
@@ -37,8 +37,9 @@ const SIGNED_OUT_POLL_MS = 60_000;
 function useSignedOutNotice(): StatusNotice | null {
   const createSetupToken = useMutation(api.apiTokens.createSetupToken);
   const [authFailed, setAuthFailed] = useState(false);
+  const [removedBy, setRemovedBy] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "running" | "failed">("idle");
-  const probe = () => bridge("getDaemonSetup")?.().then((m) => setAuthFailed(m.authFailed === true)).catch(() => {});
+  const probe = () => bridge("getDaemonSetup")?.().then((m) => { setAuthFailed(m.authFailed === true); setRemovedBy(m.removedBy ?? null); }).catch(() => {});
   useMountEffect(() => {
     if (!bridge("getDaemonSetup")) return;
     void probe();
@@ -51,6 +52,8 @@ function useSignedOutNotice(): StatusNotice | null {
   });
   const run = bridge("runDaemonSetup");
   if (!authFailed || !run) return null;
+  // Removed by its team: signing in again is the admins' call, not this button's.
+  if (removedBy) return { tone: "red", icon: ShieldOff, title: `${removedBy}'s admins removed this Mac. Nothing syncs.` };
 
   const signIn = async () => {
     setPhase("running");

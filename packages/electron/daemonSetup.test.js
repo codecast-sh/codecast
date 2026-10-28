@@ -28,6 +28,17 @@ test("a linked machine whose daemon marked its sign-in expired reports authFaile
   assert.equal(createDaemonSetup({ exists: linked, readFile, home: HOME, platform: "darwin", env: {} }).state().authFailed, false);
 });
 
+test("a machine its team removed names the team", () => {
+  const files = { [`${HOME}/.codecast/daemon.state`]: JSON.stringify({ authExpired: true, removedBy: "Littlebird" }) };
+  const readFile = (p) => { if (!(p in files)) throw new Error("ENOENT"); return files[p]; };
+  const linked = on(`${HOME}/.local/bin/cast`, `${HOME}/.codecast/config.json`);
+  const s = createDaemonSetup({ exists: linked, readFile, home: HOME, platform: "darwin", env: {} }).state();
+  assert.equal(s.authFailed, true);
+  assert.equal(s.removedBy, "Littlebird");
+  files[`${HOME}/.codecast/daemon.state`] = JSON.stringify({ authExpired: false, removedBy: "Littlebird" });
+  assert.equal(createDaemonSetup({ exists: linked, readFile, home: HOME, platform: "darwin", env: {} }).state().removedBy, undefined);
+});
+
 test("setup runs the installer once with the token and reports success", async () => {
   const tokens = [];
   const setup = createDaemonSetup({ run: async (t) => { tokens.push(t); return { code: 0, tail: "" }; }, exists: on(), home: HOME, platform: "darwin", env: {} });

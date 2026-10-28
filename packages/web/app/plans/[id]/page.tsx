@@ -12,6 +12,7 @@ import { AppLoader } from "../../../components/AppLoader";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
 import { ShareControl } from "../../../components/ShareControl";
+import { policyTeamOf } from "@codecast/shared/contracts";
 import "../../../components/editor/editor.css";
 import {
   PlanProgressBar,
@@ -266,7 +267,7 @@ export default function PlanDetailPage() {
             </>
           }
           topBarRight={
-            <ShareControl label="plan" path={`/plans/${plan.short_id}`} publicShare={{ kind: "plan", id: plan._id, token: (storePlan ?? plan).share_token }} />
+            <ShareControl label="plan" path={`/plans/${plan.short_id}`} publicShare={{ kind: "plan", id: plan._id, token: (storePlan ?? plan).share_token, team: policyTeamOf("plans", storePlan ?? plan) }} />
           }
           metaContent={
             <>

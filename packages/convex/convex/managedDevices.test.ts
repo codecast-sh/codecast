@@ -230,7 +230,7 @@ describe("server gates", () => {
     const personalConv = await conversation(t, member);
     await as(admin).mutation(api.managedDevices.setTeamPolicy, { team_id: team, policy: { public_sharing_disabled: true } });
     await expect(as(member).mutation(api.conversations.generateShareLink, { conversation_id: teamConv })).rejects.toThrow(
-      "Publishing and public share links is turned off by Acme's admins.",
+      "Public sharing is turned off by Acme's admins.",
     );
     expect(await as(member).mutation(api.conversations.generateShareLink, { conversation_id: personalConv })).toBeString();
   });
@@ -262,7 +262,7 @@ describe("server gates", () => {
     const personalConv = await conversation(t, member);
     const place = (conversation_id: Id<"conversations">, api_token?: string) =>
       (api_token ? t : as(member)).mutation(api.cloud.placeConversation, { conversation_id, device_id: DEVICE, project_path: "/w", start: false, ...(api_token ? { api_token } : {}) });
-    await expect(place(personalConv, apiToken)).rejects.toThrow("Cloud hosts is turned off by Acme's admins.");
+    await expect(place(personalConv, apiToken)).rejects.toThrow("Cloud hosting is turned off by Acme's admins.");
     // From the web (no device) the personal row is not the team's.
     expect(await place(personalConv)).toMatchObject({ placed: true });
     const teamConv = await conversation(t, member, team);

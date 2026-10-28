@@ -47,6 +47,7 @@ import { defaultCursorPath } from "./cursorWatcher.js";
 import { staleTmuxServerKillPlan, killProcessTree, liveTmuxServerPid, snapshotProcessTable } from "./processTable.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { removedDeviceMessage } from "@codecast/shared/contracts/managedPolicy";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -67,6 +68,7 @@ export interface DoctorDeps {
     lastHeartbeatTick?: number;
     lastWatchdogCheck?: number;
     authExpired?: boolean;
+    removedBy?: string;
     cursorAccess?: "granted" | "denied";
     /** Hang marker the daemon consumed at boot (see daemonMarkers.ts). */
     lastHang?: HangMarker;
@@ -384,7 +386,7 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
   passive.push({
     name: "auth",
     run: () => state?.authExpired
-      ? { ok: false, detail: "expired — run `cast auth`" }
+      ? { ok: false, detail: state.removedBy ? removedDeviceMessage(state.removedBy) : "expired — run `cast auth`" }
       : { ok: true, detail: "authenticated" },
   });
 

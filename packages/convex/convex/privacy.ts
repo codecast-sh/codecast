@@ -1,5 +1,5 @@
 import { matchDirectoryMapping } from "@codecast/shared/team/directoryRules";
-import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { repositoryKeyOfRemote, teamVisibleConvTeam as sharedTeamVisibleConvTeam } from "@codecast/shared/contracts";
 import { Id } from "./_generated/dataModel";
 import { isSessionOwner } from "./sessionOwners";
 import { currentMembershipVisibility, effectiveMembershipVisibility, isVisibilityShareable, type MembershipVisibilityFacts } from "./teamVisibility";
@@ -375,10 +375,7 @@ export function teamVisibleConvTeam<T = Id<"teams">>(conv: {
   auto_shared?: boolean;
   team_visibility?: string;
 } | null | undefined): T | undefined {
-  if (!conv?.team_id) return undefined;
-  if (!conv.is_private || conv.auto_shared) return conv.team_id;
-  if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
-  return undefined;
+  return sharedTeamVisibleConvTeam<T>(conv);
 }
 
 // Creation-time team/privacy resolution. Every conversation insert must derive

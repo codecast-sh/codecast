@@ -76,13 +76,15 @@ export interface ManagedPolicyDescriptor {
   name: string;
   /** For a restriction: what it turns off, as a refusal names it. */
   subject?: string;
+  /** For a restriction: the agent feature (snippet slug) it holds off on a device. */
+  feature?: string;
 }
 
 export const MANAGED_POLICY: ManagedPolicyDescriptor[] = [
-  { key: "public_sharing_disabled", profileKey: "PublicSharingDisabled", kind: "restriction", team: true, name: "Block public pages and share links", subject: "Publishing and public share links" },
-  { key: "browser_control_disabled", profileKey: "BrowserControlDisabled", kind: "restriction", team: true, name: "Block agent browser control", subject: "Agent browser control" },
-  { key: "computer_control_disabled", profileKey: "ComputerControlDisabled", kind: "restriction", team: true, name: "Block agent desktop control", subject: "Agent desktop control" },
-  { key: "cloud_hosts_disabled", profileKey: "CloudHostsDisabled", kind: "restriction", team: true, name: "Block cloud hosts", subject: "Cloud hosts" },
+  { key: "public_sharing_disabled", profileKey: "PublicSharingDisabled", kind: "restriction", team: true, name: "Block public pages and share links", subject: "Public sharing" },
+  { key: "browser_control_disabled", profileKey: "BrowserControlDisabled", kind: "restriction", team: true, name: "Block agent browser control", subject: "Agent browser control", feature: "browser" },
+  { key: "computer_control_disabled", profileKey: "ComputerControlDisabled", kind: "restriction", team: true, name: "Block agent desktop control", subject: "Agent desktop control", feature: "computer" },
+  { key: "cloud_hosts_disabled", profileKey: "CloudHostsDisabled", kind: "restriction", team: true, name: "Block cloud hosts", subject: "Cloud hosting" },
   { key: "auto_update", profileKey: "AutoUpdate", kind: "choice", team: true, name: "Automatic updates" },
   { key: "excluded_paths", profileKey: "ExcludedPaths", kind: "paths", team: true, name: "Never sync these folders" },
   { key: "web_url", profileKey: "WebURL", kind: "string", team: false, name: "Web URL" },
@@ -188,6 +190,40 @@ export function mergePolicies(layers: PolicyLayer[]): EffectivePolicy {
   return { values: values as DevicePolicy, sources };
 }
 
+/**
+ * The team a conversation is visible to, if any. On conversations team_id is
+ * routing, stamped even on private sessions; only a team-visible conversation
+ * answers to its team (convex privacy.ts re-exports this for work items).
+ */
+export function teamVisibleConvTeam<T>(conv: {
+  team_id?: T;
+  is_private?: boolean;
+  auto_shared?: boolean;
+  team_visibility?: string;
+} | null | undefined): T | undefined {
+  if (!conv?.team_id) return undefined;
+  if (!conv.is_private || conv.auto_shared) return conv.team_id;
+  if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
+  return undefined;
+}
+
+/**
+ * The team whose policy governs a row: a conversation's is the team it is
+ * visible to; any other row's is its workspace key's team, else its team tag.
+ * The server's guard and the web's locked controls both read it here.
+ */
+export function policyTeamOf(table: string, row: any): string | null {
+  if (!row) return null;
+  if (table === "conversations") {
+    const teamId = teamVisibleConvTeam(row);
+    return teamId ? String(teamId) : null;
+  }
+  if (typeof row.workspace === "string" && row.workspace) {
+    return row.workspace.startsWith("team:") ? row.workspace.slice("team:".length) : null;
+  }
+  return row.team_id ? String(row.team_id) : null;
+}
+
 /** Is a restriction on? */
 export function policyBlocks(policy: TeamPolicy | null | undefined, key: Extract<TeamPolicyKey, `${string}_disabled`>): boolean {
   return policy?.[key] === true;
@@ -208,6 +244,9 @@ export function isEnrollmentToken(value: unknown): value is string {
   return typeof value === "string" && value.startsWith(ENROLLMENT_TOKEN_PREFIX) && value.length > ENROLLMENT_TOKEN_PREFIX.length + 16;
 }
 
+/** What a person reads about a machine its team's admins removed (CLI status, doctor). */
+export const removedDeviceMessage = (team: string) => `${team}'s admins removed this machine. Ask them to allow it again, then run cast mdm enroll.`;
+
 /** POST /cli/enroll: a managed device announces itself to its team. */
 export interface EnrollRequest {
   enrollment_token: string;
@@ -220,7 +259,7 @@ export interface EnrollRequest {
 
 export type EnrollResponse =
   | { ok: true; enrollment_id: string; team_id: string; team_name: string; policy: TeamPolicy }
-  | { ok: false; error: string };
+  | { ok: false; error: string; /** The team whose admins took this device out. */ removed_by?: string };
 
 /** What the heartbeat carries for a device: the team policy that applies to it. */
 export interface HeartbeatTeamPolicy {

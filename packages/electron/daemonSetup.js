@@ -59,14 +59,21 @@ function createDaemonSetup({ run, exists = fs.existsSync, readFile = (p) => fs.r
     const cli = resolveCli({ env, home, exists });
     const installed = cli !== "cast";
     const linked = exists(path.join(home, ".codecast", "config.json"));
-    return { supported, installed, linked, authFailed: linked && authExpired(), running: inFlight !== null };
+    const daemon = linked ? daemonState() : {};
+    const authFailed = daemon.authExpired === true;
+    return {
+      supported, installed, linked, authFailed,
+      // The team whose admins removed this machine: signing in again is theirs to allow.
+      ...(authFailed && typeof daemon.removedBy === "string" ? { removedBy: daemon.removedBy } : {}),
+      running: inFlight !== null,
+    };
   }
 
-  function authExpired() {
+  function daemonState() {
     try {
-      return JSON.parse(readFile(path.join(home, ".codecast", "daemon.state"))).authExpired === true;
+      return JSON.parse(readFile(path.join(home, ".codecast", "daemon.state"))) ?? {};
     } catch {
-      return false;
+      return {};
     }
   }
 

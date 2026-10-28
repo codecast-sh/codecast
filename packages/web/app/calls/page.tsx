@@ -20,6 +20,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ShareControl } from "../../components/ShareControl";
+import { policyTeamOf } from "@codecast/shared/contracts";
 import { GuestInvite } from "../../components/calls/GuestDoor";
 import { GuestTag, ParticipantTag } from "../../components/calls/GuestTag";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -738,6 +739,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
               kind: "call",
               id: String(call._id),
               token: call.share_token,
+              team: policyTeamOf("calls", call),
               // In the call or a team admin opens the link; any reader closes it.
               openRefusal: call.can_share_link === false ? CALL_LINK_REFUSED_WORDS : null,
             }}

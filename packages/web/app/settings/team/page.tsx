@@ -24,7 +24,7 @@ import { TEAM_ICONS, TEAM_COLORS, type TeamIconName, type TeamColorName } from "
 import { TeamIdentityPicker, type TeamIdentity } from "../../../components/team/TeamIdentityPicker";
 import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatusEditor";
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
-import { ManagedDevicesEditor } from "../../../components/settings/ManagedDevicesEditor";
+import { ManagedDevicesLink } from "../../../components/settings/ManagedDevicesEditor";
 import { TeamTemplateLearning } from "../../../components/settings/TeamTemplateLearning";
 import { TeamModelBudget } from "../../../components/settings/TeamModelBudget";
 import { TeamDomainAccess } from "../../../components/settings/TeamDomainAccess";
@@ -470,7 +470,7 @@ export default function TeamPage() {
         <TeamFeaturesEditor teamId={effectiveTeamId} isAdmin={isAdmin} />
       )}
 
-      {isAdmin && effectiveTeamId && <ManagedDevicesEditor teamId={effectiveTeamId} teamName={team?.name ?? "this team"} />}
+      {isAdmin && effectiveTeamId && <ManagedDevicesLink teamId={String(effectiveTeamId)} />}
 
       {effectiveTeamId && <TeamTemplateLearning teamId={String(effectiveTeamId)} />}
 

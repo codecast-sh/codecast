@@ -6712,6 +6712,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setTeamPolicy: (teamId: string, policy: Record<string, unknown>) => void;
   revokeEnrollmentToken: (teamId: string, tokenId: string) => void;
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
+  restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
   updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
@@ -14750,6 +14751,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const key = settingsDataKey("managedDevices", (this.currentUser as any)?._id, teamId);
     const device = key ? (this.settingsData as any)[key]?.value?.devices?.find((d: any) => String(d._id) === enrollmentId) : undefined;
     if (device) device.status = "revoked";
+  }),
+  restoreDeviceEnrollment: action(function (this: Draft, teamId: string, enrollmentId: string) {
+    const key = settingsDataKey("managedDevices", (this.currentUser as any)?._id, teamId);
+    const device = key ? (this.settingsData as any)[key]?.value?.devices?.find((d: any) => String(d._id) === enrollmentId) : undefined;
+    if (device) device.status = "pending";
   }),
 
   // A team's monthly model budget (learning-loop.md LL10; admin only on the

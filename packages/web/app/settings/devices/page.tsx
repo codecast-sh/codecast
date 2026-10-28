@@ -19,6 +19,7 @@ import { describeDeviceFreeze } from "../../../lib/daemonHealthCopy";
 import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { Bot, Users } from "lucide-react";
 import { DeviceShareControl } from "../../../components/settings/DeviceShareControl";
+import { ManagedDevicePill } from "../../../components/settings/ManagedDevicePill";
 import { useSharedWithLabel } from "../../../hooks/useDeviceSharing";
 import { CloudHostPanel } from "../../../components/settings/CloudHostPanel";
 import { TeamMachineCard } from "../../../components/settings/TeamMachineCard";
@@ -302,6 +303,7 @@ function InactiveDeviceRow({ d }: { d: Device }) {
           <div className="flex items-center gap-1.5 text-sm text-sol-text-muted group-hover:text-sol-text">
             <span className="truncate">{deviceDisplayName(d)}</span>
             <ChevronRight className={`h-3 w-3 shrink-0 text-sol-text-dim transition-transform ${open ? "rotate-90" : ""}`} />
+            <ManagedDevicePill d={d} />
           </div>
           <div className="truncate font-mono text-[11px] text-sol-text-dim">
             {deviceKindLabel(d)} · last seen {relativeSeen(d.last_seen)}{sharedWith ? ` · ${sharedWith}` : ""} · {d.device_id.slice(0, 8)}

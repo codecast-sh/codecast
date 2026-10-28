@@ -212,6 +212,7 @@ import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt,
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { type Config, getAgentArgs, isCloudMirrorEnabled } from "./config/types.js";
 import { applyManagedPolicy, exitIfPolicyBlocks, lockedConfigKey, managedByLabel, policyRefusal, readManagedProfile, snippetPolicyRefusal, stripManagedPolicy, writeEffectivePolicyFile } from "./config/managedPolicy.js";
+import { removedDeviceMessage } from "@codecast/shared/contracts/managedPolicy";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
 import { addVault, findVault, listVaults, removeVault, setVaultMirroring } from "./vault/vaultRegistry.js";
 import {
@@ -556,6 +557,8 @@ interface DaemonState {
   pendingSyncOldestMs?: number;
   pendingSyncNoProgressMs?: number;
   authExpired?: boolean;
+  /** The team whose admins removed this machine (daemon noteTeamRemoval). */
+  removedBy?: string;
   lastHeartbeatTick?: number;
   lastWatchdogCheck?: number;
   runtimeVersion?: string;
@@ -1190,7 +1193,7 @@ async function waitForDaemonHealthy(timeoutMs: number, startedAfterMs: number): 
     const fresh = ((state as any)?.timestamp ?? 0) >= startedAfterMs;
     if (!pid) last = "daemon not running";
     else if (!fresh) last = `daemon up (pid ${pid}), waiting for first state write`;
-    else if (state?.authExpired) return { ok: false, detail: "auth expired — run `cast auth`" };
+    else if (state?.authExpired) return { ok: false, detail: state.removedBy ? removedDeviceMessage(state.removedBy) : "auth expired — run `cast auth`" };
     else if (!state?.connected) last = `daemon up (pid ${pid}), Convex not connected yet`;
     else return { ok: true, detail: `running (pid ${pid}), Convex connected` };
     await new Promise((r) => setTimeout(r, 500));
@@ -1275,7 +1278,10 @@ async function showStatus(options: { network?: boolean; json?: boolean } = {}): 
 
   row("Version", fmt.value(`v${getVersion()}`));
 
-  if (state?.authExpired) {
+  if (state?.authExpired && state.removedBy) {
+    row("Auth", fmt.warning(`removed by ${state.removedBy}`));
+    console.log(`  ${fmt.muted(removedDeviceMessage(state.removedBy))}`);
+  } else if (state?.authExpired) {
     row("Auth", fmt.warning("expired"));
     console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast auth")} ${fmt.muted("to re-authenticate")}`);
   } else if (config?.auth_token) {
@@ -1818,7 +1824,7 @@ async function runLogin(setupToken: string): Promise<void> {
 
     writeConfig(config);
 
-    patchDaemonState({ authExpired: false });
+    patchDaemonState({ authExpired: false, removedBy: undefined });
 
     console.log("Linked successfully!\n");
     console.log(`User ID: ${config.user_id}`);
@@ -1930,7 +1936,7 @@ async function runAuth(opts: { query?: Record<string, string> } = {}): Promise<v
 
   writeConfig(config);
 
-  patchDaemonState({ authExpired: false });
+  patchDaemonState({ authExpired: false, removedBy: undefined });
 
   console.log(`${fmt.success(icons.check)} ${c.bold}Authenticated successfully!${c.reset}\n`);
   console.log(`  ${fmt.muted("User")}     ${fmt.id(config.user_id || "")}`);
@@ -2931,7 +2937,10 @@ mdm
   .option("--force", "Open the sign-in page even if one was opened in the last few hours")
   .action(async (options: { force?: boolean }) => {
     const { nextEnrollStep, requestEnrollment, enrollRequest } = await import("./mdm.js");
-    const config = readConfig();
+    // A sign-in the server refuses (the device was removed, then allowed
+    // again) is no sign-in: enroll signs the person in again.
+    const saved = readConfig();
+    const config = saved && readDaemonState()?.authExpired ? { ...saved, auth_token: undefined } : saved;
     const profile = readManagedProfile();
     const step = nextEnrollStep(config, profile, Date.now(), options.force);
     if (step.kind === "done" || step.kind === "waiting") return;

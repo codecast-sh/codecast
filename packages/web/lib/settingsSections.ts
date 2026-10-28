@@ -19,6 +19,7 @@ export type SettingsSectionId =
   | "keyboard"
   | "calls"
   | "team"
+  | "managed-devices"
   | "sync"
   | "privacy"
   | "integrations"
@@ -47,6 +48,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/keyboard": "keyboard",
   "/settings/calls": "calls",
   "/settings/team": "team",
+  "/settings/managed-devices": "managed-devices",
   "/settings/sync": "sync",
   "/settings/privacy": "privacy",
   "/settings/integrations": "integrations",

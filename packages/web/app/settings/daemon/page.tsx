@@ -1,5 +1,6 @@
 "use client";
 
+import { autoUpdateLock, useDevicePolicy } from "../../../lib/managedPolicy";
 import { Cpu, RefreshCw } from "lucide-react";
 import { selfUpdateBlocked } from "@codecast/convex/convex/lib/deviceUpdate";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -84,7 +85,9 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
   // Older daemons report no value; they always update themselves and cannot
   // take the command, so the switch waits for an update.
   const known = d.settings?.auto_update !== undefined;
-  const auto = d.settings?.auto_update !== false;
+  // The device's team may force it (Managed devices); the switch then shows the forced value, locked.
+  const forced = autoUpdateLock(useDevicePolicy(d));
+  const auto = forced ? forced.on : d.settings?.auto_update !== false;
   const blocked = selfUpdateBlocked(d);
   const target = d.update_available ? `v${d.update_available}` : "the latest release";
   const held =
@@ -96,7 +99,9 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
       <SettingsRow
         label="Update automatically"
         description={
-          !known
+          forced
+            ? forced.message
+            : !known
             ? "This machine's CLI always updates itself. Update it once with cast update to get this switch."
             : auto
               ? "On. New releases install on their own, and codecast refreshes its hooks and CLAUDE.md sections to match."
@@ -105,7 +110,7 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
       >
         <Switch
           checked={auto}
-          disabled={!known || !d.online || pending.has("auto_update")}
+          disabled={!!forced || !known || !d.online || pending.has("auto_update")}
           onCheckedChange={(next) =>
             run("auto_update", () => setSnippet({ device_id: d.device_id, snippet: "auto_update", enabled: next }))
           }

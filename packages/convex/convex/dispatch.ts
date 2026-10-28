@@ -2855,6 +2855,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(enrollmentId)) return;
     return await ctx.runMutation!(api.managedDevices.revokeDeviceEnrollment, { enrollment_id: enrollmentId as Id<"device_enrollments"> });
   },
+  restoreDeviceEnrollment: async (ctx, _userId, [, enrollmentId]: [string, string]) => {
+    if (!isServerId(enrollmentId)) return;
+    return await ctx.runMutation!(api.managedDevices.restoreDeviceEnrollment, { enrollment_id: enrollmentId as Id<"device_enrollments"> });
+  },
   // A team's monthly model budget (store setTeamBudget paints the settings row).
   setTeamBudget: async (ctx, _userId, [teamId, capUsd]: [string, number]) => {
     if (!isServerId(teamId)) return;

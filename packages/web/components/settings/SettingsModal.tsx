@@ -22,6 +22,7 @@ import SoundsPanel from "../../app/settings/sounds/page";
 import KeyboardPanel from "../../app/settings/keyboard/page";
 import CallsPanel from "../../app/settings/calls/page";
 import TeamPanel from "../../app/settings/team/page";
+import ManagedDevicesPanel from "../../app/settings/managed-devices/page";
 import SyncPanel from "../../app/settings/sync/page";
 import IntegrationsPanel from "../../app/settings/integrations/page";
 import AgentsPanel from "../../app/settings/agents/page";
@@ -48,6 +49,7 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "keyboard": KeyboardPanel,
   "calls": CallsPanel,
   "team": TeamPanel,
+  "managed-devices": ManagedDevicesPanel,
   "sync": SyncPanel,
   "privacy": PrivacyPanel,
   "integrations": IntegrationsPanel,
@@ -84,6 +86,8 @@ interface SectionDef {
   /** Extra words the nav search matches beyond the label. */
   keywords: string;
   desktopOnly?: boolean;
+  /** Shown only to an admin of the active team. */
+  adminOnly?: boolean;
 }
 
 /** A nav entry for a surface that outgrew settings: it leaves for its page. */
@@ -109,6 +113,7 @@ const GROUPS: { label: string; sections: NavDef[]; surface?: DevSurface }[] = [
     label: "Workspace",
     sections: [
       { id: "team", label: "Team", icon: Users, desc: "Members, identity and the features your team runs", keywords: "members invite roles icon org statuses" },
+      { id: "managed-devices", label: "Managed devices", icon: ShieldCheck, desc: "Deploy codecast to your team's Macs with an MDM, and the policy they carry", adminOnly: true, keywords: "mdm jamf kandji intune mosyle enrollment profile pkg installer policy restrictions fleet it admin" },
       { id: "account-pool", label: "Account pool", icon: Layers, desc: "Claude accounts your team shares, and who spends them", surface: "settings.machines", keywords: "shared pool team claude accounts usage tokens who spent" },
       { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", surface: "settings.sync", keywords: "projects sharing visibility private workspace directories" },
       { id: "privacy", label: "Privacy", icon: ShieldCheck, desc: "What happens to your data", surface: "hosted", keywords: "privacy data training delete mail read policy" },
@@ -143,6 +148,10 @@ export function SettingsModal() {
   const { shows, words } = useSurfaceMode();
   const hosted = words === MODE_WORDS.hosted;
   const onTeam = useMyTeams().length > 0;
+  const isTeamAdmin = useInboxStore((s) => {
+    const active = s.clientState.ui?.active_team_id;
+    return !!active && s.teams.some((t) => t?._id === active && t.role === "admin");
+  });
   const assistant = useSimpleModeAllowed();
   const router = useRouter();
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -228,11 +237,12 @@ export function SettingsModal() {
         if (d.surface === "hosted" ? !hosted : d.surface && !shows(d.surface)) return false;
         if (hosted && d.hostedNeedsTeam && !onTeam) return false;
         if (d.assistantOnly && !assistant) return false;
+        if (d.adminOnly && !isTeamAdmin) return false;
         if (!q) return true;
         return `${d.label} ${d.desc} ${d.keywords} ${group.label}`.toLowerCase().includes(q);
       }),
     })).filter((g) => g.sections.length > 0);
-  }, [q, isDesktop, shows, hosted, onTeam, assistant]);
+  }, [q, isDesktop, shows, hosted, onTeam, assistant, isTeamAdmin]);
   const firstMatch = visibleGroups[0]?.sections[0];
   const go = (d: NavDef) => {
     if (d.id) return useInboxStore.getState().openSettingsModal(d.id);

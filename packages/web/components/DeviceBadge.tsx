@@ -47,6 +47,8 @@ export type Device = {
   /** Teams this machine is open to (Settings > Machines); teammates there may
    *  start sessions on it. Empty or absent = private. */
   shared_team_ids?: string[];
+  /** The team that manages it through an MDM, or whose admins removed it (devices.listDevices). */
+  managed?: { team_id: string; team_name: string; state: "managed" | "removed"; at: number };
   /** Installed agent-feature snippets (by slug) + stable mode, heartbeat-reported. */
   settings?: {
     snippets?: Record<string, boolean>;

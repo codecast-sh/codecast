@@ -72,6 +72,7 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Resources", path: "/resources", icon: "session", keywords: "cpu memory activity monitor load pressure processes offload cloud", secondary: true },
   { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates", secondary: true },
   { label: "Team Settings", path: "/settings/team", icon: "settings", keywords: "members invite workspace", secondary: true },
+  { label: "Managed devices", path: "/settings/managed-devices", icon: "settings", keywords: "mdm jamf kandji intune enrollment profile pkg policy fleet", secondary: true },
   { label: "Account pool", path: "/settings/account-pool", icon: "settings", keywords: "shared team claude accounts usage who spent tokens", secondary: true },
   { label: "Claude Accounts", path: "/settings/claude-accounts", icon: "settings", keywords: "account switch login oauth recovery auto continue resume retry", secondary: true },
   { label: "Sync & Privacy", path: "/settings/sync", icon: "settings", keywords: "projects sharing private", secondary: true },

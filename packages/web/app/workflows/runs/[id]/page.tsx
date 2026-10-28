@@ -3,6 +3,7 @@
 import { flowName } from "@codecast/shared/contracts/flowPool";
 import { useMemo, useState } from "react";
 import { ShareControl } from "../../../../components/ShareControl";
+import { policyTeamOf } from "@codecast/shared/contracts";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { RunGate } from "../../../../components/WorkflowContextPanel";
@@ -203,7 +204,7 @@ function RunDetailContent({ runId }: { runId: string }) {
             {!card && cost && (cost.billed_usd > 0 || cost.list_usd > 0) && <span title="Money the run billed; its subscription sessions at API list price, an equivalent never billed"> · {costUsd(cost.billed_usd)} billed · {costUsd(cost.list_usd)} at list price</span>}
           </p>
         </div>
-        <ShareControl label="workflow run" path={`/workflows/runs/${run._id}`} publicShare={{ kind: "run", id: run._id, token: (run as any).share_token }} />
+        <ShareControl label="workflow run" path={`/workflows/runs/${run._id}`} publicShare={{ kind: "run", id: run._id, token: (run as any).share_token, team: policyTeamOf("workflow_runs", run) }} />
       </div>
 
       <div className="flex-1 overflow-y-auto">
