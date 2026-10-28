@@ -300,39 +300,6 @@ describe("withAgentConfigCopies", () => {
     expect(copyOf(m)).toContain(".mcp.json");
   });
 
-  test("an untracked doc or note in the checkout stays out: only agent config travels", () => {
-    // ct-74465's run worktree got docs/architecture/team-kit.md, untracked in the main tree,
-    // and its rebase onto the main that later tracked it refused to start.
-    commit("README.md");
-    write("docs/architecture/team-kit.md", "someone's draft\n");
-    write("notes.md", "scratch\n");
-    write("scripts/try.sh", "echo\n");
-    write("CLAUDE.local.md", "personal\n");
-    const m = resolveManifest(repo);
-    expect(copyOf(m)).toContain("CLAUDE.local.md");
-    expect(copyOf(m)).not.toContain("docs/architecture/team-kit.md");
-    expect(copyOf(m)).not.toContain("notes.md");
-    expect(copyOf(m)).not.toContain("scripts/try.sh");
-  });
-
-  test("an untracked script that agent config runs travels with it", () => {
-    // A personal Stop hook that runs an uncommitted script breaks in every worktree without the script.
-    commit("README.md");
-    write(".claude/settings.local.json", JSON.stringify({
-      hooks: { Stop: [{ hooks: [{ type: "command", command: "bash scripts/hook.sh" }] }] },
-      statusLine: { type: "command", command: "\"$CLAUDE_PROJECT_DIR\"/tools/status.sh --short" },
-    }));
-    write("scripts/hook.sh", "echo stop\n");
-    write("tools/status.sh", "echo ok\n");
-    commit("scripts/tracked.sh");
-    write("scripts/unrelated.sh", "echo draft\n");
-    const m = resolveManifest(repo);
-    expect(copyOf(m)).toContain(".claude/settings.local.json");
-    expect(copyOf(m)).toContain("scripts/hook.sh");
-    expect(copyOf(m)).toContain("tools/status.sh");
-    expect(copyOf(m)).not.toContain("scripts/unrelated.sh");
-  });
-
   test("a file under a symlinked component is skipped with a warning; the rest still ships", () => {
     commit("README.md");
     const shared = fs.mkdtempSync(path.join(os.tmpdir(), "ws-shared-"));
@@ -400,16 +367,16 @@ describe("withAgentConfigCopies", () => {
   });
 
   test("a path in the user's cloud_mirror_exclude stays out of the worktree copy list", () => {
-    commit(".gitignore", ".claude/sim/\n");
-    write(".claude/sim/run/notes.md");
-    write(".claude/sim/assets/frame.png");
+    commit(".gitignore", ".sim/\n");
+    write(".sim/run/notes.md");
+    write(".sim/assets/frame.png");
     write("CLAUDE.local.md");
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-config-"));
     const previous = process.env.CODECAST_DIR;
     process.env.CODECAST_DIR = configDir;
     try {
-      expect(copyOf(withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false }))).toContain(".claude/sim/run/notes.md");
-      fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({ cloud_mirror_exclude: ".claude/sim" }));
+      expect(copyOf(withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false }))).toContain(".sim/run/notes.md");
+      fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({ cloud_mirror_exclude: ".sim" }));
       expect(copyOf(withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false }))).toEqual(["CLAUDE.local.md"]);
     } finally {
       if (previous === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = previous;

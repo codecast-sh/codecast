@@ -149,16 +149,30 @@ exit 1
     expect(r.json.why).not.toContain("intro.txt");
   });
 
-  test("a rebase git refuses to start is reported with git's reason, never as a conflict", () => {
+  test("an untracked copy of a file the default branch now tracks moves aside, and the rebase goes on", () => {
     // ct-74465: the run's worktree held an untracked copy of a file main had since tracked.
-    const before = git(work, "rev-parse", "HEAD");
     landOnMain("team-kit.md", "tracked on main\n", "main tracks team-kit.md");
     fs.writeFileSync(path.join(work, "team-kit.md"), "an untracked copy\n");
+    fs.writeFileSync(path.join(work, "draft.md"), "untracked, not on main\n");
     const r = station();
+    expect(r.code).toBe(0);
+    expect(r.json).toMatchObject({ rebased: true, landed: false });
+    expect(fs.readFileSync(path.join(work, "team-kit.md"), "utf-8")).toBe("tracked on main\n");
+    expect(fs.readFileSync(path.join(root, "run", "aside", "team-kit.md"), "utf-8")).toBe("an untracked copy\n");
+    expect(fs.readFileSync(path.join(work, "draft.md"), "utf-8")).toBe("untracked, not on main\n");
+    expect(r.comments).toContain("Moved 1 untracked file(s) that origin/main tracks");
+  });
+
+  test("a rebase git refuses to start is reported with git's reason, never as a conflict", () => {
+    const before = git(work, "rev-parse", "HEAD");
+    landOnMain("other.txt", "y\n", "someone else's change");
+    fs.writeFileSync(path.join(work, ".git", "index.lock"), "");
+    const r = station();
+    fs.rmSync(path.join(work, ".git", "index.lock"));
     expect(r.code).toBe(1);
     expect(r.json).toMatchObject({ rebased: false, landed: false });
     expect(r.json.why).toStartWith("rebase could not start: ");
-    expect(r.json.why).toContain("untracked working tree files would be overwritten");
+    expect(r.json.why).toContain("index.lock");
     expect(r.json.why).not.toContain("conflicted");
     expect(r.comments).toContain("could not start");
     expect(r.comments).toContain("the rebase then has to run again");

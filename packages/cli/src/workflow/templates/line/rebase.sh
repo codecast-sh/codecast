@@ -7,8 +7,8 @@
 #   exit 0: on the default branch and checked, or nothing of the change is left
 #           on the branch because it is already there (landed: true, the run
 #           goes to watch rather than shipping it twice)
-#   exit 1: the rebase conflicted, git refused to start it (an untracked file
-#           the default branch tracks), or the check failed on the rebased
+#   exit 1: the rebase conflicted, git refused to start it (a lock, a dirty
+#           index), or the check failed on the rebased
 #           branch; what happened goes on the task and the run goes back to
 #           implement, or stops where the flow has no implement
 #   exit 2: no worktree here, the default branch could not be fetched, or the
@@ -36,15 +36,24 @@ fork="$(git merge-base "$was" "$upstream")"
 touched=()
 while IFS= read -r f; do touched+=("$f"); done < <(git diff --name-only --no-renames "$fork" "$was")
 
+# A worktree starts with copies of the main tree's untracked agent files, and
+# one the default branch has since begun to track blocks the checkout (git
+# refuses to overwrite it). They are copies, the originals stay in the main
+# tree, so each moves aside into the run's directory and the rebase goes on.
+aside=()
+while IFS= read -r f; do aside+=("$f"); done < <(comm -12 <(git ls-files --others --exclude-standard | sort) <(git ls-tree -r --name-only "$upstream" | sort))
+for f in "${aside[@]}"; do mkdir -p "$dir/aside/$(dirname "$f")" && mv "$f" "$dir/aside/$f"; done
+[ "${#aside[@]}" -eq 0 ] || cast task comment $task_id "Moved ${#aside[@]} untracked file(s) that $upstream tracks out of the run's worktree, into $dir/aside, so the rebase could check $upstream out: ${aside[*]}" -t progress > /dev/null
+
 if ! git rebase --autostash "$upstream" > "$dir/rebase.log" 2>&1; then
   conflicted=()
   while IFS= read -r f; do conflicted+=("$f"); done < <(git diff --name-only --diff-filter=U | head -20)
   git rebase --abort > /dev/null 2>&1
   said="$(tail -n 5 "$dir/rebase.log" | tr '\n' ' ')"
   if [ "${#conflicted[@]}" -eq 0 ]; then
-    # No file conflicted: git refused before replaying anything (an untracked
-    # file the default branch tracks, a lock, a dirty index), so it is no
-    # conflict to resolve. Git's own first complaint says what to fix.
+    # No file conflicted: git refused before replaying anything (a lock, a
+    # dirty index), so it is no conflict to resolve. Git's own first
+    # complaint says what to fix.
     why="$(grep -m 1 -E '^(error|fatal):' "$dir/rebase.log" | sed -E 's/^(error|fatal): //')"
     [ -n "$why" ] || why="$said"
     cast task comment $task_id "Rebasing $br onto $upstream could not start, so nothing of the change was tried and the branch is as it was. Git said: $(tr '\n' ' ' < "$dir/rebase.log") Fix that in the run's worktree $worktree; the rebase then has to run again." -t review > /dev/null
