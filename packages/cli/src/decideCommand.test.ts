@@ -361,3 +361,70 @@ describe("cast decide ls --answered-since", () => {
     expect(formatAnsweredList([])).toBe("No cards answered in that window.");
   });
 });
+
+// A person hands a decision on (convex decisionHandoff.ts): pass --to a
+// teammate with a note, escalate to the owner's manager with a required note.
+// Both work from a plain shell, with no session.
+describe("cast decide pass --to and escalate on the wire", () => {
+  const SITE = "https://x.test";
+  const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  const realError = console.error;
+  const realExit = process.exit;
+  let logs: string[] = [];
+  const deps = { getCliEndpoint: () => ({ siteUrl: SITE, apiToken: "t" }), detectCurrentSessionId: () => null } as any;
+
+  beforeEach(() => {
+    calls.length = 0;
+    logs = [];
+    globalThis.fetch = (async (url: string | URL | Request, init: RequestInit) => {
+      const path = String(url).slice(SITE.length);
+      const { api_token: _token, ...body } = JSON.parse(String(init.body));
+      calls.push({ path, body });
+      const reply = path === "/cli/decide/pass-to" ? { passed: true, short_id: "sd-7", to: { _id: "u2", name: "Sam" } } : { escalated: true, short_id: "sd-7", to: ["Morgan"] };
+      return new Response(JSON.stringify(reply), { status: 200 });
+    }) as typeof fetch;
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+    console.error = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+    process.exit = ((code?: number) => { throw new Error(`exit ${code}`); }) as any;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+    console.error = realError;
+    process.exit = realExit;
+  });
+
+  async function run(...argv: string[]) {
+    const { Command } = await import("commander");
+    const { registerDecideCommand } = await import("./decideCommand.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDecideCommand(program, deps);
+    await program.parseAsync(["node", "cast", "decide", ...argv]);
+  }
+
+  it("pass --to posts the person and the note, and names who has it", async () => {
+    await run("pass", "sd-7", "--to", "sam", "--note", "You know the parser");
+    expect(calls).toEqual([{ path: "/cli/decide/pass-to", body: { decision_id: "sd-7", to: "sam", note: "You know the parser" } }]);
+    expect(logs.join("\n")).toContain("sd-7 to Sam, with your note");
+  });
+
+  it("escalate posts the note and names whom it went to", async () => {
+    await run("escalate", "sd-7", "--note", "Costs money");
+    expect(calls).toEqual([{ path: "/cli/decide/escalate", body: { decision_id: "sd-7", note: "Costs money" } }]);
+    expect(logs.join("\n")).toContain("Escalated: sd-7 to Morgan");
+  });
+
+  it("escalate without a note is refused before any request", async () => {
+    await expect(run("escalate", "sd-7")).rejects.toThrow("exit 1");
+    expect(calls).toEqual([]);
+    expect(logs.join("\n")).toContain("needs --note");
+  });
+
+  it("pass with no --to stays the role's pass up, which needs a session", async () => {
+    await expect(run("pass", "sd-7", "--note", "up")).rejects.toThrow("exit 1");
+    expect(calls).toEqual([]);
+  });
+});

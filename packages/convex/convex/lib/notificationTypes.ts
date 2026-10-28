@@ -83,6 +83,9 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("task_unblocked"),
   // Someone outside a decision's people answered it for them.
   v.literal("decision_answered_for_you"),
+  // A decision passed or escalated to the recipient, with the sender's note.
+  v.literal("decision_passed"),
+  v.literal("decision_escalated"),
   // Finding a team by work email: a request to its admins, then the approval.
   v.literal("team_join_request"),
   v.literal("team_join_approved"),

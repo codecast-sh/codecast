@@ -18,6 +18,7 @@ import { DecisionBody, DecisionFacts, DecisionLadder, LeadRecommendation, hasDec
 import { GateRunChip } from "./DecisionCompactCard";
 import { DeployedIn } from "../line/widgets/DeployedIn";
 import { OptionPages } from "./OptionPages";
+import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
 import { decisionWaitLabel } from "../../lib/decisionLinks";
@@ -120,6 +121,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               {meta}
             </>
           )}
+          <HandoffNote decision={decision} className="mt-3" />
         </header>
 
         {/* A lead's call and why, before the evidence it was made on. */}

@@ -16,7 +16,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { isHumanOnlyCategory } from "@codecast/convex/convex/lib/decisionCategory";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
 import { CollapsibleBody } from "../CollapsibleBody";
-import { AskingSessionView, type AskingSessionRow } from "./DecisionParties";
+import { AskingSessionView, HandoffNote, type AskingSessionRow } from "./DecisionParties";
 import { askingSessionDeps } from "./askingSessionDeps";
 import { OptionPages } from "./OptionPages";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
@@ -297,6 +297,7 @@ export function DecisionCompactCardView({
             {decision.question}
           </Link>
         )}
+        <HandoffNote decision={decision} className="mt-2" />
         {/* The reasoning, inline. A decision cannot be made from its title
             and its option labels alone, so the context the asker wrote reads
             here, clipped to a few lines with the way to open it. Collapsed it

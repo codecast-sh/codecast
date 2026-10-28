@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, ArrowUp, CornerDownRight } from "lucide-react";
 import { useTrackedStore, getProjectName, type SessionDecisionItem } from "../../store/inboxStore";
 import { resolveAssigneeInfo } from "../../lib/liveEntities";
 import { Avatar } from "../tasks/TaskCommentStream";
@@ -184,5 +184,25 @@ export function OpenDecisionLink({ href, label = "open", className = "" }: { hre
     <Link href={href} className={`inline-flex items-center gap-1 font-mono text-sol-text-dim hover:text-sol-text ${className}`}>
       {label}<ArrowUpRight className="w-3 h-3" />
     </Link>
+  );
+}
+
+/** Why it reached its owner, in the sender's words: a pass with a note, or an
+ *  escalation (always with one). Only while it is open; a settled card says its verdict. */
+export function HandoffNote({ decision, className = "" }: { decision: Pick<SessionDecisionItem, "status" | "passed_to" | "escalated">; className?: string }) {
+  if (decision.status !== "pending") return null;
+  const up = decision.escalated;
+  const note = up?.note ?? decision.passed_to?.note;
+  if (!note) return null;
+  const by = up?.by ?? decision.passed_to?.by;
+  const Icon = up ? ArrowUp : CornerDownRight;
+  return (
+    <div className={`flex items-start gap-2 text-[12px] ${className}`} data-decision-handoff={up ? "escalated" : "passed"}>
+      <span className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] ${up ? "border-sol-orange/40 text-sol-orange" : "border-sol-border text-sol-text-muted"}`}>
+        <Icon className="w-3 h-3" aria-hidden />{up ? "escalated" : "passed"}
+      </span>
+      {by && <PersonChip userId={by} className="shrink-0 text-[11px]" />}
+      <span className="min-w-0 text-sol-text [overflow-wrap:anywhere] whitespace-pre-wrap">{note}</span>
+    </div>
   );
 }

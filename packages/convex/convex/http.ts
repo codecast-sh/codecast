@@ -1619,11 +1619,13 @@ cliRoute("/cli/decide/answer", (ctx, body) =>
     answer_text: body.answer_text,
   }),
 );
-// The verb is renamed (org-staffing.md S28). The route stays so a CLI that
-// still sends `cast decide escalate` reads what replaced it, instead of a 404.
-cliRoute("/cli/decide/escalate", async () => ({
-  error: "cast decide escalate is now cast decide pass <sd-N> --note -: it hands the same card up to the people with your note on it. To favour an option, cast decide recommend <sd-N> <n> --note - hands it up the same way.",
-}));
+// A person hands a decision on (decisionHandoff.ts): to a named teammate, or up to the owner's manager.
+cliRoute("/cli/decide/pass-to", (ctx, body) =>
+  ctx.runMutation(api.decisionHandoff.passForCli, { api_token: body.api_token, decision_id: body.decision_id, to: body.to, note: body.note }),
+);
+cliRoute("/cli/decide/escalate", (ctx, body) =>
+  ctx.runMutation(api.decisionHandoff.escalateForCli, { api_token: body.api_token, decision_id: body.decision_id, note: body.note }),
+);
 cliRoute("/cli/decide/show", (ctx, body) =>
   ctx.runMutation(api.sessionDecisions.showForCli, { api_token: body.api_token, decision_id: body.decision_id }),
 );

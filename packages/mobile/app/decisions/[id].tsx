@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -8,7 +8,7 @@ import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
 import { openLink } from '@/lib/links';
-import { useInboxStore, type DecisionAnswerInput, type SessionDecisionItem } from '@codecast/web/store/inboxStore';
+import { rosterEscalationTargets, useInboxStore, type DecisionAnswerInput, type SessionDecisionItem } from '@codecast/web/store/inboxStore';
 import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
 import { decisionQueueItems } from '@codecast/web/lib/decisionQueue';
 import { useDecisionDraft } from '@codecast/web/hooks/useDecisionDraft';
@@ -53,6 +53,7 @@ export default function DecisionScreen() {
   const decisionId = item?.decisionId ?? row?._id ?? id ?? '';
 
   const [draft, patchDraft] = useDecisionDraft<AnswerDraft>(decisionId);
+  const [handoff, setHandoff] = useState<'pass' | 'escalate' | null>(null);
   const answerDecision = useInboxStore((s) => s.answerDecision);
   const look = appAnswerLook(Theme);
 
@@ -141,6 +142,7 @@ export default function DecisionScreen() {
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <QueueChip item={item} now={now} />
           <Text style={styles.question} selectable>{item.question}</Text>
+          {row ? <HandoffNote row={row} /> : null}
           {askingSessionLine(item) ? (
             <TouchableOpacity onPress={() => router.push(`/session/${item.conversationId}`)} hitSlop={8}>
               <Text style={styles.session} numberOfLines={1}>{askingSessionLine(item)} ›</Text>
@@ -182,15 +184,96 @@ export default function DecisionScreen() {
             <TouchableOpacity onPress={() => answer({ dismiss: true })} hitSlop={8}>
               <Text style={styles.footerText}>Dismiss</Text>
             </TouchableOpacity>
+            <TouchableOpacity onPress={() => setHandoff(handoff === 'pass' ? null : 'pass')} hitSlop={8}>
+              <Text style={[styles.footerText, handoff === 'pass' && { color: Theme.text }]}>Pass</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setHandoff(handoff === 'escalate' ? null : 'escalate')} hitSlop={8}>
+              <Text style={[styles.footerText, { color: Theme.orange }]}>Escalate</Text>
+            </TouchableOpacity>
             {nextId ? (
               <TouchableOpacity onPress={goNext} hitSlop={8}>
                 <Text style={styles.footerText}>Skip ›</Text>
               </TouchableOpacity>
             ) : null}
           </View>
+          {handoff ? <HandoffPanel key={handoff} mode={handoff} decisionId={decisionId} holderKey={row?.holder_key} onDone={goNext} /> : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </>
+  );
+}
+
+// Why it reached its owner, in the sender's words: an escalation, or a pass with a note.
+function HandoffNote({ row }: { row: SessionDecisionItem }) {
+  const Theme = useTheme();
+  const up = row.escalated;
+  const note = up?.note ?? row.passed_to?.note;
+  const by = useInboxStore((s) => {
+    const id = up?.by ?? row.passed_to?.by;
+    const m = id ? (s.teamMembers ?? []).find((u: any) => String(u._id) === id) : null;
+    return m?.name ?? m?.email ?? null;
+  });
+  if (row.status !== 'pending' || !note) return null;
+  return (
+    <View style={[styles.handoffNote, { borderColor: up ? Theme.orange : Theme.borderLight }]}>
+      <Text style={[styles.handoffLabel, { color: up ? Theme.orange : Theme.textMuted }]}>{up ? 'Escalated' : 'Passed'}{by ? ` by ${by}` : ''}</Text>
+      <Text style={styles.context} selectable>{note}</Text>
+    </View>
+  );
+}
+
+// Pass: pick a teammate, add a note if you like. Escalate: to the owner's
+// manager, else the admins, named before it goes, with a note it needs.
+function HandoffPanel({ mode, decisionId, holderKey, onDone }: { mode: 'pass' | 'escalate'; decisionId: string; holderKey?: string; onDone: () => void }) {
+  const Theme = useTheme();
+  const [note, setNote] = useState('');
+  const [to, setTo] = useState<string | null>(null);
+  const meId = useInboxStore((s) => String(s.currentUser?._id ?? ''));
+  const members = useInboxStore((s) => s.teamMembers);
+  const orgPeople = useInboxStore((s) => s.orgTree?.people);
+  const passDecision = useInboxStore((s) => s.passDecision);
+  const escalateDecision = useInboxStore((s) => s.escalateDecision);
+  const people = useMemo(() => (members ?? []).filter((m: any) => !m.is_bot && String(m._id) !== meId && holderKey !== `user:${m._id}`), [members, meId, holderKey]);
+  const nameOf = (id: string) => { const m = (members ?? []).find((u: any) => String(u._id) === id); return m?.name ?? m?.email ?? 'a teammate'; };
+  const upTo = useMemo(() => {
+    const owner = holderKey?.startsWith('user:') ? holderKey.slice(5) : meId;
+    return rosterEscalationTargets(owner, orgPeople, members);
+  }, [holderKey, meId, orgPeople, members]);
+  const escalating = mode === 'escalate';
+  const ready = escalating ? !!note.trim() && upTo.length > 0 : !!to;
+  const send = () => {
+    if (!ready) return;
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    if (escalating) escalateDecision(decisionId, note);
+    else passDecision(decisionId, { kind: 'user', id: to! }, note);
+    onDone();
+  };
+  return (
+    <View style={styles.other}>
+      {escalating ? (
+        <Text style={styles.muted}>To {upTo.length ? upTo.map(nameOf).join(', ') : 'nobody above you'}</Text>
+      ) : (
+        <View style={styles.people}>
+          {people.map((m: any) => {
+            const picked = to === String(m._id);
+            return (
+              <TouchableOpacity key={String(m._id)} onPress={() => setTo(picked ? null : String(m._id))} style={[styles.person, picked && { borderColor: Theme.blue }]}>
+                <Text style={[styles.personText, picked && { color: Theme.blue }]}>{m.name ?? m.email}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+      <TextInput
+        style={[styles.input, styles.otherInput]}
+        value={note}
+        onChangeText={setNote}
+        placeholder={escalating ? 'Why it goes up' : 'Note for them (optional)'}
+        placeholderTextColor={Theme.inputPlaceholder}
+        multiline
+      />
+      {ready ? <AnswerButton look={appAnswerLook(Theme)} label={escalating ? 'Escalate' : `Pass to ${nameOf(to!)}`} onPress={send} /> : null}
+    </View>
   );
 }
 
@@ -224,4 +307,9 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   otherInput: { minHeight: 48, textAlignVertical: 'top' },
   footer: { flexDirection: 'row', justifyContent: 'space-between', marginTop: Spacing.lg },
   footerText: { fontSize: 14, color: Theme.textMuted },
+  handoffNote: { borderLeftWidth: 2, paddingLeft: Spacing.md, gap: 2 },
+  handoffLabel: { fontSize: 12, fontWeight: '600' },
+  people: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  person: { borderWidth: 1, borderColor: Theme.borderLight, borderRadius: BorderRadius.md, paddingHorizontal: Spacing.md, paddingVertical: 6 },
+  personText: { fontSize: 14, color: Theme.text },
 }));

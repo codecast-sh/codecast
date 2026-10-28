@@ -300,6 +300,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   mergeProblem: never("machine control: the server moves the twin's findings and drops it; reopening the twin is the way back"),
   trialClose: never("send: the problem leaves Stopped for everyone watching the trial; reopening its task is the way back"),
   passDecision: never("send: the decision reaches the person or role it was passed to, who is told at once"),
+  escalateDecision: never("send: the decision reaches the owner's manager or the admins, who are told at once with the note"),
   unassignDecision: never("send: the decision leaves the assignee's queue and is routed again; assigning it is the way back"),
   setModLocalDevice: SETTINGS,
   setTeamBudget: SETTINGS,

@@ -22,6 +22,8 @@
 // W2 (docs/architecture/decisions-as-documents.md D6): an ask may carry a
 // kind (single|multi|rank|form), a category proposal, a markdown document,
 // option bodies, a JSON spec, and bind to a task, station and stack. The
+// hand-offs (decisionHandoff.ts): `pass <sd-N> --to <person> --note` gives it
+// to a teammate, `escalate <sd-N> --note` sends it to the owner's manager. The
 // race verbs: `recommend` for a role on the ladder, `answer`
 // for a person the decision was asked of or the holder role under a grant,
 // `show` to read one decision with its document and ladder. Ids are the
@@ -303,7 +305,7 @@ export function isStaleDecision(row: DecisionRow, now: number = Date.now()): boo
   return now - row.created_at >= STALE_AGE_MS || (row.messages_since ?? 0) >= STALE_MESSAGES_SINCE;
 }
 
-const DECIDE_SUBCOMMANDS = new Set(["edit", "cancel", "rm", "withdraw", "ls", "list", "show", "recommend", "pass", "answer"]);
+const DECIDE_SUBCOMMANDS = new Set(["edit", "cancel", "rm", "withdraw", "ls", "list", "show", "recommend", "pass", "escalate", "answer"]);
 
 // An `sd-N` short id, or a raw Convex id (opaque lowercase alphanumerics of
 // 20+ chars); nothing else an agent types here (a question, a subcommand)
@@ -466,6 +468,22 @@ async function listAnsweredSince(deps: PublishDeps, options: any): Promise<void>
   else console.log(formatAnsweredList(rows));
 }
 
+// A person hands a decision on: `pass --to` to one teammate, `escalate` to the
+// owner's manager (else the workspace's admins). Both carry the note to them.
+async function handOff(deps: PublishDeps, verb: "pass" | "escalate", target: string, options: any): Promise<void> {
+  const note: string | undefined = options.note?.trim() || undefined;
+  const to: string[] = options.to;
+  if (verb === "pass" && to.length > 1) fail("cast decide pass gives a decision to one person: one --to.");
+  if (verb === "escalate" && !note) fail('cast decide escalate needs --note: say why it goes up (--note - reads it from stdin).');
+  const result = verb === "pass"
+    ? await decideApi(deps, { decision_id: target, to: to[0], ...(note ? { note } : {}) }, "/cli/decide/pass-to")
+    : await decideApi(deps, { decision_id: target, note }, "/cli/decide/escalate");
+  if (options.json) return void console.log(JSON.stringify(result, null, 2));
+  const who = verb === "pass" ? result.to?.name ?? to[0] : (result.to ?? []).join(", ");
+  console.log(`${fmt.success(verb === "pass" ? "Passed:" : "Escalated:")} ${result.short_id ?? target} to ${who}${note ? ", with your note" : ""}.`);
+  console.log(fmt.muted(verb === "pass" ? "  It is in their queue now, and they are told." : "  It is first in their queue now, and they are told why."));
+}
+
 // POST to /cli/decide (the ask/edit/cancel/ls verbs) or one of the
 // /cli/decide/<verb> routes.
 async function decideApi(deps: PublishDeps, body: Record<string, unknown>, route = "/cli/decide"): Promise<any> {
@@ -602,7 +620,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--category <c>", "Proposed category: approach|scope|priority|retry|review|allocation (the server may pin a protected one)")
     .option("--kind <k>", `single|multi|rank|form (default single)`)
     .option("--line <label>", "Ask for one line of text instead of a choice: a form with one text field (sets --kind form)")
-    .option("--to <who>", "Who answers: a person's name, email or @handle in the session's workspace (repeatable; default: whoever the session reports to)", (val: string, acc: string[]) => [...acc, val], [] as string[])
+    .option("--to <who>", "Who answers: a person's name, email or @handle in the session's workspace (repeatable; default: whoever the session reports to). pass: the one teammate it goes to", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--doc <file>", stdinText("Markdown document as the decision's long body (creates a decision doc)"))
     .option("--spec <file>", "JSON spec: { question, kind, category, options[{label,description,body_md,evidence,cost,risk,page}], form{fields}, doc_md, task, station, stack, advisory, default }")
     .option(
@@ -621,7 +639,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--answered-since <time>", "ls: the cards answered on a team's tasks after a time (epoch ms, ISO time, or 30m/24h/7d ago), oldest first; no session needed")
     .option("--team <name|id>", "ls --answered-since: the team (default: the active one)")
     .option("-n, --limit <n>", "ls --answered-since: rows per page (default 50, at most 100)")
-    .option("--note <text>", stdinText("recommend / pass: what the person should know that the card does not say"))
+    .option("--note <text>", stdinText("recommend / pass / escalate: what the person should know that the card does not say (escalate needs one)"))
     .option("--form <k=v>", "answer: a form field value (repeatable)", (val: string, acc: string[]) => [...acc, val], [] as string[])
     .option("--for-human", "answer: from a session, answer as your human. Only when they explicitly told you in this conversation to answer this decision, or agreed to this choice; never on your own judgment")
     .option("--json", "Machine-readable output")
@@ -636,7 +654,9 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if (question === "brief") return void console.log(presenterBrief.trim());
       if ((question === "ls" || question === "list") && options.answeredSince !== undefined) return listAnsweredSince(deps, options);
       const sessionId: string | null = options.session || deps.detectCurrentSessionId();
-      if (!sessionId && question !== "answer") fail("No session detected. Run inside a codecast session or pass --session <id>.");
+      // A person hands a decision on from a plain shell too: pass --to and escalate need no session.
+      const handoff = question === "escalate" || (question === "pass" && (options.to as string[]).length > 0);
+      if (!sessionId && question !== "answer" && !handoff) fail("No session detected. Run inside a codecast session or pass --session <id>.");
 
       const sub = question && DECIDE_SUBCOMMANDS.has(question) ? question : null;
       const spec: DecideSpec | null = options.spec ? parseDecideSpec(bodyFromArg(options.spec, "--spec")) : null;
@@ -676,9 +696,10 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       }
 
       // ── show / recommend / answer: the race verbs, by sd-N ──
-      if (sub === "show" || sub === "recommend" || sub === "pass" || sub === "answer") {
+      if (sub === "show" || sub === "recommend" || sub === "pass" || sub === "escalate" || sub === "answer") {
         const target = rest[0];
-        if (!looksLikeDecisionId(target)) fail(`Usage: cast decide ${sub} <sd-N> ${sub === "recommend" ? "<n> [--note -]" : sub === "pass" ? "[--note -]" : sub === "answer" ? '<n | "1,3" | "2>1>3" | --form k=v>' : ""}`.trim());
+        if (!looksLikeDecisionId(target)) fail(`Usage: cast decide ${sub} <sd-N> ${sub === "recommend" ? "<n> [--note -]" : sub === "pass" ? "[--to <person>] [--note -]" : sub === "escalate" ? "--note -" : sub === "answer" ? '<n | "1,3" | "2>1>3" | --form k=v>' : ""}`.trim());
+        if (handoff) return handOff(deps, sub as "pass" | "escalate", target, options);
         if (sub === "show") {
           const result = await decideApi(deps, { decision_id: target }, "/cli/decide/show");
           if (options.json) {

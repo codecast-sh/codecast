@@ -4558,6 +4558,10 @@ export default defineSchema({
       // Someone outside a decision's people answered or dismissed it for
       // them (sessionDecisions.noticeAnsweredForPeople).
       v.literal("decision_answered_for_you"),
+      // A decision handed to the recipient with a note: passed by a teammate,
+      // or escalated to them as the owner's manager or an admin (decisionHandoff.ts).
+      v.literal("decision_passed"),
+      v.literal("decision_escalated"),
       // Finding a team by work email (teamDiscovery.ts): someone asked to
       // join (to its admins), and an admin let them in (to them).
       v.literal("team_join_request"),
@@ -4900,9 +4904,13 @@ export default defineSchema({
     // role. It then holds the decision whatever routing or grants say, and a
     // role it was passed to may answer it without a grant.
     // `from`: the people it was asked of before the first pass, whom taking the pass back (unassignCore) restores.
+    // `note`: what the passer wrote for the new owner (decisionHandoff.ts).
     passed_to: v.optional(
-      v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string(), by: v.id("users"), at: v.number(), from: v.optional(v.array(v.id("users"))) })
+      v.object({ kind: v.union(v.literal("user"), v.literal("role")), id: v.string(), by: v.id("users"), at: v.number(), from: v.optional(v.array(v.id("users"))), note: v.optional(v.string()) })
     ),
+    // Sent up to the owner's manager, else the workspace admins (escalateCore):
+    // who sent it, why, when, and whom it went to. It sorts first for them; a later pass or unassign clears it.
+    escalated: v.optional(v.object({ by: v.id("users"), at: v.number(), note: v.string(), to: v.array(v.id("users")) })),
     // The people it is visible to; materialized one row each in decision_inbox.
     asked_user_ids: v.optional(v.array(v.id("users"))),
     // The ladder: roles from the asker up to the first person, in order. A

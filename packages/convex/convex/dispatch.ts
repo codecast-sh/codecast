@@ -7,7 +7,8 @@ import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
 import { relateCore } from "./taskLinks";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
-import { answerRefusal, guardClientResolution, passCore, type PassTarget, unassignCore, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
+import { answerRefusal, guardClientResolution, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
+import { escalateCore, passCore, type PassTarget, unassignCore } from "./decisionHandoff";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import { discussCore } from "./decisionDiscussion";
 import { sendLineChatCore } from "./lineChat";
@@ -602,9 +603,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // patches sessionDecisions and decisionStacks on the draft first; these are
   // the server writes the optimistic rows reconcile against.
   reopenDecision: async (ctx, userId, [decisionId]: [string]) => reopenCore(ctx, userId, decisionId as Id<"session_decisions">),
-  // A person hands an open question to a teammate or a role; refused by return.
-  passDecision: async (ctx, userId, [decisionId, to]: [string, PassTarget]) => passCore(ctx, userId, decisionId, to),
-  // A person takes a pass back: the decision is routed as its session would route it now.
+  // A person hands an open question to a teammate or a role, with a note; refused by return.
+  passDecision: async (ctx, userId, [decisionId, to, note]: [string, PassTarget, string | undefined]) => passCore(ctx, userId, decisionId, to, note),
+  // A person sends it up to the owner's manager, else the admins, with a required note.
+  escalateDecision: async (ctx, userId, [decisionId, note]: [string, string]) => escalateCore(ctx, userId, decisionId, note),
+  // A person takes a pass or an escalation back: the decision is routed as its session would route it now.
   unassignDecision: async (ctx, userId, [decisionId]: [string]) => unassignCore(ctx, userId, decisionId),
   // A person's words to the session that owns a decision (decisionDiscussion.ts).
   // A refusal is returned, not thrown: the outbox would redrive a throw forever.

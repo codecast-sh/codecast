@@ -106,6 +106,8 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "change_shipped": return { name: "rocket", color: Theme.green };
     case "cause_reopened": return { name: "undo", color: Theme.red };
     case "decision_answered_for_you": return { name: "question-circle", color: Theme.yellow };
+    case "decision_passed": return { name: "share", color: Theme.yellow };
+    case "decision_escalated": return { name: "level-up", color: Theme.orange };
     case "passkey_changed": return { name: "key", color: Theme.red };
     default: return { name: "bell", color: Theme.textMuted };
   }

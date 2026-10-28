@@ -27,8 +27,8 @@ import {
   reroutePendingDecisionsForConversation,
   handUpLapsedCore,
   HOP_DEADLINE_MS,
-  passCore,
 } from "./sessionDecisions";
+import { passCore } from "./decisionHandoff";
 import { hashToken } from "./apiTokens";
 import { isMachineDeliveredMessage } from "@codecast/shared/contracts";
 import * as fs from "fs";
@@ -998,12 +998,11 @@ describe("review wave 1 regressions", () => {
     expect(await agreementHistoryForCategory(ctx, "scope", Date.now())).toEqual(new Map());
   });
 
-  test("passing a decision up is a role's own ask now: the old verb is gone and its route says what to do instead", async () => {
+  test("a role passes a decision up with recommend; escalate is a person's hand-off to their manager now", async () => {
     expect((await import("./sessionDecisions")) as any).not.toHaveProperty("escalateCore");
     const http = fs.readFileSync(path.join(__dirname, "http.ts"), "utf-8");
     const route = http.slice(http.indexOf('cliRoute("/cli/decide/escalate"'), http.indexOf('cliRoute("/cli/decide/show"'));
-    expect(route).toContain("error:");
-    expect(route).not.toContain("runMutation");
+    expect(route).toContain("decisionHandoff.escalateForCli");
   });
 });
 

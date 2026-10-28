@@ -114,6 +114,7 @@ import type * as data from "../data.js";
 import type * as debugTmp from "../debugTmp.js";
 import type * as debugTmpDiet from "../debugTmpDiet.js";
 import type * as decisionDiscussion from "../decisionDiscussion.js";
+import type * as decisionHandoff from "../decisionHandoff.js";
 import type * as decisionStacks from "../decisionStacks.js";
 import type * as decisions from "../decisions.js";
 import type * as deploys from "../deploys.js";
@@ -700,6 +701,7 @@ declare const fullApi: ApiFromModules<{
   debugTmp: typeof debugTmp;
   debugTmpDiet: typeof debugTmpDiet;
   decisionDiscussion: typeof decisionDiscussion;
+  decisionHandoff: typeof decisionHandoff;
   decisionStacks: typeof decisionStacks;
   decisions: typeof decisions;
   deploys: typeof deploys;

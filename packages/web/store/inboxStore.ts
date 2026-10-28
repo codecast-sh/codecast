@@ -158,6 +158,7 @@ import { awaitingOkIds, decisionDraftKey, pendingDecisionConvIds, sessionHasOpen
 import type { LocalMirror, MergeBackStatus, OpenTaskReport, SessionActivity, SubagentCaps, SubagentSlot } from "@codecast/shared/contracts";
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
+import { escalationTargetIds } from "@codecast/shared/contracts";
 import { isAgentSpawnedConversation, isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -1433,8 +1434,10 @@ export type SessionDecisionItem = {
   trial?: boolean;
   holder?: { kind: "user" | "role"; id: string };
   holder_key?: string;
-  /** A person handed it to a teammate or a role (convex passCore); null when nobody did. */
-  passed_to?: { kind: "user" | "role"; id: string } | null;
+  /** A person handed it to a teammate or a role (convex decisionHandoff), with their note; null when nobody did. */
+  passed_to?: { by?: string; id: string; kind: "user" | "role"; note?: string } | null;
+  /** Sent up to the owner's manager, else the admins (convex escalateCore): who, why, when, to whom. */
+  escalated?: { at: number; by: string; note: string; to: string[] } | null;
   /** Whether it sits in the viewer's own queue (convex decisionRowsForViewer). A row the team's line decisions
    *  brought in that is not the viewer's says false; the queue surfaces read inViewerQueue. */
   in_queue?: boolean;
@@ -6337,7 +6340,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   reopenDecision: (decisionId: string) => void;
   // Hands an open question to a teammate (it leaves this viewer's queue) or a
   // role (it stays here, held by the role); the passDecision side effect.
-  passDecision: (decisionId: string, to: { kind: "user" | "role"; id: string }) => void;
+  passDecision: (decisionId: string, to: { kind: "user" | "role"; id: string }, note?: string) => void;
+  // Up to the owner's manager, else the admins, with a required note; the escalateDecision side effect.
+  escalateDecision: (decisionId: string, note: string) => void;
   unassignDecision: (decisionId: string) => void;
   // Stack verbs (D5): the draft moves first, named side effects follow.
   reorderStack: (stackId: string, decisionIds: string[]) => void;
@@ -9881,13 +9886,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const detail = this.decisionDetails[decisionId];
     if (detail && row) detail.decision = { ...row };
   }),
-  passDecision: action(function (this: Draft, decisionId: string, to: { kind: "user" | "role"; id: string }) {
+  passDecision: action(function (this: Draft, decisionId: string, to: { kind: "user" | "role"; id: string }, note?: string) {
     const row = this.sessionDecisions[decisionId] ?? this.decisionDetails[decisionId]?.decision;
     if (!row || row.status !== "pending") return;
     const now = Date.now();
-    row.passed_to = { kind: to.kind, id: to.id };
+    const said = note?.trim();
+    const me = String(this.currentUser?._id ?? "");
+    row.passed_to = { by: me, id: to.id, kind: to.kind, ...(said ? { note: said } : {}) };
+    row.escalated = null;
     // Given to a person, it leaves every other queue and enters theirs.
-    if (to.kind === "user") row.in_queue = to.id === String(this.currentUser?._id ?? "");
+    if (to.kind === "user") row.in_queue = to.id === me;
     row.holder = { kind: to.kind, id: to.id };
     row.holder_key = `${to.kind}:${to.id}`;
     if (to.kind === "user") row.asked_user_ids = [to.id];
@@ -9906,12 +9914,34 @@ const inboxStoreConfig = (set: any, get: any) => ({
     detail.holder_role = role;
     if (!detail.ladder.some((h) => h.role_id === to.id)) detail.ladder = [...detail.ladder, { role_id: to.id, at: now, role }];
   }),
-  // A pass taken back (convex unassignCore): nobody holds it, and the server
-  // routes it again; the unassignDecision side effect.
+  // Sent up (convex escalateCore) to whom the same rule picks from this roster; the echo settles it.
+  escalateDecision: action(function (this: Draft, decisionId: string, note: string) {
+    const row = this.sessionDecisions[decisionId] ?? this.decisionDetails[decisionId]?.decision;
+    const said = note.trim();
+    if (!row || row.status !== "pending" || !said) return;
+    const me = String(this.currentUser?._id ?? "");
+    const owner = row.holder?.kind === "user" ? row.holder.id : me;
+    const to = rosterEscalationTargets(owner, this.orgTree?.people, this.teamMembers);
+    const now = Date.now();
+    row.escalated = { at: now, by: me, note: said, to };
+    if (to.length) {
+      row.passed_to = { by: me, id: to[0], kind: "user", note: said };
+      row.holder = { kind: "user", id: to[0] };
+      row.holder_key = `user:${to[0]}`;
+      row.asked_user_ids = to;
+    }
+    row.in_queue = to.includes(me);
+    row.updated_at = now;
+    const detail = this.decisionDetails[decisionId];
+    if (detail && detail.decision !== row) detail.decision = { ...row };
+  }),
+  // A pass or an escalation taken back (convex unassignCore): nobody holds it,
+  // and the server routes it again; the unassignDecision side effect.
   unassignDecision: action(function (this: Draft, decisionId: string) {
     const row = this.sessionDecisions[decisionId];
     if (!row || row.status !== "pending" || !row.passed_to) return;
     row.passed_to = null;
+    row.escalated = null;
     row.updated_at = Date.now();
   }),
   reorderStack: action(function (this: Draft, stackId: string, decisionIds: string[]) {
@@ -15117,6 +15147,12 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
       s.sendMessage(convId, content, undefined, clientId);
     });
   }
+}
+
+/** Whom an escalation reaches, from the roster a client holds: the manager on the org tree, the members on the team roster. */
+export function rosterEscalationTargets(ownerId: string, people: ReadonlyArray<{ user_id: string; reports_to_user_id?: string | null }> | null | undefined, members: ReadonlyArray<any> | null | undefined): string[] {
+  const managerId = (people ?? []).find((p) => String(p.user_id) === ownerId)?.reports_to_user_id;
+  return escalationTargetIds(ownerId, managerId, (members ?? []).map((m) => ({ user_id: String(m._id), role: m.role, is_bot: m.is_bot })));
 }
 
 export const useInboxStore = survivingInboxStore ?? createInboxStore();

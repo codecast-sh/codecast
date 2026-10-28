@@ -364,7 +364,7 @@ export async function reroutePendingDecisionsForConversation(
   const conversation = await ctx.db.get(conversationId);
   if (!conversation) return { moved: 0 };
   for (const row of openRows) {
-    // A person handed this one to somebody; ownership moves do not take it back.
+    // A person handed this one to somebody (decisionHandoff.ts); ownership moves do not take it back.
     if (row.passed_to) continue;
     await rerouteRow(ctx, conversation, row, now);
   }
@@ -372,7 +372,7 @@ export async function reroutePendingDecisionsForConversation(
 }
 
 /** One open decision routed again from its asking session: its people, inbox rows, ladder and holder. */
-async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
+export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
   const task = row.task_id ? await ctx.db.get(row.task_id) : null;
   // A proposal's decision asked by another session keeps routing as the station that proposed it.
   const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
@@ -386,33 +386,6 @@ async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: nu
   await syncDecisionInbox(ctx, row._id, people, now, trial !== "owner" && (!hears || (climbs && woken.length === 0)));
   const updated = await ctx.db.get(row._id);
   if (updated) await refreshHolder(ctx, updated, now);
-}
-
-// A person takes back a pass (passCore): the decision is nobody's in
-// particular again, routed as its asking session would route it now.
-export async function unassignCore(ctx: Ctx, userId: Id<"users">, decisionId: string): Promise<{ unassigned: true } | { error: string }> {
-  const row = await findDecision(ctx, decisionId);
-  if (!row) return { error: "Decision not found" };
-  if (row.status !== "pending") return { error: `Decision is already ${row.status}` };
-  if (!(await userMayRead(ctx, userId, row))) return { error: "Unauthorized: not your decision" };
-  if (!row.passed_to) return { unassigned: true };
-  const now = Date.now();
-  const from = row.passed_to.from;
-  await ctx.db.patch(row._id, { passed_to: undefined, updated_at: now });
-  if (from) {
-    // Back to the people it was asked of; a trial owner's question (no ladder) goes back to nobody's queue.
-    await ctx.db.patch(row._id, { asked_user_ids: from });
-    await syncDecisionInbox(ctx, row._id, from, now, !(row.trial && !row.hops?.length));
-    const fresh = await ctx.db.get(row._id);
-    if (fresh) await refreshHolder(ctx, fresh, now);
-    return { unassigned: true };
-  }
-  // A pass from before it recorded whom it came from: routed as its asking session would route it now.
-  const conversation = await ctx.db.get(row.conversation_id);
-  if (!conversation) return { error: "The session that asked is gone" };
-  const fresh = await ctx.db.get(row._id);
-  if (fresh) await rerouteRow(ctx, conversation, fresh, now);
-  return { unassigned: true };
 }
 
 // Repair: put back the people an open decision was asked of (a pass taken
@@ -1167,8 +1140,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     ? { ...routed, ladder: { ...routed.ladder, activeRoles: [], hops: [] }, people: addressed.people, hears: null }
     : routed;
   if (existing) {
-    // A question a person gave to a teammate (passCore) stays theirs when it is asked again.
-    const given = existing.passed_to?.kind === "user" ? [existing.passed_to.id as Id<"users">] : null;
+    // A question a person gave to a teammate or escalated (decisionHandoff.ts) stays theirs when it is asked again.
+    const given = existing.passed_to?.kind === "user" ? existing.asked_user_ids ?? [existing.passed_to.id as Id<"users">] : null;
     // The re-ask lands on the open row: text, category and task move with it,
     // a --stack appends it (once), and the holder is recomputed because the
     // category or the stack's delegate may have changed who may answer.
@@ -2003,55 +1976,6 @@ export const reopen = mutation({
   },
 });
 
-export type PassTarget = { kind: "user" | "role"; id: string };
-
-// A person hands an open question to someone else. To a teammate: it leaves
-// the current people's queues and enters theirs. To a role: the role is woken
-// on it and may answer it; its people keep the card, held by the role, so any
-// of them can still answer or pass it on. Refusals are returned, not thrown,
-// because the web sends this through the outbox (dispatch passDecision).
-export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string, to: PassTarget): Promise<{ passed: true } | { error: string }> {
-  const row = await findDecision(ctx, decisionId);
-  if (!row) return { error: "Decision not found" };
-  if (row.status !== "pending") return { error: `Decision is already ${row.status}` };
-  if (!(await userMayRead(ctx, userId, row))) return { error: "Unauthorized: not your decision" };
-  // A trial's question may be given to a teammate (the team's decision inbox assigns it); it never climbs a role's line.
-  if (row.trial && to.kind === "role") return { error: "A trial run's question stays with its trial" };
-  const conversation = await ctx.db.get(row.conversation_id);
-  if (conversation && isHostedAgentType(conversation.agent_type)) return { error: HOSTED_ANSWER_REFUSED };
-  if (row.holder?.kind === to.kind && row.holder.id === to.id && (to.kind === "role" || row.asked_user_ids?.length === 1)) {
-    return { error: "It is already theirs" };
-  }
-  // A line decision's team is its problem's when the session that asked is nobody's team's (a station run on a host).
-  const task = !conversation?.team_id && row.task_id ? await ctx.db.get(row.task_id) : null;
-  const teamId = conversation?.team_id ?? task?.team_id;
-  const now = Date.now();
-  // The people it was asked of before anyone passed it: taking the pass back returns it to them.
-  const from = row.passed_to ? row.passed_to.from : row.asked_user_ids;
-  const passed_to = { ...to, by: userId, at: now, ...(from ? { from } : {}) };
-  if (to.kind === "user") {
-    const target = await ctx.db.get(to.id as Id<"users">);
-    if (!target || target.is_bot) return { error: "Pass it to a person or a role" };
-    if (String(target._id) !== String(userId) && !(teamId && (await isTeamMember(ctx, target._id, teamId)))) {
-      return { error: `${target.name ?? "They"} is not on this session's team` };
-    }
-    await ctx.db.patch(row._id, { passed_to, holder: { kind: "user", id: to.id }, holder_key: `user:${to.id}`, asked_user_ids: [target._id], updated_at: now });
-    await syncDecisionInbox(ctx, row._id, [target._id], now);
-    return { passed: true };
-  }
-  const role = await ctx.db.get(to.id as Id<"org_roles">);
-  if (!role || role.status === "retired") return { error: "No such role" };
-  if (!(await userCanAccessRole(ctx, userId, role))) return { error: "Unauthorized: not your role" };
-  if (role.team_id && teamId && String(role.team_id) !== String(teamId)) return { error: `${role.name} is on another team` };
-  const woken = await tellHearingRole(ctx, role, row, now);
-  if (woken.length === 0) return { error: `${role.name} has no running session to hear it` };
-  const hops = (row.hops ?? []).some((h) => String(h.role_id) === String(role._id))
-    ? row.hops
-    : [...(row.hops ?? []), { role_id: role._id, at: now }];
-  await ctx.db.patch(row._id, { passed_to, holder: { kind: "role", id: to.id }, holder_key: `role:${to.id}`, hops, updated_at: now });
-  return { passed: true };
-}
-
 // Agreement history (D2): answered decisions of this category in this scope
 // where the role recommended and the person picked that option. The grant
 // rule needs `agreements` of them from `askers` distinct sessions.
@@ -2459,7 +2383,10 @@ export async function listForUserCore(ctx: Ctx, userId: Id<"users">, now: number
       if (r.status === "pending" || (r.resolved_at ?? 0) >= cutoff) out.set(String(r._id), r);
     }
   }
-  return withLiveSession(ctx, await currentDecisions(ctx, Array.from(out.values())));
+  // A decision escalated to this person comes first (decisionHandoff.ts); the rest keep their order.
+  const escalatedHere = (d: DecisionRow) => d.status === "pending" && !!d.escalated?.to.some((id) => String(id) === String(userId));
+  const rows = Array.from(out.values()).sort((a, b) => Number(escalatedHere(b)) - Number(escalatedHere(a)));
+  return withLiveSession(ctx, await currentDecisions(ctx, rows));
 }
 
 export const listForUser = query({
@@ -2508,7 +2435,7 @@ async function decisionRowsForViewer(ctx: Ctx, rows: DecisionRow[], inQueue: (ro
       }
       worst = severity.get(key) ?? null;
     }
-    out.push({ ...r, ...extra, passed_to: r.passed_to ? { kind: r.passed_to.kind, id: r.passed_to.id } : null, in_queue: await inQueue(r), problem_severity: worst });
+    out.push({ ...r, ...extra, passed_to: r.passed_to ? { by: r.passed_to.by, id: r.passed_to.id, kind: r.passed_to.kind, ...(r.passed_to.note ? { note: r.passed_to.note } : {}) } : null, in_queue: await inQueue(r), problem_severity: worst });
   }
   return out;
 }
