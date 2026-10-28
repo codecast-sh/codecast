@@ -445,7 +445,12 @@ async function waitOnStation(
       body: `The run is back at this station, with you. Your brief as it stands now:\n\n${buildNodePrompt(node, graph, context)}`,
       wake: true,
     });
-    if (sent) answeredAfter = typeof before?.at === "number" ? before.at : null;
+    const since = typeof before?.at === "number" ? before.at : null;
+    // The send restarts a stopped presenter only if it can come back. One that cannot (killed, or an agent that crashes
+    // on every resume: ct-65353's presenter did, and its run waited out the 90-minute limit twice) is retired, and a
+    // fresh hand presents.
+    if (sent && await presenterBack(presenter, since, options)) answeredAfter = since;
+    else await retirePresenter(presenter, context[`${node.id}.session_id`] || presenter.slice(0, 7), options);
   }
 
   let hand: { conversationId: string; shortId: string };
@@ -705,6 +710,37 @@ async function revivedInTime(conversationId: string, options: RunOptions): Promi
     if (row?.is_live || row?.work_state === "done") return true;
   }
   return false;
+}
+
+/** How long a presenter sent back its brief has to come back for it before a fresh hand presents instead. */
+const PRESENTER_GRACE_MS = 10 * 60_000;
+
+/** Whether a presenter sent back its brief comes back for it within the grace: it reads live, or it has pinned since
+ *  `since`. A killed one never does. */
+async function presenterBack(conversationId: string, since: number | null, options: RunOptions): Promise<boolean> {
+  const until = Date.now() + (options.presenterGraceMs ?? PRESENTER_GRACE_MS);
+  const pollInterval = options.pollIntervalMs ?? 10_000;
+  for (;;) {
+    const row = ((await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === conversationId);
+    if (row?.is_killed) return false;
+    if (row?.is_live) return true;
+    const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
+    if (typeof pinned?.at === "number" && (since === null || pinned.at > since)) return true;
+    if (Date.now() >= until) return false;
+    await new Promise((r) => setTimeout(r, pollInterval));
+  }
+}
+
+/** A presenter that cannot come back is stopped, so a late revive finds it retired, and the cards it left waiting are
+ *  taken back, so the fresh hand's card is the only one its gate can adopt. */
+async function retirePresenter(conversationId: string, shortId: string, options: RunOptions): Promise<void> {
+  console.log(`${c.yellow}  ${shortId} did not come back for its brief; a fresh hand presents${c.reset}`);
+  const row = ((await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === conversationId);
+  await cliCall(options, "/cli/sessions/kill", { session: conversationId });
+  const listed = row?.session_id ? await cliCall(options, "/cli/decide", { action: "ls", session_id: row.session_id }) : null;
+  for (const d of listed?.decisions ?? []) {
+    if (d.status === "pending") await cliCall(options, "/cli/decide", { action: "cancel", decision_id: d.short_id ?? d.id });
+  }
 }
 
 /** Start a station's hand through /cli/spawn, the way `cast spawn --unattended` starts one. */
@@ -1220,6 +1256,8 @@ export interface RunOptions {
   pollIntervalMs?: number;
   /** How long a resumed run waits for the hand it left to be revived (REVIVE_GRACE_MS; tests shorten it). */
   reviveGraceMs?: number;
+  /** How long a presenter sent back its brief has to come back (PRESENTER_GRACE_MS; tests shorten it). */
+  presenterGraceMs?: number;
   /** How long a hand asked for its missing handoff has before a finished reading counts (HANDOFF_ASK_GRACE_MS; tests shorten it). */
   handoffAskGraceMs?: number;
   /** Continue this run row from where it stands instead of from start (runResume.ts). */
