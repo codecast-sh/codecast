@@ -92,7 +92,6 @@ import { ChannelListeners } from "../../components/chat/ChannelListeners";
 import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { mentionWakeLine } from "../../lib/chatMentionWakes";
 import { useChannelMenu } from "../../hooks/useChannelMenu";
-import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useDesktopAppWindow } from "../../hooks/useDesktopWindowRole";
 import { useIsPhone } from "../../hooks/useIsPhone";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
@@ -208,7 +207,6 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   const activeWorkspaceTeam = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
   const chatOn = useTeamFeature("chat");
   const navHidden = useInboxStore((s) => selectNavHidden(s as any));
-  const headTitlebarRef = useTitlebarHead<HTMLElement>();
   const inAppWindow = useDesktopAppWindow();
   const narrowViewport = useIsPhone();
   // One channel list on screen at a time: the app sidebar lists the channels,
@@ -633,7 +631,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
           </div>
         ) : activeChannelId ? (
           <>
-            <header ref={headTitlebarRef} className="ch-head">
+            <header className="ch-head">
               {activeChannel?.kind === "dm" ? (
                 <DmHeadline channel={activeChannel} />
               ) : (
