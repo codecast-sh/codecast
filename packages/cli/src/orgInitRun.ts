@@ -230,7 +230,18 @@ export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
   // The numbers are the server's: the parser may fold two spec rows into one,
   // so a change's number is read here, never counted from the spec.
   for (const row of result.changes ?? []) console.log(`  ${changeRow(row)}`);
-  for (const a of parsed.spec.asks ?? []) console.log(`  ${fmt.muted(`ask: ${a.title} (${a.seqs.length} change${a.seqs.length === 1 ? "" : "s"})`)}`);
+  // The server may act on the proposal as it posts (a role that starts work on
+  // its own files sessions at once; a hire goes to the lead above): say what it
+  // did, or the author reports it as waiting on the person.
+  // Rows past one transaction's share stay proposed while a scheduled run
+  // applies them (`remaining`): those are applying, not the person's.
+  const count = (...st: string[]) => (result.changes ?? []).filter((c: any) => st.includes(c.status)).length;
+  const applying = (result.remaining ?? 0) + count("accepted");
+  const open = count("proposed", "failed") - (result.remaining ?? 0);
+  if (result.applied && result.status !== "open") console.log(`  ${fmt.success(`applied at once (${result.status}): nothing waits on a person`)}`);
+  else if (result.applied) console.log(`  ${fmt.accent([`applied ${count("applied")} at once`, applying ? `${applying} still applying` : "", open ? `${open} open for the person on the org page` : ""].filter(Boolean).join("; "))}`);
+  else if (result.routed_to) console.log(`  ${fmt.muted(`sent to @${result.routed_to} to decide; the person may decide it too`)}`);
+  else for (const a of parsed.spec.asks ?? []) console.log(`  ${fmt.muted(`ask: ${a.title} (${a.seqs.length} change${a.seqs.length === 1 ? "" : "s"})`)}`);
   console.log(`  ${fmt.accent(proposalUrl(deps, result.short_id))}`);
 }
 
@@ -297,7 +308,9 @@ export async function revise(deps: OrgInitDeps, ref: string, options: any): Prom
   console.log(`${fmt.success("✓")} ${fmt.highlight(ref)} revised ${fmt.muted(`· ${decided} of ${total} decided`)}`);
   for (const j of r.revisions ?? []) console.log(`  ${revisionLine(j)}`);
   for (const seq of r.answered ?? []) console.log(`  ${fmt.accent("answered")} #${seq} ${fmt.muted("(shown on the card under the person's words)")}`);
-  console.log(`${fmt.muted("The person decides what is left on the org page:")} ${fmt.accent(proposalUrl(deps, ref))}`);
+  // A revise that leaves nothing to decide settles the proposal on the server.
+  if (r.status && r.status !== "open") console.log(`${fmt.success(`${ref} is ${r.status}: nothing waits on a person`)} ${fmt.accent(proposalUrl(deps, ref))}`);
+  else console.log(`${fmt.muted("The person decides what is left on the org page:")} ${fmt.accent(proposalUrl(deps, ref))}`);
 }
 
 /** One journal entry as a line: what happened to which change, and the note. */
