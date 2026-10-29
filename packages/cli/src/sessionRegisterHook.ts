@@ -74,6 +74,25 @@ case "$SESSION_ID" in
 esac
 [ \${#SESSION_ID} -le 128 ] || exit 0
 
+# A headless run (\`claude -p\`) inherits the CODECAST_CONVERSATION_ID of the
+# session whose Bash started it, detached or not, while Claude Code gives the
+# run its own session id. Declare that conversation as the run's parent so the
+# daemon nests it there even when the process is gone or reparented before the
+# daemon looks (spawnParents.ts). A declaration \`cast exec\` wrote first wins.
+PARENT_CONV="\${CODECAST_CONVERSATION_ID:-}"
+if [ "\${CLAUDE_CODE_ENTRYPOINT:-}" = "sdk-cli" ]; then
+  case "$PARENT_CONV" in
+    ""|*[!A-Za-z0-9]*) ;;
+    *)
+      DECL="$HOME/.codecast/spawn-parents/$SESSION_ID.json"
+      if [ ! -f "$DECL" ]; then
+        mkdir -p "$HOME/.codecast/spawn-parents"
+        echo "{\\"parent_conversation_id\\":\\"$PARENT_CONV\\",\\"ts\\":$(date +%s)000}" > "$DECL"
+      fi
+      ;;
+  esac
+fi
+
 ${SESSION_REGISTER_JOB}
 session_register_job
 `;
