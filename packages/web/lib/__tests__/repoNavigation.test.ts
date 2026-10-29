@@ -20,6 +20,9 @@ describe('repository entry points', () => {
   test('session repository fallback comes only from its bound PR', () => {
     expect(sessionRepository({git_remote_url: 'git@github.com:a/b.git'})).toBe('a/b');
     expect(sessionRepository({pr_status: {repository:'c/d'}})).toBe('c/d');
+    expect(sessionRepository({git_remote_url: 'https://github.com/a/dotfiles.git', git_root: '/Users/a'})).toBeNull();
+    expect(sessionRepository({git_remote_url: 'https://github.com/a/dotfiles.git', git_root: '/home/a/', pr_status: {repository:'c/d'}})).toBe('c/d');
+    expect(sessionRepository({git_remote_url: 'https://github.com/a/b.git', git_root: '/Users/a/code/b'})).toBe('a/b');
     expect(sessionRepository({git_remote_url:'/src/codecast'})).toBeNull();
   });
   test('related code stays scoped to explicit entity links', () => {

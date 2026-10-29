@@ -41,7 +41,7 @@ import {
 } from "../store/inboxStore";
 import { channelsSig, messagesSig, railMessagesSig, railSig, reactionsSig, readsSig, seatSig, sessionOriginSig, slackLinksSig } from "../store/chatWakeSigs";
 import { memberListSig } from "./useTeamRoster";
-import { orgRolesSig } from "./useOrgRoles";
+import { roleRowsOf, roleRowsSig } from "../lib/roleRows";
 import { identityRowOf, roleOfUser, sessionIdentity, withLiveRole, type IdentityPrefs, type RoleRows } from "../lib/sessionIdentity";
 import { identityPrefsNow, useIdentityPrefs } from "./useIdentityPrefs";
 import type { SessionPersona } from "../lib/chatViews";
@@ -400,10 +400,10 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
     (s: any) => s.currentUser?.image,
     (s: any) => anchorBotsSig(s.anchors),
     (s: any) => s.chatAuthors,
-    (s: any) => orgRolesSig(s.orgTree),
+    (s: any) => roleRowsSig(s),
   ]);
-  const orgTree = (s as any).orgTree as RoleRows | null;
-  const rolesSig = orgRolesSig((s as any).orgTree);
+  const orgTree: RoleRows = roleRowsOf(s as never);
+  const rolesSig = roleRowsSig(s as never);
   const viewerId = String(s.currentUser?._id ?? "");
   const roster: any[] = s.teamMembers ?? [];
   const sig = memberListSig(roster);
@@ -525,7 +525,7 @@ export function roleSeatsFrom(anchors: Record<string, any> | undefined, tree: Ro
  *  render (a palette callback, a toast). */
 export function chatAuthorLookupsNow(): { sessionFor: (sessionId: string) => SessionPersona | undefined; seatFor: (botUserId: string) => RoleSeat | undefined } {
   const s = useInboxStore.getState() as any;
-  return { sessionFor: sessionPersonasFrom(s.sessions, s.orgTree, identityPrefsNow()), seatFor: roleSeatsFrom(s.anchors, s.orgTree, identityPrefsNow()) };
+  return { sessionFor: sessionPersonasFrom(s.sessions, roleRowsOf(s), identityPrefsNow()), seatFor: roleSeatsFrom(s.anchors, roleRowsOf(s), identityPrefsNow()) };
 }
 
 /** The live lookups every surface that names a chat line's author passes to
@@ -533,16 +533,16 @@ export function chatAuthorLookupsNow(): { sessionFor: (sessionId: string) => Ses
  *  user's title and a session's line by the session's title. Signature-gated:
  *  sessions heartbeat, and only a title, agent or identity change matters. */
 export function useChatAuthorLookups(): { sessionFor: (sessionId: string) => SessionPersona | undefined; seatFor: (botUserId: string) => RoleSeat | undefined } {
-  const st = useTrackedStore([(s: any) => sessionOriginSig(s.sessions), (s: any) => seatSig(s.anchors), (s: any) => orgRolesSig(s.orgTree)]);
+  const st = useTrackedStore([(s: any) => sessionOriginSig(s.sessions), (s: any) => seatSig(s.anchors), (s: any) => roleRowsSig(s)]);
   const sessionsSig = sessionOriginSig(st.sessions);
   const seatsSig = seatSig((st as any).anchors);
-  const rolesSig = orgRolesSig((st as any).orgTree);
+  const rolesSig = roleRowsSig(st as never);
   const prefs = useIdentityPrefs();
   // The signatures are the real deps: the raw collection refs flip on every push.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const sessionFor = useMemo(() => sessionPersonasFrom(st.sessions, (st as any).orgTree, prefs), [sessionsSig, rolesSig, prefs]);
+  const sessionFor = useMemo(() => sessionPersonasFrom(st.sessions, roleRowsOf(st as never), prefs), [sessionsSig, rolesSig, prefs]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const seatFor = useMemo(() => roleSeatsFrom((st as any).anchors, (st as any).orgTree, prefs), [seatsSig, rolesSig, prefs]);
+  const seatFor = useMemo(() => roleSeatsFrom((st as any).anchors, roleRowsOf(st as never), prefs), [seatsSig, rolesSig, prefs]);
   return useMemo(() => ({ sessionFor, seatFor }), [sessionFor, seatFor]);
 }
 
