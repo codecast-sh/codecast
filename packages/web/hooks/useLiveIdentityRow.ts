@@ -7,7 +7,7 @@ import { createContext, useContext, useMemo, useSyncExternalStore } from "react"
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import { identityRowOf, liveRoleSig, roleAuthorOf, roleOfUser, speakerOf, withLiveRole, type IdentityRow, type RoleAuthor, type RoleRows, type SessionIdentity } from "../lib/sessionIdentity";
-import { orgRolesSig } from "./useOrgRoles";
+import { roleRowsOf, roleRowsSig } from "../lib/roleRows";
 import { useIdentityPrefs } from "./useIdentityPrefs";
 
 /** Answers the role rows for everything below it instead of the store; null
@@ -21,17 +21,16 @@ export function useLiveIdentityRow<T extends IdentityRow>(row: T): T;
 export function useLiveIdentityRow<T extends IdentityRow>(row: T | null): T | null;
 export function useLiveIdentityRow<T extends IdentityRow>(row: T | null): T | null {
   const override = useContext(RoleRowsOverride);
-  const rows = () => (override === undefined ? useInboxStore.getState().orgTree : override);
+  const rows = () => (override === undefined ? roleRowsOf(useInboxStore.getState() as never) : override);
   // A row with neither pointer is no role's (standingRoleOf), whatever the
   // role rows say, so it costs the store no subscription: every card and
   // sidebar row resolves its identity through here. Otherwise it subscribes
-  // to the matched role's fields alone, since the org tree's ref flips
-  // whenever anything in the workspace's org changes.
+  // to the matched role's fields alone.
   const mayBeRole = !!row && (!!row.standing_role_id || !!row.acting_user_id);
   const sig = useSyncExternalStore(
     override === undefined && mayBeRole ? useInboxStore.subscribe : noSubscription,
     () => liveRoleSig(row, rows()),
-    () => liveRoleSig(row, override === undefined ? useInboxStore.getInitialState().orgTree : override),
+    () => liveRoleSig(row, override === undefined ? roleRowsOf(useInboxStore.getInitialState() as never) : override),
   );
   return useMemo(
     () => (row ? withLiveRole(row, rows()) : null),
@@ -86,10 +85,10 @@ export function useConversationSpeaker(conversationId: string | null | undefined
  *  (a role's bot user), both read from the role rows. Null for anyone else.
  *  Wakes only when the roles or their seats change. */
 export function useRoleAuthor(): (by: { userId?: string | null; session?: IdentityRow | null }) => RoleAuthor | null {
-  const sig = useInboxStore((s) => orgRolesSig(s.orgTree));
+  const sig = useInboxStore((s) => roleRowsSig(s as never));
   const prefs = useIdentityPrefs();
   return useMemo(() => {
-    const tree = useInboxStore.getState().orgTree;
+    const tree = roleRowsOf(useInboxStore.getState() as never);
     return ({ userId, session }) => {
       if (session) {
         const role = roleAuthorOf(withLiveRole(session, tree), prefs);
