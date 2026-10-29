@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { InboxSession } from "../inboxStore";
-import { sessionStructuralSig } from "../inboxStore";
+import { hiddenBucketTree, sessionStructuralSig } from "../inboxStore";
 import { placeSections } from "./placeTestHarness";
 
 const now = Date.now();
@@ -68,5 +68,29 @@ describe("linked subagent nesting", () => {
     const awake = placeSections(Object.fromEntries(rows.map(row => [row._id, row])), new Set(), undefined, { now: until + 60_000 });
     expect(ids(awake.subsByParent.get("parent") ?? [])).toEqual(["child"]);
     expect(awake.snoozed).toEqual([]);
+  });
+});
+
+describe("set aside bucket rows", () => {
+  const stashed = (id: string, parentId?: string) =>
+    row(id, { inbox_stashed_at: now, ...(parentId ? { parent_conversation_id: parentId, is_subagent: true } : {}) });
+
+  it("draws a stashed child whose parent is outside the bucket as its own card", () => {
+    const { topLevel, subsByTop } = hiddenBucketTree([stashed("a"), stashed("orphan", "live-lead")]);
+    expect(ids(topLevel)).toEqual(["a", "orphan"]);
+    expect(subsByTop.size).toBe(0);
+  });
+
+  it("nests every descendant under its outermost ancestor in the bucket", () => {
+    const { topLevel, subsByTop } = hiddenBucketTree([stashed("root"), stashed("kid", "root"), stashed("grandkid", "kid")]);
+    expect(ids(topLevel)).toEqual(["root"]);
+    expect(ids(subsByTop.get("root") ?? []).sort()).toEqual(["grandkid", "kid"]);
+  });
+
+  it("draws every row exactly once, so the header count matches", () => {
+    const items = [stashed("root"), stashed("kid", "root"), stashed("grandkid", "kid"), stashed("orphan", "elsewhere"), stashed("x", "y"), stashed("y", "x")];
+    const { topLevel, subsByTop } = hiddenBucketTree(items);
+    const drawn = [...topLevel, ...topLevel.flatMap((top) => subsByTop.get(top._id) ?? [])];
+    expect(ids(drawn).sort()).toEqual(ids(items).sort());
   });
 });
