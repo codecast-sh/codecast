@@ -231,6 +231,7 @@ describe("darwin code signature gate", () => {
     expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn({ ...signed, "/opt/new": DARWIN_SIGNING_TEAM }) })("/opt/new")).toEqual({ ok: true });
     expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn({ ...signed, "/opt/new": "EVIL123456" }) })("/opt/new")).toEqual({ ok: false, reason: "wrong_team" });
     expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn({ ...signed, "/opt/new": null }) })("/opt/new")).toEqual({ ok: false, reason: "wrong_team" });
+    expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn(signed) })("/opt/new")).toEqual({ ok: false, reason: "unreadable" });
     expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn({ ...signed, "/opt/new": DARWIN_SIGNING_TEAM }, false) })("/opt/new")).toEqual({ ok: false, reason: "invalid" });
   });
 
@@ -245,11 +246,13 @@ describe("darwin code signature gate", () => {
     const updater = createCodecastUpdater({
       currentVersion: "1.0.0", stateDir: "/s", fetch, fs, execPath: "/opt/codecast/codecast", platform: "darwin", arch: "arm64", log: () => {},
       download: async (_u, dest) => void files.set(dest, NEW),
-      verifyPlatformSignature: makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/codecast/codecast", spawn: fakeSpawn({ "/opt/codecast/codecast": DARWIN_SIGNING_TEAM, "/opt/codecast/codecast.new": "EVIL123456" }) }),
+      // The download lands at a name the updater picks, so every file but the
+      // running binary carries the foreign team.
+      verifyPlatformSignature: makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/codecast/codecast", spawn: fakeSpawn(new Proxy({}, { get: (_, file) => file === "/opt/codecast/codecast" ? DARWIN_SIGNING_TEAM : "EVIL123456" })) }),
     });
     const res = await updater.performUpdate();
     expect(res).toEqual({ success: false, error: "platform_signature_wrong_team" });
     expect(dec.decode(files.get("/opt/codecast/codecast")!)).toBe("OLD");
-    expect(files.has("/opt/codecast/codecast.new")).toBe(false);
+    expect([...files.keys()].filter((k) => k.startsWith("/opt/codecast/codecast."))).toEqual([]);
   });
 });
