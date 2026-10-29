@@ -13005,6 +13005,7 @@ export const linkPlanHandoff = mutation({
     if (!child || child.user_id !== userId) throw new Error("Child not found");
 
     if (child.parent_message_uuid === "plan-handoff") return;
+    if (args.parent_conversation_id === args.child_conversation_id) return;
 
     await ctx.db.patch(args.child_conversation_id, {
       parent_conversation_id: args.parent_conversation_id,

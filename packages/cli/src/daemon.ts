@@ -11487,7 +11487,9 @@ async function processSessionFilePass(
             if (parentSessionMatch) {
               const parentSessionId = parentSessionMatch[1];
               const parentConvId = conversationCache[parentSessionId];
-              if (parentConvId) {
+              // A compaction summary names the session's OWN transcript in the
+              // same words, and a self-link loops delivery forever.
+              if (parentConvId && parentConvId !== conversationId) {
                 try {
                   await syncService.linkPlanHandoff(parentConvId, conversationId);
                   planHandoffChildren.set(parentConvId, conversationId);
@@ -26182,7 +26184,7 @@ async function deliverMessageIntoSession(
   }
 
   const childConvId = planHandoffChildren.get(conversationId);
-  if (childConvId) {
+  if (childConvId && childConvId !== conversationId) {
     logDelivery(`Redirecting message from plan parent ${conversationId.slice(0, 12)} to child ${childConvId.slice(0, 12)}`);
     return deliverMessage(childConvId, content, conversationCache, syncService, messageId, titleCache, agentTypeHint);
   }
