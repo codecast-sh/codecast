@@ -230,7 +230,12 @@ export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
   // The numbers are the server's: the parser may fold two spec rows into one,
   // so a change's number is read here, never counted from the spec.
   for (const row of result.changes ?? []) console.log(`  ${changeRow(row)}`);
-  for (const a of parsed.spec.asks ?? []) console.log(`  ${fmt.muted(`ask: ${a.title} (${a.seqs.length} change${a.seqs.length === 1 ? "" : "s"})`)}`);
+  // The server may settle the proposal as it posts (a role that starts work on
+  // its own files sessions at once; a hire goes to the lead above): say so, or
+  // the author reports it as waiting on the person.
+  if (result.applied) console.log(`  ${fmt.success(`applied at once (${result.status}): nothing waits on a person`)}`);
+  else if (result.routed_to) console.log(`  ${fmt.muted(`sent to @${result.routed_to} to decide`)}`);
+  else for (const a of parsed.spec.asks ?? []) console.log(`  ${fmt.muted(`ask: ${a.title} (${a.seqs.length} change${a.seqs.length === 1 ? "" : "s"})`)}`);
   console.log(`  ${fmt.accent(proposalUrl(deps, result.short_id))}`);
 }
 
