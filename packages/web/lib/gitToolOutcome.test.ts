@@ -97,5 +97,11 @@ test("a conversation knows the pull requests linked to it, made by it, and named
   const messages = [{ content: "Opened PR 7. Rank went from #10 to #2." }, { content: "see https://github.com/O/R/pull/9" }];
   const ids = knownPullRequestIds("O/R", messages, [{ repository: "o/r", number: 3 }, { repository: "x/y", number: 4 }], new Set(["o/r#5"]));
   expect([...ids].sort()).toEqual(["o/r#3", "o/r#5", "o/r#7", "o/r#9", "x/y#4"]);
-  expect([...knownPullRequestIds(null, messages, [], new Set())]).toEqual([]);
+  expect([...knownPullRequestIds(null, messages, [], new Set())]).toEqual(["o/r#9"]);
+});
+
+test("a PR named by number belongs to the repository the conversation linked it in, not its folder's remote", () => {
+  // A session started in a home directory under git works in another repo.
+  const messages = [{ content: "opened https://github.com/JasonBenn/sit/pull/1" }, { content: "waiting on PR #1's fixes" }];
+  expect([...knownPullRequestIds("JasonBenn/panoramic-way", messages, [], new Set())]).toEqual(["jasonbenn/sit#1"]);
 });

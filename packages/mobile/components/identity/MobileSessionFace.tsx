@@ -11,6 +11,7 @@ import { AVATAR_LABELS, AVATAR_URLS } from '@codecast/web/lib/orgAvatars';
 import type { AvatarKey } from '@codecast/shared/contracts/orgAvatars';
 import { faceBadgeSize, viewerFace, type IdentityRow } from '@codecast/web/lib/sessionIdentity';
 import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
+import { useLiveIdentityRow } from '@codecast/web/hooks/useLiveIdentityRow';
 import { useTheme } from '@/constants/Theme';
 import { MobileRoleIconTile } from './MobileRoleIconTile';
 
@@ -27,7 +28,9 @@ export function MobileSessionFace({ row, size = 18, style, badge }: {
   badge?: ReactNode;
 }) {
   const Theme = useTheme();
-  const id = viewerFace(row, useIdentityPrefs());
+  // The role read live from the role rows (lib/roleRows), so a row whose
+  // cached role snapshot lacks a field (an icon) still draws it.
+  const id = viewerFace(useLiveIdentityRow(row), useIdentityPrefs());
   const badgeSize = faceBadgeSize(size);
   if (id.kind === 'none') {
     return badge ? <View style={[{ width: size, height: size, flexShrink: 0, alignItems: 'center', justifyContent: 'center' }, style]} testID="session-face-plain">{badge}</View> : null;

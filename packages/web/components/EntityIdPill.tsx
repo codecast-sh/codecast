@@ -49,6 +49,7 @@ import {
   MESSAGE_REF_PREFIX,
   CONTEXTUAL_PR_REF_PREFIX,
   parseContextualPrRef,
+  pullRequestRepository,
   parseRepoObjectId,
   parseCallRef,
   parseReplayRef,
@@ -732,15 +733,15 @@ export function EntityAwareCode({ children, className, ...allProps }: any) {
 
 /**
  * A pull request named by number alone (`pr:#N|<as written>`, minted by
- * remarkEntityIds) completes to `owner/repo#N` from the conversation's
- * repository and wears a pill that reads as the text written. With no
+ * remarkEntityIds) completes to `owner/repo#N` from the repository the
+ * conversation knows that PR in, else its own (pullRequestRepository), and wears a pill that reads as the text written. With no
  * repository in context it is not a reference at all and prints back verbatim,
  * and neither is a lone `#N` the conversation does not know as a pull request.
  */
 function contextualPrReference(payload: string, ctx: FilePathContextValue | null, mention?: MentionInfo): React.ReactNode | null {
   const ref = parseContextualPrRef(payload);
   if (!ref) return null;
-  const repository = ctx?.repository;
+  const repository = pullRequestRepository(ref.number, ctx?.pullRequestIds, ctx?.repository);
   if (!repository) return <>{ref.label}</>;
   const id = repoObjectId({ type: "pr", repository, number: ref.number });
   if (ref.bare && !ctx?.pullRequestIds?.has(id)) return <>{ref.label}</>;
