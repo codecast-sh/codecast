@@ -9857,7 +9857,9 @@ export async function computeInboxSessions(
     // rideLeadPlacements), so `cast sessions` files the team where the
     // overlay and the web do.
     const byId = new Map(enrichedRows.map((r) => [r.conv._id.toString(), r]));
-    rideLeadPlacements(new Map(enrichedRows.map((r) => [r.conv._id.toString(), r.row as { bucket: InboxBucket }])), (id) => byId.get(id)?.conv);
+    const childLive = new Set([...childrenByParent].filter(([, children]) => hasLiveNestedChild(children, maps, now)).map(([pid]) => pid));
+    const rideRowOf = (id: string) => (childLive.has(id) ? { ...byId.get(id)?.conv, child_live: true } : byId.get(id)?.conv);
+    rideLeadPlacements(new Map(enrichedRows.map((r) => [r.conv._id.toString(), r.row as { bucket: InboxBucket }])), rideRowOf);
     // Children go through the SAME placement call as their parents, off the
     // same clock and the same asking inputs. A child has no probed last user
     // message (buildSubagentChildRow leaves it null), which is the honest
@@ -10161,6 +10163,17 @@ export function groupPoolChildren(pool: any[]): Map<string, any[]> {
     else byParent.set(pid, [c]);
   }
   return byParent;
+}
+
+// A parent's child_live fact: some nested child with content holds a trusted
+// status that is not idle, the test the overlay's fact-only child rows use.
+export function hasLiveNestedChild(children: any[], maps: InboxSessionMaps, now: number): boolean {
+  return children.some((c) => {
+    if ((c.message_count ?? 0) === 0) return false;
+    const cid = c._id.toString();
+    const status = trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now, isLiveAt(maps, cid, now), verifiedWaitingFor(maps, cid, now));
+    return status !== undefined && status !== "idle";
+  });
 }
 
 // The parents that a producing subagent child should keep in "working", derived ONCE
@@ -10748,7 +10761,11 @@ export async function computeSessionsLiveness(
     // its own pending decide is lifted by that, and its children are not
     // probed in this execution (buildAskingParents), so it reads false.
     const childAsking = askingParents.has(cid) && !pendingDecisionIds.has(cid);
-    const childFacts = { child_asking: childAsking, child_asking_until: childAsking ? liftUntil(cid) : null };
+    const childFacts = {
+      child_asking: childAsking,
+      child_asking_until: childAsking ? liftUntil(cid) : null,
+      child_live: hasLiveNestedChild(childrenByParent.get(cid) ?? [], maps, now),
+    };
     const askingFor = (lv: LivenessFields, t: number) => ownAsk(lv, conv) || pendingDecisionIds.has(cid) || childAskingAt(childFacts, t);
     const placeAt = (t: number): InboxPlacement => placeLivenessRowAt(conv, maps, reads[i], producingUntil, askingFor, t).placement;
     const { lv, asking, placement } = placeLivenessRowAt(conv, maps, reads[i], producingUntil, askingFor, now);
@@ -10775,7 +10792,8 @@ export async function computeSessionsLiveness(
   // inside computeFold). The tally and the digest read the FINAL stamps.
   const convById = new Map(shownConvs.map((conv) => [conv._id.toString(), conv]));
   const stamped = new Map(shownConvs.map((conv) => [conv._id.toString(), liveness[conv._id.toString()] as InboxOverlayRow & { bucket: InboxBucket; below_fold: boolean }]));
-  rideLeadPlacements(stamped, (id) => convById.get(id), (rider, lead) => {
+  const rideRowOf = (id: string) => (liveness[id]?.child_live ? { ...convById.get(id), child_live: true } : convById.get(id));
+  rideLeadPlacements(stamped, rideRowOf, (rider, lead) => {
     rider.bucket_stale_at = lead.bucket_stale_at;
     rider.stale_bucket = lead.stale_bucket;
   });
