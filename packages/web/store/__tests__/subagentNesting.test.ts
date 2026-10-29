@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { InboxSession } from "../inboxStore";
-import { hiddenBucketTree, sessionStructuralSig } from "../inboxStore";
+import { sessionStructuralSig } from "../inboxStore";
+import { hiddenBucketTree } from "../hiddenBucketTree";
 import { placeSections } from "./placeTestHarness";
 
 const now = Date.now();
