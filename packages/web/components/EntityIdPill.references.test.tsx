@@ -653,6 +653,13 @@ describe("pull request references", () => {
     expect(html).toContain('href="/pr/codecast-sh/codecast/482"');
   });
 
+  test("PR #N opens the repository the conversation knows that PR in, not the session folder's remote", () => {
+    const html = renderIn("jasonbenn/panoramic-way", "waiting on PR #1's fixes; then #1 merges", ["jasonbenn/sit#1"]);
+    expect(pillTexts(html)).toEqual(["#1", "#1"]);
+    expect(html).toContain('href="/pr/jasonbenn/sit/1"');
+    expect(html).not.toContain("panoramic-way");
+  });
+
   test("a lone #N the conversation does not know as a pull request is a rank, not a reference", () => {
     const html = renderIn("union-ai/union", "one candidate moved from #10 to #2 at a dial of 3, and down to #144 at 0", ["union-ai/union#3263"]);
     expect(html).not.toContain('class="not-prose');

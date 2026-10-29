@@ -13,7 +13,7 @@ import { useMemo } from 'react';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { makeCollectionSig } from '@codecast/web/store/wakeSig';
 import { useLiveIdentityRow } from '@codecast/web/hooks/useLiveIdentityRow';
-import { orgRolesSig } from '@codecast/web/hooks/useOrgRoles';
+import { roleRowsOf, roleRowsSig } from '@codecast/web/lib/roleRows';
 import { identityRowOf, identitySig, withLiveRole, type IdentityRow } from '@codecast/web/lib/sessionIdentity';
 
 type SourceRow = IdentityRow & Record<string, unknown>;
@@ -54,13 +54,15 @@ export function useSessionIdentityRow(id: string | null | undefined, fallback?: 
  *  agent's session id (what a chat line's origin_session_id carries). */
 export function useSessionIdentityLookup(): (id: string | null | undefined) => IdentityRow | null {
   const sig = useInboxStore((s) => sessionsIdentitySig(s.sessions));
-  const rolesSig = useInboxStore((s) => orgRolesSig(s.orgTree));
+  const rolesSig = useInboxStore((s) => roleRowsSig(s as never));
   return useMemo(() => {
-    const { sessions, orgTree } = useInboxStore.getState();
+    const state = useInboxStore.getState();
+    const { sessions } = state;
+    const roleRows = roleRowsOf(state as never);
     const map = new Map<string, IdentityRow>();
     for (const row of Object.values(sessions ?? {}) as any[]) {
       if (!row?._id) continue;
-      const identity = withLiveRole(identityRowOf(row), orgTree);
+      const identity = withLiveRole(identityRowOf(row), roleRows);
       map.set(String(row._id), identity);
       if (row.session_id) map.set(String(row.session_id), identity);
     }
