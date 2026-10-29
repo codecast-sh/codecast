@@ -13,7 +13,7 @@ import { TextInput, Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, chipText, themedStyles, useActiveLook, useTheme } from '@/constants/Theme';
 import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSessionStyle';
 import { mixColor } from '@/lib/solColor';
-import { NativePressable } from '@/lib/gestureHandler';
+import { GestureHandlerRootView, NativePressable } from '@/lib/gestureHandler';
 import { PulsingDot } from '@/components/SessionItem';
 import { sendDisc, useHostedTheme } from '@/components/hosted/hostedTheme';
 import { useInboxStore, type OptimisticImage } from '@codecast/web/store/inboxStore';
@@ -300,6 +300,9 @@ export function MessageComposer({
       </RNView>
 
       <Modal visible={expanded} animationType="slide" onRequestClose={() => setExpanded(false)}>
+        {/* Android renders a Modal outside the app's root view; the send
+            button is a gesture-handler touchable and needs its own root. */}
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.expandedContainer}
@@ -334,6 +337,7 @@ export function MessageComposer({
             {actionsRowEl}
           </RNView>
         </KeyboardAvoidingView>
+        </GestureHandlerRootView>
       </Modal>
     </>
   );

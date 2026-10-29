@@ -29,6 +29,7 @@ import { RecentScreenshots } from '@/components/session/RecentScreenshots';
 import { checkoutMatches, displayPath, expandHome, newFolderPath } from '@/lib/folderSearch';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT } from '@/components/session/MessageComposer';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
+import { GestureHandlerRootView } from '@/lib/gestureHandler';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
 import { Serif } from '@/constants/fonts';
 import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
@@ -501,6 +502,9 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      {/* An Android Modal renders outside the app's root view, so the
+          composer's gesture-handler send button needs a root of its own. */}
+      <GestureHandlerRootView style={{ flex: 1 }}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         {/* The sheet closes by swiping down; only the hosted sheet carries a
             title, because its question is the prompt. */}
@@ -724,6 +728,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
           onSelect={(k) => setStableMode(k as StableModePick)}
         />
       </KeyboardAvoidingView>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
