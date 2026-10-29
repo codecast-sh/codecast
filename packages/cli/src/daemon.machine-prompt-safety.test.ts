@@ -21,6 +21,7 @@ import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types"
 import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
+import { planHandoffTarget } from "./planHandoff";
 
 // The fixture lifts delivery code out of daemon.ts by name; the pane classifiers
 // it calls live in tmuxPaneState.ts, so both files are read as one source.
@@ -205,7 +206,7 @@ function fixture(transport = "tmux", cached = true) {
     clearTimeout: (timer: { cancelled: boolean }) => { timer.cancelled = true; },
     pendingInteractivePrompts, lastEmittedSyntheticPrompt,
     closeSyntheticPrompt: async (...args: unknown[]) => { closed.push(args); lastEmittedSyntheticPrompt.delete("sid"); },
-    touchHostActivity: () => {}, pendingAgentSwitches: new Set(), planHandoffChildren: new Map(),
+    touchHostActivity: () => {}, pendingAgentSwitches: new Set(), planHandoffChildren: new Map(), planHandoffTarget,
     ownedByAnotherDevice: () => false, isRemoteDevice: () => false, codexAppServerInstance: undefined, readyCodexAppServer: async () => null,
     buildReverseConversationCache: () => cached ? { conv: "sid" } : {}, findSessionFile: () => ({ agentType: "claude" }),
     startedSessionTmux: new Map([["conv", { tmuxSession: "target", agentType: "claude", startedAt: clock.now }]]),
