@@ -2,6 +2,7 @@ import { ingestReceiptSignature } from "./ingestReceipt.js";
 import type { ParsedMessage, TranscriptEmission } from "../parser.js";
 import { detectPermissionPrompt } from "../permissionDetector.js";
 import { generateTitleFromMessage } from "./ingestMetadata.js";
+import { handoffParentSessionId } from "../planHandoff.js";
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -296,11 +297,7 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
     const lastAssistant = result.messages.filter(m => m.role === 'assistant').at(-1);
     meta.permissionPrompt = lastAssistant ? detectPermissionPrompt(lastAssistant.content) : null;
   }
-  result.handoffParents = result.messages.map(m => {
-    if (m.role !== 'user') return null;
-    const handoff = m.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
-    return handoff ? handoff[1].match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/)?.[1] ?? '' : null;
-  });
+  result.handoffParents = result.messages.map(m => m.role === 'user' ? handoffParentSessionId(m.content, job.sessionId) : null);
   result.messageTitles = result.messages.map(m => m.role === "user" ? generateTitleFromMessage(m.content) : null);
   result.signatures = result.messages.map(m => createHash('sha256').update(JSON.stringify(m)).digest('hex'));
   if (hasClockFreeReceipts(job)) result.receiptSignatures = result.messages.map(m => createHash('sha256').update(JSON.stringify({...m,timestamp:0})).digest('hex')); 

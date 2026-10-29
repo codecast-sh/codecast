@@ -4,6 +4,7 @@ import { restoreSuspendedAgent } from "./tmuxSuspendedAgent.js";
 import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
+import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from "./planHandoff.js";
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
@@ -11480,19 +11481,13 @@ async function processSessionFilePass(
         const userMsgs = metadata.headMessages ?? [];
         for (const msg of userMsgs) {
           if (!msg.content) continue;
-          const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
-          if (handoffMatch) {
-            const jsonlPath = handoffMatch[1];
-            const parentSessionMatch = jsonlPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
-            if (parentSessionMatch) {
-              const parentSessionId = parentSessionMatch[1];
+          const parentSessionId = handoffParentSessionId(msg.content, sessionId);
+          if (parentSessionId !== null) {
+            if (parentSessionId) {
               const parentConvId = conversationCache[parentSessionId];
-              // A compaction summary names the session's OWN transcript in the
-              // same words, and a self-link loops delivery forever.
-              if (parentConvId && parentConvId !== conversationId) {
+              if (parentConvId && linkPlanHandoffChild(planHandoffChildren, parentConvId, conversationId)) {
                 try {
                   await syncService.linkPlanHandoff(parentConvId, conversationId);
-                  planHandoffChildren.set(parentConvId, conversationId);
                   log(`Retroactive plan handoff: linked ${sessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
                 } catch (err) {
                   log(`Failed retroactive plan handoff link: ${err instanceof Error ? err.message : String(err)}`);
@@ -11678,7 +11673,7 @@ async function processSessionFilePass(
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         if (isPlanHandoff && parentConversationId) {
-          planHandoffChildren.set(parentConversationId, conversationId);
+          linkPlanHandoffChild(planHandoffChildren, parentConversationId, conversationId);
           log(`Registered plan handoff: parent ${parentConversationId.slice(0, 12)} -> child ${conversationId.slice(0, 12)}`);
         }
         log(`Created conversation ${conversationId} for session ${sessionId}`);
@@ -26183,8 +26178,8 @@ async function deliverMessageIntoSession(
     return false;
   }
 
-  const childConvId = planHandoffChildren.get(conversationId);
-  if (childConvId && childConvId !== conversationId) {
+  const childConvId = planHandoffTarget(planHandoffChildren, conversationId);
+  if (childConvId) {
     logDelivery(`Redirecting message from plan parent ${conversationId.slice(0, 12)} to child ${childConvId.slice(0, 12)}`);
     return deliverMessage(childConvId, content, conversationCache, syncService, messageId, titleCache, agentTypeHint);
   }
@@ -31145,17 +31140,13 @@ async function main(): Promise<void> {
           const userMsgs = msgs.filter(m => m.role === "user").slice(0, 3);
           for (const msg of userMsgs) {
             if (!msg.content) continue;
-            const handoffMatch = msg.content.match(/read the full transcript at:\s*([^\s]+\.jsonl)/i);
-            if (handoffMatch) {
-              const jsonlPath = handoffMatch[1];
-              const parentMatch = jsonlPath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
-              if (parentMatch) {
-                const parentSessionId = parentMatch[1];
+            const parentSessionId = handoffParentSessionId(msg.content, childSessionId);
+            if (parentSessionId !== null) {
+              if (parentSessionId) {
                 const parentConvId = conversationCache[parentSessionId];
-                if (parentConvId && parentConvId !== childConvId) {
+                if (parentConvId && linkPlanHandoffChild(planHandoffChildren, parentConvId, childConvId)) {
                   try {
                     await syncService.linkPlanHandoff(parentConvId, childConvId);
-                    planHandoffChildren.set(parentConvId, childConvId);
                     linked++;
                     log(`Backfill: linked plan handoff ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
                   } catch (err) {
