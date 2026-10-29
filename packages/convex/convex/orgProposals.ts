@@ -400,9 +400,12 @@ export async function listProposals(ctx: Ctx, userId: Id<"users">, args: { team_
 const decidable = (c: ChangeRow) => isOrgChangeDecidable(c.status);
 const approvable = (c: ChangeRow) => isOrgChangeApprovable(c.status);
 async function resolveIfDone(ctx: Ctx, proposal: ProposalRow, now: number): Promise<boolean> {
-  const open = (await changesOf(ctx, proposal._id)).some((c) => decidable(c) || c.status === "accepted");
-  if (open) return false;
-  await ctx.db.patch(proposal._id, { status: "resolved", resolved_at: now, updated_at: now });
+  const rows = await changesOf(ctx, proposal._id);
+  if (rows.some((c) => decidable(c) || c.status === "accepted")) return false;
+  // Every change removed by its author leaves nothing a person decided: that is
+  // the author taking the proposal back, so it reads as withdrawn.
+  const status = rows.some((c) => c.status !== "removed") ? "resolved" : "withdrawn";
+  await ctx.db.patch(proposal._id, { status, resolved_at: now, updated_at: now });
   await clearDecision(ctx, proposal, now);
   return true;
 }
@@ -901,9 +904,9 @@ export async function callerIsAuthor(ctx: Ctx, userId: Id<"users">, proposal: Pr
  * every count); an amend keeps the row and its id, the merged change (the
  * same patch and validator a person's "accept with edits" uses) replaces
  * the old and the stamp keeps it; an add is a new row with the next seq.
- * The proposal's `revisions` journal records each op in order. Removing
- * the last undecided change does not resolve the proposal: resolution is
- * a person's act.
+ * The proposal's `revisions` journal records each op in order. A revise
+ * that leaves nothing to decide settles the proposal (resolveIfDone), or
+ * it would sit open on a card that says "Nothing to decide".
  */
 export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args: { proposal: string; ops: unknown; from_session?: string }): Promise<any> {
   const proposal = await findProposal(ctx, args.proposal);
@@ -995,11 +998,12 @@ export async function performReviseProposal(ctx: Ctx, userId: Id<"users">, args:
   }
   for (const w of writes) await w();
   await ctx.db.patch(proposal._id, { revisions: [...(proposal.revisions ?? []), ...journal], updated_at: now });
+  await resolveIfDone(ctx, proposal, now);
   const after = await changesOf(ctx, proposal._id);
   const depends = orgChangeDependencies(after.filter((c) => c.status !== "removed").map((c) => ({ seq: c.seq, change: c.change })));
   return {
     proposal: proposal.short_id,
-    status: "open",
+    status: (await ctx.db.get(proposal._id))!.status,
     revisions: journal,
     ...(answered.length ? { answered } : {}),
     changes: after.map((c) => ({ id: c._id, seq: c.seq, change: c.change, status: c.status, revision: c.revision, line: describeOrgChange(c.change), depends: depends[c.seq] })),
@@ -1394,6 +1398,25 @@ export const backfillSupersession = internalMutation({
     await ctx.db.patch(newer._id, { supersedes: older._id, updated_at: now });
     await ctx.db.patch(older._id, { superseded_by: newer._id, updated_at: now });
     return { newer: newer.short_id, older: older.short_id };
+  },
+});
+
+/** One sweep: settle the open proposals a revise emptied before a revise
+ *  settled them (op-90, op-98, op-101 and op-114 sat open on "Nothing to
+ *  decide"). Idempotent; `dry` names them and writes nothing. */
+export const settleEmptiedProposals = internalMutation({
+  args: { dry: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const settled: Array<{ proposal: string; status: string }> = [];
+    for (const p of await ctx.db.query("org_proposals").collect()) {
+      if (p.status !== "open") continue;
+      const rows = await changesOf(ctx as any, p._id);
+      if (!rows.length || rows.some((c) => decidable(c) || c.status === "accepted")) continue;
+      if (!args.dry) await resolveIfDone(ctx as any, p as any, now);
+      settled.push({ proposal: p.short_id, status: args.dry ? "would settle" : (await ctx.db.get(p._id))!.status });
+    }
+    return { settled };
   },
 });
 
