@@ -23,6 +23,13 @@ describe("who an escalation reaches", () => {
     expect(escalationTargetIds("owner", "owner", members)).toEqual(["admin"]);
   });
 
+  test("never the person escalating: an admin escalating a teammate's decision reaches the other admins", () => {
+    const team = [...members, { user_id: "admin2", role: "admin" }];
+    expect(escalationTargetIds("mgr", null, team, "admin")).toEqual(["owner", "admin2"]);
+    expect(escalationTargetIds("owner", "mgr", members, "mgr")).toEqual(["admin"]);
+    expect(escalationTargetIds("mgr", null, [{ user_id: "mgr" }, { user_id: "admin", role: "admin" }], "admin")).toEqual([]);
+  });
+
   test("nobody above the owner", () => {
     expect(escalationTargetIds("owner", undefined, [{ user_id: "owner", role: "admin" }, { user_id: "bot", role: "admin", is_bot: true }])).toEqual([]);
   });

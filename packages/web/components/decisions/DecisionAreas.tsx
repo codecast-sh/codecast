@@ -9,6 +9,7 @@
 //   who would get what and opens the shared confirm (consequential
 //   SwitchReview); nothing moves before the confirm.
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useAction, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -73,12 +74,13 @@ export function AreasMap({ rows, before }: { rows: MapRow[]; before?: MapRow[] }
 
 const Chord = () => <span className="flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></span>;
 
-type MapWords = (teamId: string, words: string) => Promise<Mapped | { error: string }>;
+type MapRefusal = { error: string; budget?: true };
+type MapWords = (teamId: string, words: string) => Promise<Mapped | MapRefusal>;
 type ReadShareOut = (teamId: string) => Promise<ShareOutPreview | { error: string }>;
 
 export function ChangeAreas({ teamId }: { teamId: string }) {
   const mapAreas = useAction(api.decisionAreas.mapAreas);
-  return <ChangeAreasView teamId={teamId} mapWords={(team, words) => mapAreas({ team_id: team as Id<"teams">, words }) as Promise<Mapped | { error: string }>} />;
+  return <ChangeAreasView teamId={teamId} mapWords={(team, words) => mapAreas({ team_id: team as Id<"teams">, words }) as Promise<Mapped | MapRefusal>} />;
 }
 
 /** Change areas with its one server read handed in, so it mounts without a Convex client. */
@@ -87,7 +89,7 @@ export function ChangeAreasView({ teamId, mapWords }: { teamId: string; mapWords
   const [words, setWords] = useState("");
   const [mapped, setMapped] = useState<Mapped | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<MapRefusal | null>(null);
   const current = useCurrentAreas();
   const applyDecisionAreas = useInboxStore((s) => s.applyDecisionAreas);
   const currentText = useMemo(() => areasText(current.map((r) => ({ user_id: r.user_id, project_ids: r.projects.map((p) => p.id), takes_decisions: r.takes_decisions })), (u) => current.find((r) => r.user_id === u)?.name ?? "", (p) => current.flatMap((r) => r.projects).find((x) => x.id === p)?.title ?? ""), [current]);
@@ -104,10 +106,10 @@ export function ChangeAreasView({ teamId, mapWords }: { teamId: string; mapWords
     setError(null);
     try {
       const r: any = await mapWords(teamId, words);
-      if (r?.error) setError(r.error);
+      if (r?.error) setError(r as MapRefusal);
       else setMapped(r as Mapped);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError({ error: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(false);
     }
@@ -145,7 +147,12 @@ export function ChangeAreasView({ teamId, mapWords }: { teamId: string; mapWords
               className="w-full resize-none rounded border border-sol-border bg-sol-bg-alt px-2 py-1.5 text-[12.5px] text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue"
               data-areas-words
             />
-            {error && <div className="text-[12px] text-sol-red" role="alert" data-areas-error>{error}</div>}
+            {error && (
+              <div className="flex items-center gap-2 text-[12px]" role="alert" data-areas-error>
+                <span className="text-sol-red">{error.error}</span>
+                {error.budget && <Link href="/settings/team" className="text-sol-blue underline-offset-2 hover:underline" data-areas-set-budget>Set the budget</Link>}
+              </div>
+            )}
             <div className="flex items-center justify-end gap-2 text-[12px]">
               <button type="button" onClick={() => show(false)} className="px-2 py-1 text-sol-text-dim hover:text-sol-text">Cancel</button>
               {mapped ? (

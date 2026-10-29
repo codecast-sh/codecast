@@ -10,6 +10,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { ArrowUpRight, Check, CornerUpRight, MessageSquareText, UserRound, UserRoundX, X } from "lucide-react";
 import { toast } from "sonner";
 import { rosterEscalationTargets, useInboxStore, type SessionDecisionItem } from "../../store/inboxStore";
+import { windowOrgTree } from "../../store/orgSlice";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
 import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
 import { PaletteSearchBar } from "../PaletteRows";
@@ -42,7 +43,7 @@ export function DecisionPalette({ targets, mode, standalone, onClose }: { target
     if (step !== "escalate") return [];
     const st = useInboxStore.getState();
     const me = String(st.currentUser?._id ?? "");
-    const ids = new Set(rows.flatMap((d) => rosterEscalationTargets(d.holder?.kind === "user" ? d.holder.id : me, st.orgTree?.people, st.teamMembers)));
+    const ids = new Set(rows.flatMap((d) => rosterEscalationTargets(d.holder?.kind === "user" ? d.holder.id : me, windowOrgTree(st)?.people, st.teamMembers, me)));
     return people.filter((p) => ids.has(p.key));
   }, [step, rows, people]);
   const label = rows.length === 1 ? rows[0].question : `${counted(rows.length)} selected`;

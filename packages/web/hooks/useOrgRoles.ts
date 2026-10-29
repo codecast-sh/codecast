@@ -12,6 +12,7 @@
 // without scanning a session, which is all this hook needs.
 import { useMemo } from "react";
 import { useInboxStore } from "../store/inboxStore";
+import { windowOrgTree } from "../store/orgSlice";
 import type { OrgRole, OrgTree } from "../components/org/orgTypes";
 import { roleIconSig } from "../lib/sessionIdentity";
 
@@ -43,9 +44,9 @@ export function orgRolesSig(tree: OrgTree | null | undefined): string {
 const NO_IDS: ReadonlySet<string> = new Set();
 
 export function useOrgRoles(): { roles: OrgRole[]; workspace: OrgWorkspace | null; roleBotUserIds: ReadonlySet<string> } {
-  const sig = useInboxStore((s) => orgRolesSig(s.orgTree));
+  const sig = useInboxStore((s) => orgRolesSig(windowOrgTree(s)));
   return useMemo(() => {
-    const tree = useInboxStore.getState().orgTree;
+    const tree = windowOrgTree(useInboxStore.getState());
     const roleBotUserIds = tree?.anchors.some((a) => a.org_role_id)
       ? new Set(tree.anchors.filter((a) => a.org_role_id).map((a) => a.bot_user_id))
       : NO_IDS;

@@ -36,6 +36,7 @@ import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, type OrgChangeStatus, type O
 import { andList, changeSentence, describeOrgChange, isOrgChangeApprovable, isOrgChangeDecidable, proposalReplyText, ORG_VERDICT_REVISED, type OrgChangeReply, type OrgProposalReply, type OrgReplyVerdict, type OrgTenureSpec, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { hasThreadState, clearedThreadStateFields, type ThreadStateFields } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
+import { activeWorkspaceKeyOf } from "../lib/workspaceScope";
 import { leadScopeChange, type LeadScopeChange } from "@codecast/shared/contracts/orgLead";
 import type { OrgLogEntry, OrgLogRow } from "@codecast/shared/contracts/orgChange";
 
@@ -1254,6 +1255,18 @@ function replayOntoPush<F extends "orgProposalChanges" | "orgProposals" | "orgLo
 export function orgTreeFor(scope: string | null | undefined, tree: { workspace?: { kind: string; id: string } } | null | undefined): boolean {
   if (!scope || !tree?.workspace) return true;
   return `${tree.workspace.kind}:${tree.workspace.id}` === scope;
+}
+
+/** The held org tree when it is the workspace this window reads (its org scope, else the active workspace); null
+ *  while the slot still holds another's. A workspace with Org off never refeeds the slot, so after a switch it keeps
+ *  the last workspace's roles and people, which no picker or escalation may offer as this one's. */
+export function windowOrgTree<T extends { workspace?: { kind: string; id: string } }>(s: {
+  orgTree: T | null;
+  orgScope: string | null;
+  clientState: { ui?: { active_team_id?: string | null } };
+  currentUser?: { _id?: unknown } | null;
+}): T | null {
+  return orgTreeFor(s.orgScope ?? activeWorkspaceKeyOf(s), s.orgTree) ? s.orgTree : null;
 }
 
 export const ORG_SYNC_REGISTRY = {

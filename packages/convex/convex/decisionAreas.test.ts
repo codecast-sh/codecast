@@ -5,7 +5,8 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { askForAreas } from "./decisionAreas";
 import { hashToken } from "./apiTokens";
 import { setBudgetCap } from "./lib/teamBudget";
 
@@ -152,5 +153,33 @@ describe("Change areas (mapAreas)", () => {
     expect(r.error).toBeUndefined();
     expect(r.assignments.find((a: any) => a.user_id === String(s.jason)).projects).toEqual([{ id: String(s.desk), title: "Desk" }]);
     expect((await s.focusOf(s.jason)).projects).toEqual([]);
+  });
+});
+
+// No budget: Change areas says why and offers the budget; the admins' card answered in words asks again, saying why.
+describe("words that cannot be mapped", () => {
+  test("Change areas marks a budget refusal so the dialog can send the admin to set one", async () => {
+    const s = await setup({ budget: false });
+    const r: any = await s.t.withIdentity({ subject: `${s.ashot}|session` }).action(api.decisionAreas.mapAreas, { team_id: s.team, words: "Jason: desk" });
+    expect(r).toEqual({ error: "The team's model budget has no room this month", budget: true });
+  });
+
+  test("the admins' card answered in words with no budget is asked again, saying why", async () => {
+    const s = await setup({ budget: false });
+    const first = await s.t.run(async (ctx) => {
+      const conv = await ctx.db.insert("conversations", { user_id: s.ashot, session_id: "sess-1", title: "Asking session", team_id: s.team } as any);
+      return askForAreas(ctx as any, s.team, await ctx.db.get(conv), T0);
+    });
+    expect(first).not.toBeNull();
+    await s.t.action(internal.decisionAreas.mapAndApply, { user_id: s.ashot, team_id: s.team, words: "Jason: desk" });
+    const after = await s.t.run(async (ctx) => {
+      const team: any = await ctx.db.get(s.team);
+      const card: any = await ctx.db.get(team.decision_areas.card_id);
+      return { same: String(card._id) === String(first), status: card.status, context: card.context_md as string };
+    });
+    expect(after.same).toBe(false);
+    expect(after.status).toBe("pending");
+    expect(after.context.startsWith("Your last answer was not applied: The team's model budget has no room this month.")).toBe(true);
+    expect(model.prompts).toEqual([]);
   });
 });

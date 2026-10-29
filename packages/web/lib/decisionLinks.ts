@@ -1,5 +1,6 @@
 import { flowName } from "@codecast/shared/contracts/flowPool";
 import type { SessionDecisionItem } from "../store/inboxStore";
+import { inViewerQueue } from "./decisionQueue";
 
 // The route of a decision's document page: its short id when it has one.
 export function decisionHref(d: Pick<SessionDecisionItem, "_id" | "short_id">): string {
@@ -51,8 +52,18 @@ export function runHref(runId: string): string {
   return `/workflows/runs/${runId}`;
 }
 
-/** What a pending decision's wait means for the person, in plain words: the consequence, never the mechanism. */
-export function decisionWaitLabel(d: Pick<SessionDecisionItem, "status" | "blocking">): string {
+/** Whether an open decision waits on the viewer: the queue's own stamp when the row came through a queue feed, else
+ *  (a decision page opened directly, read from its document alone) whether the viewer is among the people it asks. */
+export function waitsOnViewer(d: Pick<SessionDecisionItem, "in_queue" | "asked_user_ids">, viewerId: string | undefined): boolean {
+  if (d.in_queue !== undefined || !d.asked_user_ids || !viewerId) return inViewerQueue(d);
+  return d.asked_user_ids.includes(viewerId);
+}
+
+/** What a pending decision's wait means for the person, in plain words: the consequence, never the mechanism. One held
+ *  by someone else (passed, escalated, shared out) waits on them; a silent card was asked by codecast, not an agent. */
+export function decisionWaitLabel(d: Pick<SessionDecisionItem, "status" | "blocking" | "silent" | "in_queue" | "asked_user_ids">, viewerId?: string): string {
   if (d.status !== "pending") return d.status;
-  return d.blocking ? "Waiting on you" : "The agent went ahead; you can change course";
+  if (!waitsOnViewer(d, viewerId)) return "Waiting on a teammate";
+  if (d.blocking) return "Waiting on you";
+  return d.silent ? "Asked of you" : "The agent went ahead; you can change course";
 }

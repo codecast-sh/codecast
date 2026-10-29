@@ -135,7 +135,10 @@ export const rosterForUser = internalQuery({
 });
 
 /** One model call on the team's budget: the words onto the roster's members and projects. */
-async function mapWords(ctx: { runMutation: any; scheduler: any }, roster: AreasRoster, words: string): Promise<AreasPreview | { error: string }> {
+/** A refusal; `budget` when the team's model budget had no room, so the person can be sent to set one. */
+type MapRefusal = { error: string; budget?: true };
+
+async function mapWords(ctx: { runMutation: any; scheduler: any }, roster: AreasRoster, words: string): Promise<AreasPreview | MapRefusal> {
   if (!words.trim()) return { error: "Say who decides for which areas" };
   if (roster.projects.length === 0) return { error: "This team has no projects to give out" };
   const reply = await runModelCall(ctx, { workspace: `team:${roster.team_id}`, team_id: roster.team_id }, "call", {
@@ -145,7 +148,7 @@ async function mapWords(ctx: { runMutation: any; scheduler: any }, roster: Areas
     max_tokens: AREAS_MAX_TOKENS,
     output: "json",
   }, "Decision areas");
-  if (!reply.ok) return { error: reply.reason === "budget" ? "The team's model budget has no room this month" : `Could not read the areas: ${reply.error}` };
+  if (!reply.ok) return reply.reason === "budget" ? { error: "The team's model budget has no room this month", budget: true } : { error: `Could not read the areas: ${reply.error}` };
   const parsed = parseAreasReply(reply.json, roster.members, roster.projects, new Map(Object.entries(roster.takes)));
   if (!parsed) return { error: "Could not read the areas from that answer" };
   return previewOf(roster, parsed.assignments, parsed.unplaced);
@@ -154,7 +157,7 @@ async function mapWords(ctx: { runMutation: any; scheduler: any }, roster: Areas
 /** "Change areas": the map the words make, for the person to look at before applying it. */
 export const mapAreas = action({
   args: { team_id: v.id("teams"), words: v.string() },
-  handler: async (ctx, args): Promise<AreasPreview | { error: string }> => {
+  handler: async (ctx, args): Promise<AreasPreview | MapRefusal> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { error: "Sign in first" };
     const roster: AreasRoster | { error: string } = await ctx.runQuery(internal.decisionAreas.rosterForUser, { user_id: userId, team_id: args.team_id });
@@ -170,8 +173,27 @@ export const mapAndApply = internalAction({
     const roster: AreasRoster | { error: string } = await ctx.runQuery(internal.decisionAreas.rosterForUser, { user_id: args.user_id, team_id: args.team_id });
     if ("error" in roster) return roster;
     const mapped = await mapWords(ctx, roster, args.words);
-    if ("error" in mapped) return mapped;
-    return await ctx.runMutation(internal.decisionAreas.applyInternal, { user_id: args.user_id, team_id: args.team_id, assignments: mapped.assignments.map(({ user_id, project_ids, takes_decisions }) => ({ user_id, project_ids, takes_decisions })) });
+    const done: { applied: number } | { error: string } = "error" in mapped ? mapped
+      : await ctx.runMutation(internal.decisionAreas.applyInternal, { user_id: args.user_id, team_id: args.team_id, assignments: mapped.assignments.map(({ user_id, project_ids, takes_decisions }) => ({ user_id, project_ids, takes_decisions })) });
+    // The card already reads as answered; words that could not be applied ask again, saying why, or nothing would.
+    if ("error" in done) await ctx.runMutation(internal.decisionAreas.askAreasAgain, { team_id: args.team_id, reason: done.error });
+    return done;
+  },
+});
+
+/** The admins' card answered in words that could not be applied: a fresh card, its context saying why. */
+export const askAreasAgain = internalMutation({
+  args: { team_id: v.id("teams"), reason: v.string() },
+  handler: async (ctx, args) => {
+    const team: Doc<"teams"> | null = await ctx.db.get(args.team_id);
+    const state = team?.decision_areas;
+    if (!team || !state?.card_id || state.set_at || state.declined_at) return;
+    const card: Doc<"session_decisions"> | null = await ctx.db.get(state.card_id);
+    const conversation = card ? await ctx.db.get(card.conversation_id) : null;
+    if (!conversation) return;
+    const { card_id: _c, proposal: _p, ...rest } = state;
+    await ctx.db.patch(team._id, { decision_areas: rest });
+    await askForAreas(ctx, team._id, conversation, Date.now(), args.reason.replace(/\.$/, ""));
   },
 });
 
@@ -223,7 +245,7 @@ export async function proposeAreas(ctx: Ctx, roster: AreasRoster): Promise<AreaA
  * asked from the workspace's agent's session when it has one, else from the
  * session whose question found no areas.
  */
-export async function askForAreas(ctx: Ctx, teamId: Id<"teams">, conversation: any, now: number): Promise<Id<"session_decisions"> | null> {
+export async function askForAreas(ctx: Ctx, teamId: Id<"teams">, conversation: any, now: number, unapplied?: string): Promise<Id<"session_decisions"> | null> {
   const team: Doc<"teams"> | null = await ctx.db.get(teamId);
   const state = team?.decision_areas;
   if (!team || state?.card_id || state?.set_at || state?.declined_at) return null;
@@ -249,7 +271,7 @@ export async function askForAreas(ctx: Ctx, teamId: Id<"teams">, conversation: a
     user_id: asker.user_id,
     short_id,
     question: AREAS_CARD_QUESTION,
-    context_md: `Each new decision about a project goes to whoever covers it, fewest open first. Projects: ${roster.projects.map((p) => p.title).join(", ")}.\n\nPick the split below, or answer in your own words, naming each person and what they cover.`,
+    context_md: `${unapplied ? `Your last answer was not applied: ${unapplied}.\n\n` : ""}Each new decision about a project goes to whoever covers it, fewest open first. Projects: ${roster.projects.map((p) => p.title).join(", ")}.\n\nPick the split below, or answer in your own words, naming each person and what they cover.`,
     kind: "single",
     category: "unknown",
     options: [{ label: AREAS_CARD_USE, body_md: split }, { label: AREAS_CARD_LEAVE }],

@@ -552,7 +552,7 @@ export function shareOutLedger(p: ShareOutPreview): SwitchLedger {
     rows: [
       ...p.to.map((t) => ({ k: t.name, v: `${t.count}`, list: p.moves.filter((m) => m.to === t.user_id).map((m) => `${m.short_id ? `${m.short_id} ` : ""}${m.question}`) })),
       { k: "Each person", v: "Told once" },
-      { k: "Kept as is", v: "Passed, --to, protected" },
+      { k: "Kept as is", v: "Passed, escalated, asked by name, protected" },
     ],
     confirm: p.moves.length ? `Share out ${p.moves.length}` : "Share out",
     keep: "Cancel",

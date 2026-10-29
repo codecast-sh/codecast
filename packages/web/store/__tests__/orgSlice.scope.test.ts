@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ORG_SYNC_REGISTRY, orgTreeFor } from "../orgSlice";
+import { ORG_SYNC_REGISTRY, orgTreeFor, windowOrgTree } from "../orgSlice";
 
 const tree = (kind: string, id: string) => ({ workspace: { kind, id, name: id }, people: [], roles: [], anchors: [] });
 
@@ -17,5 +17,27 @@ describe("org scope: the window's org tree is the workspace the page reads", () 
     expect(draft.orgTreeServer).toBeUndefined();
     const next = ORG_SYNC_REGISTRY.orgTree.normalize(tree("team", "t1"), draft) as any;
     expect(next.workspace.id).toBe("t1");
+  });
+});
+
+// A workspace with Org off never refeeds the slot: after a switch it still holds the last workspace's tree, and its
+// roles must not be offered as this workspace's (a test team's decision offered Union's roles to pass to).
+describe("windowOrgTree: readers see the held tree only when it is the window's workspace", () => {
+  const state = (held: ReturnType<typeof tree> | null, active: string | null, orgScope: string | null = null) => ({
+    orgTree: held, orgScope, clientState: { ui: { active_team_id: active } }, currentUser: { _id: "u1" },
+  });
+  test("the active team's tree reads through", () => {
+    const held = tree("team", "t1");
+    expect(windowOrgTree(state(held, "t1"))).toBe(held);
+  });
+  test("another team's tree left in the slot reads as none", () => {
+    expect(windowOrgTree(state(tree("team", "t1"), "t2"))).toBeNull();
+    expect(windowOrgTree(state(tree("team", "t1"), null))).toBeNull();
+  });
+  test("the personal workspace's own tree, and a scoped surface's tree, read through", () => {
+    const mine = tree("user", "u1");
+    expect(windowOrgTree(state(mine, null))).toBe(mine);
+    const scoped = tree("team", "t1");
+    expect(windowOrgTree(state(scoped, "t2", "team:t1"))).toBe(scoped);
   });
 });

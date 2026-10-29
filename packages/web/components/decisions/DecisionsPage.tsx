@@ -9,7 +9,7 @@
 // the admins' area controls: Change areas and Share out (DecisionAreas).
 import { useCallback, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { LayoutList, Rows3, StepForward } from "lucide-react";
+import { BookOpen, LayoutList, Rows3, StepForward } from "lucide-react";
 import { DetailSplitLayout } from "../DetailSplitLayout";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { SegmentedToggle } from "../SegmentedToggle";
@@ -27,6 +27,9 @@ import { isFlowDecision } from "../../lib/decisions/decisionRows";
 import type { SessionDecisionItem } from "../../store/inboxStore";
 
 const routeOf = (d: SessionDecisionItem) => `/decisions/${d.short_id ?? d._id}`;
+
+/** How passing, escalating, areas and the thread work, as people meet them (a published page). */
+const GUIDE_URL = "https://codecast.sh/a/uwp726v59XIX";
 
 /** A decision whole, beside the list: a flow's in the flows' reader, any other as its document. */
 export function DecisionPeek({ d, onClose }: { d: SessionDecisionItem; onClose: () => void }) {
@@ -82,7 +85,13 @@ export function DecisionsList({ activeId }: { activeId?: string }) {
       renderPreview={(d, onClose) => <DecisionPeek d={d} onClose={onClose} />}
       activeItemId={activeId ? rows.mine.find((d) => d.short_id === activeId || d._id === activeId)?._id : undefined}
       savedViews
-      headerExtra={state.view.tab === "team" ? <TeamAreaControls workspace={rows.workspaceKey} /> : step}
+      headerExtra={<>
+        {state.view.tab === "team" ? <TeamAreaControls workspace={rows.workspaceKey} /> : step}
+        <a href={GUIDE_URL} target="_blank" rel="noreferrer" aria-label="Decisions guide" data-decisions-guide
+          className="flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/40 text-xs text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors no-underline">
+          <BookOpen className="w-3 h-3" /><span className="cq-header-collapse">Guide</span>
+        </a>
+      </>}
       displayExtra={mineControls}
       customContent={cards ? () => <div className="flex-1 overflow-y-auto"><DecisionQueueList /></div> : undefined}
     />

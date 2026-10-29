@@ -122,7 +122,7 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
 // Who an escalation reaches (escalationTargetIds): the owner's manager, else
 // the workspace's admins, read from this workspace's memberships. The owner is
 // the person holding it now, else the caller.
-export async function escalationTargets(ctx: Ctx, teamId: Id<"teams">, ownerId: Id<"users">): Promise<Id<"users">[]> {
+export async function escalationTargets(ctx: Ctx, teamId: Id<"teams">, ownerId: Id<"users">, byId?: Id<"users">): Promise<Id<"users">[]> {
   const memberships = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect();
   const members = [];
   for (const m of memberships) {
@@ -130,7 +130,7 @@ export async function escalationTargets(ctx: Ctx, teamId: Id<"teams">, ownerId: 
     if (u) members.push({ user_id: String(m.user_id), role: m.role, is_bot: !!u.is_bot });
   }
   const managerId = memberships.find((m: any) => String(m.user_id) === String(ownerId))?.reports_to_user_id;
-  return escalationTargetIds(String(ownerId), managerId ? String(managerId) : null, members) as Id<"users">[];
+  return escalationTargetIds(String(ownerId), managerId ? String(managerId) : null, members, byId ? String(byId) : undefined) as Id<"users">[];
 }
 
 export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: string, rawNote: string | undefined): Promise<{ escalated: true; to: Id<"users">[] } | { error: string }> {
@@ -141,8 +141,8 @@ export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: st
   const { row, teamId } = open;
   if (!teamId) return { error: "A personal session's decision has no one above it to escalate to" };
   const ownerId = (row.holder?.kind === "user" ? row.holder.id : userId) as Id<"users">;
-  const to = await escalationTargets(ctx, teamId, ownerId);
-  if (to.length === 0) return { error: "Nobody is above the owner: no manager and no other admin in this workspace" };
+  const to = await escalationTargets(ctx, teamId, ownerId, userId);
+  if (to.length === 0) return { error: String(ownerId) === String(userId) ? "Nobody is above you: no manager and no other admin in this workspace" : "Nobody else is above the owner: take it yourself instead" };
   const now = Date.now();
   const from = handoffFrom(row);
   // A pass to the first of them, so ownership moves and re-asks keep it where it was sent; the others share the card.

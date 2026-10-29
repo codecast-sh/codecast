@@ -300,7 +300,7 @@ import {
   selectChannelReadMarker,
   type ChatSliceState,
 } from "./chatSlice";
-import { bindOptimisticMessageWriter, createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFieldsIntent, type OrgSliceState } from "./orgSlice";
+import { bindOptimisticMessageWriter, createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFieldsIntent, windowOrgTree, type OrgSliceState } from "./orgSlice";
 import { writeAsServerShape } from "./serverShape";
 import { replaceContents } from "./simSlot";
 import { attachProjectStubDraft, createInitiativeSlice, detachProjectStubDraft, moveProjectInGoals, moveProjectInLocks, rekeyInitiativeProjectDraft, type InitiativeSliceActions } from "./initiativeSlice";
@@ -9917,7 +9917,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!row || row.status !== "pending" || !said) return;
     const me = String(this.currentUser?._id ?? "");
     const owner = row.holder?.kind === "user" ? row.holder.id : me;
-    const to = rosterEscalationTargets(owner, this.orgTree?.people, this.teamMembers);
+    const to = rosterEscalationTargets(owner, windowOrgTree({ orgTree: this.orgTree, orgScope: this.orgScope, clientState: this.clientState, currentUser: this.currentUser })?.people, this.teamMembers, me);
     const now = Date.now();
     row.escalated = { at: now, by: me, note: said, to };
     if (to.length) {
@@ -15146,9 +15146,9 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
 }
 
 /** Whom an escalation reaches, from the roster a client holds: the manager on the org tree, the members on the team roster. */
-export function rosterEscalationTargets(ownerId: string, people: ReadonlyArray<{ user_id: string; reports_to_user_id?: string | null }> | null | undefined, members: ReadonlyArray<any> | null | undefined): string[] {
+export function rosterEscalationTargets(ownerId: string, people: ReadonlyArray<{ user_id: string; reports_to_user_id?: string | null }> | null | undefined, members: ReadonlyArray<any> | null | undefined, byId?: string): string[] {
   const managerId = (people ?? []).find((p) => String(p.user_id) === ownerId)?.reports_to_user_id;
-  return escalationTargetIds(ownerId, managerId, (members ?? []).map((m) => ({ user_id: String(m._id), role: m.role, is_bot: m.is_bot })));
+  return escalationTargetIds(ownerId, managerId, (members ?? []).map((m) => ({ user_id: String(m._id), role: m.role, is_bot: m.is_bot })), byId);
 }
 
 export const useInboxStore = survivingInboxStore ?? createInboxStore();

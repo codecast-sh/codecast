@@ -4,7 +4,7 @@ import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { useRef, useState, type WheelEvent } from "react";
 import Link from "next/link";
 import { ArrowLeft, Check, MessageSquare, MessagesSquare } from "lucide-react";
-import type { SessionDecisionItem, DecisionDetailItem } from "../../store/inboxStore";
+import { useInboxStore, type SessionDecisionItem, type DecisionDetailItem } from "../../store/inboxStore";
 import { useSyncTaskEvidence, useTaskEvidenceByShortId } from "../../hooks/useSyncTaskEvidence";
 import { useDecisionThread } from "../../hooks/useDecisionThread";
 import { useJumpToDecisionAsk } from "../../hooks/useJumpToDecisionAsk";
@@ -21,7 +21,7 @@ import { OptionPages } from "./OptionPages";
 import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
-import { decisionWaitLabel } from "../../lib/decisionLinks";
+import { decisionWaitLabel, waitsOnViewer } from "../../lib/decisionLinks";
 import { DecisionAnswerPanel, restatesCard, useDecisionAnswering, useDecisionPage } from "./DecisionAnswering";
 import "./decisions.css";
 
@@ -50,6 +50,7 @@ function Empty({ text }: { text: string }) {
 
 function DocumentBody({ decision, detail, answerable }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean }) {
   const a = useDecisionAnswering(decision, detail, answerable);
+  const meId = useInboxStore((st) => st.currentUser?._id as string | undefined);
   const { now, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, heldNote, outcome, closed, banner, doubt } = a;
   // A card's cause task may carry the author's change guide; its evidence row holds it.
   useSyncTaskEvidence(a.cardTask);
@@ -99,8 +100,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
                 and when, so the header keeps only the age. */}
             {!outcome && !banner && (
               // Words in the wait's tone, not a box: the headline under it is the thing to read.
-              <span className={pending ? (decision.blocking ? "text-sol-yellow" : "text-sol-blue") : "text-sol-text-dim"}>
-                {decisionWaitLabel(decision)}
+              <span className={pending && waitsOnViewer(decision, meId) ? (decision.blocking ? "text-sol-yellow" : "text-sol-blue") : "text-sol-text-dim"}>
+                {decisionWaitLabel(decision, meId)}
               </span>
             )}
             <span>{!outcome && !banner && "· "}asked {formatTimeAgo(decision.created_at, now)}</span>

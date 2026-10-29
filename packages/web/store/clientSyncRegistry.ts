@@ -335,11 +335,14 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   // The decision document page's context (doc body, task, stack, ladder,
   // people, grant offer), one row per decision viewed. Delta: each page
-  // feeds its own row and must not evict the others.
+  // feeds its own row and must not evict the others. Every field but _id is an
+  // object, and a row whose scalars match keeps its old identity, so each is
+  // compared by content: otherwise a pass, an escalation or an answer that
+  // lands while the page is cached never reaches it.
   decisionDetails: {
     persistence: { kind: "collection", key: "decisionDetails" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true, deepFields: ["superseded"] },
+    sync: { isDelta: true, deepFields: ["decision", "doc", "task", "stack", "ladder", "asked_users", "holder_role", "grant_offer", "grant", "superseded"] },
     feeds: ["sessionDecisions.getWithDoc"],
   },
   // A decision's team thread (decisionThread.thread, store/decisionThreadTypes.ts).

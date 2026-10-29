@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { ArrowUp } from "lucide-react";
 import { rosterEscalationTargets, useInboxStore } from "../../store/inboxStore";
+import { windowOrgTree } from "../../store/orgSlice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
 import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
@@ -35,7 +36,7 @@ export function PassDecision({ decisionId, open, onOpenChange, onPassed, keys = 
   const holderKey = useInboxStore((s) => (s.sessionDecisions[decisionId] ?? s.decisionDetails[decisionId]?.decision)?.holder_key);
   const passDecision = useInboxStore((s) => s.passDecision);
   const escalateDecision = useInboxStore((s) => s.escalateDecision);
-  const orgPeople = useInboxStore((s) => s.orgTree?.people);
+  const orgPeople = useInboxStore((s) => windowOrgTree(s)?.people);
   const members = useInboxStore((s) => s.teamMembers);
 
   const options = useMemo(() => [
@@ -46,7 +47,7 @@ export function PassDecision({ decisionId, open, onOpenChange, onPassed, keys = 
   // Whom Escalate reaches, named on the panel before it is sent.
   const upTo = useMemo(() => {
     const owner = holderKey?.startsWith("user:") ? holderKey.slice(5) : String(meId ?? "");
-    const ids = rosterEscalationTargets(owner, orgPeople, members);
+    const ids = rosterEscalationTargets(owner, orgPeople, members, meId ? String(meId) : undefined);
     return ids.map((id) => people.find((p) => p.key === id)?.label ?? "a teammate");
   }, [holderKey, meId, orgPeople, members, people]);
 
