@@ -132,9 +132,10 @@ const { DEFAULT_SHORTCUTS, mergeShortcuts, diffOverrides } = require("./shortcut
 
 let mainWindow = null;
 let paletteWindow = null;
-// Whether Codecast's own window was frontmost when the palette was summoned.
-// Decides where Enter's fire-and-forget hand-back lands (see compose-submit).
-let paletteSummonedOverSelf = false;
+// The Codecast window (main, Chat/Work, a breakout) that was frontmost when the
+// palette was summoned, or null when another app was. Decides where Enter's
+// fire-and-forget hand-back lands (see compose-submit).
+let paletteSummonedOver = null;
 let tray = null;
 let deepLinkUrl = null;
 let currentBaseUrl = BASE_URL;
@@ -2199,11 +2200,15 @@ function togglePalette() {
 // so we never flash the previous face during the swap.
 function placePaletteWindow() {
   if (!paletteWindow) return;
-  // Capture BEFORE the palette takes focus: was Codecast's own window the one
-  // being summoned over? Enter's fire-and-forget hand-back (compose-submit)
-  // must step back into the main window in that case, not app.hide() past it
-  // to whatever app sits behind.
-  paletteSummonedOverSelf = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused());
+  // Capture BEFORE the palette takes focus: which Codecast window, if any, is
+  // it being summoned over? Enter's fire-and-forget hand-back (compose-submit)
+  // must step back into that window, not app.hide() past it to whatever app
+  // sits behind. Re-summoning while the palette itself is focused (pressing
+  // the shortcut again, switching face) keeps the window it first opened over.
+  // The agent dock is a panel that holds the keyboard without activating
+  // Codecast, so the app in front is still someone else's.
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused !== paletteWindow) paletteSummonedOver = focused === agentDockWindow ? null : focused;
   // Reposition to center of current display
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
@@ -3466,11 +3471,11 @@ shellIpc.on("compose-submit", (_e, data) => {
       `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify("/conversation/" + data.conversationId)} }))`
     );
   } else if (!data?.navigate) {
-    if (paletteSummonedOverSelf && mainWindow && !mainWindow.isDestroyed()) {
-      // Summoned while Codecast was frontmost — "stepping back out" means
-      // returning to the main window, not hiding the whole app.
-      mainWindow.show();
-      mainWindow.focus();
+    if (paletteSummonedOver && !paletteSummonedOver.isDestroyed()) {
+      // Summoned while a Codecast window was frontmost — "stepping back out"
+      // means returning to that window, not hiding the whole app.
+      paletteSummonedOver.show();
+      paletteSummonedOver.focus();
     } else if (process.platform === "darwin") {
       app.hide();
     }
