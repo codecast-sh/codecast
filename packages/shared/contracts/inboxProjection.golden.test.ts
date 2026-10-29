@@ -98,6 +98,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // `run-logs` fixture: its three logs are out, the hosting session is in.
   // No older fixture moved.
   22: "47f15077eeeeec75",
+  // v23: a standing session whose live work is a nested subagent (child_live)
+  // files by its own state: the `nested_role` row in roles.json.
+  23: "873f7c5eaedf6e64",
 };
 
 type Expected = {

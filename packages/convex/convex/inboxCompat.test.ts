@@ -292,4 +292,34 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     expect("escalated_by_role" in hand).toBe(false);
     expect("escalations" in sessions.find((s: any) => s._id === "conversations_standing")).toBe(false);
   });
+
+  // A lead that delegates with `cast spawn --subagent` has no hand beside it:
+  // its only live work is a nested child, which is never a member, so the
+  // child_live fact is what files it by its own state.
+  test("a standing session whose only live work is a nested subagent files by its own state", async () => {
+    const managed = (id: string, agent_status: string) => ({
+      _id: `ms_${id}`, user_id: ME, conversation_id: `conversations_${id}`, last_heartbeat: EPOCH - 1000,
+      agent_status, agent_status_updated_at: EPOCH - MIN, tmux_session: `cc-${id}`, permission_mode: "default",
+    });
+    const tables = {
+      org_roles: [{ _id: "org_roles_alive", short_id: "or-9", name: "Aliveness lead", handle: "aliveness", avatar: "goat", status: "active" }],
+      managed_sessions: [managed("lead", "dormant"), managed("nested", "dormant"), managed("quiet", "dormant")],
+      conversations: [
+        conv("lead", { updated_at: EPOCH - MIN, anchor_id: "anchors_alive", standing_role_id: "org_roles_alive", thread_state_status: "dormant", thread_state: "waiting on the review" }),
+        conv("nested", { updated_at: EPOCH - 2 * MIN, is_subagent: true, parent_conversation_id: "conversations_lead", org_role_id: "org_roles_alive", thread_state_status: "dormant", thread_state: "PR under review" }),
+        // A dormant lead with nothing under it stays out, as before.
+        conv("quiet", { updated_at: EPOCH - MIN, anchor_id: "anchors_quiet", standing_role_id: "org_roles_quiet", thread_state_status: "dormant", thread_state: "nothing running" }),
+      ],
+    };
+    const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
+    expect((liveness as any).conversations_lead.child_live).toBe(true);
+    expect((liveness as any).conversations_lead.bucket).toBe("dormant");
+    expect((liveness as any).conversations_quiet.bucket).toBe("hidden");
+
+    // `cast sessions` files it the same way, with the child listed under it.
+    const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, { projection: true });
+    expect(sessions.find((s: any) => s._id === "conversations_lead").bucket).toBe("dormant");
+    expect(sessions.find((s: any) => s._id === "conversations_quiet").bucket).toBe("hidden");
+    expect(sessions.some((s: any) => s._id === "conversations_nested")).toBe(true);
+  });
 });

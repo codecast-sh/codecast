@@ -707,7 +707,7 @@ describe("field ownership constants", () => {
       "tmux_session", "permission_mode", "agent_started_at", "open_tasks", "open_tasks_at",
       "message_count", "updated_at", "last_turn_allows_park",
       "agent_status_updated_at", "agent_status_boundary", "turn_completed_at", "hibernated_at", "last_heartbeat", "last_role_is_user", "auq_open", "daemon_alive_until", "producing_until",
-      "child_asking", "child_asking_until", "activity", "context_tokens", "last_model_call_at",
+      "child_asking", "child_asking_until", "child_live", "activity", "context_tokens", "last_model_call_at",
     ]);
     expect([...INBOX_PROJECTION_FIELDS]).toEqual([
       "bucket", "work_state", "asking", "below_fold", "bucket_stale_at", "stale_bucket",
@@ -715,9 +715,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 22", () => {
+  test("the caps are the single source and the version is 23", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(22);
+    expect(INBOX_PROJECTION_VERSION).toBe(23);
   });
 });
 
@@ -798,6 +798,23 @@ describe("rideLeadPlacements — a teammate rides its present lead", () => {
     rideLeadPlacements(p, (id) => rowsById[id], (rider, lead) => { rider.stamp = lead.stamp; });
     expect(p.get("mate")!.stamp).toBe("lead");
     expect(p.get("mate_of_mate")!.stamp).toBe("lead");
+  });
+
+  test("a hidden standing session with a live nested child files by its own state; idle or childless stays hidden", () => {
+    const rows: Record<string, RollupRow> = {
+      nested_lead: { standing_role_id: "r1", child_live: true },
+      idle_lead: { standing_role_id: "r2", child_live: true },
+      quiet_lead: { standing_role_id: "r3" },
+    };
+    const p = new Map<string, { bucket: InboxBucket; work_state: string }>([
+      ["nested_lead", { bucket: "hidden", work_state: "dormant" }],
+      ["idle_lead", { bucket: "hidden", work_state: "idle" }],
+      ["quiet_lead", { bucket: "hidden", work_state: "dormant" }],
+    ]);
+    rideLeadPlacements(p, (id) => rows[id]);
+    expect(p.get("nested_lead")!.bucket).toBe("dormant");
+    expect(p.get("idle_lead")!.bucket).toBe("hidden");
+    expect(p.get("quiet_lead")!.bucket).toBe("hidden");
   });
 
   test("input order never matters", () => {
