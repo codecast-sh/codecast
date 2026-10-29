@@ -895,7 +895,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           agent={{
             label: rootAgent ? agentName(rootAgent) : "Workspace agent",
             title: rootAgent ? `${agentName(rootAgent)}, the workspace's agent` : "Set up the workspace's agent",
-            icon: <AnchorAvatar anchor={rootAgent} size={20} className="flex-shrink-0" />,
+            icon: <AnchorAvatar anchor={rootAgent} size={20} className="w-5 h-5 flex-shrink-0" bare />,
           }}
         />
 

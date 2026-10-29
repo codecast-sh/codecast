@@ -4,6 +4,7 @@ import { useSyncTeams } from "@codecast/web/hooks/useSyncTeams";
 import { useSyncCollection } from "@codecast/web/hooks/useSyncCollection";
 import { useBootstrapCollection } from "@codecast/web/hooks/useBootstrapCollection";
 import { useSyncOrgTreeFeeder } from "@codecast/web/hooks/useSyncOrgTree";
+import { useSyncViewerRoles } from "@codecast/web/hooks/useSyncViewerRoles";
 import { workspaceStamp } from "@codecast/web/hooks/useWorkspaceArgs";
 import { useSyncTasks } from "./useSyncTasks";
 import { useSyncPlans } from "./useSyncPlans";
@@ -36,6 +37,8 @@ export function useSyncWorkspaceData(): void {
     { liveLoadingScope: "projects" },
   );
   useSyncOrgTreeFeeder();
+  // Every role the viewer can see, the one home of a role's face (lib/roleRows).
+  useSyncViewerRoles();
 }
 
 /** Is a workspace list still on its cold first load? True while its bootstrap

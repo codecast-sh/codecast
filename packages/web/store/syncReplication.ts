@@ -28,7 +28,7 @@ import {
 } from "@platform/engine";
 import { useInboxStore, hasSyncRegistryEntry, syncLogScopeMetaKey, SESSIONS_PRESERVE_FIELDS } from "./inboxStore";
 import { INBOX_FACT_FIELDS } from "@codecast/shared/contracts";
-import { writePatchesToIDB } from "./idbCache";
+import { CACHE_SCHEMA_VERSION, writePatchesToIDB } from "./idbCache";
 import { followerPersistencePatches } from "./followerPersistence";
 import { syncTransaction } from "./syncTransaction";
 import type { GestureMessage } from "./gestureBridge";
@@ -42,13 +42,18 @@ import {
 // host and its followers share one principal by construction, so a window
 // that just signed in as someone else can never take a snapshot, an update or
 // a mut from the previous account's host, and needs no per-message check.
+// They are scoped to the store's schema too. After a deploy, windows run
+// different builds until each reloads, and a host from an older build never
+// mounts the feeders of a collection added since: its followers would wait on
+// that collection forever. Every collection change bumps the schema version,
+// so windows that cannot share a store elect separate hosts.
 const LOCK_NAME = "codecast-sync-host";
 const CHANNEL_NAME = "codecast-replication-v1";
 export function replicationLockName(principalId: string): string {
-  return `${LOCK_NAME}:${principalId}`;
+  return `${LOCK_NAME}:${CACHE_SCHEMA_VERSION}:${principalId}`;
 }
 export function replicationChannelName(principalId: string): string {
-  return `${CHANNEL_NAME}:${principalId}`;
+  return `${CHANNEL_NAME}:${CACHE_SCHEMA_VERSION}:${principalId}`;
 }
 
 /**
