@@ -23,7 +23,8 @@ import {
   contextualPrRefPayload,
   parseContextualPrRef,
   splitContextualPrRefs,
-  namedPullRequestIds,
+  namedPullRequests,
+  pullRequestRepository,
   parseClaudeArtifactUrl,
   parseCallRef,
   callRefId,
@@ -520,11 +521,19 @@ describe("parseGitHubLocationUrl", () => {
 describe("pull requests named outright", () => {
   test("PR N, pull request N and GitHub links count; a lone #N does not", () => {
     expect(
-      namedPullRequestIds(
-        "PR 12 and pull request #13, then #14 moved to #2; see https://github.com/Union-AI/union/pull/15",
-        "Union-AI/union",
-      ),
-    ).toEqual(["union-ai/union#12", "union-ai/union#13", "union-ai/union#15"]);
+      namedPullRequests("PR 12 and pull request #13, then #14 moved to #2; see https://github.com/Union-AI/union/pull/15"),
+    ).toEqual({ ids: ["union-ai/union#15"], numbers: [12, 13] });
+  });
+
+  test("a PR number belongs to the session's repository, else the one repository the conversation knows it in", () => {
+    const known = new Set(["jasonbenn/sit#1", "o/r#2", "x/y#2"]);
+    // A session in a real repository keeps its own, even when a linked upstream PR shares the number.
+    expect(pullRequestRepository(2, known, "A/B")).toBe("a/b");
+    expect(pullRequestRepository(1, known, null)).toBe("jasonbenn/sit");
+    expect(pullRequestRepository(2, known, null)).toBeNull();
+    expect(pullRequestRepository(3, known, null)).toBeNull();
+    expect(pullRequestRepository(7, new Set(["jasonbenn/sit#2"]), null)).toBe("jasonbenn/sit");
+    expect(pullRequestRepository(7, new Set(), null)).toBeNull();
   });
 });
 

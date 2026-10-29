@@ -6,7 +6,7 @@
 // with no extra row. The commit hash rule is the one the server's file change
 // extractor uses, so the two never disagree about which sha a call produced.
 import { extractCommitHashFromContent } from "@codecast/convex/convex/fileChanges/extractor";
-import { namedPullRequestIds, parseEntityUrl, repoObjectId } from "@codecast/shared/entities";
+import { namedPullRequests, parseEntityUrl, pullRequestRepository, repoObjectId } from "@codecast/shared/entities";
 
 export type GitToolOutcome =
   | { kind: "commit"; hash: string; subject: string; branch?: string }
@@ -90,13 +90,14 @@ export function transcriptGitOutcomes(messages: readonly TranscriptMessage[]): {
   return { commitShas, prRefs };
 }
 
-const namedCache = new WeakMap<object, { content: string; repository: string; ids: string[] }>();
+const namedCache = new WeakMap<object, { content: string; named: { ids: string[]; numbers: number[] } }>();
 
 /**
- * The pull requests of `repository` a conversation knows, as repo object ids:
- * the ones linked to the session, the ones its shell calls made, and the ones
- * its prose names outright. A lone `#N` in the conversation is a pull request
- * only when it is one of these.
+ * The pull requests a conversation knows, as repo object ids: the ones linked
+ * to the session, the ones its shell calls made, the ones its prose links, and
+ * the ones its prose names by number (`PR 7`), completed by
+ * pullRequestRepository against the others. A lone `#N` in the conversation is
+ * a pull request only when it is one of these.
  */
 export function knownPullRequestIds(
   repository: string | null | undefined,
@@ -105,19 +106,25 @@ export function knownPullRequestIds(
   prRefs: ReadonlySet<string>,
 ): Set<string> {
   const ids = new Set<string>(prRefs);
-  if (!repository) return ids;
   for (const pr of linked) {
     if (pr.repository && typeof pr.number === "number") ids.add(repoObjectId({ type: "pr", repository: pr.repository, number: pr.number }));
   }
+  const numbers = new Set<number>();
   for (const message of messages) {
     const content = message.content;
     if (!content) continue;
-    let named = namedCache.get(message);
-    if (!named || named.content !== content || named.repository !== repository) {
-      named = { content, repository, ids: namedPullRequestIds(content, repository) };
-      namedCache.set(message, named);
+    let cached = namedCache.get(message);
+    if (!cached || cached.content !== content) {
+      cached = { content, named: namedPullRequests(content) };
+      namedCache.set(message, cached);
     }
-    for (const id of named.ids) ids.add(id);
+    for (const id of cached.named.ids) ids.add(id);
+    for (const n of cached.named.numbers) numbers.add(n);
+  }
+  const evidence = new Set(ids);
+  for (const number of numbers) {
+    const owner = pullRequestRepository(number, evidence, repository);
+    if (owner) ids.add(repoObjectId({ type: "pr", repository: owner, number }));
   }
   return ids;
 }
