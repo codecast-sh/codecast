@@ -548,6 +548,15 @@ export function isTaskNotificationMessage(rawContent: string | null | undefined)
   return !!rawContent && stripInjectionNoise(rawContent).startsWith("<task-notification>");
 }
 
+// The summary Claude Code writes when it compacts a conversation, synced as a
+// user-role row. It covers everything before it, so a transcript rebuilt from
+// codecast starts at the latest one (cli jsonlGenerator).
+export const COMPACTION_SUMMARY_PREFIX = "This session is being continued from a previous conversation";
+
+export function isCompactionSummaryMessage(rawContent: string | null | undefined): boolean {
+  return !!rawContent && stripInjectionNoise(rawContent).startsWith(COMPACTION_SUMMARY_PREFIX);
+}
+
 /** The ids of the background work a turn reports back on: a harness
  *  <task-notification>'s task id, or the spawned workers a <scheduled-task>
  *  wake names. Empty for a turn that reports on no work. */

@@ -204,6 +204,16 @@ describe("propose", () => {
     expect(cap.said()).toContain("https://codecast.sh/org?proposal=op-9");
     expect(cap.said()).not.toContain("cast org apply");
   });
+  test("a proposal the server applied as it posted says so, and lists no asks", async () => {
+    const change = { kind: "file_session", session: "jx7d0d9", to: "done" };
+    const d = deps({ cliPost: async () => ({ short_id: "op-125", status: "resolved", applied: true, changes: [{ seq: 1, change, status: "proposed", line: "file session jx7d0d9 as done" }] }) });
+    const cap = capture();
+    try {
+      await propose(d, { spec: specFile({ title: "Filing", summary_md: "S", mode: "review", changes: [{ change, rationale: "r" }], asks: [{ title: "Close it", why: "w", seqs: [1] }] }) });
+    } finally { cap.restore(); }
+    expect(cap.said()).toContain("applied at once (resolved): nothing waits on a person");
+    expect(cap.said()).not.toContain("ask: Close it");
+  });
 });
 
 // A proposal is decided on the org page only (S4): `cast org apply op-N`

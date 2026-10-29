@@ -185,6 +185,8 @@ function fakeElectron() {
   const windows = [];
   const handlers = new Map();
   const listeners = new Map();
+  const shortcuts = new Map();
+  const focus = { window: null };
   const app = {
     name: "",
     setPath: () => {},
@@ -199,6 +201,11 @@ function fakeElectron() {
     dock: { setIcon: () => {} },
     requestSingleInstanceLock: () => true,
     setAsDefaultProtocolClient: () => {},
+    hides: 0,
+    hide() {
+      this.hides += 1;
+    },
+    focus: () => {},
   };
   const BrowserWindow = class extends FakeWindow {
     constructor(options) {
@@ -207,6 +214,9 @@ function fakeElectron() {
     }
     static getAllWindows() {
       return windows.filter((w) => !w.destroyed);
+    }
+    static getFocusedWindow() {
+      return focus.window;
     }
     static fromWebContents(wc) {
       return windows.find((w) => w.webContents === wc) ?? null;
@@ -222,7 +232,13 @@ function fakeElectron() {
       setContextMenu() {}
       on() {}
     },
-    globalShortcut: { register: () => true, unregisterAll: noop },
+    globalShortcut: {
+      register: (acc, cb) => {
+        shortcuts.set(acc, cb);
+        return true;
+      },
+      unregisterAll: () => shortcuts.clear(),
+    },
     ipcMain: {
       handle: (channel, cb) => handlers.set(channel, cb),
       on: (channel, cb) => handlers.set(channel, cb),
@@ -249,7 +265,7 @@ function fakeElectron() {
     powerMonitor: { on: noop },
     desktopCapturer: { getSources: async () => [] },
   };
-  return { electron, windows, handlers, listeners };
+  return { electron, windows, handlers, listeners, shortcuts, focus };
 }
 
 /**
