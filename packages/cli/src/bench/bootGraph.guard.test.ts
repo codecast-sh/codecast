@@ -420,7 +420,9 @@ describe("command groups stay off the boot graph", () => {
     // -> tmux, so loading resourceMonitor first threw a TDZ ReferenceError.
     // 521 on 2026-10-27: handEdit.ts and projectWrites.ts, which the capability
     // driver's markdown_section arm judges every owned region with (ct-42887).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(521);
+    // 522 on 2026-10-29: planHandoff.ts, the one plan-handoff parser the daemon
+    // and the ingest worker share (a compaction summary self-linked a session).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(522);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

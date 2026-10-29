@@ -100,8 +100,6 @@ export function makeDarwinSignatureCheck(opts: { spawn?: SpawnSync; platform?: s
   const spawn = opts.spawn ?? spawnSync;
   const platform = opts.platform ?? process.platform;
   const execPath = opts.execPath ?? process.execPath;
-  // undefined when codesign cannot read the file at all; null when it is
-  // signed without a team.
   const teamOf = (binary: string): string | null | undefined => {
     const r = spawn("/usr/bin/codesign", ["-dv", "--", binary], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 30000 });
     if (r.status !== 0) return undefined;
@@ -112,8 +110,6 @@ export function makeDarwinSignatureCheck(opts: { spawn?: SpawnSync; platform?: s
     if (teamOf(execPath) !== DARWIN_SIGNING_TEAM) return { ok: true };
     const verify = spawn("/usr/bin/codesign", ["--verify", "--strict", "--", binary], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 60000 });
     if (verify.status !== 0) return { ok: false, reason: "invalid" };
-    // A file that passed --verify and then cannot be read changed under the
-    // check (another updater moved it), which is not a foreign signature.
     const team = teamOf(binary);
     if (team === undefined) return { ok: false, reason: "unreadable" };
     if (team !== DARWIN_SIGNING_TEAM) return { ok: false, reason: "wrong_team" };
