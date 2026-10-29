@@ -50,7 +50,7 @@ import { fateOf, problemEvidence, type FindingFate } from "./lib/problemEvidence
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { failedAtStation } from "@codecast/shared/contracts/causeHistory";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
-import { problemSuperseded, runSuperseded } from "./lib/superseded";
+import { newLineMemo, problemSuperseded, runSuperseded } from "./lib/superseded";
 import { supersededCard, type Superseded } from "@codecast/shared/contracts/superseded";
 
 type Ctx = { db: any };
@@ -1371,6 +1371,7 @@ export const runs = query({
     const projects: Doc<"projects">[] = (await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", workspaceKey)).collect())
       .filter((p: Doc<"projects">) => !!p.line_trial);
     const out: Array<TrialRunView & { superseded: Superseded }> = [];
+    const memo = newLineMemo();
     for (const project of projects) {
       if (!(await canAccessProject(ctx, userId, project))) continue;
       const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
@@ -1388,7 +1389,7 @@ export const runs = query({
         }
         // A closed problem's run lost nothing: there is no card to pick up.
         const row = runRow(workspaceKey, project, task, run, stop ? { ...stop, findings } : null, isTerminalTaskStatus(task.status) ? null : await gateLossOf(ctx, run));
-        out.push({ ...row, superseded: await runSuperseded(ctx, run, task) });
+        out.push({ ...row, superseded: await runSuperseded(ctx, run, task, memo) });
       }
     }
     return out.sort((a, b) => b.updated_at - a.updated_at);
