@@ -609,8 +609,9 @@ id, the new change replaces the old and `revision.before` keeps it; an added
 one is a new row with the next seq. Every touched row carries `revision: {
 kind, note, at, before? }` and the proposal appends to `revisions: [{ op,
 seq, at, by, line, was?, note? }]`, the journal the pane and `cast org apply`
-list. A revise never resolves the proposal, even when it removes the last
-undecided change; the queue card is rewritten to the changes that remain.
+list. A revise that leaves nothing to decide settles the proposal: resolved
+when a person decided any change, withdrawn when the author removed them all.
+Otherwise the queue card is rewritten to the changes that remain.
 The CLI verb is `cast org revise op-N --remove <seq> | --amend <seq> --edits
 <json> --rationale <text> | --add <file> [--note <text>]`, session only.
 

@@ -231,6 +231,7 @@ describe("darwin code signature gate", () => {
     expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn({ ...signed, "/opt/new": DARWIN_SIGNING_TEAM }) })("/opt/new")).toEqual({ ok: true });
     expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn({ ...signed, "/opt/new": "EVIL123456" }) })("/opt/new")).toEqual({ ok: false, reason: "wrong_team" });
     expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn({ ...signed, "/opt/new": null }) })("/opt/new")).toEqual({ ok: false, reason: "wrong_team" });
+    expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn(signed) })("/opt/new")).toEqual({ ok: false, reason: "unreadable" });
     expect(await makeDarwinSignatureCheck({ platform: "darwin", execPath: "/opt/old", spawn: fakeSpawn({ ...signed, "/opt/new": DARWIN_SIGNING_TEAM }, false) })("/opt/new")).toEqual({ ok: false, reason: "invalid" });
   });
 
