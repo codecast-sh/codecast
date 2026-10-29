@@ -204,6 +204,16 @@ describe("propose", () => {
     expect(cap.said()).toContain("https://codecast.sh/org?proposal=op-9");
     expect(cap.said()).not.toContain("cast org apply");
   });
+  test("a proposal the server applied as it posted says so, and lists no asks", async () => {
+    const change = { kind: "file_session", session: "jx7d0d9", to: "done" };
+    const d = deps({ cliPost: async () => ({ short_id: "op-125", status: "resolved", applied: true, changes: [{ seq: 1, change, status: "proposed", line: "file session jx7d0d9 as done" }] }) });
+    const cap = capture();
+    try {
+      await propose(d, { spec: specFile({ title: "Filing", summary_md: "S", mode: "review", changes: [{ change, rationale: "r" }], asks: [{ title: "Close it", why: "w", effect: "e", seqs: [1] }] }) });
+    } finally { cap.restore(); }
+    expect(cap.said()).toContain("applied at once (resolved): nothing waits on a person");
+    expect(cap.said()).not.toContain("ask: Close it");
+  });
 });
 
 // A proposal is decided on the org page only (S4): `cast org apply op-N`
@@ -377,6 +387,14 @@ describe("cast org revise", () => {
     const cap3 = capture(); const exit3 = trapExit();
     try { await revise(d, "ds-4", { remove: ["3"] }); } catch (e: any) { expect(e.message).toBe("exit"); } finally { exit3.restore(); cap3.restore(); }
     expect(cap3.said()).toContain("Usage: cast org revise op-N");
+  });
+
+  test("a revise the server settled says so instead of handing the proposal to the person", async () => {
+    const d = deps({ callingSession: () => "jxanaly", cliPost: async () => ({ proposal: "op-4", status: "withdrawn", counts: { total: 0, decided: 0 }, revisions: [{ op: "removed", seq: 1, line: "retire @growth" }] }) } as any) as any;
+    const cap = capture();
+    try { await revise(d, "op-4", { remove: ["1"] }); } finally { cap.restore(); }
+    expect(cap.said()).toContain("op-4 is withdrawn: nothing waits on a person");
+    expect(cap.said()).not.toContain("The person decides what is left");
   });
 });
 

@@ -76,7 +76,9 @@ describe("filing the person's sessions", () => {
   test("a role a person lets start work on its own files at once, and says so on each row", async () => {
     const db = fixtures({ hopTrust: "direct" });
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "conversations_hop", spec: spec(tidy) });
-    expect(r).toMatchObject({ applied: true });
+    // The answer reports what routing did, not the rows as first written: the author reads it.
+    expect(r).toMatchObject({ applied: true, status: "resolved" });
+    expect(r.changes.map((c: any) => c.status)).toEqual(r.changes.map(() => "applied"));
     expect(await db.get("conversations_tweet")).toMatchObject({ org_role_id: GROWTH });
     expect((await db.query("org_proposal_changes").collect())[0]).toMatchObject({ status: "applied", reply: { verdict: "approve", text: "Filed by @head-of-people, which starts work on its own" } });
   });

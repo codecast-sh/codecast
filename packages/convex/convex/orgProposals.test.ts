@@ -10,7 +10,7 @@ import {
   listProposals,
   readProposalOrigin,
   readProposal, performBreachSnapshot, performWriteBreaches,
-  performReviseProposal, cleanFailedNote, performSayInThread, formatProposalMessage, callerIsAuthor, performDecideAsk, performReply, performDecideHire } from "./orgProposals";
+  performReviseProposal, cleanFailedNote, performSayInThread, formatProposalMessage, callerIsAuthor, performDecideAsk, performReply, performDecideHire, settleEmptiedProposals } from "./orgProposals";
 import { performSetHiresFreely } from "./orgRoles";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): create from a
@@ -876,27 +876,34 @@ describe("orgProposals.revise", () => {
     await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "answer", seq: 1, text: " " }] })).rejects.toThrow("answer: text is the answer");
   });
 
-  test("removing the last undecided change leaves the proposal open; a removed change is never decided, and the next decision resolves what is left", async () => {
+  test("a revise that leaves nothing to decide settles the proposal: resolved when a person decided any of it, withdrawn when its author removed every change", async () => {
     const { db, r } = await seeded();
     const ctx = ctxOf(db);
     await performDecideChange(ctx, ME as any, { change_id: String(r.changes[1].id), verdict: "skip" });
-    await performDecideChange(ctx, ME as any, { change_id: String(r.changes[2].id), verdict: "skip" });
+    // A removed change is out of every count; one still to decide keeps the proposal open.
+    const kept = await performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 3 }] });
+    expect(kept.status).toBe("open");
+    expect(kept.counts).toEqual({ total: 2, decided: 1, applied: 0, failed: 0, skipped: 1 });
     const out = await performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 1 }] });
-    expect(out.status).toBe("open");
-    expect((await db.get(r.id)).status).toBe("open");
-    expect(out.counts).toEqual({ total: 2, decided: 2, applied: 0, failed: 0, skipped: 2 });
-    await expect(performDecideChange(ctx, ME as any, { change_id: String(r.changes[0].id), verdict: "skip" })).rejects.toThrow("op-1#1 is already removed");
-    // The author asks again on a subject the person already skipped (#2 was
-    // trust @growth); the person skips that too, and the decision resolves.
-    await performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "add", change: change({ kind: "trust", handle: "growth", trust: "direct" }) }] });
-    const added = (await db.query("org_proposal_changes").collect()).find((c: any) => c.seq === 4);
-    expect(await performDecideChange(ctx, ME as any, { change_id: String(added._id), verdict: "skip", seen: await seenNow(db) })).toMatchObject({ resolved: true });
+    expect(out.status).toBe("resolved");
     expect((await db.get(r.id)).status).toBe("resolved");
-    // Accept all over a proposal with nothing left to decide is a person's act, and it resolves; a revise never does.
+    await expect(performReviseProposal(ctx, ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "add", change: change({ kind: "trust", handle: "growth", trust: "direct" }) }] })).rejects.toThrow("op-1 is resolved");
+    // The author removes everything: nothing a person decided, so it is withdrawn.
     const { db: db2, r: r2 } = await seeded();
-    await performReviseProposal(ctxOf(db2), ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 1 }, { op: "remove", seq: 2 }, { op: "remove", seq: 3 }] });
-    expect((await db2.get(r2.id)).status).toBe("open");
-    expect(await performAcceptAll(ctxOf(db2), ME as any, { proposal: "op-1", provision: false, seen: await seenNow(db2) })).toMatchObject({ resolved: true });
+    const gone = await performReviseProposal(ctxOf(db2), ME as any, { proposal: "op-1", from_session: "s1", ops: [{ op: "remove", seq: 1 }, { op: "remove", seq: 2 }, { op: "remove", seq: 3 }] });
+    expect(gone.status).toBe("withdrawn");
+    expect((await db2.get(r2.id)).status).toBe("withdrawn");
+  });
+
+  test("the sweep settles proposals a revise emptied before revises settled them, and leaves the rest", async () => {
+    const { db, r } = await seeded();
+    // The state a revise left behind before this fix: every change removed, the proposal still open.
+    for (const c of r.changes) await db.patch(c.id, { status: "removed" });
+    const dry = await (settleEmptiedProposals as any)._handler(ctxOf(db), { dry: true });
+    expect(dry).toEqual({ settled: [{ proposal: "op-1", status: "would settle" }] });
+    expect((await db.get(r.id)).status).toBe("open");
+    expect(await (settleEmptiedProposals as any)._handler(ctxOf(db), {})).toEqual({ settled: [{ proposal: "op-1", status: "withdrawn" }] });
+    expect(await (settleEmptiedProposals as any)._handler(ctxOf(db), {})).toEqual({ settled: [] });
   });
 });
 
