@@ -27,7 +27,7 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { awaitingOkIds } from "../lib/decisionQueue";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, pendingSendIdsOf, freshReviveRequestIds, hostedStatusSections, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, hostedOnlyInbox, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated, HOSTED_UNFOLDABLE_SECTIONS } from "../store/inboxStore";
+import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, hiddenBucketTree, NEW_SESSION_HOLD_MS, ensureHydrated, HOSTED_UNFOLDABLE_SECTIONS } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -3260,23 +3260,7 @@ function SessionListPanelImpl({
     // disagree; coarseNow keeps the live derivation on the panel's ticker.
     const isBucketLive = (sess: InboxSession) => sessionLiveAt(sess, coarseNow);
     const liveCount = items.filter(isBucketLive).length;
-    const allIds = new Set(items.map((sess) => sess._id));
-    const subMap = new Map<string, InboxSession[]>();
-    const nestParentOf = inboxNestParentOf(items);
-    for (const sess of items) {
-      const nestParent = nestParentOf(sess);
-      if (nestParent && allIds.has(nestParent)) {
-        if (!subMap.has(nestParent)) subMap.set(nestParent, []);
-        subMap.get(nestParent)!.push(sess);
-      }
-    }
-    for (const subs of subMap.values()) {
-      subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
-    }
-    const subsWithParent = new Set(Array.from(subMap.values()).flat().map((sess) => sess._id));
-    const orphanedSub = (sess: InboxSession) =>
-      !subsWithParent.has(sess._id) && sess.parent_conversation_id && s.sessions[sess.parent_conversation_id];
-    const topLevel = items.filter((sess) => !subsWithParent.has(sess._id) && !orphanedSub(sess));
+    const { topLevel, subsByTop: subMap } = hiddenBucketTree(items);
     // Activity floats: running rows (or idle parents with a running subagent)
     // sort to the top of the opened bucket, so background work is one glance
     // away instead of buried under newest-stashed-first. Stable sort keeps the
