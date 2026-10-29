@@ -6,7 +6,8 @@
 // with no extra row. The commit hash rule is the one the server's file change
 // extractor uses, so the two never disagree about which sha a call produced.
 import { extractCommitHashFromContent } from "@codecast/convex/convex/fileChanges/extractor";
-import { namedPullRequests, parseEntityUrl, pullRequestRepository, repoObjectId } from "@codecast/shared/entities";
+import { namedPullRequests, parseEntityUrl, repoObjectId } from "@codecast/shared/entities";
+import { pullRequestRepository } from "./entityLinks";
 
 export type GitToolOutcome =
   | { kind: "commit"; hash: string; subject: string; branch?: string }
