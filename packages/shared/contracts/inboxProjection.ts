@@ -112,7 +112,9 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // whose asking child's heartbeat aged out leaves QUESTIONS on the replica at
 // the instant it does on the server.
 // v22: a workflow run's own log (isRunLog) is never an inbox member.
-export const INBOX_PROJECTION_VERSION = 22 as const;
+// v23: a standing session whose live work is a nested subagent (child_live)
+// files by its own state, as one with a hand beside it already did.
+export const INBOX_PROJECTION_VERSION = 23 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -693,6 +695,8 @@ export interface RollupRow extends InboxRowIdentity {
   org_role_id?: unknown;
   /** Set when the row IS a role's standing session. */
   standing_role_id?: unknown;
+  /** A nested child of this row is live (the overlay's child_live fact). */
+  child_live?: boolean | null;
   /** The role put this session in front of the person; it stands alone again. */
 }
 
@@ -838,6 +842,13 @@ export function rideLeadPlacements<P extends { bucket: InboxBucket }>(
   rowOf: (id: string) => RollupRow | undefined,
   copy: (rider: P, lead: P) => void = () => {},
 ): void {
+  // A standing session whose work is a nested subagent has no rider here
+  // (children are never members), so the child_live fact stands in for one.
+  for (const [id, lead] of placements) {
+    if (lead.bucket !== "hidden" || !rowOf(id)?.child_live) continue;
+    const state = (lead as { work_state?: WorkState }).work_state;
+    if (state && state !== "idle") lead.bucket = state;
+  }
   settleRiders(
     placements.keys(),
     (id) => (placements.has(id) ? rowOf(id) : undefined),
@@ -1225,6 +1236,7 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   producing_until?: number | null;
   child_asking?: boolean | null;
   child_asking_until?: number | null;
+  child_live?: boolean | null;
   open_tasks?: unknown[] | null;
   open_tasks_at?: number | null;
 }
@@ -1604,6 +1616,10 @@ export const INBOX_FACT_FIELDS = [
   // pool, its status outlives its trust): the lift decays with time alone, so the
   // replica reads it at its own clock (childAskingAt). Null: no time bound.
   "child_asking_until",
+  // A nested child of this row is live (a non-idle trusted status): what puts
+  // a standing session in front of the person when its only work is a
+  // subagent, which is never a member the ride can see.
+  "child_live",
   // What the agent is doing right now (conversations.activity): stamped at
   // message ingest from the newest tool call, cleared when the turn settles.
   // Overlay borne so a tool call never changes the session list result; the
