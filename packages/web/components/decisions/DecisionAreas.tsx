@@ -150,7 +150,7 @@ export function ChangeAreasView({ teamId, mapWords }: { teamId: string; mapWords
             {error && (
               <div className="flex items-center gap-2 text-[12px]" role="alert" data-areas-error>
                 <span className="text-sol-red">{error.error}</span>
-                {error.budget && <Link href="/settings/team" className="text-sol-blue underline-offset-2 hover:underline" data-areas-set-budget>Set the budget</Link>}
+                {error.budget && <Link href="/settings/team" className="text-sol-blue underline-offset-2 hover:underline" data-areas-set-budget>Raise model spending</Link>}
               </div>
             )}
             <div className="flex items-center justify-end gap-2 text-[12px]">

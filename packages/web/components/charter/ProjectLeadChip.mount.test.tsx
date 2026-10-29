@@ -152,12 +152,14 @@ describe("ProjectLeadChip", () => {
   });
 
   it("another workspace's tree offers nothing and says why", async () => {
-    await seed({ orgTree: { ...tree, workspace: { kind: "team", id: "other-team", name: "Other" } } });
+    // The window reads another workspace, with that workspace's own tree: the project is not its to staff.
+    const ui = (useInboxStore.getState().clientState as any).ui;
+    await seed({ orgTree: { ...tree, workspace: { kind: "team", id: "other-team", name: "Other" } }, clientState: { ...(useInboxStore.getState().clientState as object), ui: { ...ui, active_team_id: "other-team" } } } as any);
     await mount(<ProjectLeadChip projectId={LONE} editable />);
     const el = chip()!;
     assert.ok(el.hasAttribute("data-owner-blocked"));
     assert.match(el.title, /Switch to the project's workspace/);
     assert.equal(document.querySelector("[data-add-lead]"), null);
-    await seed({ orgTree: tree });
+    await seed({ orgTree: tree, clientState: { ...(useInboxStore.getState().clientState as object), ui } } as any);
   });
 });
