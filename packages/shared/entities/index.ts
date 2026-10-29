@@ -445,22 +445,49 @@ export function parseContextualPrRef(payload: string | undefined | null): { numb
 }
 
 /**
- * The pull requests a piece of prose names beyond doubt: `PR 3263`, `pull
- * request 12`, and GitHub pull request links, as repo object ids. A bare
- * number is completed from `repository`; a lone `#N` is left out, since it is
+ * The pull requests a piece of prose names beyond doubt: GitHub pull request
+ * links as repo object ids, and `PR 3263` or `pull request 12` as numbers the
+ * reader completes with a repository. A lone `#N` is left out, since it is
  * what this evidence exists to vouch for.
  */
-export function namedPullRequestIds(text: string, repository: string): string[] {
-  const ids: string[] = [];
+export function namedPullRequests(text: string): { ids: string[]; numbers: number[] } {
+  const numbers: number[] = [];
   for (const m of text.matchAll(contextualPrRefRegex())) {
     for (const token of splitContextualPrRefs(m[1], m[2], m[3] ?? "")) {
-      if ("number" in token && !token.bare) ids.push(repoObjectId({ type: "pr", repository, number: token.number }));
+      if ("number" in token && !token.bare) numbers.push(token.number);
     }
   }
+  const ids: string[] = [];
   for (const m of text.matchAll(/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/gi)) {
     ids.push(repoObjectId({ type: "pr", repository: m[1], number: Number(m[2]) }));
   }
-  return ids;
+  return { ids, numbers };
+}
+
+/**
+ * The repository a pull request named by number alone belongs to: the
+ * session's own. A session with none (started in a home directory, see
+ * sessionRepository) takes the one repository the conversation knows a PR of
+ * that number in, else the one repository all its known PRs are in. Null when
+ * several could claim it. The known PRs are only what the reader holds, so a
+ * long transcript can name a PR whose link is not loaded.
+ */
+export function pullRequestRepository(
+  number: number,
+  known: ReadonlySet<string> | undefined,
+  repository: string | null | undefined,
+): string | null {
+  if (repository) return repository.toLowerCase();
+  const claims = new Set<string>();
+  const repos = new Set<string>();
+  for (const id of known ?? []) {
+    const ref = parseRepoObjectId(id);
+    if (ref?.type !== "pr") continue;
+    repos.add(ref.repository);
+    if (ref.number === number) claims.add(ref.repository);
+  }
+  const candidates = claims.size ? claims : repos;
+  return candidates.size === 1 ? [...candidates][0] : null;
 }
 
 function isGitHubHost(host: string): boolean {

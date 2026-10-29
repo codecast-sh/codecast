@@ -65,8 +65,12 @@ export function isDefaultBranch(branch: string | null | undefined): boolean {
   return branch === "main" || branch === "master";
 }
 
-export function sessionRepository(session: { git_remote_url?: string | null; pr_status?: { repository?: string } | null }): string | null {
-  return githubRepository(session.git_remote_url) ?? repositoryName(session.pr_status?.repository);
+/** The repository a session works in. A checkout rooted at a home directory
+ *  (dotfiles under git) is not one: a session started in `~` works in the
+ *  repos below it, and that remote would claim every PR number it names. */
+export function sessionRepository(session: { git_remote_url?: string | null; git_root?: string | null; pr_status?: { repository?: string } | null }): string | null {
+  const homeCheckout = !!session.git_root && /^(\/Users\/[^/]+|\/home\/[^/]+|\/root)\/?$/.test(session.git_root);
+  return (homeCheckout ? null : githubRepository(session.git_remote_url)) ?? repositoryName(session.pr_status?.repository);
 }
 
 export function taskRepository(task: { external?: { provider?: string; identifier?: string } | null }): string | null {
