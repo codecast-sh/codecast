@@ -32,6 +32,7 @@ function fakeCtx(docs: Row[], tables: Record<string, Row[]>) {
             return builder;
           },
           take: async (n: number) => { reads.push(`${table}.${index}`); return rows.slice(0, n); },
+          first: async () => { reads.push(`${table}.${index}`); return rows[0] ?? null; },
           collect: async () => { reads.push(`${table}.${index}`); return rows; },
         };
         return builder;
@@ -59,5 +60,13 @@ describe("currentDecisions", () => {
     expect(kept.map((d) => d._id)).toEqual(["d2", "d3", "d4"]);
     expect(ctx.reads.filter((r) => r === "workflow_versions.by_workflow_at")).toHaveLength(1);
     expect(ctx.reads.filter((r) => r === "workflow_runs.by_workflow_id")).toHaveLength(1);
+  });
+
+  test("a card whose problem has a later run is dropped; one whose run is its problem's newest stands", async () => {
+    const later = { _id: "run_later", status: "running", workflow_id: "wf1", task_id: "t2", created_at: 30 };
+    const ctx = fakeCtx([workflow, current, later, ...tasks], { workflow_runs: [current, later], workflow_versions: [] });
+    expect(await currentDecisions(ctx, [decision("d2", current)] as any)).toEqual([]);
+    const alone = fakeCtx([workflow, current, ...tasks], { workflow_runs: [current], workflow_versions: [] });
+    expect((await currentDecisions(alone, [decision("d2", current)] as any)).map((d) => d._id)).toEqual(["d2"]);
   });
 });

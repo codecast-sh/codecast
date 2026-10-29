@@ -93,9 +93,9 @@ export async function runSuperseded(ctx: Ctx, run: Doc<"workflow_runs">, task?: 
   const problem = task !== undefined ? task : run.task_id ? await ctx.db.get(run.task_id) : null;
   let newer: string | null = null;
   if (run.task_id) {
-    const siblings: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", run.task_id)).collect();
-    const later = siblings.filter((r) => r._id !== run._id && r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0];
-    newer = later ? String(later._id) : null;
+    // The problem's newest run, not every run it ever had: a run is superseded only by a later one.
+    const latest: Doc<"workflow_runs"> | null = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", run.task_id)).order("desc").first();
+    newer = latest && latest._id !== run._id && latest.created_at > run.created_at ? String(latest._id) : null;
   }
   const workflow: Doc<"workflows"> | null = run.workflow_id ? await workflowOf(ctx, run.workflow_id, memo) : null;
   return supersededRun({
