@@ -11049,9 +11049,10 @@ export async function resolveSpawnerConversation(
   conversationCache: ConversationCache,
   spawnRegistry: TmuxSpawnRegistry = tmuxSpawnRegistry,
 ): Promise<string | null> {
-  // A launcher that knew its caller (`cast exec`) declared it: no guessing.
+  // A launcher that knew its caller (`cast exec`, or the session whose
+  // conversation id the run inherited) declared it: no guessing.
   const declared = declaredSpawnParent(CONFIG_DIR, sessionId);
-  const declaredConversation = declared ? conversationCache[declared] : undefined;
+  const declaredConversation = !declared ? undefined : "conversationId" in declared ? declared.conversationId : conversationCache[declared.sessionId];
   if (declaredConversation && declaredConversation !== conversationCache[sessionId]) return declaredConversation;
   let candidates = spawnerCandidates.get(sessionId);
   if (!candidates) {
