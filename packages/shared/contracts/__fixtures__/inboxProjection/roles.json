@@ -1,5 +1,5 @@
 {
-  "about": "A role's sessions ride the role's standing session (org-roles-run-work.md R1, isUnderRole). A settled session under a role leaves needs input and files with the role; the hidden standing session surfaces by its own state once something rides it, and stays hidden with nothing under it. Nothing on a session lifts its role (org-staffing.md S28: what it needs travels up as messages), so a dormant role with settled sessions under it files them all in dormant. A session the viewer pinned keeps its place; one whose role has no standing session on the list, or whose standing session was dismissed, keeps its own placement; one under a stashed role is stashed with it. A role's session that asks does not lift the role into questions; a standing session that asks in its own thread is a question, not hidden.",
+  "about": "A role's sessions ride the role's standing session (org-roles-run-work.md R1, isUnderRole). A settled session under a role leaves needs input and files with the role; the hidden standing session surfaces by its own state once something rides it, and stays hidden with nothing under it, unless a nested subagent under it is live (child_live), which surfaces it the same way. Nothing on a session lifts its role (org-staffing.md S28: what it needs travels up as messages), so a dormant role with settled sessions under it files them all in dormant. A session the viewer pinned keeps its place; one whose role has no standing session on the list, or whose standing session was dismissed, keeps its own placement; one under a stashed role is stashed with it. A role's session that asks does not lift the role into questions; a standing session that asks in its own thread is a question, not hidden.",
   "epoch": "E",
   "asking": [
     "growth_asking"
@@ -90,6 +90,17 @@
       "standing_role_id": "quiet"
     },
     {
+      "_id": "nested_role",
+      "status": "active",
+      "updated_at": "E-8m",
+      "message_count": 40,
+      "agent_status": "dormant",
+      "is_idle": true,
+      "anchor_id": "anchor_nested",
+      "standing_role_id": "nested",
+      "child_live": true
+    },
+    {
       "_id": "absent_role_waiting",
       "status": "active",
       "updated_at": "E-9m",
@@ -174,7 +185,7 @@
         "new": 0,
         "needs_input": 4,
         "done": 0,
-        "dormant": 7,
+        "dormant": 8,
         "working": 0,
         "idle": 0,
         "snoozed": 0,
@@ -197,7 +208,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "3c02e179023fbca7",
+    "set_digest": "854ed3972a1c6a49",
     "placements": {
       "absentrolewaitingz17000000000000": [
         "needs_input",
@@ -254,6 +265,11 @@
         "working",
         false
       ],
+      "nestedrolez100000000000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
       "quietrolez9000000000000000000000": [
         "hidden",
         "dormant",
@@ -297,6 +313,7 @@
       "growthrolez100000000000000000000": -60000,
       "growthwaitingz130000000000000000": -120000,
       "growthworkingz130000000000000000": -180000,
+      "nestedrolez100000000000000000000": -480000,
       "quietrolez9000000000000000000000": -480000,
       "retiredrolewaitingz1800000000000": -780000,
       "retiredrolez11000000000000000000": -720000,
@@ -312,6 +329,7 @@
         "growthescalatedz1500000000000000",
         "growthdirectz1200000000000000000",
         "growthescalatedworkingz220000000",
+        "nestedrolez100000000000000000000",
         "growthrolez100000000000000000000"
       ],
       "needs_input": [
