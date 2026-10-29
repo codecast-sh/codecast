@@ -185,6 +185,8 @@ function fakeElectron() {
   const windows = [];
   const handlers = new Map();
   const listeners = new Map();
+  const shortcuts = new Map();
+  const focus = { window: null };
   const app = {
     name: "",
     setPath: () => {},
@@ -199,6 +201,11 @@ function fakeElectron() {
     dock: { setIcon: () => {} },
     requestSingleInstanceLock: () => true,
     setAsDefaultProtocolClient: () => {},
+    hides: 0,
+    hide() {
+      this.hides += 1;
+    },
+    focus: () => {},
   };
   const BrowserWindow = class extends FakeWindow {
     constructor(options) {
@@ -207,6 +214,9 @@ function fakeElectron() {
     }
     static getAllWindows() {
       return windows.filter((w) => !w.destroyed);
+    }
+    static getFocusedWindow() {
+      return focus.window;
     }
     static fromWebContents(wc) {
       return windows.find((w) => w.webContents === wc) ?? null;
@@ -222,7 +232,13 @@ function fakeElectron() {
       setContextMenu() {}
       on() {}
     },
-    globalShortcut: { register: () => true, unregisterAll: noop },
+    globalShortcut: {
+      register: (acc, cb) => {
+        shortcuts.set(acc, cb);
+        return true;
+      },
+      unregisterAll: () => shortcuts.clear(),
+    },
     ipcMain: {
       handle: (channel, cb) => handlers.set(channel, cb),
       on: (channel, cb) => handlers.set(channel, cb),
@@ -231,9 +247,9 @@ function fakeElectron() {
     nativeImage: { createFromPath: () => ({ setTemplateImage: noop, isEmpty: () => true }) },
     shell: { openExternal: noop, showItemInFolder: noop },
     screen: {
-      getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1600, height: 1000 } }),
+      getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1600, height: 1000 }, workAreaSize: { width: 1600, height: 1000 } }),
       getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1600, height: 1000 } }),
-      getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1600, height: 1000 }, scaleFactor: 2 }),
+      getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1600, height: 1000 }, workAreaSize: { width: 1600, height: 1000 }, scaleFactor: 2 }),
       getCursorScreenPoint: () => {
         cursorReads.count += 1;
         return { x: 400, y: 400 };
@@ -249,7 +265,7 @@ function fakeElectron() {
     powerMonitor: { on: noop },
     desktopCapturer: { getSources: async () => [] },
   };
-  return { electron, windows, handlers, listeners };
+  return { electron, windows, handlers, listeners, shortcuts, focus };
 }
 
 /**
