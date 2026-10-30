@@ -64,6 +64,15 @@ describe("performClaimDeviceAccount", () => {
     expect(db._tables.daemon_commands ?? []).toEqual([]);
   });
 
+  test("undelivered messages follow the session to the new account", async () => {
+    const db = fixtures();
+    db._tables.pending_messages = [
+      { _id: "pm1", conversation_id: "conv1", from_user_id: PREV, owner_user_id: PREV, status: "pending" },
+    ];
+    await performClaimDeviceAccount({ db }, NEXT as any, { previousUserId: PREV as any, deviceId: "mini" }, NOW);
+    expect(db._tables.pending_messages[0].owner_user_id).toBe(NEXT);
+  });
+
   test("a previous login that is still heartbeating is left alone", async () => {
     const db = fixtures({ prevSeen: NOW });
     const result = await performClaimDeviceAccount({ db }, NEXT as any, {

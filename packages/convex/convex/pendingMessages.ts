@@ -186,6 +186,30 @@ export function pendingMessageOwnerId(
   return (message.owner_user_id ?? conversation.user_id).toString();
 }
 
+// When a conversation changes runner (a cross-account move or device claim), every row still
+// waiting to be delivered follows it. The denormalized owner_user_id otherwise keeps pointing at
+// the previous runner, whose daemon no longer serves the conversation, while the new runner's
+// daemon refuses the row as someone else's: the message strands as "pending" forever.
+export async function rehomeUndeliveredMessages(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  runnerId: Id<"users">,
+): Promise<number> {
+  let moved = 0;
+  for (const status of ["pending", "held", "injected", "failed", "undeliverable"] as const) {
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", status))
+      .collect();
+    for (const row of rows) {
+      if (String(row.owner_user_id) === String(runnerId)) continue;
+      await ctx.db.patch(row._id, { owner_user_id: runnerId });
+      moved++;
+    }
+  }
+  return moved;
+}
+
 export function canDaemonSeePendingMessage(
   message: {
     from_user_id: Id<"users">;
