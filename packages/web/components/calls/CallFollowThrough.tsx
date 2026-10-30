@@ -8,13 +8,11 @@
 
 import { useMemo, useState, type MouseEvent } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { FileText } from "lucide-react";
 import { callPathRef, isRecRoomKey } from "@codecast/shared/contracts";
 import { EntityIdPill } from "../EntityIdPill";
 import { AuthorAvatar } from "../entityDisplay";
 import { relativeTime } from "../../lib/entityDisplay";
-import { openBeside } from "../../lib/stage";
 import { taskFacePath } from "../../lib/workUnit";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useActiveWorkspaceKey, useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
@@ -24,6 +22,7 @@ import { fmtClock } from "../triggerCadence";
 import type { WorkspaceKey } from "../../lib/workspaceScope";
 import { buildFollowThrough, FOLLOW_STAGES, type FollowCall, type FollowItem, type FollowStage } from "../../lib/calls/followThrough";
 import { firstName } from "./speakers";
+import { useOpenTask } from "./CallTasks";
 
 const WINDOW_MS = 14 * 24 * 3600_000;
 
@@ -66,13 +65,9 @@ function StageBar({ counts, total }: { counts: Record<FollowStage, number>; tota
 }
 
 function ItemRow({ item }: { item: FollowItem }) {
-  const router = useRouter();
+  const openTask = useOpenTask();
   const t = item.task;
-  const open = (e: MouseEvent) => {
-    e.preventDefault();
-    const path = taskFacePath(t);
-    if (!openBeside(path)) router.push(path);
-  };
+  const open = (e: MouseEvent) => openTask(e, t);
   const owner = t?.assignee_info;
   const extra = item.sessions.length - 2;
   return (
@@ -100,7 +95,7 @@ function ItemRow({ item }: { item: FollowItem }) {
           <span className="text-sol-text-dim">nobody</span>
         )}
       </span>
-      <span className="flex w-[260px] shrink-0 items-center gap-1 overflow-hidden whitespace-nowrap text-[11px] [&_.entity-ref]:max-w-[120px] [&_.entity-ref]:truncate">
+      <span className="flex max-w-[220px] shrink-0 items-center gap-1 overflow-hidden whitespace-nowrap text-[11px] [&_.entity-ref]:max-w-[120px] [&_.entity-ref]:truncate">
         {item.sessions.slice(0, 2).map((id) => (
           <EntityIdPill key={id} shortId={id.slice(0, 7)} compact />
         ))}

@@ -64,16 +64,19 @@ function pickCallTask(call: CallRef) {
   });
 }
 
-/** Normalized title, so an action item finds the task made from it. */
-export const itemKey = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.]+$/, "");
-
-function CallTaskRow({ task: t }: { task: CallTask }) {
+/** Opens a task beside the page (or on its own page where nothing opens beside). */
+export function useOpenTask() {
   const router = useRouter();
-  const open = (e: MouseEvent) => {
+  return (e: MouseEvent, t: { short_id: string }) => {
     e.preventDefault();
-    const path = taskFacePath(t);
+    const path = taskFacePath(t as any);
     if (!openBeside(path)) router.push(path);
   };
+}
+
+function CallTaskRow({ task: t }: { task: CallTask }) {
+  const openTask = useOpenTask();
+  const open = (e: MouseEvent) => openTask(e, t);
   const { icon: StatusIcon, color, label } = taskVisual(t.status);
   return (
     <li className="group rt-task">

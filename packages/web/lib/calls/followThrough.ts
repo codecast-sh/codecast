@@ -40,21 +40,47 @@ const words = (s: string) =>
       .filter((w) => w.length >= 3 && !STOP.has(w)),
   );
 
-/** Whether a task's title says the same thing as a summary's action item. The
- *  listener rewrites the wording, so this compares content words, not text. */
-export function sameAsk(item: string, title: string): boolean {
+/** Normalized title, so an action item finds the task made from it word for word. */
+export const itemKey = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.]+$/, "");
+
+function overlap(item: string, title: string): number {
   const a = words(item);
   const b = words(title);
-  if (a.size === 0 || b.size === 0) return false;
+  if (a.size === 0 || b.size === 0) return 0;
   let shared = 0;
   for (const w of a) if (b.has(w)) shared++;
-  return shared >= 3 || shared / Math.min(a.size, b.size) >= 0.5;
+  // Two shared words say little ("Ship the mobile build" and "Fix the mobile
+  // build signing" share two): a match needs three, and most of the shorter.
+  return shared >= 3 ? shared / Math.min(a.size, b.size) : 0;
 }
 
-/** "Samvit: look into X" → { who: "Samvit", text: "look into X" }. */
-export function splitAsk(item: string): { who?: string; text: string } {
+/** The task a call's action item became, or undefined when nobody filed it.
+ *  The one rule the call page and the board both use: the same words first
+ *  (a task made from the item on the call page), else the closest reworded
+ *  title (the listener rewrites each item) sharing most of its content words. */
+export function taskForItem<T extends { title?: string }>(item: string, tasks: T[]): T | undefined {
+  const text = splitAsk(item).text;
+  const exact = tasks.find((t) => [itemKey(item), itemKey(text)].includes(itemKey(t.title ?? "")));
+  if (exact) return exact;
+  let best: T | undefined;
+  let bestScore = 0.6;
+  for (const t of tasks) {
+    const score = overlap(text, t.title ?? "");
+    if (score >= bestScore) [best, bestScore] = [t, score];
+  }
+  return best;
+}
+
+/** "Samvit: look into X" → { who: "Samvit", text: "look into X" }, when the
+ *  prefix names someone on the call; "Note: ..." stays whole. With no names
+ *  given, any short capitalized prefix counts. */
+export function splitAsk(item: string, names?: string[]): { who?: string; text: string } {
   const m = /^([A-Z][\w.' -]{0,40}?):\s+(.+)$/.exec(item.trim());
-  return m ? { who: m[1].trim(), text: m[2].trim() } : { text: item.trim() };
+  if (!m) return { text: item.trim() };
+  const who = m[1].trim();
+  const known = (n: string) => n.toLowerCase() === who.toLowerCase() || n.split(/\s+/)[0]?.toLowerCase() === who.toLowerCase();
+  if (names && !names.some(known)) return { text: item.trim() };
+  return { who, text: m[2].trim() };
 }
 
 function taskStage(task: any, sessions: string[], decisions: any[]): FollowStage {
@@ -72,7 +98,10 @@ export function sweepCallNumbers(title: string): number[] {
   if (!/call ideas sweep/i.test(title)) return [];
   const out = new Set<number>();
   for (const m of title.matchAll(/cl-(\d+)\s+to\s+cl-(\d+)/gi)) {
-    for (let n = Number(m[1]); n <= Number(m[2]); n++) out.add(n);
+    const [from, to] = [Number(m[1]), Number(m[2])];
+    // A sweep reads a few days of calls; a wider span is a typo, not a range.
+    if (to - from > 50) continue;
+    for (let n = from; n <= to; n++) out.add(n);
   }
   for (const m of title.matchAll(/cl-(\d+)/gi)) out.add(Number(m[1]));
   return [...out];
@@ -116,9 +145,10 @@ export function buildFollowThrough(
       return { key: String(task._id), title: task.title, task, sessions, decisions: decs, stage: taskStage(task, sessions, decs) };
     });
     // A summary's action item no task took up is an ask nobody filed.
+    const names = (call.participants ?? []).map((p: any) => String(p.name ?? ""));
     for (const raw of call.action_items ?? []) {
-      const { who, text } = splitAsk(raw);
-      if (callTasks.some((t) => sameAsk(text, t.title ?? ""))) continue;
+      if (taskForItem(raw, callTasks)) continue;
+      const { who, text } = splitAsk(raw, names);
       items.push({ key: `ask:${raw}`, title: text, askedOf: who, sessions: [], decisions: [], stage: "unfiled" });
     }
     const counts = Object.fromEntries([...FOLLOW_STAGES, "dropped"].map((s) => [s, 0])) as Record<FollowStage, number>;
