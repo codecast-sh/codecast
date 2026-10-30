@@ -6,9 +6,9 @@
 // the decision card waiting on it, and its stage. The stage totals at the top
 // filter the board, so "what did nobody pick up" is one press.
 
-import { useMemo, useState, type MouseEvent } from "react";
+import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import Link from "next/link";
-import { FileText } from "lucide-react";
+import { FileText, Plus } from "lucide-react";
 import { callPathRef, isRecRoomKey } from "@codecast/shared/contracts";
 import { EntityIdPill } from "../EntityIdPill";
 import { AuthorAvatar } from "../entityDisplay";
@@ -22,7 +22,7 @@ import { fmtClock } from "../triggerCadence";
 import type { WorkspaceKey } from "../../lib/workspaceScope";
 import { buildFollowThrough, FOLLOW_STAGES, type FollowCall, type FollowItem, type FollowStage } from "../../lib/calls/followThrough";
 import { firstName } from "./speakers";
-import { useOpenTask } from "./CallTasks";
+import { makeCallTask, useOpenTask } from "./CallTasks";
 
 const WINDOW_MS = 14 * 24 * 3600_000;
 
@@ -65,7 +65,7 @@ function StageBar({ counts, total }: { counts: Record<FollowStage, number>; tota
   );
 }
 
-function ItemRow({ item }: { item: FollowItem }) {
+function ItemRow({ item, call }: { item: FollowItem; call: any }) {
   const openTask = useOpenTask();
   const t = item.task;
   const open = (e: MouseEvent) => openTask(e, t);
@@ -115,9 +115,20 @@ function ItemRow({ item }: { item: FollowItem }) {
         {extra > 0 && <span className="text-[10.5px] text-sol-text-dim">+{extra}</span>}
         {item.decisions[0]?.short_id && <EntityIdPill shortId={item.decisions[0].short_id} compact />}
       </span>
-      <span className="w-12 shrink-0 text-right text-[10.5px] tabular-nums text-sol-text-dim">
-        {t ? relativeTime(t.updated_at) : ""}
-      </span>
+      {item.raw ? (
+        <button
+          type="button"
+          onClick={() => makeCallTask(call, item.raw!)}
+          title={item.guess ? `File this ask as its own task, apart from ${item.guess.short_id}` : "File this ask as a task on the call"}
+          className="flex w-[84px] shrink-0 items-center justify-end gap-1 text-[11px] text-sol-text-dim hover:text-sol-text"
+        >
+          <Plus className="h-3 w-3" /> Make task
+        </button>
+      ) : (
+        <span className="w-[84px] shrink-0 text-right text-[10.5px] tabular-nums text-sol-text-dim">
+          {t ? relativeTime(t.updated_at) : ""}
+        </span>
+      )}
     </li>
   );
 }
@@ -153,7 +164,7 @@ function CallBlock({ fc, filter }: { fc: FollowCall; filter: FollowStage | null 
       ) : (
         <ul className="pb-2">
           {items.map((it) => (
-            <ItemRow key={it.key} item={it} />
+            <ItemRow key={it.key} item={it} call={call} />
           ))}
         </ul>
       )}
@@ -161,7 +172,7 @@ function CallBlock({ fc, filter }: { fc: FollowCall; filter: FollowStage | null 
   );
 }
 
-export function CallFollowThrough({ calls }: { calls: any[] }) {
+export function CallFollowThrough({ calls, fallback }: { calls: any[]; fallback: ReactNode }) {
   const workspace = useActiveWorkspaceKey();
   const me = useMyUserId();
   const tasks = useWorkspaceCollection<any>("tasks", taskSig, workspace);
@@ -184,6 +195,7 @@ export function CallFollowThrough({ calls }: { calls: any[] }) {
     return out;
   }, [board]);
   const shown = filter ? board.filter((fc) => fc.counts[filter] > 0) : board;
+  if (board.length === 0) return <>{fallback}</>;
 
   return (
     <div className="flex h-full min-h-0 flex-col">

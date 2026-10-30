@@ -1297,24 +1297,29 @@ export default function CallsPage() {
                 <CallDetailSkeleton lead={listToggle} />
               ) : selectedId ? (
                 <div className="p-8 text-sm text-sol-text-dim">Call not found (or not yours to see).</div>
-              ) : callsOn && calls.length > 0 ? (
-                <CallFollowThrough calls={calls} />
               ) : (
-                <div className="flex h-full items-center justify-center">
-                  <div className="max-w-xs text-center text-sol-text-dim">
-                    <Phone className="mx-auto mb-2 h-6 w-6 opacity-40" />
-                    <div className="text-sm">Select a call</div>
-                    <p className="mt-1.5 text-[12px] leading-relaxed text-sol-text-dim/80">
-                      Every huddle lands in the list with its transcript, and its video when someone recorded it. Your voice notes are here too.
-                    </p>
-                  </div>
-                    <FeatureUpsell
-                      slug="calls"
-                      variant="inline"
-                      className="mt-5 rounded-md border text-left"
-                      reason="Let agents read these transcripts, so what was decided on a call reaches the work."
-                    />
-                </div>
+                // The board when the active team had calls lately; the plain
+                // hint otherwise (no calls yet, huddles off, a personal workspace).
+                <CallFollowThrough
+                  calls={callsOn ? calls : NO_CALLS}
+                  fallback={
+                    <div className="flex h-full items-center justify-center">
+                      <div className="max-w-xs text-center text-sol-text-dim">
+                        <Phone className="mx-auto mb-2 h-6 w-6 opacity-40" />
+                        <div className="text-sm">Select a call</div>
+                        <p className="mt-1.5 text-[12px] leading-relaxed text-sol-text-dim/80">
+                          Every huddle lands in the list with its transcript, and its video when someone recorded it. Your voice notes are here too.
+                        </p>
+                      </div>
+                        <FeatureUpsell
+                          slug="calls"
+                          variant="inline"
+                          className="mt-5 rounded-md border text-left"
+                          reason="Let agents read these transcripts, so what was decided on a call reaches the work."
+                        />
+                    </div>
+                  }
+                />
               )}
             </div>
           </div>

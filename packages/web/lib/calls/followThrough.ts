@@ -14,6 +14,8 @@ export type FollowItem = {
   /** Who the summary asked it of ("Samvit: ..."), when it said. */
   askedOf?: string;
   task?: any;
+  /** The action item as the summary wrote it, for an ask no task names. */
+  raw?: string;
   /** For an ask no task names word for word: the task whose title reads most
    *  like it, shown as a guess and never counted as filing it. */
   guess?: any;
@@ -158,7 +160,7 @@ export function buildFollowThrough(
       if (taskForItem(raw, callTasks)) continue;
       const { who, text } = splitAsk(raw, names);
       const guess = likelyTaskForItem(raw, callTasks);
-      items.push({ key: `ask:${raw}`, title: text, askedOf: who, guess, sessions: [], decisions: [], stage: guess ? "guessed" : "unfiled" });
+      items.push({ key: `ask:${raw}`, raw, title: text, askedOf: who, guess, sessions: [], decisions: [], stage: guess ? "guessed" : "unfiled" });
     }
     const counts = Object.fromEntries([...FOLLOW_STAGES, "dropped"].map((s) => [s, 0])) as Record<FollowStage, number>;
     for (const it of items) counts[it.stage]++;
