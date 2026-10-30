@@ -34,6 +34,7 @@ import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unpa
 import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 import { queueMoveContinueIfMidTurn } from "./moveContinue";
+import { rehomeUndeliveredMessages } from "./pendingMessages";
 import { deviceManagementFor } from "./lib/teamPolicyGuard";
 
 async function getAuthenticatedUserId(
@@ -987,6 +988,7 @@ export async function performReparentSessionToDevice(
     patch.user_id = runnerId;
   }
   await ctx.db.patch(conv._id, patch);
+  if (crossUser) await rehomeUndeliveredMessages(ctx, conv._id, runnerId);
   // Moved onto a team machine: the caller keeps the session as an owner.
   if (onTeamMachine) await retainSessionCreator(ctx, conv._id, userId, runnerId);
 
@@ -1159,6 +1161,7 @@ export async function performClaimDeviceAccount(
     } else {
       await ctx.db.patch(conv._id, { user_id: callerId });
     }
+    await rehomeUndeliveredMessages(ctx, conv._id, callerId);
     const managed = await ctx.db
       .query("managed_sessions")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))

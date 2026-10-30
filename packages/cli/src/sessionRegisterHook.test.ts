@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SESSION_REGISTER_HOOK } from "./sessionRegisterHook.js";
+import { declareSpawnParent, declaredSpawnParent } from "./spawnParents.js";
 
 let home: string;
 let hookFile: string;
@@ -81,5 +82,42 @@ describe("session-register hook", () => {
     run({ session_id: id, hook_event_name: "UserPromptSubmit" });
     expect(claim(id).tty).toBe("ttys001");
     expect(claim(id).pid).not.toBe(99999999);
+  });
+
+  describe("headless run parent declaration", () => {
+    const configDir = () => path.join(home, ".codecast");
+    const headless = (id: string, env: Record<string, string>) =>
+      run({ session_id: id, hook_event_name: "SessionStart", source: "startup" }, { CODECAST_DIR: "", CODECAST_CONVERSATION_ID: "", CLAUDE_CODE_ENTRYPOINT: "", ...env });
+
+    test("names the conversation the run inherited", () => {
+      headless("hl-1", { CODECAST_CONVERSATION_ID: "jx7parent", CLAUDE_CODE_ENTRYPOINT: "sdk-cli" });
+      expect(declaredSpawnParent(configDir(), "hl-1")).toEqual({ conversationId: "jx7parent" });
+    });
+
+    test("an interactive session declares nothing, even with a conversation id of its own", () => {
+      headless("hl-2", { CODECAST_CONVERSATION_ID: "jx7self", CLAUDE_CODE_ENTRYPOINT: "cli" });
+      expect(declaredSpawnParent(configDir(), "hl-2")).toBeNull();
+    });
+
+    test("a run started outside any codecast session declares nothing", () => {
+      headless("hl-3", { CLAUDE_CODE_ENTRYPOINT: "sdk-cli" });
+      expect(declaredSpawnParent(configDir(), "hl-3")).toBeNull();
+    });
+
+    test("an Agent SDK run declares too", () => {
+      headless("hl-5", { CODECAST_CONVERSATION_ID: "jx7parent", CLAUDE_CODE_ENTRYPOINT: "sdk-py" });
+      expect(declaredSpawnParent(configDir(), "hl-5")).toEqual({ conversationId: "jx7parent" });
+    });
+
+    test("a resumed headless run declares nothing", () => {
+      run({ session_id: "hl-6", hook_event_name: "SessionStart", source: "resume" }, { CODECAST_CONVERSATION_ID: "jx7parent", CLAUDE_CODE_ENTRYPOINT: "sdk-cli" });
+      expect(declaredSpawnParent(configDir(), "hl-6")).toBeNull();
+    });
+
+    test("a declaration cast exec wrote first wins", () => {
+      declareSpawnParent(configDir(), "hl-4", "caller-session");
+      headless("hl-4", { CODECAST_CONVERSATION_ID: "jx7parent", CLAUDE_CODE_ENTRYPOINT: "sdk-cli" });
+      expect(declaredSpawnParent(configDir(), "hl-4")).toEqual({ sessionId: "caller-session" });
+    });
   });
 });

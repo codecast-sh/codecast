@@ -85,6 +85,17 @@ describe("performReparentSessionToDevice", () => {
     expect(db._tables.managed_sessions.map((r: any) => r._id)).toEqual(["ms3"]);
   });
 
+  test("undelivered messages follow the session to its new runner", async () => {
+    const db = fixtures();
+    db._tables.pending_messages = [
+      { _id: "pm1", conversation_id: "conv1", from_user_id: ME, owner_user_id: JASON, status: "pending" },
+      { _id: "pm2", conversation_id: "conv1", from_user_id: ME, owner_user_id: JASON, status: "held" },
+      { _id: "pm3", conversation_id: "conv1", from_user_id: ME, owner_user_id: JASON, status: "delivered" },
+    ];
+    await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+    expect(db._tables.pending_messages.map((r: any) => r.owner_user_id)).toEqual([ME, ME, JASON]);
+  });
+
   test("owners are untouched by a device reparent (axes are independent)", async () => {
     const db = fixtures();
     await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });

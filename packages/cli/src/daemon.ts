@@ -11048,11 +11048,15 @@ export async function resolveSpawnerConversation(
   agentType: AgentClientId,
   conversationCache: ConversationCache,
   spawnRegistry: TmuxSpawnRegistry = tmuxSpawnRegistry,
+  configDir: string = CONFIG_DIR,
 ): Promise<string | null> {
+  const own = conversationCache[sessionId];
   // A launcher that knew its caller (`cast exec`) declared it: no guessing.
-  const declared = declaredSpawnParent(CONFIG_DIR, sessionId);
-  const declaredConversation = declared ? conversationCache[declared] : undefined;
-  if (declaredConversation && declaredConversation !== conversationCache[sessionId]) return declaredConversation;
+  const declared = declaredSpawnParent(configDir, sessionId);
+  if (declared && "sessionId" in declared) {
+    const caller = conversationCache[declared.sessionId];
+    if (caller && caller !== own) return caller;
+  }
   let candidates = spawnerCandidates.get(sessionId);
   if (!candidates) {
     candidates = await walkSpawnerCandidates(filePath, sessionId, agentType, spawnRegistry);
@@ -11060,7 +11064,16 @@ export async function resolveSpawnerConversation(
   }
   for (const candidate of candidates) {
     const conversationId = "conversationId" in candidate ? candidate.conversationId : conversationCache[candidate.sessionId];
-    if (conversationId && conversationId !== conversationCache[sessionId]) return conversationId;
+    if (conversationId && conversationId !== own) return conversationId;
+  }
+  // The conversation the run inherited (session-register hook) comes after the
+  // walk: the walk reads the spawner's current session, which an in-pane
+  // /resume can have moved off the pane's launch conversation. It catches what
+  // the walk cannot see: a run whose process is gone or was reparented. An id
+  // comes from an env var, so only one of this machine's own conversations counts.
+  if (declared && "conversationId" in declared && declared.conversationId !== own
+    && Object.values(conversationCache).includes(declared.conversationId)) {
+    return declared.conversationId;
   }
   return null;
 }

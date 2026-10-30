@@ -74,6 +74,30 @@ case "$SESSION_ID" in
 esac
 [ \${#SESSION_ID} -le 128 ] || exit 0
 
+# A headless run (\`claude -p\`) inherits the CODECAST_CONVERSATION_ID of the
+# session whose Bash started it, detached or not, while Claude Code gives the
+# run its own session id. Declare that conversation as the run's parent so the
+# daemon nests it there even when the process is gone or reparented before the
+# daemon looks (spawnParents.ts). A declaration \`cast exec\` wrote first wins.
+# A resumed session already has its conversation, so only a fresh run declares.
+PARENT_CONV="\${CODECAST_CONVERSATION_ID:-}"
+case "\${CLAUDE_CODE_ENTRYPOINT:-}:\${HOOK_source:-}" in
+  sdk-cli:resume|sdk-ts:resume|sdk-py:resume) ;;
+  sdk-cli:*|sdk-ts:*|sdk-py:*)
+    case "$PARENT_CONV" in
+      ""|*[!A-Za-z0-9]*) ;;
+      *)
+        DECL_DIR="\${CODECAST_DIR:-$HOME/.codecast}/spawn-parents"
+        if [ ! -f "$DECL_DIR/$SESSION_ID.json" ]; then
+          mkdir -p "$DECL_DIR"
+          find "$DECL_DIR" -name '*.json' -mtime +7 -delete 2>/dev/null
+          echo "{\\"parent_conversation_id\\":\\"$PARENT_CONV\\",\\"ts\\":$(date +%s)000}" > "$DECL_DIR/$SESSION_ID.json"
+        fi
+        ;;
+    esac
+    ;;
+esac
+
 ${SESSION_REGISTER_JOB}
 session_register_job
 `;
