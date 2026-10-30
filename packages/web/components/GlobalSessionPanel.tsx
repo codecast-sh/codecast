@@ -27,7 +27,7 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { awaitingOkIds } from "../lib/decisionQueue";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, pendingSendIdsOf, freshReviveRequestIds, hostedStatusSections, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, hostedOnlyInbox, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
-import { hiddenBucketTree } from "../store/hiddenBucketTree";
+import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated, HOSTED_UNFOLDABLE_SECTIONS } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
@@ -3135,9 +3135,8 @@ function SessionListPanelImpl({
     [openCharacterPicker],
   );
   // "Kill all" on the Stashed header — two-step confirm (arm, then fire within
-  // 3s) since it tears down every stashed agent at once. Kills the top-level
-  // rows (each stamps its own children) plus any stashed child whose parent
-  // isn't stashed, so nothing in the bucket survives.
+  // 3s) since it tears down every stashed agent at once. Kills each row its
+  // parent's cascade won't reach (killAllIds), so nothing in the bucket survives.
   const [killAllArmed, setKillAllArmed] = useState(false);
   const killAllTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleKillAllStashed = useCallback(() => {
@@ -3148,12 +3147,8 @@ function SessionListPanelImpl({
       return;
     }
     setKillAllArmed(false);
-    const stashedIds = new Set(filteredStashed.map((sess) => sess._id));
-    const ids = filteredStashed
-      .filter((sess) => !sess.parent_conversation_id || !stashedIds.has(sess.parent_conversation_id))
-      .map((sess) => sess._id);
     // The kill's own entry toast announces it, with its Undo.
-    killManyWithNotice(ids);
+    killManyWithNotice(killAllIds(filteredStashed));
   }, [killAllArmed, filteredStashed, killManyWithNotice]);
 
   // A new grouping is a new list: it opens at its first group, not at the

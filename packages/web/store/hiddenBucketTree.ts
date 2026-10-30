@@ -1,3 +1,4 @@
+import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { inboxNestParentOf, type InboxSession } from "./inboxStore";
 
 // A set aside bucket's rows as cards with their sub rows beneath, one level
@@ -28,4 +29,23 @@ export function hiddenBucketTree(items: InboxSession[]): { topLevel: InboxSessio
   }
   for (const subs of subsByTop.values()) subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   return { topLevel, subsByTop };
+}
+
+// The ids "Kill all" sends so nothing in the bucket survives. A kill stamps
+// only the killed row's direct children (nestParentIdOf, as hideSessionInDraft
+// cascades), so a row is covered only when its direct parent is killed
+// explicitly; every other row, a grandchild included, is killed itself.
+export function killAllIds(items: InboxSession[]): string[] {
+  const parentOf = new Map(items.map((s) => [s._id, nestParentIdOf(s)]));
+  const explicit = new Map<string, boolean>();
+  const isExplicit = (id: string): boolean => {
+    const known = explicit.get(id);
+    if (known !== undefined) return known;
+    explicit.set(id, true); // a parent cycle resolves to killing the row itself
+    const parent = parentOf.get(id);
+    const result = !parent || !parentOf.has(parent) || !isExplicit(parent);
+    explicit.set(id, result);
+    return result;
+  };
+  return items.map((s) => s._id).filter(isExplicit);
 }
