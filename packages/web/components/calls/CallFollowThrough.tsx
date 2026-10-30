@@ -28,6 +28,7 @@ const WINDOW_MS = 14 * 24 * 3600_000;
 
 const STAGE: Record<FollowStage, { label: string; color: string }> = {
   unfiled: { label: "No task", color: "var(--sol-red)" },
+  guessed: { label: "Likely filed", color: "var(--sol-orange)" },
   filed: { label: "Not picked up", color: "var(--sol-yellow)" },
   working: { label: "Working", color: "var(--sol-blue)" },
   deciding: { label: "Needs decision", color: "var(--sol-magenta)" },
@@ -80,7 +81,19 @@ function ItemRow({ item }: { item: FollowItem }) {
             <span className="truncate">{t.title}</span>
           </a>
         ) : (
-          <span className="truncate text-[12.5px] text-sol-text-muted">{item.title}</span>
+          <>
+            <span className="truncate text-[12.5px] text-sol-text-muted">{item.title}</span>
+            {item.guess && (
+              <a
+                href={taskFacePath(item.guess)}
+                onClick={(e) => openTask(e, item.guess)}
+                title={`Reads like ${item.guess.short_id}: ${item.guess.title}`}
+                className="shrink-0 font-mono text-[10.5px] text-sol-orange hover:underline"
+              >
+                {item.guess.short_id}?
+              </a>
+            )}
+          </>
         )}
       </span>
       <span className="flex w-[92px] shrink-0 items-center gap-1 truncate text-[11px] text-sol-text-muted">

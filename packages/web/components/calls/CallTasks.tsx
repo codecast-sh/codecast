@@ -67,9 +67,9 @@ function pickCallTask(call: CallRef) {
 /** Opens a task beside the page (or on its own page where nothing opens beside). */
 export function useOpenTask() {
   const router = useRouter();
-  return (e: MouseEvent, t: { short_id: string }) => {
+  return (e: MouseEvent, t: { _id: string; short_id?: string | null }) => {
     e.preventDefault();
-    const path = taskFacePath(t as any);
+    const path = taskFacePath(t);
     if (!openBeside(path)) router.push(path);
   };
 }

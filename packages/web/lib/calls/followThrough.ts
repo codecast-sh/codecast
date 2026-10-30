@@ -3,10 +3,10 @@
 // Pure, over store rows, so the calls page derives it at render and a task
 // moving anywhere moves its row here at once.
 
-export type FollowStage = "unfiled" | "filed" | "working" | "deciding" | "review" | "done" | "dropped";
+export type FollowStage = "unfiled" | "guessed" | "filed" | "working" | "deciding" | "review" | "done" | "dropped";
 
 /** Left to right, the way an ask travels. */
-export const FOLLOW_STAGES: FollowStage[] = ["unfiled", "filed", "working", "deciding", "review", "done"];
+export const FOLLOW_STAGES: FollowStage[] = ["unfiled", "guessed", "filed", "working", "deciding", "review", "done"];
 
 export type FollowItem = {
   key: string;
@@ -14,6 +14,9 @@ export type FollowItem = {
   /** Who the summary asked it of ("Samvit: ..."), when it said. */
   askedOf?: string;
   task?: any;
+  /** For an ask no task names word for word: the task whose title reads most
+   *  like it, shown as a guess and never counted as filing it. */
+  guess?: any;
   /** Sessions working the task, newest first, the one that filed it left out. */
   sessions: string[];
   decisions: any[];
@@ -54,14 +57,19 @@ function overlap(item: string, title: string): number {
   return shared >= 3 ? shared / Math.min(a.size, b.size) : 0;
 }
 
-/** The task a call's action item became, or undefined when nobody filed it.
- *  The one rule the call page and the board both use: the same words first
- *  (a task made from the item on the call page), else the closest reworded
- *  title (the listener rewrites each item) sharing most of its content words. */
+/** The task made from a call's action item: the same title, word for word
+ *  (with or without the "Name:" prefix). The only rule that counts an ask as
+ *  filed, on the call page and the board alike. */
 export function taskForItem<T extends { title?: string }>(item: string, tasks: T[]): T | undefined {
+  const keys = [itemKey(item), itemKey(splitAsk(item).text)];
+  return tasks.find((t) => keys.includes(itemKey(t.title ?? "")));
+}
+
+/** The task whose title reads most like an action item the listener may have
+ *  reworded: three shared content words and most of the shorter. A guess for a
+ *  person to confirm, since one common extra word can carry it. */
+export function likelyTaskForItem<T extends { title?: string }>(item: string, tasks: T[]): T | undefined {
   const text = splitAsk(item).text;
-  const exact = tasks.find((t) => [itemKey(item), itemKey(text)].includes(itemKey(t.title ?? "")));
-  if (exact) return exact;
   let best: T | undefined;
   let bestScore = 0.6;
   for (const t of tasks) {
@@ -149,7 +157,8 @@ export function buildFollowThrough(
     for (const raw of call.action_items ?? []) {
       if (taskForItem(raw, callTasks)) continue;
       const { who, text } = splitAsk(raw, names);
-      items.push({ key: `ask:${raw}`, title: text, askedOf: who, sessions: [], decisions: [], stage: "unfiled" });
+      const guess = likelyTaskForItem(raw, callTasks);
+      items.push({ key: `ask:${raw}`, title: text, askedOf: who, guess, sessions: [], decisions: [], stage: guess ? "guessed" : "unfiled" });
     }
     const counts = Object.fromEntries([...FOLLOW_STAGES, "dropped"].map((s) => [s, 0])) as Record<FollowStage, number>;
     for (const it of items) counts[it.stage]++;

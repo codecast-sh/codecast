@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { buildFollowThrough, splitAsk, sweepCallNumbers, taskForItem } from "../followThrough";
+import { buildFollowThrough, likelyTaskForItem, splitAsk, sweepCallNumbers, taskForItem } from "../followThrough";
 
 describe("followThrough", () => {
-  test("an action item finds the task the listener reworded from it, and no looser match", () => {
+  test("only the same words count an ask as filed; a reworded title is a guess", () => {
     const desk = { title: "Meet Cam this afternoon to align on how the desk should be used" };
-    const signing = { title: "Fix the mobile build signing" };
-    const tasks = [desk, signing, { title: "Check the inbound sign-up thread that went badly" }];
-    expect(taskForItem("Jason: Catch up with Cam this afternoon on what he is working on and align on how the desk can and should be used", tasks)).toBe(desk);
-    expect(taskForItem("Ship the mobile build", tasks)).toBeUndefined();
-    expect(taskForItem("Ashot: Check on the handoff/clipboard issue he said he would look into", tasks)).toBeUndefined();
+    const signing = { title: "Fix the mobile build signing today" };
+    const pricing = { title: "Redesign the pricing page for teams" };
+    const tasks = [desk, signing, pricing, { title: "Check the inbound sign-up thread that went badly" }];
+    const reworded = "Jason: Catch up with Cam this afternoon on what he is working on and align on how the desk can and should be used";
+    expect(taskForItem(reworded, tasks)).toBeUndefined();
+    expect(likelyTaskForItem(reworded, tasks)).toBe(desk);
+    // The reviewer's near misses never count as filed, whatever the guess says.
+    expect(taskForItem("Ship the mobile build today", tasks)).toBeUndefined();
+    expect(taskForItem("Update the pricing page copy for teams", tasks)).toBeUndefined();
+    expect(likelyTaskForItem("Ship the mobile build", tasks)).toBeUndefined();
+    expect(likelyTaskForItem("Ashot: Check on the handoff/clipboard issue he said he would look into", tasks)).toBeUndefined();
   });
 
   test("a task made from the item on the call page matches it word for word", () => {
@@ -47,8 +53,10 @@ describe("followThrough", () => {
       ["Confidence score", "deciding"],
       ["Settle up", "done"],
       ["write the launch post", "unfiled"],
+      ["fix the funnel stages nesting", "guessed"],
     ]);
     expect(fc.items[4].askedOf).toBe("Jo");
+    expect(fc.items[5].guess._id).toBe("t1");
     expect(fc.sweepDocs.map((d) => d._id)).toEqual(["d1"]);
   });
 });
