@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { InboxSession } from "../inboxStore";
 import { sessionStructuralSig } from "../inboxStore";
-import { hiddenBucketTree } from "../hiddenBucketTree";
+import { hiddenBucketTree, killAllIds } from "../hiddenBucketTree";
 import { placeSections } from "./placeTestHarness";
 
 const now = Date.now();
@@ -93,5 +93,22 @@ describe("set aside bucket rows", () => {
     const { topLevel, subsByTop } = hiddenBucketTree(items);
     const drawn = [...topLevel, ...topLevel.flatMap((top) => subsByTop.get(top._id) ?? [])];
     expect(ids(drawn).sort()).toEqual(ids(items).sort());
+  });
+});
+
+describe("kill all in a set aside bucket", () => {
+  const stashed = (id: string, parentId?: string) =>
+    row(id, { inbox_stashed_at: now, ...(parentId ? { parent_conversation_id: parentId, is_subagent: true } : {}) });
+
+  it("kills each row its parent's cascade does not reach", () => {
+    // root cascades to kid; grandkid's parent (kid) is not killed explicitly, so
+    // grandkid is; great-grandkid rides grandkid's cascade.
+    const items = [stashed("root"), stashed("kid", "root"), stashed("grandkid", "kid"), stashed("great", "grandkid")];
+    expect(killAllIds(items).sort()).toEqual(["grandkid", "root"]);
+  });
+
+  it("kills a row whose parent is outside the bucket, and terminates on a parent cycle", () => {
+    expect(killAllIds([stashed("orphan", "live-lead")])).toEqual(["orphan"]);
+    expect(killAllIds([stashed("x", "y"), stashed("y", "x")])).toEqual(["x"]);
   });
 });
