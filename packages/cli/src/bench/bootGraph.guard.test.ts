@@ -249,7 +249,9 @@ describe("command groups stay off the boot graph", () => {
     // lived in resourceMonitor.ts, which processTable.ts reads at load time
     // through the cycle processTable -> resourceMonitor -> sessionProcessMatcher
     // -> tmux, so loading resourceMonitor first threw a TDZ ReferenceError.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(329);
+    // 330 on 2026-10-29: contracts/inboxFields.ts, the inbox field ownership
+    // lists split out of contracts/inboxProjection.ts for its max-lines pin.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(330);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -295,7 +297,9 @@ describe("command groups stay off the boot graph", () => {
     // 4400 on 2026-10-28: managed devices (MDM). contracts/managedPolicy.ts
     // (+2: each policy's refusal words and the removed-device message) and
     // index.ts printing that message when a team has removed the device.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4400);
+    // 4401 on 2026-10-29: contracts/inboxProjection.ts lifting a hidden role
+    // lead whose only live work is a nested subagent (child_live).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4401);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -422,7 +426,9 @@ describe("command groups stay off the boot graph", () => {
     // driver's markdown_section arm judges every owned region with (ct-42887).
     // 522 on 2026-10-29: planHandoff.ts, the one plan-handoff parser the daemon
     // and the ingest worker share (a compaction summary self-linked a session).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(522);
+    // 523 on 2026-10-29: contracts/inboxFields.ts, split out of
+    // contracts/inboxProjection.ts for its max-lines pin.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(523);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
