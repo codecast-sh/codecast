@@ -20,6 +20,7 @@
 
 import { execFileAsync, execSync } from "../proc.js";
 import { execFileSync } from "../proc.js";
+import { execFileSyncToFile } from "../worktreeLegacy.js";
 import { randomUUID } from "node:crypto";
 import { WIP_REF_PREFIX, WIP_SNAPSHOT_SUBJECT } from "../wipSnapshot.js";
 import * as fs from "node:fs";
@@ -869,7 +870,7 @@ async function recreateSeededWorktree(repoRoot: string, name: string, branch: st
     gitArgv(worktreePath, ["reset", "-q", "--mixed", seedBase]);
     return;
   }
-  await withWorktreeAdd(repoRoot, () => gitArgv(repoRoot, ["worktree", "add", worktreePath, branch]));
+  await withWorktreeAdd(repoRoot, () => execFileSyncToFile("git", ["worktree", "add", worktreePath, branch], { cwd: repoRoot }));
   if (tip === seedBase) {
     gitArgv(worktreePath, ["read-tree", "-u", "--reset", startPoint]);
     gitArgv(worktreePath, ["reset", "-q", "--mixed", seedBase]);

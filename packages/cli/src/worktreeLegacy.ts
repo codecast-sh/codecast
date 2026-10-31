@@ -2,8 +2,33 @@
 // no workspace.toml): add the worktree under .codecast/worktrees, retrying git's
 // lock contention, and copy the setup files a checkout needs.
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
-import { execSync } from "./proc.js";
+import { execFileSync, execSync } from "./proc.js";
+
+/**
+ * Runs a command synchronously with its output in a temp file rather than a
+ * pipe. Bun 1.4 returns from a sync spawn only when every holder of a piped
+ * stdout or stderr has closed it, so a command whose child outlives it (git
+ * runs a post-checkout hook that backgrounds `npm run build:watch &` with git's
+ * own stdout and stderr) keeps the daemon's event loop in the call for as long
+ * as the job lives. With a file the call returns when the command exits. On
+ * failure the error carries the output as `stderr`, as a piped call's would.
+ */
+export function execFileSyncToFile(file: string, args: string[], options: { cwd?: string } = {}): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-exec-"));
+  const out = path.join(dir, "out");
+  const fd = fs.openSync(out, "w");
+  try {
+    execFileSync(file, args, { ...options, stdio: ["ignore", fd, fd] });
+  } catch (err) {
+    (err as { stderr?: string }).stderr = fs.readFileSync(out, "utf-8");
+    throw err;
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 const CODECAST_WORKTREE_DIR = ".codecast/worktrees";
 
@@ -45,17 +70,13 @@ export function createWorktreeLegacy(repoRoot: string, name: string, log: (messa
       try { execSync(`sleep ${(200 + attempt * 300) / 1000}`, { stdio: "ignore" }); } catch {}
     }
     try {
-      execSync(`git worktree add --no-track -b ${branchName} ${worktreePath}`, {
-        cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-      });
+      execFileSyncToFile("git", ["worktree", "add", "--no-track", "-b", branchName, worktreePath], { cwd: repoRoot });
       created = true;
       break;
     } catch (err) {
       // Branch already exists — try without -b
       try {
-        execSync(`git worktree add ${worktreePath} ${branchName}`, {
-          cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-        });
+        execFileSyncToFile("git", ["worktree", "add", worktreePath, branchName], { cwd: repoRoot });
         created = true;
         break;
       } catch (err2) {
