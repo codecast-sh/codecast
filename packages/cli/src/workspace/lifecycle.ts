@@ -20,7 +20,7 @@
 
 import { execFileAsync, execSync } from "../proc.js";
 import { execFileSync } from "../proc.js";
-import { execFileSyncToFile } from "../worktreeLegacy.js";
+import { execFileSyncToFile, execFileToFile } from "../worktreeLegacy.js";
 import { randomUUID } from "node:crypto";
 import { WIP_REF_PREFIX, WIP_SNAPSHOT_SUBJECT } from "../wipSnapshot.js";
 import * as fs from "node:fs";
@@ -908,7 +908,7 @@ async function createGitWorktree(repoRoot: string, name: string, branch: string,
 
   if (startPoint) {
     if (fs.existsSync(worktreePath)) throw new Error(`worktree directory ${worktreePath} already exists`);
-    const add = (b: string) => withWorktreeAdd(repoRoot, () => execFileAsync("git", ["worktree", "add", "--no-track", "-b", b, worktreePath, startPoint], { cwd: repoRoot, encoding: "utf-8" }));
+    const add = (b: string) => withWorktreeAdd(repoRoot, () => execFileToFile("git", ["worktree", "add", "--no-track", "-b", b, worktreePath, startPoint], { cwd: repoRoot }));
     try {
       await add(branch);
       return { path: worktreePath, branch };
@@ -931,10 +931,10 @@ async function createGitWorktree(repoRoot: string, name: string, branch: string,
 
   // Try create-new-branch path first; fall back to attaching to existing branch.
   try {
-    await withWorktreeAdd(repoRoot, () => execFileAsync("git", ["worktree", "add", "--no-track", "-b", branch, worktreePath], { cwd: repoRoot }));
+    await withWorktreeAdd(repoRoot, () => execFileToFile("git", ["worktree", "add", "--no-track", "-b", branch, worktreePath], { cwd: repoRoot }));
   } catch {
     // Branch may already exist (e.g., from a previous broken attempt).
-    await withWorktreeAdd(repoRoot, () => execFileAsync("git", ["worktree", "add", worktreePath, branch], { cwd: repoRoot }));
+    await withWorktreeAdd(repoRoot, () => execFileToFile("git", ["worktree", "add", worktreePath, branch], { cwd: repoRoot }));
   }
   return { path: worktreePath, branch };
 }

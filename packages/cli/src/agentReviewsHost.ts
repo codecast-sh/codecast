@@ -31,6 +31,7 @@ import { gzipSync } from "node:zlib";
 import { TOOL_PATH, execFileAsync, findOnPath, spawn } from "./proc.js";
 import { codecastPath } from "./codecastDir.js";
 import { bunPath } from "./momentsHost.js";
+import { execFileToFile } from "./worktreeLegacy.js";
 import { accountTokenFilePath, readActiveCredentialAsync } from "./ccAccounts.js";
 import { loadLocalUsageProfiles, type UsageProfile } from "./usageCommand.js";
 import { isUsageExhausted, livePercent, worstUsagePercent } from "@codecast/shared/contracts";
@@ -178,8 +179,10 @@ export async function checkoutFor(root: string, inUse: Set<string>, now = Date.n
   const dir = path.join(checkoutsDir(), name);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(checkoutsDir(), { recursive: true });
-    const r = await git(root, ["worktree", "add", "--detach", "--quiet", dir, head]);
-    if (r.status !== 0) throw new Error(`could not check out ${head.slice(0, 10)} of ${root}: ${r.stderr.trim().slice(0, 300)}`);
+    // Not through git(): a post-checkout hook's background job would hold its pipes.
+    await execFileToFile("git", ["-C", root, "worktree", "add", "--detach", "--quiet", dir, head]).catch((err: { stderr?: string }) => {
+      throw new Error(`could not check out ${head.slice(0, 10)} of ${root}: ${(err.stderr ?? String(err)).trim().slice(0, 300)}`);
+    });
   }
   for (const other of fs.readdirSync(checkoutsDir())) {
     const p = path.join(checkoutsDir(), other);
