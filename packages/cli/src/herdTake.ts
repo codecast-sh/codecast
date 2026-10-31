@@ -19,6 +19,8 @@ const SWAP_HOLD_MS = 10 * 60_000;
 const DRAIN_MS = 15_000;
 const AGENT_WAIT_MS = 30_000;
 const BUSY_POLL_MS = 3000;
+/** How often a wait that goes on is said again, with how long it has lasted. */
+const REEMIT_MS = 15_000;
 
 const holds = new Map<string, number>();
 
@@ -57,13 +59,32 @@ export type HerdTakeRequest = {
 
 export type HerdTakeResult = { ok: true; paneId: string; label: string } | { ok: false; error: string };
 
+/**
+ * What a progress event says about the step it belongs to. Events of one `step`
+ * are the same step said again (a re-emit with `elapsedSec` since the step
+ * began), so a client can keep rewriting one line; a different `step` is new.
+ * An event with no `step` is a step of its own.
+ */
+export type StepInfo = { step: string; elapsedSec?: number };
+
 /** One line of the route's streamed answer: progress, then exactly one done or error. */
 export type HerdTakeEvent =
-  | { type: "progress"; message: string }
+  | ({ type: "progress"; message: string } & Partial<StepInfo>)
   | { type: "done"; paneId: string; label: string }
   | { type: "error"; error: string };
 
 export type Busy = { kind: string; detail: string };
+
+export type Emit = (message: string, info?: StepInfo) => void;
+
+export function formatElapsed(sec: number): string {
+  return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, "0")}s`;
+}
+
+/** A progress event as one plain line. */
+export function formatProgress(message: string, elapsedSec?: number): string {
+  return elapsedSec === undefined ? message : `${message} · ${formatElapsed(elapsedSec)}`;
+}
 
 export type HerdTakeDeps = {
   agentType(sessionId: string): string;
@@ -73,6 +94,8 @@ export type HerdTakeDeps = {
   busy(sessionId: string): Busy | null;
   /** Whether a message to the session is mid-delivery. */
   deliveryInFlight(sessionId: string): boolean;
+  /** The clock the wait is timed by (Date.now). */
+  now?(): number;
   /** Resolves after `ms`, or as soon as `signal` aborts. */
   wait(ms: number, signal: AbortSignal): Promise<void>;
   /** Why the tmux session cannot be killed without touching others, or null. */
@@ -106,7 +129,7 @@ const takesInFlight = new Set<string>();
 export async function takeSessionIntoHerdr(
   req: HerdTakeRequest,
   deps: HerdTakeDeps,
-  emit: (message: string) => void,
+  emit: Emit,
   signal: AbortSignal,
 ): Promise<HerdTakeResult> {
   if (takesInFlight.has(req.sessionId)) return fail("a take of this session is already running");
@@ -118,7 +141,7 @@ export async function takeSessionIntoHerdr(
   }
 }
 
-async function run(req: HerdTakeRequest, deps: HerdTakeDeps, emit: (message: string) => void, signal: AbortSignal): Promise<HerdTakeResult> {
+async function run(req: HerdTakeRequest, deps: HerdTakeDeps, emit: Emit, signal: AbortSignal): Promise<HerdTakeResult> {
   const { sessionId } = req;
   const agent = deps.agentType(sessionId);
   if (agent !== "claude") return fail(`only claude sessions can be taken into herdr (this one is ${agent})`);
@@ -132,15 +155,29 @@ async function run(req: HerdTakeRequest, deps: HerdTakeDeps, emit: (message: str
   };
   const cancelled = () => fail("cancelled while waiting for the agent");
 
+  const now = () => (deps.now ?? Date.now)();
   let waitingOn: string | null = null;
+  let waitingSince = 0;
+  let lastSaid = 0;
+  /** Says what the take waits on: at once when the cause is new, then every REEMIT_MS with the time so far. */
+  const sayWaiting = (busy: Busy) => {
+    const at = now();
+    const message = `agent is active — waiting for ${busy.detail}`;
+    const step = `busy:${busy.kind}`;
+    if (busy.kind !== waitingOn) {
+      waitingOn = busy.kind;
+      waitingSince = lastSaid = at;
+      emit(message, { step });
+    } else if (at - lastSaid >= REEMIT_MS) {
+      lastSaid = at;
+      emit(message, { step, elapsedSec: Math.round((at - waitingSince) / 1000) });
+    }
+  };
   /** Polls until the agent is idle. A result means the take is over. */
   const waitIdle = async (): Promise<HerdTakeResult | null> => {
     for (let busy = deps.busy(sessionId); busy; busy = deps.busy(sessionId)) {
       if (signal.aborted) return cancelled();
-      if (busy.kind !== waitingOn) {
-        waitingOn = busy.kind;
-        emit(`agent is active — waiting for ${busy.detail}`);
-      }
+      sayWaiting(busy);
       await deps.wait(BUSY_POLL_MS, signal);
     }
     if (signal.aborted) return cancelled();
@@ -184,7 +221,7 @@ async function run(req: HerdTakeRequest, deps: HerdTakeDeps, emit: (message: str
       return gone(err);
     }
     emit(`starting claude in pane ${paneId}`);
-    if (await deps.agentUp(sessionId, AGENT_WAIT_MS, (sec) => emit(`waiting for claude to come up (${sec}s)`))) {
+    if (await deps.agentUp(sessionId, AGENT_WAIT_MS, (sec) => emit("waiting for claude to come up", { step: "claude-up", elapsedSec: sec }))) {
       return { ok: true, paneId, label };
     }
     // Closed while the hold still stands: a claude that came up late would otherwise sit beside the tmux resume the next message starts.
@@ -208,8 +245,8 @@ async function run(req: HerdTakeRequest, deps: HerdTakeDeps, emit: (message: str
       releaseSwap(sessionId);
     }
     if (!("kind" in result)) return result;
-    waitingOn = result.kind;
-    emit(`agent is active — waiting for ${result.detail}`);
+    waitingOn = null;
+    sayWaiting(result);
   }
 }
 
@@ -227,7 +264,7 @@ function daemonEndpoint(configDir: string): { port: number; token: string } | nu
 /** Asks the daemon to take a session and hands each progress message to `onProgress`. No time limit: the daemon may be waiting for a busy agent, and dropping the connection cancels that wait. */
 export async function requestHerdTake(
   req: HerdTakeRequest,
-  onProgress: (message: string) => void,
+  onProgress: (progress: { message: string } & Partial<StepInfo>) => void,
   configDir = defaultConfigDir(),
 ): Promise<HerdTakeResult> {
   const daemon = daemonEndpoint(configDir);
@@ -243,7 +280,7 @@ export async function requestHerdTake(
     const read = (line: string) => {
       if (!line.trim()) return;
       const event = JSON.parse(line) as HerdTakeEvent;
-      if (event.type === "progress") onProgress(event.message);
+      if (event.type === "progress") onProgress(event);
       else if (event.type === "done") result = { ok: true, paneId: event.paneId, label: event.label };
       else if (event.type === "error") result = fail(event.error);
     };

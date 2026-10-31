@@ -2857,7 +2857,7 @@ async function handleHerdTake(body: string, res: http.ServerResponse): Promise<v
       result = { ok: false, error: "bad request: not a session, or not a herdr socket of this machine" };
     } else {
       const take = { sessionId: req.sessionId, socketPath: req.socketPath, workspaceId: req.workspaceId, force: req.force === true };
-      result = await takeSessionIntoHerdr(take, herdTakeDeps(), (message) => send({ type: "progress", message }), aborted.signal);
+      result = await takeSessionIntoHerdr(take, herdTakeDeps(), (message, info) => send({ type: "progress", message, ...info }), aborted.signal);
     }
   } catch (err) {
     result = { ok: false, error: err instanceof Error ? err.message : String(err) };
