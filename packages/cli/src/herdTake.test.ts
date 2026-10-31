@@ -20,7 +20,7 @@ function fixture(over: Partial<HerdTakeDeps> = {}) {
     killRefusal: async () => null,
     prepareLaunch: async () => { calls.push("prepare"); return { cwd: "/work", label: "My title" }; },
     kill: async () => { state.heldDuringKill = swapHeld(SID); calls.push("kill"); state.tmux = null; },
-    buildLine: async () => { state.heldAtBuild = swapHeld(SID); calls.push("build"); return "claude --resume x"; },
+    buildLine: async () => { state.heldAtBuild = swapHeld(SID); calls.push("build"); return { line: "claude --resume x" }; },
     launch: async () => { calls.push("launch"); return "w1:p9"; },
     closePane: async () => { state.heldAtClose = swapHeld(SID); calls.push("close"); },
     agentUp: async (_s, _ms, tick) => { tick(5); return true; },
@@ -58,6 +58,14 @@ describe("takeSessionIntoHerdr", () => {
     expect(f.state.heldDuringKill).toBe(true);
     expect(f.state.heldAtBuild).toBe(true);
     expect(swapHeld(SID)).toBe(false);
+  });
+
+  test("a launch that left a pinned account says so before the tab opens", async () => {
+    const note = "note: runs on your keychain login (was work); it won't follow cast account switches";
+    const f = fixture({ buildLine: async () => ({ line: "claude --resume x", note }) });
+    expect((await f.run()).ok).toBe(true);
+    expect(f.events.indexOf(note)).toBeGreaterThan(f.events.indexOf("stopping tmux cc-claude-abc"));
+    expect(f.events.indexOf(note)).toBeLessThan(f.events.findIndex((e) => e.startsWith("opening herdr tab")));
   });
 
   test("the transcript is only touched after the old agent is gone", async () => {

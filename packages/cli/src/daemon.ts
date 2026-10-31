@@ -309,6 +309,7 @@ import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskSchedul
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync } from "./tmux.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
+import { turnUnanswered } from "./transcriptTurn.js";
 import { HERD_TAKE_PATH, SwapHeldError, swapHeld, takeSessionIntoHerdr, type HerdTakeDeps, type HerdTakeEvent, type HerdTakeRequest, type HerdTakeResult } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
@@ -1114,8 +1115,10 @@ export async function killTmuxSessionAndTree(tmuxSession: string, reason?: strin
     await tmuxExec(plan?.server ? ["-L", plan.server, "kill-server"] : ["kill-session", "-t", tmuxSession]);
     log(`[KILL] tmux=${tmuxSession} panes=${panePids.join(",") || "-"} by=${by}`);
   } catch (err) {
-    // Usually the session was already gone; a live one that refused is worth seeing.
-    log(`[KILL] tmux=${tmuxSession} kill-session failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) panes=${panePids.join(",") || "-"} by=${by}`, panePids.length ? "warn" : "info");
+    // Reaping the last pane ends a session's own server before kill-server runs, so "no server" is the
+    // ordinary outcome. A live session that refused is worth seeing.
+    if (isTmuxSessionMissingError(err)) log(`[KILL] tmux=${tmuxSession} already gone once its panes were reaped panes=${panePids.join(",") || "-"} by=${by}`);
+    else log(`[KILL] tmux=${tmuxSession} kill-session failed (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) panes=${panePids.join(",") || "-"} by=${by}`, panePids.length ? "warn" : "info");
   }
   // Release the OAuth refresh gate now rather than on the next reconcile: when
   // this was the last claude on the keychain login, the drain listener fires a
@@ -2870,22 +2873,35 @@ async function handleHerdTake(body: string, res: http.ServerResponse): Promise<v
 /** The launch-ledger pane name of a session's herdr copy: not a tmux session name, since the copy has no surface in tmux. */
 const herdrPaneName = (sessionId: string): string => `herdr-${resumeShortId(sessionId)}`;
 
-export function herdTakeDeps(): HerdTakeDeps {
+/** What a Claude hook reports once a turn has ended. */
+const HOOK_IDLE_STATUSES: ReadonlySet<string> = new Set([...SETTLE_STATUSES_WITH_TASKS, "stopped"]);
+
+/** `lastHookStatus` for a test to seed. */
+export const herdTakeForTests = { lastHookStatus };
+
+export function herdTakeDeps(transcriptPath: (sessionId: string) => string | undefined = (id) => findSessionFile(id)?.path): HerdTakeDeps {
   return {
     agentType: detectSessionAgentType,
     liveTarget: async (sessionId) => {
       const live = await resolveLiveTmuxTarget(readConversationCache()[sessionId], sessionId, "claude", resumeTmuxName("claude", sessionId));
       return { tmuxTarget: live.tmuxTarget, proc: live.proc };
     },
-    // The unreachable-agent teardown's guard (deliverMessageIntoSession): work that dies with the tree.
-    // A subagent counts while it was active within the hibernation quiet window; subagentActiveAgoMs
-    // counts up forever once one has run, and NaN (coverage lost) is not busy.
-    busy: (sessionId) => {
-      const status = currentAgentStatus(sessionId);
-      if (status && ACTIVE_AGENT_STATUSES.has(status)) return { kind: "turn", detail: `the turn to finish (${status})` };
+    // Whether killing now would cut a turn. The status the pane reconciler publishes is a guess from the screen
+    // and called a turn in progress idle (a kill landed two seconds before the Stop hook), so the hook's own
+    // last report decides, and the transcript must agree: a prompt or tool result with no reply after it is a
+    // turn in progress. Background work and subagents that dies with the tree count as in the unreachable-agent
+    // teardown (deliverMessageIntoSession); a subagent counts while it was active within the hibernation quiet
+    // window (subagentActiveAgoMs counts up forever once one has run, and NaN, coverage lost, is not busy).
+    busy: async (sessionId) => {
+      const hook = lastHookStatus.get(sessionId)?.status;
+      if (!hook) return { kind: "turn", detail: "the agent's first status report" };
+      if (!HOOK_IDLE_STATUSES.has(hook)) return { kind: "turn", detail: `the turn to finish (${hook})` };
       if (hasOpenBackgroundWork(sessionId)) return { kind: "background", detail: "background work to finish" };
       const ago = subagentActiveAgoMs(sessionId);
       if (ago < HIBERNATE_SUBAGENT_QUIET_MS) return { kind: "subagent", detail: `the subagent to finish (active ${Math.round(ago / 1000)}s ago)` };
+      const transcript = transcriptPath(sessionId);
+      const tail = transcript ? await readFileTailAsync(transcript, 256 * 1024).catch(() => null) : null;
+      if (tail !== null && turnUnanswered(tail)) return { kind: "reply", detail: "the turn to finish (no reply yet)" };
       return null;
     },
     deliveryInFlight: (sessionId) => {
@@ -2925,13 +2941,19 @@ export function herdTakeDeps(): HerdTakeDeps {
       markClaudeSessionLive(herdrPaneName(sessionId));
       await killTmuxSessionAndTree(tmuxSession, "herd take");
     },
+    // On the keychain login, as a claude started by hand in the pane: a herdr shell cannot read the fleet store's
+    // keychain item (errSecInteractionNotAllowed), so a pinned or fleet account would start "Not logged in".
+    // The live gate already holds the keychain login for this copy (see kill), so nothing is re-marked here.
     buildLine: async (sessionId, cwd) => {
       const sessionFile = findSessionFile(sessionId);
       if (!sessionFile) throw new Error("no transcript for the session on this machine");
       const jsonlContent = readFileHeadLines(sessionFile.path);
-      const built = await buildClaudeResumeCommand({ sessionId, cwd, jsonlPath: sessionFile.path, jsonlContent, config: readConfig(), conversationId: readConversationCache()[sessionId] });
-      markClaudeSessionLive(herdrPaneName(sessionId), built.resumeAccount);
-      return resumeLaunchLine({ agentType: "claude", cwd, pane: herdrPaneName(sessionId), sessionId, resumeAccountPrefix: built.resumeAccountPrefix, resumeCmd: built.resumeCmd });
+      const built = await buildClaudeResumeCommand({ sessionId, cwd, jsonlPath: sessionFile.path, jsonlContent, config: readConfig(), conversationId: readConversationCache()[sessionId], keychain: true });
+      const was = built.displacedAccount === FLEET_GATE_ACCOUNT ? "the fleet account" : built.displacedAccount;
+      return {
+        line: resumeLaunchLine({ agentType: "claude", cwd, pane: herdrPaneName(sessionId), sessionId, resumeAccountPrefix: built.resumeAccountPrefix, resumeCmd: built.resumeCmd }),
+        ...(was ? { note: `note: runs on your keychain login (was ${was}); it won't follow cast account switches` } : {}),
+      };
     },
     launch: async (req, launch) => {
       const release = await accountLifecycleGate.acquireResume("claude");
@@ -24828,9 +24850,11 @@ async function relocateForeignOccupant(tmuxSession: string, sessionId: string, a
  * a non-UUID id, the resume cwd's project dir), so a caller launching it anywhere
  * (a tmux pane, a herdr tab) gets the same flags a resume always carries.
  */
-async function buildClaudeResumeCommand(a: {
+export async function buildClaudeResumeCommand(a: {
   sessionId: string; cwd: string; jsonlPath: string; jsonlContent: string; config: Config | null; conversationId?: string;
-}): Promise<{ resumeCmd: string; resumeAccountPrefix: string; resumeAccount: string | undefined }> {
+  /** Run on the machine's keychain login whatever the session is pinned to: no account prefix. For a launch whose shell cannot read the stores a pin points at (a herdr tab cannot read the fleet store's keychain item). */
+  keychain?: boolean;
+}): Promise<{ resumeCmd: string; resumeAccountPrefix: string; resumeAccount: string | undefined; displacedAccount?: string }> {
   const { sessionId, cwd, jsonlPath, jsonlContent, config, conversationId } = a;
   const jsonlBypass = extractJsonlPermissionMode(jsonlContent) === "bypassPermissions";
   const extraFlags = combineClaudeResumeFlags(
@@ -24923,6 +24947,11 @@ async function buildClaudeResumeCommand(a: {
   // was asked for.
   const { prefix: resumeAccountPrefix, account: resumeAccount } = launchAccountPrefix(pinnedAccount, log);
   const resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
+  if (a.keychain) {
+    // The active profile already runs on the keychain, so only another account is displaced.
+    const displacedAccount = resumeAccount !== undefined && resumeAccount !== activeProfileName() ? resumeAccount : undefined;
+    return { resumeCmd, resumeAccountPrefix: "", resumeAccount: undefined, displacedAccount };
+  }
   return { resumeCmd, resumeAccountPrefix, resumeAccount };
 }
 

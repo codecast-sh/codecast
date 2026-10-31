@@ -1,7 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync, existsSync, unlinkSync } from "node:fs";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { readFileSync, existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { launchAccountPrefix } from "./ccAccounts.js";
 import { HIBERNATE_SUBAGENT_QUIET_MS } from "./hibernation.js";
-import { herdTakeDeps, hibernationConcurrencyForTests, liveOutsideTmux, resetSubagentActivityForTests, typedLaunchLine } from "./daemon.js";
+import { buildClaudeResumeCommand, herdTakeDeps, herdTakeForTests, hibernationConcurrencyForTests, liveOutsideTmux, resetSubagentActivityForTests, typedLaunchLine } from "./daemon.js";
 import { functionBlock } from "./test-helpers/sourceRegion.js";
 
 const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
@@ -81,19 +85,95 @@ describe("the take route", () => {
 });
 
 describe("the take's busy check (the real dependency)", () => {
-  const busy = (id: string) => herdTakeDeps().busy(id);
+  const dir = mkdtempSync(join(tmpdir(), "herd-take-busy-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const entry = (role: "user" | "assistant", content: unknown) => JSON.stringify({ type: role, message: { role, content } });
+  const transcript = (...lines: string[]) => {
+    const file = join(dir, `${randomUUID()}.jsonl`);
+    writeFileSync(file, lines.join("\n") + "\n");
+    return file;
+  };
+  const hook = (id: string, status: string) => herdTakeForTests.lastHookStatus.set(id, { status, ts: 1 } as never);
+  /** A fresh session id whose transcript is `file`. */
+  const session = (file: string | undefined, status?: string) => {
+    const id = randomUUID();
+    if (status) hook(id, status);
+    return { id, busy: () => herdTakeDeps(() => file).busy(id) };
+  };
 
-  test("a session that never ran a subagent is idle", () => {
-    expect(busy("never-had-one")).toBeNull();
+  test("without a hook report the agent is busy: the pane reconciler's idle is not evidence", async () => {
+    expect(await session(transcript(entry("assistant", [{ type: "text", text: "done" }]))).busy()).toMatchObject({ kind: "turn" });
   });
 
-  test("a subagent active inside the quiet window is busy; once it has been quiet that long the session is idle", () => {
-    const id = "had-a-subagent";
+  test("a hook that says the turn is under way is busy", async () => {
+    expect(await session(undefined, "working").busy()).toMatchObject({ kind: "turn", detail: "the turn to finish (working)" });
+  });
+
+  test("hook idle with a transcript ending in a user prompt is busy: no reply yet", async () => {
+    const s = session(transcript(entry("assistant", [{ type: "text", text: "earlier" }]), entry("user", "do the thing")), "idle");
+    expect(await s.busy()).toEqual({ kind: "reply", detail: "the turn to finish (no reply yet)" });
+  });
+
+  test("hook idle with a transcript ending in a tool result, or a tool call, is busy", async () => {
+    const result = entry("user", [{ type: "tool_result", tool_use_id: "t1", content: "ok" }]);
+    expect(await session(transcript(entry("user", "go"), entry("assistant", [{ type: "tool_use", id: "t1" }]), result), "stopped").busy()).toMatchObject({ kind: "reply" });
+    expect(await session(transcript(entry("user", "go"), entry("assistant", [{ type: "tool_use", id: "t1" }])), "idle").busy()).toMatchObject({ kind: "reply" });
+  });
+
+  test("hook idle with a transcript ending in a reply is idle", async () => {
+    expect(await session(transcript(entry("user", "go"), entry("assistant", [{ type: "text", text: "done" }])), "idle").busy()).toBeNull();
+  });
+
+  test("hook idle with no transcript to read is idle", async () => {
+    expect(await session(undefined, "idle").busy()).toBeNull();
+  });
+
+  test("background work and a recent subagent still count", async () => {
+    const s = session(undefined, "idle");
     const seen = hibernationConcurrencyForTests.subagentActivityByParent;
-    seen.set(id, Date.now() - 1000);
-    expect(busy(id)).toMatchObject({ kind: "subagent" });
-    seen.set(id, Date.now() - HIBERNATE_SUBAGENT_QUIET_MS - 1000);
-    expect(busy(id)).toBeNull();
+    seen.set(s.id, Date.now() - 1000);
+    expect(await s.busy()).toMatchObject({ kind: "subagent" });
+    seen.set(s.id, Date.now() - HIBERNATE_SUBAGENT_QUIET_MS - 1000);
+    expect(await s.busy()).toBeNull();
+  });
+});
+
+describe("a take launches on the keychain login", () => {
+  const dir = mkdtempSync(join(tmpdir(), "herd-take-cmd-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const build = (keychain?: boolean) => {
+    const jsonlPath = join(dir, "t.jsonl");
+    writeFileSync(jsonlPath, "");
+    return buildClaudeResumeCommand({ sessionId: "11111111-2222-3333-4444-555555555555", cwd: dir, jsonlPath, jsonlContent: "", config: null, keychain });
+  };
+
+  test("no account prefix and no account attribution, whatever the launch would have used", async () => {
+    const taken = await build(true);
+    expect(taken.resumeAccountPrefix).toBe("");
+    expect(taken.resumeAccount).toBeUndefined();
+    expect(taken.resumeCmd).toContain("--resume 11111111-2222-3333-4444-555555555555");
+  });
+
+  test("the tmux resume is unchanged: it keeps the prefix launchAccountPrefix gives", async () => {
+    const tmux = await build();
+    const expected = launchAccountPrefix(undefined);
+    expect(tmux.resumeAccountPrefix).toBe(expected.prefix);
+    expect(tmux.resumeAccount).toBe(expected.account);
+    expect(functionBlock(source, "autoResumeSessionInner").text).toContain("buildClaudeResumeCommand({ sessionId, cwd, jsonlPath, jsonlContent, config, conversationId })");
+    expect(functionBlock(source, "resumeLaunchLine").text).toContain("`${a.resumeAccountPrefix}${providerKeySourcePrefix(a.agentType, CONFIG_DIR)}${disclaimPrefix()}${env} ${a.resumeCmd}`");
+  });
+
+  test("the live gate holds the keychain login for the copy, and nothing re-marks it under another account", () => {
+    const deps = source.slice(source.indexOf("export function herdTakeDeps"), source.indexOf("function startHookServer"));
+    expect(deps.match(/markClaudeSessionLive\(/g)).toHaveLength(1);
+    expect(deps).toContain("markClaudeSessionLive(herdrPaneName(sessionId));");
+  });
+});
+
+describe("killing a tmux session whose server the reap already ended", () => {
+  test("is logged as already gone, not as a failed kill", () => {
+    const kill = functionBlock(source, "killTmuxSessionAndTree").text;
+    expect(kill).toContain("if (isTmuxSessionMissingError(err)) log(`[KILL] tmux=${tmuxSession} already gone");
   });
 });
 
