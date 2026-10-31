@@ -48,6 +48,7 @@ import {
   HIBERNATE_MAX_PER_PASS,
   HIBERNATE_REFUSAL_BACKOFF_MS,
   HIBERNATE_RESUME_GRACE_MS,
+  HIBERNATE_SUBAGENT_QUIET_MS,
   hibernationBlockReason,
   selectHibernationCandidates,
   type HibernationCandidate,
@@ -307,8 +308,8 @@ import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync } from "./tmux.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
-import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, openHerdrTab } from "./herdr.js";
-import { HERD_TAKE_PATH, swapHeld, takeSessionIntoHerdr, type HerdTakeDeps, type HerdTakeEvent, type HerdTakeRequest, type HerdTakeResult } from "./herdTake.js";
+import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
+import { HERD_TAKE_PATH, SwapHeldError, swapHeld, takeSessionIntoHerdr, type HerdTakeDeps, type HerdTakeEvent, type HerdTakeRequest, type HerdTakeResult } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
@@ -344,7 +345,7 @@ import {
   loadOrCreateIdentity,
   type LoopbackIdentity,
 } from "./loopbackIdentity.js";
-import { loadOrCreateHookToken } from "./hookIdentity.js";
+import { hookBearerToken, hookTokenMatches, loadOrCreateHookToken } from "./hookIdentity.js";
 import { admitHookRequest, createLegacyHookGrace, type HookAdmission } from "./hookAdmission.js";
 import { INTERRUPT_SETTLE_MS, classifyInputBytes, createKeystrokeInference, parseAskInputSidecar, readAskInputSidecar, singleSelectOptionCount, type InputIntent } from "./keystrokeInference.js";
 import { HookStatusGate } from "./hookStatusGate.js";
@@ -515,16 +516,17 @@ function tmuxExecSync(args: string[], opts?: { timeout?: number; killSignal?: st
  * line is typed. The script removes itself first; the shell keeps it open.
  */
 async function typeIntoPane(target: string, command: string): Promise<void> {
-  let line = command;
-  if (Buffer.byteLength(command) > PANE_TYPED_LINE_MAX) {
-    const dir = path.join(CONFIG_DIR, LAUNCH_SCRIPTS_DIRNAME);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const file = path.join(dir, `${randomUUID()}.sh`);
-    fs.writeFileSync(file, `rm -f ${shq(file)}\n${command}\n`, { mode: 0o600 });
-    line = `. ${shq(file)}`;
-  }
-  await tmuxExec(["send-keys", "-t", target, "-l", tmuxLiteralArg(line)]);
+  await tmuxExec(["send-keys", "-t", target, "-l", tmuxLiteralArg(typedLaunchLine(command))]);
   await tmuxExec(["send-keys", "-t", target, "Enter"]);
+}
+/** The line to type into a starting shell for `command`: the command itself when short, else a `. script` line (see typeIntoPane). Any terminal's line buffer is as small as a tmux pane's. */
+export function typedLaunchLine(command: string): string {
+  if (Buffer.byteLength(command) <= PANE_TYPED_LINE_MAX) return command;
+  const dir = path.join(CONFIG_DIR, LAUNCH_SCRIPTS_DIRNAME);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = path.join(dir, `${randomUUID()}.sh`);
+  fs.writeFileSync(file, `rm -f ${shq(file)}\n${command}\n`, { mode: 0o600 });
+  return `. ${shq(file)}`;
 }
 const PANE_TYPED_LINE_MAX = 512;
 // paneContentAfterLaunchEcho finds a script-launched command by this name in its echo.
@@ -2850,9 +2852,9 @@ async function handleHerdTake(body: string, res: http.ServerResponse): Promise<v
     const req = JSON.parse(body) as Partial<HerdTakeRequest>;
     // The id is typed into a shell line below, and the workspace id is sent to herdr as is.
     if (typeof req.sessionId !== "string" || !isValidResumeSessionId("claude", req.sessionId)
-      || typeof req.socketPath !== "string" || !req.socketPath
+      || typeof req.socketPath !== "string" || !(await herdrSocketPaths()).includes(req.socketPath)
       || typeof req.workspaceId !== "string" || !/^[\w.:-]+$/.test(req.workspaceId)) {
-      result = { ok: false, error: "bad request" };
+      result = { ok: false, error: "bad request: not a session, or not a herdr socket of this machine" };
     } else {
       const take = { sessionId: req.sessionId, socketPath: req.socketPath, workspaceId: req.workspaceId, force: req.force === true };
       result = await takeSessionIntoHerdr(take, herdTakeDeps(), (message) => send({ type: "progress", message }), aborted.signal);
@@ -2865,7 +2867,10 @@ async function handleHerdTake(body: string, res: http.ServerResponse): Promise<v
   res.end();
 }
 
-function herdTakeDeps(): HerdTakeDeps {
+/** The launch-ledger pane name of a session's herdr copy: not a tmux session name, since the copy has no surface in tmux. */
+const herdrPaneName = (sessionId: string): string => `herdr-${resumeShortId(sessionId)}`;
+
+export function herdTakeDeps(): HerdTakeDeps {
   return {
     agentType: detectSessionAgentType,
     liveTarget: async (sessionId) => {
@@ -2873,13 +2878,19 @@ function herdTakeDeps(): HerdTakeDeps {
       return { tmuxTarget: live.tmuxTarget, proc: live.proc };
     },
     // The unreachable-agent teardown's guard (deliverMessageIntoSession): work that dies with the tree.
+    // A subagent counts while it was active within the hibernation quiet window; subagentActiveAgoMs
+    // counts up forever once one has run, and NaN (coverage lost) is not busy.
     busy: (sessionId) => {
       const status = currentAgentStatus(sessionId);
       if (status && ACTIVE_AGENT_STATUSES.has(status)) return { kind: "turn", detail: `the turn to finish (${status})` };
       if (hasOpenBackgroundWork(sessionId)) return { kind: "background", detail: "background work to finish" };
       const ago = subagentActiveAgoMs(sessionId);
-      if (ago !== Infinity) return { kind: "subagent", detail: `the subagent to finish (active ${Math.round(ago / 1000)}s ago)` };
+      if (ago < HIBERNATE_SUBAGENT_QUIET_MS) return { kind: "subagent", detail: `the subagent to finish (active ${Math.round(ago / 1000)}s ago)` };
       return null;
+    },
+    deliveryInFlight: (sessionId) => {
+      const conversationId = readConversationCache()[sessionId];
+      return !!conversationId && [...messagesInFlight.values()].some((m) => m.conversationId === conversationId);
     },
     wait: (ms, signal) => new Promise<void>((resolve) => {
       const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
@@ -2899,39 +2910,56 @@ function herdTakeDeps(): HerdTakeDeps {
       const sessionFile = findSessionFile(sessionId);
       if (!sessionFile) throw new Error("no transcript for the session on this machine");
       const jsonlContent = readFileHeadLines(sessionFile.path);
-      const conversationId = readConversationCache()[sessionId];
-      const cwd = await resolveResumeCwdOrRefuse({ recordedCwd: extractCwd(jsonlContent) || undefined, conversationId });
+      const cwd = await resolveResumeCwdOrRefuse({ recordedCwd: extractCwd(jsonlContent) || undefined, conversationId: readConversationCache()[sessionId] });
       if (!cwd) throw new Error("no local checkout for the session's project");
-      const { resumeCmd, resumeAccountPrefix } = await buildClaudeResumeCommand({ sessionId, cwd, jsonlPath: sessionFile.path, jsonlContent, config: readConfig(), conversationId });
-      // Not a tmux session name: the ledger keys a launch by the surface it owns, and this one has none in tmux.
-      const pane = `herdr-${resumeShortId(sessionId)}`;
-      return {
-        cwd,
-        label: readTitleCache()[sessionId] || extractSummaryTitle(jsonlContent) || resumeShortId(sessionId),
-        line: () => resumeLaunchLine({ agentType: "claude", cwd, pane, sessionId, resumeAccountPrefix, resumeCmd }),
-      };
+      return { cwd, label: readTitleCache()[sessionId] || extractSummaryTitle(jsonlContent) || resumeShortId(sessionId) };
     },
     kill: async (tmuxSession, sessionId) => {
-      await killTmuxSessionAndTree(tmuxSession, "herd take");
+      // Forgotten before the kill: a health check that read the cache earlier must not find a dead pane and
+      // reconstitute over the transcript, and the tmux placement must not be re-registered with the server.
       resumeSessionCache.delete(sessionId);
+      registeredTmuxBySession.delete(sessionId);
       sessionProcessCache.delete(sessionId);
+      // The kill ends the tmux copy's hold on the login; the herdr copy takes it over from here, and the
+      // process scan (unstampedClaudeHolders) keeps counting it once it runs.
+      markClaudeSessionLive(herdrPaneName(sessionId));
+      await killTmuxSessionAndTree(tmuxSession, "herd take");
+    },
+    buildLine: async (sessionId, cwd) => {
+      const sessionFile = findSessionFile(sessionId);
+      if (!sessionFile) throw new Error("no transcript for the session on this machine");
+      const jsonlContent = readFileHeadLines(sessionFile.path);
+      const built = await buildClaudeResumeCommand({ sessionId, cwd, jsonlPath: sessionFile.path, jsonlContent, config: readConfig(), conversationId: readConversationCache()[sessionId] });
+      markClaudeSessionLive(herdrPaneName(sessionId), built.resumeAccount);
+      return resumeLaunchLine({ agentType: "claude", cwd, pane: herdrPaneName(sessionId), sessionId, resumeAccountPrefix: built.resumeAccountPrefix, resumeCmd: built.resumeCmd });
     },
     launch: async (req, launch) => {
       const release = await accountLifecycleGate.acquireResume("claude");
       try {
-        const paneId = await openHerdrTab(req.socketPath, req.workspaceId, launch);
+        const paneId = await openHerdrTab(req.socketPath, req.workspaceId, { ...launch, line: typedLaunchLine(launch.line) });
         await new Promise((resolve) => setTimeout(resolve, CLAUDE_SPAWN_CREDENTIAL_GRACE_MS));
         return paneId;
       } finally {
         release();
       }
     },
+    closePane: async (req, paneId) => {
+      await herdrRequest(req.socketPath, "pane.close", { pane_id: paneId });
+    },
+    // Up means the SessionStart hook has registered the process as a herdr one: a process found earlier by its
+    // argv carries no TERM_PROGRAM, and a cache entry without it sends delivery down the AppleScript route.
     agentUp: async (sessionId, waitMs, tick) => {
       sessionProcessCache.delete(sessionId);
       const startedAt = Date.now();
       let ticked = 0;
       while (Date.now() - startedAt < waitMs) {
-        if (await findSessionProcess(sessionId, "claude")) return true;
+        const proc = await findSessionProcess(sessionId, "claude");
+        if (proc?.termProgram === "herdr") {
+          const conversationId = readConversationCache()[sessionId];
+          void syncServiceRef?.registerManagedSession(sessionId, proc.pid, undefined, conversationId);
+          return true;
+        }
+        if (proc) sessionProcessCache.delete(sessionId);
         const sec = Math.floor((Date.now() - startedAt) / 5000) * 5;
         if (sec > ticked) { ticked = sec; tick(sec); }
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -2973,13 +3001,12 @@ function startHookServer(): http.Server {
       return;
     }
 
-    // `cast herd take` from a herdr pane. Kills an agent, so a tokenless post
-    // (the legacy-hook grace) is refused where /hook/status would accept it.
+    // `cast herd take` from a herdr pane. It kills an agent, so it takes the
+    // loopback bearer: the hook token sits in a script every agent runs.
     if (req.method === "POST" && req.url === HERD_TAKE_PATH) {
-      const admitted = admitHookIngress(req);
-      if (!admitted.ok || admitted.legacy) {
+      if (!hookTokenMatches(hookBearerToken(req.headers), terminalToken())) {
         req.resume();
-        return refuseHookIngress(HERD_TAKE_PATH, admitted.ok ? "no-token" : admitted.reason, res);
+        return refuseHookIngress(HERD_TAKE_PATH, "bad-token", res);
       }
       readHookBody(req, res, 4096, (body) => { void handleHerdTake(body, res); });
       return;
@@ -23245,6 +23272,7 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
 }
 
 async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record<string, string>>): Promise<void> {
+  if (swapHeld(sessionId)) return;
   if (isSupersededInPass(sessionId, reverse)) return;
   const tmux = resumeSessionCache.get(sessionId);
   if (!tmux) return;
@@ -23377,6 +23405,7 @@ export async function conversationForbidsResurrection(
 }
 
 async function handleDeadSession(sessionId: string, tmuxSession: string): Promise<void> {
+  if (swapHeld(sessionId)) return;
   try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
   launchTokenLedger().retirePane(tmuxSession);
   resumeSessionCache.delete(sessionId);
@@ -24837,8 +24866,6 @@ async function buildClaudeResumeCommand(a: {
   sessionId: string; cwd: string; jsonlPath: string; jsonlContent: string; config: Config | null; conversationId?: string;
 }): Promise<{ resumeCmd: string; resumeAccountPrefix: string; resumeAccount: string | undefined }> {
   const { sessionId, cwd, jsonlPath, jsonlContent, config, conversationId } = a;
-  let resumeAccountPrefix = "";
-  let resumeAccount: string | undefined;
   const jsonlBypass = extractJsonlPermissionMode(jsonlContent) === "bypassPermissions";
   const extraFlags = combineClaudeResumeFlags(
     getAgentArgs(config, "claude"),
@@ -24928,7 +24955,7 @@ async function buildClaudeResumeCommand(a: {
   // resume lands on the keychain login after all — and then it DOES hold the
   // credential the refresh gate protects. Attribute what happens, not what
   // was asked for.
-  ({ prefix: resumeAccountPrefix, account: resumeAccount } = launchAccountPrefix(pinnedAccount, log));
+  const { prefix: resumeAccountPrefix, account: resumeAccount } = launchAccountPrefix(pinnedAccount, log);
   const resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
   return { resumeCmd, resumeAccountPrefix, resumeAccount };
 }
@@ -24984,6 +25011,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   const refuseSecondCopy = (live: ResolvedLiveSession): boolean => {
     if (!liveOutsideTmux(live)) return false;
     logDelivery(`Not resuming ${resumeShortId(sessionId)}: pid=${live.proc!.pid} already runs it outside tmux`);
+    // A delivery holds its message with the reason instead of failing it into the retry ladder.
+    if (opts?.delivery) throw new SwapHeldError("the agent runs outside tmux and could not be reached", 15_000);
     return true;
   };
 
@@ -26498,7 +26527,7 @@ async function deliverMessageIntoSession(
   let sessionId = reverseCache[conversationId];
   if (sessionId && swapHeld(sessionId)) {
     logDelivery(`Holding msg=${messageId.slice(0, 8)}: a herdr take is swapping the agent of session=${sessionId.slice(0, 12)}`);
-    return false;
+    throw new SwapHeldError("a herdr take is moving the agent");
   }
 
   // A Claude Code cloud session has no local process to type into: the turn
@@ -32289,7 +32318,7 @@ async function main(): Promise<void> {
               ? { holdReason: err.holdReason, holdScreen: err.screen }
               : { holdReason: "waiting for a human answer in the terminal" };
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
-          } else if (err instanceof CloudAgentHoldError) {
+          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
             // never spending the retry budget, and tried again at the error's

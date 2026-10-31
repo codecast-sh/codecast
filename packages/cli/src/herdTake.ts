@@ -7,15 +7,16 @@
 
 import * as fs from "node:fs";
 import { defaultConfigDir } from "./config/configDir.js";
-import { readHookToken } from "./hookIdentity.js";
-import { hookPortFile } from "./loopbackIdentity.js";
+import { hookPortFile, readIdentity } from "./loopbackIdentity.js";
 import { CLAUDE_UUID_RE } from "./syncScope.js";
 
-/** The daemon's loopback route for a take (daemon.ts startHookServer); the hook token admits it. */
+/** The daemon's loopback route for a take (daemon.ts startHookServer); the loopback bearer admits it. */
 export const HERD_TAKE_PATH = "/hook/herd-take";
 
-/** Covers the kill, the launch and the wait for the new claude. */
-const SWAP_HOLD_MS = 60_000;
+/** A crash backstop only: a take releases its hold in a finally, so a live take never reaches this. */
+const SWAP_HOLD_MS = 10 * 60_000;
+/** How long, under the hold, a delivery already in flight gets to land before the idle check is repeated. */
+const DRAIN_MS = 15_000;
 const AGENT_WAIT_MS = 30_000;
 const BUSY_POLL_MS = 3000;
 
@@ -36,6 +37,13 @@ export function swapHeld(sessionId: string, now = Date.now()): boolean {
   if (until > now) return true;
   holds.delete(sessionId);
   return false;
+}
+
+/** A delivery that must wait for a take to finish: held with this reason, never spending its retries, and tried again after `recheckMs`. */
+export class SwapHeldError extends Error {
+  constructor(readonly holdReason: string, readonly recheckMs = 3000) {
+    super(holdReason);
+  }
 }
 
 export type HerdTakeRequest = {
@@ -63,28 +71,37 @@ export type HerdTakeDeps = {
   liveTarget(sessionId: string): Promise<{ tmuxTarget: string | null; proc: { pid: number } | null }>;
   /** What keeps the session from being interrupted now, or null. `kind` changes when the cause does; `detail` is for the person. */
   busy(sessionId: string): Busy | null;
+  /** Whether a message to the session is mid-delivery. */
+  deliveryInFlight(sessionId: string): boolean;
   /** Resolves after `ms`, or as soon as `signal` aborts. */
   wait(ms: number, signal: AbortSignal): Promise<void>;
   /** Why the tmux session cannot be killed without touching others, or null. */
   killRefusal(tmuxSession: string): Promise<string | null>;
-  /** Everything a launch needs except the launch token, which is minted by `line()` once the old copy is gone. */
-  prepareLaunch(sessionId: string): Promise<{ cwd: string; label: string; line: () => string }>;
+  /** What can be settled while the old agent still runs and the transcript is untouched: the cwd and the tab's label. Throws to refuse. */
+  prepareLaunch(sessionId: string): Promise<{ cwd: string; label: string }>;
   kill(tmuxSession: string, sessionId: string): Promise<void>;
+  /** The line that starts claude on the session. It rewrites transcript files, so it runs only once the old agent is gone. */
+  buildLine(sessionId: string, cwd: string): Promise<string>;
   /** Opens the tab, types the line, and returns the new pane's id. */
   launch(req: HerdTakeRequest, launch: { cwd: string; label: string; line: string }): Promise<string>;
-  /** Resolves true once the new claude is running the session; `tick` gets the elapsed seconds about every 5s. */
+  closePane(req: HerdTakeRequest, paneId: string): Promise<void>;
+  /** Resolves true once the new claude is running the session as a herdr agent; `tick` gets the elapsed seconds about every 5s. */
   agentUp(sessionId: string, waitMs: number, tick: (elapsedSec: number) => void): Promise<boolean>;
 };
 
 const fail = (error: string): HerdTakeResult => ({ ok: false, error });
 
+const takesInFlight = new Set<string>();
+
 /**
  * Takes the session, reporting each step through `emit`. A busy agent is waited
  * out (no overall limit: the person sees why and can interrupt), with no hold
- * taken so normal delivery goes on meanwhile. `signal` aborts the wait and
- * anything before the kill; once the old copy is killed the launch runs to its
- * end whatever the caller does, so an interrupted take never leaves the session
- * with no agent.
+ * taken so normal delivery goes on meanwhile. The hold is taken once the agent
+ * looks idle; under it the idle check is repeated after any delivery already in
+ * flight has landed, and a message that made the agent busy again sends the
+ * take back to waiting. `signal` aborts the wait and anything before the kill;
+ * once the old copy is killed the launch runs to its end whatever the caller
+ * does, so an interrupted take never leaves the session with no agent.
  */
 export async function takeSessionIntoHerdr(
   req: HerdTakeRequest,
@@ -92,6 +109,16 @@ export async function takeSessionIntoHerdr(
   emit: (message: string) => void,
   signal: AbortSignal,
 ): Promise<HerdTakeResult> {
+  if (takesInFlight.has(req.sessionId)) return fail("a take of this session is already running");
+  takesInFlight.add(req.sessionId);
+  try {
+    return await run(req, deps, emit, signal);
+  } finally {
+    takesInFlight.delete(req.sessionId);
+  }
+}
+
+async function run(req: HerdTakeRequest, deps: HerdTakeDeps, emit: (message: string) => void, signal: AbortSignal): Promise<HerdTakeResult> {
   const { sessionId } = req;
   const agent = deps.agentType(sessionId);
   if (agent !== "claude") return fail(`only claude sessions can be taken into herdr (this one is ${agent})`);
@@ -103,64 +130,94 @@ export async function takeSessionIntoHerdr(
       ? `the session already runs outside tmux (pid ${live.proc.pid}); nothing to take`
       : "the session has no live tmux copy to take");
   };
+  const cancelled = () => fail("cancelled while waiting for the agent");
 
-  emit("looking for the session's tmux copy");
-  let located = await locate();
-  if ("ok" in located) return located;
-
-  if (!req.force) {
-    let waitingOn: string | null = null;
+  let waitingOn: string | null = null;
+  /** Polls until the agent is idle. A result means the take is over. */
+  const waitIdle = async (): Promise<HerdTakeResult | null> => {
     for (let busy = deps.busy(sessionId); busy; busy = deps.busy(sessionId)) {
-      if (signal.aborted) return fail("cancelled while waiting for the agent");
+      if (signal.aborted) return cancelled();
       if (busy.kind !== waitingOn) {
         waitingOn = busy.kind;
         emit(`agent is active — waiting for ${busy.detail}`);
       }
       await deps.wait(BUSY_POLL_MS, signal);
     }
-    if (signal.aborted) return fail("cancelled while waiting for the agent");
-    if (waitingOn) {
-      emit("agent is idle");
-      located = await locate();
-      if ("ok" in located) return located;
+    if (signal.aborted) return cancelled();
+    if (waitingOn) emit("agent is idle");
+    waitingOn = null;
+    return null;
+  };
+
+  /** Everything from the hold to the new claude. A Busy means a message got in first and the wait starts over. */
+  const swap = async (tmuxSession: string): Promise<HerdTakeResult | Busy> => {
+    emit("holding message delivery to the session");
+    if (!req.force) {
+      const drainUntil = Date.now() + DRAIN_MS;
+      while (deps.deliveryInFlight(sessionId) && Date.now() < drainUntil && !signal.aborted) await deps.wait(500, signal);
+      if (signal.aborted) return cancelled();
+      const busy = deps.busy(sessionId);
+      if (busy) return busy;
     }
-  }
-  const { tmuxSession } = located;
+    const refusal = await deps.killRefusal(tmuxSession);
+    if (refusal) return fail(refusal);
+    const { cwd, label } = await deps.prepareLaunch(sessionId);
+    if (signal.aborted) return fail("cancelled");
 
-  const refusal = await deps.killRefusal(tmuxSession);
-  if (refusal) return fail(refusal);
-  const launch = await deps.prepareLaunch(sessionId);
-  if (signal.aborted) return fail("cancelled");
-
-  emit("holding message delivery to the session");
-  holdSwap(sessionId);
-  try {
     emit(`stopping tmux ${tmuxSession}`);
     await deps.kill(tmuxSession, sessionId);
     const after = await deps.liveTarget(sessionId);
     if (after.tmuxTarget || after.proc) return fail(`the old copy is still running after the kill (${after.tmuxTarget ?? `pid ${after.proc!.pid}`}); not starting a second one`);
 
-    emit(`opening herdr tab "${launch.label}"`);
+    const gone = (err: unknown) => fail(`the tmux copy is gone but the herdr tab did not open: ${err instanceof Error ? err.message : String(err)}. The next message resumes the session in tmux`);
+    let line: string;
+    try {
+      line = await deps.buildLine(sessionId, cwd);
+    } catch (err) {
+      return gone(err);
+    }
+    emit(`opening herdr tab "${label}"`);
     let paneId: string;
     try {
-      paneId = await deps.launch(req, { cwd: launch.cwd, label: launch.label, line: launch.line() });
+      paneId = await deps.launch(req, { cwd, label, line });
     } catch (err) {
-      return fail(`the tmux copy is gone but the herdr tab did not open: ${err instanceof Error ? err.message : String(err)}. The next message resumes the session in tmux`);
+      return gone(err);
     }
     emit(`starting claude in pane ${paneId}`);
-    const up = await deps.agentUp(sessionId, AGENT_WAIT_MS, (sec) => emit(`waiting for claude to come up (${sec}s)`));
-    if (!up) return fail(`opened pane ${paneId}, but claude did not start on the session within ${AGENT_WAIT_MS / 1000}s; look at the tab`);
-    return { ok: true, paneId, label: launch.label };
-  } finally {
-    releaseSwap(sessionId);
+    if (await deps.agentUp(sessionId, AGENT_WAIT_MS, (sec) => emit(`waiting for claude to come up (${sec}s)`))) {
+      return { ok: true, paneId, label };
+    }
+    // Closed while the hold still stands: a claude that came up late would otherwise sit beside the tmux resume the next message starts.
+    await deps.closePane(req, paneId).catch(() => {});
+    return fail(`claude did not start on the session within ${AGENT_WAIT_MS / 1000}s; pane ${paneId} was closed and the next message resumes the session in tmux`);
+  };
+
+  emit("looking for the session's tmux copy");
+  for (;;) {
+    if (!req.force) {
+      const stop = await waitIdle();
+      if (stop) return stop;
+    }
+    const located = await locate();
+    if ("ok" in located) return located;
+    holdSwap(sessionId);
+    let result: HerdTakeResult | Busy;
+    try {
+      result = await swap(located.tmuxSession);
+    } finally {
+      releaseSwap(sessionId);
+    }
+    if (!("kind" in result)) return result;
+    waitingOn = result.kind;
+    emit(`agent is active — waiting for ${result.detail}`);
   }
 }
 
-/** The daemon's port and hook token, or null when no daemon has run here. */
+/** The daemon's port and loopback bearer, or null when no daemon has run here. */
 function daemonEndpoint(configDir: string): { port: number; token: string } | null {
   try {
     const port = parseInt(fs.readFileSync(hookPortFile(configDir), "utf-8").trim(), 10);
-    const token = readHookToken(configDir);
+    const token = readIdentity(configDir)?.token ?? "";
     return port > 0 && token ? { port, token } : null;
   } catch {
     return null;
@@ -181,7 +238,7 @@ export async function requestHerdTake(
       headers: { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" },
       body: JSON.stringify(req),
     });
-    if (!res.body) return fail(`daemon answered HTTP ${res.status}`);
+    if (!res.ok || !res.body) return fail(`daemon answered HTTP ${res.status}${res.status === 404 ? " (it predates cast herd take; restart it with cast restart)" : ""}`);
     let result: HerdTakeResult | null = null;
     const read = (line: string) => {
       if (!line.trim()) return;
@@ -199,7 +256,7 @@ export async function requestHerdTake(
       lines.forEach(read);
     }
     read(buffered);
-    return result ?? fail(res.ok ? "the daemon ended the stream without a result" : `daemon answered HTTP ${res.status}`);
+    return result ?? fail("the daemon ended the stream without a result");
   } catch (err) {
     return fail(`could not reach the daemon: ${err instanceof Error ? err.message : String(err)}`);
   }
