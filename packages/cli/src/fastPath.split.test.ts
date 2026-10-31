@@ -68,11 +68,10 @@ function entryBytes(splitting: boolean): number {
 }
 
 test("bun --compile --splitting keeps a dynamically imported module out of the entry", () => {
-  const split = entryBytes(true);
-  const whole = entryBytes(false);
-  // Nearly three orders of magnitude apart on bun 1.3.14, darwin-arm64: 440
-  // bytes against 311,485. A tenth is loose enough to survive bundler preamble
-  // churn and still fails outright if the chunks are ever collapsed back
-  // together.
-  expect(split).toBeLessThan(whole / 10);
-}, 300_000); // two compiles
+  // The generated module is about 300 KB. Bun 1.4.4 leaves a dynamic import
+  // out of the entry even without --splitting in this toy (a few hundred
+  // bytes), where 1.3.14 concatenated it (311,485), so only the split build is asserted:
+  // it must stay far below the module it would otherwise have swallowed. The
+  // release artifact is held to BOOT_BYTES_CEILING by computer-helper-release.ts.
+  expect(entryBytes(true)).toBeLessThan(10_000);
+}, 300_000); // one compile

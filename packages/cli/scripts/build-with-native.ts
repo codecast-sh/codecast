@@ -16,15 +16,15 @@ const target = args.find((arg) => arg.startsWith("--target="))?.split("=")[1];
  * JSC parses the whole file before the first statement runs. With it, each
  * group lands in its own chunk that is read only when its verb runs.
  *
- * Measured on bun 1.3.14, darwin-arm64. The deterministic half, `cast
- * _boot-bytes` on two builds that differ only in this flag: 4,312,289 bytes
- * unsplit against 1,499 split in the release shape, and 7,110,947 against
- * 2,031 without `--minify`. The clock agrees but is coarser — median of 11
- * runs of `cast bench boot --binary`, twice over, on Developer ID signed
- * artifacts: `cast --help` 150/180 -> 120/100 ms CPU, `cast state` 160/180 ->
- * 110/110, `cast bogus` 150/190 -> 110/120. A signed binary pays a fixed
- * signature cost either way, which is why the clock moves by about a third
- * while the bytes move by three orders of magnitude.
+ * Measured on bun 1.4.4, darwin-arm64, on the tree at 4f2367cc5. The
+ * deterministic half, `cast _boot-bytes` on two builds that differ only in
+ * this flag: 5,679,974 bytes unsplit against 3,211 split in the release shape,
+ * and 8,808,617 against 4,959 without `--minify`. The clock agrees but is
+ * coarser — median of 11 runs, user+sys CPU, on ad-hoc signed artifacts:
+ * `cast --help` 151 -> 76 ms, `cast state` 216 -> 146, `cast bogus` 202 ->
+ * 128. Startup cost that is fixed per process is paid either way, which is why
+ * the clock moves by about a half while the bytes move by three orders of
+ * magnitude.
  *
  * It rides here rather than in build-binaries.sh so `build:binary` and any
  * ad-hoc compile get the same shape as a release. `computer-helper-release.ts`
@@ -175,7 +175,7 @@ export function buildComputerHelper(options: { stage: string; output: string; un
  * `cut-cli-release.yml` both enumerate that directory by name. Nothing needs
  * them — a `--compile`d binary carries its own map and prints stack traces
  * against the original .ts files with no external map at all, for an eager
- * frame and a lazily imported one alike (checked on bun 1.3.14).
+ * frame and a lazily imported one alike (checked on bun 1.4.4).
  * `<entry>.js.map` stays, because the release scripts ship it by that name.
  */
 function dropChunkSourcemaps() {
