@@ -5287,6 +5287,10 @@ export const updateTitle = mutation({
     // names (`replaces`), never one a person gave it.
     title_is_custom: v.optional(v.boolean()),
     replaces: v.optional(v.array(v.string())),
+    // The local agent's own guess (Claude Code's ai-title): fills the title
+    // only while no title pass has run (a pass always writes a subtitle), so it
+    // replaces the opening-prompt placeholder and yields to a generated title.
+    agent_guess: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversation_id);
@@ -5305,7 +5309,9 @@ export const updateTitle = mutation({
       throw new Error("Unauthorized: can only update your own conversations");
     }
 
-    const replaceable = !conversation.title_is_custom || (!!conversation.title && !!args.replaces?.includes(conversation.title));
+    const replaceable = args.agent_guess
+      ? !conversation.title_is_custom && conversation.subtitle === undefined
+      : !conversation.title_is_custom || (!!conversation.title && !!args.replaces?.includes(conversation.title));
     const changed = replaceable && (conversation.title !== args.title || (!!args.title_is_custom && !conversation.title_is_custom));
     if (changed) {
       await ctx.db.patch(args.conversation_id, {
