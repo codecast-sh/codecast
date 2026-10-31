@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatProgress, holdSwap, releaseSwap, requestHerdTake, resolveSessionRef, swapHeld, takeSessionIntoHerdr, type Busy, type HerdTakeDeps, type HerdTakeRequest } from "./herdTake.js";
+import { EventEmitter } from "node:events";
+import { formatProgress, holdSwap, releaseSwap, requestHerdTake, resolveSessionRef, serveHerdTake, swapHeld, takeBusy, takeSessionIntoHerdr, type Busy, type HerdTakeDeps, type HerdTakeRequest, type HerdTakeRoute } from "./herdTake.js";
 
 const SID = "11111111-2222-3333-4444-555555555555";
 const req: HerdTakeRequest = { sessionId: SID, socketPath: "/tmp/herdr.sock", workspaceId: "w1" };
@@ -211,6 +212,79 @@ describe("takeSessionIntoHerdr", () => {
     expect(result.ok === false && result.error).toContain("the tmux copy is gone");
     expect(f.calls).not.toContain("launch");
     expect(swapHeld(SID)).toBe(false);
+  });
+});
+
+describe("serveHerdTake", () => {
+  class FakeRes extends EventEmitter {
+    chunks: string[] = [];
+    writableEnded = false;
+    writableFinished = false;
+    destroyed = false;
+    status = 0;
+    writeHead(status: number) { this.status = status; }
+    write(chunk: string) { this.chunks.push(chunk); return true; }
+    end() { this.writableEnded = this.writableFinished = true; this.emit("close"); }
+    hangUp() { this.destroyed = true; this.emit("close"); }
+    events() { return this.chunks.join("").split("\n").filter(Boolean).map((l) => JSON.parse(l)); }
+  }
+  const route = (deps: HerdTakeDeps, logs: string[] = []): HerdTakeRoute => ({
+    deps: () => deps,
+    validSessionId: (id) => id === SID,
+    socketPaths: async () => [req.socketPath],
+    log: (m) => logs.push(m),
+  });
+  const serve = async (body: object, deps: HerdTakeDeps, logs: string[] = []) => {
+    const res = new FakeRes();
+    await serveHerdTake(JSON.stringify(body), res as never, route(deps, logs));
+    return res;
+  };
+
+  test("streams progress and ends with done", async () => {
+    const res = await serve(req, fixture().deps);
+    const events = res.events();
+    expect(res.status).toBe(200);
+    expect(events[0]).toEqual({ type: "progress", message: "looking for the session's tmux copy" });
+    expect(events.at(-1)).toEqual({ type: "done", paneId: "w1:p9", label: "My title" });
+    expect(events.filter((e) => e.type === "done" || e.type === "error")).toHaveLength(1);
+  });
+
+  test("a session id, socket or workspace the daemon does not accept ends as an error before anything runs", async () => {
+    for (const bad of [{ ...req, sessionId: "not-a-session" }, { ...req, socketPath: "/tmp/elsewhere.sock" }, { ...req, workspaceId: "w1; rm -rf" }]) {
+      const f = fixture();
+      const logs: string[] = [];
+      const res = await serve(bad, f.deps, logs);
+      expect(res.events().at(-1)).toMatchObject({ type: "error", error: expect.stringContaining("bad request") });
+      expect(f.calls).toEqual([]);
+      expect(logs).toHaveLength(1);
+    }
+  });
+
+  test("a hang-up cancels the wait for a busy agent and releases everything", async () => {
+    const res = new FakeRes();
+    const f = fixture({ busy: () => ({ kind: "turn", detail: "the turn to finish" }), wait: async () => { res.hangUp(); } });
+    await serveHerdTake(JSON.stringify(req), res as never, route(f.deps));
+    expect(f.calls).toEqual([]);
+    expect(swapHeld(SID)).toBe(false);
+  });
+});
+
+describe("takeBusy", () => {
+  const idle = { backgroundWork: false, subagentAgoMs: Infinity, tail: async () => null as string | null };
+  const prompt = '{"type":"user","message":{"role":"user","content":"go"}}\n';
+
+  test("a hook that says the turn is under way is busy without reading the transcript", async () => {
+    let read = false;
+    expect(await takeBusy({ ...idle, turnUnderway: "working", tail: async () => { read = true; return null; } })).toEqual({ kind: "turn", detail: "the turn to finish (working)" });
+    expect(read).toBe(false);
+  });
+
+  test("background work, a recent subagent and an unanswered prompt are busy; NaN coverage and a reply are not", async () => {
+    expect(await takeBusy({ ...idle, backgroundWork: true })).toMatchObject({ kind: "background" });
+    expect(await takeBusy({ ...idle, subagentAgoMs: 1000 })).toMatchObject({ kind: "subagent" });
+    expect(await takeBusy({ ...idle, tail: async () => prompt })).toMatchObject({ kind: "reply" });
+    expect(await takeBusy({ ...idle, subagentAgoMs: NaN })).toBeNull();
+    expect(await takeBusy({ ...idle, tail: async () => prompt + '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n' })).toBeNull();
   });
 });
 

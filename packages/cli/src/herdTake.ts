@@ -6,9 +6,13 @@
 // copy of the session in the gap between the kill and the new claude coming up.
 
 import * as fs from "node:fs";
+import type { ServerResponse } from "node:http";
 import { defaultConfigDir } from "./config/configDir.js";
 import { hookPortFile, readIdentity } from "./loopbackIdentity.js";
+import { HIBERNATE_SUBAGENT_QUIET_MS } from "./hibernation.js";
+import { herdrRequest } from "./herdr.js";
 import { CLAUDE_UUID_RE } from "./syncScope.js";
+import { turnUnanswered } from "./transcriptTurn.js";
 
 /** The daemon's loopback route for a take (daemon.ts startHookServer); the loopback bearer admits it. */
 export const HERD_TAKE_PATH = "/hook/herd-take";
@@ -314,4 +318,89 @@ export function resolveSessionRef(ref: string, sessionToConversation: Record<str
   if (matches.length === 1) return { sessionId: matches[0][0] };
   if (matches.length > 1) return { error: `"${ref}" matches ${matches.length} sessions; use more of the id` };
   return { error: `no session matches "${ref}" on this machine` };
+}
+
+/** Resolves after `ms`, or as soon as `signal` aborts. */
+export function abortableWait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done);
+  });
+}
+
+export async function closeHerdrPane(socketPath: string, paneId: string): Promise<void> {
+  await herdrRequest(socketPath, "pane.close", { pane_id: paneId });
+}
+
+/** Polls `up` once a second until it holds or `waitMs` passes; `tick` gets the elapsed seconds about every 5s. */
+export async function pollUntilUp(up: () => Promise<boolean>, waitMs: number, tick: (elapsedSec: number) => void): Promise<boolean> {
+  const startedAt = Date.now();
+  let ticked = 0;
+  while (Date.now() - startedAt < waitMs) {
+    if (await up()) return true;
+    const sec = Math.floor((Date.now() - startedAt) / 5000) * 5;
+    if (sec > ticked) { ticked = sec; tick(sec); }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return false;
+}
+
+/**
+ * Whether killing the session now would cut a turn. The status the pane reconciler
+ * publishes is a guess from the screen and once called a turn in progress idle (a
+ * kill landed two seconds before the Stop hook), so the facts come from the hook's
+ * last report (`turnUnderway`, set when it says the turn is not over) and, if
+ * that is silent (a daemon restart empties the hook state), from the transcript
+ * alone: a prompt or tool result with no reply after it is a turn in progress.
+ * Background work and a subagent active within the hibernation quiet window die
+ * with the tree. NaN (subagent coverage lost) is not busy.
+ */
+export async function takeBusy(i: {
+  turnUnderway?: string;
+  backgroundWork: boolean;
+  subagentAgoMs: number;
+  tail: () => Promise<string | null>;
+}): Promise<Busy | null> {
+  if (i.turnUnderway) return { kind: "turn", detail: `the turn to finish (${i.turnUnderway})` };
+  if (i.backgroundWork) return { kind: "background", detail: "background work to finish" };
+  if (i.subagentAgoMs < HIBERNATE_SUBAGENT_QUIET_MS) return { kind: "subagent", detail: `the subagent to finish (active ${Math.round(i.subagentAgoMs / 1000)}s ago)` };
+  const tail = await i.tail();
+  return tail !== null && turnUnanswered(tail) ? { kind: "reply", detail: "the turn to finish (no reply yet)" } : null;
+}
+
+/** What the route needs from the daemon. */
+export type HerdTakeRoute = {
+  deps(): HerdTakeDeps;
+  validSessionId(sessionId: string): boolean;
+  socketPaths(): Promise<string[]>;
+  log(message: string): void;
+};
+
+/** Streams the take's progress as one JSON event per line, ending with done or error. A client that hangs up cancels whatever has not yet killed the old copy. */
+export async function serveHerdTake(body: string, res: ServerResponse, route: HerdTakeRoute): Promise<void> {
+  const aborted = new AbortController();
+  res.on("close", () => { if (!res.writableFinished) aborted.abort(); });
+  const send = (event: HerdTakeEvent) => {
+    if (!res.writableEnded && !res.destroyed) res.write(JSON.stringify(event) + "\n");
+  };
+  let result: HerdTakeResult;
+  res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+  try {
+    const req = JSON.parse(body) as Partial<HerdTakeRequest>;
+    // The id is typed into a shell line, and the workspace id is sent to herdr as is.
+    if (typeof req.sessionId !== "string" || !route.validSessionId(req.sessionId)
+      || typeof req.socketPath !== "string" || !(await route.socketPaths()).includes(req.socketPath)
+      || typeof req.workspaceId !== "string" || !/^[\w.:-]+$/.test(req.workspaceId)) {
+      result = { ok: false, error: "bad request: not a session, or not a herdr socket of this machine" };
+    } else {
+      const take = { sessionId: req.sessionId, socketPath: req.socketPath, workspaceId: req.workspaceId, force: req.force === true };
+      result = await takeSessionIntoHerdr(take, route.deps(), (message, info) => send({ type: "progress", message, ...info }), aborted.signal);
+    }
+  } catch (err) {
+    result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  if (!result.ok) route.log(`[HERD-TAKE] not taken: ${result.error}`);
+  send(result.ok ? { type: "done", paneId: result.paneId, label: result.label } : { type: "error", error: result.error });
+  res.end();
 }

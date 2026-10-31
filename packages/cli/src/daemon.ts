@@ -48,7 +48,6 @@ import {
   HIBERNATE_MAX_PER_PASS,
   HIBERNATE_REFUSAL_BACKOFF_MS,
   HIBERNATE_RESUME_GRACE_MS,
-  HIBERNATE_SUBAGENT_QUIET_MS,
   hibernationBlockReason,
   selectHibernationCandidates,
   type HibernationCandidate,
@@ -309,8 +308,7 @@ import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskSchedul
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync } from "./tmux.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
-import { turnUnanswered } from "./transcriptTurn.js";
-import { HERD_TAKE_PATH, SwapHeldError, swapHeld, takeSessionIntoHerdr, type HerdTakeDeps, type HerdTakeEvent, type HerdTakeRequest, type HerdTakeResult } from "./herdTake.js";
+import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
@@ -2842,34 +2840,6 @@ export function daemonHookIngressDeps(): HookIngressDeps {
   };
 }
 
-/** Streams the take's progress as one JSON event per line, ending with done or error. A client that hangs up cancels whatever has not yet killed the old copy. */
-async function handleHerdTake(body: string, res: http.ServerResponse): Promise<void> {
-  const aborted = new AbortController();
-  res.on("close", () => { if (!res.writableFinished) aborted.abort(); });
-  const send = (event: HerdTakeEvent) => {
-    if (!res.writableEnded && !res.destroyed) res.write(JSON.stringify(event) + "\n");
-  };
-  let result: HerdTakeResult;
-  res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-  try {
-    const req = JSON.parse(body) as Partial<HerdTakeRequest>;
-    // The id is typed into a shell line below, and the workspace id is sent to herdr as is.
-    if (typeof req.sessionId !== "string" || !isValidResumeSessionId("claude", req.sessionId)
-      || typeof req.socketPath !== "string" || !(await herdrSocketPaths()).includes(req.socketPath)
-      || typeof req.workspaceId !== "string" || !/^[\w.:-]+$/.test(req.workspaceId)) {
-      result = { ok: false, error: "bad request: not a session, or not a herdr socket of this machine" };
-    } else {
-      const take = { sessionId: req.sessionId, socketPath: req.socketPath, workspaceId: req.workspaceId, force: req.force === true };
-      result = await takeSessionIntoHerdr(take, herdTakeDeps(), (message, info) => send({ type: "progress", message, ...info }), aborted.signal);
-    }
-  } catch (err) {
-    result = { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-  if (!result.ok) log(`[HERD-TAKE] not taken: ${result.error}`);
-  send(result.ok ? { type: "done", paneId: result.paneId, label: result.label } : { type: "error", error: result.error });
-  res.end();
-}
-
 /** The launch-ledger pane name of a session's herdr copy: not a tmux session name, since the copy has no surface in tmux. */
 const herdrPaneName = (sessionId: string): string => `herdr-${resumeShortId(sessionId)}`;
 
@@ -2886,33 +2856,24 @@ export function herdTakeDeps(transcriptPath: (sessionId: string) => string | und
       const live = await resolveLiveTmuxTarget(readConversationCache()[sessionId], sessionId, "claude", resumeTmuxName("claude", sessionId));
       return { tmuxTarget: live.tmuxTarget, proc: live.proc };
     },
-    // Whether killing now would cut a turn. The status the pane reconciler publishes is a guess from the screen
-    // and called a turn in progress idle (a kill landed two seconds before the Stop hook), so the hook's own
-    // last report decides, and the transcript must agree: a prompt or tool result with no reply after it is a
-    // turn in progress. A daemon restart empties the hook state; with no report the transcript decides alone.
-    // Background work and subagents that dies with the tree count as in the unreachable-agent
-    // teardown (deliverMessageIntoSession); a subagent counts while it was active within the hibernation quiet
-    // window (subagentActiveAgoMs counts up forever once one has run, and NaN, coverage lost, is not busy).
-    busy: async (sessionId) => {
+    // The hook's own last report decides, not the status the pane reconciler publishes (see takeBusy). A subagent
+    // counts while it was active within the hibernation quiet window; subagentActiveAgoMs counts up forever once
+    // one has run, and NaN (coverage lost) is not busy.
+    busy: (sessionId) => {
       const hook = lastHookStatus.get(sessionId)?.status;
-      if (hook && !HOOK_IDLE_STATUSES.has(hook)) return { kind: "turn", detail: `the turn to finish (${hook})` };
-      if (hasOpenBackgroundWork(sessionId)) return { kind: "background", detail: "background work to finish" };
-      const ago = subagentActiveAgoMs(sessionId);
-      if (ago < HIBERNATE_SUBAGENT_QUIET_MS) return { kind: "subagent", detail: `the subagent to finish (active ${Math.round(ago / 1000)}s ago)` };
       const transcript = transcriptPath(sessionId);
-      const tail = transcript ? await readFileTailAsync(transcript, 256 * 1024).catch(() => null) : null;
-      if (tail !== null && turnUnanswered(tail)) return { kind: "reply", detail: "the turn to finish (no reply yet)" };
-      return null;
+      return takeBusy({
+        turnUnderway: hook && !HOOK_IDLE_STATUSES.has(hook) ? hook : undefined,
+        backgroundWork: hasOpenBackgroundWork(sessionId),
+        subagentAgoMs: subagentActiveAgoMs(sessionId),
+        tail: async () => (transcript ? await readFileTailAsync(transcript, 256 * 1024).catch(() => null) : null),
+      });
     },
     deliveryInFlight: (sessionId) => {
       const conversationId = readConversationCache()[sessionId];
       return !!conversationId && [...messagesInFlight.values()].some((m) => m.conversationId === conversationId);
     },
-    wait: (ms, signal) => new Promise<void>((resolve) => {
-      const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
-      const timer = setTimeout(done, ms);
-      signal.addEventListener("abort", done);
-    }),
+    wait: abortableWait,
     killRefusal: async (tmuxSession) => {
       if (!validateTmuxTarget(tmuxSession) || !isCodecastCreatedTmuxName(tmuxSession)) return `tmux ${tmuxSession} was not created by codecast; not killing it`;
       // A session's own tmux server dies whole (kill-server), so anything else codecast runs on it dies too.
@@ -2965,28 +2926,20 @@ export function herdTakeDeps(transcriptPath: (sessionId: string) => string | und
         release();
       }
     },
-    closePane: async (req, paneId) => {
-      await herdrRequest(req.socketPath, "pane.close", { pane_id: paneId });
-    },
+    closePane: (req, paneId) => closeHerdrPane(req.socketPath, paneId),
     // Up means the SessionStart hook has registered the process as a herdr one: a process found earlier by its
     // argv carries no TERM_PROGRAM, and a cache entry without it sends delivery down the AppleScript route.
-    agentUp: async (sessionId, waitMs, tick) => {
+    agentUp: (sessionId, waitMs, tick) => {
       sessionProcessCache.delete(sessionId);
-      const startedAt = Date.now();
-      let ticked = 0;
-      while (Date.now() - startedAt < waitMs) {
+      return pollUntilUp(async () => {
         const proc = await findSessionProcess(sessionId, "claude");
         if (proc?.termProgram === "herdr") {
-          const conversationId = readConversationCache()[sessionId];
-          void syncServiceRef?.registerManagedSession(sessionId, proc.pid, undefined, conversationId);
+          void syncServiceRef?.registerManagedSession(sessionId, proc.pid, undefined, readConversationCache()[sessionId]);
           return true;
         }
         if (proc) sessionProcessCache.delete(sessionId);
-        const sec = Math.floor((Date.now() - startedAt) / 5000) * 5;
-        if (sec > ticked) { ticked = sec; tick(sec); }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-      return false;
+        return false;
+      }, waitMs, tick);
     },
   };
 }
@@ -3030,7 +2983,9 @@ function startHookServer(): http.Server {
         req.resume();
         return refuseHookIngress(HERD_TAKE_PATH, "bad-token", res);
       }
-      readHookBody(req, res, 4096, (body) => { void handleHerdTake(body, res); });
+      readHookBody(req, res, 4096, (body) => {
+        void serveHerdTake(body, res, { deps: herdTakeDeps, validSessionId: (id) => isValidResumeSessionId("claude", id), socketPaths: herdrSocketPaths, log });
+      });
       return;
     }
 
