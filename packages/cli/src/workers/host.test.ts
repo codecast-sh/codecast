@@ -26,7 +26,7 @@ const ping = (host: WorkerHost, timeoutMs = 1000) => host.request("ping", null, 
 // Every Readable in bun 1.4 returns one written chunk per read(); node returns all buffered.
 const drain = (stream: any) => { let text = ""; for (let chunk; (chunk = stream.read());) text += chunk; return text; };
 function reply(child: any) {
-  const requests = drain(child.stdin).trim().split("\n").filter(Boolean).map(JSON.parse);
+  const requests = drain(child.stdin).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
   requests.forEach((f: any) => child.stdout.write(encodeFrame({ v: 1, kind: "probe", type: "result", id: f.id, operation: "ping", result: "pong" })));
 }
 test("crash settles inflight and queued work; backoff excludes dead generation then third crash disables kind", async () => {
