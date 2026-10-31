@@ -242,8 +242,9 @@ jobs:
         # the web suite has it — `mock.module` substitutions are permanent in
         # one process and a test that passes alone then fails in the suite
         # depending on order — with the files spread over one worker per CPU.
-        # A test's wall-clock bounds go through test-helpers/machineLoad.ts so
-        # the load of sibling workers stretches them.
+        # A wall-clock bound that load can stretch (a test's own timeout, a
+        # fixed wait) goes through test-helpers/machineLoad.ts, since sibling
+        # workers share the CPUs.
         # A suite whose output stands still for 4 minutes is hung (ct-71000): the
         # watchdog prints what each process is doing and stops it, rather than
         # the job spending the rest of its timeout with nothing said.
