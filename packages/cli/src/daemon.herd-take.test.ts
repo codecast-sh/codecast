@@ -79,8 +79,10 @@ describe("the take route", () => {
     expect(route).not.toContain("admitHookIngress");
   });
 
-  test("accepts only a herdr socket of this machine", () => {
-    expect(functionBlock(source, "handleHerdTake").text).toContain("(await herdrSocketPaths()).includes(req.socketPath)");
+  test("hands the take the daemon's herdr sockets and id check", () => {
+    const at = source.indexOf("serveHerdTake(body, res,");
+    expect(source.slice(at, at + 300)).toContain("socketPaths: herdrSocketPaths");
+    expect(source.slice(at, at + 300)).toContain('isValidResumeSessionId("claude", id)');
   });
 });
 
