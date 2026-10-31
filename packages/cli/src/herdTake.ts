@@ -91,7 +91,7 @@ export type HerdTakeDeps = {
   /** Where the session's agent runs now: a tmux pane, a bare process, or nowhere. */
   liveTarget(sessionId: string): Promise<{ tmuxTarget: string | null; proc: { pid: number } | null }>;
   /** What keeps the session from being interrupted now, or null. `kind` changes when the cause does; `detail` is for the person. */
-  busy(sessionId: string): Busy | null;
+  busy(sessionId: string): Busy | null | Promise<Busy | null>;
   /** Whether a message to the session is mid-delivery. */
   deliveryInFlight(sessionId: string): boolean;
   /** The clock the wait is timed by (Date.now). */
@@ -104,7 +104,7 @@ export type HerdTakeDeps = {
   prepareLaunch(sessionId: string): Promise<{ cwd: string; label: string }>;
   kill(tmuxSession: string, sessionId: string): Promise<void>;
   /** The line that starts claude on the session. It rewrites transcript files, so it runs only once the old agent is gone. */
-  buildLine(sessionId: string, cwd: string): Promise<string>;
+  buildLine(sessionId: string, cwd: string): Promise<{ line: string; note?: string }>;
   /** Opens the tab, types the line, and returns the new pane's id. */
   launch(req: HerdTakeRequest, launch: { cwd: string; label: string; line: string }): Promise<string>;
   closePane(req: HerdTakeRequest, paneId: string): Promise<void>;
@@ -175,7 +175,7 @@ async function run(req: HerdTakeRequest, deps: HerdTakeDeps, emit: Emit, signal:
   };
   /** Polls until the agent is idle. A result means the take is over. */
   const waitIdle = async (): Promise<HerdTakeResult | null> => {
-    for (let busy = deps.busy(sessionId); busy; busy = deps.busy(sessionId)) {
+    for (let busy = await deps.busy(sessionId); busy; busy = await deps.busy(sessionId)) {
       if (signal.aborted) return cancelled();
       sayWaiting(busy);
       await deps.wait(BUSY_POLL_MS, signal);
@@ -193,7 +193,7 @@ async function run(req: HerdTakeRequest, deps: HerdTakeDeps, emit: Emit, signal:
       const drainUntil = Date.now() + DRAIN_MS;
       while (deps.deliveryInFlight(sessionId) && Date.now() < drainUntil && !signal.aborted) await deps.wait(500, signal);
       if (signal.aborted) return cancelled();
-      const busy = deps.busy(sessionId);
+      const busy = await deps.busy(sessionId);
       if (busy) return busy;
     }
     const refusal = await deps.killRefusal(tmuxSession);
@@ -209,7 +209,9 @@ async function run(req: HerdTakeRequest, deps: HerdTakeDeps, emit: Emit, signal:
     const gone = (err: unknown) => fail(`the tmux copy is gone but the herdr tab did not open: ${err instanceof Error ? err.message : String(err)}. The next message resumes the session in tmux`);
     let line: string;
     try {
-      line = await deps.buildLine(sessionId, cwd);
+      const built = await deps.buildLine(sessionId, cwd);
+      line = built.line;
+      if (built.note) emit(built.note);
     } catch (err) {
       return gone(err);
     }

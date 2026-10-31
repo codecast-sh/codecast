@@ -436,7 +436,9 @@ describe("command groups stay off the boot graph", () => {
     // contracts/inboxProjection.ts for its max-lines pin.
     // 524 on 2026-10-31: herdTake.ts, the swap hold and the take route's
     // orchestration and client (the CLI loads the same file lazily).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(524);
+    // 525 on 2026-10-31: transcriptTurn.ts, the unanswered-turn reading the
+    // take's busy check makes of a transcript tail.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(525);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
