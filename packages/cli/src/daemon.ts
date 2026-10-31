@@ -2889,13 +2889,13 @@ export function herdTakeDeps(transcriptPath: (sessionId: string) => string | und
     // Whether killing now would cut a turn. The status the pane reconciler publishes is a guess from the screen
     // and called a turn in progress idle (a kill landed two seconds before the Stop hook), so the hook's own
     // last report decides, and the transcript must agree: a prompt or tool result with no reply after it is a
-    // turn in progress. Background work and subagents that dies with the tree count as in the unreachable-agent
+    // turn in progress. A daemon restart empties the hook state; with no report the transcript decides alone.
+    // Background work and subagents that dies with the tree count as in the unreachable-agent
     // teardown (deliverMessageIntoSession); a subagent counts while it was active within the hibernation quiet
     // window (subagentActiveAgoMs counts up forever once one has run, and NaN, coverage lost, is not busy).
     busy: async (sessionId) => {
       const hook = lastHookStatus.get(sessionId)?.status;
-      if (!hook) return { kind: "turn", detail: "the agent's first status report" };
-      if (!HOOK_IDLE_STATUSES.has(hook)) return { kind: "turn", detail: `the turn to finish (${hook})` };
+      if (hook && !HOOK_IDLE_STATUSES.has(hook)) return { kind: "turn", detail: `the turn to finish (${hook})` };
       if (hasOpenBackgroundWork(sessionId)) return { kind: "background", detail: "background work to finish" };
       const ago = subagentActiveAgoMs(sessionId);
       if (ago < HIBERNATE_SUBAGENT_QUIET_MS) return { kind: "subagent", detail: `the subagent to finish (active ${Math.round(ago / 1000)}s ago)` };
