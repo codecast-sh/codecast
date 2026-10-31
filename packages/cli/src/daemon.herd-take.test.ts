@@ -101,8 +101,9 @@ describe("the take's busy check (the real dependency)", () => {
     return { id, busy: () => herdTakeDeps(() => file).busy(id) };
   };
 
-  test("without a hook report the agent is busy: the pane reconciler's idle is not evidence", async () => {
-    expect(await session(transcript(entry("assistant", [{ type: "text", text: "done" }]))).busy()).toMatchObject({ kind: "turn" });
+  test("without a hook report (a daemon restart empties them) the transcript decides alone", async () => {
+    expect(await session(transcript(entry("user", "go"), entry("assistant", [{ type: "text", text: "done" }]))).busy()).toBeNull();
+    expect(await session(transcript(entry("assistant", [{ type: "text", text: "earlier" }]), entry("user", "do the thing"))).busy()).toMatchObject({ kind: "reply" });
   });
 
   test("a hook that says the turn is under way is busy", async () => {
