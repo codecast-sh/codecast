@@ -189,4 +189,16 @@ describe.skipIf(!bin || process.platform === "win32")("herdr", () => {
     expect(text).toContain("GOT b'\\x1b[200~hello herd\\nsecond line\\x1b[201~'");
     expect(text.match(/GOT b'\\r'/g)).toHaveLength(1);
   }, 60_000);
+
+  test("a taken session's tab opens focused and labelled in the caller's workspace, with its line typed there", async () => {
+    const { openHerdrTab } = await import("./herdr.js");
+    const ws = await herdrRequest<Record<string, any>>(socketPath, "workspace.create", { cwd: dir, focus: false });
+    const workspaceId = ws.workspace.workspace_id as string;
+    const paneId = await openHerdrTab(socketPath, workspaceId, { cwd: dir, label: "Taken session", line: "echo take-$((40+2))" });
+    const snap = await herdrSnapshot(socketPath);
+    expect(snap.tabs.find((t) => t.workspace_id === workspaceId && t.label === "Taken session")).toBeDefined();
+    expect(snap.panes.find((p) => p.pane_id === paneId)?.workspace_id).toBe(workspaceId);
+    expect(snap.focused_pane_id).toBe(paneId);
+    expect(await until(() => readPane(paneId), (t) => t.includes("take-42"))).toContain("take-42");
+  }, 60_000);
 });

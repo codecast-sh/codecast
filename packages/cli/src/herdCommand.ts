@@ -4,6 +4,8 @@ import { spawn } from "./proc.js";
 import { HERD_PROJECT_TOKEN, HERD_SESSION, HERDR_INSTALL_HINT, herdrAlive, herdrBin, herdrRequest, herdrSnapshot, herdrSocketPath } from "./herdr.js";
 import { HerdFocus, herdMembers, serverTitles, syncHerd } from "./herdMirror.js";
 import { claimHerdViewer } from "./herdViewer.js";
+import { requestHerdTake, resolveSessionRef } from "./herdTake.js";
+import { readLocalConversationMap } from "./localConversationMap.js";
 import { readTitleCache } from "./titleCache.js";
 import { ensureTmux, listCodecastPanes, listCodecastPanesAsync, tmuxRun, type CodecastPane } from "./tmux.js";
 
@@ -105,6 +107,28 @@ export async function runHerdCommand(
       process.removeListener("SIGHUP", stop);
     }
   }
+}
+
+/** `cast herd take <session>`: from inside a herdr pane, move the session's claude out of tmux into a tab beside it. */
+export async function runHerdTakeCommand(ref: string, options: { force?: boolean }): Promise<void> {
+  const socketPath = process.env.HERDR_SOCKET_PATH;
+  const workspaceId = process.env.HERDR_WORKSPACE_ID;
+  if (!socketPath || !workspaceId) {
+    console.error("cast herd take runs from inside a herdr pane (HERDR_SOCKET_PATH and HERDR_WORKSPACE_ID are not set).");
+    process.exit(1);
+  }
+  console.log(`Resolving ${ref}`);
+  const resolved = resolveSessionRef(ref, readLocalConversationMap());
+  if ("error" in resolved) {
+    console.error(resolved.error);
+    process.exit(1);
+  }
+  const result = await requestHerdTake({ sessionId: resolved.sessionId, socketPath, workspaceId, force: !!options.force }, (message) => console.log(message));
+  if (!result.ok) {
+    console.error(`Not taken: ${result.error}`);
+    process.exit(1);
+  }
+  console.log(`Taken into herdr: ${result.label} (pane ${result.paneId})`);
 }
 
 /** Every tmux session on this machine with how long it has been idle. Sessions
