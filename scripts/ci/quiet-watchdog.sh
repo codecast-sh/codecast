@@ -3,8 +3,8 @@
 # <quiet seconds>, the run is hung: the cli suite froze for the rest of its
 # 30-minute job on most runs since Oct 24 (ct-71000), past bun's own test
 # timeouts, with no line saying where. So the watchdog prints what every
-# process is doing (the tree, each one's state and kernel wait, the test file
-# that was running), then stops the command so the job fails now.
+# process is doing (the tree, each one's state and kernel wait, the test files
+# and synchronous spawns in flight), then stops the command so the job fails now.
 #
 #   quiet-watchdog.sh <quiet seconds> -- <command...>
 #
@@ -32,6 +32,16 @@ pid=$!
 tail -n +1 -f --pid="$pid" "$log" | stdbuf -oL cut -c1-32000 &
 tailpid=$!
 
+# Lines of the trace ("<time> <pid> <what> <payload>") whose <what> is $1 and
+# was not followed by $2 from the same pid, for pids that still exist.
+in_flight() {
+  awk -v begin="$1" -v end="$2" '$3==begin{s[$2]=$0} $3==end{delete s[$2]} END{for(p in s)print s[p]}' "$CODECAST_SPAWN_TRACE" 2>/dev/null |
+    while read -r line; do
+      set -- $line
+      kill -0 "$2" 2>/dev/null && echo "$line" | cut -c1-300
+    done
+}
+
 size=-1
 still=0
 while kill -0 "$pid" 2>/dev/null; do
@@ -42,9 +52,15 @@ while kill -0 "$pid" 2>/dev/null; do
   [ "$still" -lt "$quiet" ] && continue
 
   echo "::group::quiet-watchdog: no output for ${still}s, stopping the run"
-  echo "last test file: $(grep -aoE 'src/[^ ]+\.test\.tsx?' "$log" | tail -1)"
-  echo "last synchronous spawns (a start with no done is the one that never returned):"
-  tail -8 "$CODECAST_SPAWN_TRACE" 2>/dev/null | cut -c1-300
+  # Under --parallel a file's header and output reach the log only when the
+  # file reports, so the log names finished files, never the hung one. The
+  # spawn trace (spawnTrace.ts) holds one start and one end per test file and
+  # per synchronous spawn from every worker; what started and has no end in a
+  # process still alive is what is stuck.
+  echo "test files started and not finished:"
+  in_flight file-start file-done
+  echo "synchronous spawns started and never returned:"
+  in_flight start done
   ps -eo pid,ppid,pgid,stat,etimes,wchan:32,args --forest 2>/dev/null | grep -v ' ps -eo ' | cut -c1-220
   for p in $(pgrep -f 'bun|tmux|node|git' 2>/dev/null); do
     [ -d "/proc/$p" ] || continue
