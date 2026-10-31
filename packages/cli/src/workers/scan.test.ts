@@ -8,6 +8,7 @@ import { SCAN_PAGE_BYTES, SCAN_PAGE_ROWS, validScanPayload, type ScanPolicy } fr
 import { scanPredicates } from './scanPolicy.js';
 import { walkFiles, walkEntryBatches, type WalkFile } from '../fsWalk.js';
 import { readInventoryAsync, readInventoryAsyncLocal } from '../capabilities/inventory.js';
+import { loadScaledMs } from '../test-helpers/machineLoad.js';
 import { enumerateLocalRootsAsync } from '../projectRoots.js';
 import { readInstalledPluginObservations, readInstalledPluginObservationsAsync } from '../capabilities/manifests.js';
 const dirs: string[]=[];
@@ -31,7 +32,7 @@ test('named production policies match local traversal on actual layouts, pruning
    expect(scanWorkerHost()!.state.pid).toBeGreaterThan(1);
  }
  const missing:WalkFile[]=[];await walkFiles(path.join(root,'absent'),{policy:{}},f=>missing.push(f));expect(missing).toEqual([]);
-});
+},loadScaledMs(15_000));
 test('museWatch walks date dirs into the session uuid dir only',async()=>{
  const root=temp();const mid='12345678-1234-1234-1234-123456789abc';
  // Every muse run spawns subagent/<uuid>/session.jsonl nests under the session

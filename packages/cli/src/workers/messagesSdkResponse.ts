@@ -30,7 +30,10 @@ export class MessagesSdkResponse {
       const bytes = Buffer.concat(this.pages, this.receiver.length);
       checkpoint();
       const response = new Response(bytes.length ? bytes : null, { status: this.status });
-      if (!bytes.length && ['1.3.13', '1.3.14'].includes(process.versions.bun ?? '')) {
+      // fetch's json() on an empty body resolves null in 1.3.13/14, and in 1.4.4
+      // for every status but 204/205/304, where it throws like `new Response`.
+      const bun = process.versions.bun ?? '';
+      if (!bytes.length && (['1.3.13', '1.3.14'].includes(bun) || bun === '1.4.4' && ![204, 205, 304].includes(this.status))) {
         response.json = async () => { await response.text(); return null; };
       }
       checkpoint();

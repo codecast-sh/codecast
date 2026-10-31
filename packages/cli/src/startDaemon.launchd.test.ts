@@ -111,7 +111,9 @@ describe("binary watchdog loop, executed", () => {
   };
 
   test("a pass that never returns is killed at the deadline and the loop moves on", () => {
-    const r = runOnce("sleep 60");
+    // exec: a stub shell that forks sleep leaves it alive after the kill, holding
+    // the script's stdout, and bun 1.4's spawnSync waits for that pipe to close.
+    const r = runOnce("exec sleep 60");
     r.cleanup();
     expect(r.ms).toBeLessThan(10_000);
     expect(r.log).toContain("still running after 1s");

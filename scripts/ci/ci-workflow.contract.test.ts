@@ -66,6 +66,28 @@ describe("ci.yml job graph", () => {
     }
   });
 
+  // The release workflows build with the same bun as CI; a pin of their own
+  // is how the two drift apart.
+  test("the release workflows set bun up through the same composite action", () => {
+    for (const file of ["cut-cli-release", "finalize-cli-release", "accelerate-cli-staging", "cut-extension-release"]) {
+      const release = Bun.YAML.parse(
+        readFileSync(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8"),
+      ) as { jobs: Record<string, any> };
+      for (const [name, job] of Object.entries(release.jobs)) {
+        const steps: any[] = job.steps ?? [];
+        for (const step of steps) {
+          expect(String(step.uses ?? "").startsWith("oven-sh/setup-bun@"), `${file} ${name} uses setup-bun directly`).toBe(false);
+          expect(step.with?.["bun-version"], `${file} ${name} pins its own bun`).toBeUndefined();
+        }
+        const firstBun = steps.findIndex((step) => /\bbun\b/.test(String(step.run ?? "")));
+        if (firstBun < 0) continue;
+        const setup = steps.findIndex((step) => step.uses === SETUP_BUN);
+        expect(setup, `${file} ${name} sets up bun`).toBeGreaterThan(-1);
+        expect(setup, `${file} ${name} sets up bun before its first bun step`).toBeLessThan(firstBun);
+      }
+    }
+  });
+
   test("the composite action caches the bun store and installs only after", () => {
     const steps: any[] = setupBun.runs.steps;
     expect(setupBun.runs.using).toBe("composite");

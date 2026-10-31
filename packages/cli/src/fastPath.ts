@@ -79,9 +79,9 @@ export function runFastPath(argv: string[]): boolean {
     // verb. `import.meta.url` inside a compiled binary names this module in
     // bun's embedded filesystem, so statting it IS the number (ct-49751).
     // `bun build --compile --splitting` leaves that module holding this file
-    // and nothing else — 1,499 bytes in the release shape on bun 1.3.14,
-    // darwin-arm64, 2,031 without --minify. Without splitting bun concatenates
-    // the whole CLI into it and the same probe reads 4,312,289, which is what
+    // and nothing else — 3,211 bytes in the release shape on bun 1.4.4,
+    // darwin-arm64, 4,959 without --minify. Without splitting bun concatenates
+    // the whole CLI into it and the same probe reads 5,679,974, which is what
     // the release check refuses. Nothing outside a compiled artifact can
     // observe this: the chunking exists only in one.
     Promise.all([import("node:fs"), import("node:url")])

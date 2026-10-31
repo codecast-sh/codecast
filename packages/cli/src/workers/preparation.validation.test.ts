@@ -13,6 +13,14 @@ const wire = () => ({ message_uuid: 'id', role: 'assistant', content: 'ordinary'
 const output = (message: unknown) => ({ messages: [message], bytes: [Buffer.byteLength(JSON.stringify(message))] });
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64');
 
+// `expect(promise).rejects` on a promise that is still pending can sit for a
+// full second per setImmediate hop in bun 1.4.4 (the preparation client yields
+// with one per page), so a rejection is awaited here and only then asserted.
+async function rejectsWith(promise: Promise<unknown>, message: string) {
+  const error = await promise.then(() => undefined, (reason: unknown) => reason ?? new Error('rejected with no reason'));
+  expect(() => { if (error !== undefined) throw error; }).toThrow(message);
+}
+
 function harness() {
   const cursors = new PreparationCursors();
   let id = 0;
@@ -46,8 +54,8 @@ test('L1 rejects every malformed optional or nested input field before preparati
     ...[{ toolUseId: 1, content: 'r' }, { toolUseId: 't', content: {} }, { toolUseId: 't', content: 'r', isError: 1 }, { toolUseId: 't', content: 'r', extra: 1 }, null].map(result => ({ ...raw(), toolResults: [result] })),
     ...badImages.map(image => ({ ...raw(), images: [image] })),
   ];
-  for (const message of malformed) await expect(validatePreparationInput([message], 'transcript')).rejects.toThrow('preparation schema');
-  await expect(validatePreparationInput([{ ...raw(), role: 'user' }], 'service')).rejects.toThrow('preparation schema');
+  for (const message of malformed) await rejectsWith(validatePreparationInput([message], 'transcript'), 'preparation schema');
+  await rejectsWith(validatePreparationInput([{ ...raw(), role: 'user' }], 'service'), 'preparation schema');
   for (const role of ['human', 'assistant', 'system']) await expect(validatePreparationInput([{ ...raw(), role }], 'service')).resolves.toHaveLength(1);
   const other = [{ ...raw(), role: 'legacy-other' }];
   await validatePreparationInput(other, 'transcript');
@@ -57,13 +65,13 @@ test('L1 rejects every malformed optional or nested input field before preparati
 test('L1 validates initial stored images and later resolved images through the actual cursor/client', async () => {
   const h = harness();
   for (const image of badImages) {
-    await expect(MessagePreparation.open([{ ...raw(), images: [image] }] as any, 'transcript', { host: h.host })).rejects.toThrow('preparation schema');
+    await rejectsWith(MessagePreparation.open([{ ...raw(), images: [image] }] as any, 'transcript', { host: h.host }), 'preparation schema');
     expect(h.cursors.size).toBe(0);
     const session = await MessagePreparation.open([raw()], 'transcript', { host: h.host });
-    await expect(session.setImages(0, [image] as any)).rejects.toThrow('preparation schema');
+    await rejectsWith(session.setImages(0, [image] as any), 'preparation schema');
     expect(h.cursors.size).toBe(0);
   }
-  await expect(MessagePreparation.open([{ ...raw(), model: {} }] as any, 'transcript', { host: h.host })).rejects.toThrow('preparation schema');
+  await rejectsWith(MessagePreparation.open([{ ...raw(), model: {} }] as any, 'transcript', { host: h.host }), 'preparation schema');
   expect(h.cursors.size).toBe(0);
   const precedence = { ...stored(), mediaType: 'existing-stored-type', data: 'not base64', localPath: '/not-read' };
   const session = await MessagePreparation.open([{ ...raw(), images: [precedence] }], 'transcript', { host: h.host });
@@ -87,10 +95,10 @@ test('L2 rejects every malformed wire field and byte count while preserving prep
     ...[{ tool_use_id: 1, content: 'r' }, { tool_use_id: 't', content: {} }, { tool_use_id: 't', content: 'r', is_error: 1 }, { tool_use_id: 't', content: 'r', extra: 1 }, null].map(result => ({ ...wire(), tool_results: [result] })),
     ...[{ media_type: 12, storage_id: 7, tool_use_id: false }, { media_type: 'image/png', storage_id: {} }, { media_type: 'image/png', data: 1 }, { media_type: 'image/png', data: png, tool_use_id: false }, { media_type: 'image/png', data: png, extra: 1 }, { media_type: 'image/png', data: png, storage_id: 's' }, { media_type: 'image/png' }, null].map(image => ({ ...wire(), images: [image] })),
   ];
-  for (const message of malformed) await expect(validatePreparedOutput(output(message), 1)).rejects.toThrow('preparation schema');
+  for (const message of malformed) await rejectsWith(validatePreparedOutput(output(message), 1), 'preparation schema');
   const good = output({ ...wire(), tool_calls: [{ id: 't', name: 'n', input: '{"cut"' }], images: [{ media_type: 'image/png', data: ` ${png} ` }] });
-  for (const bytes of [0, -1, 1.5, Infinity, '1', good.bytes[0] - 1, good.bytes[0] + 1]) await expect(validatePreparedOutput({ ...good, bytes: [bytes] }, 1)).rejects.toThrow('preparation schema');
-  for (const bad of [{ ...good, extra: 1 }, { ...good, bytes: [] }, { ...good, messages: {} }, { ...good, bytes: {} }]) await expect(validatePreparedOutput(bad, 1)).rejects.toThrow('preparation schema');
+  for (const bytes of [0, -1, 1.5, Infinity, '1', good.bytes[0] - 1, good.bytes[0] + 1]) await rejectsWith(validatePreparedOutput({ ...good, bytes: [bytes] }, 1), 'preparation schema');
+  for (const bad of [{ ...good, extra: 1 }, { ...good, bytes: [] }, { ...good, messages: {} }, { ...good, bytes: {} }]) await rejectsWith(validatePreparedOutput(bad, 1), 'preparation schema');
   expect<unknown>(await validatePreparedOutput(good, 1)).toBe(good);
 });
 
@@ -104,7 +112,7 @@ test('L2 validates assembled client replies and closes malformed result owners',
     const assembler = new IngestAssembler();
     for await (const tokens of ingestTokenPages(bad)) assembler.push(tokens);
     (session as any).read = async () => assembler.finish();
-    await expect(session.finish()).rejects.toThrow('preparation schema');
+    await rejectsWith(session.finish(), 'preparation schema');
     expect(h.cursors.size).toBe(0);
   }
 });
@@ -141,7 +149,7 @@ test('bounded byte verification matches JSON bytes across surrogate cuts, hostil
 test('schema/count walks checkpoint within a many-tool message and preserve all valid image selection', async () => {
   const row = { ...wire(), tool_calls: Array.from({ length: 256 }, (_, i) => ({ id: String(i), name: 'n', input: '{"cut"' })) };
   let checks = 0;
-  await expect(validatePreparedOutput(output(row), 1, () => { if (++checks === 2) throw new Error('fixture expired'); })).rejects.toThrow('fixture expired');
+  await rejectsWith(validatePreparedOutput(output(row), 1, () => { if (++checks === 2) throw new Error('fixture expired'); }), 'fixture expired');
   expect(checks).toBe(2);
   const h = harness();
   const session = await MessagePreparation.open([{ ...raw(), role: 'human', messageUuid: 'service-id', images: Array.from({ length: 11 }, stored) }], 'service', { host: h.host });

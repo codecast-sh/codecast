@@ -2,8 +2,73 @@
 // no workspace.toml): add the worktree under .codecast/worktrees, retrying git's
 // lock contention, and copy the setup files a checkout needs.
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
-import { execSync } from "./proc.js";
+import { execFileSync, execSync, spawn } from "./proc.js";
+
+/**
+ * Run a command with stderr in a temp file rather than a pipe, and stdout
+ * discarded. git runs hooks with its own stdout and stderr, so a post-checkout
+ * hook that backgrounds a job (`npm run build:watch &`) leaves the job holding
+ * any pipe git was given. Bun 1.4's sync spawns return only when every holder
+ * of a piped stdout or stderr has closed it, and node's async ones wait for
+ * 'close' on every runtime, so with a pipe the call outlasts git for as long
+ * as the job lives. A file can be held without keeping the call open: both
+ * return when the command exits. A failure carries the output as `stderr` and
+ * appended to `message`, the way a piped call's would.
+ */
+type Stderr = { dir?: string; out?: string; fd?: number };
+function openStderr(): Stderr {
+  const held: Stderr = {};
+  try {
+    held.dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-exec-"));
+    held.out = path.join(held.dir, "stderr");
+    held.fd = fs.openSync(held.out, "w");
+  } catch (err) {
+    closeStderr(held);
+    throw err;
+  }
+  return held;
+}
+function closeStderr(held: Stderr): string {
+  let text = "";
+  try { if (held.out) text = fs.readFileSync(held.out, "utf-8"); } catch { /* nothing was written */ }
+  // A hook job still holding the file makes removal fail on Windows.
+  try { if (held.fd !== undefined) fs.closeSync(held.fd); } catch { /* closed */ }
+  try { if (held.dir) fs.rmSync(held.dir, { recursive: true, force: true }); } catch { /* left for the OS temp sweep */ }
+  return text;
+}
+function failure(err: Error, stderr: string): Error {
+  const text = stderr.trim();
+  Object.assign(err, { stderr });
+  if (text) err.message = `${err.message}\n${text}`;
+  return err;
+}
+
+export function execFileSyncToFile(file: string, args: string[], options: { cwd?: string } = {}): void {
+  const held = openStderr();
+  try {
+    execFileSync(file, args, { ...options, stdio: ["ignore", "ignore", held.fd!] });
+  } catch (err) {
+    throw failure(err as Error, closeStderr(held));
+  }
+  closeStderr(held);
+}
+
+/** The async twin of execFileSyncToFile: settles when the command exits, not when its stdio closes. */
+export function execFileToFile(file: string, args: string[], options: { cwd?: string } = {}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let held: Stderr;
+    try { held = openStderr(); } catch (err) { reject(err); return; }
+    const child = spawn(file, args, { ...options, stdio: ["ignore", "ignore", held.fd!] });
+    child.once("error", (err) => { closeStderr(held); reject(err); });
+    child.once("exit", (code, signal) => {
+      const stderr = closeStderr(held);
+      if (code === 0) { resolve(); return; }
+      reject(failure(Object.assign(new Error(`Command failed: ${[file, ...args].join(" ")}`), { code, status: code, signal }), stderr));
+    });
+  });
+}
 
 const CODECAST_WORKTREE_DIR = ".codecast/worktrees";
 
@@ -45,17 +110,13 @@ export function createWorktreeLegacy(repoRoot: string, name: string, log: (messa
       try { execSync(`sleep ${(200 + attempt * 300) / 1000}`, { stdio: "ignore" }); } catch {}
     }
     try {
-      execSync(`git worktree add --no-track -b ${branchName} ${worktreePath}`, {
-        cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-      });
+      execFileSyncToFile("git", ["worktree", "add", "--no-track", "-b", branchName, worktreePath], { cwd: repoRoot });
       created = true;
       break;
     } catch (err) {
       // Branch already exists — try without -b
       try {
-        execSync(`git worktree add ${worktreePath} ${branchName}`, {
-          cwd: repoRoot, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-        });
+        execFileSyncToFile("git", ["worktree", "add", worktreePath, branchName], { cwd: repoRoot });
         created = true;
         break;
       } catch (err2) {

@@ -154,9 +154,9 @@ export function embeddedHelperSha256(binary: string): string | null {
  * `bun build --compile --splitting` keeps every `await import()` in its own
  * chunk; without `--splitting` bun concatenates them all into the entry module
  * and the binary parses the whole CLI to print `cast --help`. Measured on bun
- * 1.3.14, darwin-arm64, on the release shape: 1,499 bytes split against
- * 4,312,289 unsplit, and `cast --help` about 165 -> 110 ms CPU (median of 11,
- * `cast bench boot --binary`, on identically signed artifacts).
+ * 1.4.4, darwin-arm64, on the release shape at 4f2367cc5: 3,211 bytes split
+ * against 5,679,974 unsplit, and `cast --help` 151 -> 76 ms CPU (median of 11,
+ * user+sys, on identically ad-hoc signed artifacts).
  */
 export function bootBytes(binary: string): number {
   const result = spawnSync(binary, ["_boot-bytes"], { encoding: "utf8", timeout: 120_000, env: { ...process.env, CODECAST_NO_AUTO_UPDATE: "1" } });

