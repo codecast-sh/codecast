@@ -299,7 +299,9 @@ describe("command groups stay off the boot graph", () => {
     // index.ts printing that message when a team has removed the device.
     // 4401 on 2026-10-29: contracts/inboxProjection.ts lifting a hidden role
     // lead whose only live work is a nested subagent (child_live).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4401);
+    // 4402 on 2026-10-31: the `herd take` subcommand registration in index.ts
+    // (its module, herdCommand.ts, loads lazily).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4402);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -428,7 +430,11 @@ describe("command groups stay off the boot graph", () => {
     // and the ingest worker share (a compaction summary self-linked a session).
     // 523 on 2026-10-29: contracts/inboxFields.ts, split out of
     // contracts/inboxProjection.ts for its max-lines pin.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(523);
+    // 524 on 2026-10-31: herdTake.ts, the swap hold and the take route's
+    // orchestration and client (the CLI loads the same file lazily).
+    // 525 on 2026-10-31: transcriptTurn.ts, the unanswered-turn reading the
+    // take's busy check makes of a transcript tail.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(525);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

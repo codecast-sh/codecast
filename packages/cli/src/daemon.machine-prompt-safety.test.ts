@@ -18,6 +18,7 @@ import { typedPollAnswer } from "./typedPollAnswer";
 import { redactSecrets } from "./redact";
 import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
+import { SwapHeldError } from "./herdTake";
 import { CLAUDE_TURN_STATUS_LINE } from "./tmuxPaneState.js";
 import * as interactivePrompt from "./interactivePrompt";
 import { planSessionTeardown } from "./sessionProcessMatcher";
@@ -165,7 +166,7 @@ function fixture(transport = "tmux", cached = true) {
     tmuxExec, execAsync, redactSecrets,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
-    CloudAgentHoldError, CloudAgentUnsentError, pollPendingNow: () => {},
+    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, pollPendingNow: () => {},
     cloudAgents: { deliver: async () => null, forConversation: () => undefined, interrupt: async () => null },
     // A recovery continue restarts a pane that holds its own credential first;
     // this fixture's machine has no fleet store, so no pane is restarted.
@@ -206,7 +207,7 @@ function fixture(transport = "tmux", cached = true) {
     clearTimeout: (timer: { cancelled: boolean }) => { timer.cancelled = true; },
     pendingInteractivePrompts, lastEmittedSyntheticPrompt,
     closeSyntheticPrompt: async (...args: unknown[]) => { closed.push(args); lastEmittedSyntheticPrompt.delete("sid"); },
-    touchHostActivity: () => {}, pendingAgentSwitches: new Set(), planHandoffChildren: new Map(), planHandoffTarget,
+    touchHostActivity: () => {}, pendingAgentSwitches: new Set(), planHandoffChildren: new Map(), planHandoffTarget, swapHeld: () => false,
     ownedByAnotherDevice: () => false, isRemoteDevice: () => false, codexAppServerInstance: undefined, readyCodexAppServer: async () => null,
     buildReverseConversationCache: () => cached ? { conv: "sid" } : {}, findSessionFile: () => ({ agentType: "claude" }),
     startedSessionTmux: new Map([["conv", { tmuxSession: "target", agentType: "claude", startedAt: clock.now }]]),

@@ -29,6 +29,7 @@ function harness(probeError?: unknown, realTarget?: string, probe?: (args: strin
   const deps = {
     isTmuxSessionMissingError,
     isSupersededInPass: () => false,
+    swapHeld: () => false,
     resumeSessionCache,
     resumeInFlight: new Set<string>(),
     expectedHibernationExits: new Set<string>(),
