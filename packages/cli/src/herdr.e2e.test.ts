@@ -201,4 +201,16 @@ describe.skipIf(!bin || process.platform === "win32")("herdr", () => {
     expect(snap.focused_pane_id).toBe(paneId);
     expect(await until(() => readPane(paneId), (t) => t.includes("take-42"))).toContain("take-42");
   }, 60_000);
+
+  test("a ~1.5KB launch line reaches the new tab's shell whole", async () => {
+    const { openHerdrTab } = await import("./herdr.js");
+    const { typedLaunchLine } = await import("./daemon.js");
+    const ws = await herdrRequest<Record<string, any>>(socketPath, "workspace.create", { cwd: dir, focus: false });
+    const long = `echo long-$((40+2)); : ${"padding-".repeat(190)}; echo end-$((6*7))`;
+    expect(Buffer.byteLength(long)).toBeGreaterThan(1500);
+    const paneId = await openHerdrTab(socketPath, ws.workspace.workspace_id as string, { cwd: dir, label: "Long line", line: typedLaunchLine(long) });
+    const text = await until(() => readPane(paneId), (t) => t.includes("end-42"));
+    expect(text).toContain("long-42");
+    expect(text).toContain("end-42");
+  }, 60_000);
 });

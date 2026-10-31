@@ -1,35 +1,41 @@
 import { describe, expect, test } from "bun:test";
-import { holdSwap, releaseSwap, resolveSessionRef, swapHeld, takeSessionIntoHerdr, type Busy, type HerdTakeDeps } from "./herdTake.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { holdSwap, releaseSwap, requestHerdTake, resolveSessionRef, swapHeld, takeSessionIntoHerdr, type Busy, type HerdTakeDeps, type HerdTakeRequest } from "./herdTake.js";
 
 const SID = "11111111-2222-3333-4444-555555555555";
-const req = { sessionId: SID, socketPath: "/tmp/herdr.sock", workspaceId: "w1" };
+const req: HerdTakeRequest = { sessionId: SID, socketPath: "/tmp/herdr.sock", workspaceId: "w1" };
 
 function fixture(over: Partial<HerdTakeDeps> = {}) {
   const calls: string[] = [];
   const busyQueue: Array<Busy | null> = [];
-  const state = { tmux: "cc-claude-abc:0.0" as string | null, proc: null as { pid: number } | null, heldDuringKill: false, heldWhileWaiting: false };
+  const state = { tmux: "cc-claude-abc:0.0" as string | null, proc: null as { pid: number } | null, heldDuringKill: false, heldWhileWaiting: false, heldAtClose: null as boolean | null, heldAtBuild: null as boolean | null };
   const deps: HerdTakeDeps = {
     agentType: () => "claude",
     liveTarget: async () => ({ tmuxTarget: state.tmux, proc: state.proc }),
     busy: () => (busyQueue.length ? busyQueue.shift()! : null),
+    deliveryInFlight: () => false,
     wait: async () => { state.heldWhileWaiting ||= swapHeld(SID); calls.push("wait"); },
     killRefusal: async () => null,
-    prepareLaunch: async () => ({ cwd: "/work", label: "My title", line: () => "claude --resume x" }),
+    prepareLaunch: async () => { calls.push("prepare"); return { cwd: "/work", label: "My title" }; },
     kill: async () => { state.heldDuringKill = swapHeld(SID); calls.push("kill"); state.tmux = null; },
+    buildLine: async () => { state.heldAtBuild = swapHeld(SID); calls.push("build"); return "claude --resume x"; },
     launch: async () => { calls.push("launch"); return "w1:p9"; },
+    closePane: async () => { state.heldAtClose = swapHeld(SID); calls.push("close"); },
     agentUp: async (_s, _ms, tick) => { tick(5); return true; },
     ...over,
   };
   const events: string[] = [];
-  const run = (r = req, signal = new AbortController().signal) => takeSessionIntoHerdr(r, deps, (m) => events.push(m), signal);
+  const run = (r: HerdTakeRequest = req, signal = new AbortController().signal) => takeSessionIntoHerdr(r, deps, (m) => events.push(m), signal);
   return { deps, calls, busyQueue, state, events, run };
 }
 
 describe("swap hold", () => {
-  test("holds until released, and an expired hold is ignored", () => {
+  test("holds until released; only the crash backstop expires it", () => {
     holdSwap("s1", 1000);
-    expect(swapHeld("s1", 1000 + 59_000)).toBe(true);
-    expect(swapHeld("s1", 1000 + 61_000)).toBe(false);
+    expect(swapHeld("s1", 1000 + 5 * 60_000)).toBe(true);
+    expect(swapHeld("s1", 1000 + 11 * 60_000)).toBe(false);
     holdSwap("s2", 1000);
     releaseSwap("s2");
     expect(swapHeld("s2", 1001)).toBe(false);
@@ -37,7 +43,7 @@ describe("swap hold", () => {
 });
 
 describe("takeSessionIntoHerdr", () => {
-  test("happy path: ordered progress, hold taken only around the kill and released after", async () => {
+  test("happy path: ordered progress, hold taken only around the swap and released after", async () => {
     const f = fixture();
     expect(await f.run()).toEqual({ ok: true, paneId: "w1:p9", label: "My title" });
     expect(f.events).toEqual([
@@ -48,9 +54,17 @@ describe("takeSessionIntoHerdr", () => {
       "starting claude in pane w1:p9",
       "waiting for claude to come up (5s)",
     ]);
-    expect(f.calls).toEqual(["kill", "launch"]);
+    expect(f.calls).toEqual(["prepare", "kill", "build", "launch"]);
     expect(f.state.heldDuringKill).toBe(true);
+    expect(f.state.heldAtBuild).toBe(true);
     expect(swapHeld(SID)).toBe(false);
+  });
+
+  test("the transcript is only touched after the old agent is gone", async () => {
+    const f = fixture();
+    await f.run();
+    expect(f.calls.indexOf("build")).toBeGreaterThan(f.calls.indexOf("kill"));
+    expect(f.calls.indexOf("prepare")).toBeLessThan(f.calls.indexOf("kill"));
   });
 
   test("a busy agent is waited out, re-announced when the cause changes, with no hold until idle", async () => {
@@ -65,6 +79,25 @@ describe("takeSessionIntoHerdr", () => {
     expect(f.calls.filter((c) => c === "wait")).toHaveLength(3);
     expect(f.state.heldWhileWaiting).toBe(false);
     expect(f.calls.indexOf("kill")).toBeGreaterThan(f.calls.lastIndexOf("wait"));
+  });
+
+  test("a message that makes the agent busy between the idle check and the kill sends the take back to waiting", async () => {
+    const f = fixture();
+    // idle at the poll, busy at the re-check under the hold, then idle for good
+    f.busyQueue.push(null, { kind: "turn", detail: "the turn to finish" }, null, null);
+    expect((await f.run()).ok).toBe(true);
+    expect(f.calls.filter((c) => c === "kill")).toHaveLength(1);
+    expect(f.events.filter((e) => e.startsWith("agent is active"))).toEqual(["agent is active — waiting for the turn to finish"]);
+    expect(f.state.heldWhileWaiting).toBe(false);
+    expect(f.calls.indexOf("kill")).toBeGreaterThan(f.calls.indexOf("wait"));
+  });
+
+  test("waits under the hold for a delivery already in flight to land before re-checking", async () => {
+    let inFlight = 2;
+    const f = fixture({ deliveryInFlight: () => inFlight-- > 0 });
+    f.busyQueue.push(null, { kind: "turn", detail: "the turn to finish" }, null, null);
+    expect((await f.run()).ok).toBe(true);
+    expect(f.calls.filter((c) => c === "kill")).toHaveLength(1);
   });
 
   test("a hang-up while waiting does nothing: no hold, no kill, no launch", async () => {
@@ -87,8 +120,22 @@ describe("takeSessionIntoHerdr", () => {
     const f = fixture();
     f.deps.kill = async () => { f.calls.push("kill"); f.state.tmux = null; abort.abort(); };
     expect((await f.run(req, abort.signal)).ok).toBe(true);
-    expect(f.calls).toEqual(["kill", "launch"]);
+    expect(f.calls).toEqual(["prepare", "kill", "build", "launch"]);
     expect(swapHeld(SID)).toBe(false);
+  });
+
+  test("two concurrent takes of one session launch once", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const f = fixture();
+    f.deps.launch = async () => { f.calls.push("launch"); await gate; return "w1:p9"; };
+    const first = f.run();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await f.run()).toEqual({ ok: false, error: "a take of this session is already running" });
+    release();
+    expect((await first).ok).toBe(true);
+    expect(f.calls.filter((c) => c === "launch")).toHaveLength(1);
+    expect((await f.run()).ok).toBe(false);
   });
 
   test("refuses a non-claude session", async () => {
@@ -123,15 +170,63 @@ describe("takeSessionIntoHerdr", () => {
     const f = fixture({ kill: async () => { f.calls.push("kill"); } });
     const result = await f.run();
     expect(result.ok === false && result.error).toContain("still running after the kill");
-    expect(f.calls).toEqual(["kill"]);
+    expect(f.calls).toEqual(["prepare", "kill"]);
     expect(swapHeld(SID)).toBe(false);
   });
 
-  test("releases the hold when claude never comes up", async () => {
+  test("when claude never comes up the pane is closed before the hold lifts", async () => {
     const f = fixture({ agentUp: async () => false });
     const result = await f.run();
-    expect(result.ok === false && result.error).toContain("did not start");
+    expect(result.ok === false && result.error).toContain("was closed");
+    expect(f.calls.at(-1)).toBe("close");
+    expect(f.state.heldAtClose).toBe(true);
     expect(swapHeld(SID)).toBe(false);
+  });
+
+  test("a failing command build after the kill reports the session as down and releases the hold", async () => {
+    const f = fixture({ buildLine: async () => { throw new Error("no transcript"); } });
+    const result = await f.run();
+    expect(result.ok === false && result.error).toContain("the tmux copy is gone");
+    expect(f.calls).not.toContain("launch");
+    expect(swapHeld(SID)).toBe(false);
+  });
+});
+
+describe("requestHerdTake", () => {
+  function daemon(handler: (r: Request) => Response) {
+    const server = Bun.serve({ port: 0, fetch: handler });
+    const dir = mkdtempSync(join(tmpdir(), "herd-take-client-"));
+    writeFileSync(join(dir, "hook-port"), String(server.port));
+    writeFileSync(join(dir, "loopback-identity.json"), JSON.stringify({ port: server.port, token: "loopback-tok", created_at: 1 }));
+    return { dir, stop: () => { server.stop(true); rmSync(dir, { recursive: true, force: true }); } };
+  }
+
+  test("presents the loopback bearer and hands each streamed line to the caller", async () => {
+    const got = { auth: "" };
+    const d = daemon((r) => {
+      got.auth = r.headers.get("authorization") ?? "";
+      return new Response('{"type":"progress","message":"one"}\n{"type":"progress","message":"two"}\n{"type":"done","paneId":"w1:p3","label":"T"}\n');
+    });
+    try {
+      const seen: string[] = [];
+      expect(await requestHerdTake(req, (m) => seen.push(m), d.dir)).toEqual({ ok: true, paneId: "w1:p3", label: "T" });
+      expect(seen).toEqual(["one", "two"]);
+      expect(got.auth).toBe("Bearer loopback-tok");
+    } finally { d.stop(); }
+  });
+
+  test("reports an HTTP refusal by status, not as a parse error", async () => {
+    const d = daemon(() => new Response("unauthorized", { status: 401 }));
+    try {
+      expect(await requestHerdTake(req, () => {}, d.dir)).toEqual({ ok: false, error: "daemon answered HTTP 401" });
+    } finally { d.stop(); }
+  });
+
+  test("an error event ends the take as a failure", async () => {
+    const d = daemon(() => new Response('{"type":"error","error":"nope"}\n'));
+    try {
+      expect(await requestHerdTake(req, () => {}, d.dir)).toEqual({ ok: false, error: "nope" });
+    } finally { d.stop(); }
   });
 });
 
