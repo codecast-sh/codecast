@@ -162,6 +162,27 @@ export async function findHerdrPaneForTty(tty: string): Promise<{ socketPath: st
   return null;
 }
 
+/** A focused tab in `workspaceId` running `line` in its shell: its pane id. The
+ *  line goes in as typed text after the tab exists, so the shell is the one a
+ *  person would have opened and the agent's tty is the pane's. */
+export async function openHerdrTab(
+  socketPath: string,
+  workspaceId: string,
+  tab: { cwd: string; label: string; line: string },
+): Promise<string> {
+  const created = await herdrRequest<{ root_pane: { pane_id: string } }>(
+    socketPath, "tab.create", { workspace_id: workspaceId, cwd: tab.cwd, label: tab.label, focus: true }, 5000,
+  );
+  const paneId = created.root_pane.pane_id;
+  try {
+    await herdrRequest(socketPath, "pane.send_text", { pane_id: paneId, text: `${tab.line}\r` });
+  } catch (err) {
+    await herdrRequest(socketPath, "pane.close", { pane_id: paneId }).catch(() => {});
+    throw err;
+  }
+  return paneId;
+}
+
 // ── The binary ──────────────────────────────────────────────────────────────
 
 /** Found by walking PATH rather than spawning `which`, which fails outright

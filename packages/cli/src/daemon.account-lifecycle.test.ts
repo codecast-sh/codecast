@@ -20,7 +20,7 @@ function deferred() {
 function harness() {
   const gate = new AccountLifecycleGate();
   const events: string[] = [];
-  const state = { account: "old", forbidden: false, owner: "local", ownerReads: 0, resumeAcquires: 0, switchAcquires: 0 };
+  const state = { account: "old", forbidden: false, owner: "local", ownerReads: 0, resumeAcquires: 0, switchAcquires: 0, swapping: new Set<string>() };
   const hooks = {
     launch: (async () => true) as Resume,
     swap: (_profile: string) => {},
@@ -52,6 +52,7 @@ function harness() {
     accountLifecycleGate: gate, resumeInFlight, resumeInFlightStarted, resumeSessionCache,
     hibernationInFlight, expectedHibernationExits, lastResumeAt: new Map<string, number>(),
     RESUME_IN_FLIGHT_TIMEOUT_MS: 60_000, SWITCH_CONTINUE_SPACING_MS: 1,
+    swapHeld: (id: string) => state.swapping.has(id),
     conversationForbidsResurrection: async () => state.forbidden,
     syncServiceRef: sync, deviceId: () => "local", isRemoteDevice: () => false,
     log: () => {}, logDelivery: () => {},
@@ -111,6 +112,18 @@ test("account switch proceeds once Claude has spawned, without waiting for the p
   ready.resolve();
   expect((await change).error).toBeUndefined();
   expect(await launch).toBe(true);
+});
+
+test("a resume of a session a herdr take is swapping starts nothing, and goes ahead once the hold lifts", async () => {
+  const h = harness();
+  let launches = 0;
+  h.hooks.launch = async () => { launches++; return true; };
+  h.state.swapping.add("taken");
+  expect(await h.resume("taken", "", {}, undefined, "conv", "claude")).toBe(false);
+  expect(launches).toBe(0);
+  h.state.swapping.delete("taken");
+  expect(await h.resume("taken", "", {}, undefined, "conv", "claude")).toBe(true);
+  expect(launches).toBe(1);
 });
 
 test("credentials never change until an in-flight launch reports ready", async () => {

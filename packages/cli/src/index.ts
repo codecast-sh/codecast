@@ -5039,6 +5039,13 @@ program
   .action(async (options) => {
     const { runHerdCommand } = await import("./herdCommand.js");
     await runHerdCommand(readConfig(), { open: options.open });
+  })
+  .command("take <session>")
+  .description("From a herdr pane: move a claude session out of tmux into a tab here, so herdr owns it")
+  .option("--force", "Take it even if the agent is working or has background work")
+  .action(async (session: string, options) => {
+    const { runHerdTakeCommand } = await import("./herdCommand.js");
+    await runHerdTakeCommand(session, options);
   });
 
 program

@@ -307,7 +307,8 @@ import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId, forgetTriggerRun } from "./taskScheduler.js";
 import { hasTmux, isTmuxSessionMissingError, joinText, listCodecastPanesAsync, runTmux, runTmuxSync } from "./tmux.js";
 import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketName, socketOfTmuxEnv, withTmuxSession } from "./tmuxRoute.js";
-import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath } from "./herdr.js";
+import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, openHerdrTab } from "./herdr.js";
+import { HERD_TAKE_PATH, swapHeld, takeSessionIntoHerdr, type HerdTakeDeps, type HerdTakeEvent, type HerdTakeRequest, type HerdTakeResult } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
@@ -2836,6 +2837,110 @@ export function daemonHookIngressDeps(): HookIngressDeps {
   };
 }
 
+/** Streams the take's progress as one JSON event per line, ending with done or error. A client that hangs up cancels whatever has not yet killed the old copy. */
+async function handleHerdTake(body: string, res: http.ServerResponse): Promise<void> {
+  const aborted = new AbortController();
+  res.on("close", () => { if (!res.writableFinished) aborted.abort(); });
+  const send = (event: HerdTakeEvent) => {
+    if (!res.writableEnded && !res.destroyed) res.write(JSON.stringify(event) + "\n");
+  };
+  let result: HerdTakeResult;
+  res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+  try {
+    const req = JSON.parse(body) as Partial<HerdTakeRequest>;
+    // The id is typed into a shell line below, and the workspace id is sent to herdr as is.
+    if (typeof req.sessionId !== "string" || !isValidResumeSessionId("claude", req.sessionId)
+      || typeof req.socketPath !== "string" || !req.socketPath
+      || typeof req.workspaceId !== "string" || !/^[\w.:-]+$/.test(req.workspaceId)) {
+      result = { ok: false, error: "bad request" };
+    } else {
+      const take = { sessionId: req.sessionId, socketPath: req.socketPath, workspaceId: req.workspaceId, force: req.force === true };
+      result = await takeSessionIntoHerdr(take, herdTakeDeps(), (message) => send({ type: "progress", message }), aborted.signal);
+    }
+  } catch (err) {
+    result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  if (!result.ok) log(`[HERD-TAKE] not taken: ${result.error}`);
+  send(result.ok ? { type: "done", paneId: result.paneId, label: result.label } : { type: "error", error: result.error });
+  res.end();
+}
+
+function herdTakeDeps(): HerdTakeDeps {
+  return {
+    agentType: detectSessionAgentType,
+    liveTarget: async (sessionId) => {
+      const live = await resolveLiveTmuxTarget(readConversationCache()[sessionId], sessionId, "claude", resumeTmuxName("claude", sessionId));
+      return { tmuxTarget: live.tmuxTarget, proc: live.proc };
+    },
+    // The unreachable-agent teardown's guard (deliverMessageIntoSession): work that dies with the tree.
+    busy: (sessionId) => {
+      const status = currentAgentStatus(sessionId);
+      if (status && ACTIVE_AGENT_STATUSES.has(status)) return { kind: "turn", detail: `the turn to finish (${status})` };
+      if (hasOpenBackgroundWork(sessionId)) return { kind: "background", detail: "background work to finish" };
+      const ago = subagentActiveAgoMs(sessionId);
+      if (ago !== Infinity) return { kind: "subagent", detail: `the subagent to finish (active ${Math.round(ago / 1000)}s ago)` };
+      return null;
+    },
+    wait: (ms, signal) => new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+      const timer = setTimeout(done, ms);
+      signal.addEventListener("abort", done);
+    }),
+    killRefusal: async (tmuxSession) => {
+      if (!validateTmuxTarget(tmuxSession) || !isCodecastCreatedTmuxName(tmuxSession)) return `tmux ${tmuxSession} was not created by codecast; not killing it`;
+      // A session's own tmux server dies whole (kill-server), so anything else codecast runs on it dies too.
+      const { server } = await tmuxSessionReapPlan(tmuxSession);
+      if (!server) return null;
+      const { stdout } = await tmuxExec(["-L", server, "list-sessions", "-F", "#{session_name}"], { timeout: 3000, killSignal: "SIGKILL" }).catch(() => ({ stdout: "" }));
+      const others = stdout.split("\n").filter((name) => name && name !== tmuxSession && isCodecastCreatedTmuxName(name));
+      return others.length ? `tmux server ${server} also hosts ${others.join(", ")}; stopping it would take them down` : null;
+    },
+    prepareLaunch: async (sessionId) => {
+      const sessionFile = findSessionFile(sessionId);
+      if (!sessionFile) throw new Error("no transcript for the session on this machine");
+      const jsonlContent = readFileHeadLines(sessionFile.path);
+      const conversationId = readConversationCache()[sessionId];
+      const cwd = await resolveResumeCwdOrRefuse({ recordedCwd: extractCwd(jsonlContent) || undefined, conversationId });
+      if (!cwd) throw new Error("no local checkout for the session's project");
+      const { resumeCmd, resumeAccountPrefix } = await buildClaudeResumeCommand({ sessionId, cwd, jsonlPath: sessionFile.path, jsonlContent, config: readConfig(), conversationId });
+      // Not a tmux session name: the ledger keys a launch by the surface it owns, and this one has none in tmux.
+      const pane = `herdr-${resumeShortId(sessionId)}`;
+      return {
+        cwd,
+        label: readTitleCache()[sessionId] || extractSummaryTitle(jsonlContent) || resumeShortId(sessionId),
+        line: () => resumeLaunchLine({ agentType: "claude", cwd, pane, sessionId, resumeAccountPrefix, resumeCmd }),
+      };
+    },
+    kill: async (tmuxSession, sessionId) => {
+      await killTmuxSessionAndTree(tmuxSession, "herd take");
+      resumeSessionCache.delete(sessionId);
+      sessionProcessCache.delete(sessionId);
+    },
+    launch: async (req, launch) => {
+      const release = await accountLifecycleGate.acquireResume("claude");
+      try {
+        const paneId = await openHerdrTab(req.socketPath, req.workspaceId, launch);
+        await new Promise((resolve) => setTimeout(resolve, CLAUDE_SPAWN_CREDENTIAL_GRACE_MS));
+        return paneId;
+      } finally {
+        release();
+      }
+    },
+    agentUp: async (sessionId, waitMs, tick) => {
+      sessionProcessCache.delete(sessionId);
+      const startedAt = Date.now();
+      let ticked = 0;
+      while (Date.now() - startedAt < waitMs) {
+        if (await findSessionProcess(sessionId, "claude")) return true;
+        const sec = Math.floor((Date.now() - startedAt) / 5000) * 5;
+        if (sec > ticked) { ticked = sec; tick(sec); }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      return false;
+    },
+  };
+}
+
 function startHookServer(): http.Server {
   // Reading the saved port and token is the first thing boot does with the
   // config dir. It is one small file read in another module, which is what
@@ -2865,6 +2970,18 @@ function startHookServer(): http.Server {
         res.writeHead(204);
         res.end();
       });
+      return;
+    }
+
+    // `cast herd take` from a herdr pane. Kills an agent, so a tokenless post
+    // (the legacy-hook grace) is refused where /hook/status would accept it.
+    if (req.method === "POST" && req.url === HERD_TAKE_PATH) {
+      const admitted = admitHookIngress(req);
+      if (!admitted.ok || admitted.legacy) {
+        req.resume();
+        return refuseHookIngress(HERD_TAKE_PATH, admitted.ok ? "no-token" : admitted.reason, res);
+      }
+      readHookBody(req, res, 4096, (body) => { void handleHerdTake(body, res); });
       return;
     }
 
@@ -24395,7 +24512,14 @@ export async function resolveLiveTmuxTarget(
   return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
 }
 
+/** A live agent that no tmux pane holds (a herdr tab, a terminal): a resume now would start a second copy on its transcript. */
+export const liveOutsideTmux = (live: ResolvedLiveSession): boolean => !live.tmuxTarget && !!live.proc;
+
 async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId, opts?: ResumeOptions): Promise<boolean> {
+  if (swapHeld(sessionId)) {
+    logDelivery(`Not resuming ${sessionId.slice(0, 8)}: a herdr take is swapping its agent`);
+    return false;
+  }
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
     const age = Date.now() - (resumeInFlightStarted.get(sessionId) ?? 0);
@@ -24703,6 +24827,127 @@ async function relocateForeignOccupant(tmuxSession: string, sessionId: string, a
   }
 }
 
+/**
+ * The command line that resumes a Claude session, with the account it runs under.
+ * Puts the transcript where `claude --resume` looks for it first (a UUID copy for
+ * a non-UUID id, the resume cwd's project dir), so a caller launching it anywhere
+ * (a tmux pane, a herdr tab) gets the same flags a resume always carries.
+ */
+async function buildClaudeResumeCommand(a: {
+  sessionId: string; cwd: string; jsonlPath: string; jsonlContent: string; config: Config | null; conversationId?: string;
+}): Promise<{ resumeCmd: string; resumeAccountPrefix: string; resumeAccount: string | undefined }> {
+  const { sessionId, cwd, jsonlPath, jsonlContent, config, conversationId } = a;
+  let resumeAccountPrefix = "";
+  let resumeAccount: string | undefined;
+  const jsonlBypass = extractJsonlPermissionMode(jsonlContent) === "bypassPermissions";
+  const extraFlags = combineClaudeResumeFlags(
+    getAgentArgs(config, "claude"),
+    getPermissionFlags("claude", config),
+    jsonlBypass,
+  );
+  let resumeId = sessionId;
+  let resumeJsonlPath = jsonlPath;
+  try {
+    const rewrite = rewriteSubagentJsonlToUuid(sessionId, jsonlPath);
+    if (rewrite.rewrote) {
+      log(`Copied non-UUID session ${sessionId} to resumable UUID ${rewrite.resumeId}`);
+      resumeId = rewrite.resumeId;
+      if (rewrite.newJsonlPath) resumeJsonlPath = rewrite.newJsonlPath;
+      // Remap all caches so subsequent lookups use the new UUID
+      if (conversationId) {
+        remapConversationSession(sessionId, rewrite.resumeId, conversationId);
+        if (syncServiceRef) {
+          void pushSessionIdBinding(conversationId, rewrite.resumeId);
+        }
+      }
+      // A fork-artifact source must go immediately: the remap above just
+      // unmapped it, and the sync watcher processes new files within
+      // ~500ms — left behind, it gets rediscovered as an unknown session
+      // and minted a frozen doppelgänger conversation.
+      if (removeForkArtifactJsonl(sessionId, jsonlPath)) {
+        log(`Removed fork artifact JSONL for ${sessionId.slice(0, 28)} after UUID copy`);
+      }
+    }
+  } catch (err) {
+    log(`Failed to copy session for UUID resume: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // Guarantee the session JSONL lives under the slug of the cwd we're about to
+  // resume in. findSessionFile() searches *every* project dir, so it can return
+  // a copy written under another machine's path (e.g. a fork whose origin was
+  // /Users/<other>/...). `claude --resume` only scans its own cwd's project dir,
+  // so relocate the file there or Claude reports "No conversation found with
+  // session ID" and crashes. This also self-heals stale wrong-dir JSONLs left by
+  // earlier runs.
+  try {
+    const resumeFile = findSessionFile(resumeId);
+    if (resumeFile) {
+      const cwdProjectDir = path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd));
+      const desiredPath = path.join(cwdProjectDir, `${resumeId}.jsonl`);
+      if (path.resolve(resumeFile.path) !== path.resolve(desiredPath)) {
+        fs.mkdirSync(cwdProjectDir, { recursive: true });
+        fs.copyFileSync(resumeFile.path, desiredPath);
+        log(`Relocated session ${resumeId.slice(0, 8)} JSONL into resume cwd dir (${cwd})`);
+      }
+    }
+  } catch (err) {
+    log(`Failed to relocate session JSONL for ${resumeId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // Override the recorded model with its short alias so the resume never lands
+  // on a retired pinned snapshot. Scans the file itself, not the small head
+  // window read above — the first assistant line (where the model field first
+  // appears) can sit well past it. Reads the UUID copy when one was made:
+  // the fork-artifact source is deleted above.
+  const modelFlag = resumeModelFlagFromFile(resumeJsonlPath, extraFlags);
+  // Effort twin: transcript switch echoes win; else the conversation row
+  // (a session launched with --effort that never switched in-session leaves
+  // no transcript trace, so without this a restart silently drops it).
+  let effortFlag = resumeEffortFlagFromFile(resumeJsonlPath, extraFlags);
+  // One row read serves both fallbacks: effort (above) and the per-session
+  // account. The account has no transcript echo at all — CLAUDE_CODE_OAUTH_TOKEN
+  // is read at process start — so without this a restart lands the session on
+  // the keychain login (verified 2026-09-01: `/status` flips from
+  // "Auth token: CLAUDE_CODE_OAUTH_TOKEN" to "Login method: Claude Max account").
+  const convInfo = conversationId && syncServiceRef
+    ? await syncServiceRef.getProjectInfo(conversationId).catch(() => null)
+    : null;
+  if (!effortFlag && !/(^|\s)--effort(\s|=)/.test(extraFlags)) {
+    const convEffort = convInfo?.effort;
+    if (convEffort && /^[a-z]+$/.test(convEffort)) effortFlag = ` --effort ${convEffort}`;
+  }
+  // The pin is the SERVER's answer, not the raw row: a session parked on a
+  // limit under a spent account's token would otherwise re-source that
+  // token on every resume (accountSwitch.pinForResume rewrites such a pin
+  // to the account this device continues on). The raw read is the fallback.
+  const resumePin = conversationId && syncServiceRef
+    ? await syncServiceRef.pinForResume(conversationId)
+    : null;
+  // No pin at all = the fleet store, else the launch profile after a token
+  // switch, else the keychain: the same rule as a fresh launch.
+  const pinnedAccount = resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined;
+  // An empty prefix means the pin did not resolve to a launch file, so this
+  // resume lands on the keychain login after all — and then it DOES hold the
+  // credential the refresh gate protects. Attribute what happens, not what
+  // was asked for.
+  ({ prefix: resumeAccountPrefix, account: resumeAccount } = launchAccountPrefix(pinnedAccount, log));
+  const resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
+  return { resumeCmd, resumeAccountPrefix, resumeAccount };
+}
+
+/**
+ * The shell line that starts a resume: account, provider key, TCC disclaimer and the
+ * `env` prefix (see buildResumeEnvPrefix: strips CLAUDECODE, and for Claude keeps the
+ * "Resume from summary?" prompt from wedging an unattended resume) in front of the
+ * resume command. Issues the launch token that fences `pane`'s hook posts, so it
+ * runs once per launch, after any kill that retires that pane. The `env` prefix is
+ * what keeps the disclaimer's plain-argv exec contract.
+ */
+function resumeLaunchLine(a: {
+  agentType: AgentClientId; cwd: string; pane: string; sessionId: string; resumeAccountPrefix: string; resumeCmd: string;
+}): string {
+  const env = buildResumeEnvPrefix(a.agentType, a.cwd, launchTokenLedger().issue(a.pane, a.sessionId));
+  return `${a.resumeAccountPrefix}${providerKeySourcePrefix(a.agentType, CONFIG_DIR)}${disclaimPrefix()}${env} ${a.resumeCmd}`;
+}
+
 async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId, opts?: ResumeOptions): Promise<boolean> {
   // Drop the outer hold: JSONL relocate, the live-pane fast path, and the
   // prompt poll do not read the keychain. The spawn below takes its own hold.
@@ -24736,6 +24981,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     }
     return true;
   };
+  const refuseSecondCopy = (live: ResolvedLiveSession): boolean => {
+    if (!liveOutsideTmux(live)) return false;
+    logDelivery(`Not resuming ${resumeShortId(sessionId)}: pid=${live.proc!.pid} already runs it outside tmux`);
+    return true;
+  };
 
   // FAST PATH: probe for a live pane BEFORE any Convex lookups, JSONL scans or
   // reconstitution. A resume aimed at an already-alive session (the web's
@@ -24752,6 +25002,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     try {
       const fastLive = await resolveLiveTmuxTarget(conversationId, sessionId, agentTypeHint, resumeTmuxName(agentTypeHint, sessionId));
       if (await reuseLiveSession(fastLive, agentTypeHint)) return true;
+      if (refuseSecondCopy(fastLive)) return false;
     } catch (err) {
       if (isDeliveryVerdict(err)) throw err;
       logDelivery(`Live-session fast probe failed for ${sessionId.slice(0, 8)}, continuing with full resume: ${err instanceof Error ? err.message : String(err)}`);
@@ -24977,97 +25228,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // session ids are their own.
     resumeCmd = nonClaudeResumeCmd;
   } else {
-    const jsonlBypass = extractJsonlPermissionMode(jsonlContent) === "bypassPermissions";
-    const extraFlags = combineClaudeResumeFlags(
-      getAgentArgs(config, "claude"),
-      getPermissionFlags("claude", config),
-      jsonlBypass,
-    );
-    let resumeId = sessionId;
-    let resumeJsonlPath = jsonlPath;
-    try {
-      const rewrite = rewriteSubagentJsonlToUuid(sessionId, jsonlPath);
-      if (rewrite.rewrote) {
-        log(`Copied non-UUID session ${sessionId} to resumable UUID ${rewrite.resumeId}`);
-        resumeId = rewrite.resumeId;
-        if (rewrite.newJsonlPath) resumeJsonlPath = rewrite.newJsonlPath;
-        // Remap all caches so subsequent lookups use the new UUID
-        if (conversationId) {
-          remapConversationSession(sessionId, rewrite.resumeId, conversationId);
-          if (syncServiceRef) {
-            void pushSessionIdBinding(conversationId, rewrite.resumeId);
-          }
-        }
-        // A fork-artifact source must go immediately: the remap above just
-        // unmapped it, and the sync watcher processes new files within
-        // ~500ms — left behind, it gets rediscovered as an unknown session
-        // and minted a frozen doppelgänger conversation.
-        if (removeForkArtifactJsonl(sessionId, jsonlPath)) {
-          log(`Removed fork artifact JSONL for ${sessionId.slice(0, 28)} after UUID copy`);
-        }
-      }
-    } catch (err) {
-      log(`Failed to copy session for UUID resume: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    // Guarantee the session JSONL lives under the slug of the cwd we're about to
-    // resume in. findSessionFile() searches *every* project dir, so it can return
-    // a copy written under another machine's path (e.g. a fork whose origin was
-    // /Users/<other>/...). `claude --resume` only scans its own cwd's project dir,
-    // so relocate the file there or Claude reports "No conversation found with
-    // session ID" and crashes. This also self-heals stale wrong-dir JSONLs left by
-    // earlier runs.
-    try {
-      const resumeFile = findSessionFile(resumeId);
-      if (resumeFile) {
-        const cwdProjectDir = path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd));
-        const desiredPath = path.join(cwdProjectDir, `${resumeId}.jsonl`);
-        if (path.resolve(resumeFile.path) !== path.resolve(desiredPath)) {
-          fs.mkdirSync(cwdProjectDir, { recursive: true });
-          fs.copyFileSync(resumeFile.path, desiredPath);
-          log(`Relocated session ${resumeId.slice(0, 8)} JSONL into resume cwd dir (${cwd})`);
-        }
-      }
-    } catch (err) {
-      log(`Failed to relocate session JSONL for ${resumeId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    // Override the recorded model with its short alias so the resume never lands
-    // on a retired pinned snapshot. Scans the file itself, not the small head
-    // window read above — the first assistant line (where the model field first
-    // appears) can sit well past it. Reads the UUID copy when one was made:
-    // the fork-artifact source is deleted above.
-    const modelFlag = resumeModelFlagFromFile(resumeJsonlPath, extraFlags);
-    // Effort twin: transcript switch echoes win; else the conversation row
-    // (a session launched with --effort that never switched in-session leaves
-    // no transcript trace, so without this a restart silently drops it).
-    let effortFlag = resumeEffortFlagFromFile(resumeJsonlPath, extraFlags);
-    // One row read serves both fallbacks: effort (above) and the per-session
-    // account. The account has no transcript echo at all — CLAUDE_CODE_OAUTH_TOKEN
-    // is read at process start — so without this a restart lands the session on
-    // the keychain login (verified 2026-09-01: `/status` flips from
-    // "Auth token: CLAUDE_CODE_OAUTH_TOKEN" to "Login method: Claude Max account").
-    const convInfo = conversationId && syncServiceRef
-      ? await syncServiceRef.getProjectInfo(conversationId).catch(() => null)
-      : null;
-    if (!effortFlag && !/(^|\s)--effort(\s|=)/.test(extraFlags)) {
-      const convEffort = convInfo?.effort;
-      if (convEffort && /^[a-z]+$/.test(convEffort)) effortFlag = ` --effort ${convEffort}`;
-    }
-    // The pin is the SERVER's answer, not the raw row: a session parked on a
-    // limit under a spent account's token would otherwise re-source that
-    // token on every resume (accountSwitch.pinForResume rewrites such a pin
-    // to the account this device continues on). The raw read is the fallback.
-    const resumePin = conversationId && syncServiceRef
-      ? await syncServiceRef.pinForResume(conversationId)
-      : null;
-    // No pin at all = the fleet store, else the launch profile after a token
-    // switch, else the keychain: the same rule as a fresh launch.
-    const pinnedAccount = resumePin ? resumePin.cc_account ?? undefined : convInfo?.cc_account ?? undefined;
-    // An empty prefix means the pin did not resolve to a launch file, so this
-    // resume lands on the keychain login after all — and then it DOES hold the
-    // credential the refresh gate protects. Attribute what happens, not what
-    // was asked for.
-    ({ prefix: resumeAccountPrefix, account: resumeAccount } = launchAccountPrefix(pinnedAccount, log));
-    resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
+    ({ resumeCmd, resumeAccountPrefix, resumeAccount } = await buildClaudeResumeCommand({ sessionId, cwd, jsonlPath, jsonlContent, config, conversationId }));
   }
 
   const tmuxSession = resumeTmuxName(agentType, sessionId, slug);
@@ -25080,6 +25241,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // delivery across two panes.
   const live = await resolveLiveTmuxTarget(conversationId, sessionId, agentType, tmuxSession);
   if (await reuseLiveSession(live, agentType)) return true;
+  if (refuseSecondCopy(live)) return false;
 
   try {
     await relocateForeignOccupant(tmuxSession, sessionId, agentType);
@@ -25116,18 +25278,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // account just like a fresh launch does.
     await stampCodexPaneAccount(agentType, tmuxSession, conversationId);
 
-    // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
-    // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
-    const resumeEnvPrefix = buildResumeEnvPrefix(agentType, cwd, launchTokenLedger().issue(tmuxSession, sessionId));
-    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
-    // session gets its provider key too (pl-207).
-    const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
-    // disclaimPrefix: resumed agents carry their own TCC identity, same as a
-    // fresh launch (resumeEnvPrefix always starts with `env`, so the wrapper's
-    // plain-argv exec contract holds).
+    const launchLine = resumeLaunchLine({ agentType, cwd, pane: tmuxSession, sessionId, resumeAccountPrefix, resumeCmd });
     const releaseSpawn = await accountLifecycleGate.acquireResume(agentType);
     try {
-      await typeIntoPane(tmuxSession, `${resumeAccountPrefix}${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`);
+      await typeIntoPane(tmuxSession, launchLine);
       if (agentType === "claude") {
         await new Promise(resolve => setTimeout(resolve, CLAUDE_SPAWN_CREDENTIAL_GRACE_MS));
       }
@@ -26342,6 +26496,10 @@ async function deliverMessageIntoSession(
 
   const reverseCache = buildReverseConversationCache(conversationCache);
   let sessionId = reverseCache[conversationId];
+  if (sessionId && swapHeld(sessionId)) {
+    logDelivery(`Holding msg=${messageId.slice(0, 8)}: a herdr take is swapping the agent of session=${sessionId.slice(0, 12)}`);
+    return false;
+  }
 
   // A Claude Code cloud session has no local process to type into: the turn
   // goes to the session's events API, and it syncs back through the cloud
