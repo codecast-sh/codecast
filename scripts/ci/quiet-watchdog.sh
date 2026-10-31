@@ -26,7 +26,10 @@ trap 'rm -f "$log" "$CODECAST_SPAWN_TRACE"' EXIT
 # polled.
 "$@" >> "$log" 2>&1 &
 pid=$!
-tail -n +1 -f --pid="$pid" "$log" &
+# A step's log on GitHub ends at the first line over 64 KiB: everything after
+# it, results included, never reaches the job page. The ingest e2e tests print
+# whole run outcomes on one line, so lines are capped before they reach it.
+tail -n +1 -f --pid="$pid" "$log" | stdbuf -oL cut -c1-32000 &
 tailpid=$!
 
 size=-1
