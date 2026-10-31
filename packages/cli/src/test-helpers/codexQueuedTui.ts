@@ -4,7 +4,14 @@ import { codexQueuedPane } from "./codexQueuedPane.js";
 const [statePath, finishPath, layout, inputReleasePath] = process.argv.slice(2);
 let inputHeld = !!inputReleasePath;
 let footerTick = 0;
-const state = { active: true, interrupts: 0, queued: ["Existing worker report."], delivered: [] as string[] };
+const state = { active: true, interrupts: 0, queued: ["Existing worker report."], delivered: [] as string[] } as {
+  active: boolean; interrupts: number; queued: string[]; delivered: string[]; commands?: string[]; panelKeys?: number;
+};
+// A Claude layout runs "/mcp" as a local command, as Claude Code does: no turn,
+// no transcript line, a panel that owns the keyboard until Escape. For its
+// first frames the panel draws under the composer that still shows the command.
+let panel: "opening" | "open" | null = null;
+const PANEL = ["▔".repeat(80), "   Manage MCP servers", "   1 server", "", "     Built-in MCPs (always available)", "   ❯ ◯ computer-use", "", "   https://code.claude.com/docs/en/mcp for help", "   ↑/↓ to navigate · Enter to confirm · Esc to cancel"].join("\n");
 let composer = "";
 let input = "";
 let swallowEnter = layout === "claude-collapsed";
@@ -17,7 +24,13 @@ function render() {
   const prompt = layout?.endsWith("collapsed") && composer.length > 1000
     ? layout === "claude-collapsed" ? "[Pasted text #98]" : `[Pasted Content ${composer.length} chars]`
     : composer || (layout?.startsWith("claude") ? "" : "Ask Codex to do anything");
-  const pane = layout?.startsWith("claude")
+  // Claude Code draws the panel at the bottom of the screen, under the transcript.
+  const atBottom = (text: string) => "\n".repeat(Math.max(0, (process.stdout.rows || 50) - text.split("\n").length)) + text;
+  const pane = panel === "open"
+    ? atBottom(`⏺ Done.\n\n${PANEL}`)
+    : panel === "opening"
+    ? atBottom(`${"─".repeat(80)}\n❯ /mcp\n${"─".repeat(80)}\n${PANEL}`)
+    : layout?.startsWith("claude")
     ? `${"─".repeat(80)}\n❯ ${prompt}\n${"─".repeat(80)}\n  bypass permissions on (shift+tab to cycle)${inputReleasePath ? ` · ${footerTick}` : ""}`
     : state.active
     ? layout === "clipped"
@@ -42,7 +55,10 @@ process.stdin.on("data", (chunk: string) => {
       if (input.startsWith("\x1b") && "\x1b[200~".startsWith(input) && input.length > 1) break;
       const key = input[0];
       input = input.slice(1);
-      if (key === "\x1b") {
+      if (panel) {
+        if (key === "\x1b") panel = null;
+        else state.panelKeys = (state.panelKeys ?? 0) + 1;
+      } else if (key === "\x1b") {
         state.interrupts++;
         state.active = false;
       } else if (key === "\r" || key === "\n") {
@@ -51,7 +67,12 @@ process.stdin.on("data", (chunk: string) => {
           render();
           continue;
         }
-        if (composer) (state.active ? state.queued : state.delivered).push(composer);
+        if (composer === "/mcp" && layout?.startsWith("claude")) {
+          state.commands = [...(state.commands ?? []), composer];
+          state.panelKeys ??= 0;
+          panel = "opening";
+          setTimeout(() => { if (panel) { panel = "open"; render(); } }, 1_000);
+        } else if (composer) (state.active ? state.queued : state.delivered).push(composer);
         composer = "";
       } else if (key === "\x0b" || key === "\x15") {
         composer = "";
