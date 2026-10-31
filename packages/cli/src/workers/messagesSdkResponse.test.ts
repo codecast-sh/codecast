@@ -24,7 +24,7 @@ const adapt = (bytes: Buffer, status: number) => {
 
 test('SDK response adapter matches genuine HTTP JSON and text, including empty statuses', async () => {
   const cases = [
-    ...[200, 204, 401, 560].map(status => ({ name: `empty-${status}`, status, bytes: Buffer.alloc(0) })),
+    ...[200, 204, 205, 304, 401, 560].map(status => ({ name: `empty-${status}`, status, bytes: Buffer.alloc(0) })),
     { name: 'valid', status: 200, bytes: Buffer.from('{"value":"😀","escaped":"\\ud800"}') },
     { name: 'malformed', status: 200, bytes: Buffer.from('{bad') },
     { name: 'invalid-utf8', status: 200, bytes: Buffer.from([0x22, 0xff, 0x22]) },

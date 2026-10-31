@@ -181,14 +181,14 @@ export class RecursiveWatcher extends EventEmitter {
       }).catch(error => { if (gen === this.generation) this.emit("error", error); });
   }
 
-  // One native event. Bun's fs.watch coalesces a same-tick burst of filesystem
-  // events into a SINGLE callback carrying only the first event's filename
-  // (verified on bun 1.3.14/macOS: four synchronous writes surfaced one
-  // callback; bun 1.4.4/macOS surfaced all four, each with its filename, so
-  // the rescan below is for a runtime that coalesces). So the named file gets a direct probe — one stat, the hot path
-  // for a session appending to its transcript — and every event also requests
-  // a throttled rescan of the whole tree, which is what recovers the siblings
-  // the coalescing dropped, wherever in the tree they sit.
+  // One native event. Some bun builds coalesce a same-tick burst of
+  // filesystem events into a SINGLE callback carrying only the first event's
+  // filename (bun 1.3.14/macOS: four synchronous writes surfaced one callback;
+  // 1.4.4/macOS delivered all four, each with its filename). So the named file
+  // gets a direct probe — one stat, the hot path for a session appending to
+  // its transcript — and every event also requests a throttled rescan of the
+  // whole tree, which is what recovers the siblings a coalescing build
+  // dropped, wherever in the tree they sit.
   //
   // Before this the rescan was the ONLY path, ran 100ms after every event, and
   // walked the named file's entire subtree synchronously. Under ~/.claude/

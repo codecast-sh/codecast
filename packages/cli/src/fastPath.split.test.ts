@@ -1,19 +1,16 @@
 /**
  * `cast --help` is only cheap if the compiled binary is code split (ct-49751).
  *
- * ct-49546 put every command group behind an `await import()`, but a bundler
- * with no splitting simply concatenates those modules into the entry file, and
- * the runtime parses the whole thing before the first statement. The win exists
- * only if `bun build --compile --splitting` keeps them in separate chunks, and
- * that is a fact about bun that nothing in the source tree states — it can be
- * lost by a bun upgrade or by dropping the flag in build-with-native.ts.
- *
- * So this test asks bun directly, in miniature, by the same measure the release
- * check uses on the real artifact: stat the module `import.meta.url` names
- * inside the compiled binary. That number IS what the runtime parsed to reach
- * the first statement. `computer-helper-release.ts` runs the same probe
- * (`cast _boot-bytes`) against the built darwin binary and holds it under
- * BOOT_BYTES_CEILING.
+ * Every command group sits behind an `await import()`, and the runtime parses
+ * the whole entry module before the first statement. This test pins that
+ * `bun build --compile --splitting` keeps a lazily imported module out of the
+ * entry, by the measure the release check uses: stat the module
+ * `import.meta.url` names inside the compiled binary. It does not show that
+ * an unsplit build is larger: for this toy, bun 1.4.4 leaves the module out
+ * of the entry without --splitting as well (316 bytes unsplit against 276
+ * split; 311,283 against 339 on 1.3.14). The real CLI's entry is guarded by
+ * BOOT_BYTES_CEILING in `computer-helper-release.ts`, which runs the same
+ * probe (`cast _boot-bytes`) against the built darwin binary.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -32,10 +29,10 @@ afterEach(() => {
 });
 
 /** Bytes the compiled entry module holds, the way `cast _boot-bytes` reads it. */
-function entryBytes(splitting: boolean): number {
+function entryBytes(): number {
   // Shaped like main.ts: a tiny entry that reaches everything expensive through
-  // a dynamic import. The heavy module is generated rather than fixtured so the
-  // difference between the two builds is far larger than any bundler preamble.
+  // a dynamic import. The heavy module is generated rather than fixtured so it is
+  // far larger than any bundler preamble.
   fs.writeFileSync(
     path.join(stage, "heavy.ts"),
     Array.from({ length: 5_000 }, (_, i) => `export function f${i}(a: number) { return a * ${i}; }`).join("\n"),
@@ -47,10 +44,10 @@ function entryBytes(splitting: boolean): number {
       `if (process.argv[2] === "heavy") { const m = await import("./heavy.ts"); console.log(m.f1(2)); }\n` +
       `else console.log(statSync(fileURLToPath(import.meta.url)).size);\n`,
   );
-  const out = path.join(stage, splitting ? "split" : "whole");
+  const out = path.join(stage, "split");
   const build = spawnSync(
     process.execPath,
-    ["build", path.join(stage, "entry.ts"), "--compile", ...(splitting ? ["--splitting"] : []), "--outfile", out],
+    ["build", path.join(stage, "entry.ts"), "--compile", "--splitting", "--outfile", out],
     { encoding: "utf8", timeout: 300_000 },
   );
   expect(build.stderr + build.stdout).not.toContain("error:");
@@ -73,5 +70,5 @@ test("bun --compile --splitting keeps a dynamically imported module out of the e
   // bytes), where 1.3.14 concatenated it (311,485), so only the split build is asserted:
   // it must stay far below the module it would otherwise have swallowed. The
   // release artifact is held to BOOT_BYTES_CEILING by computer-helper-release.ts.
-  expect(entryBytes(true)).toBeLessThan(10_000);
+  expect(entryBytes()).toBeLessThan(10_000);
 }, 300_000); // one compile
