@@ -229,13 +229,7 @@ jobs:
       - name: Install tmux (e2e tests need a real tmux server)
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      # The bun the CLI ships on. 1.3.13 watched a child's pidfd with
-      # EPOLLONESHOT: an exit event skipped when a callback re-entered the loop
-      # was lost for good, and spawnSync spun beside a zombie tmux client until
-      # the watchdog stopped the suite (ct-71000, fixed by oven-sh/bun#30301).
       - uses: ./.github/actions/setup-bun
-        with:
-          bun-version: "1.3.14"
 
       - name: Unit tests (cli package)
         working-directory: packages/cli
@@ -244,15 +238,18 @@ jobs:
         # DAEMON_BUILD_ID_CHECK turns on the daemon build id stamp check, which
         # walks the whole daemon import closure. Off locally so the normal test
         # loop stays fast.
-        # --isolate: a fresh global per file, for the same reason the web suite
-        # has it — `mock.module` substitutions are permanent in one process and
-        # a test that passes alone then fails in the suite depending on order.
+        # --parallel: a fresh global per file (--isolate), for the same reason
+        # the web suite has it — `mock.module` substitutions are permanent in
+        # one process and a test that passes alone then fails in the suite
+        # depending on order — with the files spread over one worker per CPU.
+        # A test's wall-clock bounds go through test-helpers/machineLoad.ts so
+        # the load of sibling workers stretches them.
         # A suite whose output stands still for 4 minutes is hung (ct-71000): the
         # watchdog prints what each process is doing and stops it, rather than
         # the job spending the rest of its timeout with nothing said.
         env:
           DAEMON_BUILD_ID_CHECK: "1"
-        run: bash ../../scripts/ci/quiet-watchdog.sh 240 -- bun test src/ --isolate --bail=5
+        run: bash ../../scripts/ci/quiet-watchdog.sh 240 -- bun test src/ --parallel --bail=5
 
       # The eval home (packages/evals). Its tests make no network or model
       # calls; real replays run only from ./evals on a laptop.
