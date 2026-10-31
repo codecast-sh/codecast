@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { holdSwap, releaseSwap, requestHerdTake, resolveSessionRef, swapHeld, takeSessionIntoHerdr, type Busy, type HerdTakeDeps, type HerdTakeRequest } from "./herdTake.js";
+import { formatProgress, holdSwap, releaseSwap, requestHerdTake, resolveSessionRef, swapHeld, takeSessionIntoHerdr, type Busy, type HerdTakeDeps, type HerdTakeRequest } from "./herdTake.js";
 
 const SID = "11111111-2222-3333-4444-555555555555";
 const req: HerdTakeRequest = { sessionId: SID, socketPath: "/tmp/herdr.sock", workspaceId: "w1" };
@@ -27,7 +27,7 @@ function fixture(over: Partial<HerdTakeDeps> = {}) {
     ...over,
   };
   const events: string[] = [];
-  const run = (r: HerdTakeRequest = req, signal = new AbortController().signal) => takeSessionIntoHerdr(r, deps, (m) => events.push(m), signal);
+  const run = (r: HerdTakeRequest = req, signal = new AbortController().signal) => takeSessionIntoHerdr(r, deps, (m, info) => events.push(formatProgress(m, info?.elapsedSec)), signal);
   return { deps, calls, busyQueue, state, events, run };
 }
 
@@ -52,7 +52,7 @@ describe("takeSessionIntoHerdr", () => {
       "stopping tmux cc-claude-abc",
       'opening herdr tab "My title"',
       "starting claude in pane w1:p9",
-      "waiting for claude to come up (5s)",
+      "waiting for claude to come up · 5s",
     ]);
     expect(f.calls).toEqual(["prepare", "kill", "build", "launch"]);
     expect(f.state.heldDuringKill).toBe(true);
@@ -79,6 +79,20 @@ describe("takeSessionIntoHerdr", () => {
     expect(f.calls.filter((c) => c === "wait")).toHaveLength(3);
     expect(f.state.heldWhileWaiting).toBe(false);
     expect(f.calls.indexOf("kill")).toBeGreaterThan(f.calls.lastIndexOf("wait"));
+  });
+
+  test("a wait that goes on says so every 15s with the time so far, as the same step", async () => {
+    let clock = 0;
+    let polls = 0;
+    const f = fixture({ now: () => clock, busy: () => (polls++ < 12 ? { kind: "turn", detail: "the turn to finish (working)" } : null), wait: async () => { clock += 5000; } });
+    const infos: Array<{ message: string; step?: string; elapsedSec?: number }> = [];
+    const result = await takeSessionIntoHerdr(req, f.deps, (message, info) => infos.push({ message, ...info }), new AbortController().signal);
+    expect(result.ok).toBe(true);
+    const waiting = infos.filter((e) => e.message.startsWith("agent is active"));
+    expect(waiting.map((e) => e.elapsedSec)).toEqual([undefined, 15, 30, 45]);
+    expect(new Set(waiting.map((e) => e.step))).toEqual(new Set(["busy:turn"]));
+    expect(waiting[1].message).toBe("agent is active — waiting for the turn to finish (working)");
+    expect(formatProgress(waiting[3].message, waiting[3].elapsedSec)).toBe("agent is active — waiting for the turn to finish (working) · 45s");
   });
 
   test("a message that makes the agent busy between the idle check and the kill sends the take back to waiting", async () => {
@@ -209,7 +223,7 @@ describe("requestHerdTake", () => {
     });
     try {
       const seen: string[] = [];
-      expect(await requestHerdTake(req, (m) => seen.push(m), d.dir)).toEqual({ ok: true, paneId: "w1:p3", label: "T" });
+      expect(await requestHerdTake(req, (p) => seen.push(p.message), d.dir)).toEqual({ ok: true, paneId: "w1:p3", label: "T" });
       expect(seen).toEqual(["one", "two"]);
       expect(got.auth).toBe("Bearer loopback-tok");
     } finally { d.stop(); }
