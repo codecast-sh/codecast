@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from "bun:test";
-import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractTeamInfo, claudeBannerText, type ClaudeSessionEntry } from "./parser.js";
+import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractTeamInfo, extractSummaryTitle, claudeBannerText, type ClaudeSessionEntry } from "./parser.js";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 describe("Parser malformed JSON handling", () => {
@@ -1280,5 +1280,25 @@ describe("parser - Claude Code auto-continue limit wait", () => {
     expect(classifyApiErrorBanner(park.content)).toBe("limit");
     expect(cancelled.role).toBe("system");
     expect(cancelled.content).toBe("Automatic continue cancelled · /rate-limit-options to re-arm");
+  });
+});
+
+describe("extractSummaryTitle - the agent's own session name", () => {
+  const line = (o: object) => JSON.stringify(o);
+  const user = line({ type: "user", message: { role: "user", content: 'mentions "type":"ai-title" in text' } });
+
+  test("reads the latest ai-title", () => {
+    const content = [user, line({ type: "ai-title", aiTitle: "First guess", sessionId: "s" }), user, line({ type: "ai-title", aiTitle: "Better guess", sessionId: "s" })].join("\n");
+    expect(extractSummaryTitle(content)).toBe("Better guess");
+  });
+
+  test("a /rename beats the ai-title", () => {
+    const content = [line({ type: "custom-title", customTitle: "Mine", sessionId: "s" }), line({ type: "ai-title", aiTitle: "Guess", sessionId: "s" })].join("\n");
+    expect(extractSummaryTitle(content)).toBe("Mine");
+  });
+
+  test("falls back to the legacy summary entry", () => {
+    expect(extractSummaryTitle([user, line({ type: "summary", summary: "Old style" })].join("\n"))).toBe("Old style");
+    expect(extractSummaryTitle(user)).toBeUndefined();
   });
 });

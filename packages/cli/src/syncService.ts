@@ -1614,6 +1614,18 @@ export class SyncService {
     });
   }
 
+  /** The local agent's own name for the session, kept only until a title pass names it (conversations.updateTitle's agent_guess). */
+  async updateAgentTitle(conversationId: string, title: string): Promise<void> {
+    return this.guarded(async () => {
+      await this.mutate("conversations:updateTitle" as any, {
+        conversation_id: conversationId,
+        title,
+        api_token: this.apiToken,
+        agent_guess: true,
+      });
+    });
+  }
+
   /** Whether a cloud agent session's agent is archived on the provider's site (the header's Archive or Unarchive). */
   async setCloudAgentArchived(conversationId: string, archived: boolean): Promise<void> {
     return this.guarded(async () => {

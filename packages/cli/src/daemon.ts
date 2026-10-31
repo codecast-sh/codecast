@@ -11479,7 +11479,7 @@ async function processSessionFilePass(
       const summaryTitle = metadata.summaryTitle;
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
-          await syncService.updateTitle(conversationId, summaryTitle);
+          await syncService.updateAgentTitle(conversationId, summaryTitle);
           titleCache[sessionId] = summaryTitle;
           saveTitleCache(titleCache);
           log(`Updated title for session ${sessionId}: ${summaryTitle}`);
@@ -12618,7 +12618,7 @@ async function processCodexSessionPass(
       const summaryTitle = metadata.summaryTitle;
       if (summaryTitle && titleCache[sessionId] !== summaryTitle) {
         try {
-          await syncService.updateTitle(conversationId, summaryTitle);
+          await syncService.updateAgentTitle(conversationId, summaryTitle);
           titleCache[sessionId] = summaryTitle;
           saveTitleCache(titleCache);
           log(`Updated title for Codex session ${sessionId}: ${summaryTitle}`);

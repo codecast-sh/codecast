@@ -14,7 +14,7 @@ type ContentBlock =
   | { type: "image"; source: { type: string; media_type: string; data: string } };
 
 export interface ClaudeSessionEntry {
-  type: "user" | "assistant" | "human" | "summary" | "file-history-snapshot" | "system" | "queue-operation" | "attachment";
+  type: "user" | "assistant" | "human" | "summary" | "ai-title" | "custom-title" | "file-history-snapshot" | "system" | "queue-operation" | "attachment";
   subtype?: "local_command" | "stop_hook_summary" | "compact_boundary";
   uuid?: string;
   parentUuid?: string;
@@ -40,6 +40,8 @@ export interface ClaudeSessionEntry {
     usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number };
   };
   summary?: string;
+  aiTitle?: string;
+  customTitle?: string;
   operation?: "enqueue" | "remove";
   isMeta?: boolean;
   isCompactSummary?: boolean;
@@ -508,15 +510,20 @@ export function extractSidechain(content: string): { parentSessionId?: string } 
   return undefined;
 }
 
+// The agent's own name for the session. Claude Code re-writes an `ai-title`
+// line through the session and a `custom-title` line on /rename; the latest of
+// each wins, a rename over its own guess. Older versions wrote `summary`.
 export function extractSummaryTitle(content: string): string | undefined {
-  const lines = content.split("\n");
-  for (const line of lines) {
+  let custom: string | undefined;
+  let ai: string | undefined;
+  let summary: string | undefined;
+  for (const line of content.split("\n")) {
     const entry = parseSessionLine(line);
-    if (entry?.type === "summary" && entry?.summary) {
-      return entry.summary;
-    }
+    if (entry?.type === "custom-title" && entry.customTitle?.trim()) custom = entry.customTitle.trim();
+    else if (entry?.type === "ai-title" && entry.aiTitle?.trim()) ai = entry.aiTitle.trim();
+    else if (entry?.type === "summary" && entry.summary && !summary) summary = entry.summary;
   }
-  return undefined;
+  return custom ?? ai ?? summary;
 }
 
 // Agent-team stamps from a TEAMMATE session's transcript (see
