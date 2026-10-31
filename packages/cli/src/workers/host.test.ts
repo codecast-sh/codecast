@@ -23,6 +23,8 @@ function harness(backoff = [10, 20, 30]) {
   return { host, children, options, kills: () => kills };
 }
 const ping = (host: WorkerHost, timeoutMs = 1000) => host.request("ping", null, { timeoutMs });
+// Bun 1.4's PassThrough.read() returns one written chunk per call.
+const drain = (stream: any) => { let text = ""; for (let chunk; (chunk = stream.read());) text += chunk; return text; };
 function reply(child: any) {
   const requests = child.stdin.read()?.toString().trim().split("\n").map(JSON.parse) ?? [];
   requests.forEach((f: any) => child.stdout.write(encodeFrame({ v: 1, kind: "probe", type: "result", id: f.id, operation: "ping", result: "pong" })));
@@ -45,7 +47,7 @@ test("queue and inflight caps are enforced, timeout and close settle every calle
   const h = harness();
   const pending = Array.from({ length: MAX_INFLIGHT + MAX_QUEUE }, () => ping(h.host, 40));
   const outcomes = Promise.allSettled(pending);
-  expect(h.children[0].stdin.read().toString().trim().split("\n")).toHaveLength(MAX_INFLIGHT);
+  expect(drain(h.children[0].stdin).trim().split("\n")).toHaveLength(MAX_INFLIGHT);
   await expect(ping(h.host)).rejects.toThrow("queue full");
   expect((await outcomes).every(r => r.status === "rejected")).toBe(true); expect(h.host.state.pending).toBe(0); expect(h.kills()).toBe(1);
   const next = harness(); const p = ping(next.host); next.host.close(); await expect(p).rejects.toThrow("closed"); expect(next.kills()).toBe(1);

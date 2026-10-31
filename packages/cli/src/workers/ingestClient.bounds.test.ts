@@ -81,11 +81,15 @@ test('expired reservations never release a held continuation into successor stat
   expect(order).toEqual(['old resumed','new ran']);expect(position).toBe(1);
 });
 test('expired waiters retain their bounded barrier until the active owner settles',async()=>{
-  let release!:()=>void;
+  let release!:()=>void,owning!:()=>void;
   const blocked=new Promise<void>(resolve=>{release=resolve;});
+  const owned=new Promise<void>(resolve=>{owning=resolve;});
+  const expire=new AbortController();
   const results=[];
-  for(let i=0;i<MAX_QUEUE+MAX_INFLIGHT;i++) results.push(serializeTranscript('capacity-owner',()=>serializeTranscript('capacity-file',async()=>{await blocked;checkTranscriptDeadline();}),{timeoutMs:5}).catch(error=>error));
-  await new Promise(resolve=>setTimeout(resolve,20));
+  for(let i=0;i<MAX_QUEUE+MAX_INFLIGHT;i++) results.push(serializeTranscript('capacity-owner',()=>serializeTranscript('capacity-file',async()=>{owning();await blocked;checkTranscriptDeadline();}),{signal:expire.signal}).catch(error=>error));
+  await owned;
+  expire.abort(new IngestDeadlineExceeded('expired'));
+  await Promise.all(results.slice(1));
   await expect(serializeTranscript('unrelated-owner',async()=>{})).rejects.toThrow('capacity');
   release();const errors=await Promise.all(results);
   expect(errors.every(error=>error instanceof IngestDeadlineExceeded)).toBe(true);
