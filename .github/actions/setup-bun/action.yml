@@ -11,14 +11,13 @@ inputs:
     default: install
   bun-version:
     description: >
-      The bun a job runs on: the version CI pins, unless the job names its own.
+      The bun a job runs on: the version the repo pins, unless the job names its own.
     default: "1.4.4"
 runs:
   using: composite
   steps:
-    # The release workflows pin their own bun. Under --isolate this bun must
-    # run a test preload in every file: the web suite's mocks hand each file
-    # the first file's modules otherwise.
+    # Under --isolate this bun must run a test preload in every file: the web
+    # suite's mocks hand each file the first file's modules otherwise.
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
       with:
         bun-version: ${{ inputs.bun-version }}

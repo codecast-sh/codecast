@@ -18,7 +18,7 @@ This guide walks through setting up a complete self-hosted Codecast instance fro
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) 1.3+ (package manager and runtime; the repo pins `bun@1.3.13`)
+- [Bun](https://bun.sh) 1.4+ (package manager and runtime; the repo pins `bun@1.4.4`)
 - [Railway](https://railway.app) account (or another hosting platform)
 - A domain name (e.g., `codecast.yourdomain.com`)
 - [Resend](https://resend.com) account (for auth emails)
