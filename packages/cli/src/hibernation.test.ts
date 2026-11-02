@@ -12,10 +12,12 @@ import {
   HIBERNATE_SUBAGENT_QUIET_MS,
   agentForeignDescendants,
   hibernationBlockReason,
+  paneRunsOnlyTheAgent,
+  parkTargetsBeyondAgent,
   selectHibernationCandidates,
   type HibernationCandidate,
 } from "./hibernation.js";
-import type { ProcRow } from "./processTable.js";
+import { reapTargets, type ProcRow } from "./processTable.js";
 
 const candidate = (over: Partial<HibernationCandidate> = {}): HibernationCandidate => ({
   sessionId: over.sessionId ?? "s1",
@@ -276,6 +278,69 @@ describe("agentForeignDescendants", () => {
 
   test("an absent agent yields nothing to judge", () => {
     expect(agentForeignDescendants([shell, gmail], AGENT)).toEqual([]);
+  });
+});
+
+describe("what the park kills", () => {
+  // The kill set comes from the real reapTargets, rooted at the pane shell the
+  // way tmuxSessionReapPlan roots it, so these tests judge exactly what a park
+  // would signal.
+  const PANE = 97474;
+  const AGENT = 98132;
+  const T = "Sun Nov  1 21:00:00 2026";
+  const row = (pid: number, ppid: number, pgid: number, command: string): ProcRow => ({ pid, ppid, pgid, uid: 501, startedAt: T, command });
+  const shell = row(PANE, 97347, PANE, "-bash");
+  const agent = row(AGENT, PANE, AGENT, "claude --session-id s1");
+  const npmExec = row(98248, AGENT, AGENT, "npm exec ios-simulator-mcp");
+  const mcpNode = row(99411, 98248, AGENT, "node ios-simulator-mcp");
+  const caffeinate = row(98253, AGENT, AGENT, "caffeinate -i -t 300");
+  const kill = (procs: ProcRow[], descendsFrom?: (p: ProcRow) => boolean) =>
+    reapTargets(procs, [PANE], { selfPid: 4_000_000, uid: 501, descendsFrom: descendsFrom && (p => descendsFrom(p)) }).targets;
+
+  test("the agent with nested MCP servers and caffeinate: the kill reaches nothing beyond it", () => {
+    const procs = [shell, agent, npmExec, mcpNode, caffeinate];
+    expect(kill(procs)).toHaveLength(5);
+    expect(parkTargetsBeyondAgent(kill(procs), procs, PANE, AGENT)).toEqual([]);
+  });
+
+  test("a dev server reparented to pid 1 inside the agent's group is in the kill set, so it refuses", () => {
+    const devServer = row(1170, 1, AGENT, "node next-server");
+    const procs = [shell, agent, npmExec, mcpNode, devServer];
+    expect(kill(procs)).toContainEqual(devServer);
+    expect(parkTargetsBeyondAgent(kill(procs), procs, PANE, AGENT)).toEqual([devServer]);
+  });
+
+  test("a dev server whose tool shell exited, found by lineage, refuses", () => {
+    const devServer = row(1170, 1, 1154, "node vite --port 3200");
+    const procs = [shell, agent, npmExec, mcpNode, devServer];
+    expect(kill(procs, p => p.pid === devServer.pid)).toContainEqual(devServer);
+    expect(parkTargetsBeyondAgent(kill(procs, p => p.pid === devServer.pid), procs, PANE, AGENT)).toEqual([devServer]);
+  });
+
+  test("a Bash tool shell under the agent refuses here too", () => {
+    const bash = row(1154, AGENT, 1154, "bash -c sleep 120");
+    const procs = [shell, agent, npmExec, bash];
+    expect(parkTargetsBeyondAgent(kill(procs), procs, PANE, AGENT)).toEqual([bash]);
+  });
+
+  test("a target the table cannot match to the same process is beyond", () => {
+    const procs = [shell, agent, npmExec];
+    expect(parkTargetsBeyondAgent([{ ...npmExec, startedAt: "Sun Nov  1 22:00:00 2026" }], procs, PANE, AGENT)).toHaveLength(1);
+    expect(parkTargetsBeyondAgent([{ ...npmExec, startedAt: undefined }], procs, PANE, AGENT)).toHaveLength(1);
+  });
+
+  describe("paneRunsOnlyTheAgent", () => {
+    test("the agent and its MCP tree are the whole pane", () => {
+      expect(paneRunsOnlyTheAgent([shell, agent, npmExec, mcpNode], PANE, AGENT)).toBe(true);
+    });
+    test("a second process beside the agent in the pane refuses", () => {
+      expect(paneRunsOnlyTheAgent([shell, agent, npmExec, row(5000, PANE, 5000, "vim")], PANE, AGENT)).toBe(false);
+      expect(paneRunsOnlyTheAgent([shell, agent, row(5001, 5000, 5000, "x"), row(5000, PANE, 5000, "vim")], PANE, AGENT)).toBe(false);
+    });
+    test("an agent that is not the pane's child refuses; an agent that is the pane process passes", () => {
+      expect(paneRunsOnlyTheAgent([shell, { ...agent, ppid: 1 }], PANE, AGENT)).toBe(false);
+      expect(paneRunsOnlyTheAgent([agent, npmExec], AGENT, AGENT)).toBe(true);
+    });
   });
 });
 

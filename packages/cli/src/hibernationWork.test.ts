@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { HibernationWorkScan } from "./hibernationWork.js";
+import { HibernationWorkScan, subagentFilesAccounted } from "./hibernationWork.js";
 
 const sid = "session";
 const call = (name: string, input = {}, id = "call") => ({ type: "assistant", sessionId: sid, message: { content: [{ type: "tool_use", id, name, input }] } });
@@ -138,3 +138,31 @@ describe("Agent", () => {
     expect(launched().finishedAgent("someone-else")).toBe(false);
   });
 });
+
+describe("subagentFilesAccounted (has-subagent-history)", () => {
+  const scan = () => {
+    const s = new HibernationWorkScan(sid);
+    s.consume(call("Agent", { prompt: "go" }));
+    s.consume(result("Async agent launched successfully.\nagentId: a1b2c3 (internal ID)"));
+    s.consume(delivered(notification("a1b2c3", "completed")));
+    return s;
+  };
+  test("a finished agent's transcript and meta are accounted for", () => {
+    expect(subagentFilesAccounted(["agent-a1b2c3.jsonl", "agent-a1b2c3.meta.json"], scan())).toBe(true);
+    expect(subagentFilesAccounted([], scan())).toBe(true);
+  });
+  test("an agent the transcript never launched refuses", () => {
+    expect(subagentFilesAccounted(["agent-a1b2c3.jsonl", "agent-zzz999.jsonl"], scan())).toBe(false);
+  });
+  test("a file of any other shape refuses", () => {
+    expect(subagentFilesAccounted(["skill-fork.jsonl"], scan())).toBe(false);
+    expect(subagentFilesAccounted(["agent-a1b2c3.txt"], scan())).toBe(false);
+  });
+  test("a launched agent that has not ended refuses", () => {
+    const s = new HibernationWorkScan(sid);
+    s.consume(call("Agent", { prompt: "go" }));
+    s.consume(result("Async agent launched successfully.\nagentId: a1b2c3 (internal ID)"));
+    expect(subagentFilesAccounted(["agent-a1b2c3.jsonl"], s)).toBe(false);
+  });
+});
+

@@ -83,3 +83,11 @@ export class HibernationWorkScan {
     }
   }
 }
+
+/** True when every file in a session's subagents folder is the transcript of
+ *  an agent the scan saw launch and end. Anything else there (a forked skill,
+ *  a teammate, a file of another shape) is a subagent nothing accounts for. */
+export function subagentFilesAccounted(files: string[], scan: HibernationWorkScan): boolean {
+  return files.every(name => scan.finishedAgent(name.match(/^agent-([A-Za-z0-9_-]+)\.(?:jsonl|meta\.json)$/)?.[1] ?? ""));
+}
+
