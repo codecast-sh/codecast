@@ -368,17 +368,30 @@ function gitRoot(dir: string): string | null {
 
 const ENV_FILE_RE = /^\.env(?:\.(?!example$|sample$|template$|dist$|defaults$)[A-Za-z0-9_.-]+)?$/;
 
+const envFilesFrom = (dir: string, names: string[]) => names.filter((f) => ENV_FILE_RE.test(f)).map((f) => path.join(dir, f));
+
 /** `.env` and `.env.*` (not `.env.example` and other templates) directly inside `dir`. */
 export function envFilesIn(dir: string): string[] {
   try {
-    return fs.readdirSync(dir).filter((f) => ENV_FILE_RE.test(f)).map((f) => path.join(dir, f));
+    return envFilesFrom(dir, fs.readdirSync(dir));
   } catch {
     return [];
   }
 }
 
-// Directories listed concurrently by the periodic relist (async, off the loop).
-const RELIST_CONCURRENCY = 16;
+const dirIsGone = (e: unknown) => ["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException)?.code ?? "");
+
+// The periodic relist reads one directory at a time. libuv's thread pool has 4
+// threads, and a stuck directory holds one until its read fails, so reading
+// many at once lets a few stuck folders stall every other async fs call.
+const RELIST_CONCURRENCY = 1;
+
+// A directory read this slow means the filesystem is stuck, not busy. On macOS a
+// wedged tccd makes every open() of a privacy-protected folder (~/Documents)
+// block for about 5s and then fail with EINTR, while stat keeps working. After
+// one, new directories are listed only by the async relist for a while.
+const SLOW_DIR_READ_MS = 500;
+const SLOW_DIR_BACKOFF_MS = 5 * 60_000;
 
 export class KnownValueStore {
   private cwds = new Set<string>();
@@ -395,9 +408,14 @@ export class KnownValueStore {
   // listed. A daemon tracks every cwd any transcript ever recorded, thousands
   // for a heavy user, so a rebuild reads this map and never lists a directory:
   // a new directory is listed once when tracked, and refreshDirs relists the
-  // set asynchronously on the poll.
+  // set asynchronously on the poll. A read that fails keeps the last listing,
+  // so a stuck folder's secrets stay redacted; only a folder that is gone
+  // drops them. `dirs` holds every tracked directory, listed or not yet.
+  private dirs = new Set<string>();
   private envFiles = new Map<string, string[]>();
   private relisting: Promise<void> | null = null;
+  private relistAgain: Promise<void> | null = null;
+  private syncReadsBlockedUntil = 0;
 
   constructor(private readonly src: KnownValueSources) {}
 
@@ -410,35 +428,65 @@ export class KnownValueStore {
     return files;
   }
 
-  /** Track a cwd and its git root; lists only directories not seen before. True if that found a .env file. */
-  private addCwd(cwd: string): boolean {
-    if (this.cwds.has(cwd)) return false;
+  /**
+   * Track a cwd and its git root, listing directories not seen before on the
+   * loop so a session's first message is covered. While reads are stuck a new
+   * directory is left for the async relist. Says whether a .env file was found
+   * and whether a directory was left unlisted.
+   */
+  private addCwd(cwd: string): { found: boolean; deferred: boolean } {
+    const out = { found: false, deferred: false };
+    if (this.cwds.has(cwd)) return out;
     this.cwds.add(cwd);
     const root = gitRoot(cwd);
-    let found = false;
     for (const dir of root && root !== cwd ? [cwd, root] : [cwd]) {
+      this.dirs.add(dir);
       if (this.envFiles.has(dir)) continue;
-      const list = envFilesIn(dir);
-      this.envFiles.set(dir, list);
-      if (list.length) found = true;
+      const started = Date.now();
+      if (started < this.syncReadsBlockedUntil) {
+        out.deferred = true;
+        continue;
+      }
+      try {
+        const list = envFilesFrom(dir, fs.readdirSync(dir));
+        this.envFiles.set(dir, list);
+        if (list.length) out.found = true;
+      } catch (e) {
+        if (dirIsGone(e)) this.envFiles.set(dir, []);
+        else out.deferred = true;
+      }
+      const took = Date.now() - started;
+      if (took >= SLOW_DIR_READ_MS) {
+        this.syncReadsBlockedUntil = Date.now() + SLOW_DIR_BACKOFF_MS;
+        this.src.log?.(`[KNOWN-VALUES] listing ${dir} took ${took}ms; listing new directories only in the background for ${SLOW_DIR_BACKOFF_MS / 60_000} min`);
+      }
     }
-    return found;
+    return out;
   }
 
-  /** Relist every tracked directory without blocking the loop, and rebuild if any .env file came or went. */
+  /**
+   * Relist every tracked directory without blocking the loop, and rebuild if any
+   * .env file came or went. A call during a pass gets one more pass after it, so
+   * what it awaits read the disk after the call.
+   */
   refreshDirs(): Promise<void> {
-    if (this.relisting) return this.relisting;
-    const dirs = [...this.envFiles.keys()];
+    if (this.relisting) return (this.relistAgain ??= this.relisting.then(() => { this.relistAgain = null; return this.refreshDirs(); }));
+    const dirs = [...this.dirs];
     const run = async () => {
       let changed = false;
       await mapLimit(dirs, RELIST_CONCURRENCY, async (dir) => {
-        let names: string[];
-        try { names = await fs.promises.readdir(dir); } catch { names = []; }
-        const list = names.filter((f) => ENV_FILE_RE.test(f)).map((f) => path.join(dir, f));
-        const prev = this.envFiles.get(dir) ?? [];
-        if (prev.length !== list.length || prev.some((f, i) => f !== list[i])) {
+        if (this.stopped) return;
+        let list: string[];
+        try {
+          list = envFilesFrom(dir, await fs.promises.readdir(dir));
+        } catch (e) {
+          if (!dirIsGone(e)) return;
+          list = [];
+        }
+        const prev = this.envFiles.get(dir);
+        if (!prev || prev.length !== list.length || prev.some((f, i) => f !== list[i])) {
           this.envFiles.set(dir, list);
-          changed = true;
+          if (list.length || prev?.length) changed = true;
         }
       });
       if (changed && !this.stopped) this.rebuild();
@@ -488,7 +536,10 @@ export class KnownValueStore {
 
   /** A session's working directory. Loads its .env files now, so its first message is covered. */
   trackCwd(cwd: string | undefined | null): void {
-    if (cwd && this.addCwd(cwd)) this.rebuild();
+    if (!cwd) return;
+    const { found, deferred } = this.addCwd(cwd);
+    if (found) this.rebuild();
+    if (deferred) void this.refreshDirs();
   }
 
   start(intervalMs = 60_000): void {

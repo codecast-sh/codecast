@@ -381,3 +381,80 @@ describe("Vault values the redactor once dropped", () => {
     expect(redactWithMatcher(`line 2: ${b}`, m)).toBe("line 2: [redacted:known:zz-k]");
   });
 });
+
+describe("a session folder that hangs on open", () => {
+  const setup = () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "kv-stuck-"));
+    const dir = (name: string, secret: string) => {
+      const d = path.join(home, name);
+      fs.mkdirSync(d);
+      fs.writeFileSync(path.join(d, ".env"), `SERVICE_PASSWORD=${secret}\n`);
+      return d;
+    };
+    return { home, configDir: path.join(home, ".codecast"), dir };
+  };
+  const hang = (ms: number) => { const until = Date.now() + ms; while (Date.now() < until); };
+
+  test("one slow read stops synchronous reads, and a background read still picks the folder up", async () => {
+    const { home, configDir, dir } = setup();
+    const [a, b] = [dir("a", "stuckPwOne-112233"), dir("b", "stuckPwTwo-445566")];
+    const store = new KnownValueStore({ home, configDir, env: () => ({}) });
+    const real = fs.readdirSync;
+    const read = spyOn(fs, "readdirSync").mockImplementation(((p: string) => { hang(600); return real(p); }) as never);
+    try {
+      store.trackCwd(a);
+      expect(read).toHaveBeenCalledTimes(1);
+      store.trackCwd(b);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(redactKnownValues("stuckPwTwo-445566")).toBe("stuckPwTwo-445566");
+      await store.refreshDirs();
+      store.rebuild();
+      expect(redactKnownValues("stuckPwTwo-445566")).toBe("[redacted:known:SERVICE_PASSWORD]");
+    } finally {
+      read.mockRestore();
+      store.stop();
+    }
+  });
+
+  test("a read that fails keeps the folder's secrets redacted, and a folder that is gone drops them", async () => {
+    const { home, configDir, dir } = setup();
+    const a = dir("a", "keptPwValue-778899");
+    const store = new KnownValueStore({ home, configDir, env: () => ({}) });
+    try {
+      store.trackCwd(a);
+      const read = spyOn(fs.promises, "readdir").mockRejectedValue(Object.assign(new Error("interrupted"), { code: "EINTR" }));
+      await store.refreshDirs();
+      read.mockRestore();
+      store.rebuild();
+      expect(redactKnownValues("keptPwValue-778899")).toBe("[redacted:known:SERVICE_PASSWORD]");
+
+      fs.rmSync(a, { recursive: true });
+      await store.refreshDirs();
+      store.rebuild();
+      expect(redactKnownValues("keptPwValue-778899")).toBe("keptPwValue-778899");
+    } finally {
+      store.stop();
+    }
+  });
+
+  test("a rebuild lists a folder once, and a new .env arrives with the next background read", async () => {
+    const { home, configDir, dir } = setup();
+    const a = dir("a", "firstPwValue-123123");
+    const store = new KnownValueStore({ home, configDir, env: () => ({}) });
+    const read = spyOn(fs, "readdirSync");
+    try {
+      store.trackCwd(a);
+      store.rebuild();
+      expect(read.mock.calls.filter(([p]) => p === a).length).toBe(1);
+      fs.writeFileSync(path.join(a, ".env.local"), "OTHER_PASSWORD=laterPwValue-456456\n");
+      store.rebuild();
+      expect(redactKnownValues("laterPwValue-456456")).toBe("laterPwValue-456456");
+      await store.refreshDirs();
+      store.rebuild();
+      expect(redactKnownValues("laterPwValue-456456")).toBe("[redacted:known:OTHER_PASSWORD]");
+    } finally {
+      read.mockRestore();
+      store.stop();
+    }
+  });
+});
