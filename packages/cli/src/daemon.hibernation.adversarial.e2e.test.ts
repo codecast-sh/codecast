@@ -26,13 +26,17 @@ const attachers: ReturnType<typeof Bun.spawn>[] = [];
 const life = { status: "active", source: "lifecycle" as const, hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false };
 const alive = (h: Harness) => tmuxRun(["has-session", "-t", `=${h.tmuxSession}`]).status === 0;
 
-async function fixture(opts: { child?: boolean; verifiable?: boolean; space?: boolean } = {}) {
+// A child the agent started: "tool" the way Claude Code starts a Bash tool
+// command (a process group of its own), "own" the way it starts an MCP server
+// (inside the agent's group, ending with it).
+async function fixture(opts: { child?: "tool" | "own"; verifiable?: boolean; space?: boolean } = {}) {
   const sessionId = crypto.randomUUID();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "e1-hibernate-"));
   roots.push(root);
   const script = path.join(root, "claude");
   const source = buildShimScript({ sessionId });
-  fs.writeFileSync(script, opts.child ? source.replace("\nemit_meta\n", "\nsleep 120 &\necho $! > child.pid\nemit_meta\n") : source, { mode: 0o755 });
+  const start = opts.child === "tool" ? "set -m\nsleep 120 &\necho $! > child.pid\nset +m" : "sleep 120 &\necho $! > child.pid";
+  fs.writeFileSync(script, opts.child ? source.replace("\nemit_meta\n", `\n${start}\nemit_meta\n`) : source, { mode: 0o755 });
 // home: this process's own. The hibernation pass finds a pane's transcript through
 // the daemon's session file index, which is rooted at process.env.HOME — a pane
 // writing into a home of its own is invisible to it (ct-49770).
@@ -135,7 +139,7 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
   }, 30000);
 
   for (const recorder of ["cold", "old"]) test(`silent live child with ${recorder} recorder`, async () => {
-    const f = await fixture({ child: true });
+    const f = await fixture({ child: "tool" });
     const child = childPids.at(-1)!;
     expect(() => process.kill(child, 0)).not.toThrow();
     expect(await acquireSessionProcessOwnership(f.h.sessionId)).toBe("owned");
@@ -285,6 +289,15 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
     expect(alive(f.h)).toBe(false);
   }, 30000);
 
+  test("a child in the agent's own group parks with it and is not left behind", async () => {
+    const f = await fixture({ child: "own" });
+    const child = childPids.at(-1)!;
+    append(f, true);
+    expect(await run(f)).toBe(true);
+    expect(alive(f.h)).toBe(false);
+    await waitFor(() => { try { process.kill(child, 0); return false; } catch { return true; } }, { timeoutMs: 10000 });
+  }, 30000);
+
   test("an undelivered completion still needs its dormant agent", async () => {
     const f = await fixture();
     append(f, true, true);
@@ -301,7 +314,7 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
   }, 30000);
 
   test("a live child overrides a completed transcript task", async () => {
-    const f = await fixture({ child: true });
+    const f = await fixture({ child: "tool" });
     const child = childPids.at(-1)!;
     append(f, true);
     expect(await run(f)).toBe(false);
