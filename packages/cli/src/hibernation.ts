@@ -202,3 +202,34 @@ export function agentForeignDescendants(procs: ProcRow[], agentPid: number): Pro
   const group = procs.find(p => p.pid === agentPid)?.pgid;
   return descendantRows(procs, agentPid).filter(p => group === undefined || p.pgid !== group);
 }
+
+/** True when the pane's tree is the agent and the agent's tree, nothing beside it. */
+export function paneRunsOnlyTheAgent(procs: ProcRow[], panePid: number, agentPid: number): boolean {
+  if (agentPid === panePid) return true;
+  const agent = procs.find(p => p.pid === agentPid);
+  return agent?.ppid === panePid && descendantRows(procs, panePid).length === 1 + descendantRows(procs, agentPid).length;
+}
+
+/**
+ * What the park's kill would stop beyond the pane shell, the agent and the
+ * agent's own processes. The kill reaps by more than parentage (reapTargets:
+ * a group whose leader is in the tree, recorded lineage, the pane's
+ * terminal), so a dev server whose launching shell exited, now under pid 1,
+ * is in the kill set while no longer under the agent. Judging only the
+ * agent's tree would park it and kill it. A target counts as allowed only
+ * when this table shows the same process (pid, start and group) in the
+ * allowed set; anything it cannot match is beyond.
+ */
+export function parkTargetsBeyondAgent(targets: ProcRow[], procs: ProcRow[], panePid: number, agentPid: number): ProcRow[] {
+  const foreign = new Set(agentForeignDescendants(procs, agentPid).map(p => p.pid));
+  const allowed = new Map<number, ProcRow>();
+  for (const p of procs) {
+    if (p.pid === panePid || p.pid === agentPid) allowed.set(p.pid, p);
+  }
+  for (const p of descendantRows(procs, agentPid)) if (!foreign.has(p.pid)) allowed.set(p.pid, p);
+  return targets.filter(t => {
+    const known = allowed.get(t.pid);
+    return !known || !t.startedAt || known.startedAt !== t.startedAt || known.pgid !== t.pgid;
+  });
+}
+

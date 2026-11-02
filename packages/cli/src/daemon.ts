@@ -50,13 +50,15 @@ import {
   HIBERNATE_RESUME_GRACE_MS,
   agentForeignDescendants,
   hibernationBlockReason,
+  paneRunsOnlyTheAgent,
+  parkTargetsBeyondAgent,
   selectHibernationCandidates,
   type HibernationCandidate,
   type HibernationPolicy,
 } from "./hibernation.js";
 import { openTaskStart } from "./backgroundTaskStart.js";
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
-import { HibernationWorkScan } from "./hibernationWork.js";
+import { HibernationWorkScan, subagentFilesAccounted } from "./hibernationWork.js";
 import { governor, sampleLoad, describeLoad, readGovernorState, writeGovernorState, SAMPLE_INTERVAL_MS as GOVERNOR_SAMPLE_INTERVAL_MS } from "./loadGovernor.js";
 import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, isStationHandOpening, stationHandsFirst, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistroName } from "./windowsSupport.js";
@@ -22389,8 +22391,13 @@ export async function inspectHibernationTarget(sessionId: string, tmux: string, 
   const root = procs.find(p => p.pid === agentPid);
   if (!root || root.uid !== process.getuid?.() || argvSessionId(root.command) !== sessionId) return refuseTarget(sessionId, "process-vanished");
   if (agentForeignDescendants(procs, agentPid).length > 0) return refuseTarget(sessionId, "agent-has-children");
-  // The pane's tree must be the agent and the agent's tree, nothing beside it.
-  if (agentPid !== panePid && descendantRows(procs, panePid).length !== 1 + descendantRows(procs, agentPid).length) return refuseTarget(sessionId, "pane-runs-more-than-the-agent");
+  if (!paneRunsOnlyTheAgent(procs, panePid, agentPid)) return refuseTarget(sessionId, "pane-runs-more-than-the-agent");
+  // Judge the set the park will actually kill, read the way the park reads it:
+  // that reap also takes processes that left the agent's tree (a dev server
+  // reparented to pid 1 keeps its group, lineage and terminal).
+  const kill = await tmuxSessionReapPlan(tmux).catch(() => null);
+  if (!kill || !kill.panePids.includes(panePid)) return refuseTarget(sessionId, "kill-set-unreadable");
+  if (parkTargetsBeyondAgent(kill.targets, procs, panePid, agentPid).length > 0) return refuseTarget(sessionId, "park-reaches-beyond-agent");
   return { session, pane, pid: panePid, agentPid, start: match[1], stamp, conversationStamp };
 }
 
@@ -22431,8 +22438,7 @@ async function hibernationChildHistoryIsClear(sessionId: string): Promise<boolea
   // A subagent's transcript is fine to leave behind once the scan saw that
   // agent launched and ended; any other file there is a subagent nothing in
   // this transcript accounts for (a forked skill, a teammate), so it refuses.
-  const accounted = (name: string) => work.finishedAgent(name.match(/^agent-([A-Za-z0-9_-]+)\.(?:jsonl|meta\.json)$/)?.[1] ?? "");
-  if (!subagentFiles.every(accounted)) { refuseTarget(sessionId, "has-subagent-history"); return false; }
+  if (!subagentFilesAccounted(subagentFiles, work)) { refuseTarget(sessionId, "has-subagent-history"); return false; }
   return true;
 }
 
