@@ -15,7 +15,7 @@ import {
 import { buildShimScript } from "./test-helpers/fakeClaudeShim.js";
 import { spawnHarness, waitFor, type Harness } from "./test-helpers/messagingHarness.js";
 import { hasTmux, tmuxRun, tmuxRunAsync } from "./tmux.js";
-import { routeTmuxArgs, withTmuxSession } from "./tmuxRoute.js";
+import { routeTmuxArgs, sessionSocketName, withTmuxSession } from "./tmuxRoute.js";
 import type { SyncService } from "./syncService.js";
 
 const prefix = `cc-e1-safe-${process.pid}-${crypto.randomUUID().slice(0, 6)}`;
@@ -28,14 +28,19 @@ const alive = (h: Harness) => tmuxRun(["has-session", "-t", `=${h.tmuxSession}`]
 
 // A child the agent started: "tool" the way Claude Code starts a Bash tool
 // command (a process group of its own), "own" the way it starts an MCP server
-// (inside the agent's group, ending with it).
-async function fixture(opts: { child?: "tool" | "own"; verifiable?: boolean; space?: boolean } = {}) {
+// (inside the agent's group, ending with it), "orphan" in the agent's group
+// but reparented to pid 1 once the shell that started it exited.
+async function fixture(opts: { child?: "tool" | "own" | "orphan"; verifiable?: boolean; space?: boolean } = {}) {
   const sessionId = crypto.randomUUID();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "e1-hibernate-"));
   roots.push(root);
   const script = path.join(root, "claude");
   const source = buildShimScript({ sessionId });
-  const start = opts.child === "tool" ? "set -m\nsleep 120 &\necho $! > child.pid\nset +m" : "sleep 120 &\necho $! > child.pid";
+  const start = {
+    tool: "set -m\nsleep 120 &\necho $! > child.pid\nset +m",
+    own: "sleep 120 &\necho $! > child.pid",
+    orphan: "(sleep 120 & echo $! > child.pid)",
+  }[opts.child ?? "own"];
   fs.writeFileSync(script, opts.child ? source.replace("\nemit_meta\n", `\n${start}\nemit_meta\n`) : source, { mode: 0o755 });
 // home: this process's own. The hibernation pass finds a pane's transcript through
 // the daemon's session file index, which is rooted at process.env.HOME — a pane
@@ -136,6 +141,13 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
   test("rejected target name retains tracking and never reports parked", async () => {
     const f = await fixture({ space: true });
     await refused(f);
+  }, 30000);
+
+  test("a tool child is refused by name at inspection, so a dry run can say why", async () => {
+    const f = await fixture({ child: "tool" });
+    expect(await acquireSessionProcessOwnership(f.h.sessionId)).toBe("owned");
+    expect(await f.io.inspectTarget!(f.h.sessionId, f.h.tmuxSession, f.conv)).toBeNull();
+    expect(takeTargetRefusal(f.h.sessionId)).toBe("agent-has-children");
   }, 30000);
 
   for (const recorder of ["cold", "old"]) test(`silent live child with ${recorder} recorder`, async () => {
@@ -296,6 +308,45 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
     expect(await run(f)).toBe(true);
     expect(alive(f.h)).toBe(false);
     await waitFor(() => { try { process.kill(child, 0); return false; } catch { return true; } }, { timeoutMs: 10000 });
+  }, 30000);
+
+  test("a process in the agent's group that left its tree refuses at the park and survives", async () => {
+    const f = await fixture({ child: "orphan" });
+    const child = childPids.at(-1)!;
+    await waitFor(() => Bun.spawnSync(["ps", "-o", "ppid=", "-p", String(child)]).stdout.toString().trim() === "1", { timeoutMs: 5000 });
+    append(f, true);
+    // Nothing under the agent: only the park's own kill set holds the orphan.
+    expect(await f.io.inspectTarget!(f.h.sessionId, f.h.tmuxSession, f.conv)).not.toBeNull();
+    expect(await run(f)).toBe(false);
+    expect(alive(f.h)).toBe(true);
+    expect(() => process.kill(child, 0)).not.toThrow();
+  }, 30000);
+
+  test("a tmux plugin helper on the session's own server does not stop the park", async () => {
+    const f = await fixture();
+    const server = Number(tmuxRun(["display-message", "-p", "-t", `=${f.h.tmuxSession}:`, "#{pid}"]).stdout.trim());
+    expect(tmuxRun(["run-shell", "-b", "-t", `=${f.h.tmuxSession}:`, "sleep 3017"]).status).toBe(0);
+    let helper = 0;
+    await waitFor(() => {
+      const line = Bun.spawnSync(["ps", "-axo", "pid=,ppid=,pgid=,command="]).stdout.toString().split("\n")
+        .map(l => l.trim().split(/\s+/)).find(([, ppid, pgid, ...cmd]) => Number(ppid) === server && Number(pgid) === server && cmd.join(" ") === "sleep 3017");
+      helper = Number(line?.[0] ?? 0);
+      return helper > 0;
+    }, { timeoutMs: 5000 });
+    childPids.push(helper);
+    append(f, true);
+    expect(await run(f)).toBe(true);
+    expect(alive(f.h)).toBe(false);
+  }, 30000);
+
+  test("another session on the session's own server refuses and keeps running", async () => {
+    const f = await fixture();
+    const side = `${f.h.tmuxSession}-side`;
+    const made = tmuxRun(["-L", sessionSocketName(f.h.tmuxSession), "new-session", "-d", "-s", side, "sleep", "120"]);
+    expect(made.status, made.stderr).toBe(0);
+    append(f, true);
+    expect(await run(f)).toBe(false);
+    expect(alive(f.h)).toBe(true);
   }, 30000);
 
   test("an undelivered completion still needs its dormant agent", async () => {

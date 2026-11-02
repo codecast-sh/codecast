@@ -50,7 +50,6 @@ import {
   HIBERNATE_RESUME_GRACE_MS,
   agentForeignDescendants,
   hibernationBlockReason,
-  paneRunsOnlyTheAgent,
   parkTargetsBeyondAgent,
   selectHibernationCandidates,
   type HibernationCandidate,
@@ -1028,13 +1027,17 @@ async function stopReapPlan(plan: ReapPlan, opts: { recheck?: boolean } = {}): P
  * which tmux copied into their environment when the agent's client created
  * them (ensureTmuxCarriesSessionIds); tmuxSessionsCreatedBy leaves out any that
  * hosts a live session. `sideSessions` are stopped after the plan.
+ *
+ * `complete` is false when a tmux read failed and the plan may miss panes the
+ * stop would still end (a side session's, or another on the session's server).
  */
-async function tmuxSessionReapPlan(tmuxSession: string): Promise<ReapPlan & { panePids: number[]; server?: string; sideSessions: string[] }> {
+async function tmuxSessionReapPlan(tmuxSession: string): Promise<ReapPlan & { panePids: number[]; server?: string; serverPid?: number; sideSessions: string[]; complete: boolean }> {
   const socket = sessionSocketName(tmuxSession);
   const ownServer = hasSessionServer(tmuxSession) && socketOfTmuxEnv(process.env.TMUX) !== socket;
   let panePids: number[] = [];
   let serverPid: number | undefined;
   let sideSessions: string[] = [];
+  let complete = true;
   const roots: number[] = [];
   const terminals: string[] = [];
   const addPanes = (stdout: string) => {
@@ -1061,12 +1064,12 @@ async function tmuxSessionReapPlan(tmuxSession: string): Promise<ReapPlan & { pa
       const agentId = await getTmuxSessionOption(tmuxSession, "@codecast_session_id");
       if (agentId) sideSessions = (await withTmuxSession(tmuxSession, () => tmuxSessionsCreatedBy(agentId))).filter((name) => name !== tmuxSession);
       for (const name of sideSessions) {
-        addPanes((await tmuxExec(["list-panes", "-s", "-t", name, "-F", PANE_FORMAT], { timeout: 3000, killSignal: "SIGKILL" }).catch(() => ({ stdout: "" }))).stdout);
+        addPanes((await tmuxExec(["list-panes", "-s", "-t", name, "-F", PANE_FORMAT], { timeout: 3000, killSignal: "SIGKILL" }).catch(() => { complete = false; return { stdout: "" }; })).stdout);
       }
     }
-  } catch {}
+  } catch { complete = false; }
   const plan = await reapPlan(serverPid ? [serverPid, ...roots] : roots, { spare: serverPid ? [serverPid] : [], terminals });
-  return { ...plan, panePids, sideSessions, ...(serverPid ? { server: socket } : {}) };
+  return { ...plan, panePids, sideSessions, complete, ...(serverPid ? { server: socket, serverPid } : {}) };
 }
 
 /** Close what a plan leaves of its tmux: the side sessions, and the session's own server. */
@@ -22390,14 +22393,9 @@ export async function inspectHibernationTarget(sessionId: string, tmux: string, 
   const procs = await snapshotProcessTableAsync({ timeout: 3000 });
   const root = procs.find(p => p.pid === agentPid);
   if (!root || root.uid !== process.getuid?.() || argvSessionId(root.command) !== sessionId) return refuseTarget(sessionId, "process-vanished");
+  // The common refusal, named here so a dry run can say it. The park judges
+  // the whole set it will kill (parkPlanRefusal) once it holds that set.
   if (agentForeignDescendants(procs, agentPid).length > 0) return refuseTarget(sessionId, "agent-has-children");
-  if (!paneRunsOnlyTheAgent(procs, panePid, agentPid)) return refuseTarget(sessionId, "pane-runs-more-than-the-agent");
-  // Judge the set the park will actually kill, read the way the park reads it:
-  // that reap also takes processes that left the agent's tree (a dev server
-  // reparented to pid 1 keeps its group, lineage and terminal).
-  const kill = await tmuxSessionReapPlan(tmux).catch(() => null);
-  if (!kill || !kill.panePids.includes(panePid)) return refuseTarget(sessionId, "kill-set-unreadable");
-  if (parkTargetsBeyondAgent(kill.targets, procs, panePid, agentPid).length > 0) return refuseTarget(sessionId, "park-reaches-beyond-agent");
   return { session, pane, pid: panePid, agentPid, start: match[1], stamp, conversationStamp };
 }
 
@@ -22554,6 +22552,22 @@ async function attemptHibernation(cand: HibernationCandidate, io: HibernationPas
   }
 }
 
+/**
+ * Why the park must not stop what `plan` lists, or null when all of it is the
+ * pane, the agent and the agent's own processes. Judged on the very plan the
+ * park will stop, not a second read of it: under load a tmux read fails and a
+ * second plan comes back smaller, missing a side session the first one holds.
+ * The agent's side sessions always refuse: the park kills them by name, with
+ * whatever runs in them.
+ */
+export async function parkPlanRefusal(plan: Awaited<ReturnType<typeof tmuxSessionReapPlan>> | null, target: HibernationTarget): Promise<string | null> {
+  if (!plan || !plan.complete || !plan.panePids.includes(target.pid)) return "kill-set-unreadable";
+  if (plan.sideSessions.length) return "park-reaches-side-sessions";
+  const procs = await snapshotProcessTableAsync({ timeout: 3000 });
+  const server = plan.serverPid ? { pid: plan.serverPid, panes: plan.roots.filter(pid => pid !== plan.serverPid) } : undefined;
+  return parkTargetsBeyondAgent(plan.targets, procs, { panePid: target.pid, agentPid: target.agentPid, server }).length ? "park-reaches-beyond-agent" : null;
+}
+
 async function parkHibernationTerminal(sessionId: string, tmux: string, convId: string | undefined, idleHours: number, boundary: HibernationBoundary): Promise<boolean> {
   const { target } = boundary;
   const { stdout: pane } = await boundary.terminal(["capture-pane", "-p", "-J", "-t", target.pane, "-S", "-25"]);
@@ -22563,6 +22577,8 @@ async function parkHibernationTerminal(sessionId: string, tmux: string, convId: 
   // opened have no parent left to find them by. Stopped only once parked, and
   // only what a fresh table still shows unchanged.
   const leftovers = await tmuxSessionReapPlan(tmux).catch(() => null);
+  const refusal = await parkPlanRefusal(leftovers, target).catch(() => "kill-set-unreadable");
+  if (refusal) { reaperLog(`HIBERNATE refused ${tmux}: ${refusal}`, false); return false; }
   if (!await boundary.revalidate() || !boundary.unchanged()) return false;
   const checks = [
     `#{==:#{session_id},${target.session}}`, `#{==:#{pane_id},${target.pane}}`,
@@ -22601,11 +22617,9 @@ async function parkHibernationTerminal(sessionId: string, tmux: string, convId: 
       expected.replayStop?.();
     }
   }
-  if (leftovers) {
-    const stopped = await stopReapPlan(leftovers, { recheck: true }).catch(() => 0);
-    await closeReapPlanTmux(leftovers);
-    if (stopped) reaperLog(`HIBERNATE stopped ${stopped} process(es) ${tmux} left running`, false);
-  }
+  const stopped = await stopReapPlan(leftovers!, { recheck: true }).catch(() => 0);
+  await closeReapPlanTmux(leftovers!);
+  if (stopped) reaperLog(`HIBERNATE stopped ${stopped} process(es) ${tmux} left running`, false);
   stopCodexPermissionPoller(sessionId);
   resumeSessionCache.delete(sessionId);
   hibernatedSessions.add(sessionId);

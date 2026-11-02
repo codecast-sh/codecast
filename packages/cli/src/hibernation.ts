@@ -203,13 +203,6 @@ export function agentForeignDescendants(procs: ProcRow[], agentPid: number): Pro
   return descendantRows(procs, agentPid).filter(p => group === undefined || p.pgid !== group);
 }
 
-/** True when the pane's tree is the agent and the agent's tree, nothing beside it. */
-export function paneRunsOnlyTheAgent(procs: ProcRow[], panePid: number, agentPid: number): boolean {
-  if (agentPid === panePid) return true;
-  const agent = procs.find(p => p.pid === agentPid);
-  return agent?.ppid === panePid && descendantRows(procs, panePid).length === 1 + descendantRows(procs, agentPid).length;
-}
-
 /**
  * What the park's kill would stop beyond the pane shell, the agent and the
  * agent's own processes. The kill reaps by more than parentage (reapTargets:
@@ -219,14 +212,29 @@ export function paneRunsOnlyTheAgent(procs: ProcRow[], panePid: number, agentPid
  * agent's tree would park it and kill it. A target counts as allowed only
  * when this table shows the same process (pid, start and group) in the
  * allowed set; anything it cannot match is beyond.
+ *
+ * A session on a tmux server of its own also takes that server's helpers: a
+ * plugin's `run-shell` (resurrect, continuum, activity watchers) runs in the
+ * server's own group as a child of the server, under no pane. Those belong to
+ * the server, which the park stops anyway. Anything under a pane is not one.
  */
-export function parkTargetsBeyondAgent(targets: ProcRow[], procs: ProcRow[], panePid: number, agentPid: number): ProcRow[] {
+export function parkTargetsBeyondAgent(
+  targets: ProcRow[],
+  procs: ProcRow[],
+  scope: { panePid: number; agentPid: number; server?: { pid: number; panes: number[] } },
+): ProcRow[] {
+  const { panePid, agentPid, server } = scope;
   const foreign = new Set(agentForeignDescendants(procs, agentPid).map(p => p.pid));
   const allowed = new Map<number, ProcRow>();
   for (const p of procs) {
     if (p.pid === panePid || p.pid === agentPid) allowed.set(p.pid, p);
   }
   for (const p of descendantRows(procs, agentPid)) if (!foreign.has(p.pid)) allowed.set(p.pid, p);
+  const serverGroup = server && procs.find(p => p.pid === server.pid)?.pgid;
+  if (server && serverGroup !== undefined) {
+    const underPanes = new Set(server.panes.flatMap(pane => [pane, ...descendantRows(procs, pane).map(p => p.pid)]));
+    for (const p of procs) if (p.pgid === serverGroup && !underPanes.has(p.pid)) allowed.set(p.pid, p);
+  }
   return targets.filter(t => {
     const known = allowed.get(t.pid);
     return !known || !t.startedAt || known.startedAt !== t.startedAt || known.pgid !== t.pgid;
