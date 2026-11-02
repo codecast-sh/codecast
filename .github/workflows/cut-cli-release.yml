@@ -330,8 +330,7 @@ jobs:
             codecast-darwin-x64 \
             codecast-linux-arm64 \
             codecast-linux-x64 \
-            codecast-windows-x64.exe \
-            main.js.map; do
+            codecast-windows-x64.exe; do
             aws s3 cp "$artifact" "s3://$R2_BUCKET/$artifact" \
               --endpoint-url "$R2_ENDPOINT" \
               --content-type application/octet-stream \

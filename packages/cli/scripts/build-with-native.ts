@@ -176,7 +176,6 @@ export function buildComputerHelper(options: { stage: string; output: string; un
  * them — a `--compile`d binary carries its own map and prints stack traces
  * against the original .ts files with no external map at all, for an eager
  * frame and a lazily imported one alike (checked on bun 1.4.4).
- * `<entry>.js.map` stays, because the release scripts ship it by that name.
  */
 function dropChunkSourcemaps() {
   const outfile = args.find((arg) => arg.startsWith("--outfile="))?.split("=")[1];
