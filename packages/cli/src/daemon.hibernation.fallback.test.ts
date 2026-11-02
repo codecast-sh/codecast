@@ -5,7 +5,7 @@ import { createHibernationHarness } from "./test-helpers/hibernationHarness.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { functionBlock } from "./test-helpers/sourceRegion.js";
-import { resolveAgentPid } from "./daemon.js";
+import { parkPlanRefusal, resolveAgentPid } from "./daemon.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -243,5 +243,24 @@ describe("finding the agent inside its pane", () => {
   test("another session's agent in the pane is never adopted", () => {
     const other = row(75706, 75564, "/Users/ashot/.codecast/bin/claude --session-id 11111111-2222-3333-4444-555555555555");
     expect(resolveAgentPid([shell, other], 75564, "-bash", SID)).toBeNull();
+  });
+});
+
+// The park judges the plan it will stop. A plan a failed tmux read left short,
+// or one that names the agent's side sessions, refuses before any process table
+// is read: the park would end panes nobody judged.
+describe("judging the plan the park will stop", () => {
+  const target = { session: "$1", pane: "%1", pid: 4242, agentPid: 4243, start: "", stamp: "s", conversationStamp: "c" };
+  const plan = { roots: [4242], targets: [], panePids: [4242], sideSessions: [] as string[], complete: true };
+  test("an unreadable or short plan refuses", async () => {
+    expect(await parkPlanRefusal(null, target)).toBe("kill-set-unreadable");
+    expect(await parkPlanRefusal({ ...plan, complete: false }, target)).toBe("kill-set-unreadable");
+    expect(await parkPlanRefusal({ ...plan, panePids: [] }, target)).toBe("kill-set-unreadable");
+  });
+  test("the agent's side sessions refuse", async () => {
+    expect(await parkPlanRefusal({ ...plan, sideSessions: ["dev-server"] }, target)).toBe("park-reaches-side-sessions");
+  });
+  test("a plan of nothing beyond the pane passes", async () => {
+    expect(await parkPlanRefusal(plan, target)).toBeNull();
   });
 });

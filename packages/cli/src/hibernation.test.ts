@@ -12,7 +12,6 @@ import {
   HIBERNATE_SUBAGENT_QUIET_MS,
   agentForeignDescendants,
   hibernationBlockReason,
-  paneRunsOnlyTheAgent,
   parkTargetsBeyondAgent,
   selectHibernationCandidates,
   type HibernationCandidate,
@@ -296,50 +295,82 @@ describe("what the park kills", () => {
   const caffeinate = row(98253, AGENT, AGENT, "caffeinate -i -t 300");
   const kill = (procs: ProcRow[], descendsFrom?: (p: ProcRow) => boolean) =>
     reapTargets(procs, [PANE], { selfPid: 4_000_000, uid: 501, descendsFrom: descendsFrom && (p => descendsFrom(p)) }).targets;
+  const scope = { panePid: PANE, agentPid: AGENT };
 
   test("the agent with nested MCP servers and caffeinate: the kill reaches nothing beyond it", () => {
     const procs = [shell, agent, npmExec, mcpNode, caffeinate];
     expect(kill(procs)).toHaveLength(5);
-    expect(parkTargetsBeyondAgent(kill(procs), procs, PANE, AGENT)).toEqual([]);
+    expect(parkTargetsBeyondAgent(kill(procs), procs, scope)).toEqual([]);
   });
 
   test("a dev server reparented to pid 1 inside the agent's group is in the kill set, so it refuses", () => {
     const devServer = row(1170, 1, AGENT, "node next-server");
     const procs = [shell, agent, npmExec, mcpNode, devServer];
     expect(kill(procs)).toContainEqual(devServer);
-    expect(parkTargetsBeyondAgent(kill(procs), procs, PANE, AGENT)).toEqual([devServer]);
+    expect(parkTargetsBeyondAgent(kill(procs), procs, scope)).toEqual([devServer]);
   });
 
   test("a dev server whose tool shell exited, found by lineage, refuses", () => {
     const devServer = row(1170, 1, 1154, "node vite --port 3200");
     const procs = [shell, agent, npmExec, mcpNode, devServer];
     expect(kill(procs, p => p.pid === devServer.pid)).toContainEqual(devServer);
-    expect(parkTargetsBeyondAgent(kill(procs, p => p.pid === devServer.pid), procs, PANE, AGENT)).toEqual([devServer]);
+    expect(parkTargetsBeyondAgent(kill(procs, p => p.pid === devServer.pid), procs, scope)).toEqual([devServer]);
   });
 
   test("a Bash tool shell under the agent refuses here too", () => {
     const bash = row(1154, AGENT, 1154, "bash -c sleep 120");
     const procs = [shell, agent, npmExec, bash];
-    expect(parkTargetsBeyondAgent(kill(procs), procs, PANE, AGENT)).toEqual([bash]);
+    expect(parkTargetsBeyondAgent(kill(procs), procs, scope)).toEqual([bash]);
   });
 
   test("a target the table cannot match to the same process is beyond", () => {
     const procs = [shell, agent, npmExec];
-    expect(parkTargetsBeyondAgent([{ ...npmExec, startedAt: "Sun Nov  1 22:00:00 2026" }], procs, PANE, AGENT)).toHaveLength(1);
-    expect(parkTargetsBeyondAgent([{ ...npmExec, startedAt: undefined }], procs, PANE, AGENT)).toHaveLength(1);
+    expect(parkTargetsBeyondAgent([{ ...npmExec, startedAt: "Sun Nov  1 22:00:00 2026" }], procs, scope)).toHaveLength(1);
+    expect(parkTargetsBeyondAgent([{ ...npmExec, startedAt: undefined }], procs, scope)).toHaveLength(1);
   });
 
-  describe("paneRunsOnlyTheAgent", () => {
-    test("the agent and its MCP tree are the whole pane", () => {
-      expect(paneRunsOnlyTheAgent([shell, agent, npmExec, mcpNode], PANE, AGENT)).toBe(true);
+  test("a second process beside the agent in the pane refuses", () => {
+    const vim = row(5000, PANE, 5000, "vim");
+    const procs = [shell, agent, npmExec, mcpNode, vim, row(5001, 5000, 5000, "x")];
+    expect(parkTargetsBeyondAgent(kill(procs), procs, scope).map(p => p.pid).sort()).toEqual([5000, 5001]);
+  });
+
+  describe("a session on a tmux server of its own", () => {
+    // The plan roots at the server as well as at every pane on it, sparing the
+    // server itself (tmuxSessionReapPlan), so the server's whole tree is killed.
+    const SERVER = 97300;
+    const server = row(SERVER, 1, SERVER, "tmux -L cc-x new-session");
+    const paneShell = { ...shell, ppid: SERVER };
+    const ownKill = (procs: ProcRow[]) => reapTargets(procs, [SERVER, PANE], { spare: [SERVER], selfPid: 4_000_000, uid: 501 }).targets;
+    const ownScope = { ...scope, server: { pid: SERVER, panes: [PANE] } };
+    // What tmux-plugins run: `run-shell -b` forks a child of the server in the
+    // server's own group, under no pane (measured with `ps -o pid,ppid,pgid`).
+    const plugin = row(5100, SERVER, SERVER, "/bin/sh -c ~/.tmux/plugins/aw-watcher-tmux/scripts/monitor-session-activity.sh");
+    const pluginSleep = row(5101, 5100, SERVER, "sleep 10");
+
+    test("a plugin helper in the server's group parks with the server", () => {
+      const procs = [server, paneShell, agent, npmExec, mcpNode, plugin, pluginSleep];
+      expect(ownKill(procs)).toEqual(expect.arrayContaining([plugin, pluginSleep]));
+      expect(parkTargetsBeyondAgent(ownKill(procs), procs, ownScope)).toEqual([]);
     });
-    test("a second process beside the agent in the pane refuses", () => {
-      expect(paneRunsOnlyTheAgent([shell, agent, npmExec, row(5000, PANE, 5000, "vim")], PANE, AGENT)).toBe(false);
-      expect(paneRunsOnlyTheAgent([shell, agent, row(5001, 5000, 5000, "x"), row(5000, PANE, 5000, "vim")], PANE, AGENT)).toBe(false);
+
+    test("without the server in scope the same helper refuses", () => {
+      const procs = [server, paneShell, agent, plugin];
+      expect(parkTargetsBeyondAgent(ownKill(procs), procs, scope)).toEqual([plugin]);
     });
-    test("an agent that is not the pane's child refuses; an agent that is the pane process passes", () => {
-      expect(paneRunsOnlyTheAgent([shell, { ...agent, ppid: 1 }], PANE, AGENT)).toBe(false);
-      expect(paneRunsOnlyTheAgent([agent, npmExec], AGENT, AGENT)).toBe(true);
+
+    test("another pane on the server, and anything under it, still refuses", () => {
+      const side = row(6000, SERVER, 6000, "-bash");
+      const devServer = row(6001, 6000, 6000, "node vite");
+      const procs = [server, paneShell, agent, plugin, side, devServer];
+      const targets = reapTargets(procs, [SERVER, PANE, 6000], { spare: [SERVER], selfPid: 4_000_000, uid: 501 }).targets;
+      expect(parkTargetsBeyondAgent(targets, procs, { ...scope, server: { pid: SERVER, panes: [PANE, 6000] } }).map(p => p.pid).sort()).toEqual([6000, 6001]);
+    });
+
+    test("a process in the server's group under a pane is not a helper", () => {
+      const odd = row(6100, AGENT, SERVER, "node something");
+      const procs = [server, paneShell, agent, odd];
+      expect(parkTargetsBeyondAgent(ownKill(procs), procs, ownScope)).toEqual([odd]);
     });
   });
 });
