@@ -15,7 +15,7 @@ import {
 import { buildShimScript } from "./test-helpers/fakeClaudeShim.js";
 import { spawnHarness, waitFor, type Harness } from "./test-helpers/messagingHarness.js";
 import { hasTmux, tmuxRun, tmuxRunAsync } from "./tmux.js";
-import { routeTmuxArgs, sessionSocketName, withTmuxSession } from "./tmuxRoute.js";
+import { perSessionServersEnabled, routeTmuxArgs, sessionSocketName, withTmuxSession } from "./tmuxRoute.js";
 import type { SyncService } from "./syncService.js";
 
 const prefix = `cc-e1-safe-${process.pid}-${crypto.randomUUID().slice(0, 6)}`;
@@ -322,7 +322,9 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
     expect(() => process.kill(child, 0)).not.toThrow();
   }, 30000);
 
-  test("a tmux plugin helper on the session's own server does not stop the park", async () => {
+  // A server of the session's own exists only where per-session servers are on
+  // (macOS); elsewhere every fixture shares one server and there is none to judge.
+  test.skipIf(!perSessionServersEnabled())("a tmux plugin helper on the session's own server does not stop the park", async () => {
     const f = await fixture();
     const server = Number(tmuxRun(["display-message", "-p", "-t", `=${f.h.tmuxSession}:`, "#{pid}"]).stdout.trim());
     expect(tmuxRun(["run-shell", "-b", "-t", `=${f.h.tmuxSession}:`, "sleep 3017"]).status).toBe(0);
@@ -339,7 +341,7 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
     expect(alive(f.h)).toBe(false);
   }, 30000);
 
-  test("another session on the session's own server refuses and keeps running", async () => {
+  test.skipIf(!perSessionServersEnabled())("another session on the session's own server refuses and keeps running", async () => {
     const f = await fixture();
     const side = `${f.h.tmuxSession}-side`;
     const made = tmuxRun(["-L", sessionSocketName(f.h.tmuxSession), "new-session", "-d", "-s", side, "sleep", "120"]);
