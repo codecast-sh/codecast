@@ -10,10 +10,12 @@ import {
   HIBERNATE_MAX_PER_PASS,
   HIBERNATE_RESUME_GRACE_MS,
   HIBERNATE_SUBAGENT_QUIET_MS,
+  agentForeignDescendants,
   hibernationBlockReason,
   selectHibernationCandidates,
   type HibernationCandidate,
 } from "./hibernation.js";
+import type { ProcRow } from "./processTable.js";
 
 const candidate = (over: Partial<HibernationCandidate> = {}): HibernationCandidate => ({
   sessionId: over.sessionId ?? "s1",
@@ -235,3 +237,45 @@ describe("selectHibernationCandidates: the idle bar", () => {
     expect(skips).toEqual(["attached"]);
   });
 });
+
+describe("agentForeignDescendants", () => {
+  // The shapes `ps -o pid,ppid,pgid` showed under a live Claude Code agent on
+  // 2026-11-01: the agent leads its own group, its MCP servers stay in it, and
+  // each Bash tool shell is detached into a group of its own.
+  const AGENT = 98132;
+  const row = (pid: number, ppid: number, pgid: number | undefined, command: string): ProcRow => ({ pid, ppid, pgid, command });
+  const agent = row(AGENT, 97474, AGENT, "claude --session-id s1");
+  const shell = row(97474, 97347, 97474, "-bash");
+  const gmail = row(98248, AGENT, AGENT, "npm exec @gongrzhe/server-gmail-autoauth-mcp");
+  const gmailNode = row(99411, 98248, AGENT, "node /Users/x/.npm/_npx/9524/node_modules/.bin/gmail-mcp");
+  const imessage = row(98250, AGENT, AGENT, "node /Users/x/code/imessage-mcp-server/build/index.js");
+  const bash = row(1154, AGENT, 1154, "/usr/local/bin/bash -c source snapshot.sh && eval 'sleep 120'");
+  const sleep = row(1160, 1154, 1154, "sleep 120");
+
+  test("MCP children only: nothing foreign, the agent may park", () => {
+    expect(agentForeignDescendants([shell, agent, imessage], AGENT)).toEqual([]);
+  });
+
+  test("a nested MCP server (npm exec, then node) is the agent's own", () => {
+    expect(agentForeignDescendants([shell, agent, gmail, gmailNode], AGENT)).toEqual([]);
+  });
+
+  test("MCP children plus a Bash tool shell: the shell and its work are foreign", () => {
+    expect(agentForeignDescendants([shell, agent, gmail, gmailNode, imessage, bash, sleep], AGENT)).toEqual([bash, sleep]);
+  });
+
+  test("a dev server under a Bash shell is foreign even when it outlives the shell's command", () => {
+    const server = row(1170, 1154, 1154, "node vite --port 3200");
+    expect(agentForeignDescendants([agent, bash, server], AGENT)).toEqual([bash, server]);
+  });
+
+  test("a table read without process groups fails closed", () => {
+    expect(agentForeignDescendants([row(AGENT, 1, undefined, "claude"), row(98248, AGENT, undefined, "npm exec x")], AGENT)).toHaveLength(1);
+    expect(agentForeignDescendants([agent, row(98248, AGENT, undefined, "npm exec x")], AGENT)).toHaveLength(1);
+  });
+
+  test("an absent agent yields nothing to judge", () => {
+    expect(agentForeignDescendants([shell, gmail], AGENT)).toEqual([]);
+  });
+});
+

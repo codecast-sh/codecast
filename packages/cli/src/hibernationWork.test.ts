@@ -83,3 +83,58 @@ test("a foreground command without background work is clear", () => {
   scan.consume(result("ok"));
   expect(scan.reason()).toBeNull();
 });
+
+describe("TaskStop", () => {
+  const started = () => {
+    const scan = new HibernationWorkScan(sid);
+    scan.consume(call("Bash", { run_in_background: true }));
+    scan.consume(result("Command running in background with ID: job"));
+    return scan;
+  };
+  test("its confirmation closes the task it stopped", () => {
+    const scan = started();
+    scan.consume(call("TaskStop", { task_id: "job" }, "stop"));
+    scan.consume(result(JSON.stringify({ message: "Successfully stopped task: job (sleep 600)", task_id: "job", task_type: "local_bash" }), "stop"));
+    expect(scan.reason()).toBeNull();
+  });
+  test("a failed stop, or a stop of another task, leaves it open", () => {
+    const scan = started();
+    scan.consume(call("TaskStop", { task_id: "job" }, "stop"));
+    scan.consume(result("No task found with ID: job", "stop"));
+    scan.consume(call("TaskStop", { task_id: "other" }, "stop2"));
+    scan.consume(result("Successfully stopped task: other", "stop2"));
+    expect(scan.reason()).toBe("open-background-work");
+  });
+  test("the confirmation text quoted by another tool closes nothing", () => {
+    const scan = started();
+    scan.consume(call("TaskStop", { task_id: "job" }, "stop"));
+    scan.consume(result("Successfully stopped task: job", "grep"));
+    expect(scan.reason()).toBe("open-background-work");
+  });
+});
+
+describe("Agent", () => {
+  const launched = () => {
+    const scan = new HibernationWorkScan(sid);
+    scan.consume(call("Agent", { prompt: "go" }));
+    scan.consume(result("Async agent launched successfully. (This tool result is internal metadata.)\nagentId: a1b2c3 (internal ID)"));
+    return scan;
+  };
+  test("a launched agent is open work until its notification ends it", () => {
+    const scan = launched();
+    expect(scan.reason()).toBe("open-background-work");
+    expect(scan.finishedAgent("a1b2c3")).toBe(false);
+    scan.consume(delivered(notification("a1b2c3", "completed")));
+    expect(scan.reason()).toBeNull();
+    expect(scan.finishedAgent("a1b2c3")).toBe(true);
+  });
+  test("a teammate spawn never proves itself finished", () => {
+    const scan = new HibernationWorkScan(sid);
+    scan.consume(call("Agent", { name: "reviewer", team_name: "t" }));
+    scan.consume(result("Spawned successfully. (This tool result is internal metadata.)"));
+    expect(scan.reason()).toBe("background-work-unproven");
+  });
+  test("an agent the transcript never launched is not finished", () => {
+    expect(launched().finishedAgent("someone-else")).toBe(false);
+  });
+});

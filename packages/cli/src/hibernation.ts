@@ -13,6 +13,7 @@
 // this module picks. Everything cheap enough to hold in memory lives here.
 
 import { MID_TURN_AGENT_STATUSES, type AgentStatus } from "@codecast/shared/contracts";
+import { descendantRows, type ProcRow } from "./processTable.js";
 
 // Absent config = hibernation does nothing. 0 means "no cap" for the fleet size
 // and "no idle bar" for the age, so a daemon nobody configured never parks a
@@ -179,4 +180,25 @@ export function selectHibernationCandidates(
     picked.push(c);
   }
   return { picked, skips };
+}
+
+/**
+ * The processes under the agent that are NOT the agent's own: work a park
+ * would kill. Empty means the agent may be parked with its tree.
+ *
+ * The agent's own processes are the ones in its process group. Claude Code
+ * starts its stdio MCP servers, plugin LSP servers and `caffeinate` in its own
+ * group, so they end with it and start again on resume; it starts every Bash
+ * tool command, foreground or background, detached into a session of its own
+ * (2026-11-01, 158 live agents on this Mac: every same-group child was one of
+ * those, every other child a Bash tool shell). A process outside a session can
+ * never join a group inside it, so nothing a Bash command starts, a dev server
+ * or a background shell included, can pass as the agent's own. Counting every
+ * descendant instead refused all 51 parks that reached this check that day.
+ *
+ * Fails closed: a row without a group, from a table read without one, is work.
+ */
+export function agentForeignDescendants(procs: ProcRow[], agentPid: number): ProcRow[] {
+  const group = procs.find(p => p.pid === agentPid)?.pgid;
+  return descendantRows(procs, agentPid).filter(p => group === undefined || p.pgid !== group);
 }

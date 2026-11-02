@@ -48,6 +48,7 @@ import {
   HIBERNATE_MAX_PER_PASS,
   HIBERNATE_REFUSAL_BACKOFF_MS,
   HIBERNATE_RESUME_GRACE_MS,
+  agentForeignDescendants,
   hibernationBlockReason,
   selectHibernationCandidates,
   type HibernationCandidate,
@@ -22387,8 +22388,9 @@ export async function inspectHibernationTarget(sessionId: string, tmux: string, 
   const procs = await snapshotProcessTableAsync({ timeout: 3000 });
   const root = procs.find(p => p.pid === agentPid);
   if (!root || root.uid !== process.getuid?.() || argvSessionId(root.command) !== sessionId) return refuseTarget(sessionId, "process-vanished");
-  if (descendantRows(procs, agentPid).length > 0) return refuseTarget(sessionId, "agent-has-children");
-  if (agentPid !== panePid && descendantRows(procs, panePid).length !== 1) return refuseTarget(sessionId, "pane-runs-more-than-the-agent");
+  if (agentForeignDescendants(procs, agentPid).length > 0) return refuseTarget(sessionId, "agent-has-children");
+  // The pane's tree must be the agent and the agent's tree, nothing beside it.
+  if (agentPid !== panePid && descendantRows(procs, panePid).length !== 1 + descendantRows(procs, agentPid).length) return refuseTarget(sessionId, "pane-runs-more-than-the-agent");
   return { session, pane, pid: panePid, agentPid, start: match[1], stamp, conversationStamp };
 }
 
@@ -22397,8 +22399,9 @@ async function hibernationChildHistoryIsClear(sessionId: string): Promise<boolea
   const file = findReapTranscript(sessionId);
   if (!file || file.agentType !== "claude") { refuseTarget(sessionId, "not-a-claude-transcript"); return false; }
   const dir = path.join(path.dirname(file.path), sessionId, "subagents");
+  let subagentFiles: string[] = [];
   try {
-    if ((await fs.promises.readdir(dir)).length > 0) { refuseTarget(sessionId, "has-subagent-history"); return false; }
+    subagentFiles = await fs.promises.readdir(dir);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") { refuseTarget(sessionId, "subagent-dir-unreadable"); return false; }
   }
@@ -22425,6 +22428,11 @@ async function hibernationChildHistoryIsClear(sessionId: string): Promise<boolea
   if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) { refuseTarget(sessionId, "transcript-changed-while-read"); return false; }
   const reason = work.reason();
   if (reason) { refuseTarget(sessionId, reason); return false; }
+  // A subagent's transcript is fine to leave behind once the scan saw that
+  // agent launched and ended; any other file there is a subagent nothing in
+  // this transcript accounts for (a forked skill, a teammate), so it refuses.
+  const accounted = (name: string) => work.finishedAgent(name.match(/^agent-([A-Za-z0-9_-]+)\.(?:jsonl|meta\.json)$/)?.[1] ?? "");
+  if (!subagentFiles.every(accounted)) { refuseTarget(sessionId, "has-subagent-history"); return false; }
   return true;
 }
 
