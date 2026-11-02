@@ -10,7 +10,7 @@ import {
   awaitRecentSessionFile, clearHibernationPark, flushHibernationStamps, hibernateSessionNow, injectViaTmux, inspectHibernationTarget,
   noteSubagentActivity, resetSubagentActivityForTests, runHibernationPass, takeTargetRefusal,
   sessionParkStateForTests, acquireSessionProcessOwnership, setSyncServiceForTests,
-  trackSessionPaneForTests, type HibernationPassIo,
+  tmuxSessionReapPlan, trackSessionPaneForTests, type HibernationPassIo,
 } from "./daemon.js";
 import { buildShimScript } from "./test-helpers/fakeClaudeShim.js";
 import { spawnHarness, waitFor, type Harness } from "./test-helpers/messagingHarness.js";
@@ -242,6 +242,16 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
     expect(writes).toEqual([]);
   }, 30000);
 });
+
+// The park refuses a plan that a failed tmux read may have left short, so the
+// plan must say when a read failed.
+test.skipIf(!hasTmux())("a plan whose tmux read fails says it is incomplete", async () => {
+  const f = await fixture();
+  expect((await tmuxSessionReapPlan(f.h.tmuxSession)).complete).toBe(true);
+  const failed = await tmuxSessionReapPlan(`${f.h.tmuxSession}-gone`);
+  expect(failed.complete).toBe(false);
+  expect(failed.panePids).toEqual([]);
+}, 30000);
 
 test.skipIf(!hasTmux())("a delayed park write is followed by the wake clear, never a later parked write", async () => {
   const f = await fixture();

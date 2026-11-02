@@ -187,14 +187,12 @@ export function selectHibernationCandidates(
  * would kill. Empty means the agent may be parked with its tree.
  *
  * The agent's own processes are the ones in its process group. Claude Code
- * starts its stdio MCP servers, plugin LSP servers and `caffeinate` in its own
- * group, so they end with it and start again on resume; it starts every Bash
- * tool command, foreground or background, detached into a session of its own
- * (2026-11-01, 158 live agents on this Mac: every same-group child was one of
- * those, every other child a Bash tool shell). A process outside a session can
- * never join a group inside it, so nothing a Bash command starts, a dev server
- * or a background shell included, can pass as the agent's own. Counting every
- * descendant instead refused all 51 parks that reached this check that day.
+ * starts its stdio MCP servers, plugin LSP servers and `caffeinate` inside its
+ * own group, so they end with it and start again on resume. It starts every
+ * Bash tool command, foreground or background, detached into a session of its
+ * own, and a process outside a session can never join a group inside it. So
+ * nothing a Bash command starts, a dev server or a background shell included,
+ * can pass as the agent's own, while the agent's servers never block a park.
  *
  * Fails closed: a row without a group, from a table read without one, is work.
  */

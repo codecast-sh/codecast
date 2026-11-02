@@ -1029,9 +1029,10 @@ async function stopReapPlan(plan: ReapPlan, opts: { recheck?: boolean } = {}): P
  * hosts a live session. `sideSessions` are stopped after the plan.
  *
  * `complete` is false when a tmux read failed and the plan may miss panes the
- * stop would still end (a side session's, or another on the session's server).
+ * stop would still end (another session's on the session's own server). A
+ * side session's failed read leaves it true: any side session refuses a park.
  */
-async function tmuxSessionReapPlan(tmuxSession: string): Promise<ReapPlan & { panePids: number[]; server?: string; serverPid?: number; sideSessions: string[]; complete: boolean }> {
+export async function tmuxSessionReapPlan(tmuxSession: string): Promise<ReapPlan & { panePids: number[]; server?: string; serverPid?: number; sideSessions: string[]; complete: boolean }> {
   const socket = sessionSocketName(tmuxSession);
   const ownServer = hasSessionServer(tmuxSession) && socketOfTmuxEnv(process.env.TMUX) !== socket;
   let panePids: number[] = [];
@@ -1064,7 +1065,7 @@ async function tmuxSessionReapPlan(tmuxSession: string): Promise<ReapPlan & { pa
       const agentId = await getTmuxSessionOption(tmuxSession, "@codecast_session_id");
       if (agentId) sideSessions = (await withTmuxSession(tmuxSession, () => tmuxSessionsCreatedBy(agentId))).filter((name) => name !== tmuxSession);
       for (const name of sideSessions) {
-        addPanes((await tmuxExec(["list-panes", "-s", "-t", name, "-F", PANE_FORMAT], { timeout: 3000, killSignal: "SIGKILL" }).catch(() => { complete = false; return { stdout: "" }; })).stdout);
+        addPanes((await tmuxExec(["list-panes", "-s", "-t", name, "-F", PANE_FORMAT], { timeout: 3000, killSignal: "SIGKILL" }).catch(() => ({ stdout: "" }))).stdout);
       }
     }
   } catch { complete = false; }
