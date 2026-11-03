@@ -89,6 +89,19 @@ export function appPool(pushed: ReadonlyArray<PushedFlowRow> = []): AppFlow[] {
 
 export const flowBySlug = (pool: ReadonlyArray<AppFlow>, slug: string | null | undefined) => (slug ? pool.find((f) => f.slug === slug) ?? null : null);
 
+/** The flow a team's sessions are offered first when the team has set none. */
+export const CHANGE_FLOW_SLUG = "change";
+
+/** Can a session's own change run through it? A flow that takes a branch can (the run freezes the session's edits onto one). */
+export const takesSessionChange = (flow: AppFlow) => flow.takes.includes("branch");
+
+/** The team's default flow out of a pool: the slug it set when that flow is in the pool and takes a session's change,
+ *  else Change, else the first that does. */
+export function defaultFlowOf(pool: ReadonlyArray<AppFlow>, teamSlug: string | null | undefined): AppFlow | null {
+  const ok = (f: AppFlow | null) => (f && takesSessionChange(f) ? f : null);
+  return ok(flowBySlug(pool, teamSlug)) ?? ok(flowBySlug(pool, CHANGE_FLOW_SLUG)) ?? pool.find(takesSessionChange) ?? null;
+}
+
 /** The flow a run ran, from its workflow name or slug. */
 export function flowOfRun(pool: ReadonlyArray<AppFlow>, run: { workflow_slug?: string | null; workflow_name?: string | null }): AppFlow | null {
   return flowBySlug(pool, run.workflow_slug ?? null) ?? flowBySlug(pool, run.workflow_name ?? null) ?? pool.find((f) => f.name === run.workflow_name) ?? null;

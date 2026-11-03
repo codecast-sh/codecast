@@ -77,7 +77,7 @@ import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, i
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, sessionOwnerRow } from "./sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
-import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
+import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, navPromptField, navPromptPatch, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -87,6 +87,7 @@ import {
   createTeamFeedFilter,
   resolveTeamForPath,
   resolveCreationPrivacy,
+  inheritedChildPrivacy,
   resolveVisibilityMode,
   buildShareUpdate,
   buildPathRestampUpdate,
@@ -1364,9 +1365,6 @@ export const createConversation = mutation({
     // The daemon syncs old transcripts with their real start time: a session
     // that predates a repo's share start stays private (privacy.ts
     // mappingCoversStart), so a share made today never exposes yesterday.
-    const { team_id: resolvedTeamId, is_private: isPrivate, auto_shared: autoShared } =
-      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined, startedAt, args.git_remote_url);
-
     let parentConversationId: Id<"conversations"> | undefined;
     if (args.parent_conversation_id) {
       parentConversationId = args.parent_conversation_id as Id<"conversations">;
@@ -1379,6 +1377,13 @@ export const createConversation = mutation({
         parentConversationId = parentMsg.conversation_id;
       }
     }
+
+    // A subagent shares as its parent does; a fork (parent_message_uuid) and a
+    // top-level session resolve from their own path.
+    const subagentParent = parentConversationId && !args.parent_message_uuid ? await ctx.db.get(parentConversationId) : null;
+    const { team_id: resolvedTeamId, is_private: isPrivate, auto_shared: autoShared, team_visibility: inheritedTeamVisibility } =
+      inheritedChildPrivacy(subagentParent, args.user_id) ??
+      (await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined, startedAt, args.git_remote_url));
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: args.user_id,
@@ -1396,6 +1401,7 @@ export const createConversation = mutation({
       message_count: 0,
       is_private: isPrivate,
       auto_shared: autoShared || undefined,
+      ...(inheritedTeamVisibility ? { team_visibility: inheritedTeamVisibility } : {}),
       status: "active",
       parent_message_uuid: args.parent_message_uuid ?? args.fork?.at_uuid,
       parent_conversation_id: parentConversationId,
@@ -12886,6 +12892,7 @@ export const switchSessionAgent = mutation({
           subtype: "agent_switch",
           message_uuid: crypto.randomUUID(),
           timestamp: Date.now(),
+          ...navPromptField({ role: "user", content: notice, subtype: "agent_switch" }),
         });
         await ctx.db.patch(conv._id, {
           message_count: (conv.message_count ?? 0) + 1,
@@ -14155,6 +14162,9 @@ type NavScanBudget = { bytes: number; kept: number };
 
 // Walk one direction of the user-message index, keeping only navigable rows.
 // Stops at whichever ceiling comes first — documents, or bytes deserialized.
+// `indexed` walks the nav_prompt index, which holds only navigable rows, instead
+// of the whole user-role range; the predicate still runs, so a row whose flag
+// lags its content can never leak a tool result into the list.
 async function streamNavigableUserMessages(
   db: { query: (table: "messages") => any },
   conversationId: Id<"conversations">,
@@ -14162,11 +14172,14 @@ async function streamNavigableUserMessages(
   docLimit: number,
   into: Map<string, FilteredUserMessage>,
   budget: NavScanBudget,
+  indexed: boolean,
 ): Promise<void> {
-  const q = db.query("messages")
-    .withIndex("by_conversation_role_timestamp", (qq: any) =>
-      qq.eq("conversation_id", conversationId).eq("role", "user"))
-    .order(order);
+  const q = (indexed
+    ? db.query("messages").withIndex("by_conversation_nav_prompt", (qq: any) =>
+        qq.eq("conversation_id", conversationId).eq("nav_prompt", true))
+    : db.query("messages").withIndex("by_conversation_role_timestamp", (qq: any) =>
+        qq.eq("conversation_id", conversationId).eq("role", "user"))
+  ).order(order);
   let docs = 0;
   for await (const m of q) {
     docs++;
@@ -14181,17 +14194,20 @@ async function streamNavigableUserMessages(
   }
 }
 
+// `indexed` once the conversation's history carries nav_prompt flags
+// (conversations.nav_prompts_indexed_at); before that, the bounded scan.
 export async function collectNavigableUserMessages(
   db: { query: (table: "messages") => any },
   conversationId: Id<"conversations">,
+  indexed = false,
 ) {
   const byId = new Map<string, FilteredUserMessage>();
   // Newest first: the end of the transcript is what the navigator opens on, so
   // it gets the budget first and the oldest pass only fills in the head with
   // whatever is left.
   const budget: NavScanBudget = { bytes: 0, kept: 0 };
-  await streamNavigableUserMessages(db, conversationId, "desc", NAV_USER_MESSAGES_SCAN_LIMIT, byId, budget);
-  await streamNavigableUserMessages(db, conversationId, "asc", NAV_USER_MESSAGES_OLDEST_LIMIT, byId, budget);
+  await streamNavigableUserMessages(db, conversationId, "desc", NAV_USER_MESSAGES_SCAN_LIMIT, byId, budget, indexed);
+  await streamNavigableUserMessages(db, conversationId, "asc", NAV_USER_MESSAGES_OLDEST_LIMIT, byId, budget, indexed);
   return [...byId.values()].sort((a, b) => a.timestamp - b.timestamp);
 }
 
@@ -14205,6 +14221,61 @@ export const getUserMessages = query({
     // browser must serve every viewer the transcript itself serves — including
     // unauthenticated visitors presenting a public share token.
     if ((await checkConversationAccess(ctx, userId, conv, args.share_token)) === "denied") return [];
-    return collectNavigableUserMessages(ctx.db, conv._id);
+    return collectNavigableUserMessages(ctx.db, conv._id, conv.nav_prompts_indexed_at !== undefined);
+  },
+});
+
+// User-role rows per backfill page. Most are tool results carrying whole
+// command outputs, so the page is small enough to stay well under a
+// mutation's read limit even when every row is a large file body.
+const NAV_PROMPT_BACKFILL_PAGE_SIZE = 100;
+// A sweep that started this recently is presumed still running; a newer open
+// does not start a second chain. One that died is restarted after this.
+const NAV_PROMPT_BACKFILL_CLAIM_MS = 10 * 60_000;
+
+/**
+ * Flag a conversation's history for the navigator's prompt index. Live
+ * writes flag every new row, so this only catches up rows written before the
+ * flag existed: once per conversation, on first open by anyone who can read
+ * it. Idempotent: each page writes only the rows whose flag disagrees.
+ */
+export const backfillNavPrompts = mutation({
+  args: { conversation_id: v.string(), share_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const conv = await getConversationByRawId(ctx, args.conversation_id);
+    if (!conv || conv.nav_prompts_indexed_at !== undefined) return;
+    const userId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, userId, conv, args.share_token)) === "denied") return;
+    const started = conv.nav_prompts_backfill_started_at;
+    if (started !== undefined && Date.now() - started < NAV_PROMPT_BACKFILL_CLAIM_MS) return;
+    await ctx.db.patch(conv._id, { nav_prompts_backfill_started_at: Date.now() });
+    await ctx.scheduler.runAfter(0, internal.conversations.backfillNavPromptsPage, { conversation_id: conv._id });
+  },
+});
+
+export const backfillNavPromptsPage = internalMutation({
+  args: { conversation_id: v.id("conversations"), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_role_timestamp", (q) => q.eq("conversation_id", args.conversation_id).eq("role", "user"))
+      .paginate({ cursor: args.cursor ?? null, numItems: NAV_PROMPT_BACKFILL_PAGE_SIZE });
+    let flagged = 0;
+    for (const m of page.page) {
+      const nav = navPromptPatch(m, {});
+      if ("nav_prompt" in nav) {
+        await ctx.db.patch(m._id, nav);
+        flagged++;
+      }
+    }
+    if (page.isDone) {
+      await ctx.db.patch(args.conversation_id, { nav_prompts_indexed_at: Date.now(), nav_prompts_backfill_started_at: undefined });
+    } else {
+      await ctx.scheduler.runAfter(0, internal.conversations.backfillNavPromptsPage, {
+        conversation_id: args.conversation_id,
+        cursor: page.continueCursor,
+      });
+    }
+    return { scanned: page.page.length, flagged, done: page.isDone };
   },
 });

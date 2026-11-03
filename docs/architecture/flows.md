@@ -211,8 +211,14 @@ the route it took, red only where it stopped.
   (`validate -`, `show -`, a dry run). A ` ```flow ` fence draws
   `{"flow":"<slug>"}` or `{"run":"<id>"}` in any reply. The Workflow tool card
   carries "add to flows".
-- **On a session's header**, Ship lists the pool's flows that take a
-  branch, lines first, draws the picked one, and opens the shared confirm
+- **The team's default flow** (`teams.default_flow`) is the flow a session's
+  change is offered first. A team admin sets it with Make default on a flow's
+  page in /flows, where the library marks it Default; any flow that takes a
+  branch qualifies. A team that set none, or set one that left the pool, gets
+  Change (`defaultFlowOf` in `lib/line/flowPool.ts`).
+- **On a session's header**, Flows lists the pool's flows that take a
+  branch, the team's default first and picked, then lines, each named with its
+  description; it draws the picked one, and opens the shared confirm
   review: steps, agent sessions that start, questions for you, who does each
   step, the ways it can end, how to stop. Confirming asks the session to run
   its own change through it. The pool's feed is read only while the list is

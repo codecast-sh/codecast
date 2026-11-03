@@ -21,14 +21,14 @@ The wording is `ORG_CONTEXT_GUIDANCE` (`packages/shared/contracts/orgWhere.ts`),
 
 Live huddle transcripts reach fed sessions through `transcripts.deliverRoutes`. In the study they were about 1,100 turns a month, and 73% of them ended in a pass.
 - **Named lines:** a line that names the agent (the ask lane) still goes at once, carrying everything unsent with it.
-- **Other talk:** unnamed talk (the context lane) waits out `CONTEXT_MIN_GAP_MS` (3 minutes) after the last context chunk, whether the scribe's lull or the agent's own turn ending asks for the delivery. One scheduled run at the gap's end delivers what it held, so a room that falls silent does not keep it.
+- **Other talk:** unnamed talk (the context lane) waits out `CONTEXT_MIN_GAP_MS` (1 minute since Oct 22, 3 minutes before) after the last context chunk, whether the scribe's lull or the agent's own turn ending asks for the delivery. One scheduled run at the gap's end delivers what it held, so a room that falls silent does not keep it.
 - **Exceptions:** a hold's catch up (`cast call hold`), a new route's backlog and the end of the call are never gapped.
 
 ## AC4. Monitoring
 
 `packages/evals/org-comms/monitor.py` reruns the measurement:
 1. Exports from prod.
-2. Places each sender against its recipient. Codecast's own notices (a reporting line moved, a send still queued) are counted apart and left out of both the huddle and the agent numbers. A short id shared by several sessions resolves to the one closest to the recipient's line. Sessions older than the export are looked up by id, and role anchors come from each team's org listing.
+2. Places each sender against its recipient. A session's lead is its parent, else the session that spawned it (`spawned_by_conversation_id`: a plain `cast spawn`, or a Line run handing a station its brief), and the recipient's own row settles its lead even when that session is outside the export. Codecast's own notices (a reporting line moved, a send still queued) are counted apart and left out of both the huddle and the agent numbers. A short id shared by several sessions resolves to the one closest to the recipient's line. Sessions older than the export are looked up by id, and role anchors come from each team's org listing.
 3. Reads a random sample inside the recipients' transcripts, drawn only from sessions the person owns: a message they sent into a teammate's session is counted and never opened. A huddle chunk is unnamed talk only when its header says nobody named the agent; a voice handoff, a chat line and the attach briefing are asks or one-offs.
 4. Labels the sample through `prompt-dry-run.ts`.
 5. Writes `report.json` and `report.md` under `$CODECAST_EVALS_HOME/org-comms/runs/<date>/`, set against `baseline.json` (the founding study) and every earlier run.
@@ -44,8 +44,8 @@ Every run uses a saved account profile (`--account`), so a machine login switch 
 | Metric | Baseline | Means trouble when |
 |---|---|---|
 | Unnamed huddle chunks a week | about 255 | it does not fall after AC3 |
-| Unnamed chunks inside the 3 minute gap | 92% (2026-10-13, before the fix) | it is not near zero: something delivers around the gap |
-| Huddle noise | 73% | it stays high: the gap is too short |
+| Unnamed chunks inside the delivery gap | 92% (2026-10-13, before the fix) | it is not near zero: something delivers around the gap. The monitor reads the gap from `transcripts.ts` |
+| Huddle noise | 73% (27 to 33% on Nov 3 at the 1 minute gap) | it stays high: the gap is too short |
 | Agent-to-agent noise | 7% | it rises: chatter is coming back |
 | Could have been read, not urgent, changed nothing | 22% | it rises: the "write it down" half is not holding |
 | Out-of-line direction followed | 64% | it rises without coordination as the kind: peers are steering each other. Read who received it first: a lead directing a lead it manages and an ask to the owner of a file are both counted here and are the policy working |
@@ -119,3 +119,15 @@ First week under the policy and the huddle gap (700 messages, 109 agent to agent
 - **Noise separates again with three weeks pooled.** Over 517 distinct cases from the Oct 20, 22 and 27 samples: 1.9% (6 of 321) from senders that saw the guidance against 6.9% (11 of 159), Fisher p = 0.007. Within parent to worker it is 2 of 77 against 7 of 71 (p = 0.065), close but not separated; elsewhere 4 of 244 against 4 of 88. This week alone: noise 2.5%, idle messages with asked-for results left out 7.5%, peer share 8.6%, changed recipient 68%.
 - **Huddle:** 2 unnamed chunks, none inside the gap.
 - **Next run:** whether unplaced messages stay near 6%; place Line station hand-backs as the session's own line; keep pooling parent-to-worker noise.
+
+### 2026-11-03
+
+1,176 messages over Oct 27 to Nov 3 (2,239 last week), 105 agent to agent and 15 huddle cases read.
+
+- **Volume halved, and messages per new session is back to 0.60** because the harness flood that made last week's 0.17 is gone (1,958 sessions created, 13,478 last week). Role sessions carry 45% of messages.
+- **The monitor placed every message. Fixed.** Last week's open item: 161 messages (14%) were unplaced and Line hand-backs were filed as peer. The monitor read only `parent_conversation_id`, but a Line station and a plain `cast spawn` record their driver in `spawned_by_conversation_id`. It now reads both, and the recipient's own row settles its lead even when the driver is outside the export and a stranger with the same 7 character prefix is inside it (4 Line hand-backs were placed as peer that way). Unplaced 161 to 0, parent to worker 114 to 328, peer share 8.6% to 3.9%. Earlier columns are not restated, so the peer share drop is mostly placement.
+- **Huddle: 96 unnamed chunks, nearly all a minute apart, as designed.** Two fed calls (Oct 28, Nov 3, both to Pearl or Basil). Commit 599999d0d (Oct 22) cut `CONTEXT_MIN_GAP_MS` to 1 minute so an agent following the room does not hear it three minutes late; the monitor still tested against 3 minutes and reported 99% inside the gap. It now reads the gap from code: 0% inside. Huddle noise is 27 to 33% across two labelings (4 or 5 of 15, each a bare pass on chatter), against 73% at baseline, so the shorter gap costs little. AC3 updated.
+- **Out-of-line direction followed 89% (23 of 26).** 22 of the 30 directing cases in the first labeling involve role sessions: routed tasks and assignments, prod incidents sent to Operations, landing and CI asks. The rest are CI red on main sent to the commit's author. No peer steering, no wording change.
+- **A hub outside any role, third week: the Line pipeline session (jx7d8av).** 74 messages from sessions that are not its workers, 67 of them from role leads (Agent Quality 41, Eval Suite 11, Operations 10, Calling 5). The Agent Quality lead treats it as the owner of Line infrastructure: it answers its sweeps, relays Evals' and Operations' findings to it, and decides holds and resumes. The cases read changed the recipient or were absorbed, none noise. It works, but no role names the Line, so `cast route` cannot find this owner and nothing replaces it when the session goes. Queued to Ashot as a decision on seating it.
+- **Noise keeps separating.** Pooled over four weeks, 1.6% (6 of 364) from senders that saw the guidance against 6.7% (12 of 178), one-sided p = 0.003. This week alone 0 of 43 against 1 of 19. Agent noise 1.9%, idle messages with asked-for results left out 4.8% (the lowest yet), changed recipient 71%.
+- **Next run:** whether peer share holds near 4% under the new placement; huddle noise if calls continue; the Line hub against the decision.

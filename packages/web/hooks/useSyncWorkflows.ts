@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { activeTeamIdOf } from "../lib/activeTeam";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { stableRefId } from "../store/wakeSig";
@@ -47,6 +48,15 @@ export function usePoolFlowRows(workspace?: string | null): any[] {
   const { workflows: own } = useWorkflows();
   const published = useWorkspaceCollection<any>("workflows", workflowSig, workspace ?? null);
   return useMemo(() => [...own, ...published.slice().sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))], [own, published]);
+}
+
+/** The slug a team set as its default flow (teams.setDefaultFlow), or null when it set none or there is no team (the
+ *  personal workspace). The active team unless one is named. Resolve it against a pool with defaultFlowOf. */
+export function useTeamDefaultFlowSlug(teamId?: string | null): string | null {
+  return useInboxStore((s) => {
+    const team = teamId === undefined ? activeTeamIdOf(s) : teamId;
+    return (team && ((s.teams || []) as Array<{ _id: string; default_flow?: string }>).find((t) => String(t._id) === team)?.default_flow) || null;
+  });
 }
 
 /** Feeder: the viewer's workflow of one slug, whatever its age (webList is a
