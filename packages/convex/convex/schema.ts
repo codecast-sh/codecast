@@ -462,6 +462,9 @@ export default defineSchema({
     // workspace and for every device enrolled in the team (lib/teamPolicyGuard),
     // and sent to those devices on the heartbeat.
     policy: v.optional(teamPolicyValidator),
+    // The library flow a session's change is offered first (flows.md FL4): a
+    // flow's slug, set by an admin on /flows. Unset: the shipped `change`.
+    default_flow: v.optional(v.string()),
     // IANA zone the team's day is cut in (Changes editions, lib/teamDay.ts).
     // Unset: the earliest admin's users.timezone, else UTC.
     timezone: v.optional(v.string()),

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, Figure, SOL, H2, P, Code } from "../blogChrome";
+import { BlogNav, SOL, H2, P, Code, CardShot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
@@ -16,18 +16,6 @@ import { getPost } from "../posts";
 // crop. Nothing was composited or retouched.
 
 const DIR = "/blog/undo-with-a-history";
-
-/** A small capture shown at its own size (the PNGs are 2x), centred in the frame. */
-function CardShot({ src, alt, width, caption }: { src: string; alt: string; width: number; caption: string }) {
-  return (
-    <Figure caption={caption}>
-      <div className="flex justify-center px-4 py-6" style={{ backgroundColor: SOL.base2 }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} loading="lazy" className="block max-w-full h-auto" style={{ width }} />
-      </div>
-    </Figure>
-  );
-}
 
 export default function UndoWithAHistoryPost() {
   const post = getPost("undo-with-a-history");

@@ -154,6 +154,22 @@ describe("scanOpenBackgroundTasks", () => {
     );
     expect([...scanOpenBackgroundTasks(content, SID)]).toEqual(["bj14hd03m"]);
   });
+
+  test("a new agent process closes every task an earlier process left open (jx71nrj)", () => {
+    // jx71nrj armed a Monitor on Oct 22 and its process died with it, with no
+    // notification. The watchdog, which only sees dead processes, then revived
+    // the dormant session on every later exit for ten days to wake a task that
+    // no longer existed. The harness records a process start as its
+    // SessionStart hooks (one line per hook command, whatever the outcome).
+    const sessionStart = (source: string, type = "hook_success") =>
+      line({ type: "attachment", sessionId: SID, attachment: { type, hookName: `SessionStart:${source}`, hookEvent: "SessionStart" } });
+    expect([...scanOpenBackgroundTasks(transcript(monitorStart("m1"), bgStart("b1"), sessionStart("resume"), sessionStart("resume")), SID)]).toEqual([]);
+    expect([...scanOpenBackgroundTasks(transcript(monitorStart("m1"), sessionStart("startup", "hook_non_blocking_error")), SID)]).toEqual([]);
+    // What the new process arms is its own.
+    expect([...scanOpenBackgroundTasks(transcript(monitorStart("m1"), sessionStart("resume"), bgStart("b2")), SID)]).toEqual(["b2"]);
+    // Compaction keeps the process, and its tasks.
+    expect([...scanOpenBackgroundTasks(transcript(monitorStart("m1"), sessionStart("compact")), SID)]).toEqual(["m1"]);
+  });
 });
 
 describe("reconciledStatusWithTasks", () => {
