@@ -39,6 +39,7 @@ const BlogTurns = lazy(() => import("@/app/(marketing)/blog/the-tree-at-the-end-
 const BlogUndo = lazy(() => import("@/app/(marketing)/blog/undo-with-a-history/page"));
 const BlogClaudeSessions = lazy(() => import("@/app/(marketing)/blog/claude-code-sessions/page"));
 const BlogAgentsTogether = lazy(() => import("@/app/(marketing)/blog/claude-code-cursor-codex/page"));
+const BlogFromYourPhone = lazy(() => import("@/app/(marketing)/blog/claude-code-from-your-phone/page"));
 const BlogChartReply = lazy(() => import("@/app/(marketing)/blog/the-chart-in-the-reply/page"));
 const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
 const BlogTaskPage = lazy(() => import("@/app/(marketing)/blog/the-task-your-agent-reports-to/page"));
@@ -246,6 +247,7 @@ export function App() {
               <Route path="blog/undo-with-a-history" element={<E name="BlogUndo"><BlogUndo /></E>} />
               <Route path="blog/claude-code-sessions" element={<E name="BlogClaudeSessions"><BlogClaudeSessions /></E>} />
               <Route path="blog/claude-code-cursor-codex" element={<E name="BlogAgentsTogether"><BlogAgentsTogether /></E>} />
+              <Route path="blog/claude-code-from-your-phone" element={<E name="BlogFromYourPhone"><BlogFromYourPhone /></E>} />
               <Route path="blog/the-chart-in-the-reply" element={<E name="BlogChartReply"><BlogChartReply /></E>} />
               <Route path="blog/the-questions-your-agents-save-for-you" element={<E name="BlogQuestions"><BlogQuestions /></E>} />
               <Route path="blog/the-task-your-agent-reports-to" element={<E name="BlogTaskPage"><BlogTaskPage /></E>} />

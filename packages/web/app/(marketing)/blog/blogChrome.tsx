@@ -121,3 +121,32 @@ export function Screenshot({ src, alt, caption, wide = false }: { src: string; a
     </Figure>
   );
 }
+
+/** Small captures shown at a fixed display width (the PNGs are 2x), centred on a
+ *  tinted ground. Several images sit side by side and wrap on narrow screens. */
+export function CardShots({ images, width, caption }: { images: Array<{ src: string; alt: string }>; width: number; caption: ReactNode }) {
+  return (
+    <Figure caption={caption}>
+      <div className="flex flex-wrap justify-center gap-6 px-4 py-6" style={{ backgroundColor: SOL.base2 }}>
+        {images.map((image) => (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img key={image.src} src={image.src} alt={image.alt} loading="lazy" className="block max-w-full h-auto" style={{ width }} />
+        ))}
+      </div>
+    </Figure>
+  );
+}
+
+/** One small capture; see CardShots. */
+export function CardShot({ src, alt, width, caption }: { src: string; alt: string; width: number; caption: ReactNode }) {
+  return <CardShots images={[{ src, alt }]} width={width} caption={caption} />;
+}
+
+/** A prompt as it was typed to an agent, quoted in mono. */
+export function Prompt({ children }: { children: ReactNode }) {
+  return (
+    <blockquote className="my-6 border-l-2 pl-5 font-mono text-[15px] leading-relaxed" style={{ borderColor: SOL.base1, color: SOL.base01 }}>
+      {children}
+    </blockquote>
+  );
+}

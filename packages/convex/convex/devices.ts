@@ -22,6 +22,7 @@ import { activeTokenProfile } from "./ccAccountsShared";
 import { bucketTs } from "./presenceState";
 import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
+import { navPromptField } from "./userMessagesFilter";
 import { localAgentTypeOf, findModelOption, deviceDisplayName, formatMachineSwitchNotice, type DeviceNameSource,
   checkoutInUseMessage,
   deviceWakesOnUse,
@@ -494,6 +495,7 @@ async function insertMachineSwitchDivider(
     subtype: "machine_switch",
     message_uuid: crypto.randomUUID(),
     timestamp: Date.now(),
+    ...navPromptField({ role: "user", content: notice, subtype: "machine_switch" }),
   });
   await ctx.db.patch(conv._id, {
     message_count: (conv.message_count ?? 0) + 1,

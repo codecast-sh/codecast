@@ -278,6 +278,24 @@ describe("fromRrweb", () => {
     expect(ph.filter((e) => e.type === "network")).toEqual([{ type: "network", t: 10, method: "GET", url: "https://a.test/api/x", status: 500, ms: 40 }]);
   });
 
+  test("a navigation entry is timed to its response, not to the page's load event", () => {
+    // A navigation entry's duration runs to loadEventEnd: every script, image
+    // and font on the page. The document itself answered at responseEnd. A page
+    // that loaded in 4.8s on a slow connection read as "slow GET /" (rp-4725).
+    const nav = { entryType: "navigation", initiatorType: "navigation", startTime: 0, requestStart: 4, responseStart: 179, responseEnd: 181, domContentLoadedEventEnd: 2900, loadEventEnd: 4841, duration: 4841, responseStatus: 200 };
+    const slowDoc = { ...nav, responseStart: 2400, responseEnd: 2450 };
+    const ph = fromRrweb([
+      { type: 4, timestamp: T, data: { href: "https://a.test/" } },
+      { type: 6, timestamp: T + 10, data: { plugin: "rrweb/network@1", payload: { requests: [
+        { ...nav, name: "https://a.test/" },
+        { ...slowDoc, name: "https://a.test/pricing" },
+      ] } } },
+    ]);
+    expect(ph.filter((e) => e.type === "network")).toEqual([
+      { type: "network", t: 10, method: "GET", url: "https://a.test/pricing", status: 200, ms: 2450 },
+    ]);
+  });
+
   test("Sentry's console breadcrumbs and fetch spans read the same", () => {
     const s = fromRrweb([
       { type: 4, timestamp: T, data: { href: "https://a.test/" } },

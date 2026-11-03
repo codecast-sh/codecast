@@ -2092,6 +2092,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   updateTeamTaskStatuses: async (ctx, _userId, [teamId, statuses]: [string, { id: string; name: string; category: string; color?: string }[]]) => {
     return await ctx.runMutation!((api as any).teams.updateTaskStatuses, { team_id: teamId as Id<"teams">, statuses });
   },
+  setTeamDefaultFlow: async (ctx, _userId, [teamId, slug]: [string, string | null]) => {
+    return await ctx.runMutation!((api as any).teams.setDefaultFlow, { team_id: teamId as Id<"teams">, slug });
+  },
   setTeamMemberRole: async (ctx, _userId, [teamId, userId, role]: [string, string, "member" | "admin"]) => {
     return await ctx.runMutation!((api as any).teams.setMemberRole, { team_id: teamId as Id<"teams">, member_user_id: userId as Id<"users">, role });
   },

@@ -113,6 +113,30 @@ export function isNavigableUserMessage(m: FilterableMessage): boolean {
   return true;
 }
 
+// The `nav_prompt` flag a message row carries: set exactly when the row
+// passes isNavigableUserMessage, so the navigator reads its rows off the
+// by_conversation_nav_prompt index instead of walking every tool result in the
+// user-role range. Absent (never false) when the row is not navigable, so the
+// field costs nothing on the 90% of user-role rows that are tool results.
+type NavJudged = Omit<FilterableMessage, "_id" | "timestamp">;
+
+export function navPromptField(m: NavJudged): { nav_prompt?: true } {
+  return isNavigableUserMessage(m as FilterableMessage) ? { nav_prompt: true } : {};
+}
+
+// What to add to a patch so the flag follows the row's new content: nothing
+// when it already agrees, `undefined` (which removes the field) when the row
+// stopped being navigable.
+export function navPromptPatch(
+  existing: NavJudged & { nav_prompt?: true },
+  patch: Record<string, unknown> | null,
+): { nav_prompt?: true | undefined } {
+  if (!patch) return {};
+  const next = !!navPromptField({ ...existing, ...patch } as NavJudged).nav_prompt;
+  if (next === !!existing.nav_prompt) return {};
+  return { nav_prompt: next ? true : undefined };
+}
+
 // The narrow row the navigator renders — two lines, never the body.
 export function toNavigatorRow(m: FilterableMessage): FilteredUserMessage {
   return {

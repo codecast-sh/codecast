@@ -932,6 +932,15 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
       },
     },
   },
+  setTeamDefaultFlow: {
+    spec: {
+      label: () => "Changed the team's default flow",
+      inverse: (ctx) => {
+        const before = teamRow(ctx.before, ctx.args[0] as string);
+        return before ? [call("setTeamDefaultFlow", ctx.args[0], before.default_flow ?? null)] : null;
+      },
+    },
+  },
   setTeamMemberRole: {
     spec: {
       label: (ctx) => `Made ${personName(ctx.before, ctx.args[1] as string)} ${ctx.args[2] === "admin" ? "an admin" : "a member"}`,

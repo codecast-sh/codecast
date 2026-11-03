@@ -27,6 +27,7 @@ import { recordRoutineRunGraph, recordScriptRunGraph } from "./flowLibrary";
 import { libraryOfRun, runFlowVersions } from "./flowVersions";
 import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
+import { navPromptField } from "./userMessagesFilter";
 
 type Ctx = { db: any };
 
@@ -995,6 +996,7 @@ export const respondToGate = mutation({
           role: "user",
           content: args.response,
           timestamp: now,
+          ...navPromptField({ role: "user", content: args.response }),
         });
         await ctx.db.patch(run.primary_conversation_id, {
           message_count: (primaryConv.message_count || 0) + 1,
