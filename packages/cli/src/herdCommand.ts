@@ -7,7 +7,8 @@ import { claimHerdViewer } from "./herdViewer.js";
 import { formatElapsed, formatProgress, requestHerdTake, resolveSessionRef } from "./herdTake.js";
 import { readLocalConversationMap } from "./localConversationMap.js";
 import { readTitleCache } from "./titleCache.js";
-import { ensureTmux, listCodecastPanes, listCodecastPanesComplete, tmuxRun, type CodecastPane } from "./tmux.js";
+import { snapshotProcessTableAsync, type ProcRow } from "./processTable.js";
+import { ensureTmux, listCodecastPanes, parseCodecastPaneRows, PANE_LIST_FORMAT, tmuxRun, tmuxRunAsync, type CodecastPane } from "./tmux.js";
 
 /** The environment herdr's server hands its panes. A server started from
  *  inside tmux would pass TMUX on, and every pane's `tmux attach` would refuse
@@ -43,6 +44,24 @@ async function clearRestoredWorkspaces(socketPath: string): Promise<void> {
     if (ws.tokens?.[HERD_PROJECT_TOKEN]) continue;
     await herdrRequest(socketPath, "workspace.close", { workspace_id: ws.workspace_id }).catch(() => {});
   }
+}
+
+/**
+ * The panes for a caller that closes what a listing leaves out: a failed
+ * listing with a tmux server alive is incomplete and throws, because one server
+ * too busy to answer must not read as every session gone. With no server alive,
+ * nothing is running.
+ */
+export async function listCodecastPanesComplete(
+  run: typeof tmuxRunAsync = tmuxRunAsync,
+  procs: () => Promise<ProcRow[]> = snapshotProcessTableAsync,
+): Promise<CodecastPane[]> {
+  const r = await run(["list-sessions", "-F", PANE_LIST_FORMAT]);
+  if (r.status === 0) return parseCodecastPaneRows(r.stdout);
+  const uid = process.getuid?.();
+  const serverAlive = (await procs()).some((p) => p.ppid === 1 && p.uid === uid && p.command.trim().split(/\s+/)[0]?.split("/").pop() === "tmux");
+  if (serverAlive) throw new Error(`tmux listing incomplete: ${r.stderr.trim() || "a server did not answer"}`);
+  return [];
 }
 
 export async function runHerdCommand(

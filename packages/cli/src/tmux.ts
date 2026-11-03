@@ -575,24 +575,6 @@ export async function listCodecastPanesAsync(): Promise<CodecastPane[]> {
   return parseCodecastPaneRows(r.stdout);
 }
 
-/**
- * listCodecastPanesAsync for a caller that closes what a listing leaves out: a
- * failed listing with a tmux server alive is incomplete and throws, because
- * one server too busy to answer must not read as every session gone. With no
- * server alive, nothing is running.
- */
-export async function listCodecastPanesComplete(
-  run: typeof tmuxRunAsync = tmuxRunAsync,
-  procs: () => Promise<ProcRow[]> = snapshotProcessTableAsync,
-): Promise<CodecastPane[]> {
-  const r = await run(["list-sessions", "-F", PANE_LIST_FORMAT]);
-  if (r.status === 0) return parseCodecastPaneRows(r.stdout);
-  const uid = process.getuid?.();
-  const serverAlive = (await procs()).some((p) => p.ppid === 1 && p.uid === uid && p.command.trim().split(/\s+/)[0]?.split("/").pop() === "tmux");
-  if (serverAlive) throw new Error(`tmux listing incomplete: ${r.stderr.trim() || "a server did not answer"}`);
-  return [];
-}
-
 export function hasTmux(): boolean {
   if (_hasTmux === true) return true;
   if (_hasTmux === false && Date.now() - _hasTmuxCheckedAt < HAS_TMUX_RECHECK_MS) return false;

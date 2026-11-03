@@ -2,9 +2,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "b
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
+import { listCodecastPanesComplete } from "./herdCommand.js";
 import { HerdFocus, HerdTitles, herdMembers, planHerd, type HerdMember } from "./herdMirror.js";
 import type { HerdrPane, HerdrSnapshot } from "./herdr.js";
-import { listCodecastPanesComplete, type CodecastPane } from "./tmux.js";
+import type { CodecastPane } from "./tmux.js";
 import { sessionSocketName, tmuxSocketDir } from "./tmuxRoute.js";
 
 const pane = (over: Partial<CodecastPane>): CodecastPane => ({
