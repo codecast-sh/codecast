@@ -275,11 +275,11 @@ export class HerdFocus {
     // A shell still starting up may not have read the last line, and a second line would reach the client the first one starts.
     if (Date.now() - (this.typedAt.get(pane.pane_id) ?? 0) < RETYPE_AFTER_MS) return;
     this.typedAt.set(pane.pane_id, Date.now());
-    this.attached = { paneId: pane.pane_id, tty, server };
     await herdrRequest(socketPath, "pane.send_text", {
       pane_id: pane.pane_id,
       text: `env -u TMUX tmux ${attach.map(shellQuote).join(" ")}\r`,
     });
+    this.attached = { paneId: pane.pane_id, tty, server };
     const deadline = Date.now() + 10_000;
     while (isActive() && Date.now() < deadline) {
       if (await listsTty()) {

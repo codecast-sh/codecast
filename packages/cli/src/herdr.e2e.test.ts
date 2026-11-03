@@ -156,7 +156,7 @@ describe.skipIf(!bin || process.platform === "win32")("herdr", () => {
     }
   }, 120_000);
 
-  test("a mirror whose attach is never confirmed leaves cast herd open", async () => {
+  test("a slow failing listing and an attach never confirmed leave cast herd open and its tabs working", async () => {
     const name = "cc-claude-noattach";
     const host = "herd-noattach-host";
     const viewerSocket = herdrSocketPath("codecast");
@@ -165,26 +165,30 @@ describe.skipIf(!bin || process.platform === "win32")("herdr", () => {
     const shimDir = join(dir, "noattach-bin");
     mkdirSync(shimDir, { recursive: true });
     const realTmux = String((await execFileAsync("which", ["tmux"], { encoding: "utf8" })).stdout).trim();
-    writeFileSync(join(shimDir, "tmux"), `#!/bin/sh\ncase " $* " in *" list-clients "*) exit 0;; esac\nexec ${realTmux} "$@"\n`, { mode: 0o755 });
+    const listingFails = join(shimDir, "listing-fails");
+    writeFileSync(join(shimDir, "tmux"), `#!/bin/sh\ncase " $* " in *" list-clients "*) exit 0;; *" list-sessions "*) if [ -e ${shellQuote(listingFails)} ]; then sleep 4; exit 1; fi;; esac\nexec ${shellQuote(realTmux)} "$@"\n`, { mode: 0o755 });
     await tmuxRunAsync(["new-session", "-d", "-s", name, "sleep 120"]);
     await tmuxRunAsync(["set-option", "-t", name, "@codecast_session_id", "noattach-s1"]);
     await tmuxRunAsync(["set-option", "-t", name, "@codecast_project_path", dir]);
     try {
-      await tmuxRunAsync(["new-session", "-d", "-s", host, `env PATH=${shellQuote(`${shimDir}:${process.env.PATH}`)} XDG_CONFIG_HOME=${dir} TMUX_TMPDIR=${process.env.TMUX_TMPDIR} ${process.execPath} ${script}`]);
+      await tmuxRunAsync(["new-session", "-d", "-s", host, `env PATH=${shellQuote(`${shimDir}:${process.env.PATH}`)} XDG_CONFIG_HOME=${dir} TMUX_TMPDIR=${process.env.TMUX_TMPDIR} ${shellQuote(process.execPath)} ${shellQuote(script)}`]);
       const snap = await until(() => herdrSnapshot(viewerSocket).catch(() => ({ panes: [] as HerdrPane[] })), (s) => s.panes.some((p) => p.tokens?.codecast_session === "noattach-s1"), 20_000);
       const pane = snap.panes.find((p) => p.tokens?.codecast_session === "noattach-s1")!;
+      writeFileSync(listingFails, "");
       await herdrRequest(viewerSocket, "pane.focus", { pane_id: pane.pane_id });
-      await until(
+      expect(await until(
         async () => (await herdrRequest<{ read: { text: string } }>(viewerSocket, "pane.read", { pane_id: pane.pane_id, source: "recent_unwrapped", lines: 40 })).read.text,
         (text) => text.includes("attach-session"),
-      );
+        25_000,
+      )).toContain("attach-session");
       // Past HerdFocus's 10s attach deadline, with room for the exit it used to end in.
       await new Promise((resolve) => setTimeout(resolve, 13_000));
       expect(await herdViewerAlive(viewerSocket)).toBe(true);
       expect((await tmuxRunAsync(["has-session", "-t", host])).status).toBe(0);
+      expect((await herdrSnapshot(viewerSocket)).panes.some((p) => p.pane_id === pane.pane_id)).toBe(true);
     } finally {
       await tmuxRunAsync(["send-keys", "-t", host, "C-b", "q"]);
-      await until(() => herdViewerAlive(viewerSocket), (alive) => !alive, 10_000);
+      await until(() => herdViewerAlive(viewerSocket), (alive) => !alive, 20_000);
       await herdrRequest(viewerSocket, "server.stop").catch(() => {});
       await until(() => herdrAlive(viewerSocket, 500), (alive) => !alive, 10_000);
       await tmuxRunAsync(["kill-session", "-t", host]);

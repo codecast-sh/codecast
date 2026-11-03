@@ -49,8 +49,9 @@ async function clearRestoredWorkspaces(socketPath: string): Promise<void> {
 /**
  * The panes for a caller that closes what a listing leaves out: a failed
  * listing with a tmux server alive is incomplete and throws, because one server
- * too busy to answer must not read as every session gone. With no server alive,
- * nothing is running.
+ * too busy to answer must not read as every session gone. So is one with no
+ * process table, which comes back empty when ps fails. With a table and no server
+ * in it, nothing is running. Linux retitles a server `tmux: server`.
  */
 export async function listCodecastPanesComplete(
   run: typeof tmuxRunAsync = tmuxRunAsync,
@@ -59,8 +60,9 @@ export async function listCodecastPanesComplete(
   const r = await run(["list-sessions", "-F", PANE_LIST_FORMAT]);
   if (r.status === 0) return parseCodecastPaneRows(r.stdout);
   const uid = process.getuid?.();
-  const serverAlive = (await procs()).some((p) => p.ppid === 1 && p.uid === uid && p.command.trim().split(/\s+/)[0]?.split("/").pop() === "tmux");
-  if (serverAlive) throw new Error(`tmux listing incomplete: ${r.stderr.trim() || "a server did not answer"}`);
+  const table = await procs();
+  const serverAlive = table.some((p) => p.ppid === 1 && p.uid === uid && /^tmux:?$/.test(p.command.trim().split(/\s+/)[0]?.split("/").pop() ?? ""));
+  if (serverAlive || table.length === 0) throw new Error(`tmux listing incomplete: ${r.stderr.trim() || "a server did not answer"}`);
   return [];
 }
 
@@ -102,23 +104,24 @@ export async function runHerdCommand(
     viewer.once("error", (err) => { console.error(err.message); closed = true; });
     let nextRefresh = 0;
     let members: ReturnType<typeof herdMembers> = [];
+    // One failed pass must not close the viewer, and a failing refresh must not starve focus; each retries on its own. Stderr would draw over herdr's screen, so problems wait for it to exit.
+    const note = (err: unknown) => { problems.add(err instanceof Error ? err.message : String(err)); };
     while (!closed) {
-      // One failed pass must not close the viewer; the next pass retries. Stderr would draw over herdr's screen, so problems wait for it to exit.
-      try {
-        if (Date.now() >= nextRefresh) {
-          nextRefresh = Date.now() + 3000;
+      if (Date.now() >= nextRefresh) {
+        try {
           const panes = await listCodecastPanesComplete();
           await titles.refresh(panes.flatMap((p) => p.sessionId ?? []));
           const cachedTitles = readTitleCache();
           members = herdMembers(panes, { status: () => null, title: (sid) => titles.get(sid) ?? cachedTitles[sid] });
           if (closed) break;
           await syncHerd(socketPath, members, (message) => problems.add(message), () => !closed);
+        } catch (err) {
+          note(err);
         }
-        if (closed) break;
-        await focus.sync(socketPath, members, () => !closed);
-      } catch (err) {
-        problems.add(err instanceof Error ? err.message : String(err));
+        nextRefresh = Date.now() + 3000;
       }
+      if (closed) break;
+      await focus.sync(socketPath, members, () => !closed).catch(note);
       await new Promise((r) => setTimeout(r, 500));
     }
   } finally {

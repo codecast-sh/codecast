@@ -233,13 +233,23 @@ describe("HerdFocus", () => {
     expect(herd.sent).toEqual([]);
   });
 
-  test("a line whose reply came late is not typed again", async () => {
+  test("a line whose reply came late is not typed again until the shell has had time, and then it is", async () => {
     reset();
     herd.holdSend = true;
     const focus = new HerdFocus(tmux);
     await expect(focus.sync(herdrSocket, [focusMember])).rejects.toThrow("timed out");
     await focus.sync(herdrSocket, [focusMember]);
     expect(herd.sent).toHaveLength(1);
+    herd.holdSend = false;
+    onTmux = () => { clients = [tty]; };
+    const later = Date.now() + 61_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => later);
+    try {
+      await focus.sync(herdrSocket, [focusMember]);
+      expect(herd.sent).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
   }, 10_000);
 
   test("an attach never confirmed is typed again only after the shell has had time to read it", async () => {
@@ -267,6 +277,14 @@ describe("listCodecastPanesComplete", () => {
 
   test("a failed listing with a server alive is incomplete, not empty", async () => {
     await expect(listCodecastPanesComplete(failed, async () => [server] as never)).rejects.toThrow("incomplete");
+  });
+
+  test("a server Linux has retitled still counts as alive", async () => {
+    await expect(listCodecastPanesComplete(failed, async () => [{ ...server, command: "tmux: server (/tmp/tmux-1000/default)" }] as never)).rejects.toThrow("incomplete");
+  });
+
+  test("a process table that came back empty proves nothing", async () => {
+    await expect(listCodecastPanesComplete(failed, async () => [])).rejects.toThrow("incomplete");
   });
 
   test("a failed listing with no server alive means nothing is running", async () => {
