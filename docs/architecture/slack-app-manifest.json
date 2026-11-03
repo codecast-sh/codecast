@@ -8,7 +8,10 @@
     "bot_user": {
       "display_name": "Codecast",
       "always_online": true
-    }
+    },
+    "unfurl_domains": [
+      "codecast.sh"
+    ]
   },
   "oauth_config": {
     "redirect_urls": [
@@ -31,7 +34,9 @@
         "reactions:read",
         "reactions:write",
         "files:read",
-        "team:read"
+        "team:read",
+        "links:read",
+        "links:write"
       ],
       "user": [
         "channels:read",
@@ -68,7 +73,8 @@
         "member_left_channel",
         "user_change",
         "app_uninstalled",
-        "tokens_revoked"
+        "tokens_revoked",
+        "link_shared"
       ],
       "user_events": [
         "message.im",

@@ -2,7 +2,7 @@ import { test, expect, describe } from "bun:test";
 import { parseSharePath, sharePath, SHARED_OBJECT_KINDS } from "@codecast/shared/entities";
 import { isStandaloneSharePath } from "../lib/desktopHandoff";
 import { guestJoinPath } from "@codecast/shared/contracts";
-import { guestMeetMeta, shareMeta } from "./shareData";
+import { guestMeetMeta, privateEntityMeta, shareMeta } from "./shareData";
 
 const BASE = "https://codecast.sh";
 
@@ -144,5 +144,17 @@ describe("guestMeetMeta", () => {
     const meta = guestMeetMeta("tok12345", { ok: false, reason: "expired" }, BASE);
     expect(meta?.title).toBe("codecast: this meeting link is closed");
     expect(meta?.description).toContain("expired");
+  });
+});
+
+describe("privateEntityMeta", () => {
+  test("names the kind of object at its own URL, and nothing about the object", () => {
+    expect(privateEntityMeta("session", `${BASE}/conversation/jx7abc`)).toEqual({
+      title: "A codecast session",
+      description: "Sign in to codecast to open this session.",
+      url: `${BASE}/conversation/jx7abc`,
+    });
+    expect(privateEntityMeta("task", `${BASE}/tasks/ct-1`).title).toBe("A codecast task");
+    expect(privateEntityMeta("pr", `${BASE}/pr/x`).title).toBe("A codecast pull request");
   });
 });

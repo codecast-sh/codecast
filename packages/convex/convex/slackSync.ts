@@ -1130,7 +1130,7 @@ export const scanDms = internalAction({
         if (!probe.ok || !(probe.messages ?? []).length) continue;
         // The people, known before the room is made (their names and faces
         // name the shadow identities).
-        for (const u of others) await resolvePerson(ctx, install, u);
+        for (const u of others) await resolveSlackPerson(ctx, install, u);
         const made = await ctx.runMutation(internal.slackSync.commitDmLink, {
           token_id: token._id, slack_channel_id: conv.id, member_slack_ids: others, since_ts: sinceTs, window,
         });
@@ -1213,7 +1213,7 @@ export const adoptDm = internalAction({
     if (!info.ok) return;
     const others = await dmOthers(token, info.channel ?? {});
     if (others.length === 0) return;
-    for (const u of others) await resolvePerson(ctx, install, u);
+    for (const u of others) await resolveSlackPerson(ctx, install, u);
     const made = await ctx.runMutation(internal.slackSync.commitDmLink, {
       token_id: token._id, slack_channel_id: args.slack_channel_id, member_slack_ids: others,
       since_ts: backfillSinceTs("none"), window: "none",
@@ -1450,7 +1450,7 @@ type ResolvedPerson = {
   shadow_user_id: Id<"users"> | null;
 };
 
-async function resolvePerson(ctx: ActionCtx, install: Install, slackUserId: string): Promise<ResolvedPerson> {
+export async function resolveSlackPerson(ctx: ActionCtx, install: Install, slackUserId: string): Promise<ResolvedPerson> {
   let row = await ctx.runQuery(internal.slackSync.getSlackUser, { workspace_id: install.workspace_id, slack_user_id: slackUserId });
   if (!row || Date.now() - row.fetched_at > PROFILE_TTL_MS) {
     const resp = await slackApi(install.bot_token, "users.info", { user: slackUserId });
@@ -1809,7 +1809,7 @@ export async function buildInboundResolver(
   const people = new Map<string, ResolvedPerson>();
   for (const id of slackUserIdsIn(text, attachments)) {
     if (id === install.bot_user_id) continue;
-    people.set(id, await resolvePerson(ctx, install, id));
+    people.set(id, await resolveSlackPerson(ctx, install, id));
   }
   const mappedIds = [...people.values()].map((p) => p.codecast_user_id).filter((x): x is Id<"users"> => !!x);
   const handles = mappedIds.length > 0 && link.options.match_people_by_email
@@ -2022,7 +2022,7 @@ async function mirrorMessage(
   // name and face it posts under.
   let author: ReturnType<typeof inboundAuthorFields>;
   if (msg.user && !isBot) {
-    author = inboundAuthorFields(await resolvePerson(ctx, install, msg.user), link);
+    author = inboundAuthorFields(await resolveSlackPerson(ctx, install, msg.user), link);
   } else {
     const bp = msg.bot_profile ?? {};
     author = {
@@ -2148,7 +2148,7 @@ export const processEvent = internalAction({
         }
         // System notices.
         if (!link.options.system_messages) return await finish("skipped", "system_off");
-        const who = event.user ? await resolvePerson(ctx, install, event.user) : null;
+        const who = event.user ? await resolveSlackPerson(ctx, install, event.user) : null;
         const line = systemNoticeLine(sub, who?.name ?? "Someone", event);
         if (!line) return await finish("skipped", sub);
         const res = await ctx.runMutation(internal.slackSync.applyInboundMessage, {
@@ -2168,7 +2168,7 @@ export const processEvent = internalAction({
         if (event.user === install.bot_user_id) return await finish("skipped", "own_bot");
         const emoji = shortcodeToEmoji(String(event.reaction ?? ""));
         if (!emoji) return await finish("skipped", `unknown_emoji:${event.reaction}`);
-        const person = await resolvePerson(ctx, install, String(event.user));
+        const person = await resolveSlackPerson(ctx, install, String(event.user));
         const author = inboundAuthorFields(person, link);
         const res = await ctx.runMutation(internal.slackSync.applyInboundReaction, {
           link_id: link._id,
@@ -2196,7 +2196,7 @@ export const processEvent = internalAction({
           ? { link_id: link._id, add: String(event.user) }
           : { link_id: link._id, remove: String(event.user) });
         if (!link.options.system_messages) return await finish("skipped", "system_off");
-        const who = await resolvePerson(ctx, install, String(event.user));
+        const who = await resolveSlackPerson(ctx, install, String(event.user));
         const res = await ctx.runMutation(internal.slackSync.applyInboundMessage, {
           link_id: link._id,
           ts: String(event.event_ts ?? nowTs()),
@@ -2358,7 +2358,7 @@ export const refreshSlackMembers = action({
       workspace_id: auth.install.workspace_id, slack_user_ids: ids,
     });
     for (const id of missing.slice(0, MEMBER_PROFILE_FETCH_CAP)) {
-      const person = await resolvePerson(ctx, auth.install, id);
+      const person = await resolveSlackPerson(ctx, auth.install, id);
       if (!person.is_bot) people.push(id);
     }
     await ctx.runMutation(internal.slackSync.patchLinkMembers, { link_id: auth.link_id, set: people });
@@ -2729,7 +2729,7 @@ export const repairBridgeReactions = internalAction({
         if (!emoji) continue;
         for (const user of group.users ?? []) {
           if (user === c.install.bot_user_id) continue;
-          const person = await resolvePerson(ctx, c.install, user);
+          const person = await resolveSlackPerson(ctx, c.install, user);
           const author = inboundAuthorFields(person, c.link);
           people.add(`${emoji} ${person.name}`);
           if (args.dry) continue;

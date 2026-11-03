@@ -156,6 +156,29 @@ export function shareMeta(
   }
 }
 
+// --- Private objects ---------------------------------------------------------
+// A link to a workspace object (/conversation/<id>, /tasks/ct-N, …) that its
+// presenter cannot read anonymously. The card names what kind of thing it is
+// and how to open it, and the same card answers for an id that does not exist,
+// so an unfurl never confirms one. Inside Slack the codecast app draws the
+// real card for the poster (convex/slackUnfurl.ts).
+
+const PRIVATE_NOUN: Record<string, string> = {
+  session: "session",
+  pr: "pull request",
+  initiative: "goal",
+  person: "teammate",
+};
+
+export function privateEntityMeta(type: string, url: string): ShareMeta {
+  const noun = PRIVATE_NOUN[type] ?? type;
+  return {
+    title: `A codecast ${noun}`,
+    description: `Sign in to codecast to open this ${noun}.`,
+    url,
+  };
+}
+
 // --- Guest meeting links ------------------------------------------------------
 // /meet/<token> is not a share kind (it opens a door into a live call, not a
 // read-only object), but it travels the same way: pasted into a chat or a
