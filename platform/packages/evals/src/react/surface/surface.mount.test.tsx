@@ -54,7 +54,11 @@ const R = await import('..');
 
 // ── Two products over the same four nights ───────────────────────────────────
 
-const NIGHT = (n: number) => new Date(Date.parse('2026-10-01T00:00:00.000Z') + n * 86_400_000).toISOString();
+// Nights end yesterday: the wall draws a window back from now, so fixed dates
+// age out of it and the wall loses the nights these tests read.
+const DAY = 86_400_000;
+const FIRST_NIGHT = Math.floor(Date.now() / DAY) * DAY - 4 * DAY;
+const NIGHT = (n: number) => new Date(FIRST_NIGHT + n * DAY).toISOString();
 
 function rep(surface: string, freeze: string, night: number, seed: number, score: number, extra: Partial<RunRowCore> = {}): RunRowCore {
   const batch = NIGHT(night);
