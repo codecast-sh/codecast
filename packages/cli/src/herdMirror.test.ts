@@ -1,3 +1,4 @@
+import "./test-helpers/isolatedTmuxServer.js";
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -287,7 +288,13 @@ describe("listCodecastPanesComplete", () => {
     await expect(listCodecastPanesComplete(failed, async () => [])).rejects.toThrow("incomplete");
   });
 
-  test("a failed listing with no server alive means nothing is running", async () => {
-    expect(await listCodecastPanesComplete(failed, async () => [{ ...server, command: "/bin/zsh" }] as never)).toEqual([]);
+  test("a server under a user-level init still counts as alive", async () => {
+    await expect(listCodecastPanesComplete(failed, async () => [{ ...server, ppid: 900 }] as never)).rejects.toThrow("incomplete");
+  });
+
+  test("a failed listing with nothing on the sockets it asked means nothing is running", async () => {
+    for (const command of ["/bin/zsh", "tmux -L work new-session -d", "tmux: server (/tmp/tmux-1000/work)", "tmux -S /tmp/mine attach"]) {
+      expect(await listCodecastPanesComplete(failed, async () => [{ ...server, command }] as never)).toEqual([]);
+    }
   });
 });
