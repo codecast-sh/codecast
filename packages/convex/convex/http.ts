@@ -3809,6 +3809,21 @@ http.route({
     if (payload.type === "event_callback") {
       const event = payload.event || {};
       const eventId = payload.event_id as string | undefined;
+      // A codecast link posted in Slack: unfurl it as the poster sees it
+      // (slackUnfurl). Slack wants a 200 within 3s, so the work is scheduled.
+      if (event.type === "link_shared") {
+        if (payload.team_id) {
+          await ctx.scheduler.runAfter(0, internal.slackUnfurl.handleLinkShared, {
+            workspace: String(payload.team_id),
+            event,
+            is_ext_shared_channel: !!payload.is_ext_shared_channel,
+          });
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       // Ignore the bot's own posts on both paths, so an anchor reply that happens
       // to @mention the app can't wake it in a loop (each loop has a new event_id,
       // so dedup wouldn't catch it).
