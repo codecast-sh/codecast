@@ -4,14 +4,15 @@
 // is not installed.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { herdrAlive, herdrBin, herdrRequest, herdrSnapshot, herdrSocketPath } from "./herdr.js";
+import { herdrAlive, herdrBin, herdrRequest, herdrSnapshot, herdrSocketPath, type HerdrPane } from "./herdr.js";
 import { HerdFocus, herdMembers, syncHerd, syncHerdStatus } from "./herdMirror.js";
-import { claimHerdViewer } from "./herdViewer.js";
+import { claimHerdViewer, herdViewerAlive } from "./herdViewer.js";
 import { execFileAsync } from "./proc.js";
 import { listCodecastPanesAsync, tmuxRunAsync } from "./tmux.js";
+import { routeTmuxArgs } from "./tmuxRoute.js";
 
 const bin = herdrBin();
 const SESSION = "e2e";
@@ -89,7 +90,7 @@ describe.skipIf(!bin || process.platform === "win32")("herdr", () => {
     const members = names.map((tmux, i) => ({ tmux, sessionId: `focus-${i}`, projectPath: dir, agent: "claude", state: null, title: tmux, tabLabel: tmux }));
     for (const name of names) await tmuxRunAsync(["new-session", "-d", "-s", name, "-x", "180", "-y", "50", "sleep 120"]);
     const controls = names.map((name) => {
-      const client = spawn("tmux", ["-C", "attach-session", "-t", `=${name}`], { stdio: ["pipe", "ignore", "ignore"], env: { ...process.env } });
+      const client = spawn("tmux", routeTmuxArgs(["-C", "attach-session", "-t", `=${name}`])[0], { stdio: ["pipe", "ignore", "ignore"], env: { ...process.env } });
       client.stdin!.write("refresh-client -C 180,50\n");
       return client;
     });
@@ -126,6 +127,62 @@ describe.skipIf(!bin || process.platform === "win32")("herdr", () => {
       await syncHerd(socketPath, []);
       for (const client of controls) client.kill();
       for (const name of names) await tmuxRunAsync(["kill-session", "-t", name]);
+    }
+  }, 60_000);
+
+  test("focus attaches to and detaches from sessions on their own tmux servers", async () => {
+    const names = ["cc-claude-own-a", "cc-claude-own-b"];
+    const members = names.map((tmux, i) => ({ tmux, sessionId: `own-${i}`, projectPath: dir, agent: "claude", state: null, title: tmux, tabLabel: tmux }));
+    for (const name of names) {
+      const started = await tmuxRunAsync(["new-session", "-d", "-s", name, "-x", "180", "-y", "50", "sleep 120"], { env: { CODECAST_TMUX_PER_SESSION: "1" }, timeout: 60_000 });
+      expect(started.status).toBe(0);
+      expect(spawnSync("tmux", ["has-session", "-t", `=${name}`], { stdio: "ignore", env: process.env }).status).not.toBe(0);
+    }
+    const clients = async () => (await tmuxRunAsync(["list-clients", "-F", "#{session_name}"])).stdout.trim().split("\n").filter(Boolean);
+    try {
+      await syncHerd(socketPath, members);
+      const panes = (await herdrSnapshot(socketPath)).panes.filter((p) => p.tokens?.codecast_session?.startsWith("own-"));
+      const focus = new HerdFocus();
+      for (const i of [0, 1, 0]) {
+        const pane = panes.find((p) => p.tokens?.codecast_session === `own-${i}`)!;
+        await herdrRequest(socketPath, "pane.focus", { pane_id: pane.pane_id });
+        await focus.sync(socketPath, members);
+        expect(await until(clients, (c) => c.length === 1 && c[0] === names[i])).toEqual([names[i]]);
+      }
+    } finally {
+      await syncHerd(socketPath, []);
+      for (const name of names) await tmuxRunAsync(["kill-session", "-t", name]);
+    }
+  }, 120_000);
+
+  test("a mirror whose attach is never confirmed leaves cast herd open", async () => {
+    const name = "cc-claude-noattach";
+    const host = "herd-noattach-host";
+    const viewerSocket = herdrSocketPath("codecast");
+    const script = join(dir, "noattach-viewer.ts");
+    writeFileSync(script, `import { runHerdCommand } from ${JSON.stringify(new URL("./herdCommand.ts", import.meta.url).pathname)}; await runHerdCommand(null);`);
+    const shimDir = join(dir, "noattach-bin");
+    mkdirSync(shimDir, { recursive: true });
+    const realTmux = String((await execFileAsync("which", ["tmux"], { encoding: "utf8" })).stdout).trim();
+    writeFileSync(join(shimDir, "tmux"), `#!/bin/sh\ncase " $* " in *" list-clients "*) exit 0;; esac\nexec ${realTmux} "$@"\n`, { mode: 0o755 });
+    await tmuxRunAsync(["new-session", "-d", "-s", name, "sleep 120"]);
+    await tmuxRunAsync(["set-option", "-t", name, "@codecast_session_id", "noattach-s1"]);
+    await tmuxRunAsync(["set-option", "-t", name, "@codecast_project_path", dir]);
+    try {
+      await tmuxRunAsync(["new-session", "-d", "-s", host, `env PATH=${shimDir}:${process.env.PATH} XDG_CONFIG_HOME=${dir} TMUX_TMPDIR=${process.env.TMUX_TMPDIR} ${process.execPath} ${script}`]);
+      const snap = await until(() => herdrSnapshot(viewerSocket).catch(() => ({ panes: [] as HerdrPane[] })), (s) => s.panes.some((p) => p.tokens?.codecast_session === "noattach-s1"), 20_000);
+      const pane = snap.panes.find((p) => p.tokens?.codecast_session === "noattach-s1")!;
+      await herdrRequest(viewerSocket, "pane.focus", { pane_id: pane.pane_id });
+      // Past HerdFocus's 10s attach deadline.
+      await new Promise((resolve) => setTimeout(resolve, 12_000));
+      expect(await herdViewerAlive(viewerSocket)).toBe(true);
+      expect((await tmuxRunAsync(["has-session", "-t", host])).status).toBe(0);
+    } finally {
+      await tmuxRunAsync(["send-keys", "-t", host, "C-b", "q"]);
+      await until(() => herdViewerAlive(viewerSocket), (alive) => !alive, 10_000);
+      await herdrRequest(viewerSocket, "server.stop").catch(() => {});
+      await tmuxRunAsync(["kill-session", "-t", host]);
+      await tmuxRunAsync(["kill-session", "-t", name]);
     }
   }, 60_000);
 

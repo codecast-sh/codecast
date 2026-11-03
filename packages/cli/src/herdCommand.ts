@@ -69,6 +69,7 @@ export async function runHerdCommand(
   const release = await claimHerdViewer(socketPath);
   const titles = serverTitles(config);
   const focus = new HerdFocus();
+  const problems = new Set<string>();
   let viewer: ReturnType<typeof spawn> | undefined;
   let closed = false;
   const stop = () => { closed = true; viewer?.kill("SIGTERM"); };
@@ -83,17 +84,22 @@ export async function runHerdCommand(
     let nextRefresh = 0;
     let members: ReturnType<typeof herdMembers> = [];
     while (!closed) {
-      if (Date.now() >= nextRefresh) {
-        const panes = await listCodecastPanesAsync();
-        await titles.refresh(panes.flatMap((p) => p.sessionId ?? []));
-        const cachedTitles = readTitleCache();
-        members = herdMembers(panes, { status: () => null, title: (sid) => titles.get(sid) ?? cachedTitles[sid] });
+      // One failed pass must not close the viewer; the next pass retries. Stderr would draw over herdr's screen, so problems wait for it to exit.
+      try {
+        if (Date.now() >= nextRefresh) {
+          nextRefresh = Date.now() + 3000;
+          const panes = await listCodecastPanesAsync();
+          await titles.refresh(panes.flatMap((p) => p.sessionId ?? []));
+          const cachedTitles = readTitleCache();
+          members = herdMembers(panes, { status: () => null, title: (sid) => titles.get(sid) ?? cachedTitles[sid] });
+          if (closed) break;
+          await syncHerd(socketPath, members, (message) => problems.add(message), () => !closed);
+        }
         if (closed) break;
-        await syncHerd(socketPath, members, (message) => console.error(`herd: ${message}`), () => !closed);
-        nextRefresh = Date.now() + 3000;
+        await focus.sync(socketPath, members, () => !closed);
+      } catch (err) {
+        problems.add(err instanceof Error ? err.message : String(err));
       }
-      if (closed) break;
-      await focus.sync(socketPath, members, () => !closed);
       await new Promise((r) => setTimeout(r, 500));
     }
   } finally {
@@ -102,6 +108,7 @@ export async function runHerdCommand(
       await release();
       await syncHerd(socketPath, []);
     } finally {
+      for (const problem of problems) console.error(`herd: ${problem}`);
       process.removeListener("SIGTERM", stop);
       process.removeListener("SIGINT", stop);
       process.removeListener("SIGHUP", stop);

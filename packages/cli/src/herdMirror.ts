@@ -3,6 +3,7 @@ import { herdViewerAlive } from "./herdViewer.js";
 import { execFileAsync } from "./proc.js";
 import { shellQuote } from "./shellQuote.js";
 import { tmuxRunAsync } from "./tmux.js";
+import { routeTmuxArgs } from "./tmuxRoute.js";
 import { cliFetchRead } from "./cliHttp.js";
 import type { CodecastPane } from "./tmux.js";
 import {
@@ -228,7 +229,8 @@ export async function syncHerdStatus(socketPath: string, members: HerdMember[], 
 }
 
 export class HerdFocus {
-  private attached: { paneId: string; tty: string } | null = null;
+  /** `server` holds the flags that reach the session's tmux server: detach-client targets a tty, which names no session to route by. */
+  private attached: { paneId: string; tty: string; server: string[] } | null = null;
 
   async sync(socketPath: string, members: HerdMember[], isActive: () => boolean = () => true): Promise<void> {
     const snap = await herdrSnapshot(socketPath);
@@ -236,7 +238,7 @@ export class HerdFocus {
     const member = members.find((m) => m.sessionId === pane?.tokens?.[HERD_SESSION_TOKEN]);
     if (this.attached?.paneId === pane?.pane_id && member) return;
     if (this.attached) {
-      const result = await tmuxRunAsync(["detach-client", "-t", this.attached.tty]);
+      const result = await tmuxRunAsync([...this.attached.server, "detach-client", "-t", this.attached.tty]);
       if (result.status !== 0 && snap.panes.some((p) => p.pane_id === this.attached!.paneId)) {
         const clients = await tmuxRunAsync(["list-clients", "-F", "#{client_tty}"]);
         if (clients.status !== 0 || clients.stdout.split("\n").includes(this.attached.tty)) return;
@@ -250,11 +252,12 @@ export class HerdFocus {
       : "");
     if (!ttyName || ttyName === "??" || ttyName === "?") return;
     const tty = ttyName.startsWith("/dev/") ? ttyName : `/dev/${ttyName}`;
+    const [attach] = routeTmuxArgs(["attach-session", "-f", "ignore-size", "-t", `=${member.tmux}`]);
     await herdrRequest(socketPath, "pane.send_text", {
       pane_id: pane.pane_id,
-      text: `env -u TMUX tmux attach-session -f ignore-size -t ${shellQuote(`=${member.tmux}`)}\r`,
+      text: `env -u TMUX tmux ${attach.map(shellQuote).join(" ")}\r`,
     });
-    this.attached = { paneId: pane.pane_id, tty };
+    this.attached = { paneId: pane.pane_id, tty, server: attach.slice(0, attach.indexOf("attach-session")) };
     const deadline = Date.now() + 10_000;
     while (isActive() && Date.now() < deadline) {
       const clients = await tmuxRunAsync(["list-clients", "-F", "#{client_tty}"]);

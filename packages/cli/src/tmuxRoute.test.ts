@@ -9,6 +9,7 @@ import {
   paneOwnerEnv,
   paneOwnerId,
   routeTmuxArgs,
+  runRouted,
   sessionServerSockets,
   socketOfTmuxEnv,
   targetSession,
@@ -128,6 +129,17 @@ describe("helpers", () => {
     const own = paneOwnerEnv("%3@cast-cc-x", env);
     expect(own.TMUX_PANE).toBe("%3");
     expect(paneOwnerId(own.TMUX_PANE, socketOfTmuxEnv(own.TMUX))).toBe("%3@cast-cc-x");
+  });
+});
+
+describe("runRouted", () => {
+  test("a server with no sessions leaves a fleet listing complete", async () => {
+    const exec = async (argv: string[]) => {
+      if (argv[0] !== "-L") throw Object.assign(new Error("Command failed"), { stderr: "no current target\n" });
+      return `${argv[1]}\n`;
+    };
+    const argvs = routeTmuxArgs(["list-clients"], env, undefined);
+    expect(await runRouted(argvs, exec, joinListings, env)).toBe("cast-cc-claude-own\ncast-cx-resume-two\n");
   });
 });
 
