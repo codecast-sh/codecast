@@ -114,6 +114,7 @@ a.flo-count:hover { border-color: var(--lw-ink-3); }
 .fll-row .flv-row-name { display: inline-flex; align-items: baseline; gap: 8px; }
 .fll-tag { font-size: var(--lw-fs-2xs); font-weight: 600; padding: 0 6px; border-radius: 999px; border: 1px solid var(--lw-rule); color: var(--lw-ink-3); }
 .fll-tag[data-tag="spine"] { color: var(--sol-green); border-color: color-mix(in srgb, var(--sol-green) 45%, transparent); }
+.fll-tag[data-tag="default"] { color: var(--sol-blue); border-color: color-mix(in srgb, var(--sol-blue) 45%, transparent); }
 .fll-changes { grid-column: 1; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .fll-ch { display: inline-flex; align-items: baseline; gap: 5px; font-size: var(--lw-fs-2xs); padding: 1px 7px; border-radius: 6px; background: var(--lw-card-2); color: var(--lw-ink-2); }
 .fll-ch i { font-style: normal; color: var(--lw-ink-3); }

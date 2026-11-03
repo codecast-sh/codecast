@@ -15767,7 +15767,7 @@ function scanOpenBackgroundTasksInto(
       timestamp?: string;
       operation?: string;
       content?: unknown;
-      attachment?: { prompt?: unknown };
+      attachment?: { prompt?: unknown; hookName?: unknown };
       message?: { role?: string; content?: unknown };
     };
     try {
@@ -15789,6 +15789,18 @@ function scanOpenBackgroundTasksInto(
     if (d.type === "attachment") {
       const prompt = d.attachment?.prompt;
       if (typeof prompt === "string") closeNotifiedTasks(prompt, open);
+      // A new agent process starts here: the harness records its SessionStart
+      // hooks on startup and on every resume (not on compaction, which keeps
+      // the process). Each task still open was a child of an earlier process
+      // and died with it, unnoticed. The restart fence (notBefore) drops them
+      // too, but only while the daemon still holds the process's start, which
+      // it forgets once the process is gone. So the watchdog, which only sees
+      // dead processes, revived a dormant session on every exit for ten days
+      // over a Monitor that had died on Oct 22 (jx71nrj).
+      else if (d.attachment?.hookName === "SessionStart:startup" || d.attachment?.hookName === "SessionStart:resume") {
+        for (const id of open) { openedAt?.delete(id); info?.delete(id); }
+        open.clear();
+      }
       continue;
     }
     if (d.type !== "user" && d.type !== "assistant") continue;
@@ -20865,12 +20877,6 @@ async function runHeartbeatMaintenance(): Promise<void> {
     await sweepGitPlaneFleet(ids).catch((e) => log(`[GITPLANE] pass error: ${(e as Error)?.message ?? e}`));
   }
 
-  // Shared checkouts that opted in ([ship] level) follow their upstream in
-  // place, touching only files nobody changed (land/levelSweep.ts).
-  if (tick % LEVEL_EVERY_N_FLUSHES === 0) {
-    await sweepLevelCheckouts(ids).catch((e) => log(`[LEVEL] pass error: ${(e as Error)?.message ?? e}`));
-  }
-
   // Reflog tail fallback: the watchers report within a second; this catches
   // anything they missed at the flush cadence. See pollGitActivity.
   await pollGitActivity().catch((e) => log(`[GITACTIVITY] poll error: ${(e as Error)?.message ?? e}`));
@@ -20898,7 +20904,26 @@ async function runHeartbeatMaintenance(): Promise<void> {
 //     past the watchdog's stale-heartbeat threshold on a large repo.
 const WIP_SNAPSHOT_EVERY_N_FLUSHES = 10; // ~5 min (flush = 30s), same cadence as the reaper
 const GIT_PLANE_EVERY_N_FLUSHES = 10; // ~5 min repair latency; fetches self-gate to ~10 min per repo
-const LEVEL_EVERY_N_FLUSHES = 2; // ~1 min: how stale a shared checkout may get behind its upstream
+const LEVEL_SWEEP_INTERVAL_MS = 60_000; // how stale a shared checkout may get behind its upstream
+
+// Shared checkouts that opted in ([ship] level) follow their upstream in place,
+// touching only files nobody changed (land/levelSweep.ts). The sweep keeps its
+// own clock, armed at start: the session heartbeat's maintenance pass runs only
+// while a session is registered, and a line host whose runs all wait at a hold
+// has none, so line-4's checkout stayed behind a pushed commit for six hours
+// (Nov 2) while its holds read their scripts from it.
+let levelSweepInProgress = false;
+async function runLevelSweep(): Promise<void> {
+  if (levelSweepInProgress) return;
+  levelSweepInProgress = true;
+  try {
+    await sweepLevelCheckouts(currentHeartbeatSessions());
+  } catch (e) {
+    log(`[LEVEL] pass error: ${(e as Error)?.message ?? e}`);
+  } finally {
+    levelSweepInProgress = false;
+  }
+}
 
 async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
   if (readConfig()?.level_checkouts_enabled === false) return;
@@ -30364,6 +30389,8 @@ async function main(): Promise<void> {
   void seedLiveWorkflowRuns().catch((err) => logError("seedLiveWorkflowRuns failed", err as Error));
   setInterval(() => { void sweepGoneWorkflowHosts().catch((err) => logError("sweepGoneWorkflowHosts failed", err as Error)); }, 60_000);
   setInterval(() => { void resumeOrphanedWorkflowRuns().catch((err) => logError("resumeOrphanedWorkflowRuns failed", err as Error)); }, WORKFLOW_RESUME_TICK_MS);
+  // Shared and line checkouts follow their upstream, with or without a session (runLevelSweep).
+  setInterval(() => { void runLevelSweep(); }, LEVEL_SWEEP_INTERVAL_MS);
   // Moments (learning-loop.md LL7): a machine that published a product's
   // extractors claims what is due and runs them in the product's checkout.
   setInterval(() => {

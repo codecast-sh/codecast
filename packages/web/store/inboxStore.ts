@@ -6415,6 +6415,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   renameTeam: (teamId: string, name: string) => Promise<unknown>;
   updateTeamIcon: (teamId: string, fields: { icon?: string; icon_color?: string }) => Promise<unknown>;
   updateTeamTaskStatuses: (teamId: string, statuses: { id: string; name: string; category: string; color?: string }[]) => Promise<unknown>;
+  setTeamDefaultFlow: (teamId: string, slug: string | null) => Promise<unknown>;
   setTeamMemberRole: (teamId: string, userId: string, role: "member" | "admin") => Promise<unknown>;
   removeTeamMember: (teamId: string, userId: string) => Promise<unknown>;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
@@ -13708,6 +13709,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
   updateTeamTaskStatuses: asyncAction(function (this: Draft, teamId: string, statuses: { id: string; name: string; category: string; color?: string }[]) {
     const team = (this.teams ?? []).find((t: any) => t?._id === teamId);
     if (team) team.task_statuses = statuses;
+  }),
+
+  setTeamDefaultFlow: asyncAction(function (this: Draft, teamId: string, slug: string | null) {
+    const team = (this.teams ?? []).find((t: any) => t?._id === teamId);
+    if (team) team.default_flow = slug ?? undefined;
   }),
 
   // teamMembers holds the active team's roster, keyed by user id.

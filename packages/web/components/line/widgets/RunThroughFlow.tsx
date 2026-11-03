@@ -1,15 +1,16 @@
 "use client";
-// "Ship" on a session (docs/architecture/flows.md FL4, FL6): the pool
-// of flows, each drawn on pick, and the press that asks this session to send
-// its own change through the one picked. The session does the run (it knows
+// "Flows" on a session (docs/architecture/flows.md FL4, FL6): the team's library
+// of flows a change can go through, the team's default first and picked, each
+// named with what it does and drawn on pick, and the press that asks this
+// session to send its own change through the one picked. The session does the run (it knows
 // what its change is and names its task); the review says what starts first,
 // since agent stations start sessions of their own.
 import { useMemo, useState } from "react";
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { Route } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
-import { usePoolFlowRows } from "../../../hooks/useSyncWorkflows";
-import { appPool, flowRowPath, linesFirst, type AppFlow } from "../../../lib/line/flowPool";
+import { usePoolFlowRows, useTeamDefaultFlowSlug } from "../../../hooks/useSyncWorkflows";
+import { appPool, defaultFlowOf, linesFirst, takesSessionChange, type AppFlow } from "../../../lib/line/flowPool";
 import { flowAsks, flowDiagram } from "../../../lib/line/flowDiagram";
 import { flowRunLedger } from "../../consequential/ledgers";
 import { runThroughMessage } from "../../../lib/line/flowMessages";
@@ -46,7 +47,7 @@ function RunThroughFlowButton({ conversationId, sessionTitle }: { conversationId
         <PopoverTrigger asChild>
           <button type="button" className={`cq-sq6 ${HEADER_CHIP}`} title="Check, review and ship this session's change through a flow" data-run-through>
             <Route className="w-3 h-3" />
-            <span className="cq-sq2">Ship</span>
+            <span className="cq-sq2">Flows</span>
           </button>
         </PopoverTrigger>
         <PopoverContent align="end" className="w-[640px] max-w-[calc(100vw-2rem)] p-0 border-sol-border bg-sol-bg" data-run-through-pool>
@@ -67,9 +68,14 @@ function ledgerFor(flow: AppFlow, session: string) {
 
 function PoolPicker({ onRun }: { onRun: (flow: AppFlow) => void }) {
   const workflows = usePoolFlowRows();
-  const pool = useMemo(() => linesFirst(appPool(workflows).filter((f) => f.takes.includes("branch"))), [workflows]);
-  const [picked, setPicked] = useState<string>("change");
-  const flow = pool.find((f) => f.slug === picked) ?? pool[0];
+  const teamSlug = useTeamDefaultFlowSlug();
+  const { pool, fallback } = useMemo(() => {
+    const all = linesFirst(appPool(workflows).filter(takesSessionChange));
+    const d = defaultFlowOf(all, teamSlug);
+    return { pool: d ? [d, ...all.filter((f) => f !== d)] : all, fallback: d };
+  }, [workflows, teamSlug]);
+  const [picked, setPicked] = useState<string | null>(null);
+  const flow = pool.find((f) => f.slug === picked) ?? fallback ?? pool[0];
   if (!flow) return null;
   return (
     <div className="lw-widget rtf">
@@ -77,9 +83,9 @@ function PoolPicker({ onRun }: { onRun: (flow: AppFlow) => void }) {
         {pool.map((f) => (
           <li key={f.slug}>
             <button type="button" role="option" aria-selected={f.slug === flow.slug} className="rtf-row" onClick={() => setPicked(f.slug)} onDoubleClick={() => onRun(f)} data-run-through-flow={f.slug}>
-              <span className="lw-flow-kind" data-kind={f.kind}>{f.kind === "line" ? "Flow" : "Segment"}</span>
               <b>{f.label}</b>
-              <span className="rtf-path">{flowRowPath(f)}</span>
+              {f === fallback ? <span className="rtf-default" data-run-through-default="">Default</span> : <span className="lw-flow-kind" data-kind={f.kind}>{f.kind === "line" ? "Flow" : "Segment"}</span>}
+              {f.description ? <span className="rtf-desc">{f.description}</span> : null}
             </button>
           </li>
         ))}
@@ -88,7 +94,6 @@ function PoolPicker({ onRun }: { onRun: (flow: AppFlow) => void }) {
         <FlowDiagram flow={flow} compact />
       </div>
       <footer className="rtf-foot">
-        <span className="rtf-desc">{flow.description}</span>
         <button type="button" className="rtf-go" onClick={() => onRun(flow)} data-run-through-go={flow.slug}>Run through {flow.label}</button>
       </footer>
     </div>

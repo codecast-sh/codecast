@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { BlogNav, Figure, Screenshot, SOL, H2, P, Code } from "../blogChrome";
+import { BlogNav, Screenshot, SOL, H2, P, Code, CardShot } from "../blogChrome";
 import { useRouteMeta } from "../../pageMeta";
 import { getPost } from "../posts";
 
@@ -16,18 +16,6 @@ import { getPost } from "../posts";
 // people, projects) is outside every crop. Nothing was composited or retouched.
 
 const DIR = "/blog/claude-code-sessions";
-
-/** A small capture shown at its own size (the PNGs are 2.56x), centred in the frame. */
-function CardShot({ src, alt, width, caption }: { src: string; alt: string; width: number; caption: string }) {
-  return (
-    <Figure caption={caption}>
-      <div className="flex justify-center px-4 py-6" style={{ backgroundColor: SOL.base2 }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} loading="lazy" className="block max-w-full h-auto" style={{ width }} />
-      </div>
-    </Figure>
-  );
-}
 
 export default function ClaudeCodeSessionsPost() {
   const post = getPost("claude-code-sessions");

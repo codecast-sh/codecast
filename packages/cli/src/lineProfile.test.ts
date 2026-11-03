@@ -138,9 +138,12 @@ describe("line profile (LP2)", () => {
 
   test("a station cap is read by station id and reaches the runner as a variable", () => {
     const { values } = parseLineProfileText(`[line.caps]\ncards = 3\n[line.caps.stations]\neval = 8\n`);
-    const profile = resolveLineProfile(values).profile;
+    const resolved = resolveLineProfile(values);
+    const profile = resolved.profile;
     expect(profile.caps).toEqual({ cards: 3, stations: { eval: 8 } });
     expect(lineProfileVars(profile)["line.caps.stations.eval"]).toBe("8");
+    // Each station's row names where its cap came from (it printed "(undefined)").
+    expect(formatLineProfile(resolved)).toMatch(/caps\.stations\.eval\s+8 at once\s+\(file\)/);
     expect(resolveLineProfile({}).profile.caps.stations).toBeUndefined();
     const err = (t: string) => { try { parseLineProfileText(t); } catch (e) { return e as Error; } return null; };
     expect(err(`[line.caps.stations]\neval = 0`)?.message).toContain("[line.caps.stations] eval must be a positive integer");

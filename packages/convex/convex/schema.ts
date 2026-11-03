@@ -462,6 +462,9 @@ export default defineSchema({
     // workspace and for every device enrolled in the team (lib/teamPolicyGuard),
     // and sent to those devices on the heartbeat.
     policy: v.optional(teamPolicyValidator),
+    // The library flow a session's change is offered first (flows.md FL4): a
+    // flow's slug, set by an admin on /flows. Unset: the shipped `change`.
+    default_flow: v.optional(v.string()),
     // IANA zone the team's day is cut in (Changes editions, lib/teamDay.ts).
     // Unset: the earliest admin's users.timezone, else UTC.
     timezone: v.optional(v.string()),
@@ -1044,6 +1047,13 @@ export default defineSchema({
     // this only marks that the pre-feature history was caught up. Set = never
     // sweep this conversation again.
     images_backfilled_at: v.optional(v.number()),
+    // When every message in this conversation carries its nav_prompt flag
+    // (backfillNavPrompts). Until then getUserMessages scans the user-role
+    // range; after, it reads the prompt index. Set = never sweep again.
+    nav_prompts_indexed_at: v.optional(v.number()),
+    // When the running backfillNavPrompts sweep started; a later open does not
+    // start a second one unless this is stale. Cleared when the sweep finishes.
+    nav_prompts_backfill_started_at: v.optional(v.number()),
     has_pending_messages: v.optional(v.boolean()),
     // True while the conversation's newest message is a transient Claude Code
     // API/auth-error banner (see isApiErrorBanner). Cleared when a real turn
@@ -2338,6 +2348,12 @@ export default defineSchema({
       cache_read_input_tokens: v.optional(v.number()),
     })),
     embedding: v.optional(v.array(v.float64())),
+    // True on a row the message navigator lists (isNavigableUserMessage),
+    // absent otherwise. Written at every insert and patch through
+    // navPromptField/navPromptPatch, so getUserMessages reads prompts off
+    // by_conversation_nav_prompt instead of scanning the user-role range,
+    // which is mostly tool results.
+    nav_prompt: v.optional(v.literal(true)),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
@@ -2347,6 +2363,10 @@ export default defineSchema({
     .index("by_message_uuid", ["message_uuid"])
     .index("by_timestamp", ["timestamp"])
     .index("by_conversation_role_timestamp", ["conversation_id", "role", "timestamp"])
+    // Staged: messages is the largest table, so the index builds in the
+    // background instead of blocking the push. Unstage it, and turn on
+    // NAV_PROMPT_INDEX_LIVE (conversations.ts), once the build has finished.
+    .index("by_conversation_nav_prompt", { fields: ["conversation_id", "nav_prompt", "timestamp"], staged: true })
     .searchIndex("search_content_v2", {
       searchField: "content",
       filterFields: ["conversation_id"],

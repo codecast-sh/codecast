@@ -581,14 +581,14 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 /* Run through (RunThroughFlow): the pool, the picked flow drawn, the press. */
 .rtf { margin: 0; max-width: none; }
 .rtf-list { list-style: none; margin: 0; padding: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; border-bottom: 1px solid var(--lw-rule-2); }
-.rtf-row { width: 100%; display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: 7px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; background: none; text-align: left; cursor: pointer; min-width: 0; }
+.rtf-row { width: 100%; height: 100%; display: grid; grid-template-columns: 1fr auto; align-items: baseline; column-gap: 7px; row-gap: 2px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; background: none; text-align: left; cursor: pointer; min-width: 0; }
 .rtf-row:hover { background: var(--lw-card-2); }
 .rtf-row[aria-selected="true"] { background: var(--lw-card); border-color: var(--lw-rule); }
 .rtf-row b { font-size: var(--lw-fs-sm); color: var(--lw-ink); font-weight: 600; }
-.rtf-path { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rtf-default { font-size: var(--lw-fs-2xs); font-weight: 600; color: var(--sol-blue); }
 .rtf-preview { background: var(--lw-paper); }
-.rtf-foot { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-top: 1px solid var(--lw-rule-2); }
-.rtf-desc { flex: 1; min-width: 0; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rtf-foot { display: flex; justify-content: flex-end; padding: 9px 12px; border-top: 1px solid var(--lw-rule-2); }
+.rtf-desc { grid-column: 1 / -1; font-size: var(--lw-fs-xs); line-height: 1.35; color: var(--lw-ink-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .rtf-go { flex: none; font-size: var(--lw-fs-sm); font-weight: 600; padding: 5px 12px; border-radius: 7px; border: 1px solid color-mix(in srgb, var(--sol-blue) 50%, transparent); background: color-mix(in srgb, var(--sol-blue) 14%, var(--lw-card)); color: var(--sol-blue); cursor: pointer; }
 .rtf-go:hover { background: color-mix(in srgb, var(--sol-blue) 22%, var(--lw-card)); }
 .fd-seg[data-parallel] .fd-seg-steps { flex-direction: column; gap: 6px; }
