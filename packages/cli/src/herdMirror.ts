@@ -228,9 +228,15 @@ export async function syncHerdStatus(socketPath: string, members: HerdMember[], 
   await applyHerd(socketPath, ops, snap, log);
 }
 
+/** How long an attach line typed into a pane may still be unread by its shell. */
+const RETYPE_AFTER_MS = 60_000;
+
 export class HerdFocus {
   /** `server` holds the flags that reach the session's tmux server: detach-client targets a tty, which names no session to route by. */
   private attached: { paneId: string; tty: string; server: string[] } | null = null;
+  private typedAt = new Map<string, number>();
+
+  constructor(private tmux: typeof tmuxRunAsync = tmuxRunAsync) {}
 
   async sync(socketPath: string, members: HerdMember[], isActive: () => boolean = () => true): Promise<void> {
     const snap = await herdrSnapshot(socketPath);
@@ -238,33 +244,52 @@ export class HerdFocus {
     const member = members.find((m) => m.sessionId === pane?.tokens?.[HERD_SESSION_TOKEN]);
     if (this.attached?.paneId === pane?.pane_id && member) return;
     if (this.attached) {
-      const result = await tmuxRunAsync([...this.attached.server, "detach-client", "-t", this.attached.tty]);
+      const result = await this.tmux([...this.attached.server, "detach-client", "-t", this.attached.tty]);
       if (result.status !== 0 && snap.panes.some((p) => p.pane_id === this.attached!.paneId)) {
-        const clients = await tmuxRunAsync(["list-clients", "-F", "#{client_tty}"]);
+        const clients = await this.tmux(["list-clients", "-F", "#{client_tty}"]);
         if (clients.status !== 0 || clients.stdout.split("\n").includes(this.attached.tty)) return;
       }
       this.attached = null;
     }
     if (!pane || !member || !isActive()) return;
-    const { process_info: info } = await herdrRequest<{ process_info: { tty?: string; shell_pid?: number } }>(socketPath, "pane.process_info", { pane_id: pane.pane_id });
+    const { process_info: info } = await herdrRequest<{ process_info: { tty?: string; shell_pid?: number; foreground_process_group_id?: number } }>(socketPath, "pane.process_info", { pane_id: pane.pane_id });
     const ttyName = info.tty ?? (info.shell_pid
       ? String((await execFileAsync("ps", ["-o", "tty=", "-p", String(info.shell_pid)], { encoding: "utf8", timeout: 3000 })).stdout).trim()
       : "");
     if (!ttyName || ttyName === "??" || ttyName === "?") return;
     const tty = ttyName.startsWith("/dev/") ? ttyName : `/dev/${ttyName}`;
     const [attach] = routeTmuxArgs(["attach-session", "-f", "ignore-size", "-t", `=${member.tmux}`]);
+    const server = attach.slice(0, attach.indexOf("attach-session"));
+    const listsTty = async () => {
+      const clients = await this.tmux([...server, "list-clients", "-F", "#{client_tty}"]);
+      return clients.status === 0 && clients.stdout.split("\n").includes(tty);
+    };
+    // Typed text goes to whatever holds the terminal, and a tmux client hands it to the agent as a prompt.
+    if (info.foreground_process_group_id !== info.shell_pid) {
+      if (await listsTty()) {
+        this.attached = { paneId: pane.pane_id, tty, server };
+        this.typedAt.delete(pane.pane_id);
+      }
+      return;
+    }
+    // A shell still starting up may not have read the last line, and a second line would reach the client the first one starts.
+    if (Date.now() - (this.typedAt.get(pane.pane_id) ?? 0) < RETYPE_AFTER_MS) return;
+    this.typedAt.set(pane.pane_id, Date.now());
+    this.attached = { paneId: pane.pane_id, tty, server };
     await herdrRequest(socketPath, "pane.send_text", {
       pane_id: pane.pane_id,
       text: `env -u TMUX tmux ${attach.map(shellQuote).join(" ")}\r`,
     });
-    this.attached = { paneId: pane.pane_id, tty, server: attach.slice(0, attach.indexOf("attach-session")) };
     const deadline = Date.now() + 10_000;
     while (isActive() && Date.now() < deadline) {
-      const clients = await tmuxRunAsync(["list-clients", "-F", "#{client_tty}"]);
-      if (clients.status === 0 && clients.stdout.split("\n").includes(tty)) return;
+      if (await listsTty()) {
+        this.typedAt.delete(pane.pane_id);
+        return;
+      }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     if (!isActive()) return;
+    this.attached = null;
     throw new Error(`tmux viewer did not attach to ${member.tmux}`);
   }
 }

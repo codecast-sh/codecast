@@ -7,7 +7,7 @@ import { claimHerdViewer } from "./herdViewer.js";
 import { formatElapsed, formatProgress, requestHerdTake, resolveSessionRef } from "./herdTake.js";
 import { readLocalConversationMap } from "./localConversationMap.js";
 import { readTitleCache } from "./titleCache.js";
-import { ensureTmux, listCodecastPanes, listCodecastPanesAsync, tmuxRun, type CodecastPane } from "./tmux.js";
+import { ensureTmux, listCodecastPanes, listCodecastPanesComplete, tmuxRun, type CodecastPane } from "./tmux.js";
 
 /** The environment herdr's server hands its panes. A server started from
  *  inside tmux would pass TMUX on, and every pane's `tmux attach` would refuse
@@ -88,7 +88,7 @@ export async function runHerdCommand(
       try {
         if (Date.now() >= nextRefresh) {
           nextRefresh = Date.now() + 3000;
-          const panes = await listCodecastPanesAsync();
+          const panes = await listCodecastPanesComplete();
           await titles.refresh(panes.flatMap((p) => p.sessionId ?? []));
           const cachedTitles = readTitleCache();
           members = herdMembers(panes, { status: () => null, title: (sid) => titles.get(sid) ?? cachedTitles[sid] });
