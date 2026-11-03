@@ -7,12 +7,12 @@
 // (/flows/<owner>): that role's flow, drawn, with its facts and its counts.
 import { useContext, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useSyncWorkflowRun } from "../../../../../hooks/useSyncWorkflows";
+import { useSyncWorkflowRun, useTeamDefaultFlowSlug } from "../../../../../hooks/useSyncWorkflows";
 import { useFlowLibrary, type FlowRun as Run } from "../../../../../hooks/useFlowLibrary";
 import { useOwnedFlows } from "../../../../../hooks/useOwnedFlows";
 import { useSessionFlows, type LiveFlow, type SessionFlow } from "../../../../../hooks/useLiveFlow";
 import { useInboxStore } from "../../../../../store/inboxStore";
-import { appPool, flowBySlug, flowRowPath, pushedFlow, type AppFlow } from "../../../../../lib/line/flowPool";
+import { appPool, CHANGE_FLOW_SLUG, defaultFlowOf, flowBySlug, flowRowPath, pushedFlow, takesSessionChange, type AppFlow } from "../../../../../lib/line/flowPool";
 import { changesAnything, libraryEntry, libraryFlows, type FlowLibrary, type LibraryEntry, type VariantChange } from "../../../../../lib/line/flowLibrary";
 import { liveFlowLedger, liveQueue, startFlowLedger, type LiveQueueRow } from "../../../../../lib/line/liveFlow";
 import { scoreBand } from "../../../../../lib/line/problemScore";
@@ -44,6 +44,7 @@ function FlowsHome(props: LineViewProps) {
   const { select, space } = props;
   const { lib, live, runsOf } = useFlowLibrary(space);
   const sessions = useSessionFlows(space);
+  const defaultSlug = useDefaultFlowSlug(space, lib);
   const open = (slug: string) => select({ item: slug, run: null });
   return (
     <div className="flh" data-flows-home>
@@ -52,7 +53,7 @@ function FlowsHome(props: LineViewProps) {
       <section data-flows-library>
         <h2 className="flv-h">Library<span className="lw-num">{libraryFlows({ lines: lib.lines, segments: [] }).length}</span></h2>
         <ul className="fll-tree">
-          {lib.lines.map((e) => <LibraryBranch key={e.flow.slug} entry={e} runsOf={runsOf} picked={null} onPick={open} depth={0} />)}
+          {lib.lines.map((e) => <LibraryBranch key={e.flow.slug} entry={e} runsOf={runsOf} picked={null} onPick={open} depth={0} defaultSlug={defaultSlug} />)}
         </ul>
       </section>
       {/* The flows the team's sessions ran (Claude Code workflows, `cast flow run`), each one Save from the library. */}
@@ -61,7 +62,7 @@ function FlowsHome(props: LineViewProps) {
         <h2 className="flv-h">Segments<span className="lw-num">{lib.segments.length}</span></h2>
         <ul className="fll-shelf">
           {lib.segments.map((f) => (
-            <li key={f.slug}><button type="button" className="fll-seg" onClick={() => open(f.slug)} data-flow-row={f.slug}><b>{f.label}</b>{f.stations.length > 1 ? <span>{f.stations.length} steps</span> : null}</button></li>
+            <li key={f.slug}><button type="button" className="fll-seg" onClick={() => open(f.slug)} data-flow-row={f.slug}><b>{f.label}</b>{f.slug === defaultSlug ? <DefaultTag /> : null}{f.stations.length > 1 ? <span>{f.stations.length} steps</span> : null}</button></li>
           ))}
         </ul>
       </section>
@@ -242,7 +243,7 @@ function QueueRow({ row: r, n, area, href }: { row: LiveQueueRow; n: number; are
 }
 
 /** One flow of the library and, under it, the flows that extend it, each with what it changes. */
-function LibraryBranch({ entry: e, runsOf, picked, onPick, depth }: { entry: LibraryEntry; runsOf: Map<string, Run[]>; picked: string | null; onPick: (slug: string) => void; depth: number }) {
+function LibraryBranch({ entry: e, runsOf, picked, onPick, depth, defaultSlug }: { entry: LibraryEntry; runsOf: Map<string, Run[]>; picked: string | null; onPick: (slug: string) => void; depth: number; defaultSlug: string | null }) {
   const all = runsOf.get(e.flow.slug) ?? [];
   const live = all.filter((r) => r.status === "running").length;
   return (
@@ -252,6 +253,7 @@ function LibraryBranch({ entry: e, runsOf, picked, onPick, depth }: { entry: Lib
           {e.flow.label}
           {e.spine ? <span className="fll-tag" data-tag="spine">Spine</span> : null}
           {e.base ? <span className="fll-tag">Variant</span> : null}
+          {e.flow.slug === defaultSlug ? <DefaultTag /> : null}
         </span>
         {e.change ? <ChangeChips change={e.change} /> : flowRowPath(e.flow) ? <span className="flv-row-path">{flowRowPath(e.flow)}</span> : null}
         <span className="flv-row-n">
@@ -259,7 +261,7 @@ function LibraryBranch({ entry: e, runsOf, picked, onPick, depth }: { entry: Lib
           {all.length ? <span>{all.length} {all.length === 1 ? "run" : "runs"}</span> : null}
         </span>
       </button>
-      {e.variants.length ? <ul className="fll-branch">{e.variants.map((v) => <LibraryBranch key={v.flow.slug} entry={v} runsOf={runsOf} picked={picked} onPick={onPick} depth={depth + 1} />)}</ul> : null}
+      {e.variants.length ? <ul className="fll-branch">{e.variants.map((v) => <LibraryBranch key={v.flow.slug} entry={v} runsOf={runsOf} picked={picked} onPick={onPick} depth={depth + 1} defaultSlug={defaultSlug} />)}</ul> : null}
     </li>
   );
 }
@@ -318,7 +320,8 @@ function SessionShelf({ flows, library, names }: { flows: SessionFlow[]; library
  *  of, and the changes that ran through it. */
 function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
   const { lib, flows, runsOf } = useFlowLibrary(space);
-  const picked = flowBySlug(flows, selection.item) ?? flowBySlug(flows, "change") ?? flows[0];
+  const defaultSlug = useDefaultFlowSlug(space, lib);
+  const picked = flowBySlug(flows, selection.item) ?? flowBySlug(flows, defaultSlug ?? CHANGE_FLOW_SLUG) ?? flows[0];
   const entry = libraryEntry(lib, picked.slug);
   const usedBy = flows.filter((f) => f.uses.includes(picked.slug));
   const pickedRuns = (runsOf.get(picked.slug) ?? []).slice().sort((a, b) => b.created_at - a.created_at);
@@ -332,13 +335,13 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
         <button type="button" className="flv-back" onClick={() => select({ item: null, run: null })} data-flows-back>All flows</button>
         <section>
           <h2 className="flv-h">Library</h2>
-          <ul className="fll-tree">{lib.lines.map((e) => <LibraryBranch key={e.flow.slug} entry={e} runsOf={runsOf} picked={picked.slug} onPick={pick} depth={0} />)}</ul>
+          <ul className="fll-tree">{lib.lines.map((e) => <LibraryBranch key={e.flow.slug} entry={e} runsOf={runsOf} picked={picked.slug} onPick={pick} depth={0} defaultSlug={defaultSlug} />)}</ul>
         </section>
         <section>
           <h2 className="flv-h">Segments<span className="lw-num">{lib.segments.length}</span></h2>
           <ul>
             {lib.segments.map((f) => (
-              <li key={f.slug}><button type="button" className="flv-row" aria-current={f.slug === picked.slug ? "true" : undefined} onClick={() => pick(f.slug)} data-flow-row={f.slug}><span className="flv-row-name">{f.label}</span></button></li>
+              <li key={f.slug}><button type="button" className="flv-row" aria-current={f.slug === picked.slug ? "true" : undefined} onClick={() => pick(f.slug)} data-flow-row={f.slug}><span className="flv-row-name">{f.label}{f.slug === defaultSlug ? <DefaultTag /> : null}</span></button></li>
             ))}
           </ul>
         </section>
@@ -349,6 +352,7 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
           <span className="lw-flow-kind" data-kind={picked.kind}>{entry?.spine ? "Spine" : entry?.base ? "Variant" : picked.kind === "line" ? "Flow" : "Segment"}</span>
           <h1>{picked.label}</h1>
           <span className="flv-where">{picked.where === "shipped" ? "ships with codecast" : "in the team's library"}</span>
+          <DefaultFlowControl flow={picked} space={space ?? null} isDefault={picked.slug === defaultSlug} />
           {pickedRuns.length > 0 && (
             <button type="button" className="flv-steps" onClick={() => select({ view: "line", graph: picked.slug })} title="Each step's prompt, its decisions on past runs, and how often it sent work each way" data-flow-steps={picked.slug}>Steps</button>
           )}
@@ -438,6 +442,25 @@ function FlowOverview({ owner, workspace, select, href, space }: LineViewProps &
 function Count({ n, label, tone, to }: { n: number; label: string; tone?: "ask"; to: string | null }) {
   const body = <><b className="lw-num">{n}</b><span>{label}</span></>;
   return to ? <Link href={to} className="flo-count" data-tone={n > 0 ? tone : undefined}>{body}</Link> : <span className="flo-count" data-quiet="">{body}</span>;
+}
+
+const DefaultTag = () => <span className="fll-tag" data-tag="default" data-flow-default="">Default</span>;
+
+/** The team's default flow, resolved against its library: what sessions are offered first (RunThroughFlow). */
+function useDefaultFlowSlug(space: string | null | undefined, lib: FlowLibrary): string | null {
+  const team = space?.startsWith("team:") ? space.slice(5) : null;
+  const set = useTeamDefaultFlowSlug(team);
+  return useMemo(() => defaultFlowOf(libraryFlows(lib), set)?.slug ?? null, [lib, set]);
+}
+
+/** Default on a flow's page: the tag when it is the team's default; Make default for a team admin on a flow that can
+ *  take a session's change. One press, undoable, so no confirm. */
+function DefaultFlowControl({ flow, space, isDefault }: { flow: AppFlow; space: string | null; isDefault: boolean }) {
+  const team = space?.startsWith("team:") ? space.slice(5) : null;
+  const admin = useInboxStore((s) => !!team && ((s.teams || []) as Array<{ _id: string; role?: string }>).some((t) => String(t._id) === team && (t.role === "admin" || t.role === "owner")));
+  if (isDefault) return <DefaultTag />;
+  if (!team || !admin || !takesSessionChange(flow)) return null;
+  return <button type="button" className="flv-steps" onClick={() => useInboxStore.getState().setTeamDefaultFlow(team, flow.slug)} data-flow-make-default={flow.slug}>Make default</button>;
 }
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {

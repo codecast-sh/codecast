@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 HERE = os.path.dirname(os.path.abspath(__file__))
+# AC3's gap as delivery enforces it today (3 minutes until Oct 22, 1 since).
+CONTEXT_GAP_MS = int(re.search(r"CONTEXT_MIN_GAP_MS = ([\d_]+)", open(os.path.join(REPO, "packages/convex/convex/transcripts.ts")).read()).group(1).replace("_", ""))
 HOME = os.path.join(os.environ.get("CODECAST_EVALS_HOME") or os.path.expanduser("~/.local/share/codecast/evals"), "org-comms")
 HARNESS = os.path.join(REPO, "packages/cli/scripts/prompt-dry-run.ts")
 ASHOT = "kd700q4pr2m98a3nghfesw4vxx7wkn6z"
@@ -59,6 +61,10 @@ def relation(msg, convs, short):
     # A short id is a 7 character prefix and thousands collide across users, so
     # one sender id can name several sessions: take the reading closest to the
     # recipient's line, since a stranger sharing a parent's prefix is not the sender.
+    # The recipient's own row names its driver in full, so it settles the
+    # sender even when the driver is outside the export (a Line run's own
+    # session above all) and a stranger with the same prefix is inside it.
+    if rc and (lead(rc) or "").startswith(sender): return "parent->worker"
     found = [place(rc, sc, convs) for sc in short.get(sender, [])] if rc else []
     return min(found, key=LINE_ORDER.index) if found else "unresolved"
 
@@ -66,15 +72,21 @@ def relation(msg, convs, short):
 LINE_ORDER = ["parent->worker", "worker->parent", "sibling", "ancestor", "descendant", "role", "peer"]
 
 
+def lead(c):
+    """The session that drives this one: a subagent's parent, else whoever
+    spawned it (a plain `cast spawn`, or a Line run handing a station its brief)."""
+    return c.get("parent_conversation_id") or c.get("spawned_by_conversation_id")
+
+
 def place(rc, sc, convs):
-    if rc.get("parent_conversation_id") == sc["_id"]: return "parent->worker"
-    if sc.get("parent_conversation_id") == rc["_id"]: return "worker->parent"
-    if sc.get("parent_conversation_id") and sc.get("parent_conversation_id") == rc.get("parent_conversation_id"): return "sibling"
+    if lead(rc) == sc["_id"]: return "parent->worker"
+    if lead(sc) == rc["_id"]: return "worker->parent"
+    if lead(sc) and lead(sc) == lead(rc): return "sibling"
     for a, b in ((rc, sc["_id"]), (sc, rc["_id"])):
-        p, d = a.get("parent_conversation_id"), 0
+        p, d = lead(a), 0
         while p and d < 6:
             if p == b: return "ancestor" if a is rc else "descendant"
-            p, d = convs.get(p, {}).get("parent_conversation_id"), d + 1
+            p, d = lead(convs.get(p, {})), d + 1
     if rc.get("standing_role_id") or sc.get("standing_role_id"): return "role"
     return "peer"
 
@@ -165,7 +177,7 @@ def main():
         # places the older senders.
         convex_data("conversations", 100000, os.path.join(exp, "convs.jsonl"))
 
-    keep = ["_id", "_creationTime", "short_id", "title", "user_id", "parent_conversation_id", "standing_role_id", "org_role_id", "session_id"]
+    keep = ["_id", "_creationTime", "short_id", "title", "user_id", "parent_conversation_id", "spawned_by_conversation_id", "standing_role_id", "org_role_id", "session_id"]
     convs = {r["_id"]: {k: r.get(k) for k in keep} for r in load_jsonl(os.path.join(exp, "convs.jsonl"))}
     short = collections.defaultdict(list)
     for c in convs.values():
@@ -197,7 +209,7 @@ def main():
     for m in huddle:
         if unnamed_of(m): arrivals[m["conversation_id"]].append(m["_creationTime"])
     gaps = [b - t for v in arrivals.values() for t, b in zip(sorted(v), sorted(v)[1:]) if b - t < 3600_000]
-    inside_gap = round(100 * sum(1 for g in gaps if g < 170_000) / len(gaps), 1) if gaps else None
+    inside_gap = round(100 * sum(1 for g in gaps if g < CONTEXT_GAP_MS * 0.95) / len(gaps), 1) if gaps else None
     per_recipient = collections.Counter(m["conversation_id"] for m in msgs if m["rel"] != "huddle-feed")
     senders_of = collections.defaultdict(set)
     for m in msgs:
@@ -304,7 +316,7 @@ def main():
     if os.path.exists(base): reports.insert(0, json.load(open(base)))
     rows = [("messages/new session", lambda r: r.get("messages_per_new_session")),
             ("huddle chunks unnamed", lambda r: r["huddle"]["unnamed"] if r.get("days") == 7 else round(r["huddle"]["unnamed"] * 7 / r["days"])),
-            ("unnamed chunks inside the 3 min gap %", lambda r: r["huddle"]["inside_gap_pct"]),
+            ("unnamed chunks inside the delivery gap %", lambda r: r["huddle"]["inside_gap_pct"]),
             ("huddle noise %", lambda r: r["huddle"]["noise_pct"]),
             ("agent noise %", lambda r: r["agent_to_agent"]["noise_pct"]),
             ("changed recipient %", lambda r: r["agent_to_agent"]["changed_pct"]),

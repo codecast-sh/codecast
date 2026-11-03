@@ -114,6 +114,7 @@ const BlogTurns = lazy(() => import("@/app/(marketing)/blog/the-tree-at-the-end-
 const BlogUndo = lazy(() => import("@/app/(marketing)/blog/undo-with-a-history/page"));
 const BlogClaudeSessions = lazy(() => import("@/app/(marketing)/blog/claude-code-sessions/page"));
 const BlogAgentsTogether = lazy(() => import("@/app/(marketing)/blog/claude-code-cursor-codex/page"));
+const BlogFromYourPhone = lazy(() => import("@/app/(marketing)/blog/claude-code-from-your-phone/page"));
 const BlogChartReply = lazy(() => import("@/app/(marketing)/blog/the-chart-in-the-reply/page"));
 const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
 const BlogTaskPage = lazy(() => import("@/app/(marketing)/blog/the-task-your-agent-reports-to/page"));
@@ -323,6 +324,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/undo-with-a-history", component: cast(BlogUndo), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/claude-code-sessions", component: cast(BlogClaudeSessions), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/claude-code-cursor-codex", component: cast(BlogAgentsTogether), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/claude-code-from-your-phone", component: cast(BlogFromYourPhone), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-chart-in-the-reply", component: cast(BlogChartReply), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-questions-your-agents-save-for-you", component: cast(BlogQuestions), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-task-your-agent-reports-to", component: cast(BlogTaskPage), layout: "marketing", guestOk: true, guestKind: "public" },

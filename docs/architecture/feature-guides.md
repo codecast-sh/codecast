@@ -9,7 +9,7 @@ not turned on, and how a feature guide is built. Sections are FG1 onward.
 
 | Layer | Org off | Flows off |
 |---|---|---|
-| Web | `/org`, `/anchor`, `/org/<id>` show the feature landing (FG3); the workspace agent row, palette entry, anchor panel and role controls are gone | every Flows address lands on `/flows`, which shows the landing; Ship on a session header and the `flow`/`line` cards in transcripts are gone (`useWorkspaceFeature("line")`) |
+| Web | `/org`, `/anchor`, `/org/<id>` show the feature landing (FG3); the workspace agent row, palette entry, anchor panel and role controls are gone | every Flows address lands on `/flows`, which shows the landing; Flows on a session header and the `flow`/`line` cards in transcripts are gone (`useWorkspaceFeature("line")`) |
 | Surface registry | | `nav.line` is a feature surface (`surfaceRules.ts FEATURE_SURFACES`): no staff bypass, the switch alone decides |
 | Server | org reads return nothing (`org.ts requireWorkspaceCaller`); a role's triggers wait (`agentTasks.roleTriggerHeld`) and fire again untouched once Org is back on | the line sweep starts no run in a workspace with Flows or Org off (`orgLine.linesRunIn`); a live flow runs as an Org role, so it needs both |
 | CLI | `cast role`, `cast org`, `cast anchor` refuse (`requireOrgFeatureHook`) | `cast flow run`, `publish`, `import` and `on` refuse (`FlowDeps.requireFlows`); reading and runs already going are left alone; session start drops the `<flows>` line (`poolForCli.flows_on`) |

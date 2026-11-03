@@ -42,7 +42,7 @@ import {
 import { onFreshApiErrorPark } from "./accountSwitch";
 import { isCurrentBlock } from "./ccAccountsShared";
 import { safetyBlockPatch } from "./conversationSafety";
-import { stripContextTags } from "./userMessagesFilter";
+import { stripContextTags, navPromptField, navPromptPatch } from "./userMessagesFilter";
 import { dropMirroredMessage } from "./searchMirror";
 import { countMatches, parseSearchTerms } from "@codecast/shared/search";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
@@ -81,6 +81,7 @@ export function buildExistingMessagePatch(
     files?: unknown;
     subtype?: string;
     model?: string;
+    nav_prompt?: true;
   },
   incoming: {
     role: string;
@@ -129,7 +130,9 @@ export function buildExistingMessagePatch(
     patch.files = incoming.files;
   }
 
-  return Object.keys(patch).length > 0 ? patch : null;
+  if (Object.keys(patch).length === 0) return null;
+  // The navigator's index flag follows whatever this patch changed.
+  return { ...patch, ...navPromptPatch(existing as Parameters<typeof navPromptPatch>[0], patch) };
 }
 
 // A /model switch emits a user line `<local-command-stdout>Set model to <Name>`
@@ -1313,6 +1316,7 @@ export const addMessage = mutation({
       usage: args.usage,
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
+      ...navPromptField({ role: args.role, content: contentToStore, tool_results: safeToolResults, images, subtype: args.subtype }),
     });
     if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
     await scheduleUserSend(ctx, conversation, { _id: messageId, role: args.role, content: contentToStore, tool_results: safeToolResults, from_user_id: fromUserIdToStore, queued: queuedBy(matchingPending) }, msgTimestamp);
@@ -1940,7 +1944,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
             patch.tool_results = safeToolResults;
           }
           if (Object.keys(patch).length > 0) {
-            await ctx.db.patch(dup._id, patch);
+            await ctx.db.patch(dup._id, { ...patch, ...navPromptPatch(dup, patch) });
           }
           if (matchingPending) {
             consumedPendingIds.add(matchingPending._id);
@@ -1997,6 +2001,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
       usage: msg.usage,
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
+      ...navPromptField({ role: msg.role, content: contentToStore, tool_results: safeToolResults, images, subtype: msg.subtype }),
     });
     if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
     if (hosted) await storeHostedReplay(ctx, args.conversation_id, messageId, msg, { thinking: safeThinking, tool_calls: safeToolCalls });

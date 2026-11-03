@@ -232,7 +232,13 @@ function networkEvent(r: any, t: number, pageUrl?: string): ReplayEvent | undefi
   if (!url) return undefined;
   const statusRaw = r.status ?? r.responseStatus ?? r.response?.status;
   const status = typeof statusRaw === "number" ? statusRaw : 0;
-  const msRaw = typeof r.duration === "number" ? r.duration : typeof r.endTime === "number" && typeof r.startTime === "number" ? r.endTime - r.startTime : 0;
+  // A request lasts until its response ends. A performance entry's duration
+  // means that for a resource but runs to loadEventEnd for a navigation, the
+  // whole page's load.
+  const start = typeof r.startTime === "number" ? r.startTime : undefined;
+  const msRaw = start !== undefined && typeof r.responseEnd === "number" && r.responseEnd > 0 ? r.responseEnd - start
+    : typeof r.duration === "number" ? r.duration
+    : start !== undefined && typeof r.endTime === "number" ? r.endTime - start : 0;
   const method = typeof r.method === "string" ? r.method.toUpperCase() : "GET";
   // A resource with no status that PostHog reports from the performance API is
   // not a failure: the browser hides cross-origin statuses. Only a fetch or

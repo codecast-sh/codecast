@@ -34,6 +34,7 @@ export type ForkMessage = {
   timestamp: number;
   tokens_used?: unknown;
   usage?: unknown;
+  nav_prompt?: true;
 };
 
 export type ForkConvRow = {
@@ -178,6 +179,7 @@ export async function advanceForkCopy(
       timestamp: msg.timestamp,
       tokens_used: msg.tokens_used,
       usage: msg.usage,
+      nav_prompt: msg.nav_prompt,
     });
     copied++;
     bytes += sz;

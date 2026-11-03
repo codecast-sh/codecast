@@ -75,7 +75,7 @@ function RunChange({ beat, act, waiting }: SceneProps) {
   return (
     <div className="gs">
       <Win title={<><Dot state={running ? "working" : "done"} /><b>Fix double booking on slot release</b><span className="gs-dim">· claude · tidepool/app</span></>} at={{ x: 36, y: 60, w: 968, h: 480 }}
-        right={<button type="button" onClick={waiting ? act : undefined} data-wait={waiting ? "" : undefined} data-guide-stage-act={waiting ? "" : undefined} className={`gs-btn ${waiting ? "" : ""}`} style={{ borderColor: picked ? "var(--guide-accent)" : undefined, color: picked ? ACCENT : undefined }}><Route className="w-3.5 h-3.5" /> Ship</button>}>
+        right={<button type="button" onClick={waiting ? act : undefined} data-wait={waiting ? "" : undefined} data-guide-stage-act={waiting ? "" : undefined} className={`gs-btn ${waiting ? "" : ""}`} style={{ borderColor: picked ? "var(--guide-accent)" : undefined, color: picked ? ACCENT : undefined }}><Route className="w-3.5 h-3.5" /> Flows</button>}>
         <div className="absolute left-6 right-6 top-5 flex flex-col gap-3">
           <Msg from={<Person name="You" you size={24} color="var(--sol-blue)" />} you>Two people can book the same surf slot when one cancels. Fix it.</Msg>
           <Msg from={<span className="gs-face" style={{ width: 24, height: 24, background: "var(--sol-orange)", fontSize: 11 }}>A</span>}>
@@ -448,7 +448,7 @@ export const FLOWS_GUIDE: GuideDef = {
       Scene: RunChange,
       beats: [
         { say: "An agent at Tidepool finished a fix. Before it ships, it goes through the team's flow." },
-        { say: "Ship on the session's header lists the flows a change can take.", act: "Run it through Change" },
+        { say: "Flows on the session's header lists the team's flows, its default first.", act: "Run it through Change" },
         { say: "Before anything starts you see what will: the sessions it starts, what it will ask you, and how it can end.", hold: 4400 },
         { say: "The run moves in the conversation, live. Check runs the tests; Review is an independent session reading the diff.", hold: 4400 },
         { say: "It stops at Decide, the one step that is yours.", hold: 3400 },

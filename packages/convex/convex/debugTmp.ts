@@ -96,6 +96,8 @@ export const inspectConversation = internalQuery({
       conversation: {
         _id: conversation._id,
         title: conversation.title,
+        nav_prompts_indexed_at: conversation.nav_prompts_indexed_at,
+        nav_prompts_backfill_started_at: conversation.nav_prompts_backfill_started_at,
         session_id: conversation.session_id,
         user_id: conversation.user_id,
         status: conversation.status,

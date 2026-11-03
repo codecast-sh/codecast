@@ -140,6 +140,7 @@ export const getUserTeams = query({
           icon_color: team.icon_color,
           task_statuses: team.task_statuses,
           features: team.features,
+          default_flow: team.default_flow,
           // Managed policy (Team settings > Managed devices).
           policy: team.policy,
           role: m.role,
@@ -1620,6 +1621,24 @@ export const updateTeamIcon = mutation({
       await ctx.db.patch(args.team_id, updates);
     }
 
+    return { success: true };
+  },
+});
+
+/** The team's default flow (flows.md FL4): the library flow a session's change
+ *  is offered first. An admin's; null clears it back to the shipped `change`. */
+export const setDefaultFlow = mutation({
+  args: { team_id: v.id("teams"), slug: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id))
+      .unique();
+    if (!membership || membership.role !== "admin") throw new Error("Only admins can set the team's default flow");
+    const slug = args.slug?.trim() || undefined;
+    await ctx.db.patch(args.team_id, { default_flow: slug });
     return { success: true };
   },
 });
