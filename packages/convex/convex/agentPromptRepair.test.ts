@@ -43,7 +43,10 @@ test("reviewed repair previews, preserves row identity, refreshes history, and i
   expect(await f.db.get(f.original._id)).toEqual(f.original);
   expect(await f.run({ ...f.args, dry_run: false })).toEqual({ dry_run: false, changed: 1 });
   const target = await f.db.get(f.original._id);
-  expect({ ...target, content: f.original.content }).toEqual(f.original);
+  // The repaired body is a session message, which the navigator lists, so the
+  // patch also sets the prompt index flag the fixture row predates.
+  expect(target?.nav_prompt).toBe(true);
+  expect({ ...target, content: f.original.content, nav_prompt: undefined }).toEqual(f.original);
   expect(parseInboundSessionMessage(target.content)).toEqual({ from: reviewed.parent, body: f.original.content, name: undefined });
   expect(target.content).toContain(`source-message="${reviewed.entry.source_message_id}"`);
   expect((await f.db.get("mirror")).content).toBe(target.content);

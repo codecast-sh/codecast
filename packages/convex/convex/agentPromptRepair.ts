@@ -1,6 +1,7 @@
 import { internalMutation } from "./functions";
 import { v } from "convex/values";
 import { formatSessionMessage } from "./pendingMessages";
+import { navPromptPatch } from "./userMessagesFilter";
 
 const reviewedTuples = new Set([
   "bb0739536b4c6f2fbc231688320291752154f6069ff2c1784c40e52cd39797c5",
@@ -110,11 +111,11 @@ export const repair = internalMutation({
         .replace('">', `" source-message="${source._id}">`);
       if (message.content === content) continue;
       if (message.content !== entry.expected_content) throw new Error("Agent prompt changed since the repair was prepared");
-      patches.push({ id: message._id, content });
+      patches.push({ id: message._id, content, nav: navPromptPatch(message, { content }) });
     }
     if (args.dry_run !== false) return { dry_run: true, changed: patches.length };
     for (const patch of patches) {
-      await ctx.db.patch(patch.id, { content: patch.content });
+      await ctx.db.patch(patch.id, { content: patch.content, ...patch.nav });
       const mirror = await ctx.db.query("message_search_recent")
         .withIndex("by_message_id", q => q.eq("message_id", patch.id)).first();
       if (mirror) await ctx.db.patch(mirror._id, { content: patch.content.slice(0, 32_000) });

@@ -63,9 +63,11 @@ export type ReplayProvider = (typeof REPLAY_PROVIDERS)[number];
  * no status field (Safari) is a failed request only when its timings show no
  * response arrived. 5: a PostHog mobile recording (wireframes, not a DOM) is
  * converted into a page the player draws, its taps become clicks and its
- * screens' text outlines; a capture rrweb could not draw is not kept.
+ * screens' text outlines; a capture rrweb could not draw is not kept. 6: a
+ * request is timed to its responseEnd, so a navigation's duration (the whole
+ * page load, to loadEventEnd) no longer reads as a slow document request.
  */
-export const VENDOR_CONVERTER_VERSION = 5;
+export const VENDOR_CONVERTER_VERSION = 6;
 
 /**
  * How long a copy whose refresh failed waits before the vendor is asked

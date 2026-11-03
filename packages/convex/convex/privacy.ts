@@ -414,6 +414,40 @@ export async function resolveCreationPrivacy(
   };
 }
 
+/**
+ * A worker under a parent (`cast spawn --subagent`, an agent's own subagent)
+ * shares exactly as its parent does: its output is part of the parent's work,
+ * so a teammate who can read the parent must be able to open the worker card
+ * under it, and a private parent's worker stays private. Its own folder does
+ * not decide (a role session shared by hand often runs in an unmapped home
+ * folder). Only a parent with the same owner passes its sharing down; any
+ * other row returns null and the caller resolves from the path as usual.
+ */
+export function inheritedChildPrivacy(
+  parent: {
+    user_id?: Id<"users">;
+    team_id?: Id<"teams">;
+    is_private?: boolean;
+    auto_shared?: boolean;
+    team_visibility?: "summary" | "full" | "private";
+  } | null | undefined,
+  ownerId: Id<"users">,
+): {
+  team_id: Id<"teams"> | undefined;
+  is_private: boolean;
+  auto_shared: true | undefined;
+  team_visibility?: "summary" | "full" | "private";
+} | null {
+  if (!parent || parent.user_id?.toString() !== ownerId.toString()) return null;
+  const isPrivate = parent.is_private !== false || !parent.team_id;
+  return {
+    team_id: parent.team_id,
+    is_private: isPrivate,
+    auto_shared: !isPrivate && parent.auto_shared ? true : undefined,
+    ...(parent.team_visibility ? { team_visibility: parent.team_visibility } : {}),
+  };
+}
+
 // Sharing a conversation (is_private → false) MUST guarantee a team_id, or the
 // conversation becomes "shared with nobody": every team-visibility check
 // short-circuits on `!team_id` (see isConversationTeamVisible), so no teammate
