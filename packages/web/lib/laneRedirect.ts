@@ -1,19 +1,19 @@
 // Where an address of the retired simple lane (/simple and its pages) leads
-// now that hosted mode lives in the main app: home is the inbox, a
+// in the main app: home is the inbox, a
 // conversation is the conversation page, approvals are the questions page,
 // routines are the triggers page, and connections and the plan are their
 // settings sections. The query and fragment ride along, so an old Stripe
 // return (?billing=) or Whisk return (?whisk=) still says how it went. Old
 // links, bookmarks, pushes and the phone lane's addresses all arrive here.
-// The hosted page names (/approvals, /routines, /plan, /mail) redirect the
+// The hosted page names (/approvals, /plan, /mail) redirect the
 // same way, so an address guessed from the rail never lands on a profile 404.
-import { HOSTED_HOME, LANE_CONVERSATION_ROUTE, LANE_PATHS, hostedConversationPath } from "../components/simple/lanePaths";
+import { LANE_CONVERSATION_ROUTE, LANE_PATHS } from "../components/simple/lanePaths";
 import { LANE_ROOT, isUnderRoot } from "../components/simple/laneBoot";
 import { settingsPathFor } from "./settingsSections";
 import { RENAMED_PAGES, RENAMED_PAGE_ROOTS, currentPagePath } from "./renamedPages";
 
 const PAGES: Record<string, string> = {
-  [LANE_PATHS.home]: HOSTED_HOME,
+  [LANE_PATHS.home]: "/inbox",
   [LANE_PATHS.approvals]: "/decisions",
   [LANE_PATHS.routines]: "/triggers",
   [LANE_PATHS.connections]: settingsPathFor("integrations"),
@@ -25,8 +25,7 @@ const CONVERSATION_PREFIX = LANE_CONVERSATION_ROUTE.replace(":id", "");
 /** The hosted words for the main app's pages, as addresses a person types
  *  or a support doc names (/approvals, /plan): each lane page without the
  *  lane root, plus /mail for the Whisk row. They redirect, so the page keeps
- *  one canonical URL. /routines is here too, but its route redirects only in
- *  hosted mode: in developer mode it is the workflows page. */
+ *  one canonical URL. /routines is not one: it is the workflows page. */
 export const PAGE_ALIASES: Readonly<Record<string, string>> = {
   ...Object.fromEntries(
     Object.entries(PAGES)
@@ -40,6 +39,9 @@ export const PAGE_ALIASES: Readonly<Record<string, string>> = {
   // The non-developer funnel's address: the landing page with its For
   // everyone section first (app/(marketing)/page.tsx assistantFirst).
   "/everyone": "/?for=assistant",
+  // The hosted assistant's old onboarding, which marketing links and
+  // emails still carry.
+  "/welcome": "/signup",
 };
 
 /** The root segments the aliases and renamed pages take, which no public profile may claim
@@ -55,7 +57,7 @@ export function laneRedirectTarget(pathname: string, search = "", hash = ""): st
   const path = trimmed(pathname);
   if (!isUnderRoot(path, LANE_ROOT)) return null;
   const id = path.startsWith(CONVERSATION_PREFIX) ? path.slice(CONVERSATION_PREFIX.length).split("/")[0] : "";
-  const to = id ? hostedConversationPath(id) : PAGES[path] ?? HOSTED_HOME;
+  const to = id ? `/conversation/${id}` : PAGES[path] ?? "/inbox";
   return `${to}${search}${hash}`;
 }
 

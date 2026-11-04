@@ -11,9 +11,6 @@ import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
-import { LaneSettingRow } from "../../../components/simple/LaneSwitch";
-import { useHostedMode, useSimpleModeAllowed } from "../../../lib/surfaces";
-import { isHostedUi, showsAgentIcon } from "../../../components/simple/lanePaths";
 import { SelectBox } from "../../../components/ui/select-box";
 import { useInboxStore, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, type ClientUI } from "../../../store/inboxStore";
 import { BUBBLE_HUE_VAR, BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../../../lib/bubbleColor";
@@ -43,7 +40,6 @@ export default function ProfilePage() {
  *  the old form showed placeholders, cleared itself on save, and echoed the
  *  real value only as hint text below each input. */
 function ProfileSection({ user }: { user: any }) {
-  const hosted = useHostedMode();
   const updateMyProfile = useInboxStore((s) => s.updateMyProfile);
   const [form, setForm] = useState({
     name: user.name ?? "", bio: user.bio ?? "", title: user.title ?? "",
@@ -74,13 +70,13 @@ function ProfileSection({ user }: { user: any }) {
 
   const inputClass = "bg-sol-bg border-sol-border text-sol-text";
   return (
-    <SettingsSection title="Profile" icon={User} description={hosted ? "Your name, and the time zone your assistant works in." : "How you appear to your team."}>
+    <SettingsSection title="Profile" icon={User} description="How you appear to your team.">
       <div className="grid grid-cols-1 sm:grid-cols-2 sm:divide-x divide-sol-border/40">
         <SettingsField label="Display name" htmlFor="name">
           <Input id="name" value={form.name} onChange={(e) => set("name")(e.target.value)} placeholder="Your name" className={inputClass} />
         </SettingsField>
         <SettingsField label="Title / role" htmlFor="title">
-          <Input id="title" value={form.title} onChange={(e) => set("title")(e.target.value)} placeholder={hosted ? "e.g. Designer, Parent, Founder" : "e.g. Senior Developer"} className={inputClass} />
+          <Input id="title" value={form.title} onChange={(e) => set("title")(e.target.value)} placeholder="e.g. Senior Developer" className={inputClass} />
         </SettingsField>
       </div>
       <SettingsField label="Bio" htmlFor="bio">
@@ -96,11 +92,7 @@ function ProfileSection({ user }: { user: any }) {
           </SelectBox>
         </SettingsField>
         <SettingsField label="Timezone" htmlFor="timezone">
-          {hosted ? (
-            <TimezonePicker id="timezone" value={form.timezone} onChange={set("timezone")} />
-          ) : (
-            <Input id="timezone" value={form.timezone} onChange={(e) => set("timezone")(e.target.value)} placeholder="e.g. America/Los_Angeles" className={inputClass} />
-          )}
+          <Input id="timezone" value={form.timezone} onChange={(e) => set("timezone")(e.target.value)} placeholder="e.g. America/Los_Angeles" className={inputClass} />
         </SettingsField>
       </div>
       <SettingsRow
@@ -119,73 +111,30 @@ function ProfileSection({ user }: { user: any }) {
   );
 }
 
-/** Every zone this browser knows, as "New York (GMT-4)", sorted by offset
- *  then name. A stored zone the list lacks stays as its own first option. */
-function zoneOptions(current: string): Array<{ value: string; label: string }> {
-  const zones = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
-  const now = Date.now();
-  const offsetOf = (zone: string) => {
-    try {
-      return new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "shortOffset" }).formatToParts(now).find((p) => p.type === "timeZoneName")?.value ?? "";
-    } catch {
-      return "";
-    }
-  };
-  const minutes = (offset: string) => {
-    const m = /GMT([+-])(\d+)(?::(\d+))?/.exec(offset);
-    return m ? (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] ?? 0)) : 0;
-  };
-  const city = (zone: string) => zone.split("/").pop()!.replace(/_/g, " ");
-  const options = zones
-    .map((zone) => ({ zone, offset: offsetOf(zone) }))
-    .sort((a, b) => minutes(a.offset) - minutes(b.offset) || city(a.zone).localeCompare(city(b.zone)))
-    .map(({ zone, offset }) => ({ value: zone, label: `${city(zone)} (${offset})` }));
-  return current && !zones.includes(current) ? [{ value: current, label: current }, ...options] : options;
-}
-
-/** Hosted mode's time zone field: a list of places, not a zone id to type. */
-function TimezonePicker({ id, value, onChange }: { id: string; value: string; onChange: (zone: string) => void }) {
-  const [options] = useState(() => zoneOptions(value));
-  return (
-    <SelectBox id={id} value={value} onChange={(e) => onChange(e.target.value)} wrapperClassName="w-full" className="h-9 rounded-md bg-sol-bg text-sm">
-      {!value && <option value="">Choose your time zone</option>}
-      {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-    </SelectBox>
-  );
-}
-
 // ── interface preferences ──────────────────────────────────────────────────
 
 function AppearanceSection() {
   const { theme, toggleTheme, visualStyle, setVisualStyle } = useTheme();
-  // Assistant mode is always Minimal (resolveVisualStyle), so it offers no
-  // Style choice; the developer pick comes back when it is turned off.
-  const hosted = useHostedMode();
-  const modeChoice = useSimpleModeAllowed();
   const options = ([
     { value: "classic", label: "Classic", description: <StyleOptionPreview variant="classic" caption="Solarized, compact, information-dense" /> },
     { value: "minimal", label: "Minimal", description: <StyleOptionPreview variant="minimal" caption="Neutral, spacious, reading-first" /> },
   ] satisfies Array<{ value: VisualStyle; label: string; description: ReactNode }>);
   return (
     <SettingsSection title="Appearance" icon={Palette} description="Choose the visual language for every Codecast surface.">
-      {modeChoice && <LaneSettingRow />}
       <SettingsRow label={<label htmlFor="dark-mode">Dark mode</label>} description="Applies to all your windows and popups, on every device.">
         <Switch id="dark-mode" checked={theme === "dark"} onCheckedChange={toggleTheme} aria-label="Dark mode" />
       </SettingsRow>
-      {!hosted && (
-        <SettingsField label="Interface style">
-          <SettingsOptionGroup
-            value={visualStyle}
-            onChange={(value) => setVisualStyle(value as VisualStyle)}
-            label="Interface style"
-            options={options}
-            className="visual-style-options w-full"
-          />
-        </SettingsField>
-      )}
-      {!hosted && <ColorThemeField />}
-      {/* Hosted mode sets your words as a quiet note in ink, not a hue. */}
-      {visualStyle === "minimal" && !hosted && <BubbleColorField />}
+      <SettingsField label="Interface style">
+        <SettingsOptionGroup
+          value={visualStyle}
+          onChange={(value) => setVisualStyle(value as VisualStyle)}
+          label="Interface style"
+          options={options}
+          className="visual-style-options w-full"
+        />
+      </SettingsField>
+      <ColorThemeField />
+      {visualStyle === "minimal" && <BubbleColorField />}
     </SettingsSection>
   );
 }
@@ -282,13 +231,11 @@ const INTERFACE_TOGGLES: Array<{
   /** The value when it is not a plain stored boolean (a default that depends
    *  on the style). Overrides `defaultOn`. */
   resolve?: (ui: ClientUI | undefined) => boolean;
-  /** Where the switch writes in assistant mode, which keeps its own pick. */
-  hostedKey?: keyof ClientUI;
 }> = [
   { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, locked: (ui) => (resolveVisualStyle(ui) === "minimal" && resolveSimpleView(ui) ? { on: true, why: "Always on in the Minimal style" } : undefined) },
-  { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact, hostedKey: "hosted_inbox_compact" },
+  { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact },
   { prefKey: "inbox_image_thumbs", label: "Image thumbnails", desc: "Show a small thumbnail on inbox session rows when a session contains images" },
-  { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", resolve: showsAgentIcon },
+  { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", defaultOn: true },
   { prefKey: "show_characters", label: "Characters", desc: "Roles wear an animal face and a name. Off, each role shows an icon of what it looks after and its title, and no session wears a character", defaultOn: true },
   { prefKey: "personify_sessions", label: "Personify every session", desc: "Give every session an animal face and a name, not just the ones you name yourself. Roles always have one", defaultOn: false, locked: (ui) => (ui?.show_characters === false ? { on: false, why: "Off while Characters is off" } : undefined) },
   { prefKey: "show_model_badge", label: "Model badge", desc: "Show each session's model in the inbox session list" },
@@ -318,10 +265,9 @@ function PrefToggleRow(t: (typeof INTERFACE_TOGGLES)[number]) {
   });
   const locked = useInboxStore(useShallow((s) => t.locked?.(s.clientState?.ui)));
   const updateUI = useInboxStore((s) => s.updateClientUI);
-  const key = useInboxStore((s) => (t.hostedKey && isHostedUi(s.clientState?.ui) ? t.hostedKey : t.prefKey));
   return (
     <SettingsRow label={t.label} description={locked ? `${t.desc}. ${locked.why}.` : t.desc} disabled={!!locked}>
-      <Switch checked={locked ? locked.on : enabled} disabled={!!locked} onCheckedChange={(v) => updateUI({ [key]: v } as Partial<ClientUI>)} aria-label={t.label} />
+      <Switch checked={locked ? locked.on : enabled} disabled={!!locked} onCheckedChange={(v) => updateUI({ [t.prefKey]: v } as Partial<ClientUI>)} aria-label={t.label} />
     </SettingsRow>
   );
 }

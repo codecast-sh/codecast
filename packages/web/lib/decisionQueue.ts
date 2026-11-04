@@ -413,9 +413,9 @@ export function pendingDecisionConvIds(
 
 const awaitingOkMemo = new WeakMap<object, Set<string>>();
 
-/** Conversations waiting on an answer to a pending decision row. Hosted mode
- *  reads "waits on your OK" from this one home (the inbox fold, the row's
- *  word, the composer, the bell), never from agent_status, which flips before
+/** Conversations waiting on an answer to a pending decision row. A hosted
+ *  conversation reads "waits on your OK" from this one home (the row's word,
+ *  the composer, the bell), never from agent_status, which flips before
  *  the row arrives and after it is answered. Memoized on the collection, so
  *  every card can ask in a render without a scan each. */
 /** The label a decision row was answered with (APPROVAL_ANSWERS for a
@@ -439,7 +439,7 @@ export function answerSaid(label: string): string {
  *  with the answer: 'Set up the routine "X"?' reads 'set up the routine “X”'.
  *  The first letter drops its capital only when it begins an ordinary word. */
 export function questionAsStatement(question: string): string {
-  // Curly quotes, as the rest of hosted mode's words set a name.
+  // Curly quotes, as the assistant's other words set a name.
   const q = question.trim().replace(/\?+$/, "").replace(/"([^"]*)"/g, "\u201c$1\u201d");
   return /^[A-Z][a-z]/.test(q) ? q[0].toLowerCase() + q.slice(1) : q;
 }

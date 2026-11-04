@@ -9,8 +9,6 @@ import { EmailVerificationForm } from "../../components/EmailVerificationForm";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
 import { useEmailAuth } from "../../hooks/useEmailAuth";
-import { LANE_PATHS } from "../../components/simple/lanePaths";
-import { AssistantWayIn } from "../../components/simple/AssistantWayIn";
 
 function SignUpForm() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -150,14 +148,6 @@ function SignUpForm() {
             </Link>
           </p>
         </div>
-
-        {/* A quiet fork for someone who does not write code: the hosted
-            assistant's onboarding, which signs them in on its own. */}
-        {redirectTo !== LANE_PATHS.welcome ? (
-          <div className="mt-6 flex justify-center">
-            <AssistantWayIn />
-          </div>
-        ) : null}
       </div>
     </main>
   );

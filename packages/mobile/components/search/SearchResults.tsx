@@ -19,7 +19,6 @@ import {
 } from '@codecast/web/hooks/useUniversalSearch';
 import { objectKindLabel, type ObjectHit as ObjectHitRow, type ObjectKind } from '@codecast/web/hooks/useObjectSearch';
 import type { SessionSearchRow } from '@codecast/web/lib/instantSessionSearch';
-import { useAssistantScope, useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { memberAvatarUrl, memberDisplayName } from '@codecast/web/lib/liveEntities';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import { Text as RNText } from '@/components/Themed';
@@ -84,10 +83,6 @@ export function SearchResults({ query, onOpenSession }: {
 }) {
   const Theme = useTheme();
   const router = useRouter();
-  const words = useModeWords();
-  // Hosted mode searches in plain words: no team or role scopes, one filter.
-  const internals = useSurface('search.internals');
-  const { only: scopeOnly } = useAssistantScope();
   const chatOn = useActiveTeamFeature('chat');
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id ?? null);
 
@@ -99,7 +94,6 @@ export function SearchResults({ query, onOpenSession }: {
 
   const search = useUniversalSearch(query, filters, {
     limit,
-    scopeOnly,
     chatTeamId: chatOn ? activeTeamId : null,
     chatLimit: tab === 'chat' ? 30 : 10,
   });
@@ -129,14 +123,14 @@ export function SearchResults({ query, onOpenSession }: {
   const tabs = useMemo(() => {
     const list: { key: Tab; label: string; count?: number | string }[] = [
       { key: 'all', label: 'All' },
-      { key: 'sessions', label: words.conversations, count: totalSessions },
+      { key: 'sessions', label: 'Sessions', count: totalSessions },
       ...objectGroups.map((g) => ({ key: g.kind as Tab, label: g.label, count: countOf(g.hits.length) })),
       ...(chatHits.length > 0 ? [{ key: 'chat' as Tab, label: 'Chat', count: chatHits.length }] : []),
     ];
     // The kind in view keeps its chip when a new query empties it, so the row never jumps.
-    if (!list.some((t) => t.key === tab)) list.push({ key: tab, label: tab === 'chat' ? 'Chat' : objectKindLabel(tab as ObjectKind, words) });
+    if (!list.some((t) => t.key === tab)) list.push({ key: tab, label: tab === 'chat' ? 'Chat' : objectKindLabel(tab as ObjectKind) });
     return list;
-  }, [words, totalSessions, objectGroups, chatHits.length, tab]);
+  }, [totalSessions, objectGroups, chatHits.length, tab]);
 
   const sections = useMemo(() => {
     const all = tab === 'all';
@@ -148,8 +142,8 @@ export function SearchResults({ query, onOpenSession }: {
       const windowDays = searchData?.contentWindowDays ?? 30;
       const pastWindow = filters.range === 'all' || filters.range === '90d' || (filters.range === '30d' && windowDays < 30);
       out.push({
-        key: 'sessions', label: words.conversations, count: totalSessions, more: all && (sessionRows.length > SESSION_ALL_CAP || remaining > 0),
-        note: internals && searchData?.contentTier === 'recent' && pastWindow ? `Messages from the last ${windowDays} days. Older ones match by title.` : undefined,
+        key: 'sessions', label: 'Sessions', count: totalSessions, more: all && (sessionRows.length > SESSION_ALL_CAP || remaining > 0),
+        note: searchData?.contentTier === 'recent' && pastWindow ? `Messages from the last ${windowDays} days. Older ones match by title.` : undefined,
         data: (all ? sessionRows.slice(0, SESSION_ALL_CAP) : sessionRows).map((row) => ({ t: 'session' as const, key: `session:${row.conversationId}`, row })),
       });
     }
@@ -167,7 +161,7 @@ export function SearchResults({ query, onOpenSession }: {
       });
     }
     return out;
-  }, [tab, objectGroups, chatHits, sessionRows, totalSessions, remaining, words.conversations, searchData, filters.range, internals]);
+  }, [tab, objectGroups, chatHits, sessionRows, totalSessions, remaining, searchData, filters.range]);
 
   const memberById = useMemo(() => {
     const members = ((useInboxStore.getState() as any).teamMembers ?? []) as any[];
@@ -305,13 +299,9 @@ export function SearchResults({ query, onOpenSession }: {
           )}
         </RNView>
         <FilterGroup<SearchRange> label="Time" value={filters.range} options={SEARCH_RANGES} onChange={(range) => patch({ range })} />
-        {internals && (
-          <>
-            <FilterGroup label={words.conversations} value={filters.mineOnly ? 'mine' : 'all'} options={[{ key: 'all', label: 'Everyone' }, { key: 'mine', label: 'Only mine' }]} onChange={(v) => patch({ mineOnly: v === 'mine' })} />
-            <FilterGroup label="Match in" value={filters.userOnly ? 'prompts' : 'all'} options={[{ key: 'all', label: 'Any message' }, { key: 'prompts', label: 'My prompts' }]} onChange={(v) => patch({ userOnly: v === 'prompts' })} />
-            <FilterGroup label="Order" value={filters.sort} options={[{ key: 'recent', label: 'Recent' }, { key: 'relevance', label: 'Relevant' }]} onChange={(sort) => patch({ sort })} />
-          </>
-        )}
+        <FilterGroup label="Sessions" value={filters.mineOnly ? 'mine' : 'all'} options={[{ key: 'all', label: 'Everyone' }, { key: 'mine', label: 'Only mine' }]} onChange={(v) => patch({ mineOnly: v === 'mine' })} />
+        <FilterGroup label="Match in" value={filters.userOnly ? 'prompts' : 'all'} options={[{ key: 'all', label: 'Any message' }, { key: 'prompts', label: 'My prompts' }]} onChange={(v) => patch({ userOnly: v === 'prompts' })} />
+        <FilterGroup label="Order" value={filters.sort} options={[{ key: 'recent', label: 'Recent' }, { key: 'relevance', label: 'Relevant' }]} onChange={(sort) => patch({ sort })} />
       </BottomSheet>
     </RNView>
   );

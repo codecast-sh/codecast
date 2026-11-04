@@ -1,6 +1,4 @@
 import { withInboxView } from "../../lib/inboxViewHistory";
-import { assistantScopeOnly, restorableIn } from "../../lib/assistantScope";
-import { isHostedMode, useSurface } from "../../lib/surfaces";
 import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -403,11 +401,6 @@ export function QueuePageClient() {
   // chronological feed. Persisted per-user (stamped LWW).
   const inboxHome = useInboxStore((s) => resolveInboxHome(s.clientState.ui));
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
-  const scopeOnly = useInboxStore((s) => assistantScopeOnly(s.clientState.ui));
-  const hostedMode = useInboxStore(isHostedMode);
-  const fleetHome = useSurface("inbox.fleetHome");
-  // What may open on its own: in the Assistant scope, only the assistant's.
-  const restorable = useCallback((row: { agent_type?: string | null }) => restorableIn(scopeOnly, row), [scopeOnly]);
 
 
   const isPopstateRef = useRef(false);
@@ -688,11 +681,9 @@ export function QueuePageClient() {
       setShowMySessions(true);
       return;
     }
-    // In the Assistant scope only the assistant's conversations are adopted;
-    // with none, the pane shows the assistant's start (below).
-    const top = sortedSessions.find(restorable);
+    const top = sortedSessions[0];
     if (top) setCurrentSession(top._id, "adopt");
-  }, [paramSessionId, currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions, restorable]);
+  }, [paramSessionId, currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions]);
 
   // Sync URL when current session changes (but not before initial param is
   // resolved). Only the active tab owns the address bar — a background pane must
@@ -798,7 +789,7 @@ export function QueuePageClient() {
     <>
       {pendingInjectId && isConvexId(pendingInjectId) && <SessionPrewarm sessionId={pendingInjectId} />}
       {renderShowMine ? (
-        showFirstRun || !fleetHome ? firstRun : inboxHome === "board" ? (
+        showFirstRun ? firstRun : inboxHome === "board" ? (
           <ErrorBoundary name="FleetBoard" level="inline">
             <FleetBoard />
           </ErrorBoundary>
@@ -853,10 +844,7 @@ export function QueuePageClient() {
           actionLabel="Back to inbox"
           onAction={() => { setUnavailableId(null); handleBack(); }}
         />
-      ) : showFirstRun || hostedMode || (scopeOnly && !sortedSessions.some(restorable)) ? (
-        // Nothing of the assistant's to open, or nothing open in hosted mode
-        // (the last one was closed or archived): its start, with the first
-        // asks and the composer, never a blank pane.
+      ) : showFirstRun ? (
         firstRun
       ) : sortedSessions.length > 0 ? (
         <div className="h-full" />

@@ -6,9 +6,6 @@ import { DocDates } from "../DocDates";
 import { docOrigin, docTypeLabel } from "@codecast/shared/docs";
 import { docTypeStyle } from "../../lib/docTypeStyle";
 import { getLabelColor } from "../../lib/labelColors";
-import { useHostedMode } from "../../lib/surfaces";
-import { formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
-import { hostedNoteLines } from "../../lib/hostedNoteRow";
 
 export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
   doc: DocItem;
@@ -24,36 +21,6 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
 }) {
   const cfg = docTypeStyle(doc.doc_type);
   const title = (doc as any).display_title || doc.title || "Untitled";
-  // Hosted mode lists notes as a reader would: the title over a line of what
-  // it says and the conversation it came from, with no type dot or tag
-  // (every hosted note is a note).
-  const hosted = useHostedMode();
-  const source = useInboxStore((s) => {
-    const id = hosted ? (doc as any).conversation_id : undefined;
-    const row = id ? s.sessions[id] ?? s.conversations[id] : undefined;
-    return row ? sessionCardTitle(row as any) : null;
-  });
-  if (hosted) {
-    const { title: shownTitle, snippet } = hostedNoteLines(doc as any);
-    return (
-      <>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sol-text">{shownTitle}</span>
-          {(snippet || source) && (
-            <span data-cc-note-snippet className="mt-0.5 block truncate text-[12px] text-sol-text-dim">
-              {snippet}
-              {snippet && source ? " · " : null}
-              {source ? <span className="text-sol-text-dim/80">From {source}</span> : null}
-            </span>
-          )}
-        </span>
-        {doc.pinned && <Star aria-label="Starred" className="h-3 w-3 shrink-0 fill-current text-sol-yellow" />}
-        {/* The rail's time words (formatRowTime), never "31m ago" beside "Mar 26". */}
-        <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-sol-text-dim">{formatRowTime(doc[timeKey] ?? doc.updated_at, true)}</span>
-      </>
-    );
-  }
-
   return (
     <>
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dot}`} />

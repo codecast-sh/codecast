@@ -1113,7 +1113,7 @@ export const HOSTED_AGENT_CLIENTS: { codecast: HostedAgentClientDescriptor } = {
     displayName: "Codecast assistant",
     convexId: "codecast",
     // Off the developer's agent row until pinned. It still shows wherever it
-    // is the default agent (hosted mode, or no machine), because a picker
+    // is the default agent (an account with no machine), because a picker
     // always keeps the agent in use (pinnedPickerOptions `keep`).
     pinnedByDefault: false,
     executionTransports: ["hosted"],

@@ -13,6 +13,7 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { OrgFeatureGate } from "../../../components/org/OrgFeatureGate";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ScopePageInner } from "../../../components/org/scope/ScopePage";
+import { SlackReturnFlash } from "../../../components/anchor/SlackReturnFlash";
 import OrgPage from "../page";
 
 /** Where an address under Org leads, or null for the chart. A role the store
@@ -48,7 +49,10 @@ export default function OrgObjectPage() {
       <AuthGuard>
         <DashboardLayout>
           <OrgFeatureGate>
-            <ScopePageInner id={id} />
+            <div className="h-full flex flex-col">
+              <SlackReturnFlash />
+              <div className="flex-1 min-h-0"><ScopePageInner id={id} /></div>
+            </div>
           </OrgFeatureGate>
         </DashboardLayout>
       </AuthGuard>

@@ -10,12 +10,11 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TextInput, Text as RNText } from '@/components/Themed';
-import { CHROME_FONT_CAP, chipText, themedStyles, useActiveLook, useTheme } from '@/constants/Theme';
+import { CHROME_FONT_CAP, chipText, themedStyles, useTheme } from '@/constants/Theme';
 import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSessionStyle';
 import { mixColor } from '@/lib/solColor';
 import { GestureHandlerRootView, NativePressable } from '@/lib/gestureHandler';
 import { PulsingDot } from '@/components/SessionItem';
-import { sendDisc, useHostedTheme } from '@/components/hosted/hostedTheme';
 import { useInboxStore, type OptimisticImage } from '@codecast/web/store/inboxStore';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
@@ -148,9 +147,6 @@ export function MessageComposer({
   const Theme = useTheme();
   const insets = useSafeAreaInsets();
   const { height: winHeight } = useWindowDimensions();
-  // The family look's send is the hosted composers' ring and ink disc.
-  const familyLook = useActiveLook() === 'family';
-  const { c: hostedColors } = useHostedTheme();
   const { value: message, onChangeText, epoch, inputRef } = field;
   const [expanded, setExpanded] = useState(false);
   // Content height of the inline input; the fullscreen affordance only appears
@@ -241,7 +237,7 @@ export function MessageComposer({
           stop: the same interrupt web's Escape sends. Typing turns it back
           into send, so a follow-up can always be queued. */}
       <NativePressable
-        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled, familyLook && sendDisc(hostedColors, 'family', canSend || showStop).style]}
+        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
         onPress={showStop ? stop!.onPress : onSend}
         activeOpacity={0.7}
         delayPressIn={0}
@@ -251,8 +247,8 @@ export function MessageComposer({
         accessibilityLabel={showStop ? stop!.label : 'Send'}
       >
         {showStop
-          ? <FontAwesome name="stop" size={11} color={familyLook ? sendDisc(hostedColors, 'family', true).icon : '#fff'} />
-          : <FontAwesome name="arrow-up" size={14} color={familyLook ? sendDisc(hostedColors, 'family', canSend).icon : '#fff'} />}
+          ? <FontAwesome name="stop" size={11} color="#fff" />
+          : <FontAwesome name="arrow-up" size={14} color="#fff" />}
       </NativePressable>
     </RNView>
   );

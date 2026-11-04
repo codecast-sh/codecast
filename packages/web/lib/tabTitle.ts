@@ -1,7 +1,7 @@
 import type { AppTab } from "../store/inboxStore";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { conversationTitle } from "./conversationTitle";
-import { pathLabel, inboxTabSessionId, modePathLabel } from "./pathLabel";
+import { pathLabel, inboxTabSessionId } from "./pathLabel";
 import { isBrowserRoutePath } from "./browserPane";
 import { isConvexId, orgObjectOfRef } from "./entityLinks";
 import { findEntityInStore } from "./liveEntities";
@@ -60,9 +60,8 @@ export function initiativeTabTitle(path: string, initiatives: Record<string, { s
 }
 
 /** The records a tab can be titled by, read by key only (never a scan, so
- *  the window title can derive on every store tick), and the client state
- *  whose mode names a page whose name is a mode word (modePathLabel). */
-export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any>; orgTree?: { roles?: readonly unknown[] } | null; teamMembers?: readonly unknown[]; clientState?: { ui?: { lane?: string } } };
+ *  the window title can derive on every store tick). */
+export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any>; orgTree?: { roles?: readonly unknown[] } | null; teamMembers?: readonly unknown[] };
 
 /** A task, project, run, role or person tab reads its record's name once the
  *  store holds the row: the task's title, the project's title (by Convex id
@@ -118,9 +117,7 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
   // was stamped at the address it opened with, and the pane has navigated
   // since. pathLabel reads the live path (and any title a backend learned).
   if (isBrowserRoutePath(tab.path)) return pathLabel(tab.path);
-  // A page named by a mode word reads the mode now: its stored title was
-  // stamped in whichever mode opened it.
-  return modePathLabel(tab.path, records?.clientState?.ui) ?? storedTitle(tab) ?? pathLabel(tab.path);
+  return storedTitle(tab) ?? pathLabel(tab.path);
 }
 
 // A stored title with a query string in it is a raw path that leaked in

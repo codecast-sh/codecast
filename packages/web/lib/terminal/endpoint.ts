@@ -10,7 +10,6 @@
 import type { ConvexReactClient } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
-import { surfaceShown } from "../surfaces";
 
 export interface TerminalEndpoint {
   port: number;
@@ -214,11 +213,10 @@ function requestEndpoints(convex: ConvexReactClient, deviceId?: string) {
 const missedReplies = new Map<string, TerminalEndpoint>();
 
 /** Whether asking the daemons is worth anything now: only for someone signed
- *  in, and only where machines show at all (hosted mode has no terminals). A
- *  boot asks before auth settles, and the server answers that with a throw. */
+ *  in. A boot asks before auth settles, and the server answers that with a
+ *  throw. */
 function mayDiscover(): boolean {
-  const s = useInboxStore.getState();
-  return !!s.currentUser && surfaceShown(s, "machineChips");
+  return !!useInboxStore.getState().currentUser;
 }
 
 async function discover(convex: ConvexReactClient, deviceId?: string): Promise<TerminalEndpoint | null> {

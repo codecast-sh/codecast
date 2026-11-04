@@ -5,7 +5,6 @@ import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, 
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
 import { canMoveSessionToMachine, sessionMoveVerbs } from "./sessionControl";
-import { DEVELOPER_MODE, type SurfaceMode } from "./surfaceRules";
 import { isForeignSession } from "./liveEntities";
 import { isSessionKilled, isSessionSetAside } from "./sessionRetirement";
 import { isTriggerEditable } from "./triggerEditable";
@@ -57,10 +56,8 @@ function isPersonified(target: { _id: string; character_avatar?: string | null; 
   return sessionIdentity(target as never).kind !== "plain";
 }
 
-/** `mode` is hosted mode's registry (lib/surfaces.ts useSurfaceMode): model
- *  and machine verbs follow its pickers and chips. `prefs` are the viewer's:
- *  with characters off no verb gives a session one. */
-export function paletteActions(type: PaletteTargetType | null, targets: any[], userId?: string, chatOn = false, mode: SurfaceMode = DEVELOPER_MODE, prefs: IdentityPrefs = DEFAULT_IDENTITY_PREFS): PaletteAction[] {
+/** `prefs` are the viewer's: with characters off no verb gives a session one. */
+export function paletteActions(type: PaletteTargetType | null, targets: any[], userId?: string, chatOn = false, prefs: IdentityPrefs = DEFAULT_IDENTITY_PREFS): PaletteAction[] {
   const target = targets[0];
   if (!type || !target) return [];
   // A decision selection's verbs are DecisionPalette's own.
@@ -100,47 +97,39 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
     // The same move verbs the session control menu offers (none for a hosted
     // assistant conversation), and Move to machine only where one runs it.
     const verbs = sessionMoveVerbs(target.agent_type, target.session_id, target.model);
-    // The mode's noun ("session", or "conversation" in hosted mode), and the
-    // fleet verbs (stash and hide, defer, dormant) only where its triage bar shows.
-    const { words } = mode;
-    const noun = words.conversation.toLowerCase();
-    const nouns = words.conversations.toLowerCase();
-    const fleet = mode.shows("triageBar");
+    const noun = "session";
+    const nouns = "sessions";
     return [
       ...(single ? [
         ...(verbs.includes("switch") ? [row("agent_switch", "Switch agent…", Bot, "a")] : []),
         ...(verbs.includes("fork") ? [row("agent_fork", `Fork ${noun} as…`, GitBranch, "f")] : []),
         ...(verbs.includes("handoff") ? [row("agent_handoff", "Hand off to…", ArrowRightLeft, "t")] : []),
-        ...(mode.shows("modelPicker") && canControlModel(target.agent_type, target.session_id, target.model) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
+        ...(canControlModel(target.agent_type, target.session_id, target.model) ? [row("model", "Change model & effort…", Cpu, "m")] : []),
         row("rename", `Rename ${noun}…`, Pencil, "r", "session.rename"),
       ] : []),
       // Personifying is opt in, so the verb names what it does for a row that
-      // has no character yet (session-characters.md S2). Hosted mode offers
-      // only the change, for a row that already has one.
-      ...(prefs.characters && (mode.shows("conversation.internals") || isPersonified(target)) ? [row("character", isPersonified(target) ? many("Change character…", `Change character for # ${nouns}…`) : many("Give it a character…", `Give # ${nouns} characters…`), Smile, "y")] : []),
+      // has no character yet (session-characters.md S2).
+      ...(prefs.characters ? [row("character", isPersonified(target) ? many("Change character…", `Change character for # ${nouns}…`) : many("Give it a character…", `Give # ${nouns} characters…`), Smile, "y")] : []),
       row("session_pin", target.is_pinned ? many(`Unpin ${noun}`, `Unpin # ${nouns}`) : many(`Pin ${noun}`, `Pin # ${nouns}`), target.is_pinned ? PinOff : Pin, "p", "session.pin"),
       row("session_favorite", target.is_favorite ? many("Remove from favorites", "Remove # from favorites") : many("Add to favorites", "Add # to favorites"), Star, "v", "conv.favorite"),
       row("bucket", many(`Label ${noun}…`, `Label # ${nouns}…`), Tag, "l", "session.moveToBucket"),
-      ...(mode.shows("machineChips") && targets.every((t) => canMoveSessionToMachine(t.agent_type)) ? [row("device", many("Move to machine…", `Move # ${nouns} to machine…`), ArrowRightLeft, "w")] : []),
+      ...(targets.every((t) => canMoveSessionToMachine(t.agent_type)) ? [row("device", many("Move to machine…", `Move # ${nouns} to machine…`), ArrowRightLeft, "w")] : []),
       ...(!isSessionKilled(target) ? [row("snooze", many(`Snooze ${noun}…`, `Snooze # ${nouns}…`), Clock, "z", "session.snooze")] : []),
       ...(target.inbox_snoozed_until ? [row("session_unsnooze", "Move to Needs Input now", RefreshCw, "u")] : []),
       ...(isSessionSetAside(target) ? [row("session_restore", many(`Restore ${noun} to inbox`, `Restore # ${nouns} to inbox`), RefreshCw, "u")] : [
-        row("session_stash", many(`${words.stash} ${noun}`, `${words.stash} # ${nouns}`), Archive, "s", "session.stash"),
-        ...(fleet ? [
-          row("session_stash_hide", many(`Stash and hide ${noun}`, `Stash and hide # ${nouns}`), EyeOff, "b", "session.stashHide"),
-          row("session_defer", many(`Defer ${noun}`, `Defer # ${nouns}`), Clock, "d", "session.deferAdvance"),
-          row("session_dormant", "Dormant: a machine wakes it", Moon, "z", "session.dormantAdvance"),
-        ] : []),
+        row("session_stash", many(`Stash ${noun}`, `Stash # ${nouns}`), Archive, "s", "session.stash"),
+        row("session_stash_hide", many(`Stash and hide ${noun}`, `Stash and hide # ${nouns}`), EyeOff, "b", "session.stashHide"),
+        row("session_defer", many(`Defer ${noun}`, `Defer # ${nouns}`), Clock, "d", "session.deferAdvance"),
+        row("session_dormant", "Dormant: a machine wakes it", Moon, "z", "session.dormantAdvance"),
         row("session_done", "Mark done", CheckCircle2, "e"),
-        row("session_needs_input", words.markNeedsInput, CircleDot, "g"),
+        row("session_needs_input", "Mark needs input", CircleDot, "g"),
       ]),
-      ...(!isSessionKilled(target) ? [row("session_kill", many(`${words.killConfirm} ${noun}`, `${words.killConfirm} # ${nouns}`), Square, "k", "session.kill")] : []),
+      ...(!isSessionKilled(target) ? [row("session_kill", many(`Kill ${noun}`, `Kill # ${nouns}`), Square, "k", "session.kill")] : []),
       ...(!target.persistent ? [row("session_delete", many(`Delete ${noun}…`, `Delete # ${nouns}…`), Trash2, "x")] : []),
       ...(single && target.parent_conversation_id ? [row("session_parent", "View parent conversation", GitBranch)] : []),
       ...(single && target.git_branch ? [row("session_branch", "Copy branch name", GitBranch)] : []),
       ...(single && (target.project_path || target.git_root) ? [row("session_files", "Open project files", Folder)] : []),
-      // A conversation's id is machinery in hosted mode.
-      ...(mode.shows("conversation.internals") ? common : common.filter((action) => action.key !== "copy")),
+      ...common,
     ];
   }
   if (type === "task") return [
@@ -255,21 +244,24 @@ export const PALETTE_TAIL_SEARCH = "__search__page";
  *  query as well (PALETTE_ORG_LIFT), still under a command the query names. */
 export const PALETTE_ORG = "__org__";
 const PALETTE_ORG_LIFT = 0.08;
+/** An Ops item that needs a person now (alerting, regressed, spiking):
+ *  lifted like a company object above a session or task whose title matches
+ *  as well, since it is the live thing the query most likely means. */
+export const PALETTE_LIVE = "__live__";
 
 /** Between a row's label and its keywords in a cmdk value (paletteValue). */
 const LABEL_END = "\u2063";
 /** Between a row's label and each name it also answers to (paletteValue). */
 const ALIAS_SEP = "\u2062";
 
-/** A row's cmdk value: the label it renders (in the mode's words, so a hosted
- *  label is always searchable), any other names it answers to, and then its
- *  keywords. paletteItemScore ranks a hit in a name above a hit in the
+/** A row's cmdk value: the label it renders, any other names it answers to,
+ *  and then its keywords. paletteItemScore ranks a hit in a name above a hit in the
  *  keywords. */
 export function paletteValue(label: string | readonly string[], keywords = ""): string {
   return `${typeof label === "string" ? label : label.join(ALIAS_SEP)}${LABEL_END} ${keywords}`;
 }
 
-/** A Pages row's cmdk value: its label in this mode and its aliases (the
+/** A Pages row's cmdk value: its label and its aliases (the
  *  Org row answers to Goals, Team, Roadmap, the pages it replaced). */
 export function palettePageValue({ page, label }: { page: { keywords: string; aliases?: readonly string[] }; label: string }): string {
   return paletteValue([label, ...(page.aliases ?? [])], page.keywords);
@@ -304,15 +296,6 @@ const PALETTE_FILTER_NAME = 0.5;
  *  must score below a real match. Scoring it with matches puts
  *  "Files: New note" at the top and Enter creates a note instead of opening
  *  the hit. */
-/** Whether a query asks to make something ("new", "create", or either with
- *  what to make): the palette then leads with its Create group, so the word
- *  reaches New conversation, task, doc and routine before any command that
- *  merely starts with it. Two letters at least, so "n" stays a search. */
-export function queryAsksToCreate(query: string): boolean {
-  const q = query.trim().toLowerCase();
-  return q.length >= 2 && ["new", "create"].some((word) => word.startsWith(q) || q.startsWith(`${word} `));
-}
-
 export function paletteItemScore(value: string, search: string): number {
   if (value.startsWith("__compose__")) return PALETTE_COMPOSE;
   if (value.startsWith("__filter__v")) return PALETTE_FILTER_VALUE;
@@ -320,7 +303,7 @@ export function paletteItemScore(value: string, search: string): number {
   if (value.startsWith(PALETTE_TAIL_MORE)) return PALETTE_MORE;
   if (value.startsWith(PALETTE_TAIL_SEARCH)) return PALETTE_FULL_SEARCH;
   if (value.startsWith(PALETTE_KIND)) return PALETTE_MATCH + Math.max(PALETTE_TITLE_WORDS, titleHit(value, search));
-  if (value.startsWith(PALETTE_ORG)) return PALETTE_MATCH + PALETTE_ORG_LIFT + titleHit(value, search);
+  if (value.startsWith(PALETTE_ORG) || value.startsWith(PALETTE_LIVE)) return PALETTE_MATCH + PALETTE_ORG_LIFT + titleHit(value, search);
   if (value.startsWith("__entity__")) return PALETTE_MATCH + titleHit(value, search);
   if (
     value.startsWith("__search__") ||

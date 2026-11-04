@@ -16,12 +16,7 @@ import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MOBILE_PULSE, MOBILE_SESSION_STYLE } from '@codecast/shared/render/mobileSessionStyle';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ImageViewer } from '@/components/chat/ImageViewer';
-import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { IdentityPrefsOverride, useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
-import { isHostedAgentType } from '@codecast/shared/contracts';
-import { conversationState, conversationSubline, conversationTitle, titleIsAsk } from '@codecast/web/components/simple/lane';
-import { hostedRowTitle } from '@codecast/web/lib/hostedRowTitle';
-import { hostedRowTime } from '@codecast/web/lib/sameNameSuffix';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 
 export type SessionData = {
@@ -111,44 +106,26 @@ function StatusDot({ session }: { session: SessionData }) {
   return <RNView style={[styles.statusDot, { backgroundColor: color }]} />;
 }
 
-/** A hosted row's one mark, in the web rail's terms: the working dot is ink
- *  with a soft pulse, unread is a neutral dot, and anything else keeps the
- *  slot empty so titles stay aligned. */
-function HostedRowDot({ working, unread }: { working: boolean; unread: boolean }) {
-  const Theme = useTheme();
-  if (working) return <PulsingDot color={Theme.text} />;
-  return <RNView style={[styles.statusDot, { backgroundColor: unread ? Theme.text : 'transparent' }]} />;
-}
-
 // What every row of a list reads from the store, read once by the list and
 // handed down. A subscription inside each row runs its selector on every store
 // write, for every row (store/storeListenerCensus), and a list holds hundreds.
 type InboxRowEnv = {
-  /** Hosted mode hides project chips (lib/surfaces gitChips). */
-  gitChips: boolean;
-  /** Developer rows show their internals (lib/surfaces inbox.rowInternals). */
-  internals: boolean;
   /** The project the list is narrowed to: its rows leave the chip off. */
   projectFilter: string | null;
   /** The inbox_image_thumbs pref, stamped LWW so the toggle follows the user. */
   showImageThumb: boolean;
-  /** The swipe's word for setting a row aside. */
-  stashLabel: string;
 };
 const InboxRowEnvContext = createContext<InboxRowEnv | null>(null);
 
 /** Wraps a list of session rows (SwipeableSessionItem). */
 export function InboxRowEnvProvider({ children }: { children: ReactNode }) {
-  const gitChips = useSurface('gitChips');
-  const internals = useSurface('inbox.rowInternals');
   const projectFilter = useInboxStore((s) => s.activeProjectFilter);
   const showImageThumb = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
-  const stashLabel = useModeWords().stash;
   // The faces and identity lines read this instead of each subscribing.
   const prefs = useIdentityPrefs();
   const env = useMemo(
-    () => ({ gitChips, internals, projectFilter, showImageThumb, stashLabel }),
-    [gitChips, internals, projectFilter, showImageThumb, stashLabel],
+    () => ({ projectFilter, showImageThumb }),
+    [projectFilter, showImageThumb],
   );
   return (
     <IdentityPrefsOverride.Provider value={prefs}>
@@ -163,19 +140,14 @@ function useRowEnv(): InboxRowEnv {
   return env;
 }
 
-export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix, reviveAt }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; awaiting?: boolean; asked?: string; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; titleSuffix?: string; reviveAt?: number }) {
+export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number }) {
   if (PERF_PROBE) probeRender('SessionItem');
   const Theme = useTheme();
-  const { gitChips, internals, projectFilter, showImageThumb } = useRowEnv();
+  const { projectFilter, showImageThumb } = useRowEnv();
   // The project names itself on the row unless the inbox is already narrowed
   // to it (the title says it then).
-  const rowProject = gitChips ? projectName(session) : null;
+  const rowProject = projectName(session);
   const project = rowProject && rowProject !== projectFilter ? rowProject : null;
-  // Hosted mode draws a row as its title, its time and one quiet line
-  // (lib/surfaces inbox.rowInternals): where it stands while it is live
-  // (the lane's own state rule and words), else the agent's pinned line,
-  // else what the person asked. The generated summary is left out: it is
-  // written as bullets about "the user", for someone triaging a fleet.
   const sColor = statusColor(session);
   const sLabel = statusLabel(session);
   const showAuthor = session.author_name && session.is_own === false;
@@ -204,21 +176,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
   const ackAssignment = useAckAssignment();
   // Handoff note starts clamped; tapping the pill body reveals the full reason.
   const [pingExpanded, setPingExpanded] = useState(false);
-  // A conversation with the assistant is named the way its own screen names
-  // it, so a row never reads "New session" while its title is on the way.
-  // A title still on its way is the person's own ask (titleIsAsk), and the
-  // quiet line never says the ask a second time under it.
-  const hostedRow = isHostedAgentType(session.agent_type);
-  // Hosted mode names a row by the one hosted name rule (hostedRowTitle), as
-  // the web rail and the conversation's header do.
-  const storeTitle = useInboxStore((s) => (hostedRow && !internals ? hostedRowTitle(s, session._id) : ''));
-  const title = storeTitle || sessionTitle(session);
-  const laneState = internals ? null : conversationState(session as any, awaiting ? 1 : 0, Date.now());
-  const quiet = internals ? '' : (
-    conversationSubline({ last_user_message: null }, laneState!, asked)
-    || stateView?.cardLine
-    || (userMessage && userMessage !== title && !(hostedRow && titleIsAsk(session)) ? userMessage : '')
-  );
+  const title = sessionTitle(session);
 
   return (
     <TouchableOpacity
@@ -232,15 +190,14 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <RNView style={styles.iconWithStatus}>
-            {internals ? <StatusDot session={session} /> : <HostedRowDot working={laneState === 'working'} unread={!!isUnread} />}
+            <StatusDot session={session} />
           </RNView>
           {session.is_favorite && (
             <Feather name="star" size={11} color={Theme.accent} style={{ marginRight: 3 }} />
           )}
           {/* Unread carries by WEIGHT plus a leading dot — the same two signals
-              the web card and the chat rail use, never a count. Hosted mode's
-              dot is the row's one mark, drawn in the status slot. */}
-          {internals && isUnread && <RNView style={styles.unreadDot} />}
+              the web card and the chat rail use, never a count. */}
+          {isUnread && <RNView style={styles.unreadDot} />}
           {/* Personified: the face, then the name leading the title (the web
               card's order). Nobody opted in: the row reads as it always did. */}
           <MobileIdentityFace
@@ -252,18 +209,13 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
           <MobileSessionIdentityLine
             row={identityRow}
             title={title}
-            suffix={titleSuffix}
-            style={internals
-              ? [styles.conversationTitle, isUnread && styles.conversationTitleUnread]
-              : [styles.conversationTitle, styles.hostedTitle, isUnread && styles.hostedTitleUnread]}
+            style={[styles.conversationTitle, isUnread && styles.conversationTitleUnread]}
           />
         </RNView>
         <RNView style={styles.rightMeta}>
-          {internals && sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
-          {/* Hosted times read as the web rail's ("now", a clock time,
-              Yesterday, a weekday, a date), the accent only on unread rows. */}
-          <RNText style={[styles.timeText, !internals && styles.hostedTime, !internals && isUnread && styles.hostedTimeUnread]}>
-            {internals ? formatRelativeTime(session.updated_at) : hostedRowTime(session.updated_at, Date.now())}
+          {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
+          <RNText style={styles.timeText}>
+            {formatRelativeTime(session.updated_at)}
           </RNText>
           {session.is_pinned && (
             <FontAwesome name="thumb-tack" size={10} color={Theme.magenta} />
@@ -312,8 +264,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
           <RNText maxFontSizeMultiplier={1.2} style={{ fontSize: 11, color: Theme.textSecondary }}>{roleSessions} {roleSessions === 1 ? 'session' : 'sessions'}</RNText>
         </Pressable>
       )}
-      {quiet ? <RNText style={[styles.summaryText, !internals && styles.hostedQuiet]} numberOfLines={1}>{quiet}</RNText> : null}
-      {internals && stateView ? (
+      {stateView ? (
         // The agent's pinned "where this stands" line (cast state) replaces the
         // generated summary, same rule as the web card. It dims once the
         // thread has run far past the write, so a neglected line stops
@@ -324,13 +275,13 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
       ) : null}
       {/* A phone row carries one line of detail: the agent's pinned state,
           else the generated summary, else what the person last asked. */}
-      {internals && !stateView && (session.idle_summary || session.subtitle) ? (
+      {!stateView && (session.idle_summary || session.subtitle) ? (
         <RNText style={styles.summaryText} numberOfLines={1}>
           {(session.idle_summary || session.subtitle)!.replace(/^\s*[-*•]\s+/, '')}
         </RNText>
       ) : null}
 
-      {internals && !stateView && !(session.idle_summary || session.subtitle) && userMessage && (
+      {!stateView && !(session.idle_summary || session.subtitle) && userMessage && (
         <RNText style={styles.userMessage} numberOfLines={1}>
           <RNText style={styles.userMessageCaret}>&gt; </RNText>
           {userMessage}
@@ -362,7 +313,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
 // Memoized: the inbox holds every row at once, so a store write re-renders
 // only the rows whose props changed. The callbacks take the row's id (or the
 // row) so the list passes the same functions to every row.
-export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onDismiss, onLongPress, roleSessions, onOpenRole, awaiting, asked, titleSuffix, reviveAt }: {
+export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onDismiss, onLongPress, roleSessions, onOpenRole, reviveAt }: {
   session: SessionData;
   isUnread?: boolean;
   /** The row is the conversation on screen (a conversation's inbox panel). */
@@ -377,17 +328,10 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
    *  re-renders the row, which reads its relative time and staleness at
    *  render. */
   clock?: number;
-  /** The row has an open question for the person. */
-  awaiting?: boolean;
-  /** The open question a waiting row asks, shown as its quiet line. */
-  asked?: string;
-  /** Tells two same-name rows apart (lib/sameNameSuffix). */
-  titleSuffix?: string;
   /** When a revive was asked for this row (store blockedReviveRequestedAt). */
   reviveAt?: number;
 }) {
   const Theme = useTheme();
-  const { stashLabel } = useRowEnv();
   const translateX = useRef(new RNAnimated.Value(0)).current;
   const didSwipe = useRef(false);
 
@@ -494,7 +438,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} selected={selected} awaiting={awaiting} asked={asked} titleSuffix={titleSuffix} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} />
+      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} />
       <RNView style={styles.separator} />
     </RNAnimated.View>
   );
@@ -503,7 +447,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
     <RNView style={styles.swipeContainer}>
       <RNAnimated.View style={[styles.swipeBehind, { opacity: swipeBehindOpacity }]}>
         <FontAwesome name="archive" size={16} color="#fff" />
-        <RNText style={styles.swipeBehindText}>{stashLabel}</RNText>
+        <RNText style={styles.swipeBehindText}>Stash</RNText>
       </RNAnimated.View>
       {panGesture ? (
         <gestureHandler.GestureDetector gesture={panGesture}>{card}</gestureHandler.GestureDetector>
@@ -593,26 +537,6 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
   },
   conversationTitleUnread: {
     fontWeight: '700',
-  },
-  // Hosted mode: unread titles are 600 in ink, read ones muted.
-  hostedTitle: {
-    fontWeight: '500',
-    color: Theme.textMuted,
-  },
-  hostedTitleUnread: {
-    fontWeight: '600',
-    color: Theme.text,
-  },
-  hostedTime: {
-    fontSize: 12,
-    color: Theme.textMuted,
-    fontVariant: ['tabular-nums'],
-  },
-  hostedQuiet: {
-    color: Theme.textDim,
-  },
-  hostedTimeUnread: {
-    color: Theme.accent,
   },
   unreadDot: {
     width: 6,

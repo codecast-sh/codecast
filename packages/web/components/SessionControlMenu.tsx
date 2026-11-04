@@ -26,7 +26,6 @@ import {
 } from "./ui/dropdown-menu";
 import type { AgentOption, MoveVerb } from "../lib/sessionControl";
 import { MOVE_VERBS, moveAgentOptions, sessionMoveVerbs } from "../lib/sessionControl";
-import { useSurface } from "../lib/surfaces";
 import { useCloudAgentOfConversation } from "./cloudAgents/sessionAgent";
 
 // The unified session control: one panel behind the conversation-header badge
@@ -237,9 +236,7 @@ export interface SessionControlPanelProps {
  */
 function useModelControl(conversationId: string | undefined, agentType: string | undefined, model: string | null | undefined, effort: string | null | undefined) {
   const sessionId = useLiveSessionMeta(conversationId)?.sessionId;
-  // Hosted mode offers no model or effort picks (lib/surfaces.ts).
-  const pickable = useSurface("modelPicker");
-  const controllable = pickable && canControlModel(agentType, sessionId, model);
+  const controllable = canControlModel(agentType, sessionId, model);
   const cloud = useCloudAgentOfConversation(conversationId)?.spec;
   return {
     sessionId,

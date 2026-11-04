@@ -36,9 +36,9 @@ export function triggerEndVerb(status: string): "cancel" | "delete" | null {
   return isTriggerTerminal(status) ? "delete" : null;
 }
 
-/** The words for ending a trigger, given the mode's noun for one (MODE_WORDS
- *  `trigger`: "Trigger" or "Routine"): the button, the question it asks, and
- *  the short answer that confirms it beside that question. */
+/** The words for ending a trigger, given the noun for one ("Trigger"): the
+ *  button, the question it asks, and the short answer that confirms it beside
+ *  that question. */
 export function triggerEndWords(verb: "cancel" | "delete", noun: string): { label: string; ask: string; confirm: string } {
   const thing = noun.toLowerCase();
   return verb === "cancel"
@@ -80,7 +80,7 @@ export type TaskRow = {
   created_by_conversation_title?: string;
   target_conversation_id?: string;
   // The routine's home is a hosted assistant conversation (agentTasks
-  // hostedHomeStamp): the assistant's routine, in hosted mode's scope.
+  // hostedHomeStamp): the hosted assistant's routine.
   hosted_home?: boolean;
   retry_count?: number;
   max_runtime_ms?: number;
@@ -95,10 +95,6 @@ export type TaskRow = {
   // explicit human title is left alone, so preferring display_title is safe.
   display_title?: string;
   display_summary?: string;
-  /** display_summary is written to the person (a hosted routine's summary,
-   *  agentTasks.ts summary_for_person); otherwise it describes an agent's
-   *  instruction and a hosted surface leaves it out. */
-  summary_for_person?: boolean;
   // Set when the schedule was canceled as a side effect of killing its home
   // conversation (vs. completing naturally). The server re-arms stamped tasks
   // when the session is restored; the client reads it to SAY so.
@@ -188,14 +184,6 @@ function promptOpening(prompt: string): string {
 // What each run does, in one sentence — the SECOND line of every trigger
 // row, on every surface. Always the standing description, never an outcome:
 // the outcome has its own line (lastRunHeadline).
-/** A routine's description as hosted mode shows it: only a summary written
- *  to the person ("Each weekday at 8 AM I'll send you your open to-dos").
- *  A summary distilled for a developer dashboard ("escalates if user wants
- *  ...") reads as an internal note, so it is left out. */
-export function routineSummaryForPerson(t: Pick<TaskRow, "display_summary" | "summary_for_person">): string | null {
-  return (t.summary_for_person && t.display_summary?.trim()) || null;
-}
-
 export function taskGist(t: Pick<TaskRow, "display_summary" | "prompt">): string {
   const s = t.display_summary?.trim();
   return s ? cutLine(s, 200) : promptOpening(t.prompt || "");

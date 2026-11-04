@@ -26,8 +26,7 @@ const palette: Record<string, unknown> = flattenColorPalette(resolveConfig(tailw
 
 /** The sol variable a palette entry paints: `var(--sol-x)`, or a themed() function that returns it.
  *  The accent classes read `--sol-class-*`, which hold the same Solarized hex
- *  in every theme (only hosted mode remaps them, globals.css), so they are no
- *  theme variable here. */
+ *  in every theme, so they are no theme variable here. */
 function solVar(value: unknown): string | null {
   const v = typeof value === "function" ? value({}) : value;
   return typeof v === "string" ? (/^var\((--sol-(?!class-)[\w-]+)\)$/.exec(v)?.[1] ?? null) : null;

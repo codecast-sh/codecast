@@ -4,7 +4,7 @@ import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect, startTransition } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
 import {
@@ -13,21 +13,12 @@ import {
 } from '@/components/SessionItem';
 import {
   useInboxStore, type InboxSession, type BucketItem,
-  chipMatchesSession, getProjectName, resolveInboxViewMode, flatViewSessions, convBucketMap,
+  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowSubagents, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
   sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
-  hostedOnlyInbox, hostedStatusSections, pendingSendIdsOf, HOSTED_UNFOLDABLE_SECTIONS,
 } from '@codecast/web/store/inboxStore';
-import { awaitingOkIds } from '@codecast/web/lib/decisionQueue';
-import { hostedRowTitle } from '@codecast/web/lib/hostedRowTitle';
-import { hostedStopsSig, splitHostedStops } from '@codecast/web/lib/hostedNotice';
-import { sameNameSuffixes } from '@codecast/web/lib/sameNameSuffix';
-import { useHostedMode, useModeWords, useSurface } from '@codecast/web/lib/surfaces';
-import { AssistantIntro } from '@/components/hosted/AssistantStart';
-import { pageTitleFace } from '@/constants/fonts';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { DecisionsBadge } from '@/components/decisions/DecisionsBadge';
-import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
 import { useTriggers } from '@codecast/web/hooks/useSyncTriggers';
 import { SearchResults } from '@/components/search/SearchResults';
 import { labelHexColor } from '@/lib/labelColors';
@@ -40,15 +31,10 @@ import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
-import { openCompose } from '@/lib/compose';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { InboxLensBar } from '@/components/inbox/InboxLensBar';
 import { AreaBar } from '@/components/nav/AreaBar';
 import { LivePulse } from '@/components/calls/LiveRooms';
-
-/** How a hosted inbox section draws: its same-name suffixes, whether it
- *  waits on the person (the accent dot), and whether it never folds. */
-type HostedSectionOpts = { suffixes?: ReadonlyMap<string, string>; attention?: boolean; fixed?: boolean };
 
 // Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
 // the session; explicit buttons restore (both) and kill (stashed only — a
@@ -61,10 +47,8 @@ function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
   onKill?: () => void;
 }) {
   const Theme = useTheme();
-  // Hosted mode keeps the row to its title and time (lib/surfaces).
-  const internals = useSurface('inbox.rowInternals');
-  const project = useSurface('gitChips') ? projectName(session) : null;
-  const agent = internals ? agentLabel(session.agent_type ?? "") : "";
+  const project = projectName(session);
+  const agent = agentLabel(session.agent_type ?? "");
 
   return (
     <TouchableOpacity onPress={onPress} style={styles.dismissedItem} activeOpacity={0.6}>
@@ -111,12 +95,8 @@ function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
             <RNText style={sessionStyles.projectText} numberOfLines={1}>{project}</RNText>
           </>
         )}
-        {internals && (
-          <>
-            <RNText style={sessionStyles.metaSeparator}>·</RNText>
-            <RNText style={sessionStyles.metaText}>{session.message_count} msgs</RNText>
-          </>
-        )}
+        <RNText style={sessionStyles.metaSeparator}>·</RNText>
+        <RNText style={sessionStyles.metaText}>{session.message_count} msgs</RNText>
       </RNView>
     </TouchableOpacity>
   );
@@ -168,12 +148,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const Theme = useTheme();
   // Both list memos below bake palette values into React nodes.
   const scheme = useActiveScheme();
-  // A starter tapped in the empty inbox opens the sheet with its words typed in.
-  const openNewSession = openCompose;
-  const words = useModeWords();
-  const hostedMode = useHostedMode();
-  // Hosted mode: no CLI to install, and no project chips.
-  const installCli = useSurface('empty.installCli');
   const [showStashed, setShowStashed] = useState(false);
   const [showKilled, setShowKilled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -185,15 +159,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const [searchOpen, setSearchOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
-  // Another tab can open the sheet with words typed in (`?ask=`): the empty
-  // Routines list's examples do. The param is dropped once read, so the same
-  // example works again.
-  const ask = useLocalSearchParams<{ ask?: string }>().ask;
-  useEffect(() => {
-    if (!ask) return;
-    openNewSession(ask);
-    router.setParams({ ask: undefined });
-  }, [ask, openNewSession, router]);
   const isSearching = searchQuery.trim().length >= 2;
   const openSession = useCallback((conversationId: string, messageId?: string) => {
     if (onOpenSession) onOpenSession(conversationId, messageId);
@@ -203,7 +168,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // The rows as the shared chokepoint places them (hooks/useInboxPlacement):
   // the same computation the slide-out panel's counts and web run. The body
   // reads the raw sessions map off the store at render, gated by sessionsSig.
-  const { placed, sessionsSig, pendingSendSig, coarseNow, currentSessionId, sessionsWithQueuedMessages } = useInboxPlacement();
+  const { placed, sessionsSig, coarseNow, currentSessionId, sessionsWithQueuedMessages } = useInboxPlacement();
   const inboxPainted = useRef(false);
   useEffect(() => {
     if (inboxPainted.current) return;
@@ -215,12 +180,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // Unread has its own signature: sessionsWakeSig deliberately omits
   // updated_at, which is exactly the number the read model compares against.
   const unreadSig = useInboxStore((s) => sessionUnreadWakeSig(s));
-  // The Assistant scope (lib/assistantScope): in hosted mode the inbox holds
-  // the assistant's conversations and folds them into the web rail's words
-  // (hostedStatusSections), stops in their own "Couldn't finish".
-  const hostedOnly = useInboxStore((s) => hostedOnlyInbox(s.clientState?.ui ?? {}));
-  const awaitingSig = useInboxStore((s) => (hostedOnly ? [...awaitingOkIds(s.sessionDecisions)].sort().join(',') : ''));
-  const stopsSig = useInboxStore((s) => (hostedOnly ? hostedStopsSig(s.sessions, s.messages) : ''));
   const sessions = useInboxStore.getState().sessions;
   // First-payload state of the live sessions subscription (set by
   // useSyncInboxSessions). Distinguishes "still loading" from "account has no
@@ -256,42 +215,26 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // draft keystroke synced from any device. inbox_manual_order is an array, so
   // its wake rides a stringified key (ref may flip without content change).
   const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
-  const showSubagents = useInboxStore((s) => s.clientState?.ui?.show_subagents ?? true);
+  const showSubagents = useInboxStore((s) => resolveShowSubagents(s.clientState?.ui));
   const manualOrderKey = useInboxStore((s) => JSON.stringify(s.clientState?.ui?.inbox_manual_order ?? null));
   const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
 
   const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly, roleSessionsByLead } = placed;
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
   // The number beside the title, in the attention colour: how much is open.
-  // Hosted mode shows no bare number there. Its one mark is the decisions
-  // badge ("1 to answer"), and each section's own count says the rest, so
-  // the header never shows two numbers for overlapping things.
-  const headerCount = hostedMode ? 0 : activeSessions.length;
-  // The rows with an open question, which a hosted row says in plain words.
-  const questionIds = useMemo(() => new Set(questions.map((s) => String(s._id))), [questions]);
-  // What each of those rows asks: the row's quiet line is the open question
-  // itself (lane.ts conversationSubline), the oldest when it holds several.
-  const decisionQueue = useDecisionQueue();
-  const askedByConv = useMemo(() => {
-    const asked = new Map<string, string>();
-    for (const item of [...decisionQueue].sort((a, b) => a.createdAt - b.createdAt)) {
-      if (!asked.has(item.conversationId)) asked.set(item.conversationId, item.question);
-    }
-    return asked;
-  }, [decisionQueue]);
+  const headerCount = activeSessions.length;
 
   const chipMatches = useCallback((s: InboxSession) =>
     chipMatchesSession(s, {
       projectFilters: activeProjectFilter ? [{ id: activeProjectFilter, path: null, exclude: false }] : undefined,
       bucketFilters: activeBucketFilter ? [{ id: activeBucketFilter, exclude: false }] : undefined,
       bucketByConv,
-      hostedOnly,
     }),
-    [activeProjectFilter, activeBucketFilter, bucketByConv, hostedOnly]);
+    [activeProjectFilter, activeBucketFilter, bucketByConv]);
   const chipFilter = useCallback((items: InboxSession[]) => {
-    if (!activeProjectFilter && !activeBucketFilter && !hostedOnly) return items;
+    if (!activeProjectFilter && !activeBucketFilter) return items;
     return items.filter(chipMatches);
-  }, [activeProjectFilter, activeBucketFilter, hostedOnly, chipMatches]);
+  }, [activeProjectFilter, activeBucketFilter, chipMatches]);
 
   const handleSearchChange = useCallback((text: string) => {
     setSearchQuery(text);
@@ -324,18 +267,18 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   }, [pinSession]);
 
   const confirmKill = useCallback((conversationId: string) => {
-    Alert.alert(words.kill, words.killAsk, [
+    Alert.alert('Kill Session', 'Stop the agent and move this session to Killed?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: words.killConfirm, style: 'destructive', onPress: () => killSession(conversationId) },
+      { text: 'Kill', style: 'destructive', onPress: () => killSession(conversationId) },
     ]);
-  }, [killSession, words]);
+  }, [killSession]);
 
   const confirmKillAllStashed = useCallback((ids: string[]) => {
-    Alert.alert(words.killAllStashed, `${words.killAllAsk} (${ids.length})`, [
+    Alert.alert('Kill all stashed', `Stop every stashed session? (${ids.length})`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: words.killConfirm, style: 'destructive', onPress: () => killSessions(ids) },
+      { text: 'Kill', style: 'destructive', onPress: () => killSessions(ids) },
     ]);
-  }, [killSessions, words]);
+  }, [killSessions]);
 
   // Label filing — the web session-card context menu's "label" half. Picks from
   // existing labels (tap the current one to unfile), creates on the fly (iOS
@@ -411,8 +354,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       favoriteLabel,
       'Mark unread',
       'Label…',
-      words.stash,
-      words.kill,
+      'Stash',
+      'Kill Session',
       'Cancel',
     ];
     const destructiveButtonIndex = 5;
@@ -436,12 +379,12 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         { text: favoriteLabel, onPress: toggleFavorite },
         { text: 'Mark unread', onPress: markUnread },
         { text: 'Label…', onPress: () => openLabelPicker(session) },
-        { text: words.stash, onPress: () => handleStash(session._id) },
-        { text: words.kill, style: 'destructive', onPress: () => confirmKill(session._id) },
+        { text: 'Stash', onPress: () => handleStash(session._id) },
+        { text: 'Kill Session', style: 'destructive', onPress: () => confirmKill(session._id) },
         { text: 'Cancel', style: 'cancel' },
       ]);
     }
-  }, [handlePin, handleStash, confirmKill, openLabelPicker, words]);
+  }, [handlePin, handleStash, confirmKill, openLabelPicker]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -476,24 +419,21 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
 
   const openRole = useCallback((roleShortId: string) => router.push(`/org/${roleShortId}`), [router]);
 
-  const renderSessionItem = useCallback((s: InboxSession, titleSuffix?: string) => (
+  const renderSessionItem = useCallback((s: InboxSession) => (
     <SwipeableSessionItem
       key={s._id}
-      titleSuffix={titleSuffix}
       session={s as SessionData}
       isUnread={!!unreadByConv[s._id]}
       selected={currentId === s._id}
       onPress={openSession}
       onDismiss={handleStash}
       onLongPress={handleSessionLongPress as (session: SessionData) => void}
-      awaiting={questionIds.has(s._id)}
-      asked={askedByConv.get(String(s._id))}
       roleSessions={roleSessionsByLead.get(s._id)}
       onOpenRole={openRole}
       clock={rowMinute}
       reviveAt={reviveByConv[s._id]}
     />
-  ), [openSession, currentId, handleStash, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, questionIds, askedByConv]);
+  ), [openSession, currentId, handleStash, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -502,36 +442,28 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // `count` is the chokepoint's section count (flat cards plus members nested
   // under a same-bucket lead) — the header number web, the tally and the CLI
   // agree on; items.length is only the flat cards.
-  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number, hosted?: HostedSectionOpts) => {
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number) => {
     if (items.length === 0) return null;
     const key = collapseKey ?? label;
-    // A hosted section that never folds (New) ignores a stored fold.
-    const collapsed = !hosted?.fixed && !!collapsedSections?.[key];
+    const collapsed = !!collapsedSections?.[key];
     const shown = collapsed ? [] : items.slice(0, Math.max(0, rowsLeft.current));
     rowsLeft.current -= shown.length;
-    const rows = collapsed ? null : shown.map((row) => renderSessionItem(row, hosted?.suffixes?.get(String(row._id))));
-    // One heading for every lens, in the hosted rail's terms: sentence case
-    // in the interface face, muted ink, the count beside it, and a dot that
-    // carries the section's colour (hosted mode spends it only on what waits
-    // on the person). A fixed section (hosted New) never folds.
-    const fixed = !!hosted?.fixed;
-    const dot = hosted ? (hosted.attention ? Theme.accent : undefined) : color;
+    const rows = collapsed ? null : shown.map((row) => renderSessionItem(row));
+    // One heading for every lens: sentence case in the interface face, muted
+    // ink, the count beside it, and a dot in the section's colour.
     return (
       <RNView key={key}>
         <TouchableOpacity
           style={styles.sectionHeader}
-          onPress={fixed ? undefined : () => { void Haptics.selectionAsync(); toggleCollapsedSection(key); }}
-          disabled={fixed}
+          onPress={() => { void Haptics.selectionAsync(); toggleCollapsedSection(key); }}
           activeOpacity={0.6}
           accessibilityRole="header"
           accessibilityState={{ expanded: !collapsed }}
         >
-          {dot ? <RNView style={[styles.sectionDot, { backgroundColor: dot }]} /> : null}
+          {color ? <RNView style={[styles.sectionDot, { backgroundColor: color }]} /> : null}
           <RNText style={styles.sectionTitle}>{label}</RNText>
           <RNText style={styles.sectionCount}>{count ?? items.length}</RNText>
-          {fixed ? null : (
-            <Feather name={collapsed ? "chevron-right" : "chevron-down"} size={15} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
-          )}
+          <Feather name={collapsed ? "chevron-right" : "chevron-down"} size={15} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
         </TouchableOpacity>
         {rows}
       </RNView>
@@ -590,15 +522,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       if (!hydrated || sessionsFirstLoad !== false) {
         return [<SessionListSkeleton key="skeleton" />];
       }
-      if (!installCli) {
-        // Hosted mode's first run: nothing to install, so the empty inbox
-        // offers the assistant (web HostedEmptyState).
-        return [(
-          <RNView key="empty" style={[styles.emptyInbox, { paddingHorizontal: Spacing.xl }]}>
-            <AssistantIntro onStarter={(text) => openNewSession(text)} />
-          </RNView>
-        )];
-      }
       return [(
         <RNView key="empty" style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
@@ -608,20 +531,11 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       )];
     }
     if (activeSessions.length === 0) {
-      // Everything is handled. Hosted mode says so and offers the next thing
-      // to ask (the same starters the first-run inbox shows).
-      if (hostedMode) {
-        return [(
-          <RNView key="empty" style={[styles.emptyInbox, { paddingHorizontal: Spacing.xl }]}>
-            <AssistantIntro title={words.inboxClearTitle} lede={words.inboxAllClear} onStarter={(text) => openNewSession(text)} />
-          </RNView>
-        )];
-      }
       return [(
         <RNView key="empty" style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
-          <RNText style={styles.emptyText}>{words.inboxClearTitle}</RNText>
-          <RNText style={styles.emptySubtext}>{words.inboxAllClear}</RNText>
+          <RNText style={styles.emptyText}>Inbox zero</RNText>
+          <RNText style={styles.emptySubtext}>All sessions stashed, killed, or idle</RNText>
         </RNView>
       )];
     }
@@ -643,8 +557,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     // sessions falling to auto-derived project groups — exactly web's layout.
     if (viewMode === "bucket" || viewMode === "plan") {
       const active = [...filteredQuestions, ...filteredNew, ...statusNeedsInput, ...statusDone, ...filteredDormant, ...statusWorking];
-      // The names are the mode's words; the collapse keys stay the developer
-    // names, which is what the folded state is stored under on every device.
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
       if (viewMode === "bucket") {
         const { labelGroups, projectGroups } = groupSessionsForLabelView(active, buckets, bucketByConv);
@@ -661,54 +573,25 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       }
       return sections.filter(Boolean);
     }
-    if (hostedOnly) {
-      // The Assistant scope's sections, the web rail's (hostedStatusSections):
-      // Your move, then Couldn't finish, Working on it, New, Earlier (or
-      // Done), and Drafts. The collapse keys are the web's, so a fold
-      // round-trips with the desktop.
-      const st = useInboxStore.getState();
-      const awaiting = awaitingOkIds(st.sessionDecisions);
-      const sending = pendingSendIdsOf(st);
-      const { asks, stopped } = splitHostedStops(statusNeedsInput, (id) => st.messages[id]);
-      const hostedSections = hostedStatusSections(
-        { pinned: filteredPinned, questions: filteredQuestions, needsInput: asks, newSessions: filteredNew, working: statusWorking, done: statusDone, dormant: statusDormant },
-        (id) => awaiting.has(id), (id) => sending.has(id), (id) => !!unreadByConv[id],
-      );
-      // Same-name rows get a muted day or time after the title.
-      const suffixes = sameNameSuffixes([...hostedSections.flatMap(([rows]) => rows), ...stopped], (row) => hostedRowTitle(st, row._id), coarseNow);
-      const anyNew = hostedSections.some(([rows, k]) => k === 'new_results' && rows.length > 0);
-      const opts = (key: string, attention = false): HostedSectionOpts => ({ suffixes, attention, fixed: HOSTED_UNFOLDABLE_SECTIONS.has(key) });
-      for (const [rows, key] of hostedSections) {
-        if (key === 'needs_input') {
-          sections.push(renderSection(words.sectionNeedsInput, rows, undefined, 'Needs Input', undefined, opts(key, true)));
-          sections.push(renderSection("Couldn't finish", stopped, undefined, 'hosted_stopped', undefined, opts('hosted_stopped')));
-        } else if (key === 'pinned') sections.push(renderSection('Pinned', rows, undefined, 'Pinned', undefined, opts(key)));
-        else if (key === 'working') sections.push(renderSection(words.sectionWorking, rows, undefined, 'working', undefined, opts(key)));
-        else if (key === 'new_results') sections.push(renderSection('New', rows, undefined, 'new_results', undefined, opts(key)));
-        else if (key === 'done') sections.push(renderSection(anyNew ? 'Earlier' : 'Done', rows, undefined, 'done', undefined, opts(key)));
-        else sections.push(renderSection('Drafts', rows, undefined, 'drafts', undefined, opts(key)));
-      }
-      return sections.filter(Boolean);
-    }
     // Questions lead: a session that asked you something is your move before
     // anything else, pinned or not — same order as the web panel.
-    sections.push(renderSection(words.sectionQuestions, filteredQuestions, Theme.violet, "questions"));
+    sections.push(renderSection('Decisions', filteredQuestions, Theme.violet, "questions"));
     // The header number is the section COUNT while no chip narrows the list
     // and the nested rows are on screen; shared sectionHeaderCount, so this
     // inbox and the web panel can't drift.
     const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
       sectionHeaderCount(shown, full, n, showSubagents);
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta, undefined, countOf(filteredPinned, pinned, placed.counts.pinned)));
-    sections.push(renderSection(words.sectionNew, filteredNew, Theme.blue, "New", countOf(filteredNew, newSessions, placed.counts.newSessions)));
+    sections.push(renderSection('New', filteredNew, Theme.blue, "New", countOf(filteredNew, newSessions, placed.counts.newSessions)));
     // Top-down "who acts next": you (Needs Input, Done to review), the agent
     // (Working), a machine (Dormant) — same order as the web panel.
-    sections.push(renderSection(words.sectionNeedsInput, statusNeedsInput, Theme.accent, "Needs Input", countOf(statusNeedsInput, needsInput, placed.counts.needsInput)));
+    sections.push(renderSection('Needs Input', statusNeedsInput, Theme.accent, "Needs Input", countOf(statusNeedsInput, needsInput, placed.counts.needsInput)));
     sections.push(renderSection("Done", statusDone, Theme.cyan, undefined, countOf(statusDone, done, placed.counts.done)));
     sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, countOf(statusWorking, working, placed.counts.working)));
-    sections.push(renderSection(words.sectionDormant, statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
+    sections.push(renderSection('Dormant', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, installCli, openNewSession, words, hostedOnly, awaitingSig, stopsSig, pendingSendSig, unreadByConv, coarseNow, rowBudget]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, unreadByConv, coarseNow, rowBudget]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
@@ -719,9 +602,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         unreadCount={schedulePartition.unreadCount}
         nextRunAt={schedulePartition.nextRunAt}
       />
-      {/* Hosted mode shows the two folded lists only once something is in
-          one, so a first run's intro stands alone. */}
-      {(!hostedMode || filteredStashed.length + filteredKilled.length > 0) && (
       <RNView style={styles.hiddenToggleRow}>
         <TouchableOpacity
           style={styles.hiddenToggle}
@@ -729,7 +609,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           activeOpacity={0.7}
         >
           <FontAwesome name={showStashed ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
-          <RNText style={styles.dismissedToggleText}>{words.stashed} <RNText style={styles.sectionCount}>{filteredStashed.length}</RNText></RNText>
+          <RNText style={styles.dismissedToggleText}>Stashed <RNText style={styles.sectionCount}>{filteredStashed.length}</RNText></RNText>
         </TouchableOpacity>
         <RNView style={styles.hiddenToggleDivider} />
         <TouchableOpacity
@@ -738,23 +618,22 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           activeOpacity={0.7}
         >
           <FontAwesome name={showKilled ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
-          <RNText style={styles.dismissedToggleText}>{words.killed} <RNText style={styles.sectionCount}>{filteredKilled.length}</RNText></RNText>
+          <RNText style={styles.dismissedToggleText}>Killed <RNText style={styles.sectionCount}>{filteredKilled.length}</RNText></RNText>
         </TouchableOpacity>
       </RNView>
-      )}
       {showStashed && filteredStashed.length > 0 && (
         <TouchableOpacity
           onPress={() => confirmKillAllStashed(filteredStashed.map(s => s._id))}
           style={styles.killAllBtn}
           activeOpacity={0.7}
         >
-          <RNText style={styles.killAllText}>{words.killAllStashed}</RNText>
+          <RNText style={styles.killAllText}>Kill all stashed</RNText>
         </TouchableOpacity>
       )}
       {showStashed && (
         <RNView style={styles.dismissedSection}>
           {filteredStashed.length === 0 ? (
-            <RNText style={styles.dismissedEmpty}>{words.noStashed}</RNText>
+            <RNText style={styles.dismissedEmpty}>No stashed sessions</RNText>
           ) : (
             filteredStashed.map(s => (
               <HiddenSessionRow
@@ -772,7 +651,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       {showKilled && (
         <RNView style={styles.dismissedSection}>
           {filteredKilled.length === 0 ? (
-            <RNText style={styles.dismissedEmpty}>{words.noKilled}</RNText>
+            <RNText style={styles.dismissedEmpty}>No killed sessions</RNText>
           ) : (
             filteredKilled.slice(0, 100).map(s => (
               <HiddenSessionRow
@@ -790,7 +669,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         </RNView>
       )}
     </RNView>
-  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, openSession, handleRestore, confirmKill, confirmKillAllStashed, scheme, words, hostedMode]);
+  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, openSession, handleRestore, confirmKill, confirmKillAllStashed, scheme]);
 
   // What the inbox is narrowed to, named in the title: a label or a project
   // picked in the slide-out panel. The clear mark beside it goes back to all.
@@ -802,7 +681,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     setActiveBucketFilter(null);
     setActiveProjectFilter(null);
   }, [setActiveBucketFilter, setActiveProjectFilter]);
-  const shownCount = hostedMode ? 0 : filterName ? chipFilter(activeSessions).length : headerCount;
+  const shownCount = filterName ? chipFilter(activeSessions).length : headerCount;
 
   // Pull-to-reveal: the list opens scrolled past a search row that sits above
   // its first section, so a short pull shows it and a longer one refreshes.
@@ -864,9 +743,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
             panel's narrow header moves them down beside the order. */}
         {!isSearching && !panel && <DecisionsBadge />}
         <RNView style={{ flex: 1 }} />
-        {/* Hosted mode has one way into search, the field over the list (as
-            the web rail has one under the wordmark). */}
-        {!searchOpen && !hostedMode && (
+        {!searchOpen && (
           <TouchableOpacity
             style={styles.headerIconBtn}
             onPress={() => setSearchOpen(true)}
@@ -891,7 +768,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
                 style={styles.searchInput}
                 value={searchQuery}
                 onChangeText={handleSearchChange}
-                placeholder={words.searchPagePlaceholder}
+                placeholder='Search sessions... "phrases", file: pr: commit:'
                 placeholderTextColor={Theme.textMuted0}
                 returnKeyType="search"
                 autoCorrect={false}
@@ -952,7 +829,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   );
 }
 
-const styles = themedStyles((Theme, look) => StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -967,7 +844,8 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     gap: 8,
   },
   headerTitle: {
-    ...pageTitleFace(look),
+    fontSize: 20,
+    fontWeight: '700',
     color: Theme.text,
   },
   headerTitleShrink: {
@@ -1018,21 +896,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 14,
     color: Theme.blue,
   },
-  // The family look draws it as the web rail's search field: a bordered
-  // field, left-aligned, in the same 44pt the pull-down reveal hides.
-  searchReveal: look === 'family' ? {
-    height: 34,
-    marginVertical: 5,
-    marginHorizontal: Spacing.md,
-    paddingHorizontal: 11,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    borderRadius: 9,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.border,
-    backgroundColor: Theme.bgAlt,
-  } : {
+  searchReveal: {
     height: 44,
     marginHorizontal: Spacing.md,
     flexDirection: 'row',

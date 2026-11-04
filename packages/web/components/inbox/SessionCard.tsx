@@ -6,7 +6,6 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { withSafetyBlock, isHostedAgentType } from "@codecast/shared/contracts";
 import { hostedStopOf } from "../../lib/hostedNotice";
-import { assistantScopeOnly } from "../../lib/assistantScope";
 import { imageBytes } from "../../lib/imageByteCache";
 import { compressImage } from "../../lib/compressImage";
 import { threadStateView } from "../../lib/threadState";
@@ -30,9 +29,6 @@ import { formatIdleDuration } from "../../lib/sessionCard";
 import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { useInboxSelection } from "../../lib/inboxSelection";
-import { isHostedMode, surfaceShown } from "../../lib/surfaces";
-import { MODE_WORDS } from "../../lib/surfaceRules";
-import { showsAgentIcon } from "../simple/lanePaths";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -43,9 +39,7 @@ import { showsAgentIcon } from "../simple/lanePaths";
 /** The card-chrome toggles the row draws, as one string. */
 function cardChromeSig(clientState: any): string {
   const ui = clientState?.ui;
-  // In the Assistant scope every row is the assistant's, so its mark says
-  // nothing there; Everything keeps it to tell the assistant from people.
-  return `${ui?.show_model_badge === true ? 1 : 0}${showsAgentIcon(ui) && !assistantScopeOnly(ui) ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}${ui?.show_device_icon !== false ? 1 : 0}${ui?.show_characters === false ? 0 : 1}`;
+  return `${ui?.show_model_badge === true ? 1 : 0}${ui?.show_agent_icon !== false ? 1 : 0}${ui?.inbox_image_thumbs === true ? 1 : 0}${ui?.personify_sessions === true ? 1 : 0}${ui?.show_branch_pill !== false ? 1 : 0}${ui?.show_device_icon !== false ? 1 : 0}${ui?.show_characters === false ? 0 : 1}`;
 }
 
 /** Visible-child parent link: the parent's title, so the card wakes on that
@@ -97,7 +91,7 @@ const paneDragStart = (sessionId: string) => (e: React.DragEvent, title: string)
 
 export type SessionCardProps = Pick<
   SessionCardViewProps,
-  | "session" | "isActive" | "isParentActive" | "isSelected" | "isUnread" | "titleSuffix" | "isFavorite" | "sessionLabel"
+  | "session" | "isActive" | "isParentActive" | "isSelected" | "isUnread" | "isFavorite" | "sessionLabel"
   | "variant" | "sectionStatus" | "forkColorKey" | "subRow" | "roleSessions"
   | "onSelect" | "onDismiss" | "onDefer" | "onRestore" | "onKill" | "onNavigateToSession" | "onCardContextMenu" | "onPickCharacter"
 > & {
@@ -162,11 +156,6 @@ export const SessionCard = memo(function SessionCard({
     // conversation the same way from its first seconds on. A string, so only a
     // changed name wakes the card.
     (s) => (hosted ? hostedRowTitle(s, cardId) : ""),
-    // The mode and the surfaces the card and its hover toolbar draw, read here
-    // so no per-row child holds a subscription of its own.
-    (s) => isHostedMode(s),
-    (s) => surfaceShown(s, "gitChips"),
-    (s) => surfaceShown(s, "inbox.labelStrip"),
   ]);
   const liveTitle = hosted ? hostedRowTitle(st, cardId) : "";
   const meId = st.currentUser?._id?.toString?.() ?? null;
@@ -203,19 +192,13 @@ export const SessionCard = memo(function SessionCard({
   const localDeviceId = localDeviceIdOf(st);
   const placeDevice = ownerDevice && (ownerDevice.is_remote || (localDeviceId && ownerDevice.device_id !== localDeviceId)) ? ownerDevice : null;
   const chromeSig = cardChromeSig(st.clientState);
-  const showGitChips = surfaceShown(st, "gitChips");
-  const showLabelStrip = surfaceShown(st, "inbox.labelStrip");
-  const hostedMode = isHostedMode(st);
   const chrome = useMemo<SessionCardChrome>(() => ({
     showModelBadge: chromeSig[0] === "1",
     showAgentIcon: chromeSig[1] === "1",
     prefs: identityPrefsOf({ personify_sessions: chromeSig[3] === "1", show_characters: chromeSig[6] === "1" }),
     showBranchPill: chromeSig[4] === "1",
     showDeviceIcon: chromeSig[5] === "1",
-    showGitChips,
-    showLabelStrip,
-    words: MODE_WORDS[hostedMode ? "hosted" : "developer"],
-  }), [chromeSig, showGitChips, showLabelStrip, hostedMode]);
+  }), [chromeSig]);
   // Cache-first bytes: a thumbnail seen once paints locally (and offline)
   // instead of re-fetching per scroll-through of the inbox.
   const thumbSrc = imageBytes.useSrc(chromeSig[2] === "1" ? session.image_preview_url : undefined);
@@ -363,9 +346,8 @@ export const SessionCard = memo(function SessionCard({
       onNavigateToSession={onNavigateToSession}
       onToggleFavorite={toggleFavorite}
       onOpenLabels={openLabels}
-      // The chip row shows the filter a click sets: no row, no filter.
-      onFilterProject={showLabelStrip ? filterProject : undefined}
-      onFilterLabel={showLabelStrip ? filterLabel : undefined}
+      onFilterProject={filterProject}
+      onFilterLabel={filterLabel}
       onAckAssignment={ackAssignment}
       onOpenComments={openComments}
       onOpenParent={openParent}

@@ -4,14 +4,11 @@ import {
   placementDecisionsSig,
   pendingSendWakeSig,
   resolveShowOld,
-  sessionUnreadMap,
-  sessionUnreadWakeSig,
   sessionsWakeSig,
   useTrackedStore,
   type PlacedInbox,
 } from "../store/inboxStore";
 import { useCoarseNow } from "./useCoarseNow";
-import { assistantScopeOnly, bySessionAgent, withinScope } from "../lib/assistantScope";
 import { hostedStopsSig, splitHostedStops } from "../lib/hostedNotice";
 
 // The user's personal attention count: the inbox's QUESTIONS + NEEDS INPUT
@@ -27,55 +24,24 @@ import { hostedStopsSig, splitHostedStops } from "../lib/hostedNotice";
 // only need the count on some platforms (DesktopProvider in a plain browser
 // tab), where running it would double the sidebar badge's identical work.
 //
-// In hosted mode the count follows the panel's Assistant/Everything scope
-// (lib/assistantScope), and a hosted conversation that ended on a stop is
-// left out: the assistant failed there, the person owes no reply. The panel
-// files those under "Couldn't finish" by the same rule (splitHostedStops).
+// A hosted assistant conversation that ended on a stop is left out: the
+// assistant failed there, the person owes no reply. The panel files those
+// under "Couldn't finish" by the same rule (splitHostedStops).
 export function useNeedsInputCount(enabled = true): number {
   return useWaitingOnPerson(enabled).length;
 }
 
-/** The rows the count counts, questions first: hosted mode's home lists them. */
+/** The rows the count counts, questions first. */
 export function useWaitingOnPerson(enabled = true): readonly PlacedInbox["needsInput"][number][] {
   const placed = useMinePlacement(enabled);
-  const scope = useTrackedStore([
-    (s) => assistantScopeOnly(s.clientState.ui),
-    (s) => hostedStopsSig(s.sessions, s.messages),
-  ]);
-  const only = assistantScopeOnly(scope.clientState.ui);
+  const scope = useTrackedStore([(s) => hostedStopsSig(s.sessions, s.messages)]);
   const stops = hostedStopsSig(scope.sessions, scope.messages);
   return useMemo(() => {
     if (!placed) return [];
     const asks = splitHostedStops(placed.needsInput, (id) => scope.messages[id]).asks;
-    return [...withinScope(placed.questions, only, bySessionAgent), ...withinScope(asks, only, bySessionAgent)];
+    return [...placed.questions, ...asks];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placed, only, stops]);
-}
-
-// Hosted mode's finished results the person has not read yet: the rail's New
-// section (hostedStatusSections), over the same placement and scope, newest
-// first, for the phone home's New list. Empty outside hosted mode's scope.
-export function useNewResults(enabled = true): readonly PlacedInbox["done"][number][] {
-  const placed = useMinePlacement(enabled);
-  const s = useTrackedStore([
-    (st) => assistantScopeOnly(st.clientState.ui),
-    (st) => sessionUnreadWakeSig(st),
-  ]);
-  const only = assistantScopeOnly(s.clientState.ui);
-  const unreadSig = sessionUnreadWakeSig(s);
-  return useMemo(() => {
-    if (!placed || !only) return [];
-    const unread = sessionUnreadMap(s);
-    return withinScope([...placed.done, ...placed.dormant], only, bySessionAgent)
-      .filter((row) => unread[row._id])
-      .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placed, only, unreadSig]);
-}
-
-// Their count, for the Inbox row and the tab title.
-export function useNewResultsCount(enabled = true): number {
-  return useNewResults(enabled).length;
+  }, [placed, stops]);
 }
 
 // The mine-scoped placement itself, for a surface that renders more than the

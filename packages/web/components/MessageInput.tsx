@@ -3,7 +3,6 @@ import { awaitingOkIds } from "../lib/decisionQueue";
 import { hostedComposerWords, hostedLastExchange, type HostedLast } from "../lib/hostedComposer";
 import { HostedStatusLine } from "./conversation/HostedStatusLine";
 import { useIsHostedConversation } from "../hooks/useConversationAgentType";
-import { MODE_WORDS, useSurface } from "../lib/surfaces";
 import { useAllowanceOut } from "./simple/usePlanFigures";
 import { useContext, useLayoutEffect, useRef, useState, useMemo, useCallback, memo, lazy, Suspense, type ReactElement } from "react";
 import { RevealInBandCtx } from "../lib/revealHost";
@@ -282,10 +281,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // box, a workflow gate and a chat room have nobody to hand to.
   const [handoffOpen, setHandoffOpen] = useState(false);
   const owners = useOwnersFromStore(conversationId);
-  const handoffShown = useSurface("composer.handoff");
-  // Send and stash is a triage verb, so it follows the triage bar's surface.
-  const triageShown = useSurface("triageBar");
-  const canHandoff = handoffShown && !bareComposer && !onGateSend && !onWorkflowLaunch && !chatMentionMode && isConvexId(conversationId) && !!owners.currentUser && owners.canManage !== false;
+  const canHandoff = !bareComposer && !onGateSend && !onWorkflowLaunch && !chatMentionMode && isConvexId(conversationId) && !!owners.currentUser && owners.canManage !== false;
   // Narrowed: MessageInput only needs the session's team_id (for mention scope), which
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
@@ -323,8 +319,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     30_000,
   );
   // Suggestion pills pref — off by default; the strip mounts only when on.
-  const suggestionShown = useSurface("composer.suggestion");
-  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true) && suggestionShown;
+  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
   const memberTeams = useInboxStore((s) => s.teams);
   const mentionScope = useMemo(() => {
     const teamId = mentionTeamId
@@ -1261,7 +1256,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // the composer drives it through this handle from its keydown (Tab accepts,
   // ↑/↓ cycle) and blanks its own placeholder while the ghost is showing.
   const suggestionRef = useRef<ComposerSuggestionHandle | null>(null);
-  const [ghostVisible, setGhostVisible] = useState(false);
+  const [ghostText, setGhostText] = useState<string | null>(null);
+  const ghostVisible = ghostText !== null;
   // Tell the host (compose popup) when Escape is spoken for by inner UI — the
   // lightbox, an image/queue chip selection, or the slash-command menu — so its
   // document-capture Escape listener stands down and the textarea handler above
@@ -1348,8 +1344,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // every key: tens of ms each beside a long transcript.
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const controlsRoomRef = useRef<number | null>(null);
+  // What the box shows decides the layout, typed or not: an empty box shows
+  // the ghost suggestion or the placeholder, and either can be as long as a
+  // typed message. Measuring only typed text left the send cluster beside a
+  // long ghost and crushed the field to a couple of characters a line.
+  const ghostTextRef = useRef<string | null>(null);
+  ghostTextRef.current = ghostText;
   const measureFitsBesideControls = useCallback(() => {
-    const text = messageRef.current;
+    const text = messageRef.current || ghostTextRef.current || textareaRef.current?.placeholder || "";
     let fits = !text.includes("\n");
     const ctx = measureCtxRef.current;
     const room = controlsRoomRef.current;
@@ -1374,7 +1376,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     controlsRoomRef.current = row.clientWidth - controls - 8;
     measureFitsBesideControls();
   }, [measureFitsBesideControls]);
-  useLayoutEffect(measureFitsBesideControls, [message, measureFitsBesideControls]);
+  useLayoutEffect(measureFitsBesideControls, [message, ghostText, measureFitsBesideControls]);
   // The row and every button in the cluster are observed, and the button set
   // is re-observed whenever it changes (the expand button comes and goes with
   // isMultiline), so a button that arrives or leaves re-reads the room.
@@ -2388,7 +2390,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       queueComposerText();
       return;
     }
-    if (e.key === "Enter" && e.altKey && e.shiftKey && onSendAndDismiss && triageShown) {
+    if (e.key === "Enter" && e.altKey && e.shiftKey && onSendAndDismiss) {
       e.preventDefault();
       handleSubmit(e).then(saved => { if (saved !== false) onSendAndDismiss(); });
       return;
@@ -2424,7 +2426,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // (store stopHostedTurn), so stopping never rests on a key a person who
   // does not code would not know.
   const hostedStop = hostedConversation && (agentStatus === "working" || agentStatus === "thinking") && !canSubmit
-    ? { label: MODE_WORDS.hosted.stopWorking, onStop: () => useInboxStore.getState().stopHostedTurn(conversationId) }
+    ? { label: "Stop", onStop: () => useInboxStore.getState().stopHostedTurn(conversationId) }
     : undefined;
   // A session's turn at work with nothing to send: the disc stops it.
   const sessionStop = turnRunning && !canSubmit ? { label: "Stop", onStop: interruptTurn, accel: "escape" } : undefined;
@@ -2463,7 +2465,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           </button>
         </ShortcutTooltip>
       )}
-      {onSendAndDismiss && triageShown && canSubmit && !onGateSend && !onWorkflowLaunch && (
+      {onSendAndDismiss && canSubmit && !onGateSend && !onWorkflowLaunch && (
         <ShortcutTooltip label="Send and stash" action="msg.sendDismiss" hint="the agent keeps running out of the inbox" side="top">
           <button
             type="button"
@@ -2984,7 +2986,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? MODE_WORDS.developer.composerApproval : hasAskUserQuestion ? "Answer the question to continue..." : MODE_WORDS.developer.composerPlaceholder) : MODE_WORDS.developer.composerPlaceholder)}
+                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {shared.active && <SharedCarets inputRef={textareaRef} text={message} rows={shared.others} editors={shared.editors} />}
@@ -3000,7 +3002,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         const ta = textareaRef.current;
                         if (ta) { ta.focus(); requestAnimationFrame(() => ta.setSelectionRange(t.length, t.length)); }
                       }}
-                      onVisibleChange={setGhostVisible}
+                      onShownChange={setGhostText}
                     />
                   )}
                 </ComposerTextRow>

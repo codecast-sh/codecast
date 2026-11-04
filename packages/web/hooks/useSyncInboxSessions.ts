@@ -1,5 +1,4 @@
 import { useRef, useCallback, useState } from "react";
-import { retireLaneIfNotAllowed } from "../components/simple/lanePref";
 import { useMutation, useConvex, type ConvexReactClient } from "convex/react";
 import { captureError } from "../lib/analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -352,10 +351,6 @@ export function useSyncInboxSessions() {
 
   useConvexSync(clientState, useCallback((data: any) => {
     useInboxStore.getState().syncTable("clientState", data);
-    // The server has answered for this person, so the merged lane is known:
-    // keep the device's boot hint in step with it.
-    if (data && typeof data === "object") useInboxStore.getState().noteLaneHint(useInboxStore.getState().clientState.ui);
-    retireLaneIfNotAllowed();
     // One-time self-heal: if the server's client_state has accumulated more
     // drafts than Convex can patch (>~1000), prune dead entries. Otherwise
     // every subsequent dispatch that touches client_state would fail with
@@ -372,7 +367,6 @@ export function useSyncInboxSessions() {
   useConvexSync(currentUser, useCallback((data: any) => {
     useInboxStore.getState().syncTable("currentUser", data);
     lastUserSyncRef.current = Date.now();
-    retireLaneIfNotAllowed();
   }, []));
 
   useConvexSync(bookmarks, useCallback((data: any) => {

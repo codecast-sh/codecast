@@ -35,11 +35,8 @@ export function decideNotificationNudge(args: {
   snoozedAt: number; // 0 = never dismissed
   miss: NotificationMiss | null;
   now: number;
-  // Hosted mode: the nudge stays out of the way until news has actually gone
-  // unshown, so a first reply is never framed by an ask.
-  onlyAfterMiss?: boolean;
 }): NudgeVerdict {
-  const { readiness, snoozedAt, miss, now, onlyAfterMiss } = args;
+  const { readiness, snoozedAt, miss, now } = args;
   if (readiness !== "ask" && readiness !== "off") return { show: false };
   const snoozed = snoozedAt > 0 && now - snoozedAt < NUDGE_SNOOZE_MS;
   // A miss after the last dismiss escalates the copy. It cuts the snooze short
@@ -49,7 +46,7 @@ export function decideNotificationNudge(args: {
     const overrides = miss.fromPerson && now - snoozedAt >= NUDGE_MISS_OVERRIDE_AFTER_MS;
     if (!snoozed || overrides) return { show: true, escalated: true, miss };
   }
-  if (snoozed || onlyAfterMiss) return { show: false };
+  if (snoozed) return { show: false };
   return { show: true, escalated: false };
 }
 

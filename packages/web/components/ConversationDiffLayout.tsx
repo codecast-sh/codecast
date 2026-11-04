@@ -27,7 +27,6 @@ import { requestFilePathMenu } from "../lib/filePathMenu";
 import { filePathHref } from "../lib/filePathLinks";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 import { matchesAction } from "../shortcuts";
-import { useSurface } from "../lib/surfaces";
 import { useFollowSurface } from "../hooks/useFollowSurface";
 
 const MOBILE_BREAKPOINT = 768;
@@ -131,12 +130,9 @@ export function ConversationDiffLayout({
   foldWorkingTurns,
   openAtTop,
   composerPlaceholder,
-  hideDiff: hideDiffProp,
+  hideDiff,
 }: ConversationDiffLayoutProps) {
   devRenderCount("ConversationDiffLayout");
-  // Hosted mode has no diff panel (lib/surfaces.ts).
-  const diffShown = useSurface("diff");
-  const hideDiff = hideDiffProp || !diffShown;
   const heightClass = "h-full";
   const [isMobile, setIsMobile] = useState(false);
   const layoutPref = useInboxStore(s => s.clientState.layouts?.conversation_diff ?? DEFAULT_DIFF_LAYOUT);
@@ -219,7 +215,7 @@ export function ConversationDiffLayout({
     const target = e.target as HTMLElement;
     const isInput = keyBelongsElsewhere(target);
 
-    if (isInput || !diffShown) return;
+    if (isInput) return;
 
     if (matchesAction(e, "diff.prevChange")) {
       e.preventDefault();

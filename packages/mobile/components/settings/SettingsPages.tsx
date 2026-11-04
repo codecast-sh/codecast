@@ -17,8 +17,6 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useSettingsData } from '@codecast/web/hooks/useSyncSettings';
-import { LANE_SWITCH, writeLane } from '@codecast/web/components/simple/lanePref';
-import { useHostedMode } from '@codecast/web/lib/surfaces';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
 import { PlanPage } from '@/components/hosted/PlanPage';
 import { MailPage } from '@/components/hosted/MailPage';
@@ -340,17 +338,10 @@ function AppearancePage() {
   const { theme, pick } = useThemePicker();
   const inboxImageThumbs = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
   const showCharacters = useInboxStore((s) => s.clientState?.ui?.show_characters !== false);
-  const hostedMode = useHostedMode();
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   return (
     <SettingsScroll>
       <SettingsGroup>
-        <ToggleRow
-          label={LANE_SWITCH.label}
-          description={LANE_SWITCH.description}
-          value={hostedMode}
-          onValueChange={(on) => writeLane(on ? 'simple' : 'full')}
-        />
         <NavRow
           label="Theme"
           description="Light, dark, or follow system"

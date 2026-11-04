@@ -5,8 +5,6 @@
 import { collapseSameTitle, matchScore } from "./mentionRanking";
 import { inActiveWorkspace } from "./workspaceScope";
 import { isActiveTask, isOnHumanBoard } from "@codecast/shared/tasks";
-import { isOnNotesShelf } from "@codecast/shared/docs";
-import { inAssistantScope, isAssistantDoc, isAssistantTask } from "./assistantScope";
 
 // One matcher for tasks/docs/plans over the globally-synced mention index.
 // Reuses matchScore() (exact > prefix > substring, every typed word required
@@ -95,26 +93,6 @@ export function searchIndexOf(s: {
     docs: byId(mergeEntityRows(idx.docs, s.docs)),
     plans: byId(mergeEntityRows(idx.plans, s.plans)),
   };
-}
-
-/** The search index as hosted mode's Assistant scope sees it: the to-dos and
- *  notes the To-dos and Notes pages list on their Assistant tab, and no
- *  plans. Read from the store's own rows, since the mention index's slim
- *  rows carry no project or conversation to judge a row by (an engineering
- *  task there would pass as the person's own). The palette and /search read
- *  this one rule, so they agree with the pages. */
-export function assistantSearchIndex(s: {
-  tasks?: Record<string, any>; docs?: Record<string, any>; sessions?: Record<string, { agent_type?: string | null } | undefined>;
-}): { tasks: Record<string, MentionRecord>; docs: Record<string, MentionRecord>; plans: Record<string, MentionRecord> } {
-  const sessions = s.sessions ?? {};
-  const assistantConversations = new Set(Object.keys(sessions).filter((id) => inAssistantScope(sessions[id]?.agent_type)));
-  const tasks = Object.values(s.tasks ?? {}).filter((t: any) => isActiveTask(t) && isOnHumanBoard(t) && isAssistantTask({
-    ...t,
-    source_agent_type: t.created_from_conversation ? sessions[String(t.created_from_conversation)]?.agent_type ?? null : null,
-  }));
-  const docs = Object.values(s.docs ?? {}).filter((d: any) => isOnNotesShelf(d) && isAssistantDoc(d, assistantConversations));
-  const byId = (rows: any[]) => Object.fromEntries(rows.map((r) => [String(r._id), r]));
-  return { tasks: byId(tasks), docs: byId(docs), plans: {} };
 }
 
 /** The search index as the everyday surfaces see it: every scope's notes and

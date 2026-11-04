@@ -11,7 +11,6 @@ import { MessageReview } from "./MessageReview";
 import { MarkdownBlocks } from "./tools/MarkdownRenderer";
 import { DOC_MD_COMPONENTS } from "../lib/docMarkdownComponents";
 import { DocReviewBar } from "./DocReviewBar";
-import { useSurface } from "../lib/surfaces";
 import { SlotActions } from "./workspace/Slot";
 import { useInboxStore } from "../store/inboxStore";
 import { ArrowLeft, Edit3, MoreHorizontal, Copy, Check, MessageSquareQuote } from "lucide-react";
@@ -124,9 +123,7 @@ export function DocumentDetailLayout({
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
   useFollowScroll("doc", bodyScrollRef);
   const draft = useDrafting(docId);
-  // Hosted mode reads a note, it does not run a writing lab on it.
-  const internals = useSurface("docs.internals");
-  const draftingOn = !!drafting && isEditing && internals;
+  const draftingOn = !!drafting && isEditing;
   const overflowEnabled = !!drafting?.overflow;
   const draftMenu = useDraftingMenu(draft, overflowEnabled);
 
@@ -185,14 +182,14 @@ export function DocumentDetailLayout({
           {topBarLeft}
         </div>
         <div className="flex items-center gap-1 ml-auto">
-          {internals && <button
+          <button
             onClick={handleCopyMarkdown}
             className="p-1.5 rounded-md text-xs flex items-center gap-1 text-sol-text-dim hover:text-sol-text transition-colors"
             title="Copy as Markdown"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>}
-          {initialEditable && internals && (
+          </button>
+          {initialEditable && (
             // Editing is the default state, so the button offers the opt-in:
             // Review renders the body as quotable blocks to annotate and send
             // to the agent. While reviewing it flips to an accent-filled state
@@ -212,29 +209,11 @@ export function DocumentDetailLayout({
             </button>
           )}
           {draftingOn && <DraftingControls d={draft} overflowEnabled={overflowEnabled} />}
-          {/* Hosted mode leads with what a person does with a note: copy its
-              text, labelled, without the title line. */}
-          {!internals && (
-            <button
-              type="button"
-              onClick={() => {
-                const md = getMarkdownRef.current?.() ?? markdownContent;
-                copyToClipboard((titleInBody ? stripTitleHeading(md) : md).trim())
-                  .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1600); })
-                  .catch(() => toast.error("Couldn't copy that. Select the text and copy it instead."));
-              }}
-              data-cc-note-copy
-              className="mr-1 inline-flex h-7 items-center gap-1.5 rounded-md border border-sol-border px-2.5 text-xs text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
-            >
-              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              {copied ? "Copied" : "Copy"}
-            </button>
-          )}
           {topBarRight}
           {/* Shared controls in the detail's own header. Closing here is a
               navigation, so the slot's default hide is overridden — the
               affordance stays identical either way. */}
-          {!embedded && internals && <SlotActions slot="primary" onClose={() => router.push(backHref)} />}
+          {!embedded && <SlotActions slot="primary" onClose={() => router.push(backHref)} />}
           {metaContent && (
             <button
               onClick={() => setShowMeta(!showMeta)}

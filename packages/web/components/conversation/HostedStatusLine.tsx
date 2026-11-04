@@ -145,9 +145,8 @@ export function HostedStatusLine({ conversationId, agentStatus, phrase, sending,
   // "Getting started…" is for a conversation's first turn only; a follow-up
   // waits on the same "Thinking…" the run shows, so one wait reads one way.
   const answeredBefore = useInboxStore((s) => (s.messages[conversationId] ?? []).some((m) => m.role === "assistant"));
-  // The same link state the developer header's sync chip shows. Hosted mode
-  // hides that chip, so a dropped link is said here instead of reading as a
-  // slow assistant.
+  // The same link state the header's sync chip shows, said beside the reply
+  // so a dropped link never reads as a slow assistant.
   const connection = useHostedConnection();
   if (connection) {
     return (

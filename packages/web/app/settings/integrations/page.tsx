@@ -1,5 +1,4 @@
-// The one integrations surface (docs/architecture/issue-sync.md S9): the
-// assistant's mail and calendar through Whisk (WhiskCard), then Slack,
+// The one integrations surface (docs/architecture/issue-sync.md S9): Slack,
 // GitHub, Linear, Google and Notion, each with connect, disconnect, who
 // connected it, health, and what it enables — plus the imported issue sources
 // inside the GitHub and Linear cards.
@@ -17,8 +16,7 @@
 // connectors redirect back here with a confirm token in the URL fragment, which
 // is read once, spent in this signed-in session, and cleared.
 
-import { Surface, useHostedMode, useModeWords, useSimpleModeAllowed, useSurface } from "../../../lib/surfaces";
-import { Sparkles, User, Users } from "lucide-react";
+import { User, Users } from "lucide-react";
 import {
   APP_DESCRIPTORS,
   APP_IDS,
@@ -31,7 +29,6 @@ import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useConnectorReturn } from "../../../hooks/useConnectorReturn";
 import { SettingsCallout, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { IntegrationCard } from "../../../components/integrations/IntegrationCard";
-import { WhiskCard } from "../../../components/integrations/WhiskCard";
 import { SourcesSection } from "../../../components/ops/SourcesSection";
 import { BrowserExtensionSetup } from "../../../components/settings/BrowserExtensionSetup";
 import { TeamSwitcher } from "../../../components/TeamSwitcher";
@@ -39,6 +36,9 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { describeConnectorError } from "../../../lib/connectorReturn";
 
 /** The entries at one scope, keyed by app, for the cards of that ledger. */
+/** Vendors whose team connection feeds the team's product sources (Ops): one connection per workspace. */
+const TEAM_FED: ReadonlySet<string> = new Set(["sentry", "posthog"]);
+
 function entriesAt(result: AppConnectionsResult | undefined, scope: AppConnectionScope) {
   return new Map<string, AppConnectionStatus>(
     (result?.apps ?? [])
@@ -52,15 +52,8 @@ export default function IntegrationsPage() {
   const { user } = useCurrentUser();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const notice = useConnectorReturn();
-  const words = useModeWords();
-  const hosted = useHostedMode();
-  const assistant = useSimpleModeAllowed();
-  // Hosted mode lists only the services the assistant reaches, so a card
-  // never promises it mail or chat it cannot read.
-  const devApps = useSurface("settings.devIntegrations");
-  const shownApp = (id: (typeof APP_IDS)[number]) => devApps || !!APP_DESCRIPTORS[id].assistantReaches;
   const shownAt = (scope: AppConnectionScope) =>
-    APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes(scope) && shownApp(id));
+    APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes(scope));
 
   const result = connections.data as AppConnectionsResult | undefined;
   const loading = result === undefined && !connections.error;
@@ -71,8 +64,10 @@ export default function IntegrationsPage() {
   const teamEntries = entriesAt(result, "team");
   const personalEntries = entriesAt(result, "personal");
 
-  const showsTeam = !(hosted && teamKnown && !team) && shownAt("team").length > 0;
-  const onlyWhisk = !devApps && !showsTeam && shownAt("personal").length === 0;
+  // Inside a team, the team's own Sentry or PostHog connection is what its product sources read through; a personal
+  // card for the same vendor beside it would read "Not connected" over sources that are flowing, so it steps aside.
+  const personalShown = shownAt("personal").filter((id) => !(team && TEAM_FED.has(id) && teamEntries.get(id)?.status === "connected"));
+  const showsTeam = shownAt("team").length > 0;
 
   const errorCallout = connections.error && (
     <div className="px-4 py-3 sm:px-5">
@@ -92,21 +87,8 @@ export default function IntegrationsPage() {
         </SettingsCallout>
       )}
 
-      {/* The assistant's own connection: mail and calendar through Whisk,
-          personal, and first because it is what hosted mode runs on. When it
-          is the page's only section its heading would repeat the subtitle. */}
-      {assistant && (
-        <SettingsSection title={onlyWhisk ? undefined : "Assistant"} icon={Sparkles}>
-          <WhiskCard />
-        </SettingsSection>
-      )}
+      <BrowserExtensionSetup />
 
-      <Surface name="settings.browserExtension">
-        <BrowserExtensionSetup />
-      </Surface>
-
-      {/* Hosted mode on Personal has no team to connect for: the section
-          would only say so. A person in a team still sees it. */}
       {showsTeam && <SettingsSection
         title="Team connections"
         icon={Users}
@@ -115,7 +97,7 @@ export default function IntegrationsPage() {
         // is in flight; the server's answer stands in when the client is on
         // Personal, since the ledger then falls back to the home team.
         actions={<TeamSwitcher teamsOnly value={activeTeamId ?? team?.id ?? null} />}
-        description={words.teamConnectionsLede}
+        description="Shared by everyone on the team picked here, for their work inside it. The keys stay with Codecast: your agents ask Codecast to act and never hold them."
       >
         {errorCallout}
         {teamKnown && !team ? (
@@ -140,12 +122,12 @@ export default function IntegrationsPage() {
         )}
       </SettingsSection>}
 
-      {shownAt("personal").length > 0 && <SettingsSection
+      {personalShown.length > 0 && <SettingsSection
         title="Personal connections"
         icon={User}
-        description={words.personalConnectionsLede}
+        description="Yours alone, and they follow you: in any workspace you work in that has no connection of its own, an agent acting for you acts through these."
       >
-        {shownAt("personal").map((id) => (
+        {personalShown.map((id) => (
           <IntegrationCard
             key={id}
             descriptor={APP_DESCRIPTORS[id]}
@@ -158,9 +140,7 @@ export default function IntegrationsPage() {
         ))}
       </SettingsSection>}
 
-      <Surface name="settings.devIntegrations">
-        <SourcesSection />
-      </Surface>
+      <SourcesSection />
     </SettingsPanel>
   );
 }

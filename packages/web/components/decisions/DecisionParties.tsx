@@ -11,7 +11,6 @@ import { identityRowOf } from "../../lib/sessionIdentity";
 import { categoryMeaning } from "../../lib/decisionCategory";
 import { askingSessionDeps } from "./askingSessionDeps";
 import { askingSessionName } from "../../lib/decisionLinks";
-import { useSurface } from "../../lib/surfaces";
 import { objectHref } from "../../lib/entityLinks";
 
 // Who is in a decision: the session that asked, the person who holds it, and
@@ -70,15 +69,11 @@ export function AskingSessionView({
   const title = askingSessionName(fullTitle, omitRef);
   const project = session?.project_path || decision.project_path;
   const live = session?.status === "running" || session?.status === "working";
-  // Hosted mode names the asking conversation and nothing else: no repo, and
-  // no second dot for whether it runs.
-  const projectShown = useSurface("gitChips");
-  const internals = useSurface("questions.internals");
   return (
     <span className={`${wrap ? "[&>*+*]:ml-1.5" : "inline-flex items-center gap-1.5 min-w-0"} ${className}`} data-asking-session={decision.conversation_id}>
       {/* Who is asking (session-characters.md S3), then whether it is live. */}
       {!label && <SessionGlyph row={session ? identityRowOf(session as any) : null} size={14} className={wrap ? "inline-flex align-[-2px]" : "shrink-0"} />}
-      {!label && internals && <span className={`${wrap ? "inline-block align-middle " : ""}w-1.5 h-1.5 shrink-0 rounded-full ${live ? "bg-sol-green" : "bg-sol-text-dim"}`} title={live ? "The asking session is running" : "The asking session is idle"} aria-label={live ? "running" : "idle"} />}
+      {!label && <span className={`${wrap ? "inline-block align-middle " : ""}w-1.5 h-1.5 shrink-0 rounded-full ${live ? "bg-sol-green" : "bg-sol-text-dim"}`} title={live ? "The asking session is running" : "The asking session is idle"} aria-label={live ? "running" : "idle"} />}
       <Link
         href={`/conversation/${decision.conversation_id}`}
         className={`${wrap ? "[overflow-wrap:anywhere]" : "truncate"} text-sol-text-muted hover:text-sol-blue transition-colors`}
@@ -91,7 +86,7 @@ export function AskingSessionView({
       >
         {label || title || "a session with no name yet"}
       </Link>
-      {project && !label && projectShown && <span className={`${wrap ? "" : "truncate "}text-sol-text-dim`}>in {getProjectName(project)}</span>}
+      {project && !label && <span className={`${wrap ? "" : "truncate "}text-sol-text-dim`}>in {getProjectName(project)}</span>}
     </span>
   );
 }

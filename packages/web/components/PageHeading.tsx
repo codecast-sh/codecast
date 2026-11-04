@@ -1,7 +1,5 @@
 // A top-level page's title, with an optional muted count and lede beside it.
-// One component, so every page that names itself does it the same way; in
-// hosted mode globals.css sets the title in the family's reading face (the
-// serif Whisk titles its pages with) and keeps the count in the interface face.
+// One component, so every page that names itself does it the same way.
 export function PageHeading({ title, count, lede }: {
   title: string;
   /** How many things the page lists, said quietly after the title. */

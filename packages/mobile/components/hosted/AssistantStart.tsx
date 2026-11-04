@@ -1,16 +1,12 @@
-// Where a person starts with the hosted assistant on the phone (web
-// components/AssistantIntro.tsx): the assistant's mark, what it does, and
-// asks drawn from the web's one pool (simple/starterPool), less any a
-// conversation already began with. AssistantIntro sits in an empty inbox in
-// hosted mode; AssistantStart is the new conversation sheet's body when the
-// assistant is the agent: up to three starters over the composer. Mail and
-// calendar are named only once Whisk is connected (useLaneMailAbilities).
+// Where a person starts with the hosted assistant on the phone: the new
+// conversation sheet's body when the assistant is the agent, up to three
+// starters drawn from the web's one pool (simple/starterPool) over the
+// composer. Mail and calendar are named only once Whisk is connected
+// (useLaneMailAbilities).
 import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { Text } from '@/components/Themed';
-import { AgentLogoSvg } from '@/components/AgentLogo';
-import { HOSTED_AGENT_TYPE } from '@codecast/shared/contracts/assistant';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
 import { useLaneMailAbilities } from '@codecast/web/components/simple/useLaneMail';
 import { useStarterPool } from '@codecast/web/components/simple/starterPool';
@@ -18,28 +14,7 @@ import { useHostedAskGate } from '@codecast/web/components/simple/useHostedAskGa
 import { Composer } from './Composer';
 import { useHostedTheme } from './hostedTheme';
 
-/** `title` and `lede` replace the intro's own lines where the screen has
- *  something truer to say (an inbox with everything handled). A row hands
- *  its whole ask to `onStarter`. */
-export function AssistantIntro({ onStarter, title, lede }: { onStarter: (text: string) => void; title?: string; lede?: string }) {
-  const { c } = useHostedTheme();
-  const { connected, can } = useLaneMailAbilities();
-  const { asks } = useStarterPool(connected, can);
-  return (
-    <View style={{ alignItems: 'center', gap: 10, alignSelf: 'stretch' }}>
-      <AgentLogoSvg agentType={HOSTED_AGENT_TYPE} size={30} />
-      <Text accessibilityRole="header" style={{ fontSize: 18, fontWeight: '500', color: c.ink, textAlign: 'center' }}>
-        {title ?? LANE_COPY.intro.title}
-      </Text>
-      <Text style={{ fontSize: 14, lineHeight: 20, color: c.soft, textAlign: 'center', maxWidth: 320 }}>
-        {lede ?? LANE_COPY.intro.lede(connected)}
-      </Text>
-      <StarterRows starters={asks.map((ask) => ({ label: ask, text: ask }))} onStarter={onStarter} />
-    </View>
-  );
-}
-
-/** The web's starter rows (AssistantIntro StarterRow): plain text in body
+/** The web's starter rows: plain text in body
  *  ink, a muted arrow at the end, a hairline between rows, three lines before
  *  an ask clips so its assumptions show. */
 function StarterRows({ starters, onStarter, held = false }: { starters: Array<{ label: string; text: string }>; onStarter: (text: string) => void; held?: boolean }) {
@@ -71,29 +46,6 @@ function StarterRows({ starters, onStarter, held = false }: { starters: Array<{ 
         </Pressable>
       ))}
     </View>
-  );
-}
-
-/** One thing to ask, as a tappable chip: the intro's starters and the empty
- *  Routines list's examples. */
-export function StarterChip({ label, onPress }: { label: string; onPress: () => void }) {
-  const { c } = useHostedTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => ({
-        paddingVertical: 7,
-        paddingHorizontal: 12,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: pressed ? c.lineStrong : c.line,
-        backgroundColor: pressed ? c.hover : c.sheet,
-        transform: [{ scale: pressed ? 0.97 : 1 }],
-      })}
-    >
-      <Text style={{ fontSize: 12.5, color: c.ink2 }}>{label}</Text>
-    </Pressable>
   );
 }
 

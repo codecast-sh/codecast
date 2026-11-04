@@ -196,7 +196,7 @@ export function routineYesWords(repeats: boolean): string {
 
 export const APPROVAL_ANSWERS = { approve: "Approve", always: "Always allow", decline: "Decline" } as const;
 
-/** What an approval's buttons say in hosted mode, where a card asks the way
+/** What an approval's buttons say on a hosted conversation's card, which asks the way
  *  a person would: Yes, or Not now. The stored labels stay APPROVAL_ANSWERS,
  *  which the engine reads the answer by. */
 export const APPROVAL_BUTTONS: Record<string, string> = {
@@ -270,7 +270,7 @@ function ownLines(text: string): string[] {
   return lines;
 }
 
-/** An approval option's label as hosted mode shows it; any other label as is. */
+/** An approval option's label as its card shows it; any other label as is. */
 export function approvalButtonLabel(label: string): string {
   return APPROVAL_BUTTONS[label] ?? label;
 }

@@ -1,7 +1,4 @@
 "use client";
-import { useAssistantConversationIds, useAssistantScope, useHostedMode, useModeWords } from "../../lib/surfaces";
-import { isAssistantDoc } from "../../lib/assistantScope";
-import { AssistantScopeSwitch, MoreInEverything } from "../../components/AssistantScopeSwitch";
 import { useCallback, useMemo, useRef, useEffect } from "react";
 import { sharePageUrl } from "../../lib/utils";
 import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
@@ -13,7 +10,7 @@ import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { DocMenuItems } from "../../components/menus/ObjectContextMenus";
-import { docOriginClass, isOnHumanShelf, isOnNotesShelf, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
+import { docOriginClass, isOnHumanShelf, DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
 import { DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
@@ -151,7 +148,6 @@ function useDocUrlState() {
 }
 
 export function DocListContent() {
-  const words = useModeWords();
   const params = useParams();
   const { docType, group, sort, dir, project: projectFilter, label: labelFilter, source: sourceFilter, setParam, setGroup, setSort, toggleSortDir, buildShareUrl } = useDocUrlState();
   const router = useRouter();
@@ -187,38 +183,24 @@ export function DocListContent() {
   // board makes between agent work and triage suggestions. "all" shows
   // everything. One shared rule (@codecast/shared/docs), so web and mobile
   // can't drift. Legacy "human"/"bot" links map onto the new values.
-  // Hosted mode's shelf is the person's own notes, so an agent org's role
-  // docs (a charter) stay with the agent docs.
-  const hosted = useHostedMode();
-  const onShelf = hosted ? isOnNotesShelf : isOnHumanShelf;
-  const sourceDocs = useMemo(() => {
+  const sourceFilteredDocs = useMemo(() => {
     if (sourceFilter === "agent" || sourceFilter === "bot") {
-      return docsList.filter((d) => !onShelf(d) && docOriginClass(d) === "agent");
+      return docsList.filter((d) => !isOnHumanShelf(d) && docOriginClass(d) === "agent");
     }
     if (sourceFilter === "mined") {
-      return docsList.filter((d) => !onShelf(d) && docOriginClass(d) === "mined");
+      return docsList.filter((d) => !isOnHumanShelf(d) && docOriginClass(d) === "mined");
     }
     if (sourceFilter === "all") return docsList;
     if (sourceFilter === "starred") return docsList.filter((d) => !!d.pinned);
     // "" (default) and legacy "human" links both mean the human's shelf.
-    return docsList.filter(onShelf);
-  }, [docsList, sourceFilter, onShelf]);
-  // The Assistant scope (lib/assistantScope), as To-dos read it: notes
-  // written by hand or in an assistant conversation. A coding agent's plans
-  // and findings wait under Everything.
-  const { only: assistantOnly } = useAssistantScope();
-  const assistantConversations = useAssistantConversationIds();
-  const sourceFilteredDocs = useMemo(
-    () => (assistantOnly ? sourceDocs.filter((d) => isAssistantDoc(d, assistantConversations)) : sourceDocs),
-    [assistantOnly, sourceDocs, assistantConversations],
-  );
-  const outOfScope = sourceDocs.length - sourceFilteredDocs.length;
+    return docsList.filter(isOnHumanShelf);
+  }, [docsList, sourceFilter]);
 
   const isShelfView = sourceFilter === "" || sourceFilter === "human";
   const hiddenAgentCount = useMemo(() => {
     if (!isShelfView) return 0;
-    return docsList.filter((d) => !onShelf(d)).length;
-  }, [docsList, isShelfView, onShelf]);
+    return docsList.filter((d) => !isOnHumanShelf(d)).length;
+  }, [docsList, isShelfView]);
 
   const filteredDocs = useMemo(() => {
     let list = sourceFilteredDocs;
@@ -345,10 +327,8 @@ export function DocListContent() {
     <GenericListView<DocItem>
       activeItemId={params?.id as string | undefined}
       paletteTargetType="doc"
-      title={words.docsPage}
-      // Hosted Notes are one kind of thing: one tab, which the header draws
-      // as no choice at all (only its count, beside the title).
-      tabs={hosted ? [{ key: "", label: "All", count: sourceFilteredDocs.length }] : [
+      title="Docs"
+      tabs={[
         { key: "", label: "All", count: sourceFilteredDocs.length },
         ...DOC_TYPES.map((t) => ({
           key: t,
@@ -374,13 +354,10 @@ export function DocListContent() {
       onSortChange={setSort}
       sortDir={dir}
       onSortDirChange={toggleSortDir}
-      // Hosted mode does not open a door into developer content from a
-      // person's notes: Everything is in developer mode.
-      headerExtra={<AssistantScopeSwitch label="Which notes this lists" hidden={outOfScope} />}
-      listFooter={hosted ? (assistantOnly && outOfScope > 0 ? <div className="px-4 pb-3"><MoreInEverything hidden={outOfScope} /></div> : undefined) : hiddenAgentCount > 0 ? (
+      listFooter={hiddenAgentCount > 0 ? (
         <div className="px-6 py-2.5 border-t border-sol-border/15 flex items-center gap-2 text-xs text-sol-text-dim">
           <Bot className="w-3.5 h-3.5 opacity-40" />
-          <span>{hiddenAgentCount} {hiddenAgentCount === 1 ? words.agentDoc : words.agentDocs} not shown</span>
+          <span>{hiddenAgentCount} {hiddenAgentCount === 1 ? "agent doc" : "agent docs"} not shown</span>
           <button data-cc-inline-link onClick={() => setParam({ source: "all" })} className="text-sol-cyan hover:underline ml-0.5">
             Show all
           </button>
@@ -431,7 +408,6 @@ export function DocListContent() {
       searchAllItems={searchScopeDocs}
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}
       emptyMessage="No documents found"
-      createLabel={words.newDoc}
       onCreate={async () => {
         // Stamp the active workspace so the new doc lives where it was created
         // (a doc made in a team space belongs to that team).

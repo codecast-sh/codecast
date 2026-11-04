@@ -14,7 +14,7 @@ import { REQUEST_MEANS, assistantPromise, useConnectAvailable } from "@/componen
 import { AssistantPrivacyNote } from "@/components/simple/AssistantPrivacyNote";
 
 /** The family's faces and accent (@platform/design), as the marketing
- *  page's assistant section and /welcome set them, for the assistant's door. */
+ *  page's assistant section sets them, for the assistant's door. */
 const READ = "var(--pd-font-read, Georgia, serif)";
 const UI = "var(--pd-font-ui, ui-sans-serif, system-ui)";
 const ACCENT = "var(--pd-accent, #cb4b16)";
@@ -111,15 +111,10 @@ const TRACK_LINKS = [
 ] as const;
 
 /** Whether the visitor came through the assistant's door: its own anchor or
- *  query on this page, or a referral from /welcome. */
+ *  query on this page. */
 function cameForAssistant(): boolean {
   if (typeof window === "undefined") return false;
-  if (window.location.hash === "#assistant" || new URLSearchParams(window.location.search).get("for") === "assistant") return true;
-  try {
-    return new URL(document.referrer).pathname.startsWith("/welcome");
-  } catch {
-    return false;
-  }
+  return window.location.hash === "#assistant" || new URLSearchParams(window.location.search).get("for") === "assistant";
 }
 
 export default function PricingPage() {
@@ -128,7 +123,7 @@ export default function PricingPage() {
   useRouteMeta("/pricing");
   const upgradesOpen = useUpgradesOpen();
   const [assistantFirst] = useState(cameForAssistant);
-  // The same promise about mail as #everyone and /welcome, behind the same gate.
+  // The same promise about mail as #everyone, behind the same gate.
   const mail = useConnectAvailable().available === true;
 
   const teamsTrack = (
@@ -272,7 +267,7 @@ export default function PricingPage() {
           <p className="text-lg leading-relaxed" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
             {/* What it does, once: the hero (or the developer hero) already
                 says there is nothing to install and that plans include the
-                AI, and /welcome is where mail's arrival is said. */}
+                AI. */}
             {assistantPromise(mail)}
           </p>
           <AssistantPrivacyNote mail={mail} className="mt-3 text-[14px] leading-relaxed" style={{ color: "var(--pd-ink-faint, #8f8676)" }} />
@@ -306,7 +301,7 @@ export default function PricingPage() {
         {/* The plans count requests; say once what one is. */}
         <p className="mt-6 text-center text-[13.5px]" style={{ color: "var(--pd-ink-faint, #8f8676)", fontFamily: UI }}>{REQUEST_MEANS}</p>
         <div className="flex justify-center mt-8">
-          <Link href="/welcome">
+          <Link href="/signup">
             <Button className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0" style={{ background: ACCENT, fontFamily: UI }}>
               Get started with the assistant
             </Button>
@@ -324,7 +319,7 @@ export default function PricingPage() {
       <MarketingNav active="/pricing" door={assistantFirst ? "assistant" : undefined} />
 
       {/* Hero. Through the assistant's door it speaks for the assistant in
-          the family's faces, as #everyone and /welcome do; otherwise it
+          the family's faces, as #everyone does; otherwise it
           names both products. */}
       {assistantFirst ? (
         <section className="max-w-3xl mx-auto px-6 pt-20 pb-8 text-center" style={{ fontFamily: UI }}>
@@ -358,7 +353,7 @@ export default function PricingPage() {
       )}
 
       {/* Two products, two tracks, labelled up top. Whoever came from the
-          assistant's door (its #assistant link, /welcome, or ?for=assistant)
+          assistant's door (its #assistant link or ?for=assistant)
           reads its plans first; everyone else starts with the developer
           product. */}
       <nav aria-label="Pricing tracks" className="max-w-4xl mx-auto px-6 pb-12 flex flex-wrap justify-center gap-3">
@@ -394,7 +389,7 @@ export default function PricingPage() {
                 Get started free
               </Button>
             </Link>
-            <Link href="/welcome">
+            <Link href="/signup">
               <Button size="lg" className="text-base px-8 h-12 font-medium text-[#fdf6e3]" style={{ backgroundColor: "#cb4b16" }}>
                 Start with the assistant
               </Button>

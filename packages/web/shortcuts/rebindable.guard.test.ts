@@ -30,10 +30,9 @@ const ID = `['"]([a-zA-Z]+\\.[a-zA-Z0-9]+)['"]`;
 const READS = [
   new RegExp(`(?:useShortcutAction|usePaneShortcutAction|registerAction)\\(\\s*${ID}`, "g"),
   new RegExp(`matchesAction\\(\\s*\\w+,\\s*${ID}`, "g"),
-  // GenericListView's paletteShortcuts and HOSTED_SECTION_KEYS: rows whose
-  // action the list (matchesAction) or HostedSectionKeys (useShortcutAction)
-  // reads.
-  new RegExp(`\\{\\s*action:\\s*${ID},\\s*(?:mode|path):`, "g"),
+  // GenericListView's paletteShortcuts: rows whose action the list
+  // (matchesAction) reads.
+  new RegExp(`\\{\\s*action:\\s*${ID},\\s*mode:`, "g"),
   // A map handed to the evals host's useShortcuts.
   new RegExp(`${ID}:\\s*\\{\\s*keys:`, "g"),
 ];

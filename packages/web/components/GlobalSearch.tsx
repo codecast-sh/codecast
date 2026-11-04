@@ -18,16 +18,11 @@ import { useSessionQueryAutocomplete } from "../hooks/useSessionQuerySuggestions
 import { SearchField, SearchGlyph } from "./search/SearchField";
 import { SessionHit } from "./search/SessionHit";
 import { useRemoteSearch } from "../hooks/useRemoteSearch";
-import { useAssistantScope, useModeWords, useSurface } from "../lib/surfaces";
-import { bySessionAgent, withinScope } from "../lib/assistantScope";
 
 export { parseSearchTerms, highlightMatch, getSnippet };
 
 export function GlobalSearch() {
-  const words = useModeWords();
-  // Hosted mode searches conversations, without the role and team filters.
-  const internals = useSurface("search.internals");
-  const noun = (n: number) => `${words.conversation.toLowerCase()}${n !== 1 ? "s" : ""}`;
+  const noun = (n: number) => `session${n !== 1 ? "s" : ""}`;
   const [isOpen, setIsOpen] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   // Narrow top bar: the field collapses to a lone icon button. The input is
@@ -117,15 +112,9 @@ export function GlobalSearch() {
   const instantRows = useInstantSessionRows(query, 12);
 
   // Content-match rows win, title-only rows next, cache rows fill the tail.
-  // The Assistant scope holds here as it does in the palette and the inbox.
-  const { only: scopeOnly } = useAssistantScope();
   const groupedResults = useMemo(
-    () => withinScope(
-      mergeSearchRows(searchData?.results as any, titleData?.results as any, instantRows) as any[],
-      scopeOnly,
-      (r: any) => bySessionAgent({ agent_type: r.agentType }),
-    ) as any[],
-    [searchData, titleData, instantRows, scopeOnly]
+    () => mergeSearchRows(searchData?.results as any, titleData?.results as any, instantRows) as any[],
+    [searchData, titleData, instantRows]
   );
 
   // Nothing selected (or the selected session dropped out of the list) falls
@@ -250,15 +239,15 @@ export function GlobalSearch() {
             setIsOpen(true);
             setTimeout(() => inputRef.current?.focus(), 0);
           }}
-          aria-label={words.search}
-          title={words.search}
+          aria-label="Search sessions"
+          title="Search sessions"
         >
           <SearchGlyph />
         </TopbarButton>
       )}
       <SearchField
         value={query}
-        placeholder={words.search}
+        placeholder="Search sessions"
         expanded={isExpanded}
         compact={compact}
         hideCaps={hideCaps}
@@ -349,7 +338,7 @@ export function GlobalSearch() {
             )}
             <div className="px-3 py-2 bg-sol-bg-alt/80 border-t border-sol-border flex items-center justify-between text-[10px] text-sol-text-dim">
               <div className="flex items-center gap-3">
-                {internals && <label className="flex items-center gap-1.5 cursor-pointer select-none text-sol-text-secondary hover:text-sol-text transition-colors">
+                <label className="flex items-center gap-1.5 cursor-pointer select-none text-sol-text-secondary hover:text-sol-text transition-colors">
                   <input
                     type="checkbox"
                     checked={userOnly}
@@ -357,8 +346,8 @@ export function GlobalSearch() {
                     className="w-3 h-3 rounded border-sol-border bg-sol-bg text-amber-500 focus:ring-amber-500/50 focus:ring-offset-0 cursor-pointer"
                   />
                   user only
-                </label>}
-                {internals && userTeams && userTeams.length > 1 && (
+                </label>
+                {userTeams && userTeams.length > 1 && (
                   <>
                     <span className="text-sol-border">|</span>
                     <select
@@ -375,7 +364,7 @@ export function GlobalSearch() {
                     </select>
                   </>
                 )}
-                {internals && <span className="text-sol-border">|</span>}
+                <span className="text-sol-border">|</span>
                 <span className="flex items-center gap-1">
                   <KeyCap size="xs">↑</KeyCap>
                   <KeyCap size="xs">↓</KeyCap>

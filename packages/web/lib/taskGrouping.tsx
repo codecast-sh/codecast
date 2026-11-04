@@ -54,9 +54,6 @@ export type TaskGroupContext = {
    *  projectInitiativeIndex): the Initiative axis reaches a task's initiative
    *  through its project, never from a field on the task. */
   initiativeOfProject?: Map<string, InitiativeRow> | null;
-  /** Hosted mode: a group header is its name and face, with no link out to
-   *  a profile or a role page. */
-  plainHeaders?: boolean;
   /** The calls tasks were pulled from (tasks.from_call), by id: what the
    *  Call axis names and dates its groups by. */
   calls?: Record<string, TaskCallRef>;
@@ -129,7 +126,7 @@ const assigneeAxis: TaskAxis = {
   compare: (a, b) => byTitle(a.sample?.assignee_info?.name, b.sample?.assignee_info?.name),
   header: (b, ctx) => {
     const info = assigneeOfKey(b.key, b.sample, ctx);
-    const href = ctx.plainHeaders ? null : isRoleAssignee(info)
+    const href = isRoleAssignee(info)
       ? { to: objectHref("role", info.role_short_id), label: "Open role" }
       : info?.github_username
         ? { to: objectHref("person", info.github_username), label: "Profile" }
@@ -364,7 +361,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
         label: call?.title || "Call",
         icon: <Phone className="w-3.5 h-3.5 text-sol-magenta" />,
         badge: day ? <span className="text-[10px] text-sol-text-dim normal-case tracking-normal">{day}</span> : undefined,
-        extra: ctx.plainHeaders ? undefined : (
+        extra: (
           <Link href={`/calls/${call?.short_id || b.key}`} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>
             {call?.short_id ? `Open ${call.short_id}` : "Open call"}
           </Link>

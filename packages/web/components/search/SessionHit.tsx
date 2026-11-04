@@ -18,7 +18,6 @@ import type { SessionSearchRow } from "../../lib/instantSessionSearch";
 import { SearchOrigin } from "./SearchOrigin";
 import { MatchSnippet, SpeakerLine } from "./MatchSnippet";
 import { AgentTypeIcon } from "../AgentTypeIcon";
-import { useModeWords, useSurface } from "../../lib/surfaces";
 
 export type SessionHitRow = SessionSearchRow;
 
@@ -39,8 +38,6 @@ export const SessionHit = memo(function SessionHit({
   /** Called on any open, so a surface that floats (the top bar's panel) can close. */
   onNavigate?: () => void;
 }) {
-  const internals = useSurface("search.internals");
-  const words = useModeWords();
   const identity = identityRowOf({ _id: row.conversationId, title: row.title, ...(row.identity ?? {}) });
   const project = getProjectName(row.projectPath ?? undefined);
   // A request sent again (Try again) matches twice with the same words; it shows once.
@@ -91,7 +88,7 @@ export const SessionHit = memo(function SessionHit({
         <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-[26px] text-[10px] text-sol-text-muted">
           {!row.isOwn && row.authorName && <span className="flex-shrink-0 font-medium text-sol-violet/80">{row.authorName.split(" ")[0]}</span>}
           <SessionProjectChip project={project} directory={row.projectPath} />
-          {internals && !!row.messageCount && <><MetaDot /><span className="flex-shrink-0 tabular-nums">{row.messageCount} msgs</span></>}
+          {!!row.messageCount && <><MetaDot /><span className="flex-shrink-0 tabular-nums">{row.messageCount} msgs</span></>}
         </div>
         <SearchOrigin row={origin} query={highlight} className="mt-1 pl-[26px]" />
         {shown.length === 0 && row.instantSnippet && (
@@ -121,7 +118,7 @@ export const SessionHit = memo(function SessionHit({
               onClick={onNavigate}
               className="block px-3 py-1 text-[11px] text-sol-text-dim no-underline hover:text-sol-text-secondary"
             >
-              {more} more in this {words.conversation.toLowerCase()}
+              {more} more in this session
             </Link>
           )}
         </div>

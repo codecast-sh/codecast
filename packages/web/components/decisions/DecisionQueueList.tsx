@@ -1,8 +1,5 @@
 "use client";
 
-import { useAssistantConversationIds, useAssistantScope, useModeWords, useSurface } from "../../lib/surfaces";
-import { HOSTED_PAGE_FRAME, HOSTED_PAGE_PAD, HOSTED_PAGE_TOP } from "../../lib/hostedPage";
-import { AssistantScopeSwitch, MoreInEverything } from "../AssistantScopeSwitch";
 import { PageHeading } from "../PageHeading";
 import { useCallback, useMemo, useState } from "react";
 import { ShortId } from "../ShortId";
@@ -12,7 +9,7 @@ import { decisionAnswerLabel } from "@codecast/shared/contracts";
 import { ChevronDown, ChevronRight, Layers, ShieldCheck, SlidersHorizontal, Undo2, Terminal, ListChecks } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type HandledDecisionItem } from "../../store/inboxStore";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
-import { useDecisionQueue, useScopedDecisionQueue } from "../../hooks/useDecisionQueue";
+import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { useSyncDecisionStacks } from "../../hooks/useSyncDecisionStacks";
 import { useSyncHandledDecisions } from "../../hooks/useSyncHandledDecisions";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -22,8 +19,6 @@ import { groupDecisions, stackDue, STACK_GROUP_MIN, type DecisionGroup } from ".
 import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
 import { answeredLabel, answeredLine, answerSaid, askedOfViewer, inViewerQueue, questionAsStatement } from "../../lib/decisionQueue";
-import { useWaitingOnPerson } from "../../hooks/useNeedsInputCount";
-import { sessionCardTitle } from "../../lib/sessionCard";
 import { StackChecklist } from "./StackChecklist";
 import { StackPolicyEditor } from "./StackPolicy";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -57,25 +52,16 @@ export function DecisionQueueList() {
   // with pending members.
   useSyncDecisionStacks({ includeDone: true });
   useSyncHandledDecisions();
-  // Hosted mode's Assistant scope (lib/assistantScope) lists the assistant's
-  // asks alone, as the rail count does (useScopedDecisionQueue); what it
-  // leaves out is one line at the foot.
-  const scope = useAssistantScope();
-  const assistantIds = useAssistantConversationIds();
-  const inScope = useCallback((conversationId: string) => !scope.only || assistantIds.has(conversationId), [scope.only, assistantIds]);
   const pendingAll = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: pendingWhere, sig: pendingSig });
   const meId = useInboxStore((s) => s.currentUser?._id as string | undefined);
-  const pending = useMemo(() => pendingAll.filter((d) => inScope(d.conversation_id) && askedOfViewer(d, meId)), [pendingAll, inScope, meId]);
+  const pending = useMemo(() => pendingAll.filter((d) => askedOfViewer(d, meId)), [pendingAll, meId]);
   const stacks = useInboxStore((s) => s.decisionStacks);
-  const handledAll = useCollectionRows<HandledDecisionItem>("handledDecisions", { sig: handledSig, sort: (a, b) => (b.resolved_at ?? 0) - (a.resolved_at ?? 0) });
-  const handled = useMemo(() => handledAll.filter((d) => inScope(d.conversation_id)), [handledAll, inScope]);
+  const handled = useCollectionRows<HandledDecisionItem>("handledDecisions", { sig: handledSig, sort: (a, b) => (b.resolved_at ?? 0) - (a.resolved_at ?? 0) });
   // Overdue stacks sort first (the-line.md L10), so the grouping follows the
   // clock: a coarse tick re-sorts when a due passes.
   const now = useCoarseNow(60_000);
   const groups = useMemo(() => groupDecisions(pending, stacks, now), [pending, stacks, now]);
-  const terminal = useScopedDecisionQueue().filter((i) => i.source !== "decide");
-  const terminalAll = useDecisionQueue().filter((i) => i.source !== "decide").length;
-  const outOfScope = pendingAll.length - pending.length + terminalAll - terminal.length;
+  const terminal = useDecisionQueue().filter((i) => i.source !== "decide");
 
   // Stack creation from selected cards: tick, name, group.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -100,7 +86,7 @@ export function DecisionQueueList() {
   // happened to its change (cardOutcome), any other decision that it was answered.
   const answered = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: answeredWhere, sig: answeredSig });
   const last = useMemo<LastClosed | null>(() => {
-    const d = answered.reduce<SessionDecisionItem | null>((m, x) => (inScope(x.conversation_id) && (x.resolved_at ?? 0) > (m?.resolved_at ?? 0) ? x : m), null);
+    const d = answered.reduce<SessionDecisionItem | null>((m, x) => ((x.resolved_at ?? 0) > (m?.resolved_at ?? 0) ? x : m), null);
     if (!d) return null;
     const outcome = d.card ? cardOutcome(d, "you", now) : null;
     if (outcome) return { verdict: outcome.verdict, title: d.card!.change, ago: settledAgo(d.resolved_at, now), href: decisionHref(d) };
@@ -110,7 +96,7 @@ export function DecisionQueueList() {
     return label
       ? { verdict: answerSaid(label), title: questionAsStatement(d.question), line: answeredLine(label, d.question), ago: settledAgo(d.resolved_at, now), href: decisionHref(d) }
       : { verdict: "Answered", title: d.question, ago: settledAgo(d.resolved_at, now), href: decisionHref(d) };
-  }, [answered, now, inScope]);
+  }, [answered, now]);
   // "Waiting on you" counts what a person must answer. Rows a lead holds
   // under a grant stay pending in the inbox (a person may still answer first)
   // but they are the lead's to clear, so they count on their own group header.
@@ -121,23 +107,15 @@ export function DecisionQueueList() {
   // fold only when nothing else is waiting), and inside it its first row, so
   // the KeyCaps show on the row the digits answer.
   const keysGroup = (groups.find((g) => g.kind === "stack" || g.kind === "scope") ?? groups[0])?.key;
-  // Hosted mode calls this page Approvals and leaves the queue's machinery
-  // (stacks, stepping, grouping) to developer mode.
-  const words = useModeWords();
-  const internals = useSurface("questions.internals");
 
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
-      <div className={`${HOSTED_PAGE_FRAME} ${HOSTED_PAGE_PAD} ${HOSTED_PAGE_TOP} pb-6`}>
+      <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 pt-6 pb-6">
         <div className="flex items-center gap-x-3 gap-y-2 flex-wrap mb-5">
-          <PageHeading title={words.questionsPage} />
-          {/* Under the title on a phone, beside it from sm up. */}
-          <div className="order-last basis-full sm:order-none sm:basis-auto empty:hidden">
-            <AssistantScopeSwitch label="Which approvals this lists" hidden={outOfScope} />
-          </div>
+          <PageHeading title="Decisions" />
           {/* A count of nothing says what the empty state below says better. */}
           {(mine > 0 || onDefault > 0 || withLead > 0 || terminal.length > 0) && <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{onDefault ? ` · ${onDefault} going ahead` : ""}{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>}
-          {internals && <div className="ml-auto flex items-center gap-2 text-[11px]">
+          <div className="ml-auto flex items-center gap-2 text-[11px]">
             {pending.length > 0 && (
               <Link href="/decisions?mode=step" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors">
                 <ListChecks className="w-3.5 h-3.5" />one at a time
@@ -148,7 +126,7 @@ export function DecisionQueueList() {
                 <Layers className="w-3.5 h-3.5" />{selecting ? "cancel" : "group into a stack"}
               </button>
             )}
-          </div>}
+          </div>
         </div>
 
         <FeatureUpsell
@@ -174,16 +152,12 @@ export function DecisionQueueList() {
         )}
 
         {empty && (
-          <QueueEmpty last={last} title={words.queueEmptyTitle} lede={words.queueEmptyLede} top={!internals}>
-            {!internals && <WaitingOnReplyLine />}
-            {/* An empty list's overflow belongs under its words, not at the page's foot. */}
-            {handled.length === 0 && <MoreInEverything hidden={outOfScope} centered />}
-          </QueueEmpty>
+          <QueueEmpty last={last} title="Nothing needs you." lede="Your agents are working. New decisions appear here the moment an agent asks." />
         )}
 
         <div className="space-y-7">
           {groups.map((g) => (
-            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={internals && g.key === keysGroup} />
+            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={g.key === keysGroup} />
           ))}
 
           {terminal.length > 0 && (
@@ -206,7 +180,6 @@ export function DecisionQueueList() {
 
           {handled.length > 0 && <HandledSection rows={handled} />}
         </div>
-        {!(empty && handled.length === 0) && <MoreInEverything hidden={outOfScope} />}
       </div>
     </div>
   );
@@ -232,8 +205,6 @@ function GroupHeader({ icon, title, count, hint, right, onToggle, open }: { icon
 
 function ScopeLabel({ scopeKey, sample }: { scopeKey: string; sample?: SessionDecisionItem }) {
   const [kind, id] = scopeKey.split(":");
-  // Hosted mode names the group alone, without its kind as a kicker.
-  const internals = useSurface("questions.internals");
   const st = useTrackedStore([
     (s) => kind === "project" ? (s.projects as any)?.[id]?.title : kind === "plan" ? (s.plans as any)?.[id]?.title : kind === "session" ? s.sessions[id]?.title : undefined,
   ]);
@@ -242,7 +213,7 @@ function ScopeLabel({ scopeKey, sample }: { scopeKey: string; sample?: SessionDe
   // The live session row wins; the decision's snapshot (session_title) covers a
   // device whose sessions collection does not hold the asking conversation.
   if (kind === "session") return <>{name || sample?.session_title || "a session"}</>;
-  return internals ? <>{kind} · {name || id.slice(0, 8)}</> : <>{name || kind}</>;
+  return <>{kind} · {name || id.slice(0, 8)}</>;
 }
 
 // A role's name, for the "with a lead" fold. Enrichment: the row carries
@@ -254,7 +225,6 @@ function RoleName({ roleId }: { roleId: string }) {
 
 function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: DecisionGroup; selecting: boolean; selected: Set<string>; onToggle: (id: string) => void; keys: boolean }) {
   const [open, setOpen] = useState(group.kind !== "role");
-  const internals = useSurface("questions.internals");
   const now = useCoarseNow(60_000);
   if (group.kind === "stack") {
     // Due (the-line.md L10) on the header: red once it has passed.
@@ -312,12 +282,9 @@ function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: Dec
       </section>
     );
   }
-  // Hosted mode names a group only when it gathers several asks: one card
-  // already names its conversation.
-  const named = internals || group.items.length > 1;
   return (
     <section>
-      {named && <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-yellow inline-block" />} title={<ScopeLabel scopeKey={group.scopeKey} sample={group.items[0]} />} count={group.items.length} />}
+      <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-yellow inline-block" />} title={<ScopeLabel scopeKey={group.scopeKey} sample={group.items[0]} />} count={group.items.length} />
       <div className="space-y-2">
         {group.items.map((d, i) => <DecisionCompactCard key={d._id} decision={d} keys={keys && i === 0} selected={selected.has(d._id)} onToggleSelect={selecting ? () => onToggle(d._id) : undefined} />)}
       </div>
@@ -369,22 +336,5 @@ function HandledSection({ rows }: { rows: HandledDecisionItem[] }) {
         </ul>
       )}
     </section>
-  );
-}
-
-/** Under hosted mode's empty Approvals: a conversation waiting on a reply is
- *  a question, not an approval, so the queue is honestly empty; this line
- *  says where the person's move is, so the home's "Your move" and an empty
- *  Approvals never read as a contradiction. */
-function WaitingOnReplyLine() {
-  const rows = useWaitingOnPerson();
-  const first = rows[0];
-  if (!first) return null;
-  const open = () => useInboxStore.getState().navigateToSession(first._id);
-  const more = rows.length - 1;
-  return (
-    <button type="button" onClick={open} data-queue-waiting-reply className="max-w-md truncate px-4 text-[12px] text-sol-text-dim transition-colors hover:text-sol-text">
-      {`${sessionCardTitle(first)}${more > 0 ? ` and ${more} more` : ""} ${more > 0 ? "are" : "is"} waiting on your answer.`}
-    </button>
   );
 }

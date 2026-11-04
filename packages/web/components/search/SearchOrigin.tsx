@@ -1,6 +1,5 @@
 import { highlightMatch } from "../../lib/searchHighlight";
 import type { SessionSearchRow } from "../../lib/instantSessionSearch";
-import { useSurface } from "../../lib/surfaces";
 
 /** What a result's title no longer says: the names the session had before,
  *  what it was first asked to do, and how many of its workers matched too. A
@@ -13,12 +12,8 @@ export function SearchOrigin({ row, query, className = "" }: {
   className?: string;
 }) {
   const earlier = row.origin?.earlier_titles ?? [];
-  // Worker sessions are a fleet's machinery; hosted mode never names them.
-  // Nor what a conversation began as: its first ask is the message the hit
-  // shows under it, so the line said it twice.
-  const internals = useSurface("search.internals");
-  const started = internals ? row.origin?.started_as : undefined;
-  const workers = internals ? row.workerCount ?? 0 : 0;
+  const started = row.origin?.started_as;
+  const workers = row.workerCount ?? 0;
   if (!earlier.length && !started && !workers) return null;
   return (
     <div className={`text-[11px] leading-relaxed text-sol-text-dim space-y-0.5 ${className}`}>

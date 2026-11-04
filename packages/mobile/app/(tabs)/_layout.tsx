@@ -4,9 +4,8 @@ import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { TabBarIcon, useTabSignals } from '@/components/nav/TabBarIcon';
 import { InboxDrawer } from '@/components/inbox/InboxDrawer';
 import { setInboxDrawerOpen, useInboxDrawerOpen } from '@/lib/inboxDrawer';
-import { TAB_BAR_HEIGHT, useActiveLook, useActiveScheme, useTheme } from '@/constants/Theme';
-import { Mono, Serif, pageTitleFace, useMonoFace } from '@/constants/fonts';
-import { useHostedMode, useModeWords } from '@codecast/web/lib/surfaces';
+import { TAB_BAR_HEIGHT, useActiveScheme, useTheme } from '@/constants/Theme';
+import { Mono, useMonoFace } from '@/constants/fonts';
 import {
   MOBILE_HEADER_STYLE,
   MOBILE_HEADER_TITLE_STYLE,
@@ -18,14 +17,11 @@ import {
 export default function TabLayout() {
   const Theme = useTheme();
   // The palette is one object repainted in place, so the memo below keys on
-  // the appearance itself.
+  // the scheme itself.
   const scheme = useActiveScheme();
-  const look = useActiveLook();
   const labelFace = useMonoFace(Mono.medium);
   const titleFace = useMonoFace(Mono.semiBold);
-  const hosted = useHostedMode();
-  const words = useModeWords();
-  const { unreadCount, chatMentions, anyLive, chatHidden } = useTabSignals();
+  const { unreadCount, chatMentions, anyLive } = useTabSignals();
   // The slide-out panel belongs to the inbox: its drag is live only there.
   const onInbox = usePathname() === '/inbox';
   const drawerOpen = useInboxDrawerOpen();
@@ -54,15 +50,7 @@ export default function TabLayout() {
           shadowOpacity: 0,
           elevation: 0,
         },
-        // Hosted mode titles a page as the Inbox and To-dos tabs do: on the
-        // left, in the reading face (pageTitleFace), so every tab opens on
-        // the same frame.
-        headerTitleAlign: hosted ? 'left' : undefined,
-        headerTitleStyle: hosted ? {
-          fontFamily: Serif.regular,
-          fontSize: pageTitleFace('family').fontSize,
-          color: Theme.text,
-        } : {
+        headerTitleStyle: {
           ...MOBILE_HEADER_TITLE_STYLE,
           color: Theme.text,
           fontFamily: titleFace,
@@ -80,7 +68,6 @@ export default function TabLayout() {
       <Tabs.Screen
         name="chat"
         options={{
-          href: chatHidden ? null : undefined,
           title: MOBILE_TAB.chat.title,
           headerShown: false,
           tabBarIcon: ({ color }) => (
@@ -96,8 +83,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="tasks"
         options={{
-          // The tab opens on the To-dos list, named by mode as its page is.
-          title: hosted ? words.tasksPage : MOBILE_TAB.tasks.title,
+          title: MOBILE_TAB.tasks.title,
           headerShown: false,
           tabBarIcon: ({ color }) => <TabBarIcon name={MOBILE_TAB.tasks.icon} color={color} />,
         }}
@@ -112,11 +98,9 @@ export default function TabLayout() {
         name="notifications"
         options={{
           title: MOBILE_TAB.notifications.title,
-          // Five developer tabs need the short "Alerts"; hosted mode's four
-          // have room for the page's own name, the one Settings uses too.
-          tabBarLabel: hosted ? MOBILE_TAB.notifications.title : MOBILE_TAB.notifications.label,
+          tabBarLabel: MOBILE_TAB.notifications.label,
           tabBarIcon: ({ color }) => (
-            <TabBarIcon name={MOBILE_TAB.notifications.icon} color={color} badge={hosted ? 0 : unreadCount ?? 0} dot={hosted && unreadCount > 0} />
+            <TabBarIcon name={MOBILE_TAB.notifications.icon} color={color} badge={unreadCount ?? 0} />
           ),
         }}
       />
@@ -128,7 +112,7 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
-  ), [Theme, scheme, look, labelFace, titleFace, hosted, words, unreadCount, chatMentions, anyLive, chatHidden]);
+  ), [Theme, scheme, labelFace, titleFace, unreadCount, chatMentions, anyLive]);
 
   return (
     <SlideOutDrawer enabled={onInbox} open={drawerOpen} setOpen={setInboxDrawerOpen} drawer={drawerPanel}>

@@ -1,6 +1,5 @@
 "use client";
 
-import { isHostedUi } from "../components/simple/lanePaths";
 import { startTour } from '../tours/engine';
 import { toast } from "sonner";
 import { isForeignSession } from "../lib/liveEntities";
@@ -9,7 +8,7 @@ import { resolvePaletteTarget } from "../lib/paletteTarget";
 import { useCallback } from "react";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, selectCommentRailOpen, selectNavCollapsed, showInboxHome } from "../store/inboxStore";
+import { useInboxStore, selectCommentRailOpen, selectNavCollapsed } from "../store/inboxStore";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { isInboxRoute, isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
@@ -22,8 +21,6 @@ import { useTriageActions } from "../components/triage/useTriageActions";
 import { toggleTriageBarCompact } from "../components/triage/graduation";
 import { checkMilestone } from "../tips/useTips";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
-import { isHostedMode, surfaceShownNow } from "../lib/surfaces";
-import { writeLane } from "../components/simple/lanePref";
 
 // The session a per-session chord (stash/kill/defer/pin/rename/label) acts on:
 // the row the user sees highlighted. The fleet board's drill-in overlay wins
@@ -244,11 +241,6 @@ export function useGlobalShortcutActions() {
   useShortcutAction('ui.guideOrg', useCallback(() => { startTour('org-guide', { replay: true }); }, []));
   useShortcutAction('ui.guideFlows', useCallback(() => { startTour('flows-guide', { replay: true }); }, []));
 
-  // Assistant mode on or off (client_state.ui.lane), from the palette.
-  useShortcutAction('ui.toggleLane', useCallback(() => {
-    writeLane(isHostedMode(useInboxStore.getState()) ? 'full' : 'simple');
-  }, []));
-
   useShortcutAction('ui.openSettings', useCallback(() => {
     const s = useInboxStore.getState();
     if (s.settingsModalSection) s.closeSettingsModal();
@@ -263,16 +255,8 @@ export function useGlobalShortcutActions() {
     store.updateClientUI({ zen_mode: !zen });
   }, []));
 
-  // Hosted mode has one inbox view, so the key that cycles views there
-  // switches what the inbox lists: the assistant's conversations, or
-  // everything (hostedOnlyInbox).
   useShortcutAction('inbox.toggleFlatView', useCallback(() => {
-    const store = useInboxStore.getState();
-    if (isHostedUi(store.clientState.ui)) {
-      store.updateClientUI({ hosted_inbox_everything: !store.clientState.ui?.hosted_inbox_everything });
-      return;
-    }
-    store.cycleInboxViewMode();
+    useInboxStore.getState().cycleInboxViewMode();
   }, []));
 
   // No chord: the bar hides from its own menu, and the palette is the way
@@ -281,13 +265,11 @@ export function useGlobalShortcutActions() {
     toggleTriageBarCompact();
   }, []));
 
-  // Hosted mode's Cmd+1 is the Inbox nav row: its home, with nothing open,
-  // so a blank slate for the next errand is one key away.
   useShortcutAction('nav.inbox', useCallback(() => {
-    if (isHostedUi(useInboxStore.getState().clientState.ui)) showInboxHome();
     router.push("/inbox");
   }, [router]));
 
+  useShortcutAction('nav.ops', useCallback(() => { router.push("/ops"); }, [router]));
   useShortcutAction('nav.back', useCallback(() => { window.history.back(); }, []));
   useShortcutAction('nav.forward', useCallback(() => { window.history.forward(); }, []));
 
@@ -311,7 +293,6 @@ export function useGlobalShortcutActions() {
   }, []));
 
   useShortcutAction('terminal.toggle', useCallback(() => {
-    if (!surfaceShownNow("terminal")) return;
     const store = useInboxStore.getState();
     store.setDockOpen(store.workspace.dock.pane == null);
   }, []));

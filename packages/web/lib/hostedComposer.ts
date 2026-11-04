@@ -5,7 +5,6 @@ import { replyAsksPerson } from "@codecast/shared/contracts/assistant";
 import type { SessionDecisionItem } from "../store/inboxStore";
 import { hostedDeclinedSince } from "./decisionQueue";
 import { hostedNoticeKind } from "./hostedNotice";
-import { MODE_WORDS } from "./surfaceRules";
 
 /** The last exchange: the assistant asked the person something, answered,
  *  stopped on a notice; or the person's message is the last word, after
@@ -42,10 +41,10 @@ export function hostedLastExchange(
  *  above, a question gets a reply, a no invites a change, a stop points at
  *  its own Try again, and an empty conversation invites a new chore. */
 export function hostedComposerWords(last: HostedLast, awaitsOk: boolean): string {
-  const words = MODE_WORDS.hosted;
-  if (awaitsOk) return words.composerApproval;
+  if (awaitsOk) return "Answer the card above, or tell me what to change";
   if (last === "asked") return "Reply…";
-  if (last === "declined") return words.composerDeclined;
-  if (last === "stopped") return words.composerAfterStop;
-  return last ? words.composerFollowUp : words.composerPlaceholder;
+  if (last === "declined") return "Tell me what to change";
+  // The stop notice carries its own Try again, so this offers the other way on.
+  if (last === "stopped") return "Or ask something else";
+  return last ? "Reply, or ask a follow-up" : "Ask anything, or hand me a chore";
 }

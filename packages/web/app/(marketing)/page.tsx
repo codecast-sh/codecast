@@ -189,15 +189,15 @@ export default function LandingPage() {
       <MarketingNav active="/" />
 
       {/* Hero: the headline, the pitch and the install strip, then the film, then the ways in. */}
-      <section className="mx-auto px-6 pt-6 pb-6">
+      <section className="mx-auto px-6 pt-10 lg:pt-14 pb-6">
         <div className="text-center max-w-3xl mx-auto">
           {/* One line from 1280px up, two balanced lines below it. */}
-          <h1 className="font-mono font-bold text-[32px] sm:text-[40px] lg:text-[44px] leading-[1.12] tracking-[-0.035em] mb-5 [text-wrap:balance] xl:whitespace-nowrap xl:-mx-56" style={{ color: '#002b36' }}>
+          <h1 className="font-mono font-bold text-[32px] sm:text-[40px] lg:text-[44px] leading-[1.12] tracking-[-0.035em] mb-7 [text-wrap:balance] xl:whitespace-nowrap xl:-mx-56" style={{ color: '#002b36' }}>
             Run all your <Highlight color="amber">coding agents</Highlight> in one workspace<span aria-hidden className="inline-block w-[0.48em] h-[0.8em] ml-[0.14em] align-baseline translate-y-[0.08em] motion-safe:animate-pulse" style={{ backgroundColor: '#cb4b16' }} />
-            <span className="block mt-3 font-normal text-lg sm:text-[21px] tracking-normal whitespace-normal" style={{ color: '#657b83' }}>On your own, or with your whole team.</span>
+            <span className="block mt-5 font-normal text-lg sm:text-[21px] tracking-normal whitespace-normal" style={{ color: '#657b83' }}>On your own, or with your whole team.</span>
           </h1>
 
-          <p className="text-[15px] leading-relaxed mb-4 lg:-mx-24" style={{ color: '#657b83' }}>
+          <p className="text-[15px] leading-[1.75] mb-8 lg:-mx-24" style={{ color: '#657b83' }}>
             Every session from <span className="whitespace-nowrap"><Highlight color="amber">Claude Code</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="green">Codex</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="blue">Cursor</Highlight>,</span> <Highlight color="violet">OpenCode</Highlight> and <Highlight color="cyan">pi</Highlight>, on any machine, in one place you can search and steer from your phone, each linked to the code it wrote. Bring your team in and your agents work beside you in chat, calls, tasks, docs and pull requests.
           </p>
           <div className="max-w-xl mx-auto mb-2">
@@ -207,11 +207,11 @@ export default function LandingPage() {
                 <InstallTabs location="landing_hero" showAlternatives={false} compact />
               </div>
             </div>
-            <p className="mt-2 text-xs" style={{ color: '#93a1a1' }}>One command. Your agents join as they are.</p>
+            <p className="mt-3 text-xs" style={{ color: '#93a1a1' }}>One command. Your agents join as they are.</p>
           </div>
         </div>
-        {/* The first screen goes to the film: its width follows the viewport's height (about 170px of headline, 48px of pitch and 152px of install strip; on a short laptop screen the scrubber sits at the fold, so the windows stay readable; the buttons follow the film), between 640px and 1240px, and a phone gets the full width. */}
-        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 370px) * 1280 / 760), 1240px))" }}>
+        {/* The first screen goes to the film: its width follows the viewport's height (about 200px of headline, 64px of pitch and 166px of install strip; on a short laptop screen the scrubber sits at the fold, so the windows stay readable; the buttons follow the film), between 640px and 1240px, and a phone gets the full width. */}
+        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 430px) * 1280 / 760), 1240px))" }}>
           <HeroFlythrough />
         </div>
         <div className="flex flex-wrap gap-3 justify-center items-center mt-8">

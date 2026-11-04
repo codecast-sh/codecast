@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { Clock, FileText, Hash, Headphones, ListTodo, Map as MapIcon, MessageSquare, PanelBottom, type LucideIcon } from "lucide-react";
 import { useInboxStore, type CreateModalKind } from "../store/inboxStore";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
-import { useHostedMode, useModeWords, useSurfaceMode } from "../lib/surfaces";
 import type { ShortcutAction } from "../shortcuts";
 
 /** How a create reaches its surface. Each host supplies its own: the command
@@ -33,29 +32,24 @@ export type CreateKind = {
 };
 
 /** Everything a person can create, in order, filtered to what this
- *  workspace and mode offer. The header's New menu and the palette's Create
+ *  workspace offers. The header's New menu and the palette's Create
  *  group both render this list. */
 export function useCreateKinds(): CreateKind[] {
-  const words = useModeWords();
-  const mode = useSurfaceMode();
-  const hosted = useHostedMode();
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   return useMemo(() => {
-    const lead = hosted ? "text-sol-text-dim" : "text-sol-cyan";
     const kinds: Array<CreateKind | false> = [
-      { id: "session", label: words.newConversation, noun: words.conversation, keywords: "session conversation start agent compose run ask", icon: MessageSquare, tone: lead, key: "s", shortcut: "session.compose", run: (env) => env.compose(false) },
-      mode.shows("actions.fleet") && { id: "session-docked", label: `${words.newConversation} (docked)`, noun: `${words.conversation} (docked)`, keywords: "session conversation docked small composer minimize corner", icon: PanelBottom, tone: "text-sol-cyan", shortcut: "session.composeDock", variant: true, run: (env) => env.compose(true) },
-      { id: "task", label: words.newTask, noun: words.task, keywords: "create todo to-do task add", icon: ListTodo, tone: lead, key: "t", shortcut: "task.create", run: (env) => env.openModal("task") },
-      { id: "doc", label: words.newDoc, noun: words.doc, keywords: "create note doc document write", icon: FileText, tone: "text-sol-text-dim", key: "d", run: (env) => env.openModal("doc") },
-      // A plan is a company's page (pages.company), with no hosted page to land on.
-      mode.shows("pages.company") && { id: "plan", label: "New plan", noun: "Plan", keywords: "create project", icon: MapIcon, tone: "text-sol-yellow", key: "p", run: (env) => env.openModal("plan") },
+      { id: "session", label: "New session", noun: "Session", keywords: "session conversation start agent compose run ask", icon: MessageSquare, tone: "text-sol-cyan", key: "s", shortcut: "session.compose", run: (env) => env.compose(false) },
+      { id: "session-docked", label: "New session (docked)", noun: "Session (docked)", keywords: "session conversation docked small composer minimize corner", icon: PanelBottom, tone: "text-sol-cyan", shortcut: "session.composeDock", variant: true, run: (env) => env.compose(true) },
+      { id: "task", label: "New task", noun: "Task", keywords: "create todo to-do task add", icon: ListTodo, tone: "text-sol-cyan", key: "t", shortcut: "task.create", run: (env) => env.openModal("task") },
+      { id: "doc", label: "New document", noun: "Doc", keywords: "create note doc document write", icon: FileText, tone: "text-sol-text-dim", key: "d", run: (env) => env.openModal("doc") },
+      { id: "plan", label: "New plan", noun: "Plan", keywords: "create project", icon: MapIcon, tone: "text-sol-yellow", key: "p", run: (env) => env.openModal("plan") },
       chatOn && { id: "channel", label: "New channel", noun: "Channel", keywords: "create chat room", icon: Hash, tone: "text-sol-cyan", key: "c", run: (env) => env.openModal("chat") },
-      callsOn && { id: "huddle", label: hosted ? "Start a call" : "Start huddle", noun: hosted ? "Call" : "Huddle", keywords: "new call ring people group voice", icon: Headphones, tone: "text-sol-violet", key: "h", run: (env) => env.openModal("huddle") },
-      { id: "trigger", label: words.newTrigger, noun: words.trigger, keywords: "create trigger routine schedule cron automation reminder recurring", icon: Clock, tone: "text-sol-violet", key: "r", run: (env) => env.navigate("/triggers?new=1") },
+      callsOn && { id: "huddle", label: "Start huddle", noun: "Huddle", keywords: "new call ring people group voice", icon: Headphones, tone: "text-sol-violet", key: "h", run: (env) => env.openModal("huddle") },
+      { id: "trigger", label: "New trigger", noun: "Trigger", keywords: "create trigger routine schedule cron automation reminder recurring", icon: Clock, tone: "text-sol-violet", key: "r", run: (env) => env.navigate("/triggers?new=1") },
     ];
     return kinds.filter((k): k is CreateKind => !!k);
-  }, [words, mode, hosted, chatOn, callsOn]);
+  }, [chatOn, callsOn]);
 }
 
 /** The env for a surface inside the main window. */

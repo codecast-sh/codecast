@@ -4,18 +4,17 @@
 // left the store — so renames never leave the rail stale (lib/liveEntities
 // philosophy). Shared by the header RecentlyViewedMenu, the Ctrl+Tab
 // RecentSwitcher and the command palette's "Recently Visited" group.
-import { modePathLabel, pathLabel } from "./pathLabel";
+import { pathLabel } from "./pathLabel";
 import { channelDisplayName } from "./chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { cleanTitle } from "./conversationProcessor";
 import { sessionCardTitle } from "./sessionCard";
-import { isHostedAgentType } from "@codecast/shared/contracts";
+import { isHostedAgentType, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { convBucketMap, filterInboxScopeFromState, getProjectName, type RecentVisit } from "../store/inboxStore";
 import { isForeignSession } from "./liveEntities";
 import { activeTeamIdOf } from "./activeTeam";
 import { formatShortDate } from "./utils";
-import { assistantScopeOnly, inAssistantScope } from "./assistantScope";
-import { pageSurface, surfaceShown } from "./surfaces";
+import { featurePageRedirect } from "./teamFeatures";
 
 // What a visit points at, resolved live so a row can show the object's own
 // detail (a task's status, a plan's progress, a label's session count).
@@ -120,9 +119,6 @@ export function resolveVisit(
     const row = state.sessions?.[v.key];
     if (row && isForeignSession(row, state.conversations?.[v.key], state.currentUser?._id?.toString?.())
       && String(row.team_id ?? "") !== String(activeTeamIdOf(state) ?? "")) return null;
-    // Hosted mode's Assistant scope (lib/assistantScope) holds for recents
-    // too: a developer session it hides never comes back through history.
-    if (sess && assistantScopeOnly(state.clientState?.ui) && !inAssistantScope(sess.agent_type)) return null;
     // Untitled blanks (pre-warm stubs the user summoned but never used) are
     // noise, and entries we can't name at all are unrenderable — skip both.
     if (sess && !sess.title && (sess.message_count ?? 0) === 0) return null;
@@ -154,12 +150,11 @@ export function resolveVisit(
     };
   }
   const path = v.path ?? v.key.slice("page:".length);
-  // A page the viewer's mode hides (lib/surfaceRules pageSurface) is not a
-  // place to go back to, whatever history holds.
-  const surface = pageSurface(path);
-  if (surface && !surfaceShown(state, surface)) return null;
+  // A Flows page while the workspace has Flows off is not a place to go back
+  // to, whatever history holds.
+  if (featurePageRedirect(path, workspaceFeatureEnabled(state.teams || [], state.clientState?.ui?.active_team_id, "line"))) return null;
   const obj = resolvePageObject(state, path);
-  const title = obj.title ?? modePathLabel(path, state.clientState?.ui) ?? v.label ?? pathLabel(path);
+  const title = obj.title ?? v.label ?? pathLabel(path);
   return { key: v.key, kind: v.kind, ts: v.ts, title, objectType: obj.objectType, entity: obj.entity, path };
 }
 
@@ -189,11 +184,8 @@ export const VISIT_OBJECT_LABEL: Record<VisitObjectType, string> = {
   page: "Page",
 };
 
-/** The kind's name in the viewer's words: a session is a conversation, a
- *  task a to-do and a doc a note in hosted mode (MODE_WORDS). */
-export function visitObjectLabel(type: VisitObjectType, words?: { conversation: string; task: string; doc: string }): string {
-  if (!words) return VISIT_OBJECT_LABEL[type];
-  return type === "session" ? words.conversation : type === "task" ? words.task : type === "doc" ? words.doc : VISIT_OBJECT_LABEL[type];
+export function visitObjectLabel(type: VisitObjectType): string {
+  return VISIT_OBJECT_LABEL[type];
 }
 
 export function visitTimeAgo(ts: number): string {

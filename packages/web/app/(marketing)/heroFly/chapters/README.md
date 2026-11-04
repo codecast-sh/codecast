@@ -112,7 +112,7 @@ Inside the hero, Convex is a stub (queries load forever, writes resolve null), e
 
 Grouped so no two builders split the same app file:
 
-1. **Desk**: `inbox`, `conversation`, `fanout`, `remote`. Splits: SessionCardView and SectionHeader (GlobalSessionPanel), sidebar primitives and InboxNavRow (Sidebar), ConversationHeaderBar and AgentStatusPill (ConversationView), ComposerShell (MessageInput).
+1. **Desk**: `inbox`, `conversation`, `fanout`, `remote`. Splits: SessionCardView and SectionHeader (GlobalSessionPanel), sidebar primitives (Sidebar), ConversationHeaderBar and AgentStatusPill (ConversationView), ComposerShell (MessageInput).
 2. **Agents**: `phone`, `talk`, `decide`. Splits: the shared phone session style spec (mobile session screen), DecisionCompactCardView.
 3. **Work**: `work`, `automation`, `integrations`. Splits: TaskRow, KanbanCard and ListRowShell, TriggerRowItem `actions`, WorkflowGraphView `chrome`, and the PR page exports.
 4. **People and memory**: `team`, `publish`, `memory`. Splits: RoomThread and NotificationBell exports, PageCard, palette styles and rows, SearchField and SearchResultRow (GlobalSearch; builder 1 uses SearchField once it lands).

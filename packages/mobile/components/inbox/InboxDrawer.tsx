@@ -12,7 +12,6 @@ import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { useInboxFilterCounts } from '@/components/inbox/InboxLensBar';
 import { DrawerHeading as Heading, DrawerRow as Row } from '@/components/nav/DrawerRow';
 import { Places } from '@/components/nav/Places';
-import { useSurface } from '@codecast/web/lib/surfaces';
 import {
   useInboxStore, sortLabels, resolveInboxViewMode, type InboxViewMode,
 } from '@codecast/web/store/inboxStore';
@@ -38,7 +37,6 @@ const FIND_AT = 10;
  *  view lens. Picking a filter applies it and slides the inbox back. */
 export function InboxDrawer() {
   const Theme = useTheme();
-  const gitChips = useSurface('gitChips');
   const { placed, labels, bucketCounts, projectCounts } = useInboxFilterCounts();
   const buckets = useInboxStore((s) => s.buckets);
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
@@ -47,10 +45,9 @@ export function InboxDrawer() {
   const [find, setFind] = useState('');
 
   const active = useMemo(() => placed.sorted.filter((s) => !s.is_deferred), [placed.sorted]);
-  const projects = gitChips ? projectCounts : [];
   const q = find.trim().toLowerCase();
   const shownLabels = q ? labels.filter((b) => b.name.toLowerCase().includes(q)) : labels;
-  const shownProjects = q ? projects.filter(([name]) => name.toLowerCase().includes(q)) : projects;
+  const shownProjects = q ? projectCounts.filter(([name]) => name.toLowerCase().includes(q)) : projectCounts;
   const viewOptions = inboxViewOptions(sortLabels(buckets).length > 0, active.some((s) => !!(s as any).active_plan));
   const viewLabel = viewOptions.find((o) => o.key === viewMode)?.label ?? 'By status';
 
@@ -64,7 +61,7 @@ export function InboxDrawer() {
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom', 'left']}>
-      {labels.length + projects.length >= FIND_AT && (
+      {labels.length + projectCounts.length >= FIND_AT && (
         <View style={styles.findRow}>
           <Feather name="search" size={15} color={Theme.textMuted0} />
           <TextInput

@@ -23,7 +23,7 @@ import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { ASSISTANT_MD_REMARK, MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { useJumpToSendingMessage } from "../../../hooks/useJumpToSendingMessage";
 import { isTeammateFramingOnly, parseSpawnedTaskPrompt, chatWakeAction, type ChatWakeEntry, type ChatWakePrompt, type HuddleSummaryTag } from "../../sessionMessage";
-import { CLOUD_AGENT_ACTION_SUBTYPE, parseHuddleDigestContent, parseScheduledTask, sessionEscalationCaption, type ScheduledTaskFrame, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_ACTION_SUBTYPE, stripCompactionProvenance, parseHuddleDigestContent, parseScheduledTask, sessionEscalationCaption, type ScheduledTaskFrame, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
 import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { CallVideoStretchChip } from "../../calls/CallVideoStretchChip";
@@ -348,9 +348,8 @@ export function WorkflowTaskBlock({ body, timestamp }: { body: string; timestamp
   );
 }
 
-// On theme tokens, so hosted mode's palette (html.hosted-mode.minimal-style)
-// recolours it like every other sol class: neutral is muted ink on a border
-// rule, amber the warning hue.
+// On theme tokens, so a theme recolours it like every other sol class:
+// neutral is muted ink on a border rule, amber the warning hue.
 export function InterruptStatusLine({ label = "user interrupted", tone = "sky" }: { label?: string; tone?: "sky" | "amber" }) {
   const lineClass = tone === "amber"
     ? "flex-1 h-px bg-gradient-to-r from-transparent via-sol-yellow/40 to-transparent"
@@ -1525,7 +1524,7 @@ export const CompactionSummaryBlock = memo(function CompactionSummaryBlock({ con
       {isExpanded && (
         <div className="mt-2 px-3 py-2 bg-sol-bg-alt/20 border-l-2 border-amber-500/30 text-xs prose prose-invert prose-sm max-w-none">
           <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS_NO_PRE}>
-            {content}
+            {stripCompactionProvenance(content)}
           </ReactMarkdown>
         </div>
       )}

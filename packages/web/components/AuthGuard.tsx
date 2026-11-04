@@ -5,7 +5,6 @@ import { AUTH_REFRESH_TOKEN_STORAGE_KEY, useLocalAuth } from "../lib/localAuth";
 import { noteAuthLeave } from "../lib/authReturn";
 import { oauthJustFailed } from "../lib/oauthReturn";
 import { AppLoader } from "./AppLoader";
-import { WELCOME_PATH, readLaneHint } from "./simple/laneBoot";
 
 /** How long a signed-out verdict must hold before the page leaves. A token
  *  refresh can read as signed out for a moment (no stored token yet, the
@@ -33,9 +32,6 @@ function RedirectUnsignedIn({ to }: { to: string }) {
       router.replace("/login?reason=oauth");
       return;
     }
-    // A device last seen in hosted mode signs in again on /welcome, in the
-    // family's look, never on the developer marketing page.
-    const target = to === "/" && readLaneHint() === "simple" ? WELCOME_PATH : to;
     const started = Date.now();
     let timer = 0;
     const settle = () => {
@@ -46,7 +42,7 @@ function RedirectUnsignedIn({ to }: { to: string }) {
       // Where the person was, so the landing page can send them back if
       // auth returns (lib/authReturn).
       noteAuthLeave(`${window.location.pathname}${window.location.search}${window.location.hash}`);
-      router.push(target);
+      router.push(to);
     };
     timer = window.setTimeout(settle, SIGNED_OUT_SETTLE_MS);
     return () => window.clearTimeout(timer);

@@ -9,7 +9,6 @@ import type { ObjectHit as Hit } from '@codecast/web/hooks/useObjectSearch';
 import { memberAvatarUrl } from '@codecast/web/lib/liveEntities';
 import { describeTaskCadence } from '@codecast/web/components/triggerCadence';
 import { parseQueryTerms, snippetAround, termSpans } from '@codecast/shared/search';
-import { useSurface } from '@codecast/web/lib/surfaces';
 import { Text as RNText } from '@/components/Themed';
 import { STATUS_CONFIG, PRIORITY_CONFIG } from '@/components/TaskItem';
 import { PLAN_STATUS_CONFIG } from '@/components/PlanItem';
@@ -55,7 +54,6 @@ function lookOf(hit: Hit, Theme: ReturnType<typeof useTheme>): Look {
 
 export const ObjectHit = memo(function ObjectHit({ hit, highlight, onPress }: { hit: Hit; highlight: string; onPress: (hit: Hit) => void }) {
   const Theme = useTheme();
-  const internals = useSurface('search.internals');
   const look = lookOf(hit, Theme);
   const done = hit.kind === 'task' && (hit.entity?.status === 'done' || hit.entity?.status === 'dropped');
   const terms = parseQueryTerms(highlight);
@@ -64,8 +62,6 @@ export const ObjectHit = memo(function ObjectHit({ hit, highlight, onPress }: { 
   // routine's instruction): the stretch that matched shows under the title.
   const body: string | undefined = termSpans(hit.title, terms).length === 0 ? hit.entity?.goal || hit.entity?.prompt : undefined;
   const why = body && termSpans(body, terms).length > 0 ? snippetAround(body.replace(/\s+/g, ' '), terms, 90) : undefined;
-  // Hosted mode says a to-do's state only once it is done; an open one is the default.
-  const state = !internals && hit.kind === 'task' ? (done ? 'Done' : undefined) : look.state;
   return (
     <Pressable onPress={() => onPress(hit)} style={({ pressed }) => [styles.row, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel={hit.title}>
       <RNView style={styles.mark}>
@@ -77,7 +73,7 @@ export const ObjectHit = memo(function ObjectHit({ hit, highlight, onPress }: { 
         <HighlightText text={title} query={highlight} style={[styles.title, done && styles.titleDone]} numberOfLines={1} />
         {!!why && <HighlightText text={why} query={highlight} style={styles.why} numberOfLines={2} />}
       </RNView>
-      {!!state && <RNText style={[styles.state, { color: look.stateColor }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{state}</RNText>}
+      {!!look.state && <RNText style={[styles.state, { color: look.stateColor }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{look.state}</RNText>}
       {hit.at ? <RNText style={styles.time} maxFontSizeMultiplier={CHROME_FONT_CAP}>{formatRelativeTime(hit.at)}</RNText> : null}
     </Pressable>
   );

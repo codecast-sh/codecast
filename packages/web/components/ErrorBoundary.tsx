@@ -2,8 +2,7 @@ import { Component, ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { captureError } from "@/lib/analytics";
 import { describeError, errorSummary, rootError } from "@/lib/errorCause";
-import { HOSTED_ERROR_WORDS, showErrorToast } from "@/lib/errorToast";
-import { surfaceShownNow } from "@/lib/surfaces";
+import { showErrorToast } from "@/lib/errorToast";
 import { isChunkLoadError, tryReloadForStaleChunk } from "../lib/chunkReloadGuard";
 import { isCallPanelWindow } from "@/lib/desktop";
 import { scheduleVoiceHostReload } from "../lib/voiceHostRecovery";
@@ -97,21 +96,15 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     }
 
     const level = this.props.level ?? "panel";
-    // Hosted mode never names a component: the crash is "this page" there.
-    const developer = surfaceShownNow("errors.developer");
-    const name = developer ? this.props.name : undefined;
+    const name = this.props.name;
 
     if (level === "inline") {
       return (
         <div className="relative px-3 py-2 text-xs text-gray-400">
           <div className="flex items-center gap-2">
-            {developer ? (
-              <button onClick={this.toggleDetails} className="hover:text-gray-300 cursor-pointer" title="Show error details">
-                Failed to load{name ? ` ${name}` : ""}
-              </button>
-            ) : (
-              <span>Couldn't load this</span>
-            )}
+            <button onClick={this.toggleDetails} className="hover:text-gray-300 cursor-pointer" title="Show error details">
+              Failed to load{name ? ` ${name}` : ""}
+            </button>
             <button onClick={this.retry} className="text-sol-cyan hover:underline">{this.state.isChunk ? "reload" : "retry"}</button>
           </div>
           {this.state.showDetails && this.state.error && (
@@ -138,7 +131,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       <div data-error-boundary={name || "app"} className="h-full flex items-center justify-center p-4">
         <div className="text-center space-y-2">
           <p className="text-sm text-gray-400">
-            {name ? `${name} crashed` : developer ? "Something went wrong" : HOSTED_ERROR_WORDS}
+            {name ? `${name} crashed` : "Something went wrong"}
           </p>
           <button
             onClick={this.retry}

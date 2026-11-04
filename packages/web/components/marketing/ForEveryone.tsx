@@ -1,9 +1,8 @@
 // The marketing page's section for someone who does not write code: the
 // hosted assistant in the family's look (@platform/design: paper, ink,
-// Newsreader for the headline, Instrument Sans for the rest), so the step
-// into /welcome reads as the same product rather than a hand-off to another.
-// One way in, three real errands that start /welcome with that ask, and a
-// small picture of what a conversation looks like. It is the whole page of
+// Newsreader for the headline, Instrument Sans for the rest). One way in
+// (signup), three real errands, and a small picture of what a conversation
+// looks like. It is the whole page of
 // the non-developer door (/?for=assistant, which /everyone redirects to); the
 // developer home page does not show it. Light on purpose, like everything the
 // public pages import.
@@ -16,7 +15,6 @@ import { ASKS, ASSISTANT_HEADLINE, assistantPromise, useConnectAvailable } from 
 import { AssistantPrivacyNote } from "../simple/AssistantPrivacyNote";
 import { APPROVAL_ANSWERS, approvalButtonLabel, routineYesWords } from "@codecast/shared/contracts/assistant";
 import { stepAsk } from "@platform/assistant/steps";
-import { LANE_PATHS, welcomeAskPath } from "../simple/lanePaths";
 import { AssistantMark } from "../simple/AssistantMark";
 
 /** Errands that need nothing connected, worded to work as asked. */
@@ -44,8 +42,7 @@ export function ForEveryone() {
           </p>
           <h2 className="text-[34px] leading-[1.12] sm:text-[42px]" style={{ fontFamily: READ, fontWeight: 500 }}>{ASSISTANT_HEADLINE}</h2>
           <p className="mt-4 max-w-md text-[16px] leading-relaxed" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
-            {/* What works today, said once; mail's arrival is /welcome's to
-                say, where connecting is offered and Whisk is named. */}
+            {/* What works today, said once. */}
             {assistantPromise(mail)}
           </p>
           <AssistantPrivacyNote mail={mail} className="mt-3 max-w-md text-[13.5px] leading-relaxed" style={{ color: "var(--pd-ink-faint, #8f8676)" }} />
@@ -55,7 +52,7 @@ export function ForEveryone() {
             {ERRANDS.map((errand) => (
               <li key={errand}>
                 <Link
-                  href={welcomeAskPath(errand)}
+                  href="/signup"
                   onClick={() => track("assistant_path_clicked", { location: "landing_everyone_ask" })}
                   className="group grid grid-cols-[1fr_auto] items-start gap-2 text-[16px] leading-snug underline-offset-4 hover:underline"
                   style={{ fontFamily: READ, color: "var(--pd-ink, #1f1a14)", textDecorationColor: "var(--pd-rule-strong, #d3c6af)" }}
@@ -103,7 +100,7 @@ function GetStarted({ className, location, centered }: { className?: string; loc
   return (
     <div className={`flex flex-wrap items-center gap-4 ${centered ? "justify-center" : ""} ${className ?? ""}`}>
       <Link
-        href={LANE_PATHS.welcome}
+        href="/signup"
         onClick={() => track("assistant_path_clicked", { location })}
         className="inline-flex h-11 items-center gap-2 rounded-[10px] px-5 text-[15px] font-semibold transition-[filter] hover:brightness-110"
         style={{ background: "var(--pd-accent, #c93a0e)", color: "var(--pd-accent-ink, #fdfbf6)" }}

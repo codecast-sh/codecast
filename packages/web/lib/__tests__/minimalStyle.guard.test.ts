@@ -86,11 +86,6 @@ describe("Minimal interface style", () => {
     const weights = new Set(["400", "500", "600"]);
     const off: string[] = [];
     for (const rule of css.matchAll(/([^{}]*\.minimal-style[^{}]*)\{([^}]*)\}/g)) {
-      // Hosted mode sets the family's type from @platform/design (Newsreader
-      // at a reading size; hosted-assistant.md "Look"), not Minimal's scale.
-      let selector = rule[1].replace(/\/\*[\s\S]*?\*\//g, "");
-      while (/\([^()]*\)/.test(selector)) selector = selector.replace(/\([^()]*\)/g, "");
-      if (selector.split(",").every((s) => s.trim().startsWith("html.hosted-mode"))) continue;
       for (const [, prop, raw] of rule[2].matchAll(/(font-size|font-weight):\s*([^;]+);/g)) {
         const value = raw.trim();
         const ok = value.startsWith("var(--t-") || (prop === "font-size" ? sizes : weights).has(value);
@@ -115,8 +110,7 @@ describe("Minimal interface style", () => {
     expect(css).toContain("[data-cc-conv-actions] > :not([data-cc-keep])");
     // Hidden, not faded: nothing in Minimal appears on hover.
     expect(css).not.toMatch(/\.minimal-style[^{]*:hover[^{]*\{[^}]*opacity: 1/);
-    // The menu's name follows the mode's words (a session, or a conversation in hosted mode).
-    expect(conversationView).toContain("<button data-cc-keep aria-label={`${words.conversation} menu`}");
+    expect(conversationView).toContain('<button data-cc-keep aria-label="Session menu"');
     // The name row of the pinned bubble is hidden by its own hook. A class
     // match here once hid the dismiss and expand buttons along with it.
     expect(css).not.toMatch(/\[data-sv-sticky\] > \.flex\.items-center/);

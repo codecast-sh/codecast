@@ -34,7 +34,6 @@ export type ShortcutAction =
   | 'app.section2'
   | 'app.section3'
   | 'app.section4'
-  | 'app.section5'
   | 'pane.split'
   | 'pane.close'
   | 'pane.expand'
@@ -45,7 +44,6 @@ export type ShortcutAction =
   | 'ui.openTours'
   | 'ui.guideOrg'
   | 'ui.guideFlows'
-  | 'ui.toggleLane'
   | 'ui.openSettings'
   | 'ui.undo'
   | 'ui.redo'
@@ -54,6 +52,7 @@ export type ShortcutAction =
   | 'inbox.toggleFlatView'
   | 'inbox.toggleTriageBar'
   | 'nav.inbox'
+  | 'nav.ops'
   | 'nav.back'
   | 'nav.forward'
   | 'search.open'
@@ -264,15 +263,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+shift+{', mac: 'meta+shift+{', action: 'tab.prev', skipInputCheck: true, description: 'Previous tab' },
   { key: 'ctrl+shift+]', mac: 'meta+shift+]', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
   { key: 'ctrl+shift+}', mac: 'meta+shift+}', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
-  // The Chat and Work windows: their sections by number (AppWindowBar). In
-  // hosted mode the main window answers them too (HostedSectionKeys:
-  // Inbox, Approvals, To-dos, Notes, Routines); a developer's main window
-  // has no handler, so the chords fall through there.
+  // The Chat and Work windows: their sections by number (AppWindowBar). The
+  // main window has no handler, so the chords fall through there.
   { key: 'ctrl+1', mac: 'meta+1', action: 'app.section1', skipInputCheck: true, description: 'First section (Chat or Work window)' },
   { key: 'ctrl+2', mac: 'meta+2', action: 'app.section2', skipInputCheck: true, description: 'Second section (Chat or Work window)' },
   { key: 'ctrl+3', mac: 'meta+3', action: 'app.section3', skipInputCheck: true, description: 'Third section (Chat or Work window)' },
   { key: 'ctrl+4', mac: 'meta+4', action: 'app.section4', skipInputCheck: true, description: 'Fourth section (Chat or Work window)' },
-  { key: 'ctrl+5', mac: 'meta+5', action: 'app.section5', skipInputCheck: true, description: 'Fifth section (hosted mode: Routines)' },
 
   // Stage panes (the tab's split layout). Handlers return false when the
   // stage isn't split so the chords fall through to whatever else owns them.
@@ -330,6 +326,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+h', mac: 'meta+h', action: 'undoWalk.pin', when: 'undoWalk', skipInputCheck: true, description: 'Pin the undo history open' },
 
   { key: 'meta+shift+alt+1', action: 'nav.inbox', skipInputCheck: true, description: 'Go to inbox' },
+  // Ops from anywhere: what is wrong in the running product. Ctrl+Option+O on mac
+  // too, since Cmd+Option+O is the browser's.
+  { key: 'ctrl+alt+o', action: 'nav.ops', description: 'Go to Ops' },
 
   { key: 'meta+/', action: 'search.open', skipInputCheck: true, description: 'Open search' },
   { key: 'ctrl+/', action: 'search.open', skipInputCheck: true, description: 'Open search' },

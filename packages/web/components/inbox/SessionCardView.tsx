@@ -34,8 +34,6 @@ import { BranchCodeLink } from "../repo/RepositoryLinks";
 import { PrStatusChip } from "../PrStatusChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { MetaDot } from "../entityDisplay";
-import { MODE_WORDS, type ModeWords } from "../../lib/surfaceRules";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
 import {
   AssignedPingStrip,
@@ -66,14 +64,6 @@ export type SessionCardChrome = {
   showDeviceIcon?: boolean;
   /** The viewer's identity prefs: characters, and every session personified. */
   prefs: IdentityPrefs;
-  /** Branch, worktree and pull request chips at all (lib/surfaces.ts
-   *  "gitChips"; off in hosted mode). Absent means shown. */
-  showGitChips?: boolean;
-  /** The hover toolbar's Labels action (lib/surfaces.ts "inbox.labelStrip").
-   *  Absent means shown. */
-  showLabelStrip?: boolean;
-  /** The words for the viewer's mode. Absent means the developer's. */
-  words?: ModeWords;
 };
 
 /** The per-card live facts that are not fields of the session row. */
@@ -112,9 +102,6 @@ export type SessionCardViewProps = {
   /** The name the open conversation's header shows, when the container has
    *  one fresher than the row's own (SessionCard reads it for hosted rows). */
   liveTitle?: string;
-  /** A muted distinguisher after the title when another row in the list
-   *  reads the same name (lib/sameNameSuffix): the day, or the time. */
-  titleSuffix?: string;
   isFavorite: boolean;
   /** The user label the row is filed under, else the project name shows. */
   sessionLabel: string | null;
@@ -195,7 +182,6 @@ export function SessionCardView({
   onToggleSelect,
   isUnread,
   liveTitle,
-  titleSuffix,
   isFavorite,
   sessionLabel,
   variant = "default",
@@ -267,8 +253,7 @@ export function SessionCardView({
     now,
   );
   const { showModelBadge, showAgentIcon } = chrome;
-  const showGitChips = chrome.showGitChips !== false;
-  const showBranchPill = chrome.showBranchPill && showGitChips;
+  const showBranchPill = chrome.showBranchPill;
   // Personification is opt in (session-characters.md S2): a session shows a
   // face once somebody gives it one, or when the workspace asks for every
   // session to have one. A role's standing session always has one — the role
@@ -342,7 +327,7 @@ export function SessionCardView({
 
   // A subagent's place in the fleet queue, or what became of its worktree.
   const fleetChip = session.subagent_slot === "queued" || session.merge_back ? <SubagentFleetChip session={session} /> : null;
-  const worktreeChip = showGitChips && (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
+  const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
     <SessionWorktreeChip
       name={session.worktree_name}
       branch={session.worktree_branch}
@@ -612,7 +597,6 @@ export function SessionCardView({
             titleClassName={`${isUnread && !isActive ? "font-semibold text-sol-text" : ""} ${isSlashCommand ? "font-mono text-sol-cyan" : ""}`}
             after={
               <>
-              {titleSuffix && <span data-sv-title-suffix className="inline-flex flex-shrink-0 items-baseline gap-1.5 font-normal text-sol-text-dim"><MetaDot /><span>{titleSuffix}</span></span>}
               {chrome.showDeviceIcon !== false && placeDevice && (
                 <span
                   data-sv-device={placeDevice.is_remote ? "cloud" : "elsewhere"}
@@ -775,7 +759,7 @@ export function SessionCardView({
           )}
           <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
             {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
-            {showGitChips && <PrStatusChip status={session.pr_status} />}
+            <PrStatusChip status={session.pr_status} />
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (
               <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
@@ -813,7 +797,7 @@ export function SessionCardView({
               isRowRestarting={isRowRestarting}
             />
             {/* Every row keeps its time column, so the list scans down one
-                edge; a same-name suffix only adds what the column cannot. */}
+                edge. */}
             <span data-sv-time className="text-[10px] text-sol-text-dim tabular-nums">
               {formatRowTime(session.updated_at, isHostedAgentType(session.agent_type))}
             </span>
@@ -851,7 +835,7 @@ export function SessionCardView({
       </div>
       <CardPinBadge session={session} fadeGround={fadeGround} onPin={onPin} />
       {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <CardHoverToolbar session={session} words={chrome.words ?? MODE_WORDS.developer} labels={chrome.showLabelStrip !== false} fadeGround={fadeGround} onPin={onPin} onDismiss={onDismiss} onOpenLabels={onOpenLabels} onStash={onStash} />
+        <CardHoverToolbar session={session} labels fadeGround={fadeGround} onPin={onPin} onDismiss={onDismiss} onOpenLabels={onOpenLabels} onStash={onStash} />
       )}
       {!isForeignSession && (onRestore || onKill) && (
         <CardRestoreCluster session={session} variant={variant} isStashed={isStashed} onKill={onKill} onRestore={onRestore} />

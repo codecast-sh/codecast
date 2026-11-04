@@ -1,6 +1,5 @@
 // What the hosted assistant does, said where a person starts with it: the
-// compose popup's empty state (HostedComposeIntro in sessionControls) and an
-// empty inbox in hosted mode (EmptyState). Mail and calendar are named only
+// compose popup's empty state (HostedComposeIntro in sessionControls). Mail and calendar are named only
 // once Whisk is connected; until then a quiet link starts the connect, where
 // this deployment can make one (connectionControls, the same rule the lane's
 // Connections page reads), which comes back to `returnTo`: the inbox, where

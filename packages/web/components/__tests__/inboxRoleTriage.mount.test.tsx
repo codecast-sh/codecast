@@ -123,7 +123,7 @@ function seed(rows: Record<string, unknown>[]) {
     pendingMessages: {},
     sessionDecisions: {},
     currentUser: { _id: "me", name: "Ashot" },
-    clientState: { ui: { inbox_scope: "mine", show_old: true } },
+    clientState: { ui: { inbox_scope: "mine", show_old: true, show_subagents: true } },
   } as any);
 }
 

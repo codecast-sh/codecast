@@ -13,7 +13,6 @@ import {
 } from "../lib/notificationNudge";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useHostedMode, useModeWords } from "../lib/surfaces";
 import { Button } from "./ui/button";
 // The pushy "turn on desktop notifications" strip. Sits with the other
 // dashboard banners; policy (when to show, when a dismiss holds, when a missed
@@ -28,8 +27,6 @@ export function NotificationNudgeBanner() {
   // broken.
   const [awaitingPrompt, setAwaitingPrompt] = useState(false);
   const { readiness, refresh } = useOsPermission("notifications");
-  const hosted = useHostedMode();
-  const words = useModeWords();
 
   useMountEffect(() => {
     setMounted(true);
@@ -43,7 +40,7 @@ export function NotificationNudgeBanner() {
   }, [readiness]);
 
   if (!mounted) return null;
-  const verdict = decideNotificationNudge({ readiness, snoozedAt, miss, now: Date.now(), onlyAfterMiss: hosted });
+  const verdict = decideNotificationNudge({ readiness, snoozedAt, miss, now: Date.now() });
   if (!verdict.show) return null;
 
   const escalated = verdict.escalated;
@@ -51,9 +48,9 @@ export function NotificationNudgeBanner() {
 
   const message = escalated
     ? verdict.miss.fromPerson
-      ? `${verdict.miss.actor ?? "Someone"} ${words.notificationMissedFrom}`
-      : words.notificationMissed
-    : words.notificationsOff;
+      ? `${verdict.miss.actor ?? "Someone"} messaged you, and Codecast couldn't show a notification.`
+      : "Codecast had news for you but couldn't show a notification."
+    : "Desktop notifications are off, so you won't hear when an agent needs you.";
 
   const handleEnable = async () => {
     const result = await requestOsPermission("notifications", readiness);

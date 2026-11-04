@@ -12,7 +12,7 @@ import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
-import { Mono, Serif, uiFace } from "@/constants/fonts";
+import { Mono, uiFace } from "@/constants/fonts";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
 import { useSyncDocDetail } from "@codecast/web/hooks/useSyncDocs";
@@ -163,7 +163,7 @@ export default function DocDetailScreen() {
   );
 }
 
-const styles = themedStyles((Theme, look) => StyleSheet.create({
+const styles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
   content: { padding: Spacing.lg },
   loading: {
@@ -184,10 +184,10 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     borderColor: Theme.borderLight,
   },
   backBtnText: { fontSize: 14, fontWeight: "500", color: Theme.accent },
-  // A note's title reads in the family's reading face in hosted mode, as the
-  // web's hosted note does.
   title: {
-    ...(look === "family" ? { fontFamily: Serif.regular, fontSize: 26, fontWeight: "400" as const, lineHeight: 32 } : { fontSize: 20, fontWeight: "700" as const, lineHeight: 26 }),
+    fontSize: 20,
+    fontWeight: "700",
+    lineHeight: 26,
     color: Theme.text,
     marginBottom: Spacing.md,
   },

@@ -9,7 +9,6 @@ import { cleanTitle } from "../../lib/conversationProcessor";
 import type { InboxSession } from "../../store/inboxStore";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import type { ModeWords } from "../../lib/surfaceRules";
 
 // The pieces of the full inbox card (SessionCardView) that stand on their own:
 // each draws from the row and the few facts handed to it, and every gesture
@@ -327,7 +326,6 @@ export function CardPinBadge({ session, fadeGround, onPin }: { session: InboxSes
 /** The hover toolbar on a live card: pin, kill, label, stash. */
 export function CardHoverToolbar({
   session,
-  words,
   labels,
   fadeGround,
   onPin,
@@ -336,9 +334,7 @@ export function CardHoverToolbar({
   onStash,
 }: {
   session: InboxSession;
-  /** The mode's words and whether the Labels action shows: the card reads
-   *  both on its one store subscription, so the toolbar holds none. */
-  words: ModeWords;
+  /** Whether the Labels action shows. */
   labels: boolean;
   fadeGround: string | null;
   onPin?: (id: string, e: React.MouseEvent) => void;
@@ -373,9 +369,9 @@ export function CardHoverToolbar({
           {/* Kill — the PRIMARY remove: done with it, clears to the Killed
               group and tears the (usually idle) agent down. Undoable. */}
           {onDismiss && (
-            <ShortcutTooltip label={words.killTip} action="session.kill" side="left">
+            <ShortcutTooltip label="Kill: stops the agent and its schedules, keeps the conversation" action="session.kill" side="left">
               <button
-                aria-label={words.kill}
+                aria-label="Kill Session"
                 onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
                 className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors pointer-events-auto"
               >
@@ -399,9 +395,9 @@ export function CardHoverToolbar({
           )}
           {/* Stash — the SECONDARY remove: set aside, agent keeps running. */}
           {onStash && (
-            <ShortcutTooltip label={words.stashTip} action="session.stash" side="left">
+            <ShortcutTooltip label="Stash: set aside, keeps running" action="session.stash" side="left">
               <button
-                aria-label={words.stash}
+                aria-label="Stash"
                 onClick={(e) => { e.stopPropagation(); onStash(session._id, e); }}
                 className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors pointer-events-auto"
               >

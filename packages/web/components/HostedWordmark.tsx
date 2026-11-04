@@ -1,8 +1,6 @@
-// Codecast's wordmark wherever the assistant's family look is (hosted mode's
-// rail, /welcome, the marketing pages reached through the assistant's door):
-// the mark in ink and the name in the reading face, as Whisk sets its own.
-// One component, so the three steps a newcomer takes from codecast.sh into
-// the app show one name. The developer marketing bar keeps its mono Logo.
+// Codecast's wordmark on the marketing pages reached through the assistant's
+// door: the mark in ink and the name in the reading face, as Whisk sets its
+// own. The developer marketing bar keeps its mono Logo.
 // Light on purpose: the public pages import it.
 import { LogoMark } from "./Logo";
 

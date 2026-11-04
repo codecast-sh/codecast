@@ -10,7 +10,6 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { Text } from '@/components/Themed';
-import { Serif } from '@/constants/fonts';
 import { stepOutcome, stepText, type ToolCallLike, type ToolResultLike } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
 import { createdRefs, siteOf } from '@codecast/web/lib/hostedReceipt';
@@ -153,7 +152,7 @@ function NoteCard({ words, docId, name }: { words: string; docId: string; name?:
           paddingBottom: 10,
         })}
       >
-        <Text numberOfLines={1} style={{ fontFamily: Serif.regular, fontSize: 17, lineHeight: 23, color: c.ink }}>{title}</Text>
+        <Text numberOfLines={1} style={{ fontSize: 15, lineHeight: 21, fontWeight: '600', color: c.ink }}>{title}</Text>
         {lines.map((line, i) => (
           <Text key={i} numberOfLines={1} style={{ marginTop: i === 0 ? 5 : 1, fontSize: 13, lineHeight: 19, color: c.soft, opacity: 1 - i * 0.22 }}>{line}</Text>
         ))}

@@ -4,7 +4,7 @@
 // theme: pressing one applies it on the spot, so the card is the picker in
 // small. Done or All themes, or a swipe, answers it, and theme_intro_seen
 // keeps it down on every device. It waits its turn: never over a call, a
-// tour, a half-typed composer, a phone, hosted mode, or another rising card,
+// tour, a half-typed composer, a phone, or another rising card,
 // and never before a machine has connected (a new account's first screen is
 // about getting its sessions in, not the colors).
 
@@ -14,7 +14,6 @@ import { toast } from "sonner";
 import { Palette } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useIsPhone } from "../../hooks/useIsPhone";
-import { isHostedMode } from "../../lib/surfaces";
 import { composerHasText, ORG_MEET_SETTLE_MS } from "../../lib/orgIntroCard";
 import { settingsPathFor } from "../../lib/settingsSections";
 import { RisingCard } from "../RisingCard";
@@ -75,11 +74,10 @@ export function ThemeIntroAnywhere() {
     (st) => st.clientStateInitialized,
     (st) => st.currentUser?._id,
     (st) => st.clientState.ui?.theme_intro_seen,
-    (st) => isHostedMode(st),
     (st) => cliNeverConnected(st.currentUser),
   ]);
   const risen = useRef(false);
-  const ready = s.clientStateInitialized && !!s.currentUser?._id && !phone && !isHostedMode(s) && !cliNeverConnected(s.currentUser);
+  const ready = s.clientStateInitialized && !!s.currentUser?._id && !phone && !cliNeverConnected(s.currentUser);
   const seen = s.clientState.ui?.theme_intro_seen === true;
 
   // Answered on another device while the card is up: it goes.

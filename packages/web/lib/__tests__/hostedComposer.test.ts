@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import { hostedComposerWords, hostedLastExchange } from "../hostedComposer";
-import { MODE_WORDS } from "../surfaceRules";
 
 const ask = { role: "user", content: "Every weekday at 9am, remind me to stretch.", timestamp: 1_000 };
 const decline = (at: number) => ({
@@ -25,12 +24,11 @@ describe("hostedLastExchange", () => {
 
 describe("hostedComposerWords", () => {
   it("says the web composer's resting words for each exchange", () => {
-    const w = MODE_WORDS.hosted;
-    expect(hostedComposerWords("declined", true)).toBe(w.composerApproval);
-    expect(hostedComposerWords("declined", false)).toBe(w.composerDeclined);
+    expect(hostedComposerWords("declined", true)).toBe("Answer the card above, or tell me what to change");
+    expect(hostedComposerWords("declined", false)).toBe("Tell me what to change");
     expect(hostedComposerWords("asked", false)).toBe("Reply…");
-    expect(hostedComposerWords("stopped", false)).toBe(w.composerAfterStop);
-    expect(hostedComposerWords("answered", false)).toBe(w.composerFollowUp);
-    expect(hostedComposerWords(null, false)).toBe(w.composerPlaceholder);
+    expect(hostedComposerWords("stopped", false)).toBe("Or ask something else");
+    expect(hostedComposerWords("answered", false)).toBe("Reply, or ask a follow-up");
+    expect(hostedComposerWords(null, false)).toBe("Ask anything, or hand me a chore");
   });
 });

@@ -19,7 +19,6 @@ import { DecisionDocument } from "./DecisionDocument";
 import { DecisionList } from "./DecisionList";
 import { TeamAreaControls } from "./DecisionAreas";
 import { LineDecision } from "../line/widgets/LineDecision";
-import { useModeWords } from "../../lib/surfaces";
 import { useDecisionView } from "../../hooks/useDecisionView";
 import { useDecisionRows } from "../../hooks/useDecisionRows";
 import { useSyncTeamDecisions, useSyncTeamLineDecisions } from "../../hooks/useSyncSessionDecisions";
@@ -51,7 +50,6 @@ function useDecisionFeeds(workspace: string | null) {
 export function DecisionsList({ activeId }: { activeId?: string }) {
   const params = useSearchParams();
   const router = useRouter();
-  const words = useModeWords();
   const state = useDecisionView();
   const rows = useDecisionRows();
   useDecisionFeeds(rows.workspaceKey);
@@ -78,7 +76,7 @@ export function DecisionsList({ activeId }: { activeId?: string }) {
 
   return (
     <DecisionList
-      title={words.questionsPage}
+      title="Decisions"
       state={state}
       rows={rows}
       routeOf={routeOf}

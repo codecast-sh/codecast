@@ -5,9 +5,9 @@
 // them from the address bar (the code is a credential), and hands them to
 // whisk.finishConnect from the signed-in session, which checks the state
 // names this person, trades the code server to server and stores the token.
-// Then it lands on the page the connect started from: Settings >
-// Integrations (the main shell toasts how it went, ConnectToast) or /welcome
-// (which says it in place, ConnectNotice).
+// Then it lands on the page the connect started from, Settings >
+// Integrations unless a conversation started it (the main shell toasts how
+// it went, ConnectToast).
 //
 // A return can land in a browser not signed in to codecast: the desktop app
 // opens the connect in the system browser. The return is then held in this
@@ -21,11 +21,8 @@ import { WHISK_RETURN_PATH } from "@codecast/convex/convex/lib/whisk";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { WHISK_RETURN_KEY } from "../../../lib/connectorReturn";
 import { returnStash, type StashedReturn } from "../../../lib/returnStash";
-import { LANE_COPY, LANE_PATHS } from "../../../components/simple/lane";
 import { settingsPathFor } from "../../../lib/settingsSections";
-import { useLaneDocumentTitle } from "../../../components/simple/useLaneTitle";
-import "../../../components/simple/laneLook";
-import "../../../components/simple/simple.css";
+import { AppLoader } from "../../../components/AppLoader";
 
 const stash = returnStash("codecast-whisk-return", "Whisk");
 
@@ -56,7 +53,6 @@ function landing(returnTo: string, ok: boolean, reason?: string): string {
 }
 
 export default function WhiskReturn() {
-  useLaneDocumentTitle(LANE_COPY.connections.mail);
   const finish = useAction(api.whisk.finishConnect);
   const { isAuthenticated, isLoading } = useConvexAuth();
   const navigate = useNavigate();
@@ -89,18 +85,15 @@ export default function WhiskReturn() {
       .finally(() => stash.clear(pending));
   }, [pending, isLoading, isAuthenticated]);
 
+  if (!signedOut) return <AppLoader label="Connecting your mail and calendar" />;
   return (
-    <div data-simple-lane>
-      <main className="sl-frame" style={{ minHeight: "100dvh", display: "grid", placeItems: "center", textAlign: "center" }}>
-        {signedOut ? (
-          <div className="sl-rise">
-            <p className="sl-lede">Sign in to codecast in this browser, then connect your mail and calendar again.</p>
-            <Link className="sl-btn is-yes" to={LANE_PATHS.welcome}>Sign in</Link>
-          </div>
-        ) : (
-          <p className="sl-lede" role="status">Connecting your mail and calendar</p>
-        )}
-      </main>
-    </div>
+    <main className="min-h-screen bg-sol-bg flex items-center justify-center p-8">
+      <div className="w-full max-w-sm text-center">
+        <p className="text-sm leading-relaxed text-sol-text-muted">Sign in to codecast in this browser, then connect your mail and calendar again.</p>
+        <Link to="/login" className="mt-5 inline-block text-xs px-3 py-1.5 rounded-md border border-sol-border text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60">
+          Sign in
+        </Link>
+      </div>
+    </main>
   );
 }

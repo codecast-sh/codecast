@@ -1,14 +1,9 @@
-// The inbox's first run, as the three surfaces that read it see it: the card
-// shows only once an empty cache is known to be the truth, an unsent
-// composer stub is not a conversation, and a first message to the hosted
-// assistant from there moves the person to hosted mode.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
+// The inbox's first run: the card shows only once an empty cache is known to
+// be the truth, and an unsent composer stub is not a conversation.
+import { describe, expect, test } from "bun:test";
 import { inboxCrawlWsKey } from "../../hooks/useSyncInboxSessions";
 import { syncMetaKey } from "../../hooks/reconcileCrawl";
-import { useInboxStore } from "../../store/inboxStore";
 import { firstRun } from "../firstRun";
-import { startHostedConversation } from "../startHostedConversation";
 
 const REAL_ID = "k".repeat(32);
 const floor = { [syncMetaKey("sessions", inboxCrawlWsKey("u_me"))]: { backfilledAt: 1 } };
@@ -40,50 +35,5 @@ describe("firstRun", () => {
     const sessions = { "stub-1": {} };
     expect(firstRun({ ...base, sessions })).toBe("yes");
     expect(firstRun({ ...base, sessions, pendingSessionCreates: { "stub-1": Promise.resolve(REAL_ID) } })).toBe("no");
-  });
-});
-
-// The join lives in the store's createSessionFromStub, the one create every
-// way in reaches, so these go through real entry points, not a helper.
-describe("a first hosted conversation joins hosted mode", () => {
-  const owner = {};
-  beforeAll(() => useInboxStore.getState()._setDispatch(async (action) => (action === "createSession" ? REAL_ID : null), { owner }));
-  afterAll(() => useInboxStore.getState()._clearDispatch(owner));
-
-  const lane = () => (useInboxStore.getState().clientState as any).ui?.lane;
-  const seed = (over: Record<string, unknown> = {}) => {
-    const cs = useInboxStore.getState().clientState as any;
-    // Hosted mode is open to staff only for now (lanePaths simpleModeAllowed).
-    useInboxStore.setState({ ...base, currentUser: { _id: "u_me", staff: true }, clientState: { ...cs, ui: { ...cs.ui, lane: undefined } }, ...over } as any);
-  };
-
-  test("from a surface that holds only the text (the palette, the context composer)", () => {
-    seed();
-    startHostedConversation("What's on tomorrow?");
-    expect(lane()).toBe("simple");
-  });
-
-  test("from a stub created directly (Ctrl+N, the composer, the self-heal)", () => {
-    seed({ sessions: { "stub-hosted": { _id: "stub-hosted", agent_type: HOSTED_AGENT_TYPE } } });
-    void useInboxStore.getState().createSessionFromStub("stub-hosted");
-    expect(lane()).toBe("simple");
-  });
-
-  test("someone past the first run stays where they are", () => {
-    seed({ sessions: { [REAL_ID]: {} } });
-    startHostedConversation("And the day after?");
-    expect(lane()).toBeUndefined();
-  });
-
-  test("someone with a machine stays where they are", () => {
-    seed({ currentUser: { _id: "u_me", staff: true, cli_version: "1.2.0" } });
-    startHostedConversation("Anything urgent?");
-    expect(lane()).toBeUndefined();
-  });
-
-  test("someone hosted mode is not open to stays in developer mode", () => {
-    seed({ currentUser: { _id: "u_me" } });
-    startHostedConversation("What's on tomorrow?");
-    expect(lane()).toBeUndefined();
   });
 });

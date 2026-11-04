@@ -440,8 +440,7 @@ function renderBlock(node: Nodes, ctx: MdCtx, k: string, first: boolean): React.
     }
     case 'heading': {
       // A heading never sets smaller than the text around it: a reply set at
-      // a reading size (hosted mode's 17px letter) keeps its headings at body
-      // size, as the web's hosted replies do.
+      // a reading size keeps its headings at body size.
       const fontSize = Math.max(HEADING_SIZES[node.depth - 1], StyleSheet.flatten(ctx.baseStyle)?.fontSize ?? 0);
       return (
         <RNText key={k} style={[ctx.baseStyle, { fontSize, fontWeight: '700', marginTop: first ? 0 : 6 }]} selectable={ctx.selectable}>

@@ -40,7 +40,7 @@ import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { ProjectLeadChip } from "../../../components/charter/ProjectLeadChip";
 import { ProjectInitiatives } from "../../../components/initiatives/ProjectInitiatives";
 import { IntentHeader, IntentIdChip, IntentTabs, ProjectDeadlineChip, ProjectStatusPick, useIntentTab, type IntentTab } from "../../../components/initiatives/IntentHeader";
-import { useSurface } from "../../../lib/surfaces";
+import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 
 const api = _api as any;
 
@@ -93,7 +93,7 @@ function ProjectDetailContent() {
   );
   const address = project?.short_id || projectRef;
   const { tab: picked, setTab } = useIntentTab(PROJECT_TABS, `/projects/${address}`);
-  const lineShown = useSurface("nav.line");
+  const lineShown = useWorkspaceFeature("line");
   const asked: ProjectTab = OLD_TABS[search.get("tab") ?? ""] ?? picked;
   const tab: ProjectTab = asked === "flow" && !lineShown ? "tasks" : asked;
   const tabs = lineShown ? TABS : TABS.filter((t) => t.key !== "flow");

@@ -41,8 +41,6 @@ import {
 } from "../../../components/triggerCadence";
 import { ARMED_STATUSES, isTriggerTerminal, taskDisplayTitle, type TaskRow } from "../../../components/triggerTasks";
 import { isTriggerEditable } from "../../../lib/triggerEditable";
-import { useModeWords, useSurface } from "../../../lib/surfaces";
-import { HostedRoutineDetail } from "../../../components/triggers/HostedRoutineDetail";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -185,10 +183,7 @@ export default function TriggerDetailPage() {
   const [summarizing, setSummarizing] = useState(false);
 
   const taskId = trigger?._id;
-  // Hosted mode's routine page drops the fleet chrome (HostedRoutineDetail).
-  const fleet = useSurface("triggers.fleetChrome");
-  const words = useModeWords();
-  const runs = useTriggerRuns(fleet ? taskId ?? null : null);
+  const runs = useTriggerRuns(taskId ?? null);
 
   if (!id || trigger === undefined) {
     return (
@@ -207,15 +202,15 @@ export default function TriggerDetailPage() {
           <div className="h-full flex items-center justify-center">
             <div className="text-center max-w-sm px-4">
               <Zap className="w-6 h-6 mx-auto text-sol-orange/50" />
-              <div className="mt-3 text-sm text-sol-text">This {words.trigger.toLowerCase()} isn't available</div>
+              <div className="mt-3 text-sm text-sol-text">This trigger isn't available</div>
               <p className="mt-1 text-xs text-sol-text-dim">
-                {fleet ? "It was deleted, or it belongs to a session you don't have access to." : "It was deleted, or it belongs to someone else."}
+                It was deleted, or it belongs to a session you don't have access to.
               </p>
               <Link
                 href="/triggers"
                 className="mt-4 inline-block px-3 py-1 rounded border border-sol-border text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors no-underline"
               >
-                {fleet ? "All triggers" : words.triggers}
+                All triggers
               </Link>
             </div>
           </div>
@@ -225,15 +220,6 @@ export default function TriggerDetailPage() {
   }
 
   const t = trigger;
-  if (!fleet) {
-    return (
-      <AuthGuard>
-        <DashboardLayout>
-          <HostedRoutineDetail task={t} now={now} />
-        </DashboardLayout>
-      </AuthGuard>
-    );
-  }
   // Verbs follow view access: whoever can see this page can manage the
   // trigger (founder decision 2026-08-30). The "runs as X" chip stays as
   // provenance for foreign triggers.

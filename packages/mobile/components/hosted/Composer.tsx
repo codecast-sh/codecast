@@ -9,7 +9,6 @@ import * as Haptics from 'expo-haptics';
 import { TextInput } from '@/components/Themed';
 import { LANE_COPY } from '@codecast/web/components/simple/lane';
 import { HOSTED_RADIUS, sendDisc, useHostedTheme } from './hostedTheme';
-import { useActiveLook } from '@/constants/Theme';
 
 const MAX_HEIGHT = 200;
 
@@ -33,7 +32,6 @@ export function Composer({
   allowEmpty?: boolean;
 }) {
   const { c } = useHostedTheme();
-  const look = useActiveLook();
   const [text, setText] = useState('');
   const [seededAt, setSeededAt] = useState<number | null>(null);
   const [focused, setFocused] = useState(false);
@@ -105,11 +103,11 @@ export function Composer({
           borderRadius: 18,
           alignItems: 'center',
           justifyContent: 'center',
-          ...sendDisc(c, look, ready, pressed).style,
+          ...sendDisc(c, ready, pressed).style,
           transform: [{ scale: pressed ? 0.94 : 1 }],
         })}
       >
-        <Feather name="arrow-up" size={18} color={sendDisc(c, look, ready).icon} />
+        <Feather name="arrow-up" size={18} color={sendDisc(c, ready).icon} />
       </Pressable>
     </View>
   );

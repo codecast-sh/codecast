@@ -39,7 +39,6 @@ export function SearchField({
   onChange?: (e: ChangeEvent<HTMLInputElement>) => void;
   /** Focus, blur, selection and key handlers for the input. */
   inputProps?: Pick<InputHTMLAttributes<HTMLInputElement>, "onSelect" | "onFocus" | "onBlur" | "onKeyDown">;
-  /** The mode's word for it (lib/surfaces.ts useModeWords). */
   placeholder?: string;
   /** Drawn inside the field's box, e.g. the autocomplete list. */
   children?: ReactNode;

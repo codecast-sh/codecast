@@ -87,12 +87,11 @@ export function isHumanOrigin(task: { source?: string | null }): boolean {
  * Web and mobile both filter with this, so the two boards cannot disagree.
  */
 /**
- * Hosted mode's to-dos: a task is the assistant's (or the person's own errand)
+ * The assistant's to-dos: a task is the assistant's (or the person's own errand)
  * when no coding work made it. It belongs to no project or plan, and it was
  * either asked for in an assistant conversation or written by hand outside any
  * session. `source_agent_type` is the agent of the conversation that created
- * it. The To-dos page (web assistantScope) and the assistant's own list_tasks
- * read this one rule, so "your to-dos" means the same rows in both.
+ * it. The assistant's own list_tasks reads this rule.
  */
 export function isAssistantTask(task: {
   project_id?: unknown;

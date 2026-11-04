@@ -188,8 +188,8 @@ function PinnedAgentsSection() {
 }
 
 /** The agent a new conversation starts with (client_state.ui.default_agent,
- *  read through lib/defaultAgent). Hosted mode and an account with no machine
- *  always start the hosted assistant, so the row says so instead. */
+ *  read through lib/defaultAgent). An account with no machine always starts
+ *  the hosted assistant, so the row says so instead. */
 function DefaultAgentRow() {
   const current = useDefaultAgentType();
   const forced = useOnlyHostedAgent();

@@ -5,15 +5,11 @@ import { Text as RNText } from '@/components/Themed';
 import { themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useChatUnread } from '@codecast/web/hooks/useChatSync';
-import { useHostedMode } from '@codecast/web/lib/surfaces';
-import { useActiveTeamId } from '@/hooks/useWorkspaceArgs';
 import { MOBILE_TAB_BADGE_STYLE, MOBILE_TAB_BADGE_TEXT_STYLE, MOBILE_TAB_ICON_SIZE } from '@codecast/shared/render/mobileTabsStyle';
 
 /** What the app's areas have waiting, as the tab bar and a conversation's
- *  slide-out show it: unread alerts, chat mentions, a live huddle, and
- *  whether Chat exists at all for this workspace. */
+ *  slide-out show it: unread alerts, chat mentions and a live huddle. */
 export function useTabSignals() {
-  const hosted = useHostedMode();
 // The badge counts unread rows in the persisted store list, so it paints at
 // boot and clears in the same tick as a mark-read (web NotificationBell).
 const unreadCount = useInboxStore((s) => {
@@ -28,12 +24,7 @@ const unreadCount = useInboxStore((s) => {
 // count (empty when chat is off for the team) and the live rooms.
 const { mentions: chatMentions } = useChatUnread();
 const anyLive = useInboxStore((s) => (s.liveRooms?.length ?? 0) > 0);
-// Chat and huddles are a team's rooms. In hosted mode the personal
-// workspace has none, so the tab steps out rather than opening on an empty
-// "No team yet"; picking a team brings it back.
-const activeTeamId = useActiveTeamId();
-const chatHidden = hosted && !activeTeamId;
-  return { unreadCount, chatMentions, anyLive, chatHidden };
+  return { unreadCount, chatMentions, anyLive };
 }
 
 export function TabBarIcon(props: {
@@ -43,12 +34,9 @@ export function TabBarIcon(props: {
   /** Something is happening there right now (a live huddle): a quiet green
    *  dot, never a number — a count is reserved for things addressed to you. */
   live?: boolean;
-  /** Unread without a count: hosted mode's quiet accent dot, as the web's
-   *  bell shows in hosted mode. */
-  dot?: boolean;
 }) {
   const Theme = useTheme();
-  const { badge, live, dot, ...iconProps } = props;
+  const { badge, live, ...iconProps } = props;
   return (
     <RNView style={{ position: 'relative' }}>
       <FontAwesome size={MOBILE_TAB_ICON_SIZE} style={{ marginBottom: -2 }} {...iconProps} />
@@ -60,33 +48,19 @@ export function TabBarIcon(props: {
         </RNView>
       ) : live ? (
         <RNView style={badgeStyles.liveDot} />
-      ) : dot ? (
-        <RNView style={badgeStyles.unreadDot} />
       ) : null}
     </RNView>
   );
 }
 
-const badgeStyles = themedStyles((Theme, look) => StyleSheet.create({
-  // The family look has one accent, so a count wears it rather than red.
+const badgeStyles = themedStyles((Theme) => StyleSheet.create({
   badge: {
     ...MOBILE_TAB_BADGE_STYLE,
-    backgroundColor: look === 'family' ? Theme.orange : Theme.red,
+    backgroundColor: Theme.red,
   },
   badgeText: {
     ...MOBILE_TAB_BADGE_TEXT_STYLE,
     fontVariant: ['tabular-nums'],
-  },
-  unreadDot: {
-    position: 'absolute',
-    top: -2,
-    right: -4,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: Theme.orange,
-    borderWidth: 1.5,
-    borderColor: Theme.bgAlt,
   },
   liveDot: {
     position: 'absolute',

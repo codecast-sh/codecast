@@ -13,7 +13,6 @@ import { formatSearchTimestamp } from "../../lib/searchTimestamp";
 import { highlightMatch, getSnippet } from "../../lib/searchHighlight";
 import { parseQueryTerms, snippetAround, termSpans } from "@codecast/shared/search";
 import { memberAvatarUrl } from "../../lib/liveEntities";
-import { useSurface } from "../../lib/surfaces";
 import type { ObjectHit as Hit } from "../../hooks/useObjectSearch";
 
 /** A long title shows the stretch around its hit, so the words found are never
@@ -36,8 +35,7 @@ export const ObjectHit = memo(function ObjectHit({ hit, highlight, selected = fa
   selected?: boolean;
   onHover?: () => void;
 }) {
-  const internals = useSurface("search.internals");
-  const shortId = internals ? hit.entity?.short_id : null;
+  const shortId = hit.entity?.short_id;
   const handle = hit.kind === "role" && hit.entity?.handle ? `@${hit.entity.handle}` : null;
   // Found by what it is for, not what it is called (a plan's goal, a
   // routine's instruction): the stretch that matched follows the title.

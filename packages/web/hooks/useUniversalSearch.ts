@@ -12,7 +12,6 @@ import { useWatchEffect } from "./useWatchEffect";
 import { useRemoteSearch } from "./useRemoteSearch";
 import { useObjectSearch, type ObjectGroup } from "./useObjectSearch";
 import { useInstantSessionRows, mergeSearchRows, type SessionSearchRow } from "../lib/instantSessionSearch";
-import { bySessionAgent, withinScope } from "../lib/assistantScope";
 
 export type SearchRange = "all" | "7d" | "30d" | "90d";
 export const SEARCH_RANGES: { key: SearchRange; label: string }[] = [
@@ -46,14 +45,12 @@ export function activeFilterCount(f: SearchFilters): number {
 export function useUniversalSearch(query: string, filters: SearchFilters, opts: {
   /** Conversations asked of the server; a surface raises it to page. */
   limit: number;
-  /** Hosted mode's Assistant scope holds. */
-  scopeOnly: boolean;
   /** The team whose chat to search; none skips chat. */
   chatTeamId?: string | null;
   chatLimit?: number;
 }) {
   const { mineOnly, userOnly, range, sort } = filters;
-  const { limit, scopeOnly, chatTeamId, chatLimit = 10 } = opts;
+  const { limit, chatTeamId, chatLimit = 10 } = opts;
 
   // Anchor "now" per range pick so the `since` arg is stable across renders:
   // a fresh Date.now() every render would churn the subscription.
@@ -62,7 +59,7 @@ export function useUniversalSearch(query: string, filters: SearchFilters, opts: 
 
   const remote = useRemoteSearch(query, {
     enabled: true, limit, userOnly, mineOnly, since, sort, debounceMs: 300,
-    chatTeamId: scopeOnly ? null : chatTeamId, chatLimit,
+    chatTeamId, chatLimit,
   });
   const { debouncedQuery, contentData: freshData, titleData, searchError } = remote;
 
@@ -89,20 +86,16 @@ export function useUniversalSearch(query: string, filters: SearchFilters, opts: 
   // filters by message role, which a cached row cannot judge, so the instant
   // tier stands down then, as the title tier does.
   const instantRows = useInstantSessionRows(userOnly ? "" : query, SEARCH_PAGE_SIZE, { mineOnly });
-  const allSessions = useMemo(
-    () => mergeSearchRows(contentRows, titleData?.results as any, instantRows),
+  const sessionRows = useMemo(
+    () => mergeSearchRows(contentRows, titleData?.results as any, instantRows) as SessionSearchRow[],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [searchData, titleData, instantRows],
-  );
-  const sessionRows = useMemo(
-    () => withinScope(allSessions, scopeOnly, (r) => bySessionAgent({ agent_type: r.agentType })) as SessionSearchRow[],
-    [allSessions, scopeOnly],
   );
 
   // Every other kind, as the person types. An operator query (file:, pr:)
   // names conversations only. Time narrows objects as it narrows conversations.
   const objectQuery = query.trim().length >= 2 && liveQuery.errors.length === 0 && !liveQuery.hasFilters ? query : "";
-  const allObjectGroups = useObjectSearch(objectQuery, { scopeOnly, cap: SEARCH_KIND_CAP });
+  const allObjectGroups = useObjectSearch(objectQuery, { cap: SEARCH_KIND_CAP });
   const objectGroups: ObjectGroup[] = useMemo(
     () => since == null ? allObjectGroups : allObjectGroups
       .map((g) => ({ ...g, hits: g.hits.filter((h) => h.at == null || h.at >= since) }))
@@ -125,8 +118,6 @@ export function useUniversalSearch(query: string, filters: SearchFilters, opts: 
     /** The content search timed out; name matches still show. */
     searchError,
     sessionRows,
-    /** Conversations the Assistant scope left out. */
-    hiddenByScope: allSessions.length - sessionRows.length,
     objectGroups,
     chatHits,
     // Instant rows match what is typed NOW; server rows the debounced term.

@@ -20,23 +20,16 @@ import {
   meterWords,
   monthPercent,
   monthShare,
-  LANE_PATHS,
-  LANE_SECTIONS,
-  laneSurfaceLabel,
-  conversationPath,
   conversationState,
-  conversationSubline,
   approvalAsk,
   accountLine,
   answerTone,
   answerNote,
   conversationTitle,
-  titleIsAsk,
   dollars,
   answerNotes,
   answersInline,
   isLaneConversation,
-  laneOf,
   meterFill,
   planPoints,
   planPrice,
@@ -49,15 +42,6 @@ import {
 } from "./lane";
 
 const BANNED = /\b(agent|session|model|token|repo|repository|device)s?\b/i;
-
-describe("lane preference", () => {
-  it("is the full app unless set to simple", () => {
-    expect(laneOf(undefined)).toBe("full");
-    expect(laneOf({})).toBe("full");
-    expect(laneOf({ lane: "full" })).toBe("full");
-    expect(laneOf({ lane: "simple" })).toBe("simple");
-  });
-});
 
 describe("conversations", () => {
   it("lists hosted conversations only, and not killed ones", () => {
@@ -350,39 +334,6 @@ describe("plan history", () => {
   });
 });
 
-describe("shared list and fold rules", () => {
-  it("says where a live conversation stands, and what came of a settled one", () => {
-    const row = { idle_summary: "Sent the reply to Dana", last_user_message: "Answer Dana" };
-    expect(conversationSubline(row, "waiting")).toBe("Waiting on you");
-    expect(conversationSubline(row, "working")).toBe("Working on it");
-    expect(conversationSubline(row, "done")).toBe("Sent the reply to Dana");
-    expect(conversationSubline({ title: "Dana's email", last_user_message: "Answer Dana" }, "done")).toBe("Answer Dana");
-    // While the title is still the person's ask, the ask is not said twice.
-    const untitled = { title: "New session", last_user_message: "Set up a routine: every weekday at 8am, send me the weather for the day ahead" };
-    expect(titleIsAsk(untitled)).toBe(true);
-    expect(titleIsAsk({ title: "Weekday weather", last_user_message: "Set up a routine" })).toBe(false);
-    expect(titleIsAsk({ title: "" })).toBe(false);
-    expect(conversationSubline(untitled, "done")).toBe("");
-    expect(conversationSubline(untitled, "working")).toBe("Working on it");
-    // A row waiting on an answer says what it asks, not a state word.
-    expect(conversationSubline(row, "waiting", 'Set up a routine: "Weekday weather"?')).toBe('Set up a routine: "Weekday weather"?');
-    expect(conversationSubline(row, "working", "Send it?")).toBe("Working on it");
-    expect(conversationSubline({}, "done")).toBe("");
-  });
-
-  it("lists every lane surface once, home first", () => {
-    expect(LANE_SECTIONS[0].path).toBe(LANE_PATHS.home);
-    expect(new Set(LANE_SECTIONS.map((t) => t.path)).size).toBe(LANE_SECTIONS.length);
-  });
-
-  it("names every lane page plainly in the window title", () => {
-    for (const s of LANE_SECTIONS) expect(laneSurfaceLabel(s.path)).toBe(s.label);
-    expect(laneSurfaceLabel(`${LANE_PATHS.approvals}/`)).toBe("Approvals");
-    expect(laneSurfaceLabel(conversationPath("abc"))).toBe("Home");
-    expect(laneSurfaceLabel(LANE_PATHS.welcome)).toBe("Welcome");
-  });
-});
-
 describe("page rules shared by the web and the phone", () => {
   it("a plan card offers nothing until the wallet and billing have answered", () => {
     const figures = { known: true, plan: { id: "free" as const }, upgrades: new Set<any>(["plus", "pro"]) };
@@ -503,18 +454,5 @@ describe("the promise follows what the mail connection allows", () => {
     expect(connectionControls({ ...off, available: undefined }, false)).toEqual({ connect: false, coming: false, allow: false, reconnect: false, confirm: false, disconnect: null });
     expect(connectionControls({ ...off, available: true }, false).connect).toBe(true);
     expect(connectionControls({ ...off, available: true }, false).coming).toBe(false);
-  });
-});
-
-describe("the inbox's names for whose move it is", () => {
-  it("never names a section with the words a row uses for its state", async () => {
-    const { MODE_WORDS } = await import("../../lib/surfaceRules");
-    const w = MODE_WORDS.hosted;
-    const names = [w.sectionQuestions, w.sectionNeedsInput, w.sectionDormant];
-    expect(new Set(names.map((n) => n.toLowerCase())).size).toBe(3);
-    const row = { idle_summary: null, last_user_message: null };
-    for (const state of ["waiting", "working"] as const) {
-      expect(names.map((n) => n.toLowerCase())).not.toContain(conversationSubline(row, state).toLowerCase());
-    }
   });
 });

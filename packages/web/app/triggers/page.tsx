@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { HOSTED_PAGE_FRAME, HOSTED_PAGE_PAD, HOSTED_PAGE_TOP } from "../../lib/hostedPage";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -18,10 +17,8 @@ import {
   triggerEventShorthand,
   eventFilterForSave,
 } from "@codecast/shared/contracts";
-import { HOSTED_AGENT_TYPE, routineFloor } from "@codecast/shared/contracts/assistant";
-import { firstRunWords, hostedSchedule, hostedWhenOf, routineExampleSeed, routineExamples, routineLimitLine, WEEKDAYS, type HostedWhen, type HostedRepeat } from "../../components/triggers/hostedSchedule";
+import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { useLaneMailAbilities } from "../../components/simple/useLaneMail";
-import { usePlanMeter } from "../../components/simple/usePlanFigures";
 import { serverErrorText } from "../../lib/errorCause";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import { isTriggerFailing, isTriggerTerminal, taskDisplayTitle, groupTriggerRowsByHome, type TaskRow, type TriggerRow, type TriggerHomeGroup } from "../../components/triggerTasks";
@@ -34,10 +31,6 @@ import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { useInboxStore, filterInboxScopeFromState, type TriggerEdit } from "../../store/inboxStore";
 import { gestureToast } from "../../store/undoStack";
 import { isTriggerEditable } from "../../lib/triggerEditable";
-import { useAssistantScope, useModeWords, useSurface } from "../../lib/surfaces";
-import { isAssistantRoutine, withinScope } from "../../lib/assistantScope";
-import { AssistantScopeSwitch, MoreInEverything } from "../../components/AssistantScopeSwitch";
-import { PageHeading } from "../../components/PageHeading";
 import {
   Clock,
   Plus,
@@ -165,65 +158,8 @@ function deriveInitial(t: any | undefined) {
   };
 }
 
-/** Hosted mode's "when": how often, then the day or date, then the time. */
-function HostedWhenPicker({ when, onChange }: { when: HostedWhen; onChange: (when: HostedWhen) => void }) {
-  const field = "bg-transparent py-2 text-sm text-sol-text focus:outline-none";
-  const set = (patch: Partial<HostedWhen>) => onChange({ ...when, ...patch });
-  return (
-    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-sol-text-muted">
-      <SelectBox variant="bare" value={when.repeat} onChange={(e) => set({ repeat: e.target.value as HostedRepeat })} aria-label="How often">
-        <option value="daily">Every day</option>
-        <option value="weekly">Every week</option>
-        <option value="once">Once</option>
-        <option value="now">Right now</option>
-      </SelectBox>
-      {when.repeat === "weekly" && (
-        <>
-          <span>on</span>
-          <SelectBox variant="bare" value={String(when.weekday)} onChange={(e) => set({ weekday: Number(e.target.value) })} aria-label="Day of the week">
-            {WEEKDAYS.map((day, i) => <option key={day} value={i}>{day}</option>)}
-          </SelectBox>
-        </>
-      )}
-      {when.repeat === "once" && (
-        <>
-          <span>on</span>
-          <input type="date" value={when.date} onChange={(e) => set({ date: e.target.value })} aria-label="Date" className={field} />
-        </>
-      )}
-      {when.repeat !== "now" && (
-        <>
-          <span>at</span>
-          <input type="time" value={when.time} onChange={(e) => set({ time: e.target.value })} aria-label="Time" className={field} />
-        </>
-      )}
-    </span>
-  );
-}
-
 /** The form's example once the person's mail is connected. */
 const MAIL_ROUTINE_PLACEHOLDER = 'What should the assistant do? e.g. "Summarize my unread mail and flag anything urgent"';
-
-/** A hosted empty Routines page: three routines to start from, each opening
- *  the form filled in, in the style of /welcome's asks. */
-function RoutineExamples({ onPick }: { onPick: (seed: ReturnType<typeof routineExampleSeed>) => void }) {
-  const { connected } = useLaneMailAbilities();
-  return (
-    <div className="mt-2 flex w-full max-w-md flex-col gap-2" data-routine-examples>
-      {routineExamples(connected).map((example) => (
-        <button
-          key={example.label}
-          type="button"
-          onClick={() => onPick(routineExampleSeed(example, Date.now()))}
-          className="flex w-full items-center gap-3 rounded-[var(--radius,8px)] border border-sol-border bg-sol-card px-4 py-3 text-left text-sm text-sol-text transition-colors hover:border-sol-text-dim/50 hover:bg-sol-bg-highlight"
-        >
-          <span className="min-w-0 flex-1">{example.label}</span>
-          <Plus className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" aria-hidden />
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   onClose: () => void;
@@ -232,9 +168,6 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   embedded?: boolean;
 }) {
   const isEdit = !!editTask;
-  // The person's other running hosted routines, which the plan's limit counts.
-  const armedRoutines = useInboxStore((s) => Object.values(s.agentTasks ?? {}).filter((t: any) =>
-    !!t && isAssistantRoutine(t) && (t.status === "scheduled" || t.status === "running") && t._id !== editTask?._id).length);
   const init = useMemo(() => deriveInitial(editTask ?? seedTask), [editTask, seedTask]);
   const create = useMutation(api.agentTasks.webCreate);
   const [prompt, setPrompt] = useState(init.prompt);
@@ -246,25 +179,12 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   const [agent, setAgent] = useState<"claude" | "codex">(init.agent);
   const [project, setProject] = useState(init.project);
   const [submitting, setSubmitting] = useState(false);
-  const words = useModeWords();
-  const devForm = useSurface("triggers.devForm");
-  // A routine for the hosted assistant: one being edited or copied whose home
-  // is hosted, or a new one where the form's developer rows are hidden. It
-  // takes no agent or project and runs on a schedule only (webCreate starts
-  // its home conversation). A daemon trigger opened in hosted mode keeps its
-  // agent and project, unshown.
-  const source = editTask ?? seedTask;
-  const hostedRoutine = source ? source.hosted_home === true : !devForm;
-  const devRows = devForm && !hostedRoutine;
-  const offersEvents = !hostedRoutine && (devForm || init.kind === "on");
-  // Hosted mode says when as a person does (every Monday at 9, once on a
-  // date), defaulting to a schedule the plan allows, with the plan's limits
-  // said under it. A stored routine the picker cannot say (every 3 hours)
-  // keeps the duration controls.
-  const [hostedWhen, setHostedWhen] = useState(() => (!devForm && hostedRoutine ? hostedWhenOf(source, Date.now()) : null));
+  // A routine for the hosted assistant, being edited or copied: its home is a
+  // hosted conversation. It takes no agent or project and runs on a schedule
+  // only (webCreate starts its home conversation).
+  const hostedRoutine = (editTask ?? seedTask)?.hosted_home === true;
   // A mail example only once mail is connected (lane.ts firstAsks' rule).
   const mailAbilities = useLaneMailAbilities();
-  const { plan } = usePlanMeter(false);
 
   // Suggest project paths from sessions already in the store — same data the
   // sidebar's workspace list derives from, without re-running its grouping.
@@ -284,8 +204,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
 
   const parsed = parseDuration(duration);
   const needsDuration = kind === "in" || kind === "every";
-  const hostedSched = hostedWhen ? hostedSchedule(hostedWhen, Date.now()) : null;
-  const valid = prompt.trim().length > 0 && (hostedWhen ? !!hostedSched : (!needsDuration || parsed !== undefined));
+  const valid = prompt.trim().length > 0 && (!needsDuration || parsed !== undefined);
 
   const preview = !needsDuration
     ? null
@@ -310,11 +229,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
       } else if (!isEdit) {
         args.agent_type = HOSTED_AGENT_TYPE;
       }
-      if (hostedWhen && hostedSched) {
-        args.schedule_type = hostedSched.schedule_type;
-        args.run_at = hostedSched.run_at;
-        if (hostedSched.interval_ms) args.interval_ms = hostedSched.interval_ms;
-      } else if (kind === "on") {
+      if (kind === "on") {
         args.schedule_type = "event";
         // Keeps a --source or --repo the trigger was armed with; the form
         // offers only the event, and saving must not widen it.
@@ -335,13 +250,13 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
         gestureToast("Saved", () => state.editTrigger(editTask._id, args));
       } else {
         await create(args);
-        toast.success((hostedWhen ? hostedWhen.repeat === "now" : kind === "now") ? "Queued, runs within a minute" : words.triggerCreated);
+        toast.success(kind === "now" ? "Queued, runs within a minute" : "Trigger set");
       }
       onClose();
     } catch (e) {
       // A hosted routine's refusal (the plan's limits) is the sentence to show.
       const reason = hostedRoutine ? serverErrorText(e) : "";
-      toast.error(isEdit ? "Failed to save" : words.triggerCreateFailed, reason ? { description: reason } : undefined);
+      toast.error(isEdit ? "Failed to save" : "Failed to set trigger", reason ? { description: reason } : undefined);
     } finally {
       setSubmitting(false);
     }
@@ -350,16 +265,15 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   // A labeled row on a hairline: label in a fixed column, the control bare
   // beside it. The rule under each row is the control's line; it turns cyan
   // while the row holds focus. Same grammar as the settings kit's rows.
-  // Hosted mode's labels are sentence case, like the rest of its forms.
   const Row = ({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) => (
     <div className={`flex items-start gap-4 border-b border-sol-border/40 focus-within:border-sol-cyan/70 transition-colors ${className}`}>
-      <span className={`w-14 flex-shrink-0 pt-2 select-none ${devForm ? "text-[10px] uppercase tracking-widest text-sol-text-dim" : "text-[12px] text-sol-text-muted"}`}>{label}</span>
+      <span className="w-14 flex-shrink-0 pt-2 select-none text-[10px] uppercase tracking-widest text-sol-text-dim">{label}</span>
       <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-4 gap-y-1">{children}</div>
     </div>
   );
   const bareInput =
     "bg-transparent py-2 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none";
-  // Hosted mode asks what to do with what it finds as a positive choice:
+  // A hosted routine asks what to do with what it finds as a positive choice:
   // report back, or act (approvals still guard every send and change).
   const hostedModeChoice = (
     <div role="radiogroup" aria-label="What to do" className="flex flex-col gap-1.5 py-2">
@@ -371,7 +285,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
       ))}
     </div>
   );
-  // Beside the agent where that row shows, else in the footer.
+  // Beside the agent.
   const readOnlyBox = (
     <label className="inline-flex items-center gap-1.5 py-1 text-xs text-sol-text-muted cursor-pointer select-none">
       <input
@@ -380,7 +294,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
         onChange={(e) => setMode(e.target.checked ? "propose" : "apply")}
         className="accent-sol-cyan"
       />
-      {words.triggerReadOnly}
+      read-only: report, don't change anything
     </label>
   );
 
@@ -391,10 +305,10 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
     <div className={embedded ? "pt-1" : "border-t border-sol-border/40 pt-1 mb-6"}>
       {isEdit && (
         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-sol-cyan pt-2 pb-1">
-          <Pencil className="w-3 h-3" /> Editing {words.trigger.toLowerCase()}
+          <Pencil className="w-3 h-3" /> Editing trigger
         </div>
       )}
-      <Row label={words.triggerPromptLabel}>
+      <Row label="Prompt">
         <textarea
           autoFocus
           value={prompt}
@@ -403,7 +317,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
             if (e.key === "Escape") onClose();
           }}
-          placeholder={hostedRoutine && mailAbilities.connected ? MAIL_ROUTINE_PLACEHOLDER : words.triggerPromptPlaceholder}
+          placeholder={hostedRoutine && mailAbilities.connected ? MAIL_ROUTINE_PLACEHOLDER : 'What should the agent do? e.g. "Check if CI is green on main and report"'}
           rows={3}
           className={`w-full ${bareInput} text-sm leading-relaxed resize-none`}
         />
@@ -412,21 +326,10 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder={words.triggerTitlePlaceholder}
+          placeholder="Optional: named from the prompt"
           className={`w-full ${bareInput}`}
         />
       </Row>
-      {hostedWhen ? (
-        <Row label="When">
-          <HostedWhenPicker when={hostedWhen} onChange={setHostedWhen} />
-          {hostedSched && !isEdit && (
-            <span className="basis-full text-[12px] text-sol-text-muted">First run: {firstRunWords(hostedSched.run_at, Date.now())}</span>
-          )}
-          <span className={`basis-full pb-2 text-[11px] ${hostedSched ? "text-sol-text-dim" : "text-sol-red"}`}>
-            {hostedSched ? routineLimitLine(plan, routineFloor(plan), armedRoutines) : "Pick a time that hasn't passed yet."}
-          </span>
-        </Row>
-      ) : (
       <Row label="When">
         <SegmentedToggle
           variant="bare"
@@ -436,7 +339,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
             { key: "now", label: "now" },
             { key: "in", label: "in…" },
             { key: "every", label: "every…" },
-            ...(offersEvents ? [{ key: "on", label: "on event" }] : []),
+            ...(hostedRoutine ? [] : [{ key: "on", label: "on event" }]),
           ]}
         />
         {needsDuration && (
@@ -460,9 +363,8 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
           </SelectBox>
         )}
       </Row>
-      )}
-      {!devRows && hostedRoutine && <Row label="Then">{hostedModeChoice}</Row>}
-      {devRows && (
+      {hostedRoutine && <Row label="Then">{hostedModeChoice}</Row>}
+      {!hostedRoutine && (
         <Row label="Agent">
           <SegmentedToggle
             variant="bare"
@@ -476,7 +378,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
           {readOnlyBox}
         </Row>
       )}
-      {devRows && (
+      {!hostedRoutine && (
         <Row label="Project">
           <input
             value={project}
@@ -492,20 +394,20 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pt-3 pb-1">
-        {devRows ? <span className="text-[11px] text-sol-text-dim">Runs on your daemon, which polls every 30s</span> : hostedRoutine ? <span /> : readOnlyBox}
+        {hostedRoutine ? <span /> : <span className="text-[11px] text-sol-text-dim">Runs on your daemon, which polls every 30s</span>}
         <div className="ml-auto flex items-center gap-3 whitespace-nowrap">
           <button onClick={onClose} className="text-xs text-sol-text-dim hover:text-sol-text transition-colors">
             Cancel
           </button>
           <Button
-            variant={devForm ? "cyan" : "amber"}
+            variant="cyan"
             size="sm"
             onClick={submit}
             disabled={!valid || submitting}
           >
             {isEdit
               ? submitting ? "Saving…" : "Save changes"
-              : submitting ? words.creatingTrigger : words.createTrigger}
+              : submitting ? "Setting…" : "Set trigger"}
           </Button>
         </div>
       </div>
@@ -515,18 +417,15 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
 
 // ── Page ──
 
-function Section({ title, count, subtitle, children, defaultOpen = true, bare = false }: {
+function Section({ title, count, subtitle, children, defaultOpen = true }: {
   title: string;
   count: number;
   subtitle?: string;
   children: React.ReactNode;
   defaultOpen?: boolean;
-  /** The list alone, no heading: the page's only section needs no name. */
-  bare?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   if (count === 0) return null;
-  if (bare) return <div className="mb-6 flex flex-col border-t border-sol-border/40">{children}</div>;
   return (
     <div className="mb-6">
       <button
@@ -595,7 +494,6 @@ function OverviewLine({ stats, now, filters, update }: {
   filters: Filters;
   update: (patch: Partial<Filters>) => void;
 }) {
-  const words = useModeWords();
   const sep = <span className="text-sol-text-dim/60">·</span>;
   const num = "tabular-nums font-medium text-sol-text";
   const toggle = (on: boolean, accent: string) =>
@@ -606,7 +504,7 @@ function OverviewLine({ stats, now, filters, update }: {
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-sol-text-muted">
       <span><span className={num}>{stats.active}</span> active</span>
       {sep}
-      <ShortcutTooltip label={words.triggersRecurringTip}>
+      <ShortcutTooltip label="Standing triggers that fire on an interval: click to filter">
         <button
           onClick={() => update({ type: filters.type === "recurring" ? "all" : "recurring" })}
           className={toggle(filters.type === "recurring", "text-sol-violet")}
@@ -615,7 +513,7 @@ function OverviewLine({ stats, now, filters, update }: {
         </button>
       </ShortcutTooltip>
       {sep}
-      <ShortcutTooltip label={words.triggersOnceTip}>
+      <ShortcutTooltip label="Triggers that fire once and finish: click to filter">
         <button
           onClick={() => update({ type: filters.type === "once" ? "all" : "once" })}
           className={toggle(filters.type === "once", "text-sol-cyan")}
@@ -638,7 +536,7 @@ function OverviewLine({ stats, now, filters, update }: {
       ) : null}
       {sep}
       {stats.failing > 0 ? (
-        <ShortcutTooltip label={words.triggersFailedTip}>
+        <ShortcutTooltip label="Triggers whose last run failed: click to filter">
           <button
             onClick={() => update({ failing: !filters.failing })}
             className={toggle(filters.failing, "text-sol-red")}
@@ -743,11 +641,7 @@ const TYPE_TOGGLES: { key: string; label: string; Icon: any; on: string }[] = [
 // draws its own box; the bar's rules are the only lines.
 type Grouping = "session" | "project" | "none";
 
-/** How many routines a hosted list holds before it offers search and the
- *  kind filters. */
-const HOSTED_FILTERS_FROM = 6;
-
-function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total, grouping, setGrouping, devFilters }: {
+function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total, grouping, setGrouping }: {
   filters: Filters;
   update: (patch: Partial<Filters>) => void;
   projects: string[];
@@ -757,16 +651,10 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
   total: number;
   grouping: Grouping;
   setGrouping: (v: Grouping) => void;
-  /** The run mode, project and agent filters and the grouping control
-   *  (surface "triggers.devFilters"). */
-  devFilters: boolean;
 }) {
   const active = filtersActive(filters);
-  // A short hosted list needs no search or kind filters: every routine is in
-  // view already. They come back past a handful, or while one is set.
-  if (!devFilters && total < HOSTED_FILTERS_FROM && !active) return null;
   return (
-    <div className={`sticky top-0 z-20 mb-2 bg-sol-bg/85 backdrop-blur ${devFilters ? "border-b border-sol-border/40" : ""}`}>
+    <div className="sticky top-0 z-20 mb-2 bg-sol-bg/85 backdrop-blur border-b border-sol-border/40">
       <div className="relative border-b border-sol-border/40 focus-within:border-sol-cyan/70 transition-colors">
         <Search className="absolute left-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none" />
         <input
@@ -779,7 +667,7 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
               e.currentTarget.blur();
             }
           }}
-          placeholder={devFilters ? "Search title, prompt, last result…" : "Search routines"}
+          placeholder="Search title, prompt, last result…"
           className="w-full bg-transparent pl-6 pr-6 py-2.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none"
         />
         {filters.search && (
@@ -796,9 +684,7 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 py-1.5 text-[11px]">
         <div className="flex items-center gap-3">
-          {/* Hosted routines never run on events, so the event chip is a
-              developer filter there. */}
-          {TYPE_TOGGLES.filter((p) => p.key !== "event" || (hasEvent && devFilters)).map(({ key, label, Icon, on }) => (
+          {TYPE_TOGGLES.filter((p) => p.key !== "event" || hasEvent).map(({ key, label, Icon, on }) => (
             <button
               key={key}
               onClick={() => update({ type: filters.type === key ? "all" : key })}
@@ -808,11 +694,10 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
               }`}
             >
               <Icon className="w-3 h-3" />
-              {devFilters ? label : label.charAt(0).toUpperCase() + label.slice(1)}
+              {label}
             </button>
           ))}
         </div>
-        {devFilters && (<>
         <SelectBox variant="bare" className="text-[11px]" value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
           <option value="all">all modes</option>
           <option value="apply">makes changes</option>
@@ -847,7 +732,6 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
             ]}
           />
         </span>
-        </>)}
         {active && (
           <span className="ml-auto inline-flex items-center gap-2 text-sol-text-dim">
             <span className="tabular-nums">{shown} of {total}</span>
@@ -1019,10 +903,8 @@ function groupByDay(tasks: TaskRow[], now: number): [string, TaskRow[]][] {
 
 const HISTORY_PAGE = 25;
 
-function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId, fleet }: {
+function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
   tasks: TaskRow[];
-  /** Developer mode's run statistics; hosted mode says each row's own end. */
-  fleet: boolean;
   now: number;
   grouping: Grouping;
   form: RowForm;
@@ -1051,7 +933,7 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId, fleet }:
   return (
     <div className="flex flex-col">
       {/* success / failure proportion — a text line and a thin bar, no box */}
-      {fleet && <div className="px-4 py-2.5 border-b border-sol-border/40">
+      <div className="px-4 py-2.5 border-b border-sol-border/40">
         <div className="flex items-center justify-between text-[11px] mb-1.5">
           <span className="text-sol-text-dim">
             <span className="text-emerald-400">{succeeded} succeeded</span>
@@ -1063,9 +945,9 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId, fleet }:
           <div className="bg-emerald-500/70 h-full transition-all" style={{ width: `${(succeeded / Math.max(tasks.length, 1)) * 100}%` }} />
           <div className="bg-sol-red/70 h-full transition-all" style={{ width: `${(failed / Math.max(tasks.length, 1)) * 100}%` }} />
         </div>
-      </div>}
+      </div>
 
-      {fleet && failed > 0 && (
+      {failed > 0 && (
         <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/40">
           <button
             onClick={() => setFailuresOnly((v) => !v)}
@@ -1116,11 +998,10 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId, fleet }:
 }
 
 function FilteredEmpty({ onClear }: { onClear: () => void }) {
-  const words = useModeWords();
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
       <ListFilter className="w-7 h-7 text-sol-text-dim" />
-      <p className="text-sm text-sol-text-muted">{words.noTriggersMatch}</p>
+      <p className="text-sm text-sol-text-muted">No triggers match these filters</p>
       <button
         onClick={onClear}
         className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight transition-colors"
@@ -1137,18 +1018,7 @@ function TriggersContent() {
   // is empty AND the first answer is in flight.
   const { tasks: taskRows, ready: tasksReady } = useTriggers();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
-  const words = useModeWords();
-  const cliHint = useSurface("hint.cli");
-  // Hosted mode starts an empty page from examples rather than a blank form.
-  const examples = !useSurface("triggers.devForm");
-  const devFilters = useSurface("triggers.devFilters");
-  // Hosted mode's Assistant scope lists the assistant's routines alone
-  // (lib/assistantScope), the same switch as the inbox's; what it leaves out
-  // is one line at the foot.
-  const scope = useAssistantScope();
-  const scopedRows = useMemo(() => withinScope(taskRows, scope.only, isAssistantRoutine) as TaskRow[], [taskRows, scope.only]);
-  const outOfScope = taskRows.length - scopedRows.length;
-  const tasks: TaskRow[] | undefined = tasksReady || scopedRows.length > 0 ? scopedRows : undefined;
+  const tasks: TaskRow[] | undefined = tasksReady || taskRows.length > 0 ? taskRows : undefined;
   // Deep links, read REACTIVELY (tab-context searchParams): the tab shell
   // keeps this page mounted, so a later click on another trigger changes only
   // the query. ?new=1 (the dock's "+ New") lands with the create form open;
@@ -1157,12 +1027,16 @@ function TriggersContent() {
   const deepLinkId = searchParams.get("task") ?? undefined;
   const deepLinkMode = searchParams.get("edit") === "1" ? "edit" : searchParams.get("duplicate") === "1" ? "duplicate" : null;
   const [showForm, setShowForm] = useState(() => searchParams.get("new") === "1");
-  // An example routine the empty page opened the form with (RoutineExamples).
-  const [formSeed, setFormSeed] = useState<ReturnType<typeof routineExampleSeed> | null>(null);
+  // The event a link names (?new=1&on=error_new, an issue's "Add trigger").
+  const eventSeed = (on: string | null) => (on && TRIGGER_EVENT_SHORTHANDS[on] ? ({ schedule_type: "event", event_filter: TRIGGER_EVENT_SHORTHANDS[on], prompt: "", title: "" } as const) : null);
+  const [formSeed, setFormSeed] = useState<ReturnType<typeof eventSeed>>(() => (searchParams.get("new") === "1" ? eventSeed(searchParams.get("on")) : null));
   const closeForm = () => { setShowForm(false); setFormSeed(null); };
   const [form, setForm] = useState<RowForm>(null);
   useWatchEffect(() => {
-    if (searchParams.get("new") === "1") setShowForm(true);
+    if (searchParams.get("new") !== "1") return;
+    setShowForm(true);
+    const seed = eventSeed(searchParams.get("on"));
+    if (seed) setFormSeed(seed);
   }, [searchParams]);
   // The deep-linked row's form opens once its row can be found — by Convex id
   // or by short id (the palette links by whichever it has).
@@ -1179,18 +1053,9 @@ function TriggersContent() {
     return () => clearInterval(id);
   });
 
-  const [picked, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  // A filter whose control is hidden never narrows the list.
-  const filters = useMemo<Filters>(
-    () => (devFilters ? picked : { ...picked, mode: "all", project: "all", agent: "all" }),
-    [devFilters, picked],
-  );
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const update = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }));
-  const [pickedGrouping, setGrouping] = useState<Grouping>("session");
-  // Without the grouping control (hosted mode), routines are one plain list:
-  // the conversation a run lands in is not something to sort by.
-  const grouping: Grouping = devFilters ? pickedGrouping : "none";
-  const fleet = useSurface("triggers.fleetChrome");
+  const [grouping, setGrouping] = useState<Grouping>("session");
 
   // Filters drive the list AND the rail so what's shown stays consistent. Stats
   // and the failure banner stay global — they're a health overview of everything.
@@ -1252,44 +1117,25 @@ function TriggersContent() {
 
   return (
     <div className="h-full overflow-y-auto bg-sol-bg" data-main-scroll>
-      <div className={`${HOSTED_PAGE_FRAME} ${fleet ? "px-5 sm:px-6 py-8" : `${HOSTED_PAGE_PAD} ${HOSTED_PAGE_TOP} pb-8`}`}>
-        {/* Hosted: the row's items start at its top, so the New button never
-            pushes the title below where To-dos and Approvals put theirs. */}
-        <div ref={titlebarRef} className={`flex gap-2 ${fleet ? "items-center mb-5" : "items-start flex-wrap gap-y-2 mb-1.5"}`}>
-          {fleet ? (
-            <>
-              <Zap className="w-4 h-4 text-sol-amber" />
-              <h1 className="text-lg font-semibold text-sol-text whitespace-nowrap">{words.triggers}</h1>
-              <span className="hidden sm:inline min-w-0 truncate text-xs text-sol-text-dim">{words.triggersLede}</span>
-            </>
-          ) : (
-            // Hosted mode counts what runs: the Active list. Paused routines
-            // are their own titled section.
-            // Its description goes on its own line below, so the heading
-            // line holds only the title, its count and the controls.
-            <PageHeading title={words.triggers} count={tasks?.length ? (fleet ? active.length + paused.length : active.length) : undefined} />
-          )}
-          {/* Under the title on a phone, beside it from sm up. */}
-          <div className={fleet ? "contents" : "order-last basis-full sm:order-none sm:basis-auto"}>
-            <AssistantScopeSwitch label="Which routines this lists" hidden={outOfScope} />
-          </div>
-          {/* One way to start a routine at a time: the empty state offers its
-              own, and an open form is already the new routine. */}
+      <div className="mx-auto w-full max-w-3xl px-5 sm:px-6 py-8">
+        <div ref={titlebarRef} className="flex gap-2 items-center mb-5">
+          <Zap className="w-4 h-4 text-sol-amber" />
+          <h1 className="text-lg font-semibold text-sol-text whitespace-nowrap">Triggers</h1>
+          <span className="hidden sm:inline min-w-0 truncate text-xs text-sol-text-dim">agents that run on their own, later</span>
+          {/* One way to start a trigger at a time: the empty state offers its
+              own, and an open form is already the new trigger. */}
           {!showForm && hasTasks && (
             <Button
               data-tour="triggers-new"
               onClick={() => setShowForm(true)}
-              // Hosted mode keeps the page calm: a secondary button, not the
-              // heaviest thing on it.
-              variant={fleet ? "amber" : "outline"}
+              variant="amber"
               size="sm"
               className="ml-auto shrink-0"
             >
-              <Plus /> {words.newTrigger}
+              <Plus /> New trigger
             </Button>
           )}
         </div>
-        {!fleet && <p className="mb-5 text-xs text-sol-text-dim">{words.triggersLede}</p>}
 
         <FeatureUpsell
           slug="triggers"
@@ -1303,33 +1149,17 @@ function TriggersContent() {
           <PaneLoader />
         ) : tasks.length === 0 ? (
           // Nothing to filter or search yet: no bar, no filtered-empty line.
-          showForm ? <MoreInEverything hidden={outOfScope} /> : (
+          showForm ? null : (
           <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-            {!examples && <Zap className="w-8 h-8 text-sol-text-dim" />}
-            <p className="text-sm text-sol-text-muted">{words.noTriggers}</p>
-            <p className="text-xs text-sol-text-dim max-w-sm">{words.triggersEmptyHint}</p>
-            {cliHint && (
-              <>
-                <code className="font-mono text-xs text-sol-text-muted bg-sol-bg-alt rounded-md px-3 py-1.5">
-                  cast trigger add "Check CI on main" --in 30m
-                </code>
-              </>
-            )}
-            {examples && <RoutineExamples onPick={(seed) => { setFormSeed(seed); setShowForm(true); }} />}
-            {examples ? (
-              <button
-                onClick={() => setShowForm(true)}
-                className="mt-1 text-sm text-sol-text-muted underline decoration-sol-border underline-offset-4 transition-colors hover:text-sol-text"
-              >
-                Or write your own
-              </button>
-            ) : (
-              <Button variant="amber" size="sm" className="mt-2" onClick={() => setShowForm(true)}>
-                <Plus /> {words.newTrigger}
-              </Button>
-            )}
-            {/* The overflow sits inside the empty block it explains. */}
-            <MoreInEverything hidden={outOfScope} centered />
+            <Zap className="w-8 h-8 text-sol-text-dim" />
+            <p className="text-sm text-sol-text-muted">No triggers yet</p>
+            <p className="text-xs text-sol-text-dim max-w-sm">Set triggers to run agents later (check CI, review PRs, continue work) from here or any session:</p>
+            <code className="font-mono text-xs text-sol-text-muted bg-sol-bg-alt rounded-md px-3 py-1.5">
+              cast trigger add "Check CI on main" --in 30m
+            </code>
+            <Button variant="amber" size="sm" className="mt-2" onClick={() => setShowForm(true)}>
+              <Plus /> New trigger
+            </Button>
           </div>
           )
         ) : (
@@ -1342,8 +1172,8 @@ function TriggersContent() {
                 still own dots on the past half. */}
             {hasTasks && (
               <div className="reveal mb-4">
-                {fleet && <OverviewLine stats={stats} now={now} filters={filters} update={update} />}
-                {fleet && <PageHorizonRail tasks={filtered} now={now} />}
+                <OverviewLine stats={stats} now={now} filters={filters} update={update} />
+                <PageHorizonRail tasks={filtered} now={now} />
                 <AttentionBanner tasks={failingActive} />
               </div>
             )}
@@ -1354,12 +1184,9 @@ function TriggersContent() {
               hasCodex={hasCodex}
               hasEvent={hasEvent}
               shown={filtered.length}
-              // Hosted mode counts the routines the list shows, not the
-              // stopped ones under History, against its six-routine rule.
-              total={devFilters ? tasks.length : tasks.filter((t) => !isTriggerTerminal(t.status)).length}
+              total={tasks.length}
               grouping={grouping}
               setGrouping={setGrouping}
-              devFilters={devFilters}
             />
             {!anyShown ? (
               <FilteredEmpty onClear={() => update(EMPTY_FILTERS)} />
@@ -1367,31 +1194,24 @@ function TriggersContent() {
               <div className="reveal reveal-2">
                 {/* The overview line already says the split; repeat it here
                     only when a filter makes the section's split differ. */}
-                {/* Hosted mode names Active only beside Paused; alone, it is just
-                    the list under the page's title, which counts it. */}
-                <Section title="Active" count={active.length} subtitle={filtersActive(filters) ? activeSubtitle : undefined} bare={!fleet && paused.length === 0}>
+                <Section title="Active" count={active.length} subtitle={filtersActive(filters) ? activeSubtitle : undefined}>
                   <RowList tasks={active} nextId={nextId} {...listProps} />
                 </Section>
                 <Section title="Paused" count={paused.length}>
                   <RowList tasks={paused} {...listProps} />
                 </Section>
                 <Section
-                  // Hosted mode names what the section holds: routines that
-                  // ran their course or were stopped (plainEndedWords).
-                  title={fleet ? "History" : "Finished and stopped"}
+                  title="History"
                   count={history.length}
-                  // Success rates are fleet health; hosted mode says only what
-                  // went wrong, in the person's words.
-                  subtitle={historyFailed > 0 ? (fleet ? `${historyFailed} failed` : `${historyFailed} didn't finish`) : fleet ? "all succeeded" : undefined}
+                  subtitle={historyFailed > 0 ? `${historyFailed} failed` : "all succeeded"}
                   defaultOpen={active.length === 0}
                 >
-                  <HistoryBody tasks={history} now={now} grouping={grouping} form={form} setForm={setForm} deepLinkId={deepLinkId} fleet={fleet} />
+                  <HistoryBody tasks={history} now={now} grouping={grouping} form={form} setForm={setForm} deepLinkId={deepLinkId} />
                 </Section>
               </div>
             )}
           </>
         )}
-        {hasTasks && <MoreInEverything hidden={outOfScope} />}
       </div>
     </div>
   );

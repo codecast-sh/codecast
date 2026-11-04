@@ -97,7 +97,7 @@ import { useIsEstablishedRef } from "../hooks/entityMentionScope";
 import { describeTaskCadence, taskStateLabel } from "./triggerCadence";
 import { chosenOptions } from "../lib/decisionLinks";
 import { useInboxStore, type SessionDecisionItem } from "../store/inboxStore";
-import { pageSurface, surfaceShown } from "../lib/surfaces";
+import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { SessionHoverContent } from "./SessionHoverContent";
 import { DocDates } from "./DocDates";
 import { TimeAgo } from "./tasks/TaskCommentStream";
@@ -1356,13 +1356,11 @@ export function EntityIdPill({
   // real (cmd-click, copy link).
   const clickStaysHere = !!entity && isSession;
 
-  // A reference to a page this mode hides (an initiative, a proposal or a
-  // decision in hosted mode) stays the text it was written as: a pill would
-  // open a page the person cannot otherwise reach.
-  const pageHidden = useInboxStore((s) => {
-    const surface = href ? pageSurface(href) : null;
-    return !!surface && !surfaceShown(s, surface);
-  });
+  // A reference to a Flows page in a workspace with Flows off stays the text
+  // it was written as: a pill would open a page the person cannot otherwise
+  // reach.
+  const flowsOn = useWorkspaceFeature("line");
+  const pageHidden = !flowsOn && !!href && /^\/(flows|line|trial)(\/|$|[?#])/.test(href);
 
   // Unknown id shape, or a Convex id that resolved to no entity table (message
   // id, random hash) — render the caller's original element, or the raw text.

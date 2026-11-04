@@ -15,7 +15,6 @@ import { TaskDecisionChip } from "../decisions/TaskDecisions";
 import { TaskStatusBadge } from "../TaskStatusBadge";
 import { LabelChips } from "../LabelChips";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
-import { formatRowTime, sentenceCase } from "../../lib/sessionCard";
 import type { ItemRowState } from "../ListRowShell";
 import { taskLivenessState } from "../../lib/liveness";
 import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
@@ -34,7 +33,6 @@ import {
 } from "lucide-react";
 import { taskPriority } from "../../lib/taskPriority";
 import { useTaskActiveSession } from "./taskActiveSession";
-import { useSurface } from "../../lib/surfaces";
 import { withShortcut } from "../../shortcuts";
 
 // The task list row and the board card. The tasks page lays them out; every
@@ -89,9 +87,6 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
   const priority = taskPriority(task.priority);
   const StatusIcon = status.icon;
   const PriorityIcon = priority.icon;
-  // Hosted mode draws a task as its status, title, assignee and age; the ids,
-  // origin glyphs, session links, labels and plan chips are working detail.
-  const internals = useSurface("tasks.internals");
   const [editValue, setEditValue] = useState(task.title);
 
   useWatchEffect(() => { setEditValue(task.title); }, [task.title]);
@@ -102,18 +97,12 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
     else state.onEditDone();
   }, [editValue, task.title, state.onTitleCommit, state.onEditDone]);
 
-  // Hosted mode leaves the time off an open to-do: a clock time beside it
-  // reads as when to do it, and the schema has no due time to show. A closed
-  // one says when it closed, in the rail's words ("Done Mon").
-  const closed = resolvedStatus.category === "done" || resolvedStatus.category === "dropped";
   const age = Date.now() - task.updated_at;
-  const ageStr = !internals
-    ? closed ? `${resolvedStatus.category === "done" ? "Done" : "Dropped"} ${formatRowTime(task.updated_at, true)}` : ""
-    : age < 3600000
-      ? `${Math.round(age / 60000)}m`
-      : age < 86400000
-        ? `${Math.round(age / 3600000)}h`
-        : `${Math.round(age / 86400000)}d`;
+  const ageStr = age < 3600000
+    ? `${Math.round(age / 60000)}m`
+    : age < 86400000
+      ? `${Math.round(age / 3600000)}h`
+      : `${Math.round(age / 86400000)}d`;
 
   return (
     <>
@@ -130,9 +119,6 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         onClick={(e) => { e.stopPropagation(); state.onOpenPalette("status"); }}
         className="flex-shrink-0 hover:scale-125 transition-transform"
         title={withShortcut("Change status", "task.status")}
-        // Hosted mode names the circle by what it does to this to-do; the
-        // shortcut stays in the tooltip.
-        aria-label={internals ? undefined : `Mark ${sentenceCase(task.title)} ${closed ? "not done" : "done"}`}
       >
         {activeSession && taskLivenessState(task.status, activeSession) === "active" ? (
           <LivePulseHalo><StatusIcon className={`w-4 h-4 ${status.color}`} /></LivePulseHalo>
@@ -140,10 +126,10 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <StatusIcon className={`w-4 h-4 ${status.color}`} />
         )}
       </button>
-      {internals && <ShortId id={task.short_id} className="text-xs text-sol-text-dim w-16 cq-hide-compact" />}
-      {internals && task.external && <IssueLink external={task.external} className="cq-hide-compact" />}
+      {<ShortId id={task.short_id} className="text-xs text-sol-text-dim w-16 cq-hide-compact" />}
+      {task.external && <IssueLink external={task.external} className="cq-hide-compact" />}
       <TaskDecisionChip taskId={task._id} />
-      {internals && <TaskLineChip task={task as any} />}
+      {<TaskLineChip task={task as any} />}
       {state.isEditing ? (
         <input
           autoFocus
@@ -160,23 +146,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         />
       ) : (
         <>
-          {/* Hosted mode says only the priorities worth a mark, high and
-              urgent, as a small accent bar before the title: what the
-              assistant set is visible, and p changes it. */}
-          {/* Every hosted row keeps the mark's slot, so titles share one edge. */}
-          {!internals && task.priority !== "high" && task.priority !== "urgent" && <span aria-hidden className="w-[3px] flex-shrink-0" />}
-          {!internals && (task.priority === "high" || task.priority === "urgent") && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); state.onOpenPalette("priority"); }}
-              data-cc-todo-priority={task.priority}
-              className="flex-shrink-0 self-center h-3.5 w-[3px] rounded-full bg-[var(--pd-accent,var(--sol-orange))]"
-              style={task.priority === "high" ? { opacity: 0.55 } : undefined}
-              title={`${task.priority === "urgent" ? "Urgent" : "High priority"} (p to change)`}
-              aria-label={`${task.priority === "urgent" ? "Urgent" : "High priority"}, change priority`}
-            />
-          )}
-          <span className="flex-1 text-sm text-sol-text truncate">{internals ? task.title : sentenceCase(task.title)}</span>
+          <span className="flex-1 text-sm text-sol-text truncate">{task.title}</span>
         </>
       )}
       {/* Floated subtask: the parent was filtered out of this view, so the row
@@ -235,7 +205,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           so it gets its own marker — a bot icon here would file real
           commitments in with agent bookkeeping, the confusion decision 4
           exists to remove. */}
-      {!internals ? null : task.from_call ? (
+      {task.from_call ? (
         <TaskCallChip callId={task.from_call} className="cq-hide-compact" />
       ) : taskOrigin(task) === "meeting" ? (
         <span
@@ -253,7 +223,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <span className="flex-shrink-0 cq-hide-compact" title={`${task.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
         )
       )}
-      {!internals ? null : activeSession ? (
+      {activeSession ? (
         <TaskSessionBadge task={task} className="cq-hide-compact" />
       ) : task.origin_session ? (
         <span className="flex items-center gap-1 flex-shrink-0 cq-hide-compact">
@@ -269,7 +239,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
         </span>
       ) : null}
-      {internals && (task as any).plan && (
+      {(task as any).plan && (
         <Link
           href={`/plans/${(task as any).plan._id}`}
           onClick={(e) => e.stopPropagation()}
@@ -279,14 +249,14 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           {(task as any).plan.title}
         </Link>
       )}
-      {internals && task.source === "insight" && (
+      {task.source === "insight" && (
         <span className="text-[10px] px-1.5 py-0 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0 cq-hide-compact">mined</span>
       )}
-      {internals && task.execution_status && (
+      {task.execution_status && (
         <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0 cq-hide-compact" />
       )}
       <TaskBlockedMark task={task} className="cq-hide-compact" />
-      {internals && task.labels && task.labels.length > 0 && (
+      {task.labels && task.labels.length > 0 && (
         <LabelChips labels={task.labels} onLabelClick={onFilterLabel} className="cq-hide-compact" />
       )}
       {task.assignee_info && (() => {
@@ -320,7 +290,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
-      ) : internals && (
+      ) : (
         <button
           onClick={(e) => { e.stopPropagation(); state.onOpenPalette("priority"); }}
           className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-compact"
@@ -329,7 +299,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} />
         </button>
       )}
-      {ageStr && <span className={`text-xs text-sol-text-dim ${internals ? "w-8" : "whitespace-nowrap"} text-right tabular-nums cq-hide-compact`}>{ageStr}</span>}
+      <span className="text-xs text-sol-text-dim w-8 text-right tabular-nums cq-hide-compact">{ageStr}</span>
     </>
   );
 }

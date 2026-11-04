@@ -15,7 +15,6 @@ import {
 } from "../../lib/osPermissions";
 import { ComputerPermissionRows } from "./ComputerPermissionRows";
 import { PermissionRow } from "./PermissionRow";
-import { useSurface } from "../../lib/surfaces";
 import { useFirstRun } from "../../lib/firstRun";
 
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -53,8 +52,6 @@ export function DeviceSetupDialog() {
   const { permissions, refresh } = useOsPermissions();
   // Holds the first-run turn while open; waits for it before opening unasked.
   const { blocked, claim } = useFirstRunDialog("device-setup", open);
-  // Hosted mode never opens it unasked; settings still can (lib/surfaces.ts).
-  const unasked = useSurface("banner.deviceSetup");
   // The inbox's first run (no machine and no conversation, or not yet known)
   // holds it, so the choice between the assistant and a machine comes first.
   // It opens once the person has a conversation.
@@ -72,7 +69,7 @@ export function DeviceSetupDialog() {
   // (the inbox tour) defers the check, not the decision: it re-runs the
   // moment that dialog closes.
   useWatchEffect(() => {
-    if (autoChecked || open || blocked || !unasked || firstRun) return;
+    if (autoChecked || open || blocked || firstRun) return;
     if (isDetachedTabWindow()) return;
     if (OS_PERMISSION_KINDS.every((k) => permissions[k] === "unknown")) return;
     const needed =
@@ -82,7 +79,7 @@ export function DeviceSetupDialog() {
     setAutoChecked(true);
     if (needed) setOpen(true);
     else if (!seen()) markSeen();
-  }, [permissions, autoChecked, open, blocked, claim, unasked, firstRun]);
+  }, [permissions, autoChecked, open, blocked, claim, firstRun]);
 
   const close = () => {
     markSeen();

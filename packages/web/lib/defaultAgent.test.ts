@@ -8,10 +8,9 @@ const state = (ui: DefaultAgentState["clientState"]["ui"], roster: unknown[] = [
 });
 
 describe("onlyHostedAgent", () => {
-  test("hosted mode or an answered empty roster, and nothing else", () => {
-    expect(onlyHostedAgent(state({ lane: "simple" }))).toBe(true);
+  test("an answered empty roster, and nothing else", () => {
     expect(onlyHostedAgent(state({}, []))).toBe(true);
-    expect(onlyHostedAgent(state({ lane: "full" }))).toBe(false);
+    expect(onlyHostedAgent(state({}))).toBe(false);
     expect(onlyHostedAgent(state({}, [], false))).toBe(false);
   });
 });
@@ -29,10 +28,6 @@ describe("defaultAgentType", () => {
     expect(defaultAgentType(state({ default_agent: "nonsense" }))).toBe("claude_code");
   });
 
-  test("hosted mode defaults to the hosted assistant over any pick", () => {
-    expect(defaultAgentType(state({ lane: "simple", default_agent: "codex" }))).toBe("codecast");
-  });
-
   test("no machine at all defaults to the hosted assistant, once the roster has answered", () => {
     expect(defaultAgentType(state({ default_agent: "codex" }, []))).toBe("codecast");
     expect(defaultAgentType(state({}, [], false))).toBe("claude_code");
@@ -47,8 +42,7 @@ describe("newConversationAgentType", () => {
     expect(newConversationAgentType(state({ default_agent: "codex" }), "bogus")).toBe("codex");
   });
 
-  test("hosted mode and a machine-less account always start the hosted assistant", () => {
-    expect(newConversationAgentType(state({ lane: "simple" }), "claude_code")).toBe("codecast");
+  test("a machine-less account always starts the hosted assistant", () => {
     expect(newConversationAgentType(state({}, []), "claude_code")).toBe("codecast");
   });
 });

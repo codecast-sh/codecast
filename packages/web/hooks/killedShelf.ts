@@ -2,7 +2,6 @@ import type { ConvexReactClient } from "convex/react";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, type InboxSession } from "../store/inboxStore";
-import { modeWordsNow } from "../lib/surfaces";
 
 // The Killed shelf's one verb: page the next slice of the user's kills
 // (listKilledSessions, newest-first) into the never-prune sessions cache and
@@ -33,6 +32,6 @@ export async function loadMoreKilledSessions(convex: ConvexReactClient): Promise
   } catch (e) {
     console.error("[killedShelf] load failed", e);
     useInboxStore.setState({ killedShelf: { ...useInboxStore.getState().killedShelf, loading: false } });
-    toast.error(modeWordsNow().loadOlderKilledFailed);
+    toast.error("Couldn't load older killed sessions");
   }
 }

@@ -101,3 +101,24 @@ export function settingsSectionForPath(path: string): SettingsPathHit | null {
   const section = PATH_TO_SECTION[clean];
   return section ? { section, search } : null;
 }
+
+/**
+ * The fragment an in-app settings link carried (`#source-src-4`): the modal
+ * opens in place without changing the URL, so the panel that owns the anchor
+ * reads it here once, as a hard load reads it from the location.
+ */
+let pendingAnchor: string | null = null;
+
+export function rememberSettingsAnchor(path: string): void {
+  const at = path.indexOf("#");
+  pendingAnchor = at === -1 ? null : path.slice(at);
+}
+
+export function peekSettingsAnchor(): string | null {
+  return pendingAnchor;
+}
+
+/** The panel that used the anchor clears it, so a later open of the same section starts at its top. */
+export function clearSettingsAnchor(): void {
+  pendingAnchor = null;
+}

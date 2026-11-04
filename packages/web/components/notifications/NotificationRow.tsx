@@ -24,7 +24,6 @@ import {
 } from "../../lib/notificationTypes";
 import { isHostedAgentType, summarizeIdleDigest, type IdleGrouped } from "@codecast/shared/contracts";
 import { AssistantMark } from "../simple/AssistantMark";
-import { DEVELOPER_MODE, type SurfaceMode } from "../../lib/surfaceRules";
 
 export function AgentIcon({ agentType, className = "w-9 h-9" }: { agentType: string; className?: string }) {
   // The hosted assistant is one disc everywhere it appears, never another
@@ -85,11 +84,9 @@ type RowProps = {
   size?: "bell" | "page";
   /** A row inside an open group: indented, quieter, no repeated border. */
   nested?: boolean;
-  /** The viewer's mode (a prop, so the marketing hero draws rows without the store). */
-  mode?: SurfaceMode;
 };
 
-export function NotificationRow({ notification, onOpen, onContextMenu, size = "bell", nested, mode = DEVELOPER_MODE }: RowProps) {
+export function NotificationRow({ notification, onOpen, onContextMenu, size = "bell", nested }: RowProps) {
   const label = sessionLabel(notification.conversation);
   const { name: actorName, avatar: actorAvatar, session: actorSession } = notificationActor(notification);
   const agentType = notification.conversation?.agent_type || "claude_code";
@@ -98,10 +95,7 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
   // given name and face, a character's, else the agent.
   const speaker = useAgentSpeaker(agentIcon ? identityRowOf(notification.conversation) : null, agentType);
   const typeLabel = notificationTypeLabel(notification.type, notification.conversation?.agent_type);
-  // Hosted mode sets the event word in the muted ink; only the unread dot
-  // carries the accent.
-  const hosted = mode.hosted;
-  const typeColor = hosted ? "text-sol-text-muted" : typeColors[notification.type] || "text-sol-text-muted";
+  const typeColor = typeColors[notification.type] || "text-sol-text-muted";
   const av = size === "page" ? "w-10 h-10" : "w-9 h-9";
 
   return (
@@ -157,7 +151,7 @@ export function NotificationRow({ notification, onOpen, onContextMenu, size = "b
             ) : null}
             <span className={`text-xs ${typeColor}`}>{typeLabel}</span>
             <span className="text-xs text-sol-text-muted ml-auto flex-shrink-0">{timeAgo(notification.created_at)}</span>
-            {!notification.read && <div className={`w-2 h-2 rounded-full flex-shrink-0 ${hosted ? "bg-sol-orange" : "bg-sol-yellow"}`} />}
+            {!notification.read && <div className="w-2 h-2 rounded-full flex-shrink-0 bg-sol-yellow" />}
           </div>
           <p className="text-sm text-sol-text leading-relaxed line-clamp-2">{notification.message}</p>
           {label && (
@@ -194,7 +188,6 @@ export function NotificationGroupRow({
   onOpen,
   onContextMenu,
   size = "bell",
-  mode = DEVELOPER_MODE,
 }: {
   group: Extract<IdleGrouped<any>, { kind: "group" }>;
   open: boolean;
@@ -202,11 +195,8 @@ export function NotificationGroupRow({
   onOpen: (n: any) => void;
   onContextMenu?: (e: MouseEvent, n: any) => void;
   size?: "bell" | "page";
-  mode?: SurfaceMode;
 }) {
-  const words = mode.words;
-  const hosted = mode.hosted;
-  const titles = group.rows.map((r) => sessionLabel(r.conversation) || words.conversation);
+  const titles = group.rows.map((r) => sessionLabel(r.conversation) || "Session");
   const { message } = summarizeIdleDigest(titles);
   const faces = group.rows.slice(0, 4);
 
@@ -240,10 +230,10 @@ export function NotificationGroupRow({
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-sm font-medium text-sol-text">{group.rows.length} {words.conversations.toLowerCase()}</span>
-              <span className={`text-xs ${hosted ? "text-sol-text-muted" : "text-sol-green"}`}>{typeLabels.sessions_need_input}</span>
+              <span className="text-sm font-medium text-sol-text">{group.rows.length} sessions</span>
+              <span className="text-xs text-sol-green">{typeLabels.sessions_need_input}</span>
               <span className="text-xs text-sol-text-muted ml-auto flex-shrink-0">{timeAgo(group.newestAt)}</span>
-              {group.unread > 0 && <div className={`w-2 h-2 rounded-full flex-shrink-0 ${hosted ? "bg-sol-orange" : "bg-sol-yellow"}`} />}
+              {group.unread > 0 && <div className="w-2 h-2 rounded-full flex-shrink-0 bg-sol-yellow" />}
             </div>
             <p className="text-sm text-sol-text leading-relaxed line-clamp-2">{message}</p>
           </div>
@@ -261,7 +251,6 @@ export function NotificationGroupRow({
             onContextMenu={onContextMenu}
             size={size}
             nested
-            mode={mode}
           />
         ))}
     </div>

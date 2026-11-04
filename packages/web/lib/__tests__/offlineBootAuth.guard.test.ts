@@ -48,18 +48,16 @@ describe("offline boot auth", () => {
     // The session to restore is chosen before that preload, so the preload warms the
     // conversation the app opens on: a conversation the URL names wins, then this
     // client's own last focus, then the server's; a remembered one only when the
-    // Assistant scope would list it and hosted mode was not asked to open on its
-    // home (hostedHomeAsked) and the window did not open fresh onto the feed
-    // home (freshHomeLaunchPending), which goes to the new-session page instead.
+    // window did not open fresh onto the feed home (freshHomeLaunchPending),
+    // which goes to the new-session page instead.
     const remembered = source.match(/const remembered = ([^;]+);/);
     const restore = source.match(/const restoreId = ([^;]+);/);
     expect(remembered).not.toBeNull();
     expect(restore).not.toBeNull();
     expect(source.indexOf(restore![0])).toBeLessThan(hydrate);
     expect(remembered![1]).toBe("ownId ?? st.clientState?.current_conversation_id");
-    expect(source).toContain("const homeAsked = linked === undefined && hostedHomeAsked(st.clientState?.ui);");
     expect(restore![1].replace(/\s+/g, " ")).toBe(
-      "linked !== undefined ? linked : !homeAsked && !freshHome && remembered && restorableIn(assistantScopeOnly(st.clientState?.ui), st.sessions[remembered]) ? remembered : null",
+      "linked !== undefined ? linked : !freshHome && remembered ? remembered : null",
     );
   });
 

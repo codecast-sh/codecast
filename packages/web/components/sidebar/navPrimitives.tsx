@@ -114,8 +114,10 @@ export function SectionRow({ row, className }: { row: SectionRowSpec; className?
  *  colour: a colour-keyed selector cannot tell a count pill from a project dot
  *  that happens to share its hue. `small` is the pinned rail's scale.
  *  `kind: "mention"` is a chat mention: it stays red in every visual style,
- *  because that number is "someone named you", not a volume count. */
-export function NavCount({ n, tone, small, kind }: { n: number; tone: string; small?: boolean; kind?: "mention" }) {
+ *  because that number is "someone named you", not a volume count.
+ *  `kind: "alert"` is the same red for a count that pages (Ops: alerting
+ *  watches, regressions, sources down). */
+export function NavCount({ n, tone, small, kind }: { n: number; tone: string; small?: boolean; kind?: "mention" | "alert" }) {
   return (
     <span
       data-sv-count={kind ?? ""}
@@ -294,36 +296,8 @@ export function NavSection({
   );
 }
 
-/** The needs-input count on the Inbox row. Silent at zero. */
+/** The needs-input count. Silent at zero. */
 export function NeedsInputCount({ n }: { n: number }) {
   if (n === 0) return null;
   return <NavCount n={n} tone="bg-teal-600 text-white" />;
-}
-
-/** The Inbox row. `badge` is the count, passed as a node so the app can hand
- *  in a badge that subscribes on its own and a heartbeat re-renders only it. */
-export function InboxNavRow({ active, isNarrow, badge, onClick }: {
-  active: boolean;
-  isNarrow: boolean;
-  badge?: React.ReactNode;
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={railRowClass(active, isNarrow)}
-      title="Inbox"
-      data-nav-page="/inbox"
-    >
-      <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-      </svg>
-      {!isNarrow && (
-        <>
-          <span>Inbox</span>
-          {badge}
-        </>
-      )}
-    </button>
-  );
 }

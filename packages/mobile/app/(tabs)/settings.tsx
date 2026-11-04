@@ -15,7 +15,6 @@ import {
   themeLabelOf,
 } from '@/components/settings/SettingsPages';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { useHostedMode, useSurface } from '@codecast/web/lib/surfaces';
 import { LANE_COPY, meterWords } from '@codecast/web/components/simple/lane';
 import { usePlanMeter } from '@codecast/web/components/simple/usePlanFigures';
 import { useLaneMailAbilities } from '@codecast/web/components/simple/useLaneMail';
@@ -34,9 +33,6 @@ export default function SettingsScreen() {
   const storeTheme = useInboxStore((s) => s.clientState?.ui?.theme);
   const status = currentStatusOf(currentUser);
   const online = devices.filter((d) => d.online).length;
-  // Hosted mode keeps the Machines rows (the agent accounts a machine runs
-  // on, the devices) only for an account that runs one.
-  const machines = useSurface('settings.machines');
   const meter = usePlanMeter();
   const mail = useLaneMailAbilities();
   const vaultAsks = useSecrets().filter((r) => r.status === 'requested').length;
@@ -44,12 +40,10 @@ export default function SettingsScreen() {
   // typed-route union only regenerates when Metro runs.
   const open = (section: string) => router.push(`/settings/${section}` as never);
 
-  // Hosted mode speaks in sentence case, as the family's other labels do.
-  const signOutLabel = useHostedMode() ? 'Sign out' : 'Sign Out';
   const handleSignOut = () => {
-    Alert.alert(signOutLabel, 'Are you sure you want to sign out?', [
+    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: signOutLabel, style: 'destructive', onPress: signOut },
+      { text: 'Sign Out', style: 'destructive', onPress: signOut },
     ]);
   };
 
@@ -87,21 +81,19 @@ export default function SettingsScreen() {
       </SettingsGroup>
 
       <SettingsGroup>
-        {machines ? <NavRow icon="key" label="Accounts" onPress={() => router.push('/accounts' as never)} /> : null}
+        <NavRow icon="key" label="Accounts" onPress={() => router.push('/accounts' as never)} />
         <NavRow
           icon="bell-o"
           label="Notifications"
           detail={currentUser?.notifications_enabled ? 'On' : 'Off'}
           onPress={() => open('notifications')}
         />
-        {machines ? (
-          <NavRow
-            icon="laptop"
-            label="Devices"
-            detail={devices.length ? `${online} online` : undefined}
-            onPress={() => open('devices')}
-          />
-        ) : null}
+        <NavRow
+          icon="laptop"
+          label="Devices"
+          detail={devices.length ? `${online} online` : undefined}
+          onPress={() => open('devices')}
+        />
         <NavRow icon="shield" label="Vault" detail={vaultAsks ? `${vaultAsks} requested` : undefined} onPress={() => open('vault')} />
         <NavRow icon="adjust" label="Appearance" detail={themeLabelOf(storeTheme).label} onPress={() => open('appearance')} />
         <NavRow
@@ -115,7 +107,7 @@ export default function SettingsScreen() {
       </SettingsGroup>
 
       <TouchableOpacity style={styles.signOut} onPress={handleSignOut} activeOpacity={0.7}>
-        <RNText style={styles.signOutText}>{signOutLabel}</RNText>
+        <RNText style={styles.signOutText}>Sign Out</RNText>
       </TouchableOpacity>
     </SettingsScroll>
   );

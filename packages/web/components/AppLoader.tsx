@@ -2,7 +2,6 @@ import { useState } from "react";
 import { LogoMark } from "./Logo";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { cn } from "../lib/utils";
-import { hostedBoot } from "./simple/laneBoot";
 
 /**
  * Holding state for app boot / auth gates and full-page route/data loads:
@@ -19,11 +18,6 @@ import { hostedBoot } from "./simple/laneBoot";
  * bar for states with meaningful copy ("Redirecting to GitHub..."). This is
  * the single loader for any holding state — don't hand-roll
  * `<div>Loading...</div>` fallbacks or spinner SVGs.
- *
- * On a hosted boot (/welcome, or an app page on a device last seen in hosted
- * mode) it takes the hosted form instead: the family paper and the
- * assistant's solid disc over the same bar, styled beside #boot-shell in
- * index.html, so a hosted person never sees the developer splash.
  */
 export function AppLoader({
   className,
@@ -36,23 +30,17 @@ export function AppLoader({
   label?: string;
   deferIndicator?: boolean;
 }) {
-  const hosted = hostedBoot();
   return (
     <div
       className={cn(
         "app-loader min-h-screen flex flex-col items-center justify-center gap-5 bg-sol-bg text-sol-text-dim",
         className,
       )}
-      data-hosted={hosted ? "" : undefined}
       role="status"
       aria-label={label ?? "Loading"}
     >
       <div className={cn("flex flex-col items-center gap-5", deferIndicator && "app-loader-indicator-delayed")}>
-        {hosted ? (
-          <span className="hosted-orb" aria-hidden><LogoMark size={28} monochrome /></span>
-        ) : (
-          <LogoMark size={size} monochrome className="opacity-45" />
-        )}
+        <LogoMark size={size} monochrome className="opacity-45" />
         <div className="app-loader-bar" />
       </div>
       {label && <div className="text-sm text-sol-text-dim">{label}</div>}

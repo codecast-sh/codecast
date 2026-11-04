@@ -20,9 +20,8 @@ const restoreGlobals = replaceGlobals({ window: dom.window, document: dom.window
 const { act, Profiler } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../inboxStore");
-const { useMinePlacement, useWaitingOnPerson, useNewResults } = await import("../../hooks/useNeedsInputCount");
+const { useMinePlacement, useWaitingOnPerson } = await import("../../hooks/useNeedsInputCount");
 const { useDecisionQueue } = await import("../../hooks/useDecisionQueue");
-const { useAssistantConversationIds } = await import("../../lib/surfaces");
 const { useFleetSummaries } = await import("../../components/presence/useMemberActivity");
 const { useCollectionRows } = await import("../../hooks/useCollectionRows");
 
@@ -51,9 +50,7 @@ const SESSION_SIG = (row: any) => `${row.title}|${row.agent_status}`;
 function AlwaysMounted() {
   useMinePlacement();
   useWaitingOnPerson();
-  useNewResults();
   useDecisionQueue();
-  useAssistantConversationIds();
   useFleetSummaries();
   useCollectionRows("sessions", { where: SESSION_WHERE, sig: SESSION_SIG });
   return null;

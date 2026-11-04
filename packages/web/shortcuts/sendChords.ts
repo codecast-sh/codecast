@@ -1,5 +1,3 @@
-import type { DevSurface } from "../lib/surfaceRules";
-
 // The composer's own send chords. They are handled inline in the composer's
 // keydown handler (they must run from a focused textarea, which the global
 // registry never does), so this table is their one source of truth: the
@@ -7,18 +5,15 @@ import type { DevSurface } from "../lib/surfaceRules";
 // spells these keys out. Accelerators use registry syntax so
 // formatAcceleratorParts renders them with the same glyphs as every other
 // chord in the app.
-// `surface` names the developer surface a chord belongs to (lib/surfaceRules),
-// so the panel leaves it out where that surface is hidden, as the palette
-// leaves out the matching actions.
-export const SEND_CHORDS: ReadonlyArray<{ accel: string; label: string; surface?: DevSurface }> = [
+export const SEND_CHORDS: ReadonlyArray<{ accel: string; label: string }> = [
   { accel: "enter", label: "Send" },
   { accel: "shift+enter", label: "New line" },
-  { accel: "ctrl+enter", label: "Queue for later", surface: "actions.fleet" },
+  { accel: "ctrl+enter", label: "Queue for later" },
   { accel: "alt+enter", label: "Send and advance" },
-  { accel: "alt+shift+enter", label: "Send and stash", surface: "actions.fleet" },
-  { accel: "meta+shift+enter", label: "Fork and send", surface: "actions.fleet" },
-  { accel: "shift+escape", label: "Stop and send", surface: "actions.fleet" },
-  { accel: "meta+alt+enter", label: "Send together with others' drafts", surface: "actions.fleet" },
-  { accel: "meta+shift+e", label: "Rich editor", surface: "actions.fleet" },
-  { accel: "alt+shift+h", label: "Hand off to a teammate", surface: "composer.handoff" },
+  { accel: "alt+shift+enter", label: "Send and stash" },
+  { accel: "meta+shift+enter", label: "Fork and send" },
+  { accel: "shift+escape", label: "Stop and send" },
+  { accel: "meta+alt+enter", label: "Send together with others' drafts" },
+  { accel: "meta+shift+e", label: "Rich editor" },
+  { accel: "alt+shift+h", label: "Hand off to a teammate" },
 ];

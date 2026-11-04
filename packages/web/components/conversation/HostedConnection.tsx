@@ -1,7 +1,6 @@
-// Hosted mode's one way of saying the link is down. The developer header's
-// sync chip carries this state there; hosted desktop has no header, so the
-// composer's status line, a bubble that has not gone yet, and the sidebar's
-// foot say it here, all from connectionChipCopy, so the three never drift.
+// A hosted conversation's way of saying the link is down, beside the reply:
+// the composer's status line and a bubble that has not gone yet say it from
+// connectionChipCopy, as the header's sync chip does, so they never drift.
 import { connectionChipCopy, useAppOffline, type ConnectionChipCopy } from "../../hooks/useAppOffline";
 
 /** The sentence for a dropped link: with a message waiting to go, what will

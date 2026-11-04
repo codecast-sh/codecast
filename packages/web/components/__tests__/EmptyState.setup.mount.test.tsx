@@ -1,6 +1,5 @@
-// The empty inbox's first-run card: a person with no machine is offered two
-// starts, the hosted assistant here or their own coding tools, and in hosted mode
-// only the assistant. By machine: a browser tab hands out the install command; the desktop app sets the machine up behind one click and
+// The empty inbox's first-run card: a person with no machine is offered their
+// own coding tools. By machine: a browser tab hands out the install command; the desktop app sets the machine up behind one click and
 // then waits for the first session; a failed run falls back to the command;
 // and a terminal that just connected is never asked to install again.
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
@@ -17,7 +16,6 @@ for (const key of ["window", "document", "navigator", "HTMLElement", "Element", 
 let setupResult: { ok: boolean; error?: string } = { ok: true };
 let setupTokens: string[] = [];
 const convex = await import("convex/react");
-// Every query answers true (whisk.connectAvailable: mail can be connected).
 mock.module("convex/react", () => ({
   ...convex,
   useMutation: () => async () => ({ token: "setup_tok_123456", expiresAt: Date.now() + 3_600_000 }),
@@ -29,14 +27,6 @@ const tracked: Array<[string, any]> = [];
 mock.module("../../lib/analytics", () => ({ ...analytics, track: (e: string, p: any) => { tracked.push([e, p]); } }));
 
 const { EmptyState } = await import("../EmptyState");
-const { useInboxStore } = await import("../../store/inboxStore");
-const { HOSTED_AGENT_TYPE } = await import("@codecast/shared/contracts/assistant");
-// The store is shared with every test file in the run, so the mode is set
-// here rather than read from whatever an earlier file left.
-const withLane = (lane?: string) => {
-  const cs = useInboxStore.getState().clientState as any;
-  useInboxStore.setState({ clientState: { ...cs, ui: { ...cs.ui, lane } } });
-};
 const { CLI_CONNECTED_KEY, cliJustConnected } = await import("../../lib/cliConnected");
 
 let root: Root;
@@ -62,38 +52,17 @@ beforeEach(() => {
   setupResult = { ok: true };
   setupTokens = [];
   tracked.length = 0;
-  useInboxStore.setState({ composes: [], currentUser: { _id: "u_me", staff: true } } as any);
-  withLane(undefined);
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
-test("anyone but staff is offered only their own coding tools", async () => {
-  useInboxStore.setState({ currentUser: { _id: "u_other" } } as any);
-  await render();
-  expect(text()).toContain("Connect your coding tools");
-  expect(text()).not.toContain("Ask the Codecast assistant");
-});
 const click = (label: string) => act(async () => { button(label)!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
 
-test("a person with no machine is offered the assistant here or their own coding tools", async () => {
+test("a person with no machine is offered their own coding tools", async () => {
   await render();
-  expect(text()).toContain("How would you like to start?");
-  expect(text()).toContain("Ask the Codecast assistant");
-  expect(text()).toContain("your mail and calendar through Whisk");
-  expect(text()).toContain("Ask the assistant right here, or connect the coding tools on your computer.");
+  expect(text()).toContain("Get started");
   expect(text()).toContain("Connect your coding tools");
   expect(text()).toContain("For developers:");
-  expect(button("Start a conversation")).toBeTruthy();
   expect(button("Generate install command")).toBeTruthy();
-});
-
-test("the assistant start opens a composer on the hosted assistant", async () => {
-  await render();
-  await click("Start a conversation");
-  const composes = useInboxStore.getState().composes;
-  expect(composes).toHaveLength(1);
-  expect(composes[0].context?.agentType).toBe(HOSTED_AGENT_TYPE);
-  expect(tracked).toEqual([["first_run_start_chosen", { start: "assistant" }]]);
 });
 
 test("asking for the install command counts as choosing the machine", async () => {
@@ -101,16 +70,6 @@ test("asking for the install command counts as choosing the machine", async () =
   await click("Generate install command");
   await flush();
   expect(tracked[0]).toEqual(["first_run_start_chosen", { start: "machine" }]);
-});
-
-test("hosted mode offers only the assistant", async () => {
-  withLane("simple");
-  await render();
-  // The hosted inbox starts the way /welcome does (LANE_COPY.home).
-  expect(text()).toContain("What can I take off your plate?");
-  expect(text()).not.toContain("How would you like to start?");
-  expect(text()).not.toContain("Connect your coding tools");
-  expect(button("Generate install command")).toBeUndefined();
 });
 
 test("a browser tab gets the install command", async () => {

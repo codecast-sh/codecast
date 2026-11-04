@@ -80,3 +80,12 @@ export function workspaceHasFeatureNow(key: TeamFeatureKey): boolean {
 export function useWorkspaceFeatureState(key: TeamFeatureKey): FeatureState {
   return useInboxStore((s) => workspaceFeatureState(s.teams || [], s.clientState.ui?.active_team_id, key));
 }
+
+/** The page to show instead of `path` while the Flows feature is off: the
+ *  Flows app's pages land on /flows, which says what Flows is and how to turn
+ *  it on (FeatureLanding), and stays put itself. Null when `path` shows. */
+export function featurePageRedirect(path: string, flowsOn: boolean): string | null {
+  if (flowsOn) return null;
+  const p = path.split("?")[0].split("#")[0];
+  return /^\/(line|trial)(\/|$)/.test(p) ? "/flows" : null;
+}

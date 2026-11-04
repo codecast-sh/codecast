@@ -3,16 +3,13 @@
 // whole collection (an answer anywhere would repaint it). `workspace` is the
 // active workspace's: what the Team view's feed and the line feed brought for
 // it. `mine` adds the viewer's own queue from every workspace, which is what
-// Mine and the sidebar's count read, as the queue always has. In hosted mode's
-// Assistant scope (lib/assistantScope) only the assistant's asks are listed
-// and counted, as the queue's cards are (useScopedDecisionQueue).
+// Mine and the sidebar's count read, as the queue always has.
 import { useMemo } from "react";
 import { useInboxStore, type SessionDecisionItem } from "../store/inboxStore";
 import { isOpen, ownedBy } from "../lib/decisions/decisionRows";
 import { useCollectionRows } from "./useCollectionRows";
 import { useActiveWorkspaceKey } from "./useWorkspaceCollection";
 import { inViewerQueue } from "../lib/decisionQueue";
-import { useAssistantConversationIds, useAssistantScope } from "../lib/surfaces";
 
 /** What a row of the list shows and is arranged by. */
 export const decisionRowSig = (d: SessionDecisionItem): string => [
@@ -24,17 +21,12 @@ export const decisionRowSig = (d: SessionDecisionItem): string => [
 
 export const inWorkspaceList = (d: SessionDecisionItem, key: string | null) => !!key && (d.team_workspace === key || d.line_workspace === key);
 
-/** Whether a row is listed at all: no trial ask, and in the Assistant scope when it is on. */
-function useListed(): (d: SessionDecisionItem) => boolean {
-  const { only } = useAssistantScope();
-  const assistant = useAssistantConversationIds();
-  return useMemo(() => (d: SessionDecisionItem) => !d.trial && (!only || assistant.has(String(d.conversation_id))), [only, assistant]);
-}
+/** Whether a row is listed at all: no trial ask. */
+const listed = (d: SessionDecisionItem) => !d.trial;
 
 export function useDecisionRows(): { workspace: SessionDecisionItem[]; mine: SessionDecisionItem[]; workspaceKey: string | null } {
   const key = useActiveWorkspaceKey();
-  const listed = useListed();
-  const where = useMemo(() => (d: SessionDecisionItem) => listed(d) && (inWorkspaceList(d, key) || inViewerQueue(d)), [key, listed]);
+  const where = useMemo(() => (d: SessionDecisionItem) => listed(d) && (inWorkspaceList(d, key) || inViewerQueue(d)), [key]);
   const rows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where, sig: decisionRowSig });
   return useMemo(() => ({ workspace: rows.filter((d) => inWorkspaceList(d, key)), mine: rows, workspaceKey: key }), [rows, key]);
 }
@@ -45,8 +37,7 @@ const ownedSig = (d: SessionDecisionItem) => `${d.status}|${d.passed_to?.id ?? "
 export function useOwnedDecisionCount(): number {
   const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const key = useActiveWorkspaceKey();
-  const listed = useListed();
   // The rows Mine lists (useDecisionRows), so the count and the tab agree.
-  const where = useMemo(() => (d: SessionDecisionItem) => listed(d) && isOpen(d) && ownedBy(d, me) && (inWorkspaceList(d, key) || inViewerQueue(d)), [me, key, listed]);
+  const where = useMemo(() => (d: SessionDecisionItem) => listed(d) && isOpen(d) && ownedBy(d, me) && (inWorkspaceList(d, key) || inViewerQueue(d)), [me, key]);
   return useCollectionRows<SessionDecisionItem>("sessionDecisions", { where, sig: ownedSig }).length;
 }

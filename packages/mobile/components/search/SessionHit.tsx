@@ -8,7 +8,6 @@ import { Pressable, StyleSheet, View as RNView } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import type { SessionSearchRow } from '@codecast/web/lib/instantSessionSearch';
 import { stripWrapperTags } from '@codecast/shared/search';
-import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
 import { Text as RNText } from '@/components/Themed';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { AgentLogoSvg } from '@/components/AgentLogo';
@@ -32,8 +31,6 @@ export const SessionHit = memo(function SessionHit({ row, highlight, maxMatches 
   onLongPress?: (row: SessionSearchRow) => void;
 }) {
   const Theme = useTheme();
-  const internals = useSurface('search.internals');
-  const words = useModeWords();
   // The store's row when it holds the session, else the identity the server sent.
   const identity = useSessionIdentityRow(row.conversationId, row.identity ? { ...row.identity, _id: row.conversationId } as any : null);
   const project = projectName({ project_path: row.projectPath });
@@ -48,10 +45,10 @@ export const SessionHit = memo(function SessionHit({ row, highlight, maxMatches 
   const shown = matches.slice(0, maxMatches);
   const more = Math.max(0, (row.matchCount ?? matches.length) - shown.length);
   // A hit on the first message says what "began as" would: the message shows, the line goes.
-  const began = internals ? row.origin?.started_as : undefined;
+  const began = row.origin?.started_as;
   const beganShown = !!began && !shown.some((m) => flat(m.content).includes(flat(began).slice(0, 60)) || flat(began).includes(flat(m.content).slice(0, 60)));
   const earlier = row.origin?.earlier_titles ?? [];
-  const workers = internals ? row.workerCount ?? 0 : 0;
+  const workers = row.workerCount ?? 0;
   const open = () => onOpen(row.conversationId, shown[0]?.messageId);
 
   return (
@@ -66,13 +63,13 @@ export const SessionHit = memo(function SessionHit({ row, highlight, maxMatches 
           <MobileSessionIdentityLine row={identity} title={cleanTitle(row.title) || 'Untitled'} style={styles.title} highlight={highlight} />
           <RNText style={sessionStyles.timeText} maxFontSizeMultiplier={CHROME_FONT_CAP}>{formatRelativeTime(row.updatedAt)}</RNText>
         </RNView>
-        {(project || !row.isOwn || (internals && !!row.messageCount)) && (
+        {(project || !row.isOwn || !!row.messageCount) && (
           <RNView style={styles.meta}>
             {project && (
               <ProjectTag name={project} maxFontSizeMultiplier={CHROME_FONT_CAP} />
             )}
             {!row.isOwn && !!row.authorName && <RNText style={sessionStyles.authorText} maxFontSizeMultiplier={CHROME_FONT_CAP}>{row.authorName.split(' ')[0]}</RNText>}
-            {internals && !!row.messageCount && <RNText style={styles.dim} maxFontSizeMultiplier={CHROME_FONT_CAP}>{row.messageCount} msgs</RNText>}
+            {!!row.messageCount && <RNText style={styles.dim} maxFontSizeMultiplier={CHROME_FONT_CAP}>{row.messageCount} msgs</RNText>}
           </RNView>
         )}
         {earlier.length > 0 && (
@@ -99,7 +96,7 @@ export const SessionHit = memo(function SessionHit({ row, highlight, maxMatches 
           ))}
           {more > 0 && (
             <Pressable onPress={open} hitSlop={6} style={styles.more}>
-              <RNText style={styles.moreText} maxFontSizeMultiplier={CHROME_FONT_CAP}>{more} more in this {words.conversation.toLowerCase()}</RNText>
+              <RNText style={styles.moreText} maxFontSizeMultiplier={CHROME_FONT_CAP}>{more} more in this session</RNText>
             </Pressable>
           )}
         </RNView>

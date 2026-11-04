@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { integrationsLedeFor, useConnectAvailable } from "../simple/assistantPromise";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
@@ -8,12 +7,10 @@ import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
-import { MODE_WORDS, useSimpleModeAllowed, useSurfaceMode, type DevSurface } from "../../lib/surfaces";
 import { useIsDesktop } from "../../lib/desktop";
 import { ErrorBoundary } from "../ErrorBoundary";
 import type { SettingsSectionId } from "../../lib/settingsSections";
 import { useDesktopSettings } from "../../hooks/useDesktopSettings";
-import { useMyTeams } from "../../hooks/useDeviceSharing";
 
 import ProfilePanel from "../../app/settings/profile/page";
 import AccountsPanel from "../../app/settings/accounts/page";
@@ -38,9 +35,8 @@ import MigratePanel from "../../app/settings/migrate/page";
 import DesktopPanel from "../../app/settings/desktop/page";
 import AppsPanel from "../../app/settings/apps/page";
 import PlanPanel from "../../app/settings/plan/page";
-import PrivacyPanel from "../../app/settings/privacy/page";
 
-const PANELS: Record<SettingsSectionId, React.ComponentType> = {
+const PANELS: Record<PanelId, React.ComponentType> = {
   "general": ProfilePanel,
   "accounts": AccountsPanel,
   "plan": PlanPanel,
@@ -51,7 +47,6 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "team": TeamPanel,
   "managed-devices": ManagedDevicesPanel,
   "sync": SyncPanel,
-  "privacy": PrivacyPanel,
   "integrations": IntegrationsPanel,
   "agents": AgentsPanel,
   "agent-library": AgentLibraryPanel,
@@ -67,22 +62,15 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "apps": AppsPanel,
 };
 
+/** Privacy lives inside Sync & Privacy, so a link to it opens that panel. */
+type PanelId = Exclude<SettingsSectionId, "privacy">;
+
 interface SectionDef {
-  id: SettingsSectionId;
+  id: PanelId;
   label: string;
   icon: LucideIcon;
   /** One line under the header title — what lives in this section. */
   desc: string;
-  /** The line in hosted mode, where it differs. */
-  hostedDesc?: string;
-  /** A section only one mode has: a developer surface (hidden in hosted
-   *  mode), or "hosted" for a section only hosted mode shows. */
-  surface?: DevSurface | "hosted";
-  /** Hosted mode shows it only to someone on a team. */
-  hostedNeedsTeam?: boolean;
-  /** The assistant's own section, shown only where hosted mode's doors are
-   *  open (lanePaths simpleModeAllowed). */
-  assistantOnly?: boolean;
   /** Extra words the nav search matches beyond the label. */
   keywords: string;
   desktopOnly?: boolean;
@@ -94,18 +82,17 @@ interface SectionDef {
 type LinkDef = Omit<SectionDef, "id"> & { id?: undefined; href: string };
 type NavDef = SectionDef | LinkDef;
 
-/** A group a developer-only surface owns (lib/surfaces.ts) shows only where it does. */
-const GROUPS: { label: string; sections: NavDef[]; surface?: DevSurface }[] = [
+const GROUPS: { label: string; sections: NavDef[] }[] = [
   {
     label: "Account",
     sections: [
       { id: "general", label: "General", icon: User, desc: "Your profile and how the app looks and behaves", keywords: "profile preferences appearance theme bio timezone username public simple view badges" },
-      { id: "plan", label: "Plan", icon: CircleGauge, desc: "Your assistant's plan, this month's use and extra credit", assistantOnly: true, keywords: "billing usage allowance meter credit top up topup subscription stripe card payment invoice receipts upgrade wallet" },
+      { id: "plan", label: "Plan", icon: CircleGauge, desc: "Your assistant's plan, this month's use and extra credit", keywords: "billing usage allowance meter credit top up topup subscription stripe card payment invoice receipts upgrade wallet" },
       { id: "notifications", label: "Notifications", icon: Bell, desc: "What reaches you, and on which device", keywords: "push email digest mentions mute presence away" },
-      { id: "sounds", label: "Sounds", icon: Volume2, desc: "What this machine says out loud, and how loudly", hostedDesc: "What this device says out loud, and how loudly", keywords: "audio volume mute chime cue walkie chat ring quiet" },
+      { id: "sounds", label: "Sounds", icon: Volume2, desc: "What this machine says out loud, and how loudly", keywords: "audio volume mute chime cue walkie chat ring quiet" },
       { id: "keyboard", label: "Keyboard", icon: Keyboard, desc: "Every shortcut, and the keys you'd rather press", keywords: "shortcuts keys hotkeys keybindings rebind chords customize" },
-      { id: "calls", label: "Calls", icon: Video, desc: "How a call starts for you: camera, mic, devices, walkie, meetings", hostedNeedsTeam: true, keywords: "camera microphone mic mute devices walkie huddle meeting record join always on recording light hands free press" },
-      { id: "accounts", label: "Accounts", icon: KeyRound, desc: "Sign-in identities linked to this account", hostedDesc: "How you sign in, and closing your account", keywords: "github oauth email login delete danger" },
+      { id: "calls", label: "Calls", icon: Video, desc: "How a call starts for you: camera, mic, devices, walkie, meetings", keywords: "camera microphone mic mute devices walkie huddle meeting record join always on recording light hands free press" },
+      { id: "accounts", label: "Accounts", icon: KeyRound, desc: "Sign-in identities linked to this account", keywords: "github oauth email login delete danger" },
       { id: "apps", label: "Apps", icon: MonitorSmartphone, desc: "Codecast on your Mac, your iPhone and in Chrome", keywords: "desktop mac macos download dmg ios iphone ipad app store mobile phone push chrome extension install" },
     ],
   },
@@ -114,15 +101,13 @@ const GROUPS: { label: string; sections: NavDef[]; surface?: DevSurface }[] = [
     sections: [
       { id: "team", label: "Team", icon: Users, desc: "Members, identity and the features your team runs", keywords: "members invite roles icon org statuses" },
       { id: "managed-devices", label: "Managed devices", icon: ShieldCheck, desc: "Deploy codecast to your team's Macs with an MDM, and the policy they carry", adminOnly: true, keywords: "mdm jamf kandji intune mosyle enrollment profile pkg installer policy restrictions fleet it admin" },
-      { id: "account-pool", label: "Account pool", icon: Layers, desc: "Claude accounts your team shares, and who spends them", surface: "settings.machines", keywords: "shared pool team claude accounts usage tokens who spent" },
-      { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", surface: "settings.sync", keywords: "projects sharing visibility private workspace directories" },
-      { id: "privacy", label: "Privacy", icon: ShieldCheck, desc: "What happens to your data", surface: "hosted", keywords: "privacy data training delete mail read policy" },
-      { id: "integrations", label: "Integrations", icon: Plug, desc: MODE_WORDS.developer.integrationsLede, hostedDesc: MODE_WORDS.hosted.integrationsLede, keywords: "whisk mail email calendar assistant chrome browser extension web store pair slack github linear google gmail notion connect oauth install repositories issues sync apps sentry posthog sdk ingest key product sources ops" },
+      { id: "account-pool", label: "Account pool", icon: Layers, desc: "Claude accounts your team shares, and who spends them", keywords: "shared pool team claude accounts usage tokens who spent" },
+      { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", keywords: "projects sharing visibility private workspace directories" },
+      { id: "integrations", label: "Integrations", icon: Plug, desc: "The Chrome extension, Slack, GitHub, Linear, Google, Notion, and the product sources Ops reads", keywords: "whisk mail email calendar assistant chrome browser extension web store pair slack github linear google gmail notion connect oauth install repositories issues sync apps sentry posthog sdk ingest key product sources ops" },
     ],
   },
   {
     label: "Machines",
-    surface: "settings.machines",
     sections: [
       { href: "/agent-features", label: "Agent Features", icon: Blocks, desc: "What codecast teaches your agents, per device", keywords: "snippets skills capabilities device memory messaging tasks triggers browser" },
       { id: "harness", label: "Harness", icon: Unplug, desc: "Codecast's hooks, and every change it made to your agent setup", keywords: "hooks claude.md agents.md settings.json statusline changes history harness automatic" },
@@ -145,14 +130,10 @@ export function SettingsModal() {
   useDesktopSettings();
   const s = useTrackedStore([(s) => s.settingsModalSection]);
   const isDesktop = useIsDesktop();
-  const { shows, words } = useSurfaceMode();
-  const hosted = words === MODE_WORDS.hosted;
-  const onTeam = useMyTeams().length > 0;
   const isTeamAdmin = useInboxStore((s) => {
     const active = s.clientState.ui?.active_team_id;
     return !!active && s.teams.some((t) => t?._id === active && t.role === "admin");
   });
-  const assistant = useSimpleModeAllowed();
   const router = useRouter();
   const backdropRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
@@ -227,22 +208,16 @@ export function SettingsModal() {
   // answers for a 14-section surface.
   const q = query.trim().toLowerCase();
   const visibleGroups = useMemo(() => {
-    // Hosted mode keeps the Machines group out of the sheet even for an
-    // account that runs a machine: General > Appearance's Mode choice
-    // switches to developer mode, which brings it back.
-    return GROUPS.filter((group) => !group.surface || (!hosted && shows(group.surface))).map((group) => ({
+    return GROUPS.map((group) => ({
       label: group.label,
       sections: group.sections.filter((d) => {
         if (d.desktopOnly && !isDesktop) return false;
-        if (d.surface === "hosted" ? !hosted : d.surface && !shows(d.surface)) return false;
-        if (hosted && d.hostedNeedsTeam && !onTeam) return false;
-        if (d.assistantOnly && !assistant) return false;
         if (d.adminOnly && !isTeamAdmin) return false;
         if (!q) return true;
         return `${d.label} ${d.desc} ${d.keywords} ${group.label}`.toLowerCase().includes(q);
       }),
     })).filter((g) => g.sections.length > 0);
-  }, [q, isDesktop, shows, hosted, onTeam, assistant, isTeamAdmin]);
+  }, [q, isDesktop, isTeamAdmin]);
   const firstMatch = visibleGroups[0]?.sections[0];
   const go = (d: NavDef) => {
     if (d.id) return useInboxStore.getState().openSettingsModal(d.id);
@@ -252,11 +227,8 @@ export function SettingsModal() {
 
   if (!section) return null;
 
-  // Sync & Privacy and Privacy are one place in two modes: a link to either
-  // opens the one this mode has.
-  const shown = hosted && section === "sync" ? "privacy" : !hosted && section === "privacy" ? "sync" : section;
-  const found = ALL_SECTIONS.find((d) => d.id === shown);
-  const active = found && (assistant || !found.assistantOnly) ? found : ALL_SECTIONS[0];
+  const shown = section === "privacy" ? "sync" : section;
+  const active = ALL_SECTIONS.find((d) => d.id === shown) ?? ALL_SECTIONS[0];
   const Panel = PANELS[active.id];
 
   return (
@@ -342,7 +314,7 @@ export function SettingsModal() {
             <div className="min-w-0">
               <h2 data-cc-sheet-title className="text-base font-semibold text-sol-text leading-tight">{active.label}</h2>
               <p className="truncate text-xs text-sol-text-muted">
-                {hosted && active.id === "integrations" ? <HostedIntegrationsLede /> : (hosted && active.hostedDesc) || active.desc}
+                {active.desc}
               </p>
             </div>
             <button
@@ -362,12 +334,6 @@ export function SettingsModal() {
       </div>
     </div>
   );
-}
-
-/** Integrations' subtitle in hosted mode, from the same gate as the Whisk
- *  row's Connect: mounted only on that page, so no other section asks. */
-function HostedIntegrationsLede() {
-  return <>{integrationsLedeFor(useConnectAvailable().available === true)}</>;
 }
 
 

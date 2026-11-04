@@ -1,9 +1,4 @@
 "use client";
-import { useAssistantScope, useHostedMode, useModeWords } from "../../lib/surfaces";
-import { isAssistantTask } from "../../lib/assistantScope";
-import { AssistantScopeSwitch, MoreInEverything } from "../../components/AssistantScopeSwitch";
-import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
-import { createTaskAndAdopt } from "../../lib/taskActions";
 import { useState, useCallback, useMemo } from "react";
 import { sharePageUrl } from "../../lib/utils";
 import { ShortId } from "../../components/ShortId";
@@ -44,10 +39,9 @@ import { toast } from "sonner";
 import { DEFAULT_LABELS } from "../../lib/labelColors";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../lib/savedViews";
-import { buildTaskTree, isActiveTask, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
+import { buildTaskTree, taskFamilyIndex } from "@codecast/shared/tasks";
 import { applyTaskDrop, closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
 import { undoAsOne } from "../../store/undoActions";
-import { gestureToast } from "../../store/undoStack";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
 import { CALLS_SOURCE, tasksForSource } from "../../lib/taskSource";
@@ -420,17 +414,6 @@ const TASK_SORT_VALUES = new Set(["priority", "created", "updated", "title", "ma
 const TASK_SORT_DEFAULT_DIR: Record<string, "asc" | "desc"> = {
   priority: "asc", title: "asc", created: "desc", updated: "desc", manual: "asc",
 };
-/** x on a hosted to-do: check it off, or open it again, as one gesture with
- *  its Undo toast. Closing goes through the one close gateway, so a to-do
- *  with open subtasks still asks first. */
-function toggleTodoDone(task: TaskItem): void {
-  const done = task.status === "done";
-  gestureToast(done ? `Reopened “${task.title}”` : `Done: “${task.title}”`, () => {
-    if (done) useInboxStore.getState().updateTask(task.short_id, { status: "open" });
-    else closeTaskWithGuard(task.short_id, "done");
-  });
-}
-
 function taskDefaultDir(sort: string): "asc" | "desc" {
   return TASK_SORT_DEFAULT_DIR[sort] ?? "asc";
 }
@@ -451,17 +434,7 @@ function normalizeTaskSort(rawGroup: string, rawSort: string, rawDir: string) {
   return { group, sort, dir };
 }
 
-/** The view a hosted person starts from, on Personal and on a team: open
- *  to-dos, newest first, in one list. On Personal every to-do is theirs, so
- *  grouping by who holds it would only file most of them under
- *  "Unassigned"; on a team it put a person's header over each handful. A
- *  link's own view and any grouping other than by person still win. */
-export function hostedPersonalView(view: { group: string; sort: string; dir: "asc" | "desc" }, rawGroup: string): { group: string; sort: string; dir: "asc" | "desc" } {
-  if (rawGroup && !/\b(assignee|chain)\b/.test(view.group)) return view;
-  return { group: "none", sort: "created", dir: "desc" };
-}
-
-function useTaskUrlState(hosted = false, scoped = false) {
+function useTaskUrlState(scoped = false) {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -488,8 +461,7 @@ function useTaskUrlState(hosted = false, scoped = false) {
   const rawGroup = (hasUrlParams ? searchParams.get("group") : taskView?.group) || "";
   const rawSort = (hasUrlParams ? searchParams.get("sort") : taskView?.sort) || "";
   const rawDir = (hasUrlParams ? searchParams.get("dir") : taskView?.dir) || "";
-  const normalized = normalizeTaskSort(rawGroup, rawSort, rawDir);
-  const { group, sort, dir } = hosted && !hasUrlParams ? hostedPersonalView(normalized, rawGroup) : normalized;
+  const { group, sort, dir } = normalizeTaskSort(rawGroup, rawSort, rawDir);
   const priority = hasUrlParams
     ? (searchParams.get("priority") || "")
     : (taskView?.priority ?? "");
@@ -623,13 +595,9 @@ export type TaskListScope = { projectIds: string[]; planIds: string[] };
 const RUNS_FEED_ARGS = { limit: 200 };
 
 export function TaskListContent({ projectId, scope }: { projectId?: string; scope?: TaskListScope } = {}) {
-  const modeWords = useModeWords();
-  const hostedMode = useHostedMode();
-  // An add row's writes name their workspace, as the create form's do.
-  const workspaceArgs = useWorkspaceArgs();
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState(hostedMode, !!scope || !!projectId);
+  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState(!!scope || !!projectId);
   const completionClock = useCoarseNow(60_000);
   const pendingCompletions = useInboxStore((s) => completedFilter ? pendingTaskCompletionsSig(s.pending) : "");
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
@@ -682,9 +650,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // which on a default team are the category names. Older links and saved views
   // carried a separate multi `statuses` filter, and named categories; both are
   // read as the same thing and rewritten the moment either control writes.
-  // Hosted mode has no Unblocked pill, so a link carrying it opens the default.
-  const rawStatus = urlStatus || statusesFilter || (completedFilter ? "done" : "");
-  const statusFilter = hostedMode && rawStatus === UNBLOCKED_VIEW ? "" : rawStatus;
+  const statusFilter = urlStatus || statusesFilter || (completedFilter ? "done" : "");
   const setViewMode = useCallback((v: "list" | "kanban") => setParam({ view: v === "list" ? "" : v }), [setParam]);
   // The prefs a view should store: what is on screen now, minus bookkeeping.
   const livePrefs = useMemo(
@@ -848,29 +814,14 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     });
   }, [wsTasks, taskOriginBadges, projectId, scope]);
 
-  // The Assistant scope (lib/assistantScope): the person's own errands and
-  // what the assistant added for them, not the to-dos coding work files. A
-  // project or role surface is already narrowed and ignores it.
-  const { only: assistantOnly } = useAssistantScope();
-  const scopeApplies = assistantOnly && !projectId && !scope;
-  const scopedTasksList = useMemo(
-    () => (scopeApplies ? tasksList.filter(isAssistantTask) : tasksList),
-    [scopeApplies, tasksList],
-  );
-  // What Everything adds to the board: human-board to-dos the scope leaves out.
-  const outOfScope = useMemo(
-    () => (scopeApplies ? tasksList.filter((t) => isActiveTask(t) && isOnHumanBoard(t) && !isAssistantTask(t)).length : 0),
-    [scopeApplies, tasksList],
-  );
-
   const allLabels = useMemo(() => {
     const set = new Set<string>(DEFAULT_LABELS);
-    for (const t of scopedTasksList) t.labels?.forEach((l: string) => set.add(l));
+    for (const t of tasksList) t.labels?.forEach((l: string) => set.add(l));
     return [...set].sort();
-  }, [scopedTasksList]);
+  }, [tasksList]);
 
   // Source filtering applied before other filters (tasksForSource).
-  const sourceFilteredTasks = useMemo(() => tasksForSource(scopedTasksList, sourceFilter), [scopedTasksList, sourceFilter]);
+  const sourceFilteredTasks = useMemo(() => tasksForSource(tasksList, sourceFilter), [tasksList, sourceFilter]);
 
   const completionTick = completedFilter ? completionClock : 0;
   const completionFilteredTasks = useMemo(
@@ -1004,8 +955,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     return Object.fromEntries(callRows.map((c) => [String(c._id), { title: callTitle(c, s as any), short_id: c.short_id ?? undefined, started_at: c.started_at }]));
   }, [callRows]);
   const groupCtx = useMemo(
-    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses, roles: orgRoles, teamMembers, currentUser, initiativeOfProject, plainHeaders: hostedMode, calls }),
-    [projects, setParam, taskStatuses, orgRoles, teamMembers, currentUser, initiativeOfProject, hostedMode, calls]
+    () => ({ projects, onFilterLabel: (label: string) => setParam({ label }), taskStatuses, roles: orgRoles, teamMembers, currentUser, initiativeOfProject, calls }),
+    [projects, setParam, taskStatuses, orgRoles, teamMembers, currentUser, initiativeOfProject, calls]
   );
 
   const listGroups = useMemo(
@@ -1044,9 +995,9 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     }
     // The Huddles pill counts across sources: its rows are every active task
     // pulled from a call, whichever source the list shows now.
-    counts[HUDDLES_TAB] = tasksForSource(scopedTasksList, CALLS_SOURCE).length;
+    counts[HUDDLES_TAB] = tasksForSource(tasksList, CALLS_SOURCE).length;
     return counts;
-  }, [completionFilteredTasks, kanbanKeyFor, blockerSig, viewerId, scopedTasksList]);
+  }, [completionFilteredTasks, kanbanKeyFor, blockerSig, viewerId, tasksList]);
   // One status vocabulary, two controls over it. The pills carry the three
   // answers people want without thinking — the live work, everything, the
   // finished work — and every finer selection (one status, a handful, a team's
@@ -1277,7 +1228,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
           getComposeRef={(t) => t.short_id}
-          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : modeWords.tasksPage}
+          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : "Tasks"}
           tabs={[
             // The answers worth a click: the live work, what can start now,
             // everything, the finished work. Anything finer is the Status filter in the bar
@@ -1285,14 +1236,13 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
             // status until the header could not hold them.
             { key: "", label: "Active", count: taskCounts.active, icon: Activity,
               title: "Live work: " + statusOptionList.filter((st) => ACTIVE.includes(st.category as TaskStatus)).map((st) => st.name).join(", ") },
-            // A hosted to-do list has no dependency graph to read.
-            ...(hostedMode ? [] : [{ key: UNBLOCKED_VIEW, label: "Unblocked", count: taskCounts[UNBLOCKED_VIEW], icon: CirclePlay,
-              title: "Open work that can start now: nothing blocking it, triaged, its parent not being worked" }]),
+            { key: UNBLOCKED_VIEW, label: "Unblocked", count: taskCounts[UNBLOCKED_VIEW], icon: CirclePlay,
+              title: "Open work that can start now: nothing blocking it, triaged, its parent not being worked" },
             { key: "all", label: "All", count: taskCounts.all, icon: Layers, title: "Every status, Backlog and Done and Dropped included" },
             { key: doneValue || "done", label: "Done", count: taskCounts.done || 0, icon: STATUS_CONFIG.done.icon,
               title: "Finished work" },
-            ...(hostedMode ? [] : [{ key: HUDDLES_TAB, label: "Huddles", count: taskCounts[HUDDLES_TAB], icon: Phone,
-              title: "Every task pulled from a call, grouped by the call it came from" }]),
+            { key: HUDDLES_TAB, label: "Huddles", count: taskCounts[HUDDLES_TAB], icon: Phone,
+              title: "Every task pulled from a call, grouped by the call it came from" },
           ]}
           activeTab={inHuddles ? HUDDLES_TAB : statusFilter}
           onTabChange={selectTab}
@@ -1407,12 +1357,11 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           getSearchText={(t) => `${t.short_id} ${t.title}`}
           emptyIcon={statusFilter === UNBLOCKED_VIEW ? <CirclePlay className="w-8 h-8 opacity-30" /> : <Circle className="w-8 h-8 opacity-30" />}
           emptyMessage={
-            hostedMode ? "No to-dos yet"
             // An empty Unblocked view is an answer, not a broken filter, unless
             // a narrower filter emptied it. Readiness turns tasks away for more
             // than blockers (superseded, a parent being worked), so the words
             // name what holds them without claiming every one waits.
-            : statusFilter === UNBLOCKED_VIEW && !(priorityFilter || labelFilter || assigneeFilter || sessionFilter) ? (
+            statusFilter === UNBLOCKED_VIEW && !(priorityFilter || labelFilter || assigneeFilter || sessionFilter) ? (
               taskCounts.open ? (
                 <>
                   Nothing can start right now
@@ -1423,13 +1372,8 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
             : "No tasks found"
           }
           onCreate={() => openCreateModal('task', projectId ? { project_id: projectId } : undefined)}
-          // Hosted mode adds a to-do the way one writes a list: type, Enter.
-          quickAdd={hostedMode ? { placeholder: "New to-do", onAdd: (title) => void createTaskAndAdopt({ title, task_type: "task", status: "open", ...(workspaceArgs === "skip" ? {} : workspaceArgs), ...(projectId ? { project_id: projectId } : {}) }) } : undefined}
           hasMore={hasMore}
           onLoadMore={loadMore}
-          // Hosted to-dos check off with x, the list's one verb there (hosted
-          // rows have no selection), with the gesture's Undo toast.
-          onToggleItem={hostedMode ? toggleTodoDone : undefined}
           paletteShortcuts={[
             { action: "task.status", mode: "status", label: "status" },
             { action: "task.priority", mode: "priority", label: "priority" },
@@ -1438,8 +1382,6 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           ]}
           paletteProps={{ teamMembers, currentUser: currentUser ?? undefined }}
           onItemEdit={handleTitleEdit}
-          headerExtra={!projectId && !scope ? <AssistantScopeSwitch label="Which to-dos this lists" hidden={outOfScope} /> : undefined}
-          listFooter={scopeApplies && outOfScope > 0 ? <div className="px-4 pb-3"><MoreInEverything hidden={outOfScope} /></div> : undefined}
           syncScope="tasks"
           dnd={{
             onDropOnGroup: handleDropOnGroup,

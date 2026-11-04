@@ -1,4 +1,4 @@
-// Hosted mode's rules and words (plan pl-840,
+// The hosted assistant's rules and words (plan pl-840,
 // docs/architecture/hosted-assistant.md): which conversations are the
 // assistant's and where one stands, what an approval card asks, and how a
 // routine and the month's usage are said out loud. Pure: the screens read
@@ -9,7 +9,6 @@
 // developer tool: no agent, session, model, token, repo or device.
 
 import { ACTIVE_AGENT_STATUSES, isHostedAgentType } from "@codecast/shared/contracts";
-import { MODE_WORDS } from "../../lib/surfaceRules";
 import { ASKS } from "./assistantPromise";
 export { ASKS };
 import { APPROVAL_ANSWERS, PLANS, TOPUP, topupCredit, type BillingReturnOutcome, type PlanId, type PlanSpec } from "@codecast/shared/contracts/assistant";
@@ -20,33 +19,7 @@ import type { WalletAccountLine, WalletSummary } from "@codecast/convex/convex/l
 import { agentStatusAt, sessionLiveAt } from "../../lib/liveness";
 import { describeConnectorError } from "../../lib/connectorReturn";
 
-import { LANE_CONVERSATION_ROUTE, LANE_PATHS, conversationPath } from "./lanePaths";
 import { askFirstFor } from "./askFirst";
-
-export { LANE_CONVERSATION_ROUTE, LANE_PATHS, conversationPath };
-
-/** The lane's sections in tab order, named the same on the web and the
- *  phone; each platform adds only its icons. */
-export const LANE_SECTIONS = [
-  { key: "home", path: LANE_PATHS.home, label: "Home" },
-  { key: "approvals", path: LANE_PATHS.approvals, label: "Approvals" },
-  { key: "routines", path: LANE_PATHS.routines, label: "Routines" },
-  { key: "connections", path: LANE_PATHS.connections, label: "Connections" },
-  { key: "plan", path: LANE_PATHS.plan, label: "Plan" },
-] as const;
-
-export type LaneSectionKey = (typeof LANE_SECTIONS)[number]["key"];
-
-/** What a lane page is called in the window's title: its section's label, or
- *  "Welcome" on /welcome. A conversation sits under Home, the section it is
- *  opened from. */
-export function laneSurfaceLabel(pathname: string): string {
-  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
-  if (path === LANE_PATHS.welcome) return "Welcome";
-  return LANE_SECTIONS.find((s) => s.path === path)?.label ?? LANE_SECTIONS[0].label;
-}
-
-export { laneOf, type Lane } from "./lanePref";
 
 // ── Conversations ──────────────────────────────────────────────────────────
 
@@ -56,18 +29,10 @@ export function isLaneConversation(row: Pick<InboxSession, "agent_type"> & { inb
 }
 
 export { conversationTitle } from "../../lib/conversationTitle";
-import { ownTitle, type TitleRow } from "../../lib/conversationTitle";
 import { allowancePoint, dollars, planPoints, planPrice, plural, requestsLeftWords } from "./planWords";
 import { describeHostedCadence, hostedNextWords } from "../triggers/hostedSchedule";
 import { describeTaskCadence } from "../triggerCadence";
 export { dollars, planPoints, planPrice } from "./planWords";
-
-/** Whether the title is the person's own ask, standing in until a real one
- *  is written. A row whose title is the ask does not repeat the ask as its
- *  second line. */
-export function titleIsAsk(row: TitleRow): boolean {
-  return !ownTitle(row) && !!(row?.last_user_message ?? "").trim();
-}
 
 /** The live states the lane distinguishes. `working` covers queued input the
  *  assistant has not picked up yet: from the person's side it is already on it. */
@@ -90,26 +55,6 @@ export function conversationState(row: LaneStateRow, openApprovals: number, now:
   const status = agentStatusAt(row, now);
   if (status && !ACTIVE_AGENT_STATUSES.has(status) && !row.last_role_is_user) return "done";
   return sessionLiveAt(row, now) ? "working" : "done";
-}
-
-const STATE_WORDS: Record<ConversationState, string> = {
-  waiting: "Waiting on you",
-  working: "Working on it",
-  done: "",
-};
-
-/** A conversation row's second line: where it stands while it is live, else
- *  what came of it, else what the person asked (unless the title is already
- *  that ask). A row waiting on an answer says what it asks (`asked`, the open
- *  question) rather than a state word, so it never reads like the name of
- *  another inbox section. */
-export function conversationSubline(
-  row: { title?: string | null; short_title?: string | null; idle_summary?: string | null; last_user_message?: string | null },
-  state: ConversationState,
-  asked?: string | null,
-): string {
-  if (state === "waiting" && asked?.trim()) return asked.trim();
-  return STATE_WORDS[state] || row.idle_summary || (titleIsAsk(row) ? "" : row.last_user_message) || "";
 }
 
 // ── Approvals ──────────────────────────────────────────────────────────────
@@ -586,8 +531,8 @@ export const LANE_COPY = {
     /** The hosted inbox's start, as /welcome says it. */
     title: "What can I take off your plate?",
     lede: (can: MailAbilities | null | undefined) => `Hand me anything on your list. ${askFirstFor(can)}`,
-    /** The one resting line every hosted composer shows. */
-    placeholder: MODE_WORDS.hosted.composerPlaceholder,
+    /** The resting line of the assistant's start composer. */
+    placeholder: "Ask anything, or hand me a chore",
     /** First things to ask: each fills the composer with a request that works sent as is, and the person can edit it first. The mail ones need Whisk connected. */
     starters: (mailConnected: boolean): Array<{ label: string; text: string }> => [
       ...(mailConnected

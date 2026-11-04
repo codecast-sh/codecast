@@ -65,9 +65,7 @@ const config: Config = {
   				base2: '#eee8d5',
   				base3: '#fdf6e3',
   				// The accents read class-only variables (--sol-class-*, globals.css)
-  				// that default to these Solarized hex values in every theme, so
-  				// developer mode paints exactly as before; hosted mode remaps them
-  				// to the family's accent, ok and danger.
+  				// that hold these Solarized hex values in every theme.
   				yellow: themed('--sol-class-yellow'),
   				orange: themed('--sol-class-orange'),
   				amber: themed('--sol-class-amber'),

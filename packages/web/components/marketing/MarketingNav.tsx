@@ -11,7 +11,6 @@ import { RepoPulseChip } from "@/components/marketing/RepoPulseChip";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { visitorPlatform } from "@/lib/visitorPlatform";
 import { HostedWordmark } from "@/components/HostedWordmark";
-import { LANE_PATHS } from "@/components/simple/lanePaths";
 
 /**
  * The one nav bar for every marketing page (landing, pricing, docs, blog...).
@@ -126,7 +125,7 @@ export function MarketingNav({
                 <Link href="/login" className="hidden sm:flex items-center px-2.5 py-1.5 text-[14px] font-medium" style={{ color: DOOR.muted }}>
                   Sign in
                 </Link>
-                <Link href={LANE_PATHS.welcome} className="inline-flex h-9 items-center rounded-[10px] px-4 text-[14px] font-semibold" style={{ background: DOOR.accent, color: DOOR.accentInk }}>
+                <Link href="/signup" className="inline-flex h-9 items-center rounded-[10px] px-4 text-[14px] font-semibold" style={{ background: DOOR.accent, color: DOOR.accentInk }}>
                   Get started
                 </Link>
               </>

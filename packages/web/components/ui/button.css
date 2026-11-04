@@ -39,17 +39,9 @@ html body :where(.cc-btn-cyan) {
   --btn-tint: #2aa198;
   --btn-ink: #002b36;
 }
-/* Hosted mode's primary action is ink on paper, the family's one button,
-   so settings' Save never paints the developer teal. */
-html.hosted-mode body :where(.cc-btn-cyan) {
-  --btn-tint: var(--pd-ink);
-  --btn-ink: var(--pd-bg);
-  color: var(--pd-bg);
-}
 
 /* Accent tones: a filled button in one of the theme's accents (the same
-   --sol-class-* variable bg-sol-<accent> reads, so hosted mode remaps them
-   too). The label is worked out from the tint: light text on a dark fill,
+   --sol-class-* variable bg-sol-<accent> reads). The label is worked out from the tint: light text on a dark fill,
    dark text tinted with the fill's own hue on a light one, so no call site
    picks a text colour for a filled button. */
 html body :where(.cc-btn-violet) { --btn-tint: var(--sol-class-violet); }

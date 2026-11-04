@@ -1,5 +1,4 @@
 import { AppLoader } from "../AppLoader";
-import { TranscriptSkeleton } from "./TranscriptSkeleton";
 import { useState, useMemo, memo, Fragment, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -34,7 +33,6 @@ import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../l
 import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
 import { DENSITY_OPTIONS } from "../../lib/conversationDensity";
-import { useHostedMode, useSurface } from "../../lib/surfaces";
 
 // The density dropdown's option list. Guests (unauthenticated share-link
 // viewers) get the local render densities only — the AI retellings need an
@@ -276,11 +274,9 @@ export function MessagesUnavailableState({
   return <MessagesLoading />;
 }
 
-/** The loader a transcript shows while its messages are on the way: the
- *  hosted skeleton (TranscriptSkeleton) in hosted
- *  mode, the logo loader otherwise. */
+/** The loader a transcript shows while its messages are on the way. */
 function MessagesLoading() {
-  return useHostedMode() ? <TranscriptSkeleton /> : <AppLoader className="min-h-0 bg-transparent py-10" size={32} />;
+  return <AppLoader className="min-h-0 bg-transparent py-10" size={32} />;
 }
 
 // Is the block this banner describes still in force? The conversation row's
@@ -699,18 +695,15 @@ export function ConversationMetadata({
  *  out. `endedAt` ends the duration where a session's span ends (a cloud
  *  agent's mirror: its last message), else it runs to now. */
 export function ConversationAgeMenuItems({ startedAt, endedAt, messageCount }: { startedAt?: number; endedAt?: number; messageCount?: number }) {
-  // The count and the running duration are a session's working parts; in
-  // hosted mode a conversation says only when it began, whatever the style.
-  const internals = useSurface("conversation.internals");
   return (
     <>
       {startedAt && (
         <DropdownMenuItem disabled className="tabular-nums">
           <span className="truncate">{formatFullTimestamp(startedAt)}</span>
-          {internals && <span className="ml-auto pl-3 text-sol-text-dim">{formatDuration(startedAt, endedAt)}</span>}
+          <span className="ml-auto pl-3 text-sol-text-dim">{formatDuration(startedAt, endedAt)}</span>
         </DropdownMenuItem>
       )}
-      {internals && !!messageCount && (
+      {!!messageCount && (
         <DropdownMenuItem disabled className="tabular-nums">
           {messageCount.toLocaleString()} {messageCount === 1 ? "message" : "messages"}
         </DropdownMenuItem>

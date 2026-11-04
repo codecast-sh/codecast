@@ -1,13 +1,12 @@
 // A hosted approval, answered, with its turn finished: nothing still waits on
 // the person. The approval is the conversation's decision row alone, so a
 // work state that lags the answer (permission_blocked left on the row) never
-// brings it back as a terminal "permission prompt", and the conversation
-// files under Done. An unsent new conversation is a draft, not work.
+// brings it back as a terminal "permission prompt".
 import { describe, expect, it } from "bun:test";
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { awaitingOkIds, sessionHasOpenQuestion } from "../../lib/decisionQueue";
 import { buildDecisionQueue } from "../../hooks/useDecisionQueue";
-import { hostedStatusSections, isUnsentConversation, pendingSendIdsOf, type InboxSession, type SessionDecisionItem } from "../inboxStore";
+import { type InboxSession, type SessionDecisionItem } from "../inboxStore";
 
 const ME = "user1";
 const CONV = "conv_hosted_routine_0000000000000";
@@ -52,60 +51,5 @@ describe("an answered hosted approval settles", () => {
     const pending = { ...answered, status: "pending", answer_index: undefined, resolved_at: undefined } as SessionDecisionItem;
     const queue = buildDecisionQueue({ d1: pending }, { [CONV]: hosted({ agent_status: "permission_blocked" }) }, {}, ME);
     expect(queue.map((i) => i.source)).toEqual(["decide"]);
-  });
-
-  it("files the finished conversation under Done, and a draft under Drafts", () => {
-    const done = hosted({ agent_status: "done" });
-    const draft = hosted({ _id: "conv_draft", message_count: 0, last_user_message: undefined, title: undefined });
-    expect(isUnsentConversation(draft)).toBe(true);
-    const sections = hostedStatusSections(
-      { pinned: [], questions: [], needsInput: [], newSessions: [draft], working: [], done: [done], dormant: [] },
-      (id) => awaitingOkIds({ d1: answered }).has(id),
-    );
-    const of = (key: string) => sections.find(([, k]) => k === key)?.[0].map((s) => s._id);
-    expect(of("needs_input")).toEqual([]);
-    expect(of("working")).toEqual([]);
-    expect(of("done")).toEqual([CONV]);
-    expect(of("drafts")).toEqual(["conv_draft"]);
-  });
-
-  it("has no Scheduled for later: a parked row reads as Done, newest first", () => {
-    const parked = hosted({ _id: "conv_parked", agent_status: "done", updated_at: 9_000 });
-    const done = hosted({ agent_status: "done", updated_at: 1_000 });
-    const sections = hostedStatusSections(
-      { pinned: [], questions: [], needsInput: [], newSessions: [], working: [], done: [done], dormant: [parked] },
-    );
-    expect(sections.map(([, k]) => k)).not.toContain("dormant");
-    expect(sections.find(([, k]) => k === "done")?.[0].map((s) => s._id)).toEqual(["conv_parked", CONV]);
-  });
-
-  it("reads Your turn as one queue, oldest first, whatever bucket each row came from", () => {
-    const ask = hosted({ _id: "conv_ask", updated_at: 5_000 });
-    const oldWait = hosted({ _id: "conv_old", updated_at: 1_000 });
-    const awaiting = hosted({ _id: "conv_awaiting", agent_status: "done", updated_at: 3_000 });
-    const sections = hostedStatusSections(
-      { pinned: [], questions: [ask], needsInput: [oldWait], newSessions: [], working: [], done: [awaiting], dormant: [] },
-      (id) => id === "conv_awaiting",
-    );
-    expect(sections.find(([, k]) => k === "needs_input")?.[0].map((s) => s._id)).toEqual(["conv_old", "conv_awaiting", "conv_ask"]);
-  });
-
-  it("files a just-sent stub under Working on it from the first frame", () => {
-    // The optimistic stub has no message_count or last_user_message until the
-    // server echoes, but its first message is already on the way.
-    const stub = hosted({ _id: "conv_stub", message_count: 0, last_user_message: undefined, title: undefined });
-    const pending = pendingSendIdsOf({
-      sessionsWithQueuedMessages: new Set<string>(),
-      pendingMessages: { conv_stub: [{ content: "Every weekday at 7am remind me" } as any] },
-    });
-    expect(isUnsentConversation(stub, pending.has("conv_stub"))).toBe(false);
-    const sections = hostedStatusSections(
-      { pinned: [], questions: [], needsInput: [], newSessions: [stub], working: [], done: [], dormant: [] },
-      () => false,
-      (id) => pending.has(id),
-    );
-    const of = (key: string) => sections.find(([, k]) => k === key)?.[0].map((s) => s._id);
-    expect(of("working")).toEqual(["conv_stub"]);
-    expect(of("drafts")).toEqual([]);
   });
 });

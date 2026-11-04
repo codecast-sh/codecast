@@ -16,16 +16,12 @@ import { PanelLeft, Plus } from "lucide-react";
 import { NotificationBellButton } from "@/components/NotificationBell";
 import { ViewerFaces } from "@/components/presence/ViewerFaces";
 import { SearchField } from "@/components/search/SearchField";
-import { useIdentityPrefs } from "@/hooks/useIdentityPrefs";
 import { TeamSwitcherButton } from "@/components/TeamSwitcher";
 import { TopbarButton } from "@/components/TopbarButton";
 import { InboxViewPickerStill } from "@/components/InboxViewPicker";
 import { SectionHeader } from "@/components/inbox/SectionHeader";
 import { SessionCardView, type SessionCardChrome } from "@/components/inbox/SessionCardView";
-import { InboxNavRow, NeedsInputCount } from "@/components/sidebar/navPrimitives";
 import { ChatNavSectionView, FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView } from "@/components/sidebar/SidebarNav";
-import { AnchorAvatar } from "@/components/anchor/AnchorIdentity";
-import { agentName } from "@/hooks/useSyncAnchors";
 import { FilmGrow } from "../film";
 import { fly, useFilmTime } from "../filmClock";
 import { clamp, fade, SEAM_GHOST } from "../timeline";
@@ -68,17 +64,13 @@ export function DeskTopBar(_: PartProps) {
 
 /** The rail: the app's own three groups, with the counts the film moves (needs input, the decision in the queue). */
 export function DeskRail(_: PartProps) {
-  // The cursor e2e asks from the start; the API worker waits on its question until it is answered.
-  const needsInput = useFilmTime((t) => (apiWorkerPhase(t) === "asking" ? 2 : 1));
   const shut = { items: [], expanded: false, onToggle: noop };
-  const prefs = useIdentityPrefs();
   return (
     <nav data-sv-nav className="h-full w-full flex flex-col bg-sol-bg-alt select-none text-sol-text">
       {/* Inert: the rows are links and buttons, which the sandbox keeps from navigating. */}
       <div data-sidebar-scroll className="flex-1 overflow-hidden pt-4">
         <SidebarNavView
           isNarrow={false}
-          inbox={<InboxNavRow active isNarrow={false} badge={<NeedsInputCount n={needsInput} />} />}
           threads={<ThreadsNavRowView isActive={false} isNarrow={false} unread={0} />}
           feed={<FeedNavRowView team={TEAM_CHIP} isActive={false} isNarrow={false} unread={RAIL.feedUnread} />}
           // The decision's queue entry opens its own room in the rail and closes it once answered, so the rows under it glide.
@@ -92,7 +84,6 @@ export function DeskRail(_: PartProps) {
           tasks={shut}
           docs={shut}
           orgOn
-          agent={{ label: agentName(null, prefs), title: agentName(null, prefs), icon: <AnchorAvatar anchor={null} size={20} className="flex-shrink-0" /> }}
         />
       </div>
     </nav>

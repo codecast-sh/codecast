@@ -6,7 +6,6 @@ import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import Feather from '@expo/vector-icons/Feather';
 import { labelHexColor } from '@/lib/labelColors';
 import { projectColor } from '@/components/sessionFormat';
-import { useSurface } from '@codecast/web/lib/surfaces';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import {
   useInboxStore, computeChipCounts, convBucketMap, sortLabels, resolveInboxViewMode, type InboxViewMode,
@@ -53,9 +52,8 @@ export function InboxLensBar({ stacked = false, accessory }: { stacked?: boolean
   const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
-  const gitChips = useSurface('gitChips');
   const { labels, bucketCounts, projectCounts } = useInboxFilterCounts();
-  const projects = stacked && gitChips ? projectCounts : [];
+  const projects = stacked ? projectCounts : [];
   const segments: InboxViewMode[] = viewMode === 'grouped' || viewMode === 'recent' ? ['grouped', 'recent'] : ['grouped', 'recent', viewMode];
   const store = useInboxStore.getState;
 

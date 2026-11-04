@@ -224,7 +224,6 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   ),
   "lib/tabSafePath.ts:TAB_PATH_ACTIONS": CONSTANT,
   "lib/workflowRun.ts:HIDDEN_TYPES": CONSTANT,
-  "store/inboxStore.ts:HOSTED_UNFOLDABLE_SECTIONS": CONSTANT,
   "store/orgSlice.ts:writeOptimisticMessage": { shared: "the store's optimistic message writer, bound once as the store module loads" },
   "lib/calls/recordingPress.ts:abandoned": { shared: "Record presses a person was told did not happen, written only by useRoomRecording; the sim presses no Record, so it stays empty" },
   "lib/calls/ringStubs.ts:settledRings": { shared: "rings a Join or Decline press answered, written only by that press; the sim answers no ring, so it stays empty" },

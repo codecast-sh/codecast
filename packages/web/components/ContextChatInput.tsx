@@ -11,12 +11,8 @@ import { agentAccent } from "../lib/agentColors";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { startHostedConversation } from "../lib/startHostedConversation";
 import { fromConvexAgentType, isHostedAgentType, type AgentClientId } from "@codecast/shared/contracts";
-import { useHostedMode } from "../lib/surfaces";
 import { AskHeldLine, useHostedAskGate } from "./simple/useHostedAskGate";
 import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
-
-/** What hosted mode calls the object a composer is about. */
-const HOSTED_NOUN: Record<string, string> = { doc: "note", task: "to-do", trigger: "routine" };
 
 type AgentKey = AgentClientId;
 const escapeContext = (value: string) =>
@@ -49,7 +45,7 @@ export function ContextChatInput({
   const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useHeldTextareaRef();
   // The conversation on screen's agent carries over; the default
-  // (lib/defaultAgent) fills in, the hosted assistant in hosted mode.
+  // (lib/defaultAgent) fills in.
   const currentAgent = useInboxStore((s) => newConversationAgentType(s, s.currentConversation.agentType));
   const [selectedAgent, setSelectedAgent] = useState<AgentKey | null>(null);
   // Same gesture as clicking a card in the object's "Sessions" list: the
@@ -62,10 +58,7 @@ export function ContextChatInput({
   const agentKey: AgentKey = selectedAgent || fromConvexAgentType(currentAgent);
   const agentOptions = usePinnedPickerOptions(agentKey);
   const isExpanded = isFocused || message.length > 0;
-  // Hosted mode asks the assistant, about a note or a to-do, in its words,
-  // with no agent to pick.
-  const hostedMode = useHostedMode();
-  const noun = hostedMode ? HOSTED_NOUN[contextType] ?? contextType : contextType;
+  // Whether this asks the hosted assistant.
   const askingHosted = isHostedAgentType(agentOptions.find((a) => a.id === agentKey)?.convexType ?? currentAgent);
   // A held month or a thinking outage keeps the words and says why, rather
   // than starting a conversation that can only stop.
@@ -200,7 +193,7 @@ export function ContextChatInput({
     [handleSubmit]
   );
 
-  const defaultPlaceholder = hostedMode ? `Ask the assistant about this ${noun}…` : `Work on this ${contextType} with an agent...`;
+  const defaultPlaceholder = `Work on this ${contextType} with an agent...`;
   const hasText = message.trim().length > 0;
 
   // At rest the composer is a small pill out of the reading line; a click
@@ -216,7 +209,7 @@ export function ContextChatInput({
           className="pointer-events-auto inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-sol-border/60 bg-sol-bg-alt text-[11px] text-sol-text-muted shadow-md transition-colors hover:text-sol-text hover:border-sol-border"
         >
           <Sparkles className="w-3 h-3 text-sol-cyan" />
-          {hostedMode ? "Ask the assistant" : "Ask an agent"}
+          Ask an agent
         </button>
       </div>
     );
@@ -229,7 +222,7 @@ export function ContextChatInput({
       <div className="mx-auto px-2 sm:px-4 conv-col">
         <div className="mx-auto px-4 mb-1 flex justify-between items-center conv-col">
           <div className="flex items-center gap-1">
-            {!hostedMode && agentOptions.map((agent) => (
+            {agentOptions.map((agent) => (
               <button
                 key={agent.id}
                 type="button"
@@ -247,7 +240,7 @@ export function ContextChatInput({
             ))}
           </div>
           <span className="text-[10px] text-sol-text-dim/50">
-            {noun}
+            {contextType}
           </span>
         </div>
       <div className={`flex flex-col border shadow-lg px-4 py-2 rounded-2xl bg-sol-bg-alt ${isFocused ? "border-sol-border" : "border-sol-border/50"}`}>

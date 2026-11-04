@@ -1,20 +1,19 @@
 // The agent a new conversation starts with, decided in one place for every
 // new-conversation surface (the compose popup, Ctrl+N, the context composer,
 // the store's create fallback). The preference has one home,
-// `client_state.ui.default_agent`; hosted mode and an account with no machine
-// default to the hosted assistant, since nothing else can answer there.
+// `client_state.ui.default_agent`; an account with no machine defaults to the
+// hosted assistant, since nothing else can answer there.
 // Pure, so the store's create fallback reads it without an import cycle; the
 // live hook is useDefaultAgentType (hooks/usePinnedAgents).
 import { fromConvexAgentType, toConvexAgentType, type ConvexAgentType } from "@codecast/shared/contracts";
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
-import { isHostedUi } from "../components/simple/lanePaths";
 
 /** The developer default when nothing else decides. */
 const LOCAL_DEFAULT: ConvexAgentType = "claude_code";
 
 /** The slice of store state the default reads. */
 export type DefaultAgentState = {
-  clientState: { ui?: { lane?: string; default_agent?: string } | null };
+  clientState: { ui?: { default_agent?: string } | null };
   machineRoster: readonly unknown[];
   machineRosterLive: boolean;
 };
@@ -32,10 +31,10 @@ export function hasNoMachine(s: Pick<DefaultAgentState, "machineRoster" | "machi
   return s.machineRosterLive && s.machineRoster.length === 0;
 }
 
-/** Where only the hosted assistant can answer: hosted mode, or an account
- *  with no machine to run a local agent on. */
+/** Where only the hosted assistant can answer: an account with no machine
+ *  to run a local agent on. */
 export function onlyHostedAgent(s: DefaultAgentState): boolean {
-  return isHostedUi(s.clientState.ui) || hasNoMachine(s);
+  return hasNoMachine(s);
 }
 
 /** The viewer's default agent: the hosted assistant where only it can

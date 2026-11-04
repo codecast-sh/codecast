@@ -1,4 +1,4 @@
-// Hosted mode's small parts on the phone: the rise each block enters with,
+// The hosted assistant's small parts on the phone: the rise each block enters with,
 // buttons, pills, callouts, list rows and the empty line. The approval card,
 // the routines, the plan and the mail connection are built from them
 // (hostedTheme.ts names their colours).

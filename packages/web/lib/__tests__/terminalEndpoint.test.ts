@@ -20,7 +20,7 @@ const session = new Map<string, string>();
 
 const { getTerminalEndpoint, lastDiscoveryFailure } = await import("../terminal/endpoint");
 const { useInboxStore } = await import("../../store/inboxStore");
-// Discovery asks only for someone signed in, in developer mode.
+// Discovery asks only for someone signed in.
 useInboxStore.setState({ currentUser: { _id: "u_me" } } as any);
 
 /** A relay with one live daemon that posts its endpoint straight away. */
@@ -75,16 +75,13 @@ afterEach(() => {
 });
 
 describe("getTerminalEndpoint", () => {
-  test("nobody signed in, or hosted mode: no relay call, and no rejection", async () => {
+  test("nobody signed in: no relay call, and no rejection", async () => {
     let asked = 0;
     const relay = { mutation: async () => { asked++; throw new Error("Not authenticated"); }, query: async () => null } as any;
     useInboxStore.setState({ currentUser: null } as any);
     expect(await getTerminalEndpoint(relay)).toBeNull();
-    // Hosted mode is open to staff only (simpleModeAllowed); everyone else stays in developer mode.
-    useInboxStore.setState({ currentUser: { _id: "u_me", staff: true }, clientState: { ...useInboxStore.getState().clientState, ui: { lane: "simple" } } } as any);
-    expect(await getTerminalEndpoint(relay)).toBeNull();
     expect(asked).toBe(0);
-    useInboxStore.setState({ clientState: { ...useInboxStore.getState().clientState, ui: {} } } as any);
+    useInboxStore.setState({ currentUser: { _id: "u_me" } } as any);
     // A relay that refuses resolves to no machine rather than throwing.
     expect(await getTerminalEndpoint(relay)).toBeNull();
     expect(asked).toBe(1);

@@ -4,12 +4,11 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { BUBBLE_HUE_VAR, resolveBubbleHue } from "../lib/bubbleColor";
 import { lockedAtBoot } from "../lib/themeBootLock";
-import { isHostedMode } from "../lib/surfaces";
-import { HOSTED_BOOT_ATTR } from "./simple/laneBoot";
 import { applyThemeVars, availableThemes, cacheThemeVars, DEFAULT_COLOR_THEME, resolveColorThemeKey, themeVarsByMode } from "../lib/theme/colorTheme";
 import type { ModRow } from "../lib/mods/host";
-// The family's faces and token sheet, for hosted mode's look. The faces are
-// fetched only once a rule uses them.
+// The family's faces and token sheet, for the hosted assistant's note cards
+// and the marketing pages' assistant section. The faces are fetched only once
+// a rule uses them.
 import "./simple/laneLook";
 
 export type Theme = "dark" | "light";
@@ -61,13 +60,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => setLock((cur) => (cur === locked ? null : cur));
   }, []);
   const shownTheme = lock ?? theme;
-  // Hosted mode is always Minimal (resolveVisualStyle); the developer pick is
-  // left alone, so leaving hosted mode restores it.
-  // Hosted mode as the shell reads it: the preference, or until it is known
-  // the device's last known mode (lib/surfaces isHostedMode).
-  const hosted = useInboxStore(isHostedMode);
-  const lane = hosted ? "simple" : "full";
-  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle({ visual_style: visualStyle, lane });
+  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle({ visual_style: visualStyle });
 
   // One custom property on the root; the stylesheet mixes the fill from it.
   useWatchEffect(() => {
@@ -76,12 +69,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [bubbleHue, lock]);
 
   useMountEffect(() => { setMounted(true); });
-  // The style and hosted classes read the hosted-mode preference, which is
-  // unknown until the client state hydrates from the cache. Until then the
-  // boot script's classes (index.html, from the codecast-hosted-look flag)
-  // stay as they are: correcting them from a half-read state undid the
-  // family's paper for the seconds hydration took and wrote the flag back
-  // as "0". A lock (the marketing pages) never reads the preference.
+  // The style class waits for the client state to hydrate from the cache, so
+  // the boot script's classes (index.html) are never corrected from a
+  // half-read state. A lock (the marketing pages) never reads the preference.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const styleReady = mounted && (hydrated || lock !== null);
 
@@ -120,34 +110,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.classList.toggle("minimal-style", shownStyle === "minimal");
   }, [shownStyle, styleReady]);
 
-  // Hosted mode wears the family's paper, ink and type (@platform/design,
-  // the same tokens Whisk and /welcome use) over the Minimal style: one class
-  // on the root, so portaled surfaces (settings, menus) take it too. The
-  // mapping is globals.css's html.hosted-mode block. A lock (the marketing
-  // pages) shows Classic, so the class comes off with it.
-  const hostedLook = hosted && !lock;
-  useWatchEffect(() => {
-    if (!styleReady) return;
-    document.documentElement.classList.toggle("hosted-mode", hostedLook);
-  }, [hostedLook, styleReady]);
-  // index.html's boot script reads this, so a cold load paints the family's
-  // paper from its first frame. A lock (the marketing pages) leaves it alone.
-  // Written only once someone is signed in: a client state that hydrated with
-  // nobody (a lapsed token, an empty cache) says nothing about their mode and
-  // must not clear the flag for the next cold load.
-  const signedIn = useInboxStore((s) => !!s.currentUser);
-  useWatchEffect(() => {
-    if (!styleReady || !signedIn || lock) return;
-    localStorage.setItem("codecast-hosted-look", hosted ? "1" : "0");
-    // The boot's guess (laneBoot.ts markLanePage) has served its purpose:
-    // from here the hosted-mode class says the mode.
-    document.documentElement.removeAttribute(HOSTED_BOOT_ATTR);
-  }, [hosted, styleReady, signedIn, lock]);
-
   // The color theme (lib/theme): Verdigris unless the person chose another,
-  // its variables inline on the root for the mode on screen. Hosted mode
-  // keeps the family's look and a lock Classic's, so both show codecast's
-  // own palette. Until a mod's theme is in the store the root keeps what
+  // its variables inline on the root for the mode on screen. A lock keeps
+  // Classic's, so it shows codecast's own palette. Until a mod's theme is in the store the root keeps what
   // index.html replayed from the cache, so a cold load never flashes the
   // default; once mods are known and the theme is gone, the default takes over.
   // A choice whose mod is gone falls back to the default theme.
@@ -163,9 +128,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const colorVars = useMemo(() => (colorTheme ? themeVarsByMode(colorTheme) : null), [colorTheme]);
   useWatchEffect(() => {
     if (!styleReady || !colorVars) return;
-    applyThemeVars(!lock && !hosted ? colorVars[shownTheme] : {});
+    applyThemeVars(!lock ? colorVars[shownTheme] : {});
     if (!lock) cacheThemeVars(colorVars);
-  }, [colorVars, shownTheme, lock, hosted, styleReady]);
+  }, [colorVars, shownTheme, lock, styleReady]);
 
   const toggleTheme = useCallback(() => {
     const current = useInboxStore.getState().clientState.ui?.theme ?? initialTheme;
@@ -173,10 +138,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [initialTheme, updateClientUI]);
 
   const setVisualStyle = useCallback((style: VisualStyle) => {
-    if (hosted) return;
     setVisualStyleState(style);
     updateClientUI({ visual_style: style });
-  }, [updateClientUI, hosted]);
+  }, [updateClientUI]);
 
   if (!mounted) return null;
 

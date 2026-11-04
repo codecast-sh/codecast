@@ -68,7 +68,7 @@ export function hostedAsks(state: HostedApprovalState, statusParked: boolean): b
 // ── The card's words ─────────────────────────────────────────────────────
 
 /** Whether a decision is an approval the engine wrote (a Yes and a Not now),
- *  which hosted mode draws as HostedApprovalBody wherever it shows. */
+ *  drawn as HostedApprovalBody wherever it shows. */
 export function isHostedApproval(options: ReadonlyArray<{ label: string }>): boolean {
   return options.some((o) => o.label === APPROVAL_ANSWERS.approve) && options.some((o) => o.label === APPROVAL_ANSWERS.decline);
 }

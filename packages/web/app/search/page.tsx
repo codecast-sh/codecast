@@ -16,8 +16,6 @@ import { SESSION_QUERY_OPERATORS } from "@codecast/shared/search";
 import { useSessionQueryAutocomplete } from "../../hooks/useSessionQuerySuggestions";
 import { SessionQuerySuggestList } from "../../components/SessionQuerySuggestList";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
-import { useAssistantScope, useModeWords, useSurface } from "../../lib/surfaces";
-import { AssistantScopeSwitch, MoreInEverything } from "../../components/AssistantScopeSwitch";
 import { useUniversalSearch, SEARCH_KIND_CAP, SEARCH_PAGE_SIZE, SEARCH_RANGES, SEARCH_RANGE_MS, type SearchRange } from "../../hooks/useUniversalSearch";
 import { objectKindLabel, type ObjectKind } from "../../hooks/useObjectSearch";
 import { useTeamFeature } from "../../lib/teamFeatures";
@@ -108,12 +106,6 @@ export default function SearchPage() {
   const [limit, setLimit] = useState(SEARCH_PAGE_SIZE);
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Hosted mode searches the person's conversations in plain words: no
-  // operators, no team or role scopes, and the Assistant scope holds here as
-  // it does in the inbox and the palette.
-  const internals = useSurface("search.internals");
-  const words = useModeWords();
-  const { only: scopeOnly } = useAssistantScope();
   const autocomplete = useSessionQueryAutocomplete(query, setQuery, inputRef, true);
   const chatOn = useTeamFeature("chat");
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
@@ -121,12 +113,11 @@ export default function SearchPage() {
   // The search itself, shared with the phone (hooks/useUniversalSearch).
   const search = useUniversalSearch(query, { mineOnly, userOnly, range, sort }, {
     limit,
-    scopeOnly,
     chatTeamId: chatOn ? activeTeamId : null,
     chatLimit: tab === "chat" ? 30 : 10,
   });
   const {
-    debouncedQuery, parsedQuery, searchActive, searchData, searchError, sessionRows, hiddenByScope,
+    debouncedQuery, parsedQuery, searchActive, searchData, searchError, sessionRows,
     objectGroups, chatHits, totalMatches, totalSessions, isLoading, queryErrors,
   } = search;
   const hlQuery = search.highlight;
@@ -215,7 +206,7 @@ export default function SearchPage() {
   // Arrow keys drive selection while focus stays in the input; single-letter
   // keys never leave the field, so no global shortcut leaks.
   const handleInputKeyDown = (e: React.KeyboardEvent) => {
-    if (internals && autocomplete.onKeyDown(e as React.KeyboardEvent<HTMLInputElement>)) return;
+    if (autocomplete.onKeyDown(e as React.KeyboardEvent<HTMLInputElement>)) return;
     if (e.key === "Escape" && query) {
       e.preventDefault();
       setQuery("");
@@ -240,11 +231,11 @@ export default function SearchPage() {
   // The tab in view stays even when its kind empties, so the page never jumps.
   const tabItems = [
     { key: "all", label: "All" },
-    { key: "sessions", label: words.conversations, count: totalSessions },
+    { key: "sessions", label: "Sessions", count: totalSessions },
     ...objectGroups.map((g) => ({ key: g.kind, label: g.label, count: g.hits.length })),
     ...(chatHits.length > 0 ? [{ key: "chat", label: "Chat", count: chatHits.length }] : []),
   ];
-  if (!tabItems.some((t) => t.key === tab)) tabItems.push({ key: tab, label: tab === "chat" ? "Chat" : objectKindLabel(tab as ObjectKind, words), count: 0 });
+  if (!tabItems.some((t) => t.key === tab)) tabItems.push({ key: tab, label: tab === "chat" ? "Chat" : objectKindLabel(tab as ObjectKind), count: 0 });
 
   const sessionFilters = showSessions;
   const anyResults = nav.length > 0;
@@ -271,7 +262,7 @@ export default function SearchPage() {
                 onChange={(e) => { setQuery(e.target.value); autocomplete.trackCaret(e.target); }}
                 {...autocomplete.inputHandlers}
                 onKeyDown={handleInputKeyDown}
-                placeholder={words.searchPagePlaceholder}
+                placeholder='Search sessions... "phrases", file: pr: commit:'
                 data-cc-search-field
                 className="w-full rounded-xl border border-sol-border bg-sol-bg-alt py-3 pl-11 pr-12 text-[15px] text-sol-text placeholder-sol-text-dim shadow-sm transition-all focus:border-sol-text/50 focus:outline-none focus:ring-[3px] focus:ring-sol-text/[0.06]"
                 autoFocus
@@ -291,7 +282,7 @@ export default function SearchPage() {
                   )
                 )}
               </div>
-              {internals && autocomplete.open && <SessionQuerySuggestList {...autocomplete.listProps} />}
+              {autocomplete.open && <SessionQuerySuggestList {...autocomplete.listProps} />}
             </div>
 
             {queryErrors.length > 0 && (
@@ -307,8 +298,7 @@ export default function SearchPage() {
                 </div>
               )}
               <div className="ml-auto flex flex-wrap items-center gap-1.5">
-                <AssistantScopeSwitch label="Which conversations this searches" hidden={hiddenByScope} />
-                {internals && sessionFilters && (
+                {sessionFilters && (
                   <FilterDropdown
                     label="Everyone"
                     icon={<Users className="h-3.5 w-3.5" />}
@@ -317,7 +307,7 @@ export default function SearchPage() {
                     onChange={(v) => setMineOnly(v === "mine")}
                   />
                 )}
-                {internals && sessionFilters && (
+                {sessionFilters && (
                   <FilterDropdown
                     label="Any message"
                     icon={<MessageSquareText className="h-3.5 w-3.5" />}
@@ -333,7 +323,7 @@ export default function SearchPage() {
                   options={SEARCH_RANGES.map((r) => ({ key: r.key === "all" ? "" : r.key, label: r.label }))}
                   onChange={(v) => setRange((v || "all") as SearchRange)}
                 />
-                {internals && sessionFilters && (
+                {sessionFilters && (
                   <FilterDropdown
                     label="Recent"
                     icon={<ArrowUpDown className="h-3.5 w-3.5" />}
@@ -356,8 +346,8 @@ export default function SearchPage() {
             <div className="flex items-center gap-2 px-3 text-xs text-sol-text-dim">
               {!searchError && <Loader2 className="h-3 w-3 animate-spin" />}
               {searchError
-                ? `Content search timed out, so these are ${words.conversations.toLowerCase()} matched by name. Try a more specific word or a quoted phrase.`
-                : `Searching what was said…`}
+                ? "Content search timed out, so these are sessions matched by name. Try a more specific word or a quoted phrase."
+                : "Searching what was said…"}
             </div>
           )}
 
@@ -444,19 +434,18 @@ export default function SearchPage() {
           {showSessions && sessionRows.length > 0 && (
             <section data-search-group="sessions" data-search-conversations>
               <GroupHeading
-                label={words.conversations}
-                count={internals && parsedQuery.text && totalMatches >= totalSessions && searchData
+                label="Sessions"
+                count={parsedQuery.text && totalMatches >= totalSessions && searchData
                   ? `${totalSessions} · ${totalMatches} match${totalMatches !== 1 ? "es" : ""}`
                   : totalSessions}
               />
               {/* The recent tier bounds content matches to a trailing window;
                   titles cover all time. Only worth saying when the selected
-                  range exceeds the window. Hosted mode leaves the window to the
-                  engine: the line reads as a developer's caveat. */}
-              {internals && searchActive && parsedQuery.text && searchData?.contentTier === "recent" &&
+                  range exceeds the window. */}
+              {searchActive && parsedQuery.text && searchData?.contentTier === "recent" &&
                 (range === "all" || SEARCH_RANGE_MS[range] > (searchData.contentWindowDays ?? 30) * 86_400_000) && (
                 <p className="mb-1 px-3 text-[11px] text-sol-text-dim">
-                  Messages from the last {searchData.contentWindowDays ?? 30} days. Older {words.conversations.toLowerCase()} match by title and summary.
+                  Messages from the last {searchData.contentWindowDays ?? 30} days. Older sessions match by title and summary.
                 </p>
               )}
               <div className="space-y-1">
@@ -489,8 +478,6 @@ export default function SearchPage() {
             </section>
           )}
 
-          {searchActive && <MoreInEverything hidden={hiddenByScope} centered />}
-
           {searchActive && searchData && !anyResults && !isLoading && queryErrors.length === 0 && (
             <div className="space-y-2 py-16 text-center">
               <p className="text-sol-text-secondary">Nothing found for &ldquo;{debouncedQuery}&rdquo;</p>
@@ -506,9 +493,7 @@ export default function SearchPage() {
             <div className="space-y-3 py-16 text-center">
               <Search className="mx-auto h-8 w-8 text-sol-text-dim/40" />
               <p className="text-sm text-sol-text-dim">
-                {internals
-                  ? <>Sessions, tasks, plans, docs, routines, people and chat across {mineOnly ? "your" : "your team's"} workspace.</>
-                  : "Search your conversations, to-dos and notes."}
+                Sessions, tasks, plans, docs, routines, people and chat across {mineOnly ? "your" : "your team's"} workspace.
               </p>
               <p className="text-[11px] text-sol-text-dim/70">
                 Open this page from anywhere with{" "}
@@ -517,7 +502,7 @@ export default function SearchPage() {
               </p>
               {/* The operators `cast search` reads too; the URL keeps the
                   whole query, so a narrowed view is a link. */}
-              {internals && <div className="mx-auto flex max-w-lg flex-wrap justify-center gap-1.5 pt-2">
+              <div className="mx-auto flex max-w-lg flex-wrap justify-center gap-1.5 pt-2">
                 {SESSION_QUERY_OPERATORS.map((o) => (
                   <button
                     key={o.op}
@@ -532,7 +517,7 @@ export default function SearchPage() {
                     {o.op}
                   </button>
                 ))}
-              </div>}
+              </div>
             </div>
           )}
         </div>

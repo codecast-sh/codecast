@@ -21,7 +21,6 @@ export function SectionHeader({
   onToggle,
   action,
   inRow = false,
-  fixed = false,
   icon,
   states,
 }: {
@@ -44,8 +43,6 @@ export function SectionHeader({
   action?: ReactNode;
   /** Drawn inside an action row, which does the sticking. */
   inRow?: boolean;
-  /** A section that never folds (hosted mode's New): no chevron, no toggle. */
-  fixed?: boolean;
   /** Drawn before the label (a role's face in "By reports"). */
   icon?: ReactNode;
   /** Work-state tallies over the group's rows, nested ones included. */
@@ -54,7 +51,7 @@ export function SectionHeader({
   if (action) {
     return (
       <div data-sv-sec-row className={`sticky top-0 z-10 flex items-center bg-sol-bg ${color}`}>
-        <SectionHeader label={label} count={count} color={color} sectionKey={sectionKey} collapsed={collapsed} monoLabel={monoLabel} landedColor={landedColor} onToggle={onToggle} inRow fixed={fixed} icon={icon} states={states} />
+        <SectionHeader label={label} count={count} color={color} sectionKey={sectionKey} collapsed={collapsed} monoLabel={monoLabel} landedColor={landedColor} onToggle={onToggle} inRow icon={icon} states={states} />
         <span className="shrink-0 pr-3 border-b border-sol-border/30 self-stretch flex items-center" data-sv-sec-action>{action}</span>
       </div>
     );
@@ -64,10 +61,8 @@ export function SectionHeader({
       data-sv-sec
       data-inbox-section={sectionKey}
       data-inbox-section-count={count}
-      onClick={fixed ? undefined : onToggle}
-      tabIndex={fixed ? -1 : undefined}
-      data-sv-sec-fixed={fixed || undefined}
-      className={`${fixed ? "cursor-default " : ""}${inRow ? "flex-1 min-w-0" : "sticky top-0 z-10 w-full"} px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2 ${color}`}
+      onClick={onToggle}
+      className={`${inRow ? "flex-1 min-w-0" : "sticky top-0 z-10 w-full"} px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2 ${color}`}
       style={landedColor ? ({ "--hold-dest": landedColor } as CSSProperties) : undefined}
     >
       {landedColor && <span key={landedColor} aria-hidden className="absolute inset-0 pointer-events-none animate-inbox-landed" />}
@@ -79,9 +74,7 @@ export function SectionHeader({
         </span>
       ) : (
         <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
-          {/* Hosted mode (globals.css) drops the brackets and sets the bare
-              count in the family's mono. */}
-          {label} <span data-cc-sec-count><span data-cc-bracket>(</span>{count}<span data-cc-bracket>)</span></span>
+          {label} ({count})
         </span>
       )}
       {states && (
@@ -94,9 +87,9 @@ export function SectionHeader({
           ))}
         </span>
       )}
-      {!fixed && <svg className={`w-3 h-3 transition-transform ${color} ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg className={`w-3 h-3 transition-transform ${color} ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-      </svg>}
+      </svg>
     </button>
   );
 }

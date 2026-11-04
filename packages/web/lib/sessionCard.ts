@@ -1,8 +1,6 @@
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { cleanTitle } from "./conversationProcessor";
 import { conversationTitle } from "./conversationTitle";
-import { hostedRowTime } from "./sameNameSuffix";
-import { formatDateSmart } from "@codecast/shared/time";
 
 // Small pure pieces of the inbox session card (components/inbox), shared with
 // its container.
@@ -36,30 +34,27 @@ export function formatIdleDuration(updatedAt: number | null | undefined): string
   return `${Math.floor(hours / 24)}d`;
 }
 
-/** A row's time as the hosted rail says it, as Whisk's list does: "now"
+function startOfDay(at: number): number {
+  const d = new Date(at);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** A hosted conversation's time column, as Whisk's list says it: "now"
  *  within the minute, then a clock time today, "Yesterday", a weekday, a
- *  date. The developer rail keeps its age (formatIdleDuration). */
+ *  date. Other rows keep their age (formatIdleDuration). */
+function hostedRowTime(at: number | null | undefined, now: number): string {
+  if (!at) return "";
+  if (now - at < 60_000) return "now";
+  const days = Math.round((startOfDay(now) - startOfDay(at)) / 86_400_000);
+  if (days <= 0) return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (days === 1) return "Yesterday";
+  if (days < 7) return new Date(at).toLocaleDateString([], { weekday: "short" });
+  return new Date(at).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+/** A row's time column: a hosted conversation's in hostedRowTime's words,
+ *  every other row its age. */
 export function formatRowTime(updatedAt: number | null | undefined, hosted: boolean, now = Date.now()): string {
   return hosted ? hostedRowTime(updatedAt, now) : formatIdleDuration(updatedAt);
-}
-
-/** How the palette's rows say a time: in hosted mode the rail's words
- *  (hostedRowTime), so a row reads the same in both places; developer mode
- *  keeps the palette's relative time ("4h ago"). A StampTime format. */
-export function paletteRowTime(hosted: boolean): (at: number, now: number) => string {
-  return hosted ? hostedRowTime : formatDateSmart;
-}
-
-/** Text as hosted mode displays a typed title or suggestion: the first letter
- *  capitalised, the rest as written ("call the plumber" reads "Call the
- *  plumber"). A first word already cased inside ("iMessage", "eBay") is a
- *  name and stays as written. Display only; the stored text keeps the
- *  person's casing. */
-export function sentenceCase(text: string | null | undefined): string {
-  const t = text ?? "";
-  const at = t.search(/\p{L}/u);
-  if (at < 0) return t;
-  const word = t.slice(at).match(/^[\p{L}\p{N}]+/u)?.[0] ?? "";
-  if (/\p{Lu}/u.test(word.slice(1))) return t;
-  return t.slice(0, at) + t.charAt(at).toUpperCase() + t.slice(at + 1);
 }

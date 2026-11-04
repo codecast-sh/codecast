@@ -10,7 +10,6 @@ import { TextInput, Text as RNText } from '@/components/Themed';
 import { Component, useState, useRef, useMemo, type ReactNode } from 'react';
 import { router as appRouter, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Ionicons } from '@expo/vector-icons';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore, type BucketItem, sortLabels } from '@codecast/web/store/inboxStore';
 import {
@@ -22,7 +21,6 @@ import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { OptionSheet } from '@/components/OptionSheet';
 import { SettingsSwitch } from '@/components/settings/SettingsUI';
 import { useAgentsByUse, useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from '@codecast/web/hooks/usePinnedAgents';
-import { useHostedMode, useSurface } from '@codecast/web/lib/surfaces';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
 import { AssistantStart } from '@/components/hosted/AssistantStart';
 import { RecentScreenshots } from '@/components/session/RecentScreenshots';
@@ -30,8 +28,6 @@ import { checkoutMatches, displayPath, expandHome, newFolderPath } from '@/lib/f
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT } from '@/components/session/MessageComposer';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { GestureHandlerRootView } from '@/lib/gestureHandler';
-import { LANE_COPY } from '@codecast/web/components/simple/lane';
-import { Serif } from '@/constants/fonts';
 import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
 import { labelHexColor } from '@/lib/labelColors';
 import { type Device, deviceDisplayName } from '@/components/DevicesSection';
@@ -158,17 +154,13 @@ function SettingRow({ label, value, dot, onPress }: {
 function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible: boolean; seed?: string | null; onClose: () => void; onSessionCreated: (conversationId: string, focus: boolean) => void }) {
   const Theme = useTheme();
   // The agent is the viewer's default (lib/defaultAgent: the hosted assistant
-  // in hosted mode or with no machine) until they pick one here. Where only
+  // with no machine) until they pick one here. Where only
   // the hosted assistant can answer, the agent row is not offered at all.
   const defaultAgent = fromConvexAgentType(useDefaultAgentType());
   const onlyHosted = useOnlyHostedAgent();
   const [agentPick, setAgentId] = useState<AgentClientId | null>(null);
   const agentId: AgentClientId = onlyHosted ? defaultAgent : agentPick ?? defaultAgent;
   const hosted = isHostedAgentType(agentId);
-  // Hosted mode's sheet is one question, the web's compose heading, and
-  // files no label (surface inbox.labelStrip).
-  const hostedSheet = useHostedMode() && hosted;
-  const labelStrip = useSurface('inbox.labelStrip');
   // The pinned agents, and always the hosted assistant: the phone has no
   // palette to reach it from, and it is the one agent that needs no machine.
   const pinnedOptions = usePinnedPickerOptions(agentId);
@@ -506,20 +498,8 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
           composer's gesture-handler send button needs a root of its own. */}
       <GestureHandlerRootView style={{ flex: 1 }}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        {/* The sheet closes by swiping down; only the hosted sheet carries a
-            title, because its question is the prompt. */}
-        {hostedSheet ? (
-          <RNView style={modalStyles.header}>
-            <RNText style={[modalStyles.title, modalStyles.hostedSheetTitle]}>{LANE_COPY.intro.sheetTitle}</RNText>
-            <TouchableOpacity
-              onPress={onClose}
-              hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
-              accessibilityLabel="Close"
-            >
-              <Ionicons name="close" size={24} color={Theme.textMuted} />
-            </TouchableOpacity>
-          </RNView>
-        ) : <RNView style={modalStyles.grabber} />}
+        {/* The sheet closes by swiping down. */}
+        <RNView style={modalStyles.grabber} />
 
         <ScrollView style={modalStyles.body} contentContainerStyle={modalStyles.bodyContent} keyboardShouldPersistTaps="handled">
           {/* The hosted assistant needs no machine, folder, model or context:
@@ -658,7 +638,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
           </RNView>
           </>)}
 
-          {labels.length > 0 && labelStrip && (
+          {labels.length > 0 && (
             <RNView style={modalStyles.labelPillRow}>
               <TouchableOpacity
                 style={[modalStyles.labelPill, !chosenLabel && modalStyles.labelPillEmpty]}
@@ -735,20 +715,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
 
 const modalStyles = themedStyles((Theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: Theme.bg },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-    paddingBottom: Spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
-  },
-  title: { fontSize: 18, fontWeight: "600", color: Theme.text },
   grabber: { alignSelf: "center", width: 36, height: 5, borderRadius: 3, marginTop: 8, marginBottom: Spacing.sm, backgroundColor: Theme.borderLight },
-  // The hosted sheet's question, in the reading face.
-  hostedSheetTitle: { fontFamily: Serif.regular, fontSize: 22, fontWeight: "500" },
   body: { flex: 1, paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
   bodyContent: { paddingBottom: Spacing.lg },
   prompt: { marginTop: Spacing.sm, marginBottom: Spacing.md },

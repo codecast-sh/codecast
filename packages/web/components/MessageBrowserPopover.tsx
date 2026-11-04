@@ -28,7 +28,6 @@ import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useConversationCommentSummary } from "../hooks/useConversationCommentsSync";
-import { useSurface } from "../lib/surfaces";
 
 const SHORT_ID_RE = /^[a-z0-9]{7}$/;
 
@@ -562,8 +561,8 @@ function NavDropdown({
   );
 }
 
-/** The fewest asks hosted mode draws the message rail for. */
-const MIN_HOSTED_RAIL = 4;
+/** The fewest asks a message rail is drawn for. */
+const MIN_RAIL = 2;
 
 export function MessageNavButton({
   conversationId,
@@ -588,8 +587,6 @@ export function MessageNavButton({
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const canQuery = isConvexId(conversationId);
-  // The fewest asks a rail is drawn for: two anywhere, more in hosted mode.
-  const minRail = useSurface("conversation.shortRail") ? 2 : MIN_HOSTED_RAIL;
 
   // Source from the complete, pagination-independent user-message cache that
   // useConversationMessages keeps populated (same list the rewind navigator
@@ -699,8 +696,7 @@ export function MessageNavButton({
   // Skeleton: query in flight on a conversation with multiple messages.
   // Reserves space + gives a subtle pulse so the indicator doesn't pop in
   // late on big/cold conversations.
-  // (message_count holds replies too, so a hosted rail's asks are about half.)
-  if (isLoading && storeMsgCount >= (minRail > 2 ? minRail * 2 : 2)) {
+  if (isLoading && storeMsgCount >= MIN_RAIL) {
     const skeletonCount = Math.min(Math.max(storeMsgCount, 6), 16);
     return (
       <div
@@ -714,7 +710,7 @@ export function MessageNavButton({
     );
   }
 
-  if (!messages || total < minRail) return null;
+  if (!messages || total < MIN_RAIL) return null;
 
   const MAX_BARS = 24;
   const hasComments = topLevelComments.length > 0;

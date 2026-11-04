@@ -10,7 +10,7 @@ import { claimKeys } from "../../../shortcuts/keyOwnership";
 import { SHORTCUTS, formatShortcutParts, isMac, useKeyBindingsVersion, type ShortcutAction } from "../../../shortcuts/registry";
 import { chordFromEvent } from "../../../shortcuts/recordChord";
 import { visibleShortcutSections } from "../../../shortcuts/visibleSections";
-import { useSurfaceMode } from "../../../lib/surfaces";
+import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useIsDesktop } from "../../../lib/desktop";
 import { takePendingRebind } from "../../../lib/keyboardSettings";
 import {
@@ -68,7 +68,7 @@ export default function KeyboardSettingsPage() {
   useKeyBindingsVersion();
   const s = useTrackedStore([(s) => s.clientState.ui?.key_bindings]);
   const bindings: KeyBindingOverride[] = s.clientState.ui?.key_bindings ?? [];
-  const mode = useSurfaceMode();
+  const flowsOn = useWorkspaceFeature("line");
   const desktop = useIsDesktop();
 
   const [query, setQuery] = useState("");
@@ -83,8 +83,8 @@ export default function KeyboardSettingsPage() {
 
   const live = useMemo(() => applyKeyBindings(SHORTCUTS, bindings, isMac), [bindings]);
   const sections = useMemo(
-    () => visibleShortcutSections(mode, (when) => SHORTCUTS.filter((d) => (when === undefined ? !d.when : d.when === when))),
-    [mode],
+    () => visibleShortcutSections(flowsOn, (when) => SHORTCUTS.filter((d) => (when === undefined ? !d.when : d.when === when))),
+    [flowsOn],
   );
   const changed = new Set(bindings.map((o) => o.action));
 

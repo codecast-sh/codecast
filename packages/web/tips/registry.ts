@@ -1,6 +1,4 @@
 import type { ShortcutAction } from '../shortcuts/registry';
-import { useInboxStore } from '../store/inboxStore';
-import { isHostedMode } from '../lib/surfaces';
 
 export type TipType = 'whisper' | 'milestone' | 'nudge' | 'inline';
 
@@ -8,9 +6,6 @@ export interface TipDef {
   id: string;
   type: TipType;
   content: string;
-  /** The tip in hosted mode's words. A tip without it teaches running a fleet
-   *  of sessions and never shows in hosted mode (tipForMode). */
-  hosted?: string;
   shortcutAction?: ShortcutAction;
   phase: 1 | 2 | 3 | 4;
 }
@@ -22,13 +17,13 @@ export const TIPS: TipDef[] = [
 
   // Whispers: show when user clicks instead of using shortcut
   { id: 'w-palette', type: 'whisper', shortcutAction: 'palette.toggle', phase: 1,
-    content: 'Open command palette', hosted: 'Find anything, or ask the assistant' },
+    content: 'Open command palette' },
   { id: 'w-search', type: 'whisper', shortcutAction: 'search.open', phase: 1,
-    content: 'Open search', hosted: 'Search your conversations' },
+    content: 'Open search' },
   { id: 'w-new-session', type: 'whisper', shortcutAction: 'session.create', phase: 1,
-    content: 'Create a new session', hosted: 'Start a new conversation' },
+    content: 'Create a new session' },
   { id: 'w-focus-input', type: 'whisper', shortcutAction: 'compose.focus', phase: 1,
-    content: 'Jump to message input', hosted: 'Jump to your reply' },
+    content: 'Jump to message input' },
 
   // Inline: proactive tips shown in the session list on first use
   { id: 'i-keyboard-nav', type: 'inline', shortcutAction: 'session.next', phase: 1,
@@ -46,7 +41,7 @@ export const TIPS: TipDef[] = [
 
   // Milestones: celebrate first-time discoveries
   { id: 'm-first-shortcut', type: 'milestone', phase: 1, shortcutAction: 'ui.toggleShortcutsHelp',
-    content: 'Keyboard shortcut unlocked. See them all with', hosted: 'Every shortcut, one key away' },
+    content: 'Keyboard shortcut unlocked. See them all with' },
 
   // ═══════════════════════════════════════════════
   // PHASE 2: Session management (after 5+ sessions)
@@ -140,19 +135,12 @@ const whisperByAction = new Map(
     .map(t => [t.shortcutAction!, t])
 );
 
-/** A tip as the viewer's mode says it: hosted mode shows only the tips that
- *  have hosted words, in those words. */
-function tipForMode(tip: TipDef | undefined): TipDef | undefined {
-  if (!tip || !isHostedMode(useInboxStore.getState())) return tip;
-  return tip.hosted ? { ...tip, content: tip.hosted } : undefined;
-}
-
 export function getTip(id: string): TipDef | undefined {
-  return tipForMode(tipMap.get(id));
+  return tipMap.get(id);
 }
 
 export function getWhisperForAction(action: ShortcutAction): TipDef | undefined {
-  return tipForMode(whisperByAction.get(action));
+  return whisperByAction.get(action);
 }
 
 export function getTipsByPhase(phase: number): TipDef[] {
@@ -164,5 +152,5 @@ export function getTipsByType(type: TipType): TipDef[] {
 }
 
 export function getInlineTips(): TipDef[] {
-  return TIPS.filter(t => t.type === 'inline').flatMap((t) => tipForMode(t) ?? []);
+  return TIPS.filter(t => t.type === 'inline');
 }

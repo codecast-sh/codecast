@@ -46,8 +46,8 @@ test("both compact worktree rows and full cards render the same location chip", 
   const card = source.slice(source.indexOf("export function SessionCardView"), compact);
   expect(card).toContain("const isSubagent = !!subRow || !!session.is_subagent || !!nestParentIdOf(session);");
   expect(card).not.toContain("!!session.worktree_name");
-  // The one chip both shapes render; hosted mode turns git chips off for both.
-  expect(source.slice(0, compact)).toContain('const worktreeChip = showGitChips && (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id)');
+  // The one chip both shapes render.
+  expect(source.slice(0, compact)).toContain('const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id)');
   expect(source.slice(compact).match(/\{worktreeChip\}/g)).toHaveLength(2);
   // The compact row's location line carries the chip, then the fleet chip.
   expect(source.slice(compact)).toContain('<div className="flex min-w-0 gap-1.5 pl-[18px] mt-0.5">{worktreeChip}{fleetChip}</div>');

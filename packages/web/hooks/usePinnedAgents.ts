@@ -36,7 +36,7 @@ export function useDefaultAgentType(): ConvexAgentType {
 }
 
 /** True where only the hosted assistant can answer (lib/defaultAgent), live:
- *  hosted mode, or an account with no machine. */
+ *  an account with no machine. */
 export function useOnlyHostedAgent(): boolean {
   return useInboxStore(onlyHostedAgent);
 }

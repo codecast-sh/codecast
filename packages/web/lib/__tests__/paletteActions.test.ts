@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { surfaceMode } from "../surfaceRules";
-import { PALETTE_ORG, PALETTE_TAIL_MORE, PALETTE_TAIL_SEARCH, paletteActions, palettePageValue, paletteActionForKey, paletteDigitIndex, paletteItemScore, paletteObjectPath, paletteValue, queryAsksToCreate, type PaletteTargetType } from "../paletteActions";
+import { PALETTE_ORG, PALETTE_TAIL_MORE, PALETTE_TAIL_SEARCH, paletteActions, palettePageValue, paletteActionForKey, paletteDigitIndex, paletteItemScore, paletteObjectPath, paletteValue, type PaletteTargetType } from "../paletteActions";
 import { resolvePaletteTarget } from "../paletteTarget";
 import { palettePages } from "../navPages";
 import { paletteSearchValue } from "../paletteRowValues";
@@ -266,14 +265,9 @@ describe("palette item ranking", () => {
     expect(paletteItemScore(paletteValue("New conversation", "start"), "new conversation")).toBeGreaterThan(paletteItemScore("__compose__ ask the codecast assistant hosted", "new conversation"));
   });
 
-  test("hosted mode says conversation and leaves the fleet verbs and the id out", () => {
-    const row = { _id: "c1", agent_type: "codecast", session_id: "s1", user_id: "u1" };
-    const hosted = paletteActions("session", [row], "u1", false, surfaceMode(true, true)).map((a) => a.label);
-    expect(hosted).toContain("Rename conversation…");
-    expect(hosted).toContain("Pin conversation");
-    expect(hosted).toContain("Close conversation");
-    expect(hosted.some((l) => /session|Dormant|Defer|Stash and hide|Copy .* ID/.test(l))).toBe(false);
-    const dev = paletteActions("session", [{ ...row, agent_type: "claude_code" }], "u1", false).map((a) => a.label);
+  test("a session's verbs say session and include the fleet verbs", () => {
+    const row = { _id: "c1", agent_type: "claude_code", session_id: "s1", user_id: "u1" };
+    const dev = paletteActions("session", [row], "u1", false).map((a) => a.label);
     expect(dev).toContain("Rename session…");
     expect(dev).toContain("Kill session");
     expect(dev).toContain("Dormant: a machine wakes it");
@@ -304,17 +298,10 @@ describe("palette item ranking", () => {
   });
 });
 
-describe("queryAsksToCreate", () => {
-  test("new or create, partly typed or with what to make, asks to create; other words do not", () => {
-    for (const q of ["ne", "new", "New ", "new task", "cr", "create", "create doc"]) expect(queryAsksToCreate(q)).toBe(true);
-    for (const q of ["", "n", "newsletter", "routine", "renew", "news"]) expect(queryAsksToCreate(q)).toBe(false);
-  });
-});
-
 describe("Org, Goals and Projects are three rows, each answering to the pages it replaced", () => {
   // The Pages rows ranked the way cmdk ranks them: by score, ties in list order.
   const rankPages = (q: string) =>
-    palettePages(surfaceMode(false, false), () => true, true)
+    palettePages(() => true, true)
       .map((row, i) => ({ label: row.label, score: paletteItemScore(palettePageValue(row), q), i }))
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score || a.i - b.i);

@@ -11,7 +11,6 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { isMac, hasOpenModal, altChordDirection } from "../../shortcuts";
 import { useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from "../../hooks/usePinnedAgents";
-import { useSurface } from "../../lib/surfaces";
 import { agentAccent } from "../../lib/agentColors";
 import { useScopedRecentProjects } from "../../hooks/useScopedRecentProjects";
 import { useShallow } from "zustand/react/shallow";
@@ -123,7 +122,6 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   // element hasn't mounted yet, during which nothing renders.
   machineSlot?: HTMLElement | null;
 }) {
-  const machineChipsShown = useSurface("machineChips");
   // Narrowed: only _id/project_path/git_root/owner_device_id/target_device_id are
   // read here, none of which change on a heartbeat — so the always-rendered
   // ProjectSwitcher no longer re-renders ~1×/s. Anything the machine row needs
@@ -625,7 +623,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   const hostLoads = useHostLoads();
   // The session's team may turn cloud hosting off (Managed devices); its choices lock.
   const cloudRefusal = usePolicyRefusal("cloud_hosts_disabled", policyTeamOf("conversations", conversation));
-  useSyncTeamMachines(machineChipsShown);
+  useSyncTeamMachines();
   // Team machines you are not on: a string, so a machine's minute-by-minute
   // load moving re-renders nothing here.
   const joinableSig = useInboxStore((s) => s.teamMachines
@@ -639,7 +637,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   // Mouse-first, and hidden entirely for the single-machine case so that
   // experience is untouched. Rests collapsed as one pill (the machine the
   // session will run on); a click unfolds the full chip row.
-  const machineUi = machineChipsShown && (
+  const machineUi = (
     <MachineChips
       loads={hostLoads}
       machines={machineChips}
@@ -929,13 +927,12 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   const convCommand = useInboxStore((s) => s.convCommand);
   const { storeSession, currentAgent } = useNewSessionAgent(conversation);
   const hosted = isHostedAgentType(currentAgent);
-  const modelPickerShown = useSurface("modelPicker");
   // The viewer's pinned agents (shared with the mobile sheet) and the hosted
   // assistant when pinned, plus the one this session already runs. This
   // surface keys by the convex spelling. A row the server already holds
   // cannot cross between local and hosted (agentTypeChangeRefusal), so a
   // created blank offers only its own side; a stub may still pick either.
-  // Where only the assistant can answer (hosted mode, no machine) it is the
+  // Where only the assistant can answer (no machine) it is the
   // whole row, pinned or not: a local agent there has nothing to run on.
   const pinned = usePinnedPickerOptions(fromConvexAgentType(currentAgent));
   const onlyHosted = useOnlyHostedAgent();
@@ -1063,7 +1060,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
             <button type="button" className={FOOT_PICK} title="Agent and model for this session">
               <AgentTypeIcon agentType={currentAgent} />
               <span className={agentAccent(currentAgent).text}>{current?.label ?? currentAgent}</span>
-              {!hosted && modelPickerShown && launch.cfg && <span>{launch.label}</span>}
+              {!hosted && launch.cfg && <span>{launch.label}</span>}
               <ChevronDown className="w-3 h-3 opacity-50" />
             </button>
           </DropdownMenuTrigger>
@@ -1083,7 +1080,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
                   </DropdownMenuItem>
                 ))}
               </div>
-              {!hosted && modelPickerShown && launch.cfg && (
+              {!hosted && launch.cfg && (
                 <div className="w-64 p-1 border-l border-sol-border/40 max-h-[60vh] overflow-y-auto">
                   <ModelEffortRows {...launch.rowProps} part="model" />
                 </div>
@@ -1091,7 +1088,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
             </div>
           </DropdownMenuContent>
         </DropdownMenu>
-        {!hosted && modelPickerShown && (
+        {!hosted && (
           <>
             <LaunchEffortPill conversationId={sessionId} />
             <AgentDefinitionPill conversationId={sessionId} variant="ghost" />
@@ -1127,7 +1124,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
         })}
         {/* The hosted assistant's plan picks its model, and it takes no
             agent definition: nothing to choose past the agent itself. */}
-        {!hosted && modelPickerShown && (
+        {!hosted && (
           <>
             <span className="text-sol-border/50 text-xs">|</span>
             <LaunchModelPill conversationId={storeSession?._id || conversation._id} />
@@ -1398,10 +1395,12 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
             {/* The strip tucked under the composer: which machine, what
                 context rides along, and the label. */}
             <div className="mx-auto conv-col px-2 sm:px-4">
-              <div className="mx-4 flex items-start gap-3 rounded-b-xl border border-t-0 border-sol-border/50 bg-sol-bg-alt/40 px-3 pt-1.5 pb-1.5">
-                <div ref={setMachineSlot} className="shrink-0 min-w-0" />
+              <div className="mx-4 flex flex-wrap items-start gap-x-3 gap-y-1 rounded-b-xl border border-t-0 border-sol-border/50 bg-sol-bg-alt/40 px-3 pt-1.5 pb-1.5">
+                <div ref={setMachineSlot} className="shrink-0 min-w-0 max-w-full" />
                 <ErrorBoundary name="StableContextPicker" level="inline">
-                  <StableContextPicker conversationId={conversation._id} className="flex-1 min-w-0 pt-1" />
+                  {/* 10rem is as narrow as the context line gets beside the
+                      machine chip; below it the line wraps under the chip. */}
+                  <StableContextPicker conversationId={conversation._id} className="flex-[1_1_10rem] min-w-0 pt-1" />
                 </ErrorBoundary>
                 <NewSessionBucketPill conversation={conversation} />
               </div>

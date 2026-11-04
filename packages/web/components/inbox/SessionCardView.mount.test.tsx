@@ -9,7 +9,7 @@ import { MemoryRouter } from "react-router";
 import { useInboxStore, type InboxSession } from "../../store/inboxStore";
 import { SessionCardView, type SessionCardViewProps } from "./SessionCardView";
 import { SectionHeader } from "./SectionHeader";
-import { InboxNavRow, NavCount, NavSection, NeedsInputCount, RailHeading, SectionRow } from "../sidebar/navPrimitives";
+import { NavCount, NavSection, NeedsInputCount, RailHeading, SectionRow } from "../sidebar/navPrimitives";
 import { SearchField } from "../search/SearchField";
 import { SessionHit } from "../search/SessionHit";
 import { DEFAULT_IDENTITY_PREFS } from "../../lib/sessionIdentity";
@@ -75,14 +75,14 @@ test("the views render from props alone and leave the store untouched", () => {
 
   const rail = render(
     <>
-      <RailHeading label="Conversations" isNarrow={false} />
-      <InboxNavRow active isNarrow={false} badge={<NeedsInputCount n={4} />} />
+      <RailHeading label="Work" isNarrow={false} />
+      <NeedsInputCount n={4} />
       <NavSection label="Tasks" href="/tasks" isActive={false} isNarrow={false} icon={null} badge={<NavCount n={7} tone="bg-sol-cyan text-sol-bg" />}
         expanded items={[{ id: "v1", name: "Ready to ship", onSelect: noop }]} />
       <SectionRow row={{ id: "v2", name: "#eng", active: true, onSelect: noop }} />
     </>,
   );
-  expect(rail).toContain(">Inbox<");
+  expect(rail).toContain(">Work<");
   expect(rail).toContain(">4<");
   expect(rail).toContain("Ready to ship");
 

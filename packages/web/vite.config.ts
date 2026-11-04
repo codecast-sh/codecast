@@ -12,7 +12,7 @@ import { storeHmrPlugin } from "./plugins/storeHmr";
 import { hookRefreshPlugin } from "./plugins/hookRefresh";
 import { contentOnlyHmrPlugin } from "./plugins/contentOnlyHmr";
 import { handoffBootPlugin } from "./plugins/handoffBoot";
-import { laneBootPlugin } from "./plugins/laneBoot";
+import { designTokensPlugin } from "./plugins/designTokens";
 import { colorThemeBootPlugin } from "./plugins/colorThemeBoot";
 import { depsCacheGuardPlugin } from "./plugins/depsCacheGuard";
 import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
@@ -67,7 +67,7 @@ export default defineConfig(({ mode, command }) => ({
     handoffBootPlugin(),
     // Puts the family token sheet and the lane flag into <head>, so a cold
     // load of a simple lane page opens on the lane's paper, not the app's splash.
-    laneBootPlugin(),
+    designTokensPlugin(),
     // The default color theme's variables in <head>, so a device with no
     // cached theme opens on the default palette, not on the stylesheet's.
     colorThemeBootPlugin(),

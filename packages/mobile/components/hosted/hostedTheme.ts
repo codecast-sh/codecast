@@ -1,17 +1,13 @@
-// Hosted mode's parts on the phone (plan pl-840, docs/architecture/
-// hosted-assistant.md "The mode"): the assistant's conversation, its
-// approvals, the plan and the mail connection, drawn in codecast's own
-// palette and face so they read as the same app as the inbox around them.
+// The hosted assistant's parts on the phone (docs/architecture/
+// hosted-assistant.md): its conversation, its approvals, the plan and the
+// mail connection, drawn in codecast's own palette and face so they read as the same app as the inbox around them.
 // Each colour here is named for what it means, once, over the app palette
 // (constants/Theme): the hosted parts never name a palette colour directly.
 import { StyleSheet, type ViewStyle } from 'react-native';
-import { BorderRadius, paletteFor, themedStyles, useActiveLook, useActiveScheme, type ColorScheme, type Look, type Palette } from '@/constants/Theme';
+import { BorderRadius, paletteFor, themedStyles, useActiveScheme, type ColorScheme, type Palette } from '@/constants/Theme';
 import { mixColor } from '@/lib/solColor';
 
-function buildHostedColors(t: Palette, look: Look = 'classic') {
-  // In the family look the yes is the rust accent, as the web's card fills
-  // it, and a send is an ink disc (sendDisc).
-  const family = look === 'family';
+function buildHostedColors(t: Palette) {
   return {
     paper: t.bg,
     sheet: t.card,
@@ -23,11 +19,10 @@ function buildHostedColors(t: Palette, look: Look = 'classic') {
     faint: t.textMuted0,
     line: t.borderLight,
     lineStrong: t.border,
-    // The yes, a link: the app's action blue, as on the decision screen; the
-    // family's rust accent in the family look.
-    accent: family ? t.orange : t.blue,
-    accentPressed: mixColor(family ? t.orange : t.blue, 84, t.text),
-    onSolid: family ? t.bg : '#ffffff',
+    // The yes, a link: the app's action blue, as on the decision screen.
+    accent: t.blue,
+    accentPressed: mixColor(t.blue, 84, t.text),
+    onSolid: '#ffffff',
     // What waits on the person: an approval's label and edge, a routine in trouble.
     attention: t.orange,
     attentionWash: mixColor(t.orange, 12, 'transparent'),
@@ -45,9 +40,9 @@ function buildHostedColors(t: Palette, look: Look = 'classic') {
 
 export type HostedColors = ReturnType<typeof buildHostedColors>;
 
-const COLORS: Record<string, HostedColors> = {};
-function colorsFor(scheme: ColorScheme, look: Look): HostedColors {
-  return (COLORS[`${look}:${scheme}`] ??= buildHostedColors(paletteFor(scheme, look), look));
+const COLORS: Partial<Record<ColorScheme, HostedColors>> = {};
+function colorsFor(scheme: ColorScheme): HostedColors {
+  return (COLORS[scheme] ??= buildHostedColors(paletteFor(scheme)));
 }
 
 /** The two radii the hosted parts use: buttons and drafts, cards and lists. */
@@ -86,18 +81,12 @@ export const hostedStyles = themedStyles((t) => {
 
 /** The hosted palette and shared styles, re-rendering on an appearance flip. */
 export function useHostedTheme(): { c: HostedColors; s: typeof hostedStyles } {
-  return { c: colorsFor(useActiveScheme(), useActiveLook()), s: hostedStyles };
+  return { c: colorsFor(useActiveScheme()), s: hostedStyles };
 }
 
-/** The send disc, one look for every hosted composer: in the family look an
- *  empty ring with a muted arrow until there is text, then an ink disc, as on
- *  the web; codecast's own look keeps the action colour over a quiet wash. */
-export function sendDisc(c: HostedColors, look: Look, ready: boolean, pressed = false): { style: ViewStyle; icon: string } {
-  if (look === 'family') {
-    return ready
-      ? { style: { backgroundColor: pressed ? c.ink2 : c.ink, borderWidth: 1.5, borderColor: 'transparent' }, icon: c.paper }
-      : { style: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: c.lineStrong }, icon: c.soft };
-  }
+/** The hosted composer's send disc: the action colour once there is text,
+ *  a quiet wash until then. */
+export function sendDisc(c: HostedColors, ready: boolean, pressed = false): { style: ViewStyle; icon: string } {
   return ready
     ? { style: { backgroundColor: pressed ? c.accentPressed : c.accent }, icon: c.onSolid }
     : { style: { backgroundColor: c.wash }, icon: c.faint };

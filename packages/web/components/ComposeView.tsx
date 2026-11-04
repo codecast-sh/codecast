@@ -2,7 +2,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useSyncUserSkills, useUserSkills } from "../hooks/useSyncUserSkills";
 import { useInboxStore, isConvexId, resolveComposeProjectPath, bucketProjectPath } from "../store/inboxStore";
 import { NewSessionFoot, NewSessionView } from "./conversation/sessionControls";
 import { MessageInput } from "./MessageInput";
@@ -24,7 +24,6 @@ import { Minus, Maximize2, ChevronUp, X } from "lucide-react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ReviewComposerContext, type ReviewComposer } from "./reviewContext";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
-import { MODE_WORDS, useSurface } from "../lib/surfaces";
 import { Button } from "./ui/button";
 // Every keep/confirm/prune decision reads through here, so it flushes the
 // composer's debounced write first: the last keystrokes count.
@@ -61,7 +60,6 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   const collapsed = docked && !!instance?.collapsed;
   const instanceRef = useRef(instance);
   useWatchEffect(() => { instanceRef.current = instance; }, [instance]);
-  const { user: currentUser } = useCurrentUser();
   const [sessionId, setSessionId] = useState<string | null>(null);
   // Project + agent captured when the blank session is created, so the popup's
   // slash menu resolves the SAME skills the in-app input would for this project.
@@ -142,8 +140,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     });
     // A resumed draft keeps its agent; otherwise the caller's agent, then the
     // conversation on screen's, carries over, and the default
-    // (lib/defaultAgent: the hosted assistant in hosted mode or with no
-    // machine) fills in.
+    // (lib/defaultAgent: the hosted assistant with no machine) fills in.
     const agentType = resumed?.agent_type || newConversationAgentType(store, context?.agentType ?? ctx.agentType);
 
     // Shared optimistic-create path — see store.beginOptimisticSession.
@@ -179,14 +176,16 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     return abandonStub;
   });
 
-  // Same resolver the in-conversation input uses. available_skills rides on
-  // currentUser, which the palette window now hydrates from IDB (see META_KEYS),
-  // so project skills like mac-remote surface here too — not just built-ins.
+  // Same resolver the in-conversation input uses, over the same skills catalog
+  // (persisted, so the palette window's popup has project skills like
+  // mac-remote from disk before its feeder answers, not just built-ins).
+  useSyncUserSkills();
+  const availableSkills = useUserSkills();
   const skills = useMemo(() => resolveSessionSkills({
-    availableSkills: (currentUser as any)?.available_skills,
+    availableSkills,
     projectPath: skillCtx.projectPath,
     agentType: skillCtx.agentType,
-  }), [currentUser, skillCtx.projectPath, skillCtx.agentType]);
+  }), [availableSkills, skillCtx.projectPath, skillCtx.agentType]);
 
   // Robust autofocus for the popup. The message box's own mount-focus can lose
   // the race against the window becoming the OS "key window" when the popup is
@@ -289,7 +288,6 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   // than MessageInput's create-then-send.
   const liveAgentType = useInboxStore((s) => (sessionId ? (s.sessions[s.resolveLiveSessionId(sessionId)]?.agent_type as string | undefined) : undefined)) ?? skillCtx.agentType;
   const hosted = isHostedAgentType(liveAgentType);
-  const canDock = useSurface("actions.fleet");
   const hostedRef = useRef(hosted);
   hostedRef.current = hosted;
 
@@ -624,7 +622,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           </div>
         </div>
       )}
-      {instance && <ComposeChrome instance={instance} stubId={sessionId} recipientName={recipient?.name} onRequestClose={requestClose} canDock={canDock} onOpenPage={pageLayout && onClose ? openAsPage : undefined} />}
+      {instance && <ComposeChrome instance={instance} stubId={sessionId} recipientName={recipient?.name} onRequestClose={requestClose} onOpenPage={pageLayout && onClose ? openAsPage : undefined} />}
       {/* Collapsed keeps everything mounted (draft, pickers, uploads) and only
           stops painting it. */}
       <div className={collapsed ? "hidden" : "contents"}>
@@ -658,7 +656,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           onDropFiles={dropFilesRef}
           onPopulateInput={populateInputRef}
           onGateSend={recipient ? async (text, images) => { await wakeRole(text, images); } : hosted ? startHosted : undefined}
-          composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : hosted ? MODE_WORDS.hosted.composerPlaceholder : undefined}
+          composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : hosted ? "Ask anything, or hand me a chore" : undefined}
           onSubmitWithIntent={handleSubmit}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
           escapeOwnedRef={escapeOwnedRef}
@@ -689,7 +687,7 @@ const chromeButton = "p-1 rounded text-sol-text-dim/70 hover:text-sol-text hover
 // title bar naming the target project and, once collapsed, the draft it holds;
 // clicking the bar collapses or restores it. Subscribes to the two strings it
 // shows, so typing re-renders this bar and not the composer around it.
-function ComposeChrome({ instance, stubId, recipientName, onRequestClose, canDock = true, onOpenPage }: { instance: ComposeInstance; stubId: string | null; recipientName?: string; onRequestClose: () => void; /** The docked composer is fleet machinery (actions.fleet); without it the modal offers a plain close. */ canDock?: boolean; /** The modal's move into the full new-session page. */ onOpenPage?: () => void }) {
+function ComposeChrome({ instance, stubId, recipientName, onRequestClose, onOpenPage }: { instance: ComposeInstance; stubId: string | null; recipientName?: string; onRequestClose: () => void; /** The modal's move into the full new-session page. */ onOpenPage?: () => void }) {
   const projectName = useInboxStore((s) => {
     const row = stubId ? s.sessions[stubId] : undefined;
     return (row?.project_path || row?.git_root)?.split("/").filter(Boolean).pop();
@@ -705,15 +703,9 @@ function ComposeChrome({ instance, stubId, recipientName, onRequestClose, canDoc
             <Maximize2 className="w-3 h-3" />
           </button>
         )}
-        {canDock ? (
-          <button onClick={() => dockCompose(instance.id)} className={chromeButton} aria-label="Minimize to a docked composer" title="Minimize">
-            <Minus className="w-3.5 h-3.5" />
-          </button>
-        ) : (
-          <button onClick={onRequestClose} className={`flex items-center gap-1.5 ${chromeButton}`} aria-label="Close" title="Close (Esc)">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        )}
+        <button onClick={() => dockCompose(instance.id)} className={chromeButton} aria-label="Minimize to a docked composer" title="Minimize">
+          <Minus className="w-3.5 h-3.5" />
+        </button>
       </div>
     );
   }
