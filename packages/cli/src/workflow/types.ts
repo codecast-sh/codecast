@@ -24,7 +24,7 @@ export type NodeType =
 
 // "session": a codecast session started through /cli/spawn (inbox visible,
 // unattended, waited on until it settles); the client comes from `agent`.
-export type AgentBackend = "builtin" | "claude" | "codex" | "tmux" | "session";
+export type AgentBackend = "builtin" | "claude" | "codex" | "tmux" | "session" | "subject";
 
 export interface WorkflowNode {
   id: string;

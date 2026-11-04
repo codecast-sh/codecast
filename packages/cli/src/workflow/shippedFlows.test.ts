@@ -12,7 +12,7 @@ describe("the web's snapshot of the shipped pool", () => {
   test("carries each flow's kind and its segments, and no station's words", () => {
     const change = shippedFlowsSnapshot().find((f) => f.slug === "change")!;
     expect(change.kind).toBe("line");
-    expect(change.uses).toEqual(["check", "review", "decide", "ship"]);
+    expect(change.uses).toEqual(["check", "review", "decide", "ship", "deploy"]);
     expect(change.nodes.some((n) => "prompt" in n || "script" in n)).toBe(false);
   });
 });

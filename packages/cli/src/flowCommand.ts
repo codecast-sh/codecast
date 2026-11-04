@@ -36,6 +36,23 @@ const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const KIND_MARK: Record<string, string> = { agent: "◉", script: "▶", person: "◇", segment: "▣", call: "○", parallel: "⫴" };
 
+/** A session's own title, when it has one worth naming a change by. */
+async function sessionTitleOf(conversation: string, deps: Pick<FlowDeps, "cliPost">): Promise<string | null> {
+  const read = await deps.cliPost("/cli/inbox", { session_ids: [conversation], show_all: true, limit: 5 }).catch(() => null);
+  const row = (read?.sessions ?? []).find((r: any) => r.id === conversation);
+  const t = String(row?.short_title || row?.title || "").trim();
+  return t && t !== "New Session" ? t.slice(0, 120) : null;
+}
+
+/** The task a session is bound to (its task pulse, written by `cast task start`), while that task is still open. */
+async function boundOpenTask(agentSession: string | undefined, deps: Pick<FlowDeps, "cliPost">): Promise<string | undefined> {
+  const { readTaskPulseFor } = await import("./taskPulse.js");
+  const bound = readTaskPulseFor(agentSession)?.task;
+  if (!bound) return undefined;
+  const row = await deps.cliPost("/cli/work/get", { short_id: bound }).catch(() => null);
+  return row && row.status !== "done" && row.status !== "dropped" ? bound : undefined;
+}
+
 async function cast(args: string[], cwd: string): Promise<{ code: number; out: string; err: string }> {
   const { resolveCastInvocation } = await import("./castInvocation.js");
   const { cmd, prefixArgs } = resolveCastInvocation();
@@ -162,7 +179,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       for (const s of found.stations) {
         if (s.kind === "join" || branches.has(s.id)) continue;
         i++;
-        const what = s.slot?.filled === "empty" ? "slot, empty" : s.kind === "segment" ? `${s.slot ? "slot" : "segment"} ${s.flow ?? "written here"}, ${s.steps} step${s.steps === 1 ? "" : "s"}` : s.kind === "parallel" ? `${s.next.length} side by side, then join` : s.kind;
+        const what = s.slot?.filled === "empty" ? "slot, empty" : s.kind === "segment" ? `${s.slot ? "slot" : "segment"} ${s.flow ?? "written here"}, ${s.steps} step${s.steps === 1 ? "" : "s"}` : s.kind === "parallel" ? `${s.next.length} side by side, then join` : s.subject ? "the session the change came from" : s.kind;
         console.log(`${String(i).padStart(2)}. ${KIND_MARK[s.kind] ?? "·"} ${bold(s.label)}  ${dim(what)}`);
         if (s.kind === "parallel") {
           for (const n of s.next) console.log(`       ${KIND_MARK[byId.get(n.toId)?.kind ?? "agent"] ?? "·"} ${n.to}`);
@@ -264,7 +281,13 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // A session's change is read first: a session with nothing here stops before anything is made.
       const { previewSessionChange } = await import("./workflow/flowChange.js");
       const preview = sessionRef && !branch ? await previewSessionChange(top, sessionRef, only).catch((err) => { console.error(err.message); process.exit(1); }) : null;
-      const changeTitle = title ?? (branch ? `Run ${branch} through ${found.label}` : `Run ${preview?.session ?? "the session"}'s change through ${found.label}`);
+      // A session's change runs on the session's own task (flows.md FL4): the one it is bound to, else one made and
+      // bound to it below, so the run's messages and a second run find the same task, branch and worktree.
+      const subjectRun = !task && !branch && !!preview;
+      if (subjectRun) task = await boundOpenTask(preview!.agentSession, deps);
+      // A session's change is named for what the session says it is doing: its own title, not the flow it runs through.
+      const sessionTitle = preview?.conversation ? await sessionTitleOf(preview.conversation, deps) : null;
+      const changeTitle = title ?? (branch ? `Run ${branch} through ${found.label}` : sessionTitle ?? `Change from session ${preview?.session ?? "here"}`);
       if (opts.dryRun) {
         console.log(`${bold(found.label)}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
         console.log(`on ${branch ? `branch ${branch}` : preview ? `session ${preview.session}'s own edits` : `task ${task}`}, bound to ${task ?? `a new task "${changeTitle}"`}`);
@@ -284,6 +307,11 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const made = await cast(["task", "create", changeTitle, "-d", `A change run through the ${found.label} flow (${found.slug}).`, "--found-during", "none"], top);
         task = (made.out + made.err).match(/\bct-\d+\b/)?.[0];
         if (!task) { console.error(`Could not make the task for this change: ${(made.err || made.out).trim()}`); process.exit(1); }
+        // Bound only from the session itself: `task start` binds the session it runs in.
+        if (subjectRun && sessionRef === deps.callingSession()) {
+          const bound = await cast(["task", "start", task], top);
+          if (bound.code !== 0) console.error(dim(`  ${task} was not bound to this session: ${(bound.err || bound.out).trim().split("\n").pop()}`));
+        }
       }
 
       // The change on its own branch and worktree, named as the run's isolated stations name theirs.
@@ -341,13 +369,61 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (started.code !== 0 || !runId) { console.error((started.err || started.out).trim()); process.exit(1); }
       const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [] };
       if (opts.json) { console.log(JSON.stringify(result)); return; }
-      console.log(`${bold(found.label)} started on ${task}: ${found.stations.map((s) => s.label).join(" → ")}`);
+      console.log(`${bold(found.label)} started on ${task}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
       if (change?.source === "session") {
         console.log(`  ${change.paths.length} file${change.paths.length === 1 ? "" : "s"} from session ${change.session} on ${change.branch}`);
         for (const s of change.shared) console.log(`  ${s.path} also holds edits from ${s.also.join(", ")}`);
         for (const h of change.held) console.log(`  held out: ${h.path} (${h.why})`);
       } else if (change) console.log(`  on ${change.branch}`);
       console.log(dim(`  run ${runId} · cast workflow runs --task ${task}`));
+    });
+
+  // The Deploy stage's wait (workflow/awaitDeploy.ts, flows.md FL4): run by the
+  // deploy segment's parked station in the change's worktree.
+  flow
+    .command("await-deploy")
+    .description("Wait until a change's branch has landed on the default branch and the deploy carrying it is live on every target its files touch; exits 1 when that deploy failed")
+    .requiredOption("--branch <name>", "The change's branch")
+    .option("--base <name>", "The default branch it lands on", "main")
+    .option("--interval <seconds>", "How often to look again", "60")
+    .option("--once", "Look once and say where it stands: exit 0 live (or nothing to deploy), 1 failed, 3 still waiting")
+    .option("--run <id>", "The run whose station this is: each new line goes on the station while it waits")
+    .option("--node <id>", "That station's id in the run")
+    .option("--files <paths>", "The change's files, space-separated (the run's $change_files); else read from git")
+    .action(async (opts: { branch: string; base: string; interval: string; once?: boolean; run?: string; node?: string; files?: string }) => {
+      const { landedCommit, targetTouches, targetState, deployWords, holds } = await import("./workflow/awaitDeploy.js");
+      const cwd = deps.realCwd();
+      const every = Math.max(5, Number(opts.interval) || 60) * 1000;
+      let said = "";
+      // Inside a run the waiting lines go to the station on the card, and only the verdict is the station's output,
+      // which is what a stop and the session's end message quote. At a terminal every line prints.
+      const say = (line: string, verdict = false) => {
+        if (line === said) return;
+        if (verdict || !opts.run) console.log(line);
+        said = line;
+        // What the card shows on the station while the run waits there.
+        if (opts.run && opts.node) void deps.cliPost("/cli/workflow-runs/progress", { run_id: opts.run, current_node_id: opts.node, node_id: opts.node, node_status: "running", result_preview: line }).catch(() => {});
+      };
+      for (;;) {
+        const known = (opts.files ?? "").split(/\s+/).filter(Boolean);
+        const landed = await landedCommit(cwd, opts.branch, opts.base, known).catch((err) => { say(`Cannot read ${opts.branch} here: ${err instanceof Error ? err.message : String(err)}`); return null; });
+        if (landed) {
+          const read = await cast(["line", "deploy", "targets", "--json"], cwd);
+          let targets: import("./workflow/awaitDeploy.js").DeployTargetRow[] | null = null;
+          try { targets = JSON.parse(read.out).targets ?? []; } catch { say(`Waiting to read the deploy targets: ${(read.err || read.out).trim().split("\n").pop()}`); }
+          if (targets) {
+            const touched = targets.filter((t) => targetTouches(t.paths, landed.files));
+            const states = await Promise.all(touched.map((t) => targetState(t, (sha) => holds(cwd, landed.sha, sha))));
+            const failed = states.some((s) => s.state === "failed");
+            const live = states.every((s) => s.state === "live");
+            say(deployWords(landed.sha, states), failed || live);
+            if (failed) process.exit(1);
+            if (live) return;
+          }
+        } else say(`Waiting for ${opts.branch} to land on ${opts.base}.`);
+        if (opts.once) { if (opts.run) console.log(said); process.exit(3); }
+        await new Promise((r) => setTimeout(r, every));
+      }
     });
 
   // The daemon's tracer for a Claude Code Workflow run (daemon.ts

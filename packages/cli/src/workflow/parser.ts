@@ -621,7 +621,8 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
         const failing = isStopExit(a);
         const said = String(a.label ?? sid).replace(/[^\w .,:()-]/g, "");
         const exitId = `${p}${sid}`;
-        nodes.set(exitId, { shape: "parallelogram", label: said, script: `echo '{"exit": "${sid}"}'${failing ? "; exit 1" : ""}`, segment: id, segment_label: segLabel, ...marks, segment_exit: failing ? "stop" : "done" });
+        // A routed stop keeps the segment's words for why, read as $stop_reason by whatever the node routes to.
+        nodes.set(exitId, { shape: "parallelogram", label: said, script: `echo '{"exit": "${sid}"}'${failing ? "; exit 1" : ""}`, segment: id, segment_label: segLabel, ...marks, segment_exit: failing ? "stop" : "done", ...(failing ? { stop: rewrite(String(a.stop)) } : {}) });
         // `<node>.exit` in the node's own conditions reads which exit the segment took.
         const which = (c: string) => c.replace(new RegExp(`(^|[^\\w.])${id}\\.exit\\b`, "g"), `$1${exitId}.json.exit`);
         for (const e of out.filter((e) => (failing ? mentionsFailure(e) : !mentionsFailure(e)))) edges.push({ ...e, from: exitId, ...(e.condition ? { condition: which(e.condition) } : {}) });

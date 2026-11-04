@@ -136,6 +136,19 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and ship__rebase.exit_code != 1", { outcome: "failure", "ship__rebase.exit_code": "1" }, false],
     ["outcome = failure and ship__ship.exit_code = 3", { outcome: "failure", "ship__ship.exit_code": "3" }, true],
     ["outcome = failure and ship__ship.exit_code != 3", { outcome: "failure", "ship__ship.exit_code": "3" }, false],
+    // A segment's stop the change flows route back to the session (flows.md FL4): each stop exit step says which exit it is.
+    ["outcome = failure and decide__revise.json.exit = revise", { outcome: "failure", "decide__revise.json.exit": "revise" }, true],
+    ["outcome = failure and decide__revise.json.exit = dropped", { outcome: "failure", "decide__revise.json.exit": "revise" }, false],
+    ["outcome = failure and decide__dropped.json.exit = revise", { outcome: "failure", "decide__dropped.json.exit": "dropped" }, false],
+    ["outcome = failure and decide__dropped.json.exit = dropped", { outcome: "failure", "decide__dropped.json.exit": "dropped" }, true],
+    ["outcome = failure and review__changes.json.exit = changes", { outcome: "failure", "review__changes.json.exit": "changes" }, true],
+    ["outcome = failure and review__changes.json.exit = rejected", { outcome: "failure", "review__changes.json.exit": "changes" }, false],
+    ["outcome = failure and review__rejected.json.exit = changes", { outcome: "failure", "review__rejected.json.exit": "rejected" }, false],
+    ["outcome = failure and review__rejected.json.exit = rejected", { outcome: "failure", "review__rejected.json.exit": "rejected" }, true],
+    ["outcome = failure and ship__conflict.json.exit = conflict", { outcome: "failure", "ship__conflict.json.exit": "conflict" }, true],
+    ["outcome = failure and ship__conflict.json.exit = unshipped", { outcome: "failure", "ship__conflict.json.exit": "conflict" }, false],
+    ["outcome = failure and ship__unshipped.json.exit = conflict", { outcome: "failure", "ship__unshipped.json.exit": "unshipped" }, false],
+    ["outcome = failure and ship__unshipped.json.exit = unshipped", { outcome: "failure", "ship__unshipped.json.exit": "unshipped" }, true],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {

@@ -26,6 +26,8 @@ export type FlowNodeIn = {
   segment_generated?: boolean;
   /** An exit that ends the run on purpose, in these words. */
   stop?: string;
+  /** How many times a run may enter the node (a way back to the session, usually); the next visit ends the run. */
+  max_visits?: number;
 };
 export type FlowEdgeIn = { from: string; to: string; label?: string; condition?: string };
 
@@ -45,6 +47,8 @@ export type FlowStation = {
   next: Array<{ to: string; toId: string; when: string | null }>;
   /** On the path a change takes when every station passes. */
   main: boolean;
+  /** Done by the session the change came from (`backend=subject`, flows.md FL4), not by a hand of the run's. */
+  subject?: true;
 };
 
 export type FoldedFlow = {
@@ -77,15 +81,19 @@ export function flowFills(source: string | null | undefined): string[] {
   return [...new Set([...(source ?? "").matchAll(/(?:^|[\s{;])subgraph\s+(?:"([^"]+)"|([\w-]+))\s*\{/g)].map((m) => m[1] ?? m[2]))];
 }
 
-/** The slots a source declares (`<node> [slot="what it must do"]`), by node id, for a reader holding no parser. */
-export function flowSlotsOf(source: string | null | undefined): Record<string, string> {
+/** One attribute of every node a source declares (`<node> [key="value"]`), by node id, for a reader holding no parser. */
+export function flowNodeAttrOf(source: string | null | undefined, key: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const m of (source ?? "").matchAll(/(?:^|[\s{;])(?:"([^"]+)"|([\w-]+))\s*\[([^\]]*)\]/g)) {
-    const slot = m[3].match(/\bslot\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([\w-]+))/);
-    if (slot) out[m[1] ?? m[2]] = (slot[1] ?? slot[2]).replace(/\\"/g, '"');
+  const attr = new RegExp(`\\b${key}\\s*=\\s*(?:"((?:[^"\\\\]|\\\\.)*)"|([\\w.-]+))`);
+  for (const m of (source ?? "").matchAll(/(?:^|[\s{;])(?:"([^"]+)"|([\w-]+))\s*\[((?:[^\]"]|"(?:[^"\\]|\\.)*")*)\]/g)) {
+    const hit = m[3].match(attr);
+    if (hit) out[m[1] ?? m[2]] = (hit[1] ?? hit[2]).replace(/\\"/g, '"');
   }
   return out;
 }
+
+/** The slots a source declares (`<node> [slot="what it must do"]`), by node id. */
+export const flowSlotsOf = (source: string | null | undefined): Record<string, string> => flowNodeAttrOf(source, "slot");
 
 /** A graph the team's pool may hold (FL2, FL5): it says what kind of flow it is, and it is no session's draft. */
 export function publishableFlowSource(source: string | null | undefined): boolean {
@@ -155,7 +163,8 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
   for (const id of top.keys()) if (!seen.has(id)) order.push(id);
   // The main path: from the start, the edge a passing station takes; an end only when nothing else is left.
   const main = new Set<string>();
-  const rank = (x: { to: string; score: number }) => x.score - (top.get(x.to)?.type === "exit" ? 10 : 0);
+  // The subject's own stations (backend=subject: the session the change came from fixes what a stage found) are a way back, never the way on.
+  const rank = (x: { to: string; score: number }) => x.score - (top.get(x.to)?.type === "exit" ? 10 : 0) - (top.get(x.to)?.backend === "subject" ? 20 : 0);
   for (let at = start?.id; at && !main.has(at); ) {
     main.add(at);
     // A fan-out runs every branch: all are on the path, and the path goes on where they join.
@@ -185,6 +194,7 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
       ...(n.slot || (n.segment_entry && n.segment_generated) ? { slot: { does: n.slot ?? "", filled: !n.segment_entry ? "empty" as const : n.segment_generated ? "generated" as const : "default" as const } } : {}),
       next: (outOf.get(id) ?? []).map((x) => ({ to: label(x.to), toId: x.to, when: x.when })),
       main: main.has(id),
+      ...(n.backend === "subject" ? { subject: true as const } : {}),
     });
   }
   // A stop inside a segment ends the run there: the flow's end too.

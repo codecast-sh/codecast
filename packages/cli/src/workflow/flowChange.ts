@@ -53,7 +53,7 @@ export async function previewSessionChange(root: string, session: string, only?:
   const shared = paths
     .map((p) => ({ path: p, also: attribution.sessions.filter((s) => s !== mine && inDiff(s, p)).map(idOf) }))
     .filter((s) => s.also.length);
-  return { frozen, session: idOf(mine), paths, shared, held };
+  return { frozen, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held };
 }
 
 /**
@@ -62,9 +62,31 @@ export async function previewSessionChange(root: string, session: string, only?:
  * HEAD are untouched. Throws when the session wrote nothing that is changed.
  */
 export async function freezeSessionChange(root: string, session: string, opts: { branch: string; worktree: string; title?: string | null; only?: ReadonlyArray<string> | null }): Promise<FrozenChange> {
-  const { frozen, session: id, paths, shared, held } = await previewSessionChange(root, session, opts.only);
+  const { frozen, session: id, conversation, paths, shared, held } = await previewSessionChange(root, session, opts.only);
   if (!paths.length) throw new Error(`Session ${id} wrote nothing here that can go in a change${held.length ? ` (held: ${held.map((h) => `${h.path}, ${h.why}`).join("; ")})` : ""}`);
   const { tip } = await buildCommits(root, frozen, [{ message: defaultMessage(opts.title ?? null, paths), paths }]);
   await git(root, ["update-ref", `refs/heads/${opts.branch}`, tip]);
-  return { source: "session", session: id, base: frozen.base, tip, branch: opts.branch, worktree: opts.worktree, paths, shared, held };
+  return {
+    source: "session", session: id, ...(conversation ? { conversation } : {}), base: frozen.base, tip, branch: opts.branch, worktree: opts.worktree, paths, shared, held,
+    ...(opts.only?.length ? { only: [...opts.only] } : {}), ...(opts.title ? { title: opts.title } : {}),
+  };
+}
+
+/**
+ * Freeze a session's change again, after the session worked on what a stage
+ * found (flows.md FL4): the same files cut the same way, on the same branch, so
+ * the run's worktree follows the new tip and every later stage reads the change
+ * as it stands now. Returns the new change and whether anything moved.
+ */
+export async function refreezeSessionChange(root: string, runDir: string, worktreePath: string | null): Promise<{ change: FrozenChange; moved: boolean }> {
+  const { readFrozenChange, writeFrozenChange } = await import("./flowChangeFile.js");
+  const before = readFrozenChange(runDir);
+  if (!before?.session) throw new Error("The run's change did not come from a session, so there is no session's change to freeze again");
+  const change = await freezeSessionChange(root, before.conversation ?? before.session, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null });
+  const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).then((s) => s.trim()).catch(() => rev);
+  const moved = (await tree(before.tip)) !== (await tree(change.tip));
+  // The run's worktree holds no work of its own: it is the change, so it follows the new tip.
+  if (worktreePath) await git(worktreePath, ["reset", "--quiet", "--hard", change.tip]);
+  writeFrozenChange(runDir, change);
+  return { change, moved };
 }

@@ -106,6 +106,17 @@ describe("resolveShipPlan", () => {
 });
 
 describe("shipBrief", () => {
+  test("a flow run's frozen branch ships as committed, never the work session's live edits (flows.md FL4)", () => {
+    const facts = { ...base, branch: "codecast/change-ct-42", committed: true, sessionShortId: null };
+    const plan = resolveShipPlan(facts);
+    expect(plan.branch).toBe("codecast/change-ct-42");
+    expect(plan.newBranch).toBe(false);
+    const brief = shipBrief(plan, facts);
+    expect(brief).toContain("already committed on codecast/change-ct-42");
+    expect(brief).toContain("never take anything from the shared checkout's uncommitted edits");
+    expect(brief).not.toContain("cast diff");
+  });
+
   test("names the branch, the task, the checks and whether to merge", () => {
     const plan = resolveShipPlan({ ...base, profile: { ...profile, ship: null } });
     const brief = shipBrief(plan, base);

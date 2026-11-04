@@ -28,8 +28,14 @@ import reviewCast from "./templates/review.cast" with { type: "text" };
 import evalCast from "./templates/eval.cast" with { type: "text" };
 import decideCast from "./templates/decide.cast" with { type: "text" };
 import shipCast from "./templates/ship.cast" with { type: "text" };
+import deployCast from "./templates/deploy.cast" with { type: "text" };
 import proveImplementCast from "./templates/prove-implement.cast" with { type: "text" };
 import changeCast from "./templates/change.cast" with { type: "text" };
+import quickChangeCast from "./templates/quick-change.cast" with { type: "text" };
+import changeFixCheck from "./templates/change/fix_check.md" with { type: "text" };
+import changeFixReview from "./templates/change/fix_review.md" with { type: "text" };
+import changeRevise from "./templates/change/revise.md" with { type: "text" };
+import changeFixConflict from "./templates/change/fix_conflict.md" with { type: "text" };
 import featureCast from "../../workflows/feature/workflow.cast" with { type: "text" };
 import planAutopilotCast from "../../workflows/plan-autopilot/workflow.cast" with { type: "text" };
 import { JUDGE_REVIEW_GRAPH } from "@codecast/shared/contracts/judgeReview";
@@ -63,6 +69,11 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   // (judge-review.cast, learning-loop.md LL11).
   "line/diagnose.md": lineDiagnose,
   "line/unproven.sh": lineUnproven,
+  // What the change flows send back to the session a change came from (flows.md FL4).
+  "change/fix_check.md": changeFixCheck,
+  "change/fix_review.md": changeFixReview,
+  "change/revise.md": changeRevise,
+  "change/fix_conflict.md": changeFixConflict,
 };
 
 /** Replace each quoted `"@<file>"` value naming one of `files` with that file's text as a DOT string. */
@@ -86,8 +97,10 @@ export const BUILTIN_WORKFLOW_TEMPLATES: Readonly<Record<string, string>> = {
   eval: inlineTemplateFiles(evalCast, LINE_TEMPLATE_FILES),
   decide: decideCast,
   ship: inlineTemplateFiles(shipCast, LINE_TEMPLATE_FILES),
+  deploy: deployCast,
   "prove-implement": inlineTemplateFiles(proveImplementCast, LINE_TEMPLATE_FILES),
-  change: changeCast,
+  change: inlineTemplateFiles(changeCast, LINE_TEMPLATE_FILES),
+  "quick-change": inlineTemplateFiles(quickChangeCast, LINE_TEMPLATE_FILES),
   feature: featureCast,
   "plan-autopilot": planAutopilotCast,
 };

@@ -76,10 +76,12 @@ describe("line.cast template", () => {
     for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) {
       expect(fs.readFileSync(path.join(TEMPLATE_DIR, ref), "utf-8")).toBe(text);
     }
-    // Every file under line/ is shipped, and every shipped file is used.
-    expect(fs.readdirSync(path.join(TEMPLATE_DIR, "line")).sort()).toEqual(Object.keys(LINE_TEMPLATE_FILES).map((r) => r.slice("line/".length)).sort());
-    // The line's own files, and the diagnosis graph it runs beside its causes (LL11).
-    const shipped = [graph, parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[JUDGE_REVIEW_GRAPH])];
+    // Every file under line/ and change/ is shipped, and every shipped file is used.
+    for (const dir of ["line", "change"]) {
+      expect(fs.readdirSync(path.join(TEMPLATE_DIR, dir)).sort()).toEqual(Object.keys(LINE_TEMPLATE_FILES).filter((r) => r.startsWith(`${dir}/`)).map((r) => r.slice(dir.length + 1)).sort());
+    }
+    // The line's own files, the diagnosis graph it runs beside its causes (LL11), and the change flows' briefs (flows.md FL4).
+    const shipped = [graph, ...[JUDGE_REVIEW_GRAPH, "change", "quick-change"].map((t) => parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[t]))];
     const used = new Set(shipped.flatMap((g) => [...g.nodes.values()].flatMap((n) => [n.prompt, n.script])));
     for (const text of Object.values(LINE_TEMPLATE_FILES)) expect(used.has(text)).toBe(true);
   });
@@ -129,6 +131,10 @@ describe("line.cast template", () => {
       "review_verdict", "review_note", "handoff", "handoff_note", "goal_ref", "category", "risk", "readiness", "readiness_note",
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
       "run_dir", "cause_history", "last_error", "sent_back", ...Object.keys(EMPTY_VARS),
+      // A change frozen from a session (frozenChangeContext): empty on a run with none.
+      "change_session",
+      // The station running, as the graph names it (runNodeLoop).
+      "station_id",
     ]);
     const nodeVar = /^(\w+)\.(output|outcome|json(\.\w+)*)$/;
     const texts = [graph.stack!, ...[...graph.nodes.values()].flatMap((n) => [n.prompt, n.script, n.doc, n.card])].filter(Boolean) as string[];

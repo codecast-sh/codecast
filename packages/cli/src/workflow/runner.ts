@@ -30,6 +30,7 @@ import { c } from "../colors.js";
 import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { frozenChangeContext } from "./flowChangeFile.js";
+import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { restoreResumedWorktree } from "./runWorktree.js";
 
@@ -411,6 +412,73 @@ async function executeSessionNode(
   return outcome;
 }
 
+// A station the run's subject does (`backend=subject`, flows.md FL4): its brief,
+// which names what a stage found, goes to the session the change came from as a
+// message in its own thread; the run waits for that session to work on it and
+// settle, then freezes its change again, so the stages after read it as it is
+// now. A run whose change came from no session has nobody to send it to, and
+// stops here with what the stage found.
+async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions): Promise<NodeOutcome> {
+  const subject = subjectOf(context);
+  const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
+  if (!subject) {
+    context["last_error"] = `This run's change came from no session, so nobody can work on what the run found.${found}`;
+    context["station_dead"] = node.id;
+    return "failure";
+  }
+  const read = await cliCall(options, "/cli/inbox", { session_ids: [subject.conversationId], show_all: true, limit: 5 });
+  const row = (read?.sessions || []).find((r: any) => r.id === subject.conversationId);
+  if (!row || row.is_killed) {
+    context["last_error"] = `The session the change came from (${subject.shortId}) ${row ? "was stopped" : "cannot be read"}, so nobody can work on what the run found.${found}`;
+    context["station_dead"] = node.id;
+    return "failure";
+  }
+  const brief = expandPromptVars(node.prompt ?? "", graph, context).trim();
+  const sent = await cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body: brief, wake: true });
+  if (!sent) {
+    context["last_error"] = `Could not send ${node.label} to session ${subject.shortId}.${found}`;
+    context["station_dead"] = node.id;
+    return "failure";
+  }
+  const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
+  await waiting({ node_id: node.id, conversation_id: subject.conversationId, since: Date.now(), note: (context["stop_reason"] || brief).slice(0, 600) });
+  const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, { ...subject, sentAtCount: row.message_count ?? 0 });
+  await waiting(null);
+  if (outcome !== "success") return outcome;
+  try {
+    const { refreezeSessionChange } = await import("./flowChange.js");
+    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
+    context["branch"] = change.branch;
+    context["change_files"] = change.paths.join(" ");
+    const said = moved
+      ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
+      : "the session's change is as it was: the stage runs again on the same change";
+    console.log(`  ${c.green}✓${c.reset} ${said}`);
+    recordNodeOutput(context, node.id, said);
+  } catch (err) {
+    context["last_error"] = `Could not freeze session ${subject.shortId}'s change again: ${err instanceof Error ? err.message : String(err)}`;
+    context["station_dead"] = node.id;
+    return "failure";
+  }
+  return "success";
+}
+
+/** The last thing a station said in words: a segment's exit steps only say which exit they took. */
+function lastSaid(state: WorkflowRunState): string | undefined {
+  for (const id of [...state.completed].reverse()) {
+    const out = state.context[`${id}.output`]?.trim();
+    if (out && !out.startsWith("{")) return out;
+  }
+  return undefined;
+}
+
+/** Tell the run's subject something in its own turn; a run with no subject, or a dry run, says nothing. */
+async function tellSubject(options: RunOptions, context: Record<string, string>, body: string): Promise<void> {
+  const subject = subjectOf(context);
+  if (!subject || options.dryRun) return;
+  await cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body, wake: true });
+}
+
 async function waitOnStation(
   node: WorkflowNode,
   graph: WorkflowGraph,
@@ -418,6 +486,9 @@ async function waitOnStation(
   cwd: string,
   options: RunOptions,
   onSpawned?: () => void,
+  // The run's subject (subjectStation.ts): the session the change came from, already sent its brief, which this
+  // station waits on instead of a hand of its own. It has answered once it has worked since the brief landed.
+  subject?: Subject & { sentAtCount: number },
 ): Promise<NodeOutcome> {
   if (!options.convexSiteUrl || !options.apiToken) {
     console.log(`  ${c.red}✗ session nodes need an authenticated CLI (cast auth)${c.reset}`);
@@ -443,7 +514,7 @@ async function waitOnStation(
   // same worktree beside it. One not back within the grace is not coming
   // (recovery off, its revive budget spent): it is stopped, so a late revive
   // finds it retired, and the station starts anew.
-  const left = options.resumed?.hand && options.resumed.node_id === node.id ? options.resumed.hand : null;
+  const left = !subject && options.resumed?.hand && options.resumed.node_id === node.id ? options.resumed.hand : null;
   if (options.resumed) options.resumed.hand = null;
   const leftRow = left ? ((await cliCall(options, "/cli/inbox", { session_ids: [left], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === left) : null;
   let reattach = !!leftRow && !leftRow.is_killed;
@@ -481,7 +552,10 @@ async function waitOnStation(
   }
 
   let hand: { conversationId: string; shortId: string };
-  if (reattach) {
+  if (subject) {
+    hand = { conversationId: subject.conversationId, shortId: subject.shortId };
+    console.log(`  ${c.green}sent to${c.reset} ${c.cyan}${hand.shortId}${c.reset}, the session the change came from`);
+  } else if (reattach) {
     hand = { conversationId: left!, shortId: context[`${node.id}.session_id`] || left!.slice(0, 7) };
     console.log(`  ${c.green}waiting again on${c.reset} ${c.cyan}${hand.shortId}${c.reset}`);
   } else if (answeredAfter !== undefined) {
@@ -499,7 +573,8 @@ async function waitOnStation(
   }
   const { conversationId, shortId } = hand;
 
-  if (options.runId) {
+  // The subject is no hand of the run's: it is reported as what the run waits on (executeSubjectNode), never as the station's session.
+  if (options.runId && !subject) {
     await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", session_id: shortId });
   }
 
@@ -533,6 +608,7 @@ async function waitOnStation(
   }
   let askedForHandoffAt = 0;
   let seenMessages = -1;
+  let subjectWorked = false;
   // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
   const clock = new ParkedClock(startMs);
   while (clock.elapsed() < timeout) {
@@ -613,7 +689,10 @@ async function waitOnStation(
       continue;
     }
     askedOnce = asking;
-    const settled = state === "done" || state === "needs_input" || row.is_killed || (wasLive && !row.is_live);
+    // The subject read finished before its brief landed: only work after it (a working read, or a reply past the brief) answers.
+    if (subject && state === "working") subjectWorked = true;
+    if (subject && !subjectWorked && (row.message_count ?? 0) < subject.sentAtCount + 2 && !row.is_killed) continue;
+    const settled = state === "done" || state === "needs_input" || (!!subject && state === "dormant") || row.is_killed || (wasLive && !row.is_live);
     if (!settled) continue;
     const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
     // A presenter brought back still shows the pin it left last visit until it pins again.
@@ -630,7 +709,9 @@ async function waitOnStation(
     // the empty handoff (2026-10-16). Wait within the node's timeout for it to
     // pin again. It still settles on done, on being killed, and on a real ask:
     // an open question, or an error it does not come back from by itself.
-    if (pinned?.status === "dormant" && state !== "done" && !row.is_killed && !row.awaiting_input && !row.blocked_on) {
+    // The run's subject is the exception: it pins dormant naming this run as its wake ("the run re-checks when this
+    // turn ends", ct-85419 waited 15 minutes at Fix check), so its dormant pin after the brief is its answer.
+    if (!subject && pinned?.status === "dormant" && state !== "done" && !row.is_killed && !row.awaiting_input && !row.blocked_on) {
       if (!heldDormant) console.log(`${c.dim}  ${shortId}: pinned dormant, waiting for its wake${c.reset}`);
       heldDormant = true;
       askedOnce = false;
@@ -1470,7 +1551,8 @@ async function returnTaskOnFailure(options: RunOptions, graph: WorkflowGraph, st
   // other way round: its close stands and its closing note says why (ct-59242 and ct-59534 came back open).
   const closed = await cliCall(options, "/cli/work/get", { short_id: options.taskId });
   if (closed && (closed.status === "done" || closed.status === "dropped")) return;
-  const exhausted = /max_visits/.test(state.failReason || "");
+  // A station's visit limit, or a way back to the session that ran out (subjectStation.sentBackWords).
+  const exhausted = /max_visits|sent the change back \d+ times/.test(state.failReason || "");
   const handoff = state.context["handoff"];
   const parkedByHand = handoff === "blocked" || handoff === "needs_context";
   // The card names the station's session, which a nested worker no longer
@@ -1566,15 +1648,19 @@ async function reportProgress(options: RunOptions, payload: Record<string, any>)
   const node = payload.current_node_id ?? payload.node_id;
   if (payload.run_status === "completed" || payload.run_status === "failed") lastReportedNode.delete(options.runId);
   else if (typeof node === "string") lastReportedNode.set(options.runId, node);
-  const body = { api_token: options.apiToken, run_id: options.runId, ...payload };
+  const post = (p: Record<string, any>) => fetch(`${options.convexSiteUrl}/cli/workflow-runs/progress`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: options.apiToken, run_id: options.runId, ...p }),
+  });
   try {
-    await fetch(`${options.convexSiteUrl}/cli/workflow-runs/progress`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const res = await post(payload);
+    // A backend older than this CLI rejects the whole report for an arg it does not know: the enrichments go, the report stays.
+    const extras = PROGRESS_ENRICHMENTS.filter((k) => k in payload);
+    if (!res.ok && extras.length) await post(Object.fromEntries(Object.entries(payload).filter(([k]) => !extras.includes(k))));
   } catch {}
 }
+const PROGRESS_ENRICHMENTS = ["visits", "waiting_on_session"];
 
 // A gate with a presenting station (`asker=`) decides on the card that station
 // posted and asks no question of its own. With no card of it standing, nobody
@@ -1914,6 +2000,8 @@ async function driveRun(
       });
     }
 
+    await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: false, lastOutput: lastSaid(state) }));
+
     // Log completion to bound plan
     if (options.planId && options.apiToken && options.convexSiteUrl && !options.dryRun) {
       try {
@@ -1950,6 +2038,9 @@ async function driveRun(
     const requeued = diskFull && options.taskId ? await requeueAfterDiskFull((route, body) => cliCall(options, route, body), options.taskId) : null;
     if (requeued) console.log(requeued.text);
     if (!requeued?.queued) await returnTaskOnFailure(options, graph, state); // a refused requeue (a trial's) fails as usual
+    // A run that got past a ship step's success landed its change, whatever stopped it after.
+    const landed = state.completed.some((id) => /(^|__)shipped$/.test(id));
+    await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: true, failReason: state.failReason, landed }));
     return "failed";
   }
   return "completed";
@@ -1994,11 +2085,16 @@ async function runNodeLoop(
     state.visitCounts[current.id] = visits;
     // Edges may route on how often a station has run (`build.visits >= 3`).
     state.context[`${current.id}.visits`] = String(visits);
+    // A station's own id as the graph runs it (a segment's station is `<node>__<id>`), for a script that reports on itself.
+    state.context["station_id"] = current.id;
 
     if (current.max_visits !== undefined && visits > current.max_visits) {
       console.log(`\n${c.red}${c.bold}  ✗ max_visits=${current.max_visits} exceeded on '${current.label}' — aborting${c.reset}`);
       state.failed = true;
-      state.failReason = `max_visits=${current.max_visits} exceeded on ${current.id}`;
+      // A way back to the session that ran out says so in words, like every other stop of the run.
+      state.failReason = current.backend === "subject"
+        ? `Stopped: ${sentBackWords(state.context["stop_stage"] || current.label, current.max_visits)}`
+        : `max_visits=${current.max_visits} exceeded on ${current.id}`;
       break;
     }
 
@@ -2026,6 +2122,7 @@ async function runNodeLoop(
         current_node_id: current.id,
         node_id: current.id,
         node_status: "running",
+        visits,
       });
     }
     const checkpoint = (next?: string) => {
@@ -2056,6 +2153,8 @@ async function runNodeLoop(
       outcome = await executeFanout(current, graph, state, cwd, options);
     } else if (current.type === "parallel_fanin") {
       outcome = "success";
+    } else if ((current.type === "agent" || current.type === "prompt") && current.backend === "subject") {
+      outcome = await executeSubjectNode(current, graph, state.context, cwd, options);
     } else if ((current.type === "agent" || current.type === "prompt") && current.backend === "session") {
       outcome = await executeSessionNode(current, graph, state.context, cwd, options, () => checkpoint());
     } else if (current.type === "agent" || current.type === "prompt") {
@@ -2104,6 +2203,13 @@ async function runNodeLoop(
     // builder), not for every hand after it: the reviewer sees only what its
     // prompt names (the-line.md L3). A command node in between keeps it.
     if (current.type === "agent" || current.type === "prompt") delete state.context["human.message"];
+
+    // A segment's stop the flow routes on (a failed check, a finding, a Revise, a conflict): its words are what
+    // the station it routes to reads as $stop_reason, cut to what a session needs.
+    if (current.segment_exit === "stop" && current.stop) {
+      state.context["stop_reason"] = failureExcerpt(expandPromptVars(current.stop, graph, state.context));
+      state.context["stop_stage"] = current.segment_label ?? current.label;
+    }
 
     // ── Stage 4: Record outcome in context and per-node map ───────────────────
     state.context["outcome"] = outcome;
@@ -2168,6 +2274,11 @@ async function runNodeLoop(
         : resolveHumanGateTarget(current, graph, state.context)
           || resolveNextNode(graph, current, state.context);
     if (stationBlocked && next) delete state.context["station_blocked"];
+    // A gate's answer reaches the session the change came from, unless where it routes says it anyway: a station the
+    // session does (a Revise note) or a stop (the run's end message). A question back to the reviewer is no answer.
+    if (current.type === "human" && outcome !== "failure" && next && next.backend !== "subject" && next.segment_exit !== "stop" && !state.context["human.gate.question"] && state.context["human.gate.label"]) {
+      await tellSubject(options, state.context, gateAnswerMessage(current.segment_label ?? current.label, state.context["human.gate.label"], state.context["human.message"]));
+    }
     if (stationBlocked && !next) {
       console.log(`\n${c.yellow}  '${current.label}' is waiting on a person; the run stops here${c.reset}`);
       state.failed = true;

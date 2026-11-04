@@ -96,7 +96,7 @@ export async function workSessionOfTask(ctx: Ctx, userId: Id<"users">, task: any
  * decision rail (the store's answerDecision patch lands before this runs), so
  * the gate is found even though it is no longer pending.
  */
-export async function gatherShipFacts(ctx: Ctx, userId: Id<"users">, target: ShipTarget, decisionId?: string): Promise<Gathered | { error: string }> {
+export async function gatherShipFacts(ctx: Ctx, userId: Id<"users">, target: ShipTarget, decisionId?: string, committedBranch?: string): Promise<Gathered | { error: string }> {
   let task: any = null;
   let work: any = null;
   let pr: any = null;
@@ -162,6 +162,8 @@ export async function gatherShipFacts(ctx: Ctx, userId: Id<"users">, target: Shi
     lineGate: gate ? { decisionId: String(gate._id) } : null,
     sessionShortId: work ? (work.short_id ?? String(work._id).slice(0, 7)) : null,
   };
+  // A flow run names the branch its change was frozen on: that snapshot ships, never the work session's live edits.
+  if (committedBranch && !pr) Object.assign(facts, { branch: committedBranch, committed: true, sessionShortId: null });
   return { facts, task, work, pr, gate };
 }
 
@@ -234,9 +236,9 @@ export async function startShipCore(
   ctx: Ctx,
   userId: Id<"users">,
   target: ShipTarget,
-  opts: { clientKey?: string; requester?: any; decisionId?: string } = {},
+  opts: { clientKey?: string; requester?: any; decisionId?: string; branch?: string } = {},
 ): Promise<StartShipResult> {
-  const got = await gatherShipFacts(ctx, userId, target, opts.decisionId);
+  const got = await gatherShipFacts(ctx, userId, target, opts.decisionId, opts.branch);
   if ("error" in got) throw new Error(got.error);
   // A trial's change never ships: its card's answer only records what the person would have done (learning-loop.md LL12).
   if (got.gate?.trial || (await trialProjectOf(ctx, got.task))) throw new Error("This change is part of a trial: answering records the choice, and nothing ships");
@@ -316,6 +318,8 @@ const cliTargetArgs = {
   session: v.optional(v.string()),
   pull_request_id: v.optional(v.string()),
   requester_session: v.optional(v.string()),
+  // The branch that holds the change as committed (a flow run's frozen snapshot): it ships as it is.
+  branch: v.optional(v.string()),
 };
 
 async function cliTarget(ctx: Ctx, userId: Id<"users">, args: { task?: string; session?: string; pull_request_id?: string }): Promise<ShipTarget> {
@@ -335,7 +339,7 @@ export const previewFromCli = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Unauthorized");
-    const got = await gatherShipFacts(ctx, userId, await cliTarget(ctx, userId, args));
+    const got = await gatherShipFacts(ctx, userId, await cliTarget(ctx, userId, args), undefined, args.branch);
     if ("error" in got) throw new Error(got.error);
     return { plan: resolveShipPlan(got.facts) };
   },
@@ -348,6 +352,6 @@ export const startFromCli = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Unauthorized");
     const requester = args.requester_session ? await findConversationByAnyRef(ctx as any, args.requester_session, userId) : null;
-    return await startShipCore(ctx, userId, await cliTarget(ctx, userId, args), { requester });
+    return await startShipCore(ctx, userId, await cliTarget(ctx, userId, args), { requester, branch: args.branch });
   },
 });

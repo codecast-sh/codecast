@@ -42,6 +42,8 @@ export type ShipFacts = {
   lineGate: { decisionId: string } | null;
   /** The session whose changes ship, when the target names one. */
   sessionShortId: string | null;
+  /** The branch already holds the change as committed (a flow run's frozen snapshot, flows.md FL4): it ships as it is. */
+  committed?: boolean;
   /**
    * The line run this task is on and the role that owns its line, with that
    * role's merge grant (org_roles.line_merge plus its merge authority, the
@@ -176,7 +178,7 @@ export function resolveShipPlan(facts: ShipFacts): ShipPlan {
 }
 
 /** The first turn of the ship session: everything it needs, nothing it must look up to start. */
-export function shipBrief(plan: ShipPlan, facts: Pick<ShipFacts, "projectPath" | "taskShortId" | "sessionShortId" | "repository">): string {
+export function shipBrief(plan: ShipPlan, facts: Pick<ShipFacts, "projectPath" | "taskShortId" | "sessionShortId" | "repository" | "committed">): string {
   const lines: string[] = [
     `# Ship ${plan.label}`,
     "",
@@ -187,7 +189,8 @@ export function shipBrief(plan: ShipPlan, facts: Pick<ShipFacts, "projectPath" |
   ];
   if (facts.repository) lines.push(`- Repository: ${facts.repository}`);
   if (facts.taskShortId) lines.push(`- Task: ${facts.taskShortId} (comment the PR link and the outcome on it)`);
-  if (facts.sessionShortId) lines.push(`- Changes from session ${facts.sessionShortId} (\`cast diff ${facts.sessionShortId}\` lists its files; ship only those)`);
+  if (facts.committed) lines.push(`- The change is already committed on ${plan.branch}, as the flow reviewed and approved it: ship that branch as it is. Run the checks where it is checked out (\`git worktree list\` shows where), add no commits of your own, and never take anything from the shared checkout's uncommitted edits`);
+  else if (facts.sessionShortId) lines.push(`- Changes from session ${facts.sessionShortId} (\`cast diff ${facts.sessionShortId}\` lists its files; ship only those)`);
   if (plan.pr.action === "shepherd") lines.push(`- Pull request: ${plan.pr.repository}#${plan.pr.number}, already open`);
   lines.push("", "## Steps", "");
   let n = 1;

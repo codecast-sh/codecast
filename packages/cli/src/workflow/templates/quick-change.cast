@@ -1,0 +1,44 @@
+// A quicker line for a small change made in a session (flows.md FL4): checked,
+// reviewed by an independent session, and landed on the reviewer's approval,
+// with no question to a person. The same segments and the same ways back to
+// the session as `change`: a failed check, the reviewer's findings and a
+// rebase conflict come back to the session that made the change, it fixes them
+// in its own checkout, and the run freezes its change again and takes it
+// through Check and every stage after. What lands is the snapshot Review
+// approved, and Deploy waits for the deploy that carries it, as in `change`.
+// Each way back runs at most three times.
+//
+//   cast flow run quick-change      # this session's own edits
+digraph "quick-change" {
+  graph [kind="line", label="Quick", description="Check, review, land, deploy: for a small change, landed on the reviewer's approval with no person asked", takes="task,branch", goal="$task_title", on_failure=stop]
+  rankdir=LR
+  start [shape=Mdiamond]
+  check  [flow="check", slot="Prove the change does what it should"]
+  review [flow="review"]
+  ship   [flow="ship", label="Land"]
+  deploy [flow="deploy"]
+  exit [shape=Msquare, label="Live"]
+
+  fix_check [label="Fix check", backend=subject, max_visits=3,
+    prompt="@change/fix_check.md"]
+  fix_review [label="Address review", backend=subject, max_visits=3,
+    prompt="@change/fix_review.md"]
+  fix_conflict [label="Resolve conflict", backend=subject, max_visits=3,
+    prompt="@change/fix_conflict.md"]
+
+  rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
+  unshipped [shape=Msquare, label="Not shipped", stop="$stop_reason"]
+
+  start -> check
+  check -> review
+  check -> fix_check [condition="outcome = failure", label="check failed"]
+  review -> ship
+  review -> fix_review [condition="outcome = failure and review.exit = changes", label="changes asked"]
+  review -> rejected   [condition="outcome = failure and review.exit = rejected", label="rejected"]
+  ship -> deploy -> exit
+  ship -> fix_conflict [condition="outcome = failure and ship.exit = conflict", label="conflict"]
+  ship -> unshipped    [condition="outcome = failure and ship.exit = unshipped", label="not shipped"]
+  fix_check -> check
+  fix_review -> check
+  fix_conflict -> check
+}

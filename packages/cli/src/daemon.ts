@@ -12,7 +12,8 @@ import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirecto
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
-import { typedPollAnswer } from "./typedPollAnswer.js";
+import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer.js";
+import { closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_CLIENTS, INGEST_WINDOW_ROWS, type IngestJob } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner, type TranscriptRetrySource } from "./workers/ingestRetryOwner.js";
@@ -63,6 +64,7 @@ import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, isStationHandOpening, s
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistroName } from "./windowsSupport.js";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
+import { claudeProjectsDirs } from "./claudeConfigDirs.js";
 import { walkFiles, walkEntryBatches, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
@@ -1680,7 +1682,7 @@ async function resumeOrphanedWorkflowRuns(): Promise<void> {
       try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
     }
     if (pid) continue;
-    if (!governor.admit("workflow_resume")) {
+    if (!governor.admit("workflow_resume", run.run_id)) {
       log(`[WORKFLOW] resume of ${run.run_id} held: machine ${describeLoad()}`);
       continue;
     }
@@ -15130,6 +15132,15 @@ async function checkForInteractivePrompt(
       }
     }
 
+    // A permission dialog already has its Approve/Deny card (opened by the
+    // PermissionRequest hook or the Notification path), and that card answers
+    // it. Scraping the same dialog again posts a second, bare "Do you want to
+    // proceed?" Yes/No card under it (jx78mec, 2026-11-04).
+    if (permissionRecordPending.has(sessionId)) {
+      log(`Skipping scraped card for ${sessionId.slice(0, 8)}: its permission dialog has an Approve/Deny card`);
+      return;
+    }
+
     // If this live menu is a real AskUserQuestion tool call, its tool_use is already
     // in the JSONL and the file watcher syncs it as a full-fidelity card. Emitting a
     // scraped card here would be a degraded duplicate, so defer to that path — it also
@@ -15773,7 +15784,7 @@ function scanOpenBackgroundTasksInto(
       timestamp?: string;
       operation?: string;
       content?: unknown;
-      attachment?: { prompt?: unknown };
+      attachment?: { prompt?: unknown; hookName?: unknown };
       message?: { role?: string; content?: unknown };
     };
     try {
@@ -15795,6 +15806,18 @@ function scanOpenBackgroundTasksInto(
     if (d.type === "attachment") {
       const prompt = d.attachment?.prompt;
       if (typeof prompt === "string") closeNotifiedTasks(prompt, open);
+      // A new agent process starts here: the harness records its SessionStart
+      // hooks on startup and on every resume (not on compaction, which keeps
+      // the process). Each task still open was a child of an earlier process
+      // and died with it, unnoticed. The restart fence (notBefore) drops them
+      // too, but only while the daemon still holds the process's start, which
+      // it forgets once the process is gone. So the watchdog, which only sees
+      // dead processes, revived a dormant session on every exit for ten days
+      // over a Monitor that had died on Oct 22 (jx71nrj).
+      else if (d.attachment?.hookName === "SessionStart:startup" || d.attachment?.hookName === "SessionStart:resume") {
+        for (const id of open) { openedAt?.delete(id); info?.delete(id); }
+        open.clear();
+      }
       continue;
     }
     if (d.type !== "user" && d.type !== "assistant") continue;
@@ -17268,7 +17291,7 @@ export type TmuxSubmitVerifyIO = {
 // Which source proved the submit. The loop asks them cheapest first — the pane
 // scrape is already in hand, the turn mark is a map read, the title costs a
 // tmux call — so this tag says which one answered, not which is strongest.
-export type TmuxSubmitEvidence = "hook_working_turn" | "pane_title" | "pane_activity" | "payload_gone";
+export type TmuxSubmitEvidence = "hook_working_turn" | "pane_title" | "pane_activity" | "payload_gone" | "command_panel";
 
 // delivered            — the prompt provably started (or joined) a turn.
 // agent_prompt_blocked — a permission or trust dialog took the keyboard.
@@ -17349,6 +17372,8 @@ export type TmuxSubmitVerifyOpts = {
   paneTitleBefore?: string | null;
   /** The pane's agent session id, when it carries one: the verdict's key. */
   sessionId?: string;
+  /** The payload is a slash command, whose Enter may open a panel (commandPanel.ts). */
+  slashCommand?: boolean;
 };
 
 export async function verifyTmuxSubmitAfterPaste(
@@ -17380,6 +17405,7 @@ async function runTmuxSubmitVerify(
   // A dialog that was already up before the paste is the caller's problem, not
   // this submit's: only one that APPEARS during the window blocks our prompt.
   const blockedBeforePaste = tmuxPaneShowsBlockingPrompt(opts.prePaste);
+  const dialogBeforePaste = opts.slashCommand ? paneDialogQuestion(opts.prePaste) : null;
   // Likewise for the title: a marker the pane already carried (claude writes
   // "_ Claude Code" from boot) can never be news about our paste.
   const titleWorkingBefore = !!opts.paneTitleBefore && PANE_TITLE_WORKING.test(opts.paneTitleBefore);
@@ -17422,6 +17448,11 @@ async function runTmuxSubmitVerify(
     // once walked a Fable credits chooser to "Pay $45.00 now" (ct-38494). Stop
     // here and say so — the caller leaves the row unacked for the healer rather
     // than painting a turn nobody is running.
+    // A panel our command opened is the command having run (commandPanel.ts);
+    // an Enter now would act inside it.
+    const dialogNow = opts.slashCommand ? paneDialogQuestion(pane) : null;
+    if (dialogNow !== null && dialogNow !== dialogBeforePaste) return settle("delivered", "command_panel");
+
     const blockingNow = tmuxPaneShowsBlockingPrompt(pane);
     if (blockingNow && !blockedBeforePaste) {
       io.log("a permission or trust prompt is up after the paste, leaving the message unsubmitted");
@@ -18071,6 +18102,18 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
   // dispatch the correct clearing key per modal, re-classify until paste-safe.
+  if (await closeOwnCommandPanel(target, tmuxExec)) log(`Closed the panel our slash command left open in ${target} before delivering`);
+  // A person's message answers an open question menu (typedMenuReply); a machine's waits for one.
+  // Only a menu the paste guard would hold on (assertPromptAbsent's reading) is answered.
+  const menuPane = !pastDialog && (agentType ?? "claude") === "claude" && !isMachineDeliveredMessage(content)
+    ? (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-80"]).catch(() => ({ stdout: "" }))).stdout : "";
+  const held = menuPane ? parseInteractivePrompt(menuPane, true) : null;
+  const menu = held && (parseInteractivePrompt(menuPane) ?? held);
+  const reply = menu && !promptIsOwnText(menu, sanitized) ? typedMenuReply(menu, content) : null;
+  if (reply) {
+    log(`Answering "${menu!.question}" in ${target} with the person's message`);
+    return injectViaTmuxInner(target, reply, agentType, opts);
+  }
   await ensureTmuxReady(target, agentType, (pane) => assertPromptAbsent(pane, sanitized, pastDialog), captureLines, pastDialog);
 
   // First LINE, not first 40 characters: the submit verifier looks for this
@@ -18288,9 +18331,16 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       pasteAt,
       paneTitleBefore,
       sessionId: (await resolvePaneSessionId()) ?? undefined,
+      slashCommand: mayOpenPanel(sanitized),
     },
   );
   if (verify.outcome === "delivered") delivery?.journal.advance(opts!.delivery!.messageId, "verified");
+  // The panel will not echo the command until it closes, so it is delivered now.
+  if (verify.evidence === "command_panel") {
+    const question = paneDialogQuestion(await captureTmuxComposerPane(tmuxExec, target, captureLines).catch(() => ""));
+    if (question !== null) rememberCommandPanel(target, question);
+    if (opts?.delivery && syncServiceRef) await syncServiceRef.updateMessageStatus({ messageId: opts.delivery.messageId, status: "delivered", deliveredAt: Date.now() }).catch(logConvexFailure);
+  }
   if (verify.outcome === "exited") {
     delivery?.journal.recordTerminalExit(opts!.delivery!.messageId);
     // Propagates to deliverMessage's transient-failure backoff (the old
@@ -18926,14 +18976,15 @@ export async function workflowAgentTranscriptPathFor(sessionId: string): Promise
   if (!workflowTranscriptRefresh || workflowTranscriptRefresh.home !== home) {
     workflowTranscriptRefresh = { home, promise: (async () => {
       const startedAt = Date.now();
-      const store = sessionFileIndexStores(home).find(store => store.agentType === "claude")!;
       const paths = new Map<string, string>();
-      await walkEntryBatches(store.root, { ...store.walk, requireComplete: true }, files => {
-        for (const file of files) {
-          const id = store.idOf(file);
-          if (id && isWorkflowAgentTranscriptPath(file.path) && !paths.has(id)) paths.set(id, file.path);
-        }
-      });
+      for (const store of sessionFileIndexStores(home).filter(store => store.agentType === "claude")) {
+        await walkEntryBatches(store.root, { ...store.walk, requireComplete: true }, files => {
+          for (const file of files) {
+            const id = store.idOf(file);
+            if (id && isWorkflowAgentTranscriptPath(file.path) && !paths.has(id)) paths.set(id, file.path);
+          }
+        });
+      }
       return { home, startedAt, builtAt: Date.now(), paths };
     })() };
   }
@@ -19051,8 +19102,10 @@ function sessionFileIndexStores(home: string): IndexStore[] {
   return [
     // Claude: <project>/<id>.jsonl, <project>/<session>/<id>.jsonl, its
     // subagents/, and subagents/workflows/<run>/ — never tool-results etc.
-    {
-      root: path.join(home, ".claude", "projects"),
+    // One store per config dir (claudeConfigDirs.ts), ~/.claude first so its
+    // copy of a session wins over a copy in another config dir.
+    ...claudeProjectsDirs(home).map((root): IndexStore => ({
+      root,
       agentType: "claude",
       walk: {
         maxDepth: 6,
@@ -19064,7 +19117,7 @@ function sessionFileIndexStores(home: string): IndexStore[] {
         fileFilter: (rel) => rel.endsWith(".jsonl") && segs(rel).length !== 5,
       },
       idOf: (f) => f.name.slice(0, -6),
-    },
+    })),
     // Codex: ~/.codex/sessions/YYYY/MM/DD/<name>-<ts>-<sessionId>.jsonl, recursive.
     {
       root: path.join(home, ".codex", "sessions"),
@@ -19336,7 +19389,7 @@ const recentSessionScans = new Map<string, RecentSessionScan>();
 async function freshSessionObservation(sessionId: string, codexOnly: boolean, complete = false): Promise<SessionFileInfo | null> {
   const home = process.env.HOME || "";
   const generation = sessionFileIndexGeneration;
-  const job: Extract<ScanJob, { name: "recent" }> = { name: "recent", home, sessionId, since: sessionFileIndexBuiltAt - 60_000, codexOnly, complete };
+  const job: Extract<ScanJob, { name: "recent" }> = { name: "recent", home, sessionId, since: sessionFileIndexBuiltAt - 60_000, codexOnly, complete, claudeRoots: claudeProjectsDirs(home) };
   let rows: ScanRow[];
   if (daemonWorkersEnabled()) {
     try { rows = await collectScan(job); }
@@ -20871,12 +20924,6 @@ async function runHeartbeatMaintenance(): Promise<void> {
     await sweepGitPlaneFleet(ids).catch((e) => log(`[GITPLANE] pass error: ${(e as Error)?.message ?? e}`));
   }
 
-  // Shared checkouts that opted in ([ship] level) follow their upstream in
-  // place, touching only files nobody changed (land/levelSweep.ts).
-  if (tick % LEVEL_EVERY_N_FLUSHES === 0) {
-    await sweepLevelCheckouts(ids).catch((e) => log(`[LEVEL] pass error: ${(e as Error)?.message ?? e}`));
-  }
-
   // Reflog tail fallback: the watchers report within a second; this catches
   // anything they missed at the flush cadence. See pollGitActivity.
   await pollGitActivity().catch((e) => log(`[GITACTIVITY] poll error: ${(e as Error)?.message ?? e}`));
@@ -20904,7 +20951,26 @@ async function runHeartbeatMaintenance(): Promise<void> {
 //     past the watchdog's stale-heartbeat threshold on a large repo.
 const WIP_SNAPSHOT_EVERY_N_FLUSHES = 10; // ~5 min (flush = 30s), same cadence as the reaper
 const GIT_PLANE_EVERY_N_FLUSHES = 10; // ~5 min repair latency; fetches self-gate to ~10 min per repo
-const LEVEL_EVERY_N_FLUSHES = 2; // ~1 min: how stale a shared checkout may get behind its upstream
+const LEVEL_SWEEP_INTERVAL_MS = 60_000; // how stale a shared checkout may get behind its upstream
+
+// Shared checkouts that opted in ([ship] level) follow their upstream in place,
+// touching only files nobody changed (land/levelSweep.ts). The sweep keeps its
+// own clock, armed at start: the session heartbeat's maintenance pass runs only
+// while a session is registered, and a line host whose runs all wait at a hold
+// has none, so line-4's checkout stayed behind a pushed commit for six hours
+// (Nov 2) while its holds read their scripts from it.
+let levelSweepInProgress = false;
+async function runLevelSweep(): Promise<void> {
+  if (levelSweepInProgress) return;
+  levelSweepInProgress = true;
+  try {
+    await sweepLevelCheckouts(currentHeartbeatSessions());
+  } catch (e) {
+    log(`[LEVEL] pass error: ${(e as Error)?.message ?? e}`);
+  } finally {
+    levelSweepInProgress = false;
+  }
+}
 
 async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
   if (readConfig()?.level_checkouts_enabled === false) return;
@@ -27878,13 +27944,17 @@ async function findStaleFiles(
   return stale.map((f) => f.path);
 }
 
-export function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
-  return findStaleFiles(
-    path.join(process.env.HOME || "", ".claude", "projects"),
-    { policy: { dirs: "claudeWatch", files: "jsonl" }, maxDepth: 6, dirFilter: watchDirFilter, fileFilter: (rel) => rel.endsWith(".jsonl") },
-    maxAgeMs,
-    (f) => watchFilter(f.rel) && shouldTreatClaudeFileAsStale(f.stat, getSyncRecord(f.path)),
-  );
+export async function findStaleSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<string[]> {
+  const perRoot = [];
+  for (const root of claudeProjectsDirs()) {
+    perRoot.push(await findStaleFiles(
+      root,
+      { policy: { dirs: "claudeWatch", files: "jsonl" }, maxDepth: 6, dirFilter: watchDirFilter, fileFilter: (rel) => rel.endsWith(".jsonl") },
+      maxAgeMs,
+      (f) => watchFilter(f.rel) && shouldTreatClaudeFileAsStale(f.stat, getSyncRecord(f.path)),
+    ));
+  }
+  return perRoot.flat();
 }
 
 export function shouldTreatClaudeFileAsStale(
@@ -29088,7 +29158,7 @@ async function reviveMidWorkSession(
     log(`Watchdog: revive of ${tag} deferred to the next pass (${REVIVE_MAX_PER_PASS} this pass)`);
     return "deferred";
   }
-  if (!governor.admit("revive")) {
+  if (!governor.admit("revive", sessionId)) {
     log(`Watchdog: revive of ${tag} held: machine ${describeLoad()}`);
     return "deferred";
   }
@@ -30379,6 +30449,8 @@ async function main(): Promise<void> {
   void seedLiveWorkflowRuns().catch((err) => logError("seedLiveWorkflowRuns failed", err as Error));
   setInterval(() => { void sweepGoneWorkflowHosts().catch((err) => logError("sweepGoneWorkflowHosts failed", err as Error)); }, 60_000);
   setInterval(() => { void resumeOrphanedWorkflowRuns().catch((err) => logError("resumeOrphanedWorkflowRuns failed", err as Error)); }, WORKFLOW_RESUME_TICK_MS);
+  // Shared and line checkouts follow their upstream, with or without a session (runLevelSweep).
+  setInterval(() => { void runLevelSweep(); }, LEVEL_SWEEP_INTERVAL_MS);
   // Moments (learning-loop.md LL7): a machine that published a product's
   // extractors claims what is due and runs them in the product's checkout.
   setInterval(() => {
@@ -30403,7 +30475,7 @@ async function main(): Promise<void> {
   const canonicalTranscripts = new Map<string, TranscriptCandidate>();
 
   watcher.on("ready", () => {
-    log("Session watcher ready (depth=2)");
+    log(`Session watcher ready (${watcher.roots().join(", ")})`);
   });
 
   // One stat per project directory, not one per file event. The handler
@@ -31089,23 +31161,24 @@ async function main(): Promise<void> {
   // watcher's FSEvents stream may have gone silent across a sleep), and after
   // reconciliation rewinds positions (so its repair actually ships, not just resets).
   const runUnsyncedSweepOnce = async (reason: string) => {
-    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-
-    // Safety check: ensure directory exists
-    if (!fs.existsSync(claudeProjectsDir)) {
+    // Every Claude config dir's projects tree (claudeConfigDirs.ts).
+    const claudeProjectsRoots = claudeProjectsDirs().filter((dir) => fs.existsSync(dir));
+    if (claudeProjectsRoots.length === 0) {
       log(`${reason}: No projects directory found, skipping`);
       return;
     }
 
     let unsyncedFiles: string[] = [];
     try {
-      unsyncedFiles = await findUnsyncedFilesAsync(
-        claudeProjectsDir,
-        undefined,
-        (filePath, observation) => isTranscriptFileInSyncScope(filePath, config, observation?.cwd),
-        watchDirFilter,
-        { dirs: "claudeWatch", files: "jsonl" },
-      );
+      for (const root of claudeProjectsRoots) {
+        unsyncedFiles.push(...await findUnsyncedFilesAsync(
+          root,
+          undefined,
+          (filePath, observation) => isTranscriptFileInSyncScope(filePath, config, observation?.cwd),
+          watchDirFilter,
+          { dirs: "claudeWatch", files: "jsonl" },
+        ));
+      }
     } catch (err) {
       logError(`${reason} failed to find unsynced files`, err instanceof Error ? err : new Error(String(err)));
       return;

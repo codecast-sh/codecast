@@ -1,0 +1,18 @@
+// A segment (flows.md FL2, FL4): after a change lands, the run waits for the
+// deploy that carries it on every target its files touch (deploys.md DP10 to
+// DP13), and ends live with the dp-N per target, or stopped when that deploy
+// failed. It starts no deploy: a target's own policy does (a press, CI on main,
+// a push that deploys itself). The wait parks: while it stands here the run
+// holds no slot and no session. A change that never lands waits out the
+// station's week.
+digraph deploy {
+  graph [kind="segment", label="Deploy", description="Wait until the deploy carrying the landed change is live on every target it touches", takes="branch"]
+  start [shape=Mdiamond]
+  wait [label="Wait for live", shape=parallelogram, parks=true, timeout=604800,
+    script="cd \"$(cast ws path $worktree)\" && cast flow await-deploy --branch $branch --base $default_branch --run $run_id --node $station_id --files \"$change_files\""]
+  live   [shape=Msquare, label="Live"]
+  failed [shape=Msquare, label="Deploy failed", stop="$wait.output"]
+  start -> wait
+  wait -> live   [condition="outcome = success"]
+  wait -> failed [condition="outcome = failure"]
+}

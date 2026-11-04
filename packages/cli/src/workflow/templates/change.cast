@@ -1,21 +1,64 @@
 // A line for a change made in a session (flows.md FL4): checked, reviewed by an
-// independent session, decided by the person who answers for it, then shipped.
+// independent session, decided by the person who answers for it, landed, then
+// watched until the deploy that carries it is live on every target it touches.
 // Each station is a segment from the pool, so a fix to one reaches every flow
 // that uses it. Check is a slot: a flow that extends this one may prove its
 // change with steps of its own (subgraph check { ... }); the project's checks
 // run when nothing fills it. A question typed at Decide goes back to the
 // reviewer, whose verdict note the card is made from, and Decide asks again.
 //
+// The session the change came from is the run's subject. What a stage finds
+// for the change comes back to that session as a message in its own thread: a
+// failed check with its output, the reviewer's findings, the person's Revise
+// note, a rebase conflict. The session fixes it in its own checkout and ends
+// its turn; the run freezes the session's change again and takes it through
+// Check, then every stage after, so what ships is the snapshot Review approved
+// and Decide accepted. Deploy then waits, holding no slot and no session, for
+// the deploy that carries the landed commit, and the session hears the dp-N
+// it went live in, or that the deploy failed. Each way back runs at most three times; the fourth ends
+// the run, and the session hears why. A change run from a branch or a pull
+// request has no session to send it to, and stops at the first finding.
+//
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
 digraph change {
-  graph [kind="line", label="Change", description="Check, review, decide, ship: the standard path for a session's change", takes="task,branch", goal="$task_title", on_failure=stop]
+  graph [kind="line", label="Change", description="Check, review, decide, land, deploy, with the session fixing what each stage finds", takes="task,branch", goal="$task_title", on_failure=stop]
   rankdir=LR
   start [shape=Mdiamond]
   check  [flow="check", slot="Prove the change does what it should"]
   review [flow="review"]
   decide [flow="decide", answerer="review__review"]
-  ship   [flow="ship"]
-  exit [shape=Msquare, label="Done"]
-  start -> check -> review -> decide -> ship -> exit
+  ship   [flow="ship", label="Land"]
+  deploy [flow="deploy"]
+  exit [shape=Msquare, label="Live"]
+
+  fix_check [label="Fix check", backend=subject, max_visits=3,
+    prompt="@change/fix_check.md"]
+  fix_review [label="Address review", backend=subject, max_visits=3,
+    prompt="@change/fix_review.md"]
+  revise [label="Revise", backend=subject, max_visits=3,
+    prompt="@change/revise.md"]
+  fix_conflict [label="Resolve conflict", backend=subject, max_visits=3,
+    prompt="@change/fix_conflict.md"]
+
+  rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
+  dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]
+  unshipped [shape=Msquare, label="Not shipped", stop="$stop_reason"]
+
+  start -> check
+  check -> review
+  check -> fix_check [condition="outcome = failure", label="check failed"]
+  review -> decide
+  review -> fix_review [condition="outcome = failure and review.exit = changes", label="changes asked"]
+  review -> rejected   [condition="outcome = failure and review.exit = rejected", label="rejected"]
+  decide -> ship
+  decide -> revise  [condition="outcome = failure and decide.exit = revise", label="revise"]
+  decide -> dropped [condition="outcome = failure and decide.exit = dropped", label="dropped"]
+  ship -> deploy -> exit
+  ship -> fix_conflict [condition="outcome = failure and ship.exit = conflict", label="conflict"]
+  ship -> unshipped    [condition="outcome = failure and ship.exit = unshipped", label="not shipped"]
+  fix_check -> check
+  fix_review -> check
+  revise -> check
+  fix_conflict -> check
 }
