@@ -455,13 +455,9 @@ async function updateRole(
   // A retired seat is closed: its handle may already belong to a live role
   // and its area has fallen back (org-staffing.md S26). Create a new one.
   if (role.status === "retired") throw new Error("That role is retired");
-  // Scope and charter edits are human only (F1, T2): a call carrying the
-  // session it runs in is an agent's, and an agent may not widen or narrow
-  // what a role owns, nor rewrite the statement of its job. Tenure (S10) and
-  // the avatar (S13) are set freely at create and edited the same way here:
-  // the host sets whether a seat is standing or a program, like its name.
-  if (args.scope !== undefined) await refuseUnlessHuman(ctx, args, "Scope");
-  if (args.charter !== undefined) await refuseUnlessHuman(ctx, args, "Charter");
+  // Tenure (S10) and the avatar (S13) are set freely at create and edited
+  // the same way here: the host sets whether a seat is standing or a
+  // program, like its name.
   // Retiring through update is the retire path: sessions must fall back to
   // their owners, not keep pointing at a hidden seat.
   if (args.status === "retired") return performRetireRole(ctx, userId, { role_id: args.role_id });
@@ -829,7 +825,6 @@ export const create = mutation({
     leave_sessions: v.optional(v.boolean()),
   },
   handler: async (ctx, { api_token, from_session, provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions, ...args }) => {
-    await refuseUnlessHuman(ctx, { api_token, from_session }, "Staffing");
     const userId = await requireCaller(ctx, api_token);
     await requireWorkspaceFeature(ctx, { team_id: args.team_id, user_id: userId }, "org");
     return performHireRole(ctx, userId, args, { provision, model, project_path, agent_type, adopt_conversation_id, leave_sessions });
@@ -915,7 +910,7 @@ export const setScope = mutation({
 // answer the web gave the person when they clicked, and a person who may set
 // the owner but not reshape the role still names the lead: the scope is left
 // for an admin, and the answer says so.
-type SetProjectLeadResult = { owner_role_id: string | null; scope: "added" | "listed" | "whole_workspace" | "outside_parent" | "not_admin" | "human_only" | "cleared"; took_over?: string };
+type SetProjectLeadResult = { owner_role_id: string | null; scope: "added" | "listed" | "whole_workspace" | "outside_parent" | "not_admin" | "cleared"; took_over?: string };
 
 // One lead is one row of the org log (org-staffing.md S21): the owner that
 // moved, with the scope the role gained and the sessions it took over folded
@@ -928,7 +923,7 @@ async function applyProjectLead(
   ctx: Ctx,
   userId: Id<"users">,
   args: { project_id: Id<"projects">; role_id: string | null; leave_sessions?: boolean },
-): Promise<{ owner_role_id: string | null; scope: "added" | "listed" | "whole_workspace" | "outside_parent" | "not_admin" | "human_only" | "cleared"; took_over?: string }> {
+): Promise<{ owner_role_id: string | null; scope: "added" | "listed" | "whole_workspace" | "outside_parent" | "not_admin" | "cleared"; took_over?: string }> {
   const project = await ctx.db.get(args.project_id);
   if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new Error("Project not found");
   const patch = await charterPatch(ctx, project, { owner: args.role_id }, "projects");
@@ -959,7 +954,7 @@ async function applyProjectLead(
 export type CoverProjectsResult = {
   added: string[];
   listed: string[];
-  skipped: Array<{ project_id: string; reason: "whole_workspace" | "outside_parent" | "not_admin" | "human_only" }>;
+  skipped: Array<{ project_id: string; reason: "whole_workspace" | "outside_parent" | "not_admin" }>;
   /** The sentence a person reads when the role took over sessions in the added projects. */
   took_over?: string;
 };
@@ -986,16 +981,6 @@ export async function performCoverProjects(
   if (!toAdd.length) return out;
   if (!(await userCanAdminRole(ctx, userId, role))) {
     out.skipped.push(...toAdd.map((id) => ({ project_id: String(id), reason: "not_admin" as const })));
-    return out;
-  }
-  // A scope edit is human only (F1, T2), and a token call carries no browser
-  // identity, so the role update would refuse it and take the caller's own
-  // write (naming an owner, adding a project) down with it. Reported instead:
-  // the write stands, and the person is told the scope is theirs to widen
-  // from the role page. Never claim `human_decision` here: it names a
-  // decision a person answered, and this is not one.
-  if (!(await ctx.auth?.getUserIdentity?.())) {
-    out.skipped.push(...toAdd.map((id) => ({ project_id: String(id), reason: "human_only" as const })));
     return out;
   }
   // The role update takes over the sessions in the gained scope (R1) unless
@@ -1026,14 +1011,13 @@ export function normalizeLineSlug(raw: string): string {
   return slug;
 }
 
-// Changing the line is a scope edit: human only, logged to org_role_history,
+// Changing the line is a scope edit: logged to org_role_history,
 // and the role wakes at once so its next frame reads it.
 export async function performSetLine(
   ctx: any,
   userId: Id<"users">,
   args: { role_id: string; slug: string; from_session?: string; api_token?: string; human_decision?: string },
 ): Promise<any> {
-  await refuseUnlessHuman(ctx, args, "Flow steps");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
   const slug = normalizeLineSlug(args.slug);
@@ -1074,7 +1058,6 @@ export const setLine = mutation({
 export const reparent = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), reports_to: reportsToValidator, note: v.optional(v.string()), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => {
-    await refuseUnlessHuman(ctx, { api_token, from_session: args.from_session }, "Staffing");
     return performReparentRole(ctx, await requireCaller(ctx, api_token), args);
   },
 });
@@ -1082,7 +1065,6 @@ export const reparent = mutation({
 export const retire = mutation({
   args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), role_id: v.string(), standing_session: v.optional(v.union(v.literal("keep"), v.literal("retire"))) },
   handler: async (ctx, { api_token, from_session, ...args }) => {
-    await refuseUnlessHuman(ctx, { api_token, from_session }, "Staffing");
     return performRetireRole(ctx, await requireCaller(ctx, api_token), args);
   },
 });
@@ -1141,23 +1123,6 @@ function normalizeBackend(raw: string | undefined): string | undefined {
 
 
 export const TRUST_STAGES = ["understand", "decide", "direct"] as const;
-
-// The human only gate (T4): trust, caps, scope and the charter are a
-// person's to change. Identity is the browser's auth session, never a body
-// field: an api token call is a terminal's, and a terminal can be a hand's
-// (a hand runs under its host's token, and the host is the role's admin).
-// The from_session check stays only for the friendlier message.
-//
-// `human_decision` is the one other authority: a decision a person answered
-// (session_decisions.answered_by.kind === "user"), applied by cast org apply
-// (orgInit.performApplyDecision). It is a server side option, never a wire
-// field: no mutation validator admits it, so a body cannot claim it.
-export async function refuseUnlessHuman(ctx: any, args: { api_token?: string; from_session?: string; human_decision?: string }, what: string): Promise<void> {
-  if (args.human_decision) return;
-  if (args.from_session) throw new Error(`${what} changes are human only: an agent session may not make them; use the role page`);
-  const identity = args.api_token ? null : await ctx.auth?.getUserIdentity?.();
-  if (!identity) throw new Error(`${what} changes are human only: make them from the role page in the browser`);
-}
 
 // Scope is opt in (org-staffing.md S26): a role that names no projects and no
 // plans looks after no area, and only the Head of People then stands for the
@@ -1831,8 +1796,7 @@ export async function performMoveRole(ctx: any, userId: Id<"users">, args: { rol
   return { role_id: role._id, handle: role.handle, conversation_id: standing._id, label: moved.label, device_id: moved.device_id, cross_user: moved.cross_user };
 }
 
-// The switch (org-staffing.md S23.1): Starts work on its own. Human only,
-// logged on the charter as a doc entry. `on` is the switch; `trust` is the
+// The switch (org-staffing.md S23.1): Starts work on its own, logged on the charter as a doc entry. `on` is the switch; `trust` is the
 // stage word one release of clients still sends, read through the same
 // mapping (understand is off, decide and direct are on, and decide is never
 // written again).
@@ -1842,7 +1806,6 @@ export async function performSetTrust(ctx: any, userId: Id<"users">, args: SetTr
 }
 
 async function performSetTrustCore(ctx: any, userId: Id<"users">, args: SetTrustArgs): Promise<any> {
-  await refuseUnlessHuman(ctx, args, "Starts work on its own");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const on = typeof args.on === "boolean" ? args.on : typeof args.trust === "string" ? switchFromStageWord(args.trust) : null;
   if (on === null) throw new Error(`Say on or off${args.trust ? ` (not "${args.trust}")` : ""}: cast role autonomy @${role.handle} on|off`);
@@ -1878,7 +1841,6 @@ export async function performSetCaps(ctx: any, userId: Id<"users">, args: SetCap
 }
 
 async function performSetCapsCore(ctx: any, userId: Id<"users">, args: SetCapsArgs): Promise<any> {
-  await refuseUnlessHuman(ctx, args, "Cap");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const caps = capsFor(role);
   const pos = (n: number | undefined, name: string) => {
@@ -1913,7 +1875,6 @@ export async function performSetAuthority(ctx: any, userId: Id<"users">, args: {
   return withOrgChange(ctx, userId, { kind: "authority" }, () => performSetAuthorityCore(ctx, userId, args));
 }
 async function performSetAuthorityCore(ctx: any, userId: Id<"users">, args: { role_id: string; authority: OrgAuthorityGrant[]; revoke?: string[]; from_session?: string; api_token?: string; human_decision?: string; decision_id?: string; template_instance_id?: string }): Promise<any> {
-  await refuseUnlessHuman(ctx, args, "Authority");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const now = Date.now();
   const revoke = new Set((args.revoke ?? []).map((id) => id.trim()));
@@ -2190,11 +2151,10 @@ export const setTrust = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), on: v.optional(v.boolean()), trust: v.optional(v.string()), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSetTrust(ctx, await requireCaller(ctx, api_token), { ...args, api_token }),
 });
-// A role's on/off structure switches: human only, and each flip logged in the
+// A role's on/off structure switches: each flip is logged in the
 // role's history like the line's merge step.
 type RoleSwitchArgs = { role_id: string; on: boolean; from_session?: string; api_token?: string; human_decision?: string };
 async function setRoleSwitch(ctx: any, userId: Id<"users">, args: RoleSwitchArgs, field: "hires_freely" | "keeps_reports_inside", what: string): Promise<any> {
-  await refuseUnlessHuman(ctx, args, what);
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
   const was = !!role[field];

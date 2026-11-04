@@ -488,26 +488,6 @@ describe("org.tree people", () => {
   });
 });
 
-describe("staffing mutations are a person's act", () => {
-  test("create, reparent and retire refuse a token call and a session; the perform functions stay open to the apply core", async () => {
-    const { create, reparent, retire } = await import("./orgRoles");
-    const db = fixtures();
-    const ctx: any = { db };
-    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
-    const calls: Array<[any, any]> = [
-      [create, { api_token: "tok", name: "Ops", handle: "ops", team_id: TEAM }],
-      [reparent, { api_token: "tok", role_id: String(role._id), reports_to: { kind: "user", user_id: MATE } }],
-      [retire, { api_token: "tok", role_id: String(role._id) }],
-      [create, { from_session: "jxhand01", name: "Ops", handle: "ops", team_id: TEAM }],
-    ];
-    for (const [fn, args] of calls) {
-      await expect((fn as any)._handler(ctx, args)).rejects.toThrow(/human only/);
-    }
-    expect(db._tables.org_roles).toHaveLength(1);
-    expect(db._tables.org_roles[0].status).toBe("active");
-  });
-});
-
 describe("org.tree standing state", () => {
   // The 07:00 scene (docs/architecture/org-roles-standing.md): the phone
   // shows the anchor's line, and each lead is coloured by its own declared

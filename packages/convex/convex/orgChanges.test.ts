@@ -232,11 +232,9 @@ describe("org history refuses unsafe undo", () => {
     expect(JSON.stringify(f.db._tables)).toBe(snapshot);
     await expect(f.undo(batch)).rejects.toThrow("Nothing can be restored");
   });
-  test("a non-admin and a session token cannot undo a role change", async () => {
+  test("a non-admin cannot undo a role change", async () => {
     const f = fixture(); await f.role(); const batch = f.last();
     await expect(performUndo(f.ctx(), MATE as any, { batch })).rejects.toThrow("only undo changes");
-    await expect(f.undo(batch, { api_token: "token" })).rejects.toThrow("human only");
-    await expect(f.undo(batch, { from_session: "jx70001" })).rejects.toThrow("human only");
   });
   test("private history is absent from team and outsider reads", async () => {
     const f = fixture(); await performCreateRole(f.ctx(), ME as any, { name: "Private", handle: "private" }); const batch = f.last();

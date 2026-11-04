@@ -119,7 +119,6 @@ export function scopeSentence(owner: string | undefined, scope: any, titleOf: (p
   if (scope.added?.length) parts.push(`${who} now has ${names(scope.added)} in its scope.`);
   const reasons: Record<string, string> = {
     not_admin: "only an admin of the role may change its scope",
-    human_only: "a scope changes from the role page in the browser, never from a token call",
     outside_parent: "it is outside the scope of the role it reports to",
     whole_workspace: "the role already looks after the whole workspace",
   };

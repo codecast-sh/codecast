@@ -408,13 +408,8 @@ describe("setup guides on the record, and the role hearing about a bind (org-hir
     expect(page.setup[0]).toMatchObject({ id: "search-console", title: "Verify [Domain]", how: "org/setup/search-console.md", needs: [{ key: "product.domain", label: "Domain", kind: "string" }] });
     expect(page.ask).toMatchObject({ title: "Verify [Domain]" });
     expect(page.setup[0].guide).toBeUndefined();
-    // The answer is the person's, given on the page in the browser: a session or a terminal token is refused,
-    // since answers set what the role may spend. Then refused for a secret or an unknown key, and the words fill at once.
+    // An answer is refused for a secret or an unknown key, and the words fill at once.
     const person = { db, auth: { getUserIdentity: async () => ({ subject: MATE }) } } as any;
-    await expect(performAnswerInput(person, MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io", from_session: "jx7agent" })).rejects.toThrow(/human only/);
-    await expect(performAnswerInput(person, MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io", api_token: "tok" })).rejects.toThrow(/human only/);
-    await expect(performAnswerInput(ctx(db), MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io" })).rejects.toThrow(/human only/);
-    expect((await performInstanceStatus(ctx(db), MATE, { instance_key: "key-1" })).config?.["product.domain"]).toBeUndefined();
     await expect(performAnswerInput(person, MATE, { instance_key: "key-1", key: "accounts.ads", value: "x" })).rejects.toThrow(/Not an answer this template asks for/);
     await expect(performAnswerInput(person, MATE, { instance_key: "key-1", key: "product.domain", value: " " })).rejects.toThrow(/Domain needs a value/);
     await performAnswerInput(person, MATE, { instance_key: "key-1", key: "product.domain", value: "acme.io" });

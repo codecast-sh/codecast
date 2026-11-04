@@ -8467,8 +8467,10 @@ program
         console.error(`Note: message ${messageId} not found in this conversation — showing the start instead.`);
       }
 
-      const { formatReadResult } = await import("./formatter.js");
-      console.log(formatReadResult(result, { full: options.full, targetLine: result.target_line }));
+      const { formatReadResult, READ_PAGE_CHARS } = await import("./formatter.js");
+      // A person at a terminal scrolls; an agent's shell tool cuts long output to a preview.
+      const maxChars = process.stdout.isTTY ? undefined : READ_PAGE_CHARS;
+      console.log(formatReadResult(result, { full: options.full, targetLine: result.target_line, maxChars }));
 
       // Opt-in, never automatic: reading a session from the CLI is often a
       // glance at someone else's work, and silently clearing their unread dot
@@ -13516,12 +13518,10 @@ function printTookOver(role: { took_over?: { phrase?: string } | null }, left: b
   else if (left) console.log(`  ${c.dim}the sessions in it stay where they are${c.reset}`);
 }
 
-// Scope edits are human only (scopes-and-feed.md F1): the session this runs
-// inside, when any, rides along so the server can refuse an agent's call.
 const collectRefs = (value: string, prev: string[] = []) => [...prev, ...value.split(",").map((s) => s.trim()).filter(Boolean)];
 roleGroup
   .command("scope")
-  .description("Add projects or plans to a role's scope, or remove them (human only)")
+  .description("Add projects or plans to a role's scope, or remove them")
   .argument("<handle>", "The role: @handle or its short id (or-N)")
   .option("--add <ref>", "project:<short id|id|title> or plan:<pl-N|id>; repeatable", collectRefs, [])
   .option("--remove <ref>", "project:<ref> or plan:<ref>; repeatable", collectRefs, [])
@@ -13545,11 +13545,10 @@ roleGroup
     }
   });
 
-// The scope's line (the-line.md L2): read the workflow slug, or set it
-// (human only, like a scope edit).
+// The scope's line (the-line.md L2): read the workflow slug, or set it.
 roleGroup
   .command("line")
-  .description("Show the workflow a role's tasks run on, or change it with --set (human only)")
+  .description("Show the workflow a role's tasks run on, or change it with --set")
   .argument("<handle>", "The role: @handle or its short id (or-N)")
   .option("--set <slug>", "The workflow slug: a shipped template (line, feature) or one you pushed")
   .option("--merge <on|off>", "The line's merge step (the-line.md L12): on, an approved branch merges into the default branch when checks pass, under the role's merge authority")

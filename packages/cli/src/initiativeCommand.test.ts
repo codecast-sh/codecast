@@ -70,10 +70,6 @@ describe("the owner role's scope, in one sentence", () => {
     expect(scopeSentence("@growth", { added: [], listed: ["p"], skipped: [] }, titleOf)).toBeNull();
     expect(scopeSentence("@growth", { added: [], listed: [], skipped: [{ project_id: "p", reason: "whole_workspace" }] }, titleOf)).toBeNull();
   });
-  test("a token call is told the scope is a person's to widen", () => {
-    const s = scopeSentence("@growth", { added: [], listed: [], skipped: [{ project_id: "q", reason: "human_only" }] }, titleOf);
-    expect(s).toBe("Billing was not added to its scope: a scope changes from the role page in the browser, never from a token call.");
-  });
   test("what was added, what was not and why, and who was taken over", () => {
     const s = scopeSentence("@growth", {
       added: ["p"], listed: [], skipped: [{ project_id: "q", reason: "not_admin" }], took_over: "@growth took over 2 sessions.",

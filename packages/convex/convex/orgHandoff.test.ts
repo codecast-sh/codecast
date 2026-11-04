@@ -247,12 +247,11 @@ describe("split a role into two leads (S34)", () => {
     expect(roleRow(tables, a).status).toBe("retired");
   });
 
-  test("refuses a role with no area, a role already handing over, and a split by an agent session", async () => {
+  test("refuses a role with no area, and a role already handing over", async () => {
     const { ctx } = world();
     const a = await seated(ctx, { name: "Growth lead", handle: "growth" }, "seatA");
     const halves = [{ name: "A", handle: "aa", refs: [P1] }, { name: "B", handle: "bb", refs: [P2] }];
     await expect(performSplitRole(ctx, ME as any, { role_id: String(a._id), halves, human_decision: "yes" })).rejects.toThrow("names no area to split");
-    await expect(performSplitRole(ctx, ME as any, { role_id: String(a._id), halves, from_session: "jxseata" })).rejects.toThrow(/human only/);
   });
 });
 

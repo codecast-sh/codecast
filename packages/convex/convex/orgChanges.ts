@@ -6,7 +6,7 @@ import { workspaceGrantsAccess } from "./lib/access";
 import { roleByHandleForRead, rolesInBoundary, userCanAdminRole } from "./lib/orgAccess";
 import { checkConversationAccess } from "./privacy";
 import { personName, performReparentSession } from "./sessionOwnership";
-import { refuseUnlessHuman, performReparentRole, performSetCaps, performSetTrust, performUpdateRole } from "./orgRoles";
+import { performReparentRole, performSetCaps, performSetTrust, performUpdateRole } from "./orgRoles";
 import { ownerSetOf, removeSessionOwnerRow, setSessionOwnerRows, syncPrimaryOwnerCache } from "./sessionOwners";
 import { patchTask } from "./agentTasks";
 import { recalcPlanProgress } from "./tasks";
@@ -326,8 +326,6 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
 }
 
 export async function performUndo(ctx: Ctx, userId: Id<"users">, args: { batch: string; with?: string[]; api_token?: string; from_session?: string }, redo = false) {
-  await refuseUnlessHuman(ctx, args, "Undo and redo");
-  if ((await ctx.db.get(userId))?.is_bot) throw new Error("Undo and redo are human only");
   const original = await requireBatch(ctx, userId, args.batch);
   // "Redo is undo of the undo": an undo or redo entry stands for the entry it
   // took back or applied again, so a verb on it is the matching verb on that

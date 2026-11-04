@@ -4214,6 +4214,14 @@ cliRoute("/cli/line/deploy/stage", async (ctx, body) => ctx.runQuery(api.deploys
 cliRoute("/cli/line/deploy/request", async (ctx, body) => ctx.runMutation(api.deploys.request, body));
 cliRoute("/cli/line/deploy/report", async (ctx, body) => ctx.runMutation(api.deploys.report, body));
 cliRoute("/cli/deploys/get", async (ctx, body) => ctx.runQuery(api.deploys.get, body));
+// Deploy targets (deploys.md DP10 to DP14): the checkout's declared targets, each one's live sha and waiting queue, a deploy of one from codecast, a ship pass.
+cliRoute("/cli/deploys/targets/publish", async (ctx, body) => ctx.runMutation(api.deployTargets.publish, body), { forwardDeviceId: true });
+cliRoute("/cli/deploys/targets", async (ctx, body) => ctx.runQuery(api.deployTargets.view, body));
+cliRoute("/cli/deploys/targets/poll", async (ctx, body) => ctx.runAction(api.deployTargets.pollNow, body));
+cliRoute("/cli/deploys/target/request", async (ctx, body) => ctx.runMutation(api.deployTargets.request, body));
+cliRoute("/cli/deploys/target/for-deploy", async (ctx, body) => ctx.runQuery(api.deployTargets.forDeploy, body));
+cliRoute("/cli/deploys/main-commits", async (ctx, body) => ctx.runMutation(api.deployTargets.reportMainCommits, body));
+cliRoute("/cli/deploys/ship-pass", async (ctx, body) => ctx.runMutation(api.deployTargets.recordShipPass, body), { forwardDeviceId: true });
 // Knowledge handoff (org-staffing.md S32) and the split (S34).
 cliRoute("/cli/role/handoff", async (ctx, body) => ctx.runMutation(api.orgHandoff.write, body));
 cliRoute("/cli/role/handoff/settle", async (ctx, body) => ctx.runMutation(api.orgHandoff.settle, body));
@@ -4282,7 +4290,6 @@ cliRoute("/cli/org/template/setup", async (ctx, body) => ctx.runMutation((api as
 cliRoute("/cli/org/template/lesson", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.fileLesson, body));
 cliRoute("/cli/org/template/lessons", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.listLessons, body));
 cliRoute("/cli/org/template/lesson-status", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.setLessonStatus, body));
-// Human only (refuseUnlessHuman): the CLI call is refused with the reason; the role page calls the mutation directly.
 cliRoute("/cli/org/template/activate", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.activateRoutine, body));
 // The learning loop (org-hire.md H12). The opt-in is a person's (an agent
 // session is refused); the pass, its status and the canary rollout are the
@@ -5098,14 +5105,14 @@ cliRoute("/cli/pr/review", async (ctx, body) => ctx.runAction((api as any).prCli
 // One Ship control (ship.ts): `cast ship run`. A --pr ref resolves the way
 // every cast pr verb resolves one, then the same action the web dispatches runs.
 cliRoute("/cli/ship/run", async (ctx, body) => {
-  const { pr_locator, dry_run, task, session, requester_session, api_token } = body;
+  const { pr_locator, dry_run, task, session, requester_session, api_token, branch } = body;
   let pull_request_id: string | undefined;
   if (pr_locator) {
     const resolved = await ctx.runQuery((api as any).prCli.resolve, { api_token, ...pr_locator });
     if (!resolved?.pull_request) return { error: "No pull request matched that reference" };
     pull_request_id = resolved.pull_request.id;
   }
-  const args = { api_token, task, session, pull_request_id, requester_session };
+  const args = { api_token, task, session, pull_request_id, requester_session, ...(branch ? { branch } : {}) };
   try {
     return await ctx.runMutation(dry_run ? (api as any).ship.previewFromCli : (api as any).ship.startFromCli, args);
   } catch (err) {

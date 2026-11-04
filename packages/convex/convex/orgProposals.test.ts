@@ -179,16 +179,10 @@ describe("orgProposals.decide", () => {
     await expect(decide(0)).rejects.toThrow("op-1 is resolved");
   });
 
-  test("a session caller, a token caller and a caller with no browser identity are refused; a plain member is refused; op-N#seq resolves", async () => {
+  test("a plain member is refused; op-N#seq resolves", async () => {
     const db = fixtures();
     const p = await propose(db, [change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 12 } })]);
     const ctx = ctxOf(db);
-    await expect(performDecideChange(ctx, ME as any, { change_id: p.ids[0], verdict: "accept", from_session: "s1" })).rejects.toThrow("a person's act");
-    await expect(performAcceptAll(ctx, ME as any, { proposal: "op-1", from_session: "s_growth" })).rejects.toThrow("a person's act");
-    // The T4 rule: a token is a terminal's, and a terminal can be a hand's.
-    await expect(performDecideChange(ctx, ME as any, { change_id: p.ids[0], verdict: "accept", api_token: "tok" })).rejects.toThrow("human only");
-    await expect(performAcceptAll(ctx, ME as any, { proposal: "op-1", api_token: "tok" })).rejects.toThrow("human only");
-    await expect(performDecideChange(tokenCtxOf(db), ME as any, { change_id: p.ids[0], verdict: "skip" })).rejects.toThrow("human only");
     await expect(performDecideChange(ctx, MATE as any, { change_id: "op-1#1", verdict: "accept" })).rejects.toThrow("team admin");
     expect((await db.get(p.ids[0] as any)).status).toBe("proposed");
     expect((await db.get(GROWTH as any)).caps).toBeUndefined();
@@ -1015,7 +1009,6 @@ describe("orgProposals asks (S19)", () => {
   test("accepting an ask applies only its changes, in apply order; skipping an ask skips only its changes; a session is refused", async () => {
     const db = fixtures();
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: asked() });
-    await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", from_session: "s_growth" })).rejects.toThrow("a person's act");
     await expect(performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 7, verdict: "accept" })).rejects.toThrow("has 3 asks; there is no ask 7");
     const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false });
     // The project is created before the plan is filed under it, whatever order the ask listed them in.
@@ -1445,8 +1438,6 @@ describe("orgProposals.reply (S39)", () => {
     ]);
     const page = await readProposal(ctxOf(db), ME as any, p.short_id);
     const seen = { revised_at: latestOrgRevisionAt(page.changes) };
-    await expect(performReply(ctxOf(db), ME as any, { proposal: p.short_id, from_session: "s_growth", items: [{ verdict: "approve", seqs: [1] }] })).rejects.toThrow("a person's act");
-    await expect(performReply(tokenCtxOf(db), ME as any, { proposal: p.short_id, api_token: "t", items: [{ verdict: "approve", seqs: [1] }] })).rejects.toThrow();
     await expect(performReply(ctxOf(db), ME as any, { proposal: p.short_id, items: [{ verdict: "approve", seqs: [1] }, { verdict: "note", seqs: [9], text: "x" }] })).rejects.toThrow("items[1]: op-1#9 does not exist");
     await expect(performReply(ctxOf(db), ME as any, { proposal: p.short_id, items: [{ verdict: "approve", seqs: [1] }, { verdict: "reject", seqs: [1] }] })).rejects.toThrow("items[1]: op-1#1 is answered twice");
     await expect(performReply(ctxOf(db), ME as any, { proposal: p.short_id, items: [{ verdict: "reject", seqs: [] }] })).rejects.toThrow("items[0]: an answer with no changes is a note on the whole proposal");
@@ -1817,8 +1808,6 @@ describe("orgProposals hires", () => {
 
   test("leeway to hire is a person's switch, logged", async () => {
     const db = hireFixtures();
-    await expect(performSetHiresFreely(tokenCtxOf(db), ME as any, { role_id: DOCS, on: true, api_token: "t" })).rejects.toThrow("human only");
-    await expect(performSetHiresFreely(ctxOf(db), ME as any, { role_id: DOCS, on: true, from_session: "s_docs" })).rejects.toThrow("human only");
     expect((await performSetHiresFreely(ctxOf(db), ME as any, { role_id: DOCS, on: true })).hires_freely).toBe(true);
     expect((await db.query("org_role_history").collect()).at(-1)).toMatchObject({ field: "hires_freely", old_value: "false", new_value: "true" });
     expect((await performSetHiresFreely(ctxOf(db), ME as any, { role_id: DOCS, on: false })).hires_freely).toBe(false);

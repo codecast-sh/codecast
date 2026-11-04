@@ -752,9 +752,8 @@ describe("orgRoles.setLine (L2)", () => {
     expect(tables.org_role_history).toHaveLength(0);
   });
 
-  test("an agent session may not change the line; a plain member may not either", async () => {
+  test("a plain member may not change the line", async () => {
     const { ctx } = fixtures();
-    await expect(performSetLine(ctx, HOST as any, { role_id: "or-1", slug: "feature", from_session: "standing" })).rejects.toThrow(/human only/);
     await expect(performSetLine(ctx, MATE as any, { role_id: "or-1", slug: "feature", human_decision: "yes" })).rejects.toThrow(/admin/);
   });
 

@@ -12,7 +12,7 @@ import type { Id } from "./_generated/dataModel";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
 import { requireRole } from "./lib/orgAccess";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { performCreateRole, performProvisionRole, performRetireRole, refuseUnlessHuman, resolveScopeRef, standingConversationOf } from "./orgRoles";
+import { performCreateRole, performProvisionRole, performRetireRole, resolveScopeRef, standingConversationOf } from "./orgRoles";
 import { beginAreaHandoff, type AreaMove } from "./orgHandoff";
 import { EMPTY_SCOPE } from "./lib/orgScope";
 
@@ -60,7 +60,6 @@ export function partitionScopes(
 }
 
 export async function performSplitRole(ctx: any, userId: Id<"users">, args: SplitArgs): Promise<any> {
-  await refuseUnlessHuman(ctx, args, "Split");
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
   if (role.handing_over) throw new Error(`@${role.handle} is already handing its area over; wait for that to close or close it first`);

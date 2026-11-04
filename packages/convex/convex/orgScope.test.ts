@@ -151,11 +151,10 @@ describe("F1 scope rules", () => {
     ).rejects.toThrow(/Outside the scope of @other/);
   });
 
-  test("the switch is a person's, logged in the role's history, and off for a role nothing set", async () => {
+  test("the switch is logged in the role's history, and off for a role nothing set", async () => {
     const db = fixtures();
     const role = await roleWithScope(db, "growth", { project_ids: [P], plan_ids: [] });
     expect(role.keeps_reports_inside).toBeUndefined();
-    await expect(performSetKeepsReportsInside(ctxOf(db), ME as any, { role_id: role.short_id, on: true, from_session: "jx1" })).rejects.toThrow(/human only/);
     const on = await performSetKeepsReportsInside(ctxOf(db), ME as any, { role_id: role.short_id, on: true });
     expect(on.keeps_reports_inside).toBe(true);
     const log = await db.query("org_role_history").withIndex("by_role", (q: any) => q.eq("role_id", role._id)).collect();
@@ -177,12 +176,9 @@ describe("F1 scope rules", () => {
     expect(JSON.parse(log[0].new_value)).toEqual({ project_ids: [P], plan_ids: [] });
   });
 
-  test("scope edits are human only, and `cast role scope` resolves refs by short id and title", async () => {
+  test("`cast role scope` resolves refs by short id and title", async () => {
     const db = fixtures();
     const role = await roleWithScope(db, "growth", { project_ids: [], plan_ids: [] });
-    await expect(
-      performUpdateRole(ctxOf(db), ME as any, { role_id: role.short_id, scope: { project_ids: [P as any], plan_ids: [] }, from_session: "jx9" }),
-    ).rejects.toThrow(/human only/);
     const added = await performSetRoleScope(ctxOf(db), ME as any, { role_id: "@growth" === "@growth" ? role.short_id : "", add: ["project:pr-1", "plan:pl-1", "project:Billing"] });
     expect(added.scope).toEqual({ project_ids: [P, Q], plan_ids: [] });
     const removed = await performSetRoleScope(ctxOf(db), ME as any, { role_id: role.short_id, remove: ["project:pr-2"] });

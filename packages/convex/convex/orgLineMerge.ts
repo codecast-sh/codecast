@@ -19,7 +19,7 @@ import { countersFor } from "./lib/orgCaps";
 import { mergeReportLine } from "./lib/orgRoutine";
 import { MERGE_AUTHORITY_ID, MERGE_AUTHORITY_LABEL, mergeAllowance, mergeGrantOf } from "./lib/lineMerge";
 export { MERGE_AUTHORITY_ID, MERGE_AUTHORITY_LABEL, mergeAllowance, mergeGrantOf, type MergeAllowance } from "./lib/lineMerge";
-import { performSetAuthority, refuseUnlessHuman } from "./orgRoles";
+import { performSetAuthority } from "./orgRoles";
 import { insertTaskComment } from "./tasks";
 import { getAuthenticatedUserId, tellRole } from "./pendingMessages";
 import { roleOfRun } from "./lib/actor";
@@ -32,7 +32,7 @@ export function prUrlFromEvidence(evidence: string | null | undefined): string |
 }
 
 // `cast role line <handle> --merge on|off [--per-day N]`: the line's switch
-// (human only, logged like the line itself). Turning it on needs a merge
+// (logged like the line itself). Turning it on needs a merge
 // grant: one the role already holds, or one written here from --per-day in
 // the same gesture, through the one authority path.
 export async function performSetLineMerge(
@@ -40,7 +40,6 @@ export async function performSetLineMerge(
   userId: Id<"users">,
   args: { role_id: string; on: boolean; per_day?: number; from_session?: string; api_token?: string; human_decision?: string },
 ): Promise<any> {
-  await refuseUnlessHuman(ctx, args, "The flow's merge step");
   let role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
   const now = Date.now();

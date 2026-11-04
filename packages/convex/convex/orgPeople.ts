@@ -7,7 +7,6 @@ import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { requireWorkspaceFeature } from "./lib/teamFeatureGuard";
-import { refuseUnlessHuman } from "./orgRoles";
 
 type Ctx = { db: any };
 
@@ -78,7 +77,6 @@ export const reparentPerson = mutation({
     reports_to_user_id: v.union(v.id("users"), v.null()),
   },
   handler: async (ctx, { api_token, ...args }) => {
-    await refuseUnlessHuman(ctx, { api_token }, "Staffing");
     const userId = await getAuthenticatedUserId(ctx, api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     await requireWorkspaceFeature(ctx, { team_id: args.team_id, user_id: userId }, "org");

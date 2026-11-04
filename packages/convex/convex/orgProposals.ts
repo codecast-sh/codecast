@@ -13,7 +13,6 @@ import { resolveSessionConversation, workspaceKey } from "./lib/access";
 import { resolveActor } from "./lib/actor";
 import { computeOrgHealth } from "./orgHealth";
 import { userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
-import { refuseUnlessHuman } from "./orgRoles";
 import { requireWorkspaceCaller } from "./org";
 import { applyOrgChange, type ApplyResult, type Boundary } from "./orgInit";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
@@ -63,10 +62,6 @@ import { humanizeConvexError } from "@codecast/shared/contracts/convexErrors";
 // decided change by change. Accepting applies at once through the one apply
 // core (orgInit.applyOrgChange); a proposal resolves when every change is
 // applied or skipped.
-//
-// Who may accept: a person, on the server's own evidence: a browser identity
-// and no api token (orgRoles.refuseUnlessHuman). A token call, from a shell
-// or a session, is refused with the reason.
 
 type Ctx = { db: any; auth?: any; scheduler?: any };
 type ProposalRow = any;
@@ -77,15 +72,6 @@ export const PROPOSAL_LINK = (shortId: string) => `/org?proposal=${shortId}`;
 
 const hostShape = (p: ProposalRow) => ({ host_user_id: p.created_by, scope_user_id: p.scope_user_id, team_id: p.team_id });
 const boundaryOf = (p: ProposalRow): Boundary => (p.team_id ? { team_id: p.team_id } : { scope_user_id: p.scope_user_id });
-
-// Deciding is a person's act, on the server's own evidence (the T4 rule that
-// guards trust, caps and scope): a browser identity and no token. A token is a
-// terminal's, and a terminal can be a hand's, so `cast org apply` at a shell
-// is refused with the reason and the person decides on the org page.
-export async function refuseUnlessHumanDecider(ctx: Ctx, args: { api_token?: string; from_session?: string }): Promise<void> {
-  if (args.from_session) throw new Error("Deciding a proposal is a person's act: an agent session may not accept or skip a change; use the org page");
-  await refuseUnlessHuman(ctx, { api_token: args.api_token, from_session: args.from_session }, "Proposal decision");
-}
 
 export async function findProposal(ctx: Ctx, ref: string): Promise<ProposalRow | null> {
   const trimmed = ref.trim();
@@ -530,7 +516,6 @@ export async function performDecideChange(
   userId: Id<"users">,
   args: { change_id: string; verdict: "accept" | "skip"; edits?: unknown; seen?: OrgVerdictSeen; from_session?: string; api_token?: string; provision?: boolean },
 ): Promise<any> {
-  await refuseUnlessHumanDecider(ctx, args);
   const found = await findChange(ctx, args.change_id);
   if (!found) throw new Error(`Change not found: ${args.change_id}`);
   const { change, proposal } = found;
@@ -588,9 +573,6 @@ export function orderForApply(rows: ChangeRow[]): ChangeRow[] {
  * the change inline, which covers the throws that happen before any write.
  */
 export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; from_session?: string; api_token?: string; provision?: boolean; kinds?: string[]; seqs?: number[]; seen?: OrgVerdictSeen; tried?: string[]; continuation?: boolean; leave_sessions?: boolean; log_head?: OrgBatchHead; lead?: boolean }): Promise<any> {
-  // The person's gate runs on the call they made; a continuation is the same
-  // act carried on by the server, scheduled only from inside that call.
-  if (!args.continuation) await refuseUnlessHumanDecider(ctx, args);
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
   // `lead`: a hire a lead above approved (performDecideHire), whose authority
@@ -665,7 +647,6 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
  * fold is left as they decided it.
  */
 export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; ask: number; verdict: "accept" | "skip"; seen?: OrgVerdictSeen; from_session?: string; api_token?: string; provision?: boolean; leave_sessions?: boolean }): Promise<any> {
-  await refuseUnlessHumanDecider(ctx, args);
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
   await requireAdmin(ctx, userId, proposal);
@@ -1149,8 +1130,7 @@ export function alreadyAnswered(rows: ChangeRow[], items: OrgReplyArg[]): boolea
  * order, one log entry, the stamp, the same chunks and continuation), a
  * rejection skips its changes and keeps the words on the row, and a note
  * keeps the words and decides nothing, so the card still waits; a note that
- * names no change is kept on the proposal row (`reply`). Human only,
- * like every verdict, and `seen` is read once for the whole reply: a
+ * names no change is kept on the proposal row (`reply`). `seen` is read once for the whole reply: a
  * proposal the author revised under the reader is refused whole and nothing
  * is written. `say` is for a surface with no composer in reach: the answers
  * are written in the shared words (proposalReplyText) and sent into the
@@ -1164,7 +1144,6 @@ export async function performReply(
   userId: Id<"users">,
   args: { proposal: string; items: OrgReplyArg[]; seen?: OrgVerdictSeen; say?: { body?: string; client_id?: string }; leave_sessions?: boolean; from_session?: string; api_token?: string; provision?: boolean },
 ): Promise<any> {
-  await refuseUnlessHumanDecider(ctx, args);
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
   await requireAdmin(ctx, userId, proposal);

@@ -16,20 +16,18 @@ function fixture() {
     counters: [], org_roles: [], org_role_history: [], org_changes: [], anchors: [], session_owners: [], managed_sessions: [], tasks: [], projects: [], plans: [], docs: [],
     conversations: [{ _id: "conversations_s", short_id: "jx7ssss", user_id: ME, team_id: TEAM, status: "active", title: "CMO", agent_type: "claude_code", updated_at: 1 }],
   });
-  // A signed in person: the human only gate reads a browser identity (refuseUnlessHuman).
   return { db, ctx: { db, auth: { getUserIdentity: async () => ({ subject: ME }) } } as any };
 }
 const DAY = 86_400_000;
 
 describe("role authority", () => {
-  test("a person grants, the list is stored with expiry and provenance, a revoke removes one, an agent session is refused", async () => {
+  test("a person grants, the list is stored with expiry and provenance, a revoke removes one", async () => {
     const { db, ctx } = fixture();
     const role = await performCreateRole(ctx, ME, { name: "CMO", handle: "acme-cmo", team_id: TEAM });
     // Seated the way provisioning seats it, so a change reaches its rail.
     db._tables.anchors.push({ _id: "anchors_cmo", bot_user_id: ME, org_role_id: role._id, conversation_id: "conversations_s", status: "active" });
     await db.patch(role._id, { anchor_id: "anchors_cmo" });
     await db.patch("conversations_s", { standing_role_id: role._id, anchor_id: "anchors_cmo" });
-    await expect(performSetAuthority(ctx, ME, { role_id: role._id, authority: [{ id: "ads-spend", kind: "spend", label: "Paid search" }], from_session: "jx7agent" })).rejects.toThrow(/human only/);
     const before = Date.now();
     const granted = await performSetAuthority(ctx, ME, { role_id: role._id, authority: [
       { id: "ads-spend", kind: "spend", label: "Paid search on the configured campaign", limit: { usd_per_month: 300 }, expires: "90d" },

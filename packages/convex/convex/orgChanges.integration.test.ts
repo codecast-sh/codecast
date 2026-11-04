@@ -11,7 +11,7 @@ const modules = {
   "./orgRoles.ts": () => import("./orgRoles"),
 };
 
-test("authenticated history API applies, previews, undoes, redoes, and enforces workspace and human gates", async () => {
+test("authenticated history API applies, previews, undoes, redoes, and enforces workspace gates", async () => {
   const t = convexTest(schema, modules);
   const seed = await t.run(async (ctx) => {
     const user = await ctx.db.insert("users", { name: "Owner" });
@@ -41,9 +41,7 @@ test("authenticated history API applies, previews, undoes, redoes, and enforces 
   expect(preview.will_change).toHaveLength(1);
   expect(preview.refused).toBeUndefined();
   expect((await t.run((ctx) => ctx.db.get(roleId)))?.caps.hands_per_day).toBe(8);
-  await expect(t.withIdentity({ subject: `${seed.bot}|test` }).mutation(anyApi.orgChanges.undo, { batch })).rejects.toThrow("human only");
   await expect(member.mutation(anyApi.orgChanges.undo, { batch })).rejects.toThrow("only undo changes");
-  await expect(owner.mutation(anyApi.orgChanges.undo, { batch, from_session: "test-session" })).rejects.toThrow("human only");
   await expect(outsider.query(anyApi.orgChanges.get, { batch })).rejects.toThrow("not found");
   expect(await outsider.query(anyApi.orgChanges.list, { team_id: seed.team })).toBeNull();
   const undo = await owner.mutation(anyApi.orgChanges.undo, { batch });

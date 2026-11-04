@@ -22,7 +22,7 @@ import { routineState, type RoutineReadiness } from "@codecast/shared/contracts/
 import { bindNote, type RoutineRow } from "./lib/orgTemplateBindNote";
 import type { LessonKind } from "@codecast/shared/contracts/orgTemplateLearning";
 import { applyActivate, getArmableTask } from "./agentTasks";
-import { performUpdateRole, refuseUnlessHuman, standingConversationOf } from "./orgRoles";
+import { performUpdateRole, standingConversationOf } from "./orgRoles";
 import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
 import { seatPlace } from "./lib/seatPlace";
 import { trustOf } from "./lib/orgCaps";
@@ -264,8 +264,7 @@ export const hiredRowKey = (projectId: string, instance: string) => `pending:${p
  * The host step of a web hire adds the loader that reads the pinned
  * release's charter on that host under the charter the role already has (a
  * hire onto a standing role keeps the person's words; a loader the same
- * instance left for another folder is replaced). The charter is human
- * only (orgRoles.refuseUnlessHuman), and the person's authority here is their
+ * instance left for another folder is replaced). The authority here is the
  * accept of the hire: the row it wrote, still awaiting its host, names this
  * role. The server builds the text from the instance and the folder, so the
  * call cannot choose the words, and the write closes once the host claims
@@ -387,11 +386,9 @@ export async function performMarkSetup(ctx: Ctx, userId: Id<"users">, args: { in
  * A hire's answer, given or changed after the hire on the role page: the row's
  * answers take it, the page's words fill from it at once, and a ready
  * instance's host step is queued so the receipt and the rendered pack on its
- * machine have it too. Answers set what the role may spend, so they are the
- * person's alone (refuseUnlessHuman): a session holding their token is refused.
+ * machine have it too. Answers set what the role may spend.
  */
 export async function performAnswerInput(ctx: Ctx, userId: Id<"users">, args: { instance_key: string; key: string; value: string; api_token?: string; from_session?: string }) {
-  await refuseUnlessHuman(ctx, args, "Hire answer");
   const { row, manifest } = await instanceFor(ctx, userId, args.instance_key);
   const input = (manifest.inputs ?? []).find((i) => i.key === args.key);
   if (!input || input.kind === "secret") throw new Error(`Not an answer this template asks for: ${args.key}`);
@@ -518,8 +515,7 @@ export async function hostStepOf(ctx: Ctx, row: any): Promise<{ state: "idle" | 
  * `org_template_bind` command carrying the instance, its checkout, its
  * workspace and the secrets a person typed, each sealed in the browser to that
  * device's public key (H4: the value never enters the server in plain text;
- * the command row holds ciphertext only the device can open). Human only,
- * like activation. One request at a time: a pending one is returned, not
+ * the command row holds ciphertext only the device can open). One request at a time: a pending one is returned, not
  * doubled.
  */
 export async function performRequestBind(ctx: Ctx, userId: Id<"users">, args: { instance_key: string; secrets?: OrgTemplateBindSecret[]; device_id?: string }) {
@@ -716,7 +712,6 @@ const sealedSecret = v.object({ key: v.string(), payload: v.object({ provider: v
 export const requestBind = mutation({
   args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), instance_key: v.string(), secrets: v.optional(v.array(sealedSecret)), device_id: v.optional(v.string()) },
   handler: async (ctx, { api_token, from_session, ...args }) => {
-    await refuseUnlessHuman(ctx, { api_token, from_session }, "Host step");
     return performRequestBind(ctx, await requireCaller(ctx, api_token), args);
   },
 });

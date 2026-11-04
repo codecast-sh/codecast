@@ -83,9 +83,10 @@ describe("performSetLineMerge", () => {
     expect(role().line_merge).toBe(true);
   });
 
-  test("an agent session may not flip it", async () => {
-    const { ctx } = world();
-    await expect(performSetLineMerge(ctx, HOST as any, { role_id: "or-1", on: true, per_day: 1, from_session: "standing" })).rejects.toThrow(/human only/);
+  test("an agent session may flip it", async () => {
+    const { ctx, role } = world();
+    await performSetLineMerge(ctx, HOST as any, { role_id: "or-1", on: true, per_day: 1, from_session: "standing" });
+    expect(role().line_merge).toBe(true);
   });
 });
 

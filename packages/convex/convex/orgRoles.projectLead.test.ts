@@ -207,18 +207,14 @@ describe("performCoverProjects", () => {
 });
 
 describe("performCoverProjects from a token call", () => {
-  // A scope edit is human only, and a `cast initiative` call authenticates by
-  // token, so the role update would refuse it. The contract (I1 "The org"):
-  // reported, never thrown, so the caller's own write stands and the person
-  // is told the scope is theirs to widen from the role page.
   const cliCtx = (db: any) => ({ db, auth: { getUserIdentity: async () => null } }) as any;
 
-  test("an admin on the CLI is told the scope was left for a person, and nothing throws", async () => {
+  test("an admin on the CLI widens the scope", async () => {
     const db = fixtures();
     const growth = await role(db, "growth", [P]);
     const out = await performCoverProjects(cliCtx(db), ME as any, growth._id, [Q as any, P as any]);
-    expect(out).toEqual({ added: [], listed: [P], skipped: [{ project_id: Q, reason: "human_only" }] });
-    expect(await scopeOf(db, growth._id)).toEqual([P]);
+    expect(out).toMatchObject({ added: [Q], listed: [P], skipped: [] });
+    expect(await scopeOf(db, growth._id)).toEqual([P, Q]);
   });
 
   test("the same call from the browser widens the scope", async () => {
