@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { isCompactionSummaryMessage } from "@codecast/shared/contracts";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { usePaneShortcutAction } from "../shortcuts";
 import { useInboxStore } from "../store/inboxStore";
@@ -35,7 +36,7 @@ export function useMessageSelection({
   const setSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
 
   const getUserMessageIndices = useCallback((): number[] => {
-    const SKIP_PREFIXES = ["[Request interrupted", "This session is being continued", "<task-notification>", "<system-reminder>", 'Background agent "'];
+    const SKIP_PREFIXES = ["[Request interrupted", "<task-notification>", "<system-reminder>", 'Background agent "'];
     const indices: number[] = [];
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
@@ -43,7 +44,7 @@ export function useMessageSelection({
       if (item.data.role !== "human" && item.data.role !== "user") continue;
       if (item.data.subtype) continue;
       const content = (item.data.content || "").trim();
-      if (!content || SKIP_PREFIXES.some(p => content.startsWith(p))) continue;
+      if (!content || isCompactionSummaryMessage(content) || SKIP_PREFIXES.some(p => content.startsWith(p))) continue;
       indices.push(i);
     }
     return indices;

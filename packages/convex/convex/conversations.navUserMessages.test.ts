@@ -6,6 +6,7 @@ import {
   NAV_USER_MESSAGES_SCAN_LIMIT,
 } from "./conversations";
 import { makeFakeDb } from "./testDb";
+import { navPromptField, navPromptPatch } from "./userMessagesFilter";
 
 // Regression for the "too many system operations" timeout on getUserMessages:
 // the user-role index range is mostly tool results, so an unbounded collect
@@ -151,5 +152,91 @@ describe("collectNavigableUserMessages", () => {
     expect(out).toHaveLength(40);
     expect(out[0].content).toBe("prompt 0");
     expect(out[39].content).toBe("prompt 39");
+  });
+});
+
+// jx7d8av, 2026-11-03: a lead session's newest stretch held ~1,250 user-role
+// rows of tool results and worker messages. The newest-first scan filled its
+// 50-row floor with worker messages and spent the byte budget, the oldest pass
+// started with nothing left, and the navigator showed 1 of 140 typed prompts.
+// Rows flagged for the prompt index (navPromptField, as every write sets them)
+// are read off by_conversation_nav_prompt, so the tool results never cost a
+// read and every prompt arrives.
+describe("collectNavigableUserMessages on the prompt index", () => {
+  const CONV = "conversations_1" as any;
+
+  function flagged(row: any) {
+    return { ...row, ...navPromptField(row) };
+  }
+
+  function leadSessionRows() {
+    const rows: any[] = [];
+    let ts = 10;
+    rows.push(flagged({ _id: "messages_first", conversation_id: CONV, role: "user", content: "opening prompt", timestamp: ts++ }));
+    for (let i = 0; i < 600; i++) {
+      rows.push(flagged({ _id: `messages_old_tr_${i}`, conversation_id: CONV, role: "user", content: "", tool_results: [{ tool_use_id: `t${i}`, content: "y".repeat(5_000) }], timestamp: ts++ }));
+    }
+    for (let i = 0; i < 20; i++) {
+      rows.push(flagged({ _id: `messages_typed_${i}`, conversation_id: CONV, role: "user", content: `typed prompt ${i}`, timestamp: ts++ }));
+    }
+    for (let i = 0; i < 1_200; i++) {
+      rows.push(flagged({ _id: `messages_tr_${i}`, conversation_id: CONV, role: "user", content: "", tool_results: [{ tool_use_id: `u${i}`, content: "x".repeat(2_000) }], timestamp: ts++ }));
+      if (i % 20 === 0) {
+        rows.push(flagged({ _id: `messages_worker_${i}`, conversation_id: CONV, role: "user", content: `<session-message from="jx7aaaa">worker report ${i}</session-message>`, timestamp: ts++ }));
+      }
+    }
+    return rows;
+  }
+
+  test("the bounded scan misses the typed prompts behind the worker wall", async () => {
+    const out = await collectNavigableUserMessages(makeFakeDb({ messages: leadSessionRows() }), CONV);
+    expect(out.filter((m) => m.content.startsWith("typed prompt"))).toHaveLength(0);
+  });
+
+  test("the prompt index returns every typed prompt", async () => {
+    const out = await collectNavigableUserMessages(makeFakeDb({ messages: leadSessionRows() }), CONV, true);
+    expect(out.filter((m) => m.content.startsWith("typed prompt"))).toHaveLength(20);
+    expect(out[0].content).toBe("opening prompt");
+    expect(out.some((m) => m.content.includes("worker report"))).toBe(true);
+    expect(out.every((m) => m.content !== "")).toBe(true);
+  });
+});
+
+describe("navPromptField / navPromptPatch", () => {
+  test("flags typed prompts and images, never tool results or notices", () => {
+    expect(navPromptField({ role: "user", content: "fix the bug" })).toEqual({ nav_prompt: true });
+    expect(navPromptField({ role: "user", content: "", tool_results: [{ tool_use_id: "t", content: "ok" }] })).toEqual({});
+    expect(navPromptField({ role: "assistant", content: "done" })).toEqual({});
+    expect(navPromptField({ role: "user", content: "", images: [{ media_type: "image/png", storage_id: "s1" }] })).toEqual({ nav_prompt: true });
+    expect(navPromptField({ role: "user", content: "This session is being continued from a previous conversation" })).toEqual({});
+  });
+
+  test("a patch sets, clears, or leaves the flag", () => {
+    const empty = { role: "user" as const, content: "" };
+    expect(navPromptPatch(empty, { images: [{ media_type: "image/png", storage_id: "s1" }] })).toEqual({ nav_prompt: true });
+    const prompt = { role: "user" as const, content: "hi", nav_prompt: true as const };
+    expect(navPromptPatch(prompt, { content: "This session is being continued" })).toEqual({ nav_prompt: undefined });
+    expect(navPromptPatch(prompt, { content: "hello" })).toEqual({});
+    expect(navPromptPatch(prompt, null)).toEqual({});
+  });
+});
+
+// Every user-role message a mutation writes must carry its flag, or the
+// prompt index silently drops it. Assistant rows never qualify.
+describe("message inserts set nav_prompt", () => {
+  test("every user-role or dynamic-role insert goes through navPromptField", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const offenders: string[] = [];
+    for (const file of readdirSync(import.meta.dir)) {
+      if (!file.endsWith(".ts") || file.includes(".test.")) continue;
+      const src = readFileSync(`${import.meta.dir}/${file}`, "utf8");
+      const re = /(?:db\.insert\("messages",|insertMessage\()\s*\{([\s\S]*?)\n\s*\}\);/g;
+      for (const m of src.matchAll(re)) {
+        const body = m[1];
+        if (/role:\s*"assistant"/.test(body)) continue;
+        if (!/navPromptField\(|nav_prompt:/.test(body)) offenders.push(`${file}: ${body.trim().slice(0, 60)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

@@ -35,6 +35,7 @@ import {
   parseVaultReady,
   parseWorkflowHarnessFrame,
   CHAT_WAKE_HEADER,
+  isCompactionSummaryMessage,
 } from "@codecast/shared/contracts";
 import { LRUCache } from "../lib/lruCache";
 export type { HuddleSummaryTag } from "@codecast/shared/contracts";
@@ -509,6 +510,7 @@ function cleanUserMessageUncached(raw: string): string | null {
   // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the
   // user's own prompt — skip it so it never surfaces as the sticky fallback or card preview.
   if (isMachineDeliveredMessage(raw)) return null;
+  if (isCompactionSummaryMessage(raw)) return null;
   // A poll answer is JSON the dashboard sent for the person; the sticky header
   // showed one raw on the scope page (2026-09-17).
   if (isPollResponsePayload(raw)) return null;

@@ -9,7 +9,7 @@
 // be returned here. Keeping that invariant at the source means no client has to
 // re-filter by role (a guard that has been silently dropped by refactors twice).
 
-import { AGENT_SWITCH_NOTICE_PREFIX, MACHINE_SWITCH_NOTICE_PREFIX, MACHINE_MOVE_NOTICE_PREFIX, isAgentContextMessage, isBootstrapPrompt, isPollResponsePayload, isTurnInterruptionNotice } from "@codecast/shared/contracts";
+import { AGENT_SWITCH_NOTICE_PREFIX, MACHINE_SWITCH_NOTICE_PREFIX, MACHINE_MOVE_NOTICE_PREFIX, isAgentContextMessage, isBootstrapPrompt, isCompactionSummaryMessage, isPollResponsePayload, isTurnInterruptionNotice } from "@codecast/shared/contracts";
 
 export type FilterableMessage = {
   _id: string;
@@ -45,8 +45,6 @@ export function isImportNotice(content: string | null | undefined): boolean {
   return !!content && content.trimStart().startsWith(IMPORT_NOTICE_PREFIX);
 }
 
-const COMPACTION_SUMMARY_PREFIX = "This session is being continued";
-
 const USER_NOISE_PREFIXES = [
   "<local-command-stdout>",
   "<local-command-stderr>",
@@ -57,7 +55,6 @@ const USER_NOISE_PREFIXES = [
   AGENT_SWITCH_NOTICE_PREFIX,
   MACHINE_SWITCH_NOTICE_PREFIX,
   MACHINE_MOVE_NOTICE_PREFIX,
-  COMPACTION_SUMMARY_PREFIX,
   "Your task is to create a detailed summary",
   "Please continue the conversation",
   "Read the output file to retrieve the result:",
@@ -71,8 +68,7 @@ const SUMMARY_MARKER =
  *  or the prompt that asked for it. The session's own recap, not a turn. */
 export function isCompactionMessage(m: { subtype?: string; content?: string | null }): boolean {
   if (m.subtype === "compact_boundary") return true;
-  const t = (m.content ?? "").trimStart();
-  return t.startsWith(COMPACTION_SUMMARY_PREFIX) || t.includes(SUMMARY_MARKER);
+  return isCompactionSummaryMessage(m.content) || (m.content ?? "").includes(SUMMARY_MARKER);
 }
 
 // Navigator rows carry a snippet, not the body: the list only ever shows two
@@ -108,9 +104,33 @@ export function isNavigableUserMessage(m: FilterableMessage): boolean {
   // (the same recogniser the scope page cuts the thread on).
   if (isBootstrapPrompt(t)) return false;
   if (USER_NOISE_PREFIXES.some((p) => t.startsWith(p))) return false;
-  if (t.includes(SUMMARY_MARKER)) return false;
+  if (isCompactionSummaryMessage(t) || t.includes(SUMMARY_MARKER)) return false;
   if (m.tool_results && m.tool_results.length > 0 && t.length < 5) return false;
   return true;
+}
+
+// The `nav_prompt` flag a message row carries: set exactly when the row
+// passes isNavigableUserMessage, so the navigator reads its rows off the
+// by_conversation_nav_prompt index instead of walking every tool result in the
+// user-role range. Absent (never false) when the row is not navigable, so the
+// field costs nothing on the 90% of user-role rows that are tool results.
+type NavJudged = Omit<FilterableMessage, "_id" | "timestamp">;
+
+export function navPromptField(m: NavJudged): { nav_prompt?: true } {
+  return isNavigableUserMessage(m as FilterableMessage) ? { nav_prompt: true } : {};
+}
+
+// What to add to a patch so the flag follows the row's new content: nothing
+// when it already agrees, `undefined` (which removes the field) when the row
+// stopped being navigable.
+export function navPromptPatch(
+  existing: NavJudged & { nav_prompt?: true },
+  patch: Record<string, unknown> | null,
+): { nav_prompt?: true | undefined } {
+  if (!patch) return {};
+  const next = !!navPromptField({ ...existing, ...patch } as NavJudged).nav_prompt;
+  if (next === !!existing.nav_prompt) return {};
+  return { nav_prompt: next ? true : undefined };
 }
 
 // The narrow row the navigator renders — two lines, never the body.

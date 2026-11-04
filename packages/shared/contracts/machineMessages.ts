@@ -7,8 +7,26 @@ import type { SecretKind } from "./secrets";
 // lifts on one (convex inboxFilters), and a recovery quotes it (convex handoff).
 export const COMPACTION_SUMMARY_PREFIX = "This session is being continued from a previous conversation";
 
+// Claude Code can open the summary with a provenance note: an
+// `<artifact-content-authored-by-others/>` tag and a sentence asking the model
+// to treat restated content as data. The summary proper starts after it, so
+// every check reads past the note and every display drops it. A preview
+// slice can end inside the note, so the note's own opening also counts.
+const SUMMARY_PROVENANCE_OPENING_RE = /^\s*<artifact-content-[\w-]*[^>]*>\s*The summarized conversation\b/;
+const SUMMARY_PROVENANCE_RE = new RegExp(
+  `^\\s*<(artifact-content-[\\w-]*)[^>]*>[\\s\\S]{0,2000}?(?=${COMPACTION_SUMMARY_PREFIX})`,
+);
+
+export function stripCompactionProvenance(text: string): string {
+  const m = text.match(SUMMARY_PROVENANCE_RE);
+  if (!m) return text;
+  return text.slice(m[0].length).replace(new RegExp(`\\s*</${m[1]}>\\s*$`), "");
+}
+
 export function isCompactionSummaryMessage(rawContent: string | null | undefined): boolean {
-  return !!rawContent && stripInjectionNoise(rawContent).trimStart().startsWith(COMPACTION_SUMMARY_PREFIX);
+  if (!rawContent) return false;
+  const text = stripInjectionNoise(rawContent);
+  return SUMMARY_PROVENANCE_OPENING_RE.test(text) || stripCompactionProvenance(text).trimStart().startsWith(COMPACTION_SUMMARY_PREFIX);
 }
 
 // Detection of user-role messages that machinery delivered into a session
