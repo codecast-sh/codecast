@@ -41,6 +41,7 @@ import { accountPoolTables } from "./accountPoolSchema";
 import { managedDeviceTables, teamPolicyValidator } from "./managedDevicesSchema";
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { momentsTables } from "./momentsSchema";
+import { deployTables } from "./deploySchema";
 import { lineTrialTables } from "./lineTrialSchema";
 import { orgRoleTokenTables } from "./orgRoleTokensSchema";
 import { liveFlowTables } from "./liveFlowsSchema";
@@ -150,6 +151,7 @@ export default defineSchema({
   // External data: sources, groups, samples, replays, metric watches, app calls (external-data.md).
   ...ingestTables,
   ...momentsTables,
+  ...deployTables,
   ...lineTrialTables,
   ...orgRoleTokenTables,
   ...liveFlowTables,
@@ -310,6 +312,9 @@ export default defineSchema({
     walkie_snoozed_until: v.optional(v.number()),
     timezone: v.optional(v.string()),
     hide_activity: v.optional(v.boolean()),
+    // The weekly card (weeklyCards.ts): built each Monday for the week just
+    // ended and offered to share. Off unless the person turns it on.
+    weekly_card_enabled: v.optional(v.boolean()),
     // Public-profile opt-in. A claimed, unique handle (lowercase alnum+dash) that
     // forms the anonymous URL /u/<username>; github_username only pre-fills the
     // suggestion. `public_profile_enabled` is the master switch — until it's true
@@ -400,7 +405,9 @@ export default defineSchema({
     .index("by_github_id", ["github_id"])
     .index("by_username", ["username"])
     .index("by_team_id", ["team_id"])
-    .index("by_last_heartbeat", ["last_heartbeat"]),
+    .index("by_last_heartbeat", ["last_heartbeat"])
+    // The Monday weekly card sweep reads only the people who turned it on.
+    .index("by_weekly_card", ["weekly_card_enabled"]),
 
   // Per-user skills blob, split out of the users doc. The users doc is patched
   // on every heartbeat, and Convex versions the WHOLE doc per patch — carrying
@@ -462,6 +469,13 @@ export default defineSchema({
     // workspace and for every device enrolled in the team (lib/teamPolicyGuard),
     // and sent to those devices on the heartbeat.
     policy: v.optional(teamPolicyValidator),
+    // The library flow a session's change is offered first (flows.md FL4): a
+    // flow's slug, set by an admin on /flows. Unset: the shipped `change`.
+    default_flow: v.optional(v.string()),
+    // The role that answers for the team: Slack, team chat, @anchor and
+    // decision talk (anchors.workspaceAgentRoleOf). Set by an admin in Team
+    // settings. Unset: the Head of People.
+    workspace_agent_role_id: v.optional(v.id("org_roles")),
     // IANA zone the team's day is cut in (Changes editions, lib/teamDay.ts).
     // Unset: the earliest admin's users.timezone, else UTC.
     timezone: v.optional(v.string()),
@@ -828,7 +842,7 @@ export default defineSchema({
     // is the reply). Hidden from the feed via is_subagent.
     comment_fork_parent: v.optional(v.id("conversations")),
     comment_fork_message_id: v.optional(v.string()),
-    comment_fork_comment_id: v.optional(v.id("comments")),
+    comment_fork_comment_id: v.optional(v.union(v.id("comments"), v.id("review_comments"))),
     comment_fork_prompt_at: v.optional(v.number()),
     // Denormalized comment signal for the inbox card, recomputed by
     // comments.refreshCommentSignal on every comment create/resolve/delete.
@@ -1044,6 +1058,13 @@ export default defineSchema({
     // this only marks that the pre-feature history was caught up. Set = never
     // sweep this conversation again.
     images_backfilled_at: v.optional(v.number()),
+    // When every message in this conversation carries its nav_prompt flag
+    // (backfillNavPrompts). Until then getUserMessages scans the user-role
+    // range; after, it reads the prompt index. Set = never sweep again.
+    nav_prompts_indexed_at: v.optional(v.number()),
+    // When the running backfillNavPrompts sweep started; a later open does not
+    // start a second one unless this is stale. Cleared when the sweep finishes.
+    nav_prompts_backfill_started_at: v.optional(v.number()),
     has_pending_messages: v.optional(v.boolean()),
     // True while the conversation's newest message is a transient Claude Code
     // API/auth-error banner (see isApiErrorBanner). Cleared when a real turn
@@ -2338,6 +2359,12 @@ export default defineSchema({
       cache_read_input_tokens: v.optional(v.number()),
     })),
     embedding: v.optional(v.array(v.float64())),
+    // True on a row the message navigator lists (isNavigableUserMessage),
+    // absent otherwise. Written at every insert and patch through
+    // navPromptField/navPromptPatch, so getUserMessages reads prompts off
+    // by_conversation_nav_prompt instead of scanning the user-role range,
+    // which is mostly tool results.
+    nav_prompt: v.optional(v.literal(true)),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
@@ -2347,6 +2374,7 @@ export default defineSchema({
     .index("by_message_uuid", ["message_uuid"])
     .index("by_timestamp", ["timestamp"])
     .index("by_conversation_role_timestamp", ["conversation_id", "role", "timestamp"])
+    .index("by_conversation_nav_prompt", ["conversation_id", "nav_prompt", "timestamp"])
     .searchIndex("search_content_v2", {
       searchField: "content",
       filterFields: ["conversation_id"],
@@ -2587,6 +2615,9 @@ export default defineSchema({
     .index("by_user_file", ["user_id", "file_path"])
     .index("by_timestamp", ["timestamp"]),
 
+  // History: conversation comments written before 2026-11-03. Nothing writes
+  // this table; every comment, these included, is read and written through
+  // its review_comments row (commentStore.ts).
   comments: defineTable({
     conversation_id: v.id("conversations"),
     message_id: v.optional(v.id("messages")),
@@ -2634,6 +2665,7 @@ export default defineSchema({
     // every conversation the viewer can access).
     .index("by_created_at", ["created_at"]),
 
+  // Retired: no function reads or writes it. Kept until confirmed empty.
   public_comments: defineTable({
     conversation_id: v.id("conversations"),
     user_id: v.id("users"),
@@ -3412,7 +3444,12 @@ export default defineSchema({
       changes: v.number(),
       patch: v.optional(v.string()),
     }))),
+    // When it reached the repository's default branch, in push order (a push's
+    // commits a millisecond apart): what orders main, so a target's waiting
+    // queue is the commits after its live sha (deploys.md DP12).
+    main_at: v.optional(v.number()),
   })
+    .index("by_repository_main", ["repository", "main_at"])
     .index("by_conversation_id", ["conversation_id"])
     .index("by_timestamp", ["timestamp"])
     .index("by_sha", ["sha"])
@@ -3818,8 +3855,9 @@ export default defineSchema({
     // `content` its note, `conversation_id` the conversation it quotes. Its
     // author's alone, before and after sending; the send stamps `sent_*` and
     // lib/reviewAnswered stamps `answered_*` like any sent note. Every other
-    // reader of this table skips these rows (isQuoteRow).
-    origin: v.optional(v.literal("quote")),
+    // reader of this table skips these rows (isQuoteRow). Origin "comment"
+    // marks a conversation comment (below).
+    origin: v.optional(v.union(v.literal("quote"), v.literal("comment"))),
     message_id: v.optional(v.id("messages")),
     block_index: v.optional(v.number()),
     // The quoted text and where it sat (shared/comments/proseAnchor.ts).
@@ -3839,12 +3877,13 @@ export default defineSchema({
     due_at: v.optional(v.number()),
     promise_task_id: v.optional(v.id("tasks")),
     promise_signaled_at: v.optional(v.number()),
-    // ── Conversation comment twins (commentTwins.ts) ──
-    // A copy of one `comments` row, written in the same mutation as the row
-    // (dual write) while `comments` stays the source of truth. The source's
+    // ── Conversation comments (commentStore.ts, lib/conversationCommentRows) ──
+    // Conversation comments live here: rows with origin "comment", and the
+    // twins of `comments` rows written before the write path moved
+    // (source_comment_id, the id such a comment still goes by). A comment's
     // pull request and GitHub id sit in their own fields, so no pull request
-    // or GitHub reader of this table can reach a twin; every other reader
-    // skips it (isCommentTwin).
+    // or GitHub reader of this table can reach one; every other reader skips
+    // them (isConversationComment).
     source_comment_id: v.optional(v.id("comments")),
     source_pr_id: v.optional(v.id("pull_requests")),
     source_github_comment_id: v.optional(v.number()),
@@ -4016,7 +4055,8 @@ export default defineSchema({
     version: v.optional(v.string()),
     // The CI run or the page that shows the deploy.
     url: v.optional(v.string()),
-    commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()) }))),
+    // What went out, with the session whose Codecast-Session trailer each commit carries.
+    commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()), conversation_id: v.optional(v.id("conversations")) }))),
     // The fixes it carried (contracts/deploys DeployCarry).
     carries: v.array(v.object({
       task_id: v.id("tasks"),
@@ -4029,6 +4069,16 @@ export default defineSchema({
     })),
     // Why it failed, or the deploy command's last words.
     note: v.optional(v.string()),
+    // What was asked (DP13): a deploy of main's head, a redeploy of an earlier
+    // deploy's sha, or the target's rollback command; rollback_of names the
+    // deploy (dp-N) whose sha it puts back.
+    action: v.optional(v.union(v.literal("deploy"), v.literal("redeploy"), v.literal("rollback"))),
+    rollback_of: v.optional(v.string()),
+    // Files under the target's sources that were uncommitted when it went out:
+    // the sha names every commit up to it, and these went too.
+    dirty: v.optional(v.number()),
+    // The `cast ship checkout` pass that sent it (DP11).
+    ship_pass_id: v.optional(v.id("ship_passes")),
     // The line-deploy run that carries it through its steps (DP8): each
     // step's state is that run's station, read from the run, never copied here.
     run_id: v.optional(v.id("workflow_runs")),
@@ -4042,7 +4092,8 @@ export default defineSchema({
     .index("by_project_created", ["project_id", "created_at"])
     .index("by_source_created", ["source_id", "created_at"])
     .index("by_repository_created", ["repository", "created_at"])
-    .index("by_project_status", ["project_id", "status"]),
+    .index("by_project_status", ["project_id", "status"])
+    .index("by_workspace_target_created", ["workspace", "target", "created_at"]),
 
   // Read-through cache of repository content fetched with the GitHub App
   // token for the source browser and history pages: branch lists, trees,
@@ -4196,6 +4247,9 @@ export default defineSchema({
     words: v.number(),
     text: v.string(),
     clipped: v.boolean(),
+    // A decision answer: the question it answered, and whether it picked an
+    // option (shown, not counted as typing) or was written.
+    decision: v.optional(v.object({ question: v.string(), picked: v.boolean() })),
   })
     .index("by_team_timestamp", ["team_id", "timestamp"])
     .index("by_message", ["message_id"]),
@@ -4215,6 +4269,29 @@ export default defineSchema({
   })
     .index("by_user_day", ["user_id", "day_start"])
     .index("by_user_team_day", ["user_id", "team_id", "day_start"]),
+
+  // A person's week with coding agents (shared contracts/weeklyCard): one row
+  // per (user, local Monday). `stats` is built by weeklyCards.generate and
+  // never holds a title, prompt, path or teammate; project names ride in it
+  // but reach the public page only with show_projects. share_token is the
+  // publicShare "card" kind's link; while it is set, the options are locked so
+  // nothing reaches the page that the owner did not confirm.
+  weekly_cards: defineTable({
+    user_id: v.id("users"),
+    workspace: v.string(),
+    week_key: v.string(),
+    week_start: v.number(),
+    tz: v.string(),
+    stats: v.any(),
+    generated_at: v.number(),
+    show_projects: v.optional(v.boolean()),
+    show_tokens: v.optional(v.boolean()),
+    share_token: v.optional(v.string()),
+    // When the Monday sweep told the owner this week's card is ready.
+    notified_at: v.optional(v.number()),
+  })
+    .index("by_user_week", ["user_id", "week_key"])
+    .index("by_share_token", ["share_token"]),
 
   // A session's usage not yet folded into user_usage_daily, per UTC day.
   usage_pending: defineTable({
@@ -4625,14 +4702,19 @@ export default defineSchema({
       v.literal("team_join_request"),
       v.literal("team_join_approved"),
       // A passkey added to or removed from the recipient's account (passkeys.ts).
-      v.literal("passkey_changed")
+      v.literal("passkey_changed"),
+      // The person's weekly card is ready to look at and share (weeklyCards.ts).
+      v.literal("weekly_card"),
+      // A metric watch that names the recipient crossed its line, is still
+      // past it, or recovered (metricAlerts.ts).
+      v.literal("metric_alert")
     ),
     actor_user_id: v.optional(v.id("users")),
     // Display identity for actors without an account (an anonymous artifact
     // commenter): name + avatar snapshot, used when actor_user_id is absent.
     actor_name: v.optional(v.string()),
     actor_avatar: v.optional(v.string()),
-    comment_id: v.optional(v.id("comments")),
+    comment_id: v.optional(v.union(v.id("comments"), v.id("review_comments"))),
     conversation_id: v.optional(v.id("conversations")),
     entity_type: v.optional(v.union(
       v.literal("task"),
@@ -4653,7 +4735,11 @@ export default defineSchema({
       // A machine by daemon device id: the overload alert opens its offload review.
       v.literal("machine"),
       // A passkey added or removed: opens Settings > Accounts.
-      v.literal("passkey")
+      v.literal("passkey"),
+      // A weekly card by its week key: opens /week on that week.
+      v.literal("weekly_card"),
+      // A metric watch by its short id: opens /ops/metrics/mw-N.
+      v.literal("metric_watch")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -8207,6 +8293,8 @@ export default defineSchema({
       activity: v.optional(v.string()),
       // What a call node's model calls cost, summed over its visits (learning-loop.md LL1).
       cost_usd: v.optional(v.number()),
+      // How many times the run has entered this station; the graph's max_visits is its limit.
+      visits: v.optional(v.number()),
     })),
     goal_override: v.optional(v.string()),
     project_path: v.optional(v.string()),
@@ -8215,6 +8303,9 @@ export default defineSchema({
     // The session that ran `cast workflow run`: session nodes spawn under it
     // (spawned_by, and so its org role) whichever process executes the run.
     spawner_conversation_id: v.optional(v.id("conversations")),
+    // The run is waiting on the session its change came from (flows.md FL4): the station that sent it work, since
+    // when, and what it sent, cut short. Cleared when the session settles and when the run ends.
+    waiting_on_session: v.optional(v.object({ node_id: v.string(), conversation_id: v.string(), since: v.number(), note: v.string() })),
     // The role whose line started the run (the sweep, LE6). Its open cards
     // count by this, so a role with no standing session, or one whose
     // standing session changed, still holds its slots (learning-loop.md LL5).
@@ -8462,7 +8553,11 @@ export default defineSchema({
       // A machine, for the overload alert. Direct recipients only. Same reason.
       v.literal("machine"),
       // A passkey, for its owner's add and remove notices. Same reason.
-      v.literal("passkey")
+      v.literal("passkey"),
+      // A weekly card, for its owner's Monday notice. Same reason.
+      v.literal("weekly_card"),
+      // A metric watch, for its alert to the people it names. Same reason.
+      v.literal("metric_watch")
     ),
     entity_id: v.string(),
     reason: v.union(

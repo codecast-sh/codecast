@@ -1,11 +1,11 @@
-import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon, ListTodo, Newspaper, Radar, Network, KeyRound } from "lucide-react";
+import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon, ListTodo, Newspaper, Radar, Network, KeyRound, Rocket } from "lucide-react";
 import type { ReactNode } from "react";
 import { Command as CommandPrimitive } from "cmdk";
 import { SessionGlyph, SessionIdentityLine } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { paletteRowTime, sessionCardTitle } from "../lib/sessionCard";
-import { useHostedMode, useSurface } from "../lib/surfaces";
+import { sessionCardTitle } from "../lib/sessionCard";
+import { formatDateSmart } from "@codecast/shared/time";
 import { paletteSearchValue, paletteSessionValue } from "../lib/paletteRowValues";
 import { AvatarImg } from "../lib/avatarCache";
 import { getProjectName } from "../store/inboxStore";
@@ -74,6 +74,8 @@ export function NavIcon({ type, className }: { type: string; className?: string 
       return <LinkIcon className={c} />;
     case "newspaper":
       return <Newspaper className={c} />;
+    case "rocket":
+      return <Rocket className={c} />;
     case "radar":
       return <Radar className={c} />;
     case "key":
@@ -166,12 +168,11 @@ function LabelChip({ label }: { label?: string | null }) {
   );
 }
 
-/** A session's project: a colored dot and the repo's name. Hosted mode has no projects. */
+/** A session's project: a colored dot and the repo's name. */
 function ProjectChip({ directory }: { directory?: string | null }) {
   const getLabelColor = useLabelColor();
-  const shown = useSurface("gitChips");
   const project = getProjectName(directory ?? undefined);
-  if (!shown || project === "unknown") return null;
+  if (project === "unknown") return null;
   return (
     <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim max-w-[120px]" title={directory || project}>
       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-60 ${getLabelColor(project).dot}`} />
@@ -191,11 +192,6 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
   device?: Device;
   onSelect: () => void;
 }) {
-  // Hosted mode keeps a row to its name, its labels and its age: no project,
-  // machine or set-aside state.
-  const machineShown = useSurface("machineChips");
-  const shelfShown = useSurface("triageBar");
-  const hostedTime = useHostedMode();
   const isTeam = conv.isOwn === false;
   const shelved = !!standing?.shelf;
   const authorFirst = conv.authorName?.split(" ")[0];
@@ -220,11 +216,11 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
         title={sessionCardTitle(conv)}
         className={`flex-1 ${shelved || standing?.sub ? "opacity-60 group-data-[selected=true]:opacity-100" : ""}`}
       />
-      {shelfShown && standing?.shelf && (
+      {standing?.shelf && (
         <span className="text-[10px] text-sol-text-dim/80 flex-shrink-0">{standing.shelf}</span>
       )}
       <LabelChip label={bucket?.name} />
-      {machineShown && device && (
+      {device && (
         <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim max-w-[110px]" title={`Runs on ${deviceDisplayName(device)}`}>
           <DeviceIcon d={device} className="w-3 h-3 flex-shrink-0 opacity-70" />
           <span className="truncate">{deviceDisplayName(device)}</span>
@@ -234,7 +230,7 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
       {isTeam && authorFirst && (
         <span className="text-[10px] text-sol-text-dim flex-shrink-0" title={`${conv.authorName}'s session`}>· {authorFirst}</span>
       )}
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={paletteRowTime(hostedTime)} /></span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -272,16 +268,12 @@ export function PaletteSearchResultRow({ result, label, query = "", onSelect }: 
 }) {
   const terms = query ? parseSessionQuery(query).text : "";
   const row = identityRowOf({ _id: result.conversationId, title: result.title, ...(result.identity ?? {}) });
-  const internals = useSurface("search.internals");
-  const hostedTime = useHostedMode();
-  // Hosted mode reads a hit's words as prose: no markdown marks, no escaped
-  // line breaks.
   const found = result.matches?.[0]?.content;
   // A hit on the first message says what the "began as" line above already
   // shows: one of the two is enough.
   const flat = (text: string) => plainSnippet(text).replace(/\s+/g, " ").trim().toLowerCase().slice(0, 80);
   const echoesOrigin = !!found && !!result.origin?.started_as && flat(found) === flat(result.origin.started_as);
-  const snippetText = !found || echoesOrigin ? undefined : !internals ? plainSnippet(found) : found;
+  const snippetText = !found || echoesOrigin ? undefined : found;
   return (
     <CommandPrimitive.Item
       data-palette-type="session" data-palette-id={result.conversationId} data-palette-title={result.title}
@@ -310,15 +302,15 @@ export function PaletteSearchResultRow({ result, label, query = "", onSelect }: 
       </div>
       <LabelChip label={label} />
       <ProjectChip directory={result.projectPath} />
-      {internals && <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
         {result.titleMatch
           ? "title"
           : result.matches?.length
           ? `${result.matches.length} match${result.matches.length !== 1 ? "es" : ""}`
           // An operator-only query (file:, pr:, ...) matches the session, not a message.
           : "filter"}
-      </span>}
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={result.updatedAt} format={paletteRowTime(hostedTime)} /></span>
+      </span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={result.updatedAt} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -347,8 +339,6 @@ export function PaletteTaskRow({ task, status, onSelect, valuePrefix = "__entity
   /** PALETTE_KIND when the query named to-dos by their word. */
   valuePrefix?: string;
 }) {
-  // A task's id is machinery in hosted mode; its title and state name it.
-  const hosted = useHostedMode();
   return (
     <CommandPrimitive.Item
     data-palette-type="task" data-palette-id={task._id} data-palette-title={task.title} data-palette-short-id={task.short_id}
@@ -356,15 +346,11 @@ export function PaletteTaskRow({ task, status, onSelect, valuePrefix = "__entity
       onSelect={onSelect}
       className={itemClass}
     >
-      {/* Hosted mode draws a to-do with the rail's own glyph, and says its
-          state only once it is done, in ink: an open to-do is the default. */}
-      {hosted ? <span className="flex-shrink-0 text-sol-text-dim"><NavIcon type="check" /></span> : <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />}
+      <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
       <span className="truncate flex-1">{task.title || "Untitled"}</span>
-      {status && (hosted
-        ? task.status === "done" && <span className="text-[10px] flex-shrink-0 text-sol-text-muted">Done</span>
-        : <span className={`text-[10px] flex-shrink-0 ${status.color}`}>{status.label}</span>)}
-      {!hosted && <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />}
-      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={task.updated_at} format={paletteRowTime(hosted)} /></span>
+      {status && <span className={`text-[10px] flex-shrink-0 ${status.color}`}>{status.label}</span>}
+      <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={task.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }

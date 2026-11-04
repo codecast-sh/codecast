@@ -3,12 +3,17 @@
 import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { activeTeamIdOf } from "../lib/activeTeam";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { stableRefId } from "../store/wakeSig";
 import { isViewersWorkflow } from "../store/lineWorkflowSlice";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
+import { appPool, takesSessionChange } from "../lib/line/flowPool";
+import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
+
+const graphTakesBranch = (w: { source?: string | null }) => flowGraphAttr(w?.source, "kind") === "line" && /\bbranch\b/.test(flowGraphAttr(w?.source, "takes") ?? "");
 
 const api = _api as any;
 
@@ -47,6 +52,15 @@ export function usePoolFlowRows(workspace?: string | null): any[] {
   const { workflows: own } = useWorkflows();
   const published = useWorkspaceCollection<any>("workflows", workflowSig, workspace ?? null);
   return useMemo(() => [...own, ...published.slice().sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))], [own, published]);
+}
+
+/** The slug a team set as its default flow (teams.setDefaultFlow), or null when it set none or there is no team (the
+ *  personal workspace). The active team unless one is named. Resolve it against a pool with defaultFlowOf. */
+export function useTeamDefaultFlowSlug(teamId?: string | null): string | null {
+  return useInboxStore((s) => {
+    const team = teamId === undefined ? activeTeamIdOf(s) : teamId;
+    return (team && ((s.teams || []) as Array<{ _id: string; default_flow?: string }>).find((t) => String(t._id) === team)?.default_flow) || null;
+  });
 }
 
 /** Feeder: the viewer's workflow of one slug, whatever its age (webList is a
@@ -124,9 +138,10 @@ export function useSyncWorkflowRun(runId: string | null | undefined) {
 
 const runSig = (r: any) =>
   `${r.status}|${r.current_node_id ?? ""}|${r.updated_at ?? 0}|${r.total_tokens ?? 0}|${r.agent_count ?? 0}|${r.gate_prompt ?? ""}|` +
+  `${r.waiting_on_session?.node_id ?? ""}:${r.waiting_on_session?.since ?? 0}|${r.merge?.sha ?? ""}|${r.gate_decision_id ?? ""}|` +
   (r.node_statuses ?? []).map((n: any) =>
     `${n.node_id}:${n.status}:${n.session?._id ?? ""}:${n.session?.is_active ? 1 : 0}:${n.session?.title ?? ""}:${n.session?.message_count ?? 0}:` +
-    `${n.completed_at ?? 0}:${n.outcome ?? ""}:${n.tokens ?? 0}:${n.activity ?? ""}:${n.result_preview ? 1 : 0}`,
+    `${n.completed_at ?? 0}:${n.outcome ?? ""}:${n.tokens ?? 0}:${n.activity ?? ""}:${n.result_preview ? 1 : 0}:${n.visits ?? 0}`,
   ).join(",");
 const runNewestFirst = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
@@ -169,4 +184,30 @@ export function useWorkflow(id: string | null | undefined): any | null | undefin
   const row = useInboxStore((s) => (id ? (s.workflows as any)[id] : undefined));
   if (!id) return undefined;
   return row ?? (ready ? null : undefined);
+}
+
+/** The shipped flows a session's change goes through. A session also starts runs of other flows (a deploy, a line run),
+ *  which other feeds bring into the same collection; those are not its Ship. */
+const SHIPPED_SESSION_FLOWS = new Set(appPool().filter((f) => f.kind === "line" && takesSessionChange(f)).flatMap((f) => [f.slug, f.name]));
+
+/** Feeder: the runs a session started for its change (convex sessionFlowRuns), live ones first. */
+export function useSyncSessionFlowRuns(conversationId: string | null | undefined) {
+  return useSyncCollection("workflowRuns", api.sessionFlowRuns.forConversation, conversationId ? { conversation_id: conversationId } : "skip");
+}
+
+/** Reader: a session's own flow runs, newest first (undefined while cold and empty). */
+export function useSessionFlowRuns(conversationId: string | null | undefined): any[] | undefined {
+  const { ready } = useSyncSessionFlowRuns(conversationId);
+  // A team's own flow counts when its graph in the store says it takes a branch.
+  const teamFlows = useInboxStore((s) => {
+    const out: string[] = [];
+    for (const w of Object.values((s.workflows ?? {}) as Record<string, any>)) if (graphTakesBranch(w)) out.push(w.slug, w.name);
+    return out.sort().join("|");
+  });
+  const where = useMemo(() => {
+    const ok = new Set([...SHIPPED_SESSION_FLOWS, ...teamFlows.split("|").filter(Boolean)]);
+    return (r: any) => !!conversationId && String(r.spawner_conversation_id ?? "") === conversationId && r.run_kind !== "workflow" && (ok.has(r.workflow_slug ?? "") || ok.has(r.workflow_name ?? ""));
+  }, [conversationId, teamFlows]);
+  const rows = useWorkflowRuns(where);
+  return rows.length || ready ? rows.slice().sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)) : undefined;
 }

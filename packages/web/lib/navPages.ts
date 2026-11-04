@@ -1,15 +1,12 @@
 // The palette's Pages rows, and which of them a viewer sees. Kept out of the
-// palette so the rule (team features, then the surface registry's pages) is
-// testable without mounting it.
+// palette so the rule (team features) is testable without mounting it.
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { localDay } from "./changesDay";
-import type { SurfaceMode } from "./surfaceRules";
 import type { ShortcutAction } from "../shortcuts/registry";
 
 // Ranked by expected use. `secondary` pages are reachable only by typing:
 // they'd otherwise pad the empty-palette view that lives or dies by scan speed.
 export const NAV_PAGES: ReadonlyArray<{
-  /** The developer name; a page named by mode reads SurfaceMode.page. */
   label: string;
   /** A function when the address depends on when the row is picked (yesterday's edition). */
   path: string | (() => string);
@@ -27,7 +24,6 @@ export const NAV_PAGES: ReadonlyArray<{
 }> = [
   { label: "Dashboard", path: "/team/activity", icon: "grid", keywords: "home sessions main activity feed team" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting", action: "nav.inbox" },
-  // "Approvals" in hosted mode (SurfaceMode.page), where Cmd+2 opens it.
   { label: "Decisions", path: "/decisions", icon: "bell", keywords: "ok approve approvals questions decisions waiting answer team mine" },
   { label: "Threads", path: "/threads", icon: "message", keywords: "threads replies comments conversations unread mentions dms" },
   { label: "Chat", path: "/chat", icon: "message", keywords: "channels team talk messages rooms", feature: "chat" },
@@ -44,9 +40,14 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Evals", path: "/evals", icon: "grid", keywords: "evals evaluations prompts surfaces regression trend freezes runs judge bisect attribution score", secondary: true },
   { label: "Multiplayer sim", path: "/evals/sim", icon: "workflow", keywords: "multiplayer sim simulator store invariants interleave scenarios shrink swim lanes sync", secondary: true },
   { label: "Triggers", path: "/triggers", icon: "clock", keywords: "triggers routines schedules cron automation recurring followup reminders" },
-  { label: "Signals", path: "/ops", icon: "radar", keywords: "signals sources ops errors issues sentry posthog incidents checks jobs replays metrics alerts deploys production monitoring" },
-  { label: "Signals: issues", path: "/ops/issues", icon: "radar", keywords: "errors issues groups exceptions stack sentry", secondary: true },
-  { label: "Signals: replays", path: "/ops/replays", icon: "radar", keywords: "session replays recordings repro", secondary: true },
+  { label: "Ops", path: "/ops", icon: "radar", aliases: ["Signals"], keywords: "ops overview whats wrong now alerting regressed incidents errors issues sentry posthog checks jobs replays metrics alerts deploys production monitoring", action: "nav.ops" },
+  // The Ops tabs in the shell's own order (opsPaths OPS_TABS).
+  { label: "Ops: Timeline", path: "/ops/timeline", icon: "radar", aliases: ["Timeline"], keywords: "timeline events deploys transitions history", secondary: true },
+  { label: "Ops: Issues", path: "/ops/issues", icon: "radar", aliases: ["Issues", "Errors"], keywords: "errors issues groups exceptions stack sentry regressed", secondary: true },
+  { label: "Ops: Replays", path: "/ops/replays", icon: "radar", aliases: ["Replays", "Recordings"], keywords: "session replays recordings repro posthog rrweb", secondary: true },
+  { label: "Ops: Metrics", path: "/ops/metrics", icon: "radar", aliases: ["Metrics", "Watches"], keywords: "metrics watches alerts thresholds hogql series charts", secondary: true },
+  { label: "Ops: Apps", path: "/ops/apps", icon: "radar", keywords: "app connector readers actions grants calls", secondary: true },
+  { label: "Ops: Sources", path: "/settings/integrations#product-sources", icon: "radar", aliases: ["Sources", "Source settings"], keywords: "ops sources connect sentry posthog ingest key sdk github ci health", secondary: true },
   { label: "Agent features", path: "/agent-features", icon: "grid", keywords: "agent features snippets cast install memory messaging tasks triggers browser computer skills stable context teach" },
   { label: "Capabilities", path: "/capabilities", icon: "grid", keywords: "skills mcp plugins drift machines library apps connect" },
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
@@ -59,16 +60,17 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Org", path: "/org", icon: "network", aliases: ["Team", "Company"], keywords: "people mission roles organization org chart reporting structure members canvas" },
   { label: "Goals", path: "/org/goals", icon: "map", aliases: ["Roadmap"], keywords: "goal initiatives objectives strategy mission health progress owner" },
   { label: "Projects", path: "/org/projects", icon: "grid", keywords: "project leads progress status active planning paused" },
+  { label: "Deploys", path: "/deploys", icon: "rocket", aliases: ["Releases"], keywords: "deploy ship release live waiting rollback roll back ci backend web cli mobile desktop" },
   { label: "Changes", path: "/changes", icon: "newspaper", keywords: "open changes edition shipped released landed today commits stories what changed changelog", feature: "changes" },
   { label: "Changes: yesterday", path: () => `/changes?d=${localDay(-1)}`, icon: "newspaper", keywords: "edition shipped landed commits stories what changed", feature: "changes", secondary: true },
   { label: "Changes: risks only", path: "/changes?risk=1", icon: "newspaper", keywords: "edition risky risk flags deploy shipped what changed", feature: "changes", secondary: true },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
   { label: "Workflows", path: "/routines", icon: "workflow", keywords: "orchestration runs graph dot gates routines", secondary: true },
-  { label: "Trial", path: "/trial", icon: "file", keywords: "trial cards agentwatch line runs stop at the card review answer what would ship", secondary: true },
+  { label: "Trial", path: "/trial", icon: "file", keywords: "trial cards agentwatch line runs stop at the card review answer what would ship", secondary: true, feature: "line" },
   { label: "Expectations", path: "/expectations", icon: "file", keywords: "expectations how the product should behave rules behavior spec quoted sources proposals findings breaks judges", secondary: true },
-  { label: "Flows", path: "/flows", icon: "workflow", keywords: "flows line findings problems signals causes build cards watch shipped factory throughput owners", secondary: true },
-  { label: "Flow settings", path: "/flows/settings", icon: "settings", keywords: "flow line profile finders principles prompting commands check prove eval ship size budget watch days cards cap stations steps prompts customize line.toml", secondary: true },
+  { label: "Flows", path: "/flows", icon: "workflow", keywords: "flows line findings problems signals causes build cards watch shipped factory throughput owners", secondary: true, feature: "line" },
+  { label: "Flow settings", path: "/flows/settings", icon: "settings", keywords: "flow line profile finders principles prompting commands check prove eval ship size budget watch days cards cap stations steps prompts customize line.toml", secondary: true, feature: "line" },
   { label: "Live Sessions", path: "/sessions", icon: "session", keywords: "running machines devices liveness", secondary: true },
   { label: "Resources", path: "/resources", icon: "session", keywords: "cpu memory activity monitor load pressure processes offload cloud", secondary: true },
   { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates", secondary: true },
@@ -90,21 +92,33 @@ export const NAV_PAGES: ReadonlyArray<{
 
 export type NavPage = (typeof NAV_PAGES)[number];
 
-/** A page's address for the surface registry: a dated address is still its
- *  page (/changes?d=... is /changes). */
+/** A page's address: a dated address is still its page (/changes?d=... is /changes). */
 export function pagePath(page: NavPage): string {
   return typeof page.path === "string" ? page.path : page.path();
 }
 
-/** The Pages rows to list, each with its name in this mode. Secondary pages
- *  show only while searching; a page whose team feature is off, or whose
- *  surface the mode hides (SurfaceMode.showsPage), never shows. */
+/** The Pages rows to list. Secondary pages show only while searching; a
+ *  page whose team feature is off never shows. */
 export function palettePages(
-  mode: SurfaceMode,
   featureOn: (feature: TeamFeatureKey | undefined) => boolean | undefined,
   searching: boolean,
 ): Array<{ page: NavPage; label: string }> {
   return NAV_PAGES
-    .filter((p) => (searching || !p.secondary) && featureOn(p.feature) && mode.showsPage(pagePath(p)))
-    .map((page) => ({ page, label: mode.page(pagePath(page), page.label) }));
+    .filter((p) => (searching || !p.secondary) && featureOn(p.feature))
+    .map((page) => ({ page, label: page.label }));
+}
+
+/**
+ * Whether a query names a page, so the palette leads with Pages (a
+ * destination before the objects named alike): one of a page's names (its
+ * label or an alias) is the query, or starts with it once the query is
+ * `minPrefix` letters long.
+ */
+export function queryNamesPage(rows: ReadonlyArray<{ page: Pick<NavPage, "aliases">; label: string }>, query: string, minPrefix: number): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  return rows.some(({ page, label }) => [label, ...(page.aliases ?? [])].some((name) => {
+    const n = name.toLowerCase();
+    return n === q || (q.length >= minPrefix && n.startsWith(q));
+  }));
 }

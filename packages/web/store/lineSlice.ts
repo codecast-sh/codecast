@@ -39,6 +39,8 @@ export type LineSliceActions = {
   /** Deploy on the Deploys view (deploys.md DP2): one deploy sending the project's waiting fixes, painted at once as
    *  requested; the server row supersedes the stub by its client key (convex deploys requestDeployCore). */
   deployLine: (clientKey: string, projectId: string, stub: DeployStub) => Promise<{ _id: string; short_id: string; carries: number } | null | undefined>;
+  /** Deploy, redeploy or roll back one of a team's targets (Deploys page); the requested deploy paints at once. */
+  deployTarget: (clientKey: string, teamId: string, repository: string, target: string, action: "deploy" | "redeploy" | "rollback", of: string | null, stub: { started_by: string; sha: string | null; previous_sha: string | null; commits: number; sessions: Array<{ conversation_id: string; short_id?: string | null; title?: string | null }> }) => Promise<{ _id: string; short_id: string } | null | undefined>;
   /** Stop a live run (convex workflow_runs cancelRunByPerson): it ends at once, as a person's cancel. */
   stopLineRun: (runId: string) => Promise<{ ok: true } | null | undefined>;
   labelDecision: (runId: string, nodeId: string, verdict: LabelVerdict | null, note?: string | null) => void;
@@ -162,6 +164,15 @@ export function createLineSlice(): LineSliceActions {
         via: "source", title: `Deploy to ${stub.target}`, after: null,
       };
     }) as LineSliceActions["deployLine"],
+
+    deployTarget: asyncAction(function (this: { teamDeploys: Record<string, any> }, clientKey: string, teamId: string, repository: string, target: string, action: "deploy" | "redeploy" | "rollback", of: string | null, stub: { started_by: string; sha: string | null; previous_sha: string | null; commits: number; sessions: Array<{ conversation_id: string; short_id?: string | null; title?: string | null }> }) {
+      const now = Date.now();
+      this.teamDeploys[clientKey] = {
+        _id: clientKey, client_key: clientKey, workspace: `team:${teamId}`, target, repository, short_id: "", status: "requested", trigger: "person",
+        action, rollback_of: of, sha: stub.sha, previous_sha: stub.previous_sha, version: null, url: null, source: "codecast", started_by: stub.started_by,
+        note: null, commits: stub.commits, sessions: stub.sessions, steps: [], created_at: now, live_at: null, finished_at: null,
+      };
+    }) as LineSliceActions["deployTarget"],
 
     // "Stop the run": the run reads ended on the draft, as the server's cancel leaves it.
     stopLineRun: asyncAction(function (this: { workflowRuns: Record<string, any> }, runId: string) {

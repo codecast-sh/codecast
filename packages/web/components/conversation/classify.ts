@@ -3,7 +3,7 @@ import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload, parseWor
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, parseVaultReady, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
-import { stripMentionContext, stripPastedContent } from "@codecast/shared/contracts";
+import { isCompactionSummaryMessage, stripMentionContext, stripPastedContent } from "@codecast/shared/contracts";
 import { jointAuthors, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { parseLineChat } from "@codecast/shared/contracts/lineChat";
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, parseTaskCommentMessage, parseDecisionDiscussion, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
@@ -511,9 +511,9 @@ export function classifyUserMessage(
     if (!immediatePrev && !contextPrev) return { kind: 'normal' };
     return hasUserImages ? { kind: 'normal' } : { kind: 'noise' };
   }
-  if (displayable.startsWith("This session is being continued") || displayable.startsWith("Please continue the conversation")) {
-    return { kind: 'continuation' };
-  }
+  // The summary renders as the summary card wherever its boundary row sorts.
+  if (isCompactionSummaryMessage(displayable)) return { kind: 'compaction_summary' };
+  if (displayable.startsWith("Please continue the conversation")) return { kind: 'continuation' };
   if (STICKY_NOISE_PREFIXES.some(p => displayable.startsWith(p))) {
     return { kind: 'noise' };
   }

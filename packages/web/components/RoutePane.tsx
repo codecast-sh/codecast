@@ -18,6 +18,7 @@ const Tasks = lazyPage("@/app/tasks/page", () => import("@/app/tasks/page"));
 const Docs = lazyPage("@/app/docs/page", () => import("@/app/docs/page"));
 const Capabilities = lazyPage("@/app/capabilities/page", () => import("@/app/capabilities/page"));
 const AgentFeatures = lazyPage("@/app/agent-features/page", () => import("@/app/agent-features/page"));
+const Week = lazyPage("@/app/week/page", () => import("@/app/week/page"));
 const DocDetail = lazyPage("@/app/docs/[id]/page", () => import("@/app/docs/[id]/page"));
 const Plans = lazyPage("@/app/plans/page", () => import("@/app/plans/page"));
 const Calls = lazyPage("@/app/calls/page", () => import("@/app/calls/page"));
@@ -32,6 +33,7 @@ const Inbox = lazyPage("@/app/inbox/page", () => import("@/app/inbox/page"));
 const Feed = lazyPage("@/app/feed/page", () => import("@/app/feed/page"));
 // What the team shipped and why, one day as an edition (changes-page.md).
 const Changes = lazyPage("@/app/changes/page", () => import("@/app/changes/page"));
+const Deploys = lazyPage("@/app/deploys/page", () => import("@/app/deploys/page"));
 // One day of what each person typed into sessions, a column each.
 const Prompts = lazyPage("@/app/prompts/page", () => import("@/app/prompts/page"));
 const Mods = lazyPage("@/app/mods/page", () => import("@/app/mods/page"));
@@ -164,6 +166,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/docs$/, paramNames: [], component: Docs },
   { pattern: /^\/capabilities$/, paramNames: [], component: Capabilities },
   { pattern: /^\/agent-features$/, paramNames: [], component: AgentFeatures },
+  { pattern: /^\/week$/, paramNames: [], component: Week },
   { pattern: /^\/plans$/, paramNames: [], component: Plans },
   { pattern: /^\/goals$/, paramNames: [], component: Goals },
   { pattern: /^\/goals\/([^/]+)$/, paramNames: ["id"], component: Goal },
@@ -172,6 +175,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
   { pattern: /^\/changes$/, paramNames: [], component: Changes },
+  { pattern: /^\/deploys$/, paramNames: [], component: Deploys },
   { pattern: /^\/prompts$/, paramNames: [], component: Prompts },
   { pattern: /^\/mods$/, paramNames: [], component: Mods },
   { pattern: /^\/m\/([^/]+)$/, paramNames: ["mod"], component: ModPane },
@@ -284,7 +288,7 @@ export function RoutePane(props: PaneScope) {
 
   const page = (
     <TabParamsCtx.Provider value={ctxValue}>
-      <Suspense fallback={<RouteFallback path={ctxValue.pathname} />}>
+      <Suspense fallback={<RouteFallback />}>
         <Component />
       </Suspense>
     </TabParamsCtx.Provider>

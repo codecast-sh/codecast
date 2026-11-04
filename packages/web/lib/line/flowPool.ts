@@ -4,7 +4,7 @@
 // teammates published to the workspace's pool, workflows.webPool). Each reads through the one fold
 // (shared/contracts/flowPool.ts) the CLI's `cast flow ls` uses, so both say
 // the same stations in the same order. Pure: no store, no React.
-import { flowBase, flowFills, flowGraphAttr as graphAttr, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, segmentTopOf, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
+import { flowBase, flowFills, flowGraphAttr as graphAttr, flowNodeAttrOf, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, segmentTopOf, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import { SHIPPED_FLOWS } from "./shippedFlows.generated";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
 
@@ -43,6 +43,9 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
   // A segment the graph wrote in place, and a slot it declares, read from its source (or the row's own list).
   const fills = new Set(row.fills ?? flowFills(row.source));
   const slots = flowSlotsOf(row.source);
+  // A stored node carries no backend or visit limit: the session's own stations and their limits read from the source.
+  const backends = flowNodeAttrOf(row.source, "backend");
+  const maxVisits = flowNodeAttrOf(row.source, "max_visits");
   const nodes: FlowNodeIn[] = row.nodes.map((n) => {
     const top = segmentTopOf(n.id);
     const entry = top === n.id && row.nodes.some((x) => x.id.startsWith(`${n.id}__`));
@@ -52,6 +55,8 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
     const exit = out.length > 0 && out.every((e) => segmentTopOf(e.to) !== top) ? (out.every((e) => /\boutcome\s*=\s*failure\b/.test(e.condition ?? "")) ? "stop" : "done") : null;
     return {
       id: n.id, label: n.label, type: n.type, shape: n.shape,
+      ...(backends[n.id] ? { backend: backends[n.id] } : {}),
+      ...(Number(maxVisits[n.id]) > 0 ? { max_visits: Number(maxVisits[n.id]) } : {}),
       ...(top !== n.id ? { segment: top } : {}),
       ...(exit ? { segment_exit: exit } : {}),
       ...(entry ? { segment_entry: true, ...(written ? {} : { segment_flow: n.id }) } : {}),
@@ -84,10 +89,30 @@ export function appPool(pushed: ReadonlyArray<PushedFlowRow> = []): AppFlow[] {
   const names = new Set(shipped.map((f) => f.slug));
   // A pushed graph joins the pool only when it says what kind of flow it is and is no session's draft, never a probe or a trial's copy.
   const joins = pushed.filter((r) => !names.has(r.slug) && r.nodes.length && publishableFlowSource(r.source));
-  return [...shipped, ...joins.filter((r, i) => joins.findIndex((x) => x.slug === r.slug) === i).map(pushedFlow)];
+  const pushedFlows = joins.filter((r, i) => joins.findIndex((x) => x.slug === r.slug) === i).map((r) => ({ flow: pushedFlow(r), saysTakes: !!graphAttr(r.source, "takes") }));
+  const all: AppFlow[] = [...shipped, ...pushedFlows.map((p) => p.flow)];
+  // A flow that extends another and says nothing of what it takes takes what its base takes (a team's variant of Change takes a session's change).
+  for (const p of pushedFlows) {
+    const base = !p.saysTakes && p.flow.base ? all.find((f) => f.slug === p.flow.base) : null;
+    if (base) p.flow.takes = base.takes;
+  }
+  return all;
 }
 
 export const flowBySlug = (pool: ReadonlyArray<AppFlow>, slug: string | null | undefined) => (slug ? pool.find((f) => f.slug === slug) ?? null : null);
+
+/** The flow a team's sessions are offered first when the team has set none. */
+export const CHANGE_FLOW_SLUG = "change";
+
+/** Can a session's own change run through it? A flow that takes a branch can (the run freezes the session's edits onto one). */
+export const takesSessionChange = (flow: AppFlow) => flow.takes.includes("branch");
+
+/** The team's default flow out of a pool: the slug it set when that flow is in the pool and takes a session's change,
+ *  else Change, else the first that does. */
+export function defaultFlowOf(pool: ReadonlyArray<AppFlow>, teamSlug: string | null | undefined): AppFlow | null {
+  const ok = (f: AppFlow | null) => (f && takesSessionChange(f) ? f : null);
+  return ok(flowBySlug(pool, teamSlug)) ?? ok(flowBySlug(pool, CHANGE_FLOW_SLUG)) ?? pool.find(takesSessionChange) ?? null;
+}
 
 /** The flow a run ran, from its workflow name or slug. */
 export function flowOfRun(pool: ReadonlyArray<AppFlow>, run: { workflow_slug?: string | null; workflow_name?: string | null }): AppFlow | null {

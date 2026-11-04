@@ -79,8 +79,8 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   // A product recording is an Ops page of its own (`/ops/replays/rp-N`), and
   // a moment of it opens there at that time (`?t=<ms>`, see entityRoute).
   replay: "/ops/replays",
-  // A deploy opens on the Line app's Deploys view (`/line?view=deploys&deploy=dp-N`, see entityRoute).
-  deploy: "/line",
+  // A deploy opens on the Deploys page at its target, the deploy open (`/deploys?deploy=dp-N`, see entityRoute).
+  deploy: "/deploys",
   // A Vault secret opens on the Vault page with its panel (`/vault?s=sec-N`):
   // a path under /vault is a Files note, never a secret.
   secret: "/vault",
@@ -188,7 +188,7 @@ export function entityRoute(type: string, id: string): string | null {
   if (!norm) return null;
   if (isOrgObjectKind(norm)) return objectHref(norm, id);
   if (norm === "pr" || norm === "commit") return repoObjectRoute(id);
-  if (norm === "deploy") return `${ENTITY_ROUTE.deploy}?view=deploys&deploy=${encodeURIComponent(id)}`;
+  if (norm === "deploy") return `${ENTITY_ROUTE.deploy}?deploy=${encodeURIComponent(id)}`;
   if (norm === "replay") {
     // A moment, or the start of a stretch, opens the replay at that time.
     const ref = parseReplayRef(id);
@@ -1198,7 +1198,7 @@ export function parseMessageRefPayload(payload: string | undefined | null): Mess
  * not own yet. Adding a kind is one entry here; the type then makes each
  * consumer's table incomplete until it handles the new kind.
  */
-export const SHARED_OBJECT_KINDS = ["message", "doc", "plan", "task", "call", "project", "initiative", "decision", "stack", "trigger", "run"] as const;
+export const SHARED_OBJECT_KINDS = ["message", "doc", "plan", "task", "call", "project", "initiative", "decision", "stack", "trigger", "run", "card"] as const;
 export type SharedObjectKind = (typeof SHARED_OBJECT_KINDS)[number];
 export type ShareKind = "conversation" | SharedObjectKind;
 

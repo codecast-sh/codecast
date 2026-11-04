@@ -15,6 +15,8 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { type AppFlow } from '@codecast/web/lib/line/flowPool';
 import { flowDiagram, routeTail, runReached, stepStates, type DiagramStep, type SideRoute, type StepState } from '@codecast/web/lib/line/flowDiagram';
 import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence';
+import { takesSessionChange } from '@codecast/web/lib/line/flowPool';
+import { journeyOf, WHO_WORDS, type JourneyNow, type StageState } from '@codecast/web/lib/ship/journey';
 
 type FeatherName = React.ComponentProps<typeof Feather>['name'];
 type RunRow = Parameters<typeof stepStates>[1] & { _id: string; status: string; task_short_id?: string | null; fail_reason?: string | null; workflow_slug?: string; workflow_name?: string };
@@ -39,7 +41,59 @@ export function FlowRunCard({ runId }: { runId: string }) {
   const run = useWorkflowRun(runId) as RunRow | null | undefined;
   const { flow, library } = useRunFlow(run);
   if (!run || !flow) return null;
+  if (flow.kind === 'line' && takesSessionChange(flow)) return <ShipBody flow={flow} run={run} />;
   return <FlowBody flow={flow} run={run} library={library} />;
+}
+
+/** A session's change on its way to live: one row per stage with who acts there, then what is happening now. */
+function ShipBody({ flow, run }: { flow: AppFlow; run: RunRow }) {
+  const Theme = useTheme();
+  const journey = useMemo(() => journeyOf(flow, run as any), [flow, run]);
+  const finished = journey.stages.every((s) => s.state === 'done');
+  const tone: Record<StageState, string> = { idle: Theme.textDim, active: Theme.blue, back: Theme.violet, waiting: Theme.yellow, done: Theme.green, stopped: Theme.red };
+  const icon: Record<StageState, FeatherName> = { idle: 'circle', active: 'loader', back: 'corner-down-left', waiting: 'clock', done: 'check-circle', stopped: 'x-circle' };
+  return (
+    <RNView style={[styles.card, { borderColor: Theme.border, backgroundColor: Theme.bgAlt }]}>
+      <RNView style={styles.head}>
+        <RNText style={[styles.name, { color: Theme.text }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{flow.label}</RNText>
+        {run.task_short_id ? <RNText style={[styles.task, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{run.task_short_id}</RNText> : null}
+      </RNView>
+      <RNView style={styles.steps}>
+        {journey.stages.map((s) => (
+          <RNView key={s.id} style={[styles.step, { opacity: s.state === 'idle' ? 0.55 : 1 }]}>
+            <Feather name={icon[s.state]} size={13} color={tone[s.state]} />
+            <RNText style={[styles.stepName, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.label}</RNText>
+            <RNText style={[styles.who, { color: s.state === 'back' ? Theme.violet : Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{finished ? (s.round ? `round ${s.round}` : '') : `${s.state === 'back' ? 'This session' : s.id === 'live' ? '' : WHO_WORDS[s.who]}${s.round ? ` · round ${s.round}` : ''}`}</RNText>
+          </RNView>
+        ))}
+      </RNView>
+      <NowLine now={journey.now} />
+    </RNView>
+  );
+}
+
+function NowLine({ now }: { now: JourneyNow }) {
+  const Theme = useTheme();
+  const [head, body, color] = ((): [string, string | null, string] => {
+    switch (now.kind) {
+      case 'idle': return ['', null, Theme.textMuted];
+      case 'starting': return ['Starting', null, Theme.blue];
+      case 'working': return [now.stage, now.activity, now.who === 'agent' ? Theme.orange : Theme.blue];
+      case 'session': return [`${now.stage} sent it back`, now.note || null, Theme.violet];
+      case 'you': return ['Your call', now.prompt ?? now.stage, Theme.yellow];
+      case 'landed': return ['Landed', now.line ?? 'waiting to deploy', Theme.green];
+      case 'deploying': return ['Deploying', now.line, Theme.blue];
+      case 'live': return ['Live', now.line?.replace(/^Live:\s*/, '') ?? null, Theme.green];
+      case 'stopped': case 'failed': return [now.kind === 'stopped' ? `Stopped${now.stage ? ` at ${now.stage}` : ''}` : 'Failed', now.why, Theme.red];
+    }
+  })();
+  if (!head) return null;
+  return (
+    <RNView style={{ paddingHorizontal: 12, paddingBottom: 10, gap: 2 }}>
+      <RNText style={[styles.state, { color }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{head}</RNText>
+      {body ? <RNText style={[styles.why, { color: Theme.text, paddingHorizontal: 0, paddingBottom: 0 }]} numberOfLines={4} maxFontSizeMultiplier={CHROME_FONT_CAP}>{body}</RNText> : null}
+    </RNView>
+  );
 }
 
 /** Save into the team's library, or the name it was saved under. */

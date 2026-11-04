@@ -5,7 +5,7 @@ import { appPool, flowOfRun } from "../lib/line/flowPool";
 import { flowLibrary, libraryFlows, type LibraryRow } from "../lib/line/flowLibrary";
 
 /** A run as the Flows views read it. */
-export type FlowRun = { _id: string; status: string; run_kind?: string; current_node_id?: string | null; current_node_label?: string | null; fail_reason?: string | null; task_id?: string | null; task_short_id?: string | null; workflow_slug?: string; workflow_name?: string; user_id?: string; primary_conversation_id?: string | null; created_at: number; updated_at: number };
+export type FlowRun = { _id: string; status: string; run_kind?: string; current_node_id?: string | null; current_node_label?: string | null; fail_reason?: string | null; task_id?: string | null; task_short_id?: string | null; task_title?: string | null; workflow_slug?: string; workflow_name?: string; user_id?: string; primary_conversation_id?: string | null; created_at: number; updated_at: number };
 
 /** The library a workspace reads, its live flow, and its runs by flow. */
 export function useFlowLibrary(space: string | null | undefined) {

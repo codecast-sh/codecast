@@ -39,6 +39,7 @@ const BlogTurns = lazy(() => import("@/app/(marketing)/blog/the-tree-at-the-end-
 const BlogUndo = lazy(() => import("@/app/(marketing)/blog/undo-with-a-history/page"));
 const BlogClaudeSessions = lazy(() => import("@/app/(marketing)/blog/claude-code-sessions/page"));
 const BlogAgentsTogether = lazy(() => import("@/app/(marketing)/blog/claude-code-cursor-codex/page"));
+const BlogFromYourPhone = lazy(() => import("@/app/(marketing)/blog/claude-code-from-your-phone/page"));
 const BlogChartReply = lazy(() => import("@/app/(marketing)/blog/the-chart-in-the-reply/page"));
 const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
 const BlogTaskPage = lazy(() => import("@/app/(marketing)/blog/the-task-your-agent-reports-to/page"));
@@ -61,6 +62,7 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Changes = lazy(() => import("@/app/changes/page"));
+const Deploys = lazy(() => import("@/app/deploys/page"));
 const Prompts = lazy(() => import("@/app/prompts/page"));
 const Mods = lazy(() => import("@/app/mods/page"));
 const ModPane = lazy(() => import("@/app/m/page"));
@@ -127,6 +129,7 @@ const PrView = lazy(() => import("@/app/pr/[owner]/[repo]/[number]/page"));
 const Docs = lazy(() => import("@/app/docs/page"));
 const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const AgentFeatures = lazy(() => import("@/app/agent-features/page"));
+const Week = lazy(() => import("@/app/week/page"));
 const Files = lazy(() => import("@/app/files/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
@@ -143,7 +146,6 @@ const Goal = lazy(() => import("@/app/goals/[id]/page"));
 const Projects = lazy(() => import("@/app/projects/page"));
 // Routines = our DOT-graph orchestration (was "Workflows"); the graph page lives at /routines.
 // Workflows = Anthropic dynamic-workflow runs dashboard at /workflows.
-// The entry redirects to /triggers in hosted mode, where Routines names it.
 const Routines = lazy(() => import("@/app/workflows/entry"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 // Triggers (renamed from "Schedules"; /schedules stays routable as an alias).
@@ -178,7 +180,6 @@ const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
 // The hosted assistant's front door (plan pl-840), and the retired simple
 // lane's addresses, which lead into the main app.
-const Welcome = lazy(() => import("@/app/welcome/page"));
 const LaneRedirect = lazy(() => import("@/components/LaneRedirect"));
 
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -246,6 +247,7 @@ export function App() {
               <Route path="blog/undo-with-a-history" element={<E name="BlogUndo"><BlogUndo /></E>} />
               <Route path="blog/claude-code-sessions" element={<E name="BlogClaudeSessions"><BlogClaudeSessions /></E>} />
               <Route path="blog/claude-code-cursor-codex" element={<E name="BlogAgentsTogether"><BlogAgentsTogether /></E>} />
+              <Route path="blog/claude-code-from-your-phone" element={<E name="BlogFromYourPhone"><BlogFromYourPhone /></E>} />
               <Route path="blog/the-chart-in-the-reply" element={<E name="BlogChartReply"><BlogChartReply /></E>} />
               <Route path="blog/the-questions-your-agents-save-for-you" element={<E name="BlogQuestions"><BlogQuestions /></E>} />
               <Route path="blog/the-task-your-agent-reports-to" element={<E name="BlogTaskPage"><BlogTaskPage /></E>} />
@@ -280,6 +282,7 @@ export function App() {
               <Route path="inbox" element={<E name="Inbox"><Inbox /></E>} />
               <Route path="feed" element={<E name="Feed"><Feed /></E>} />
               <Route path="changes" element={<E name="Changes"><Changes /></E>} />
+              <Route path="deploys" element={<E name="Deploys"><Deploys /></E>} />
               <Route path="prompts" element={<E name="Prompts"><Prompts /></E>} />
               <Route path="mods" element={<E name="Mods"><Mods /></E>} />
               <Route path="m/:mod" element={<E name="ModPane"><ModPane /></E>} />
@@ -324,6 +327,7 @@ export function App() {
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />
               <Route path="capabilities" element={<E name="Capabilities"><Capabilities /></E>} />
               <Route path="agent-features" element={<E name="AgentFeatures"><AgentFeatures /></E>} />
+              <Route path="week" element={<E name="Week"><Week /></E>} />
               <Route path="files" element={<E name="Files"><Files /></E>} />
               {/* /vault is the team Vault; an old /vault?f=… Files link redirects
                   to /files from inside it (lib/vault/vaultHref.ts). */}
@@ -467,12 +471,9 @@ export function App() {
                 MUST stay above ":username" or the profile catch-all eats it. */}
             <Route path="people" element={<E name="People"><People /></E>} />
 
-            {/* /welcome is where someone new to the hosted assistant starts,
-                signed in or not (docs/architecture/hosted-assistant.md),
-                outside the tab shell. The simple lane folded into the main
-                app as hosted mode: its old addresses (/simple and below)
-                replace themselves with their main-app pages. */}
-            <Route path="welcome" element={<E name="Welcome"><Welcome /></E>} />
+            {/* Old addresses (/simple and below, /welcome) replace
+                themselves with their main-app pages. */}
+            <Route path="welcome" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="simple/*" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             {/* The hosted page names as addresses (lib/laneRedirect.ts
                 PAGE_ALIASES), above ":username" so none reads as a profile. */}

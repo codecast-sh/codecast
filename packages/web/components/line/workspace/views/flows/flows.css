@@ -28,10 +28,10 @@
 .flv-chip-btn:hover { border-color: var(--lw-ink-3); color: var(--lw-ink); }
 
 .flv-runs { margin-top: 6px; }
-.flv-run { width: 100%; display: grid; grid-template-columns: auto 80px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; background: none; text-align: left; cursor: pointer; }
+.flv-run { width: 100%; display: grid; grid-template-columns: auto minmax(80px, 280px) minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; background: none; text-align: left; cursor: pointer; }
 .flv-run:hover { background: var(--lw-card-2); }
 .flv-run[aria-current="true"] { background: var(--lw-card); border-color: var(--lw-rule); }
-.flv-run-task { font-size: var(--lw-fs-xs); color: var(--lw-ink-2); font-variant-numeric: tabular-nums; }
+.flv-run-task { font-size: var(--lw-fs-xs); color: var(--lw-ink-2); font-variant-numeric: tabular-nums; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flv-run-why { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .flv-run-age { font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
 .flv-none { margin: 0; font-size: var(--lw-fs-sm); color: var(--lw-ink-3); }
@@ -114,6 +114,7 @@ a.flo-count:hover { border-color: var(--lw-ink-3); }
 .fll-row .flv-row-name { display: inline-flex; align-items: baseline; gap: 8px; }
 .fll-tag { font-size: var(--lw-fs-2xs); font-weight: 600; padding: 0 6px; border-radius: 999px; border: 1px solid var(--lw-rule); color: var(--lw-ink-3); }
 .fll-tag[data-tag="spine"] { color: var(--sol-green); border-color: color-mix(in srgb, var(--sol-green) 45%, transparent); }
+.fll-tag[data-tag="default"] { color: var(--sol-blue); border-color: color-mix(in srgb, var(--sol-blue) 45%, transparent); }
 .fll-changes { grid-column: 1; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .fll-ch { display: inline-flex; align-items: baseline; gap: 5px; font-size: var(--lw-fs-2xs); padding: 1px 7px; border-radius: 6px; background: var(--lw-card-2); color: var(--lw-ink-2); }
 .fll-ch i { font-style: normal; color: var(--lw-ink-3); }

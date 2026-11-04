@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { appPool } from "../flowPool";
+import { appPool, CHANGE_FLOW_SLUG, defaultFlowOf } from "../flowPool";
 
 const row = (over: Record<string, unknown>) => ({
   _id: String(over.slug), slug: "x", name: "x",
@@ -25,5 +25,20 @@ describe("appPool over pushed rows (flows.md FL2)", () => {
       row({ _id: "theirs", slug: "review-pass", source: 'digraph a { graph [kind="segment"] }', workspace: "team:t1" }),
     ]).filter((f) => f.where !== "shipped");
     expect(pool.map((f) => f.workflowId)).toEqual(["own"]);
+  });
+});
+
+describe("defaultFlowOf (flows.md FL4)", () => {
+  const pool = appPool([
+    row({ slug: "fast-ship", source: 'digraph a { graph [kind="line", takes="branch"] }', workspace: "team:t1" }),
+    row({ slug: "triage", source: 'digraph b { graph [kind="line", takes="task"] }', workspace: "team:t1" }),
+  ]);
+  test("the team's slug when it is in the pool and takes a session's change", () => {
+    expect(defaultFlowOf(pool, "fast-ship")?.slug).toBe("fast-ship");
+  });
+  test("Change when the team set none, set one gone from the pool, or set one that cannot take a session's change", () => {
+    expect(defaultFlowOf(pool, null)?.slug).toBe(CHANGE_FLOW_SLUG);
+    expect(defaultFlowOf(pool, "deleted")?.slug).toBe(CHANGE_FLOW_SLUG);
+    expect(defaultFlowOf(pool, "triage")?.slug).toBe(CHANGE_FLOW_SLUG);
   });
 });

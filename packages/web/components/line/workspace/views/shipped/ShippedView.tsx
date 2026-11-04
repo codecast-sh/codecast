@@ -22,7 +22,6 @@ export const ShippedView = memo(function ShippedView({ space, workspace: ws, hre
   const sourceLabel = useMemo(() => new Map((map?.sources ?? []).map((s) => [s.key, s.label])), [map?.sources]);
   const n = { regressed: 0, watching: 0, verified: 0 };
   for (const r of rows) n[r.state]++;
-  const deploys = { view: "deploys" as const, deploy: null };
   return (
     <div className="sh" data-shipped={rows.length}>
       <header className="sh-bar">
@@ -32,7 +31,8 @@ export const ShippedView = memo(function ShippedView({ space, workspace: ws, hre
           <span className="sg-count" data-tone="ok"><i aria-hidden /><b className="lw-num">{n.verified}</b> verified</span>
           <span className="sg-dim">last {FLOW_MAP_DAYS} days</span>
         </span>
-        <a className="lw-chip sh-deploys" href={href(deploys)} onClick={(e) => { if (e.metaKey || e.ctrlKey || e.button !== 0) return; e.preventDefault(); select(deploys); }} data-shipped-deploys><Rocket className="w-3.5 h-3.5" aria-hidden />Deploys</a>
+        {/* Every target's live version, what waits to go out and the press that sends it: the one Deploys page. */}
+        <a className="lw-chip sh-deploys" href="/deploys" data-shipped-deploys><Rocket className="w-3.5 h-3.5" aria-hidden />Deploys</a>
       </header>
       {rows.length === 0 ? <div className="lw-empty"><b>Nothing shipped in {FLOW_MAP_DAYS} days</b></div> : (
         <table className="sg-table sh-table">

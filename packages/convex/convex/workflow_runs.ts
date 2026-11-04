@@ -27,6 +27,7 @@ import { recordRoutineRunGraph, recordScriptRunGraph } from "./flowLibrary";
 import { libraryOfRun, runFlowVersions } from "./flowVersions";
 import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
+import { navPromptField } from "./userMessagesFilter";
 
 type Ctx = { db: any };
 
@@ -995,6 +996,7 @@ export const respondToGate = mutation({
           role: "user",
           content: args.response,
           timestamp: now,
+          ...navPromptField({ role: "user", content: args.response }),
         });
         await ctx.db.patch(run.primary_conversation_id, {
           message_count: (primaryConv.message_count || 0) + 1,
@@ -1075,6 +1077,10 @@ export const updateProgress = mutation({
     runner_device: v.optional(v.string()),
     // What a call node cost (learning-loop.md LL1, LL10).
     cost_usd: v.optional(v.number()),
+    // How many times the run has entered the node (its limit is the graph's max_visits).
+    visits: v.optional(v.number()),
+    // The run waits on the session its change came from (flows.md FL4); null once it settled.
+    waiting_on_session: v.optional(v.union(v.null(), v.object({ node_id: v.string(), conversation_id: v.string(), since: v.number(), note: v.string() }))),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -1095,6 +1101,7 @@ export const updateProgress = mutation({
       session_id: args.session_id ?? prev?.session_id,
       result_preview: args.result_preview ?? prev?.result_preview,
       ...(args.cost_usd !== undefined || prev?.cost_usd !== undefined ? { cost_usd: (prev?.cost_usd ?? 0) + (args.cost_usd ?? 0) } : {}),
+      ...(args.visits !== undefined || prev?.visits !== undefined ? { visits: args.visits ?? prev?.visits } : {}),
       started_at: args.node_status === "running" ? now : (prev?.started_at ?? now),
       completed_at: args.node_status !== "running" ? now : undefined,
     };
@@ -1115,6 +1122,9 @@ export const updateProgress = mutation({
       ...(args.graph_hash ? { graph_hash: args.graph_hash, restart_runner_at: undefined } : {}),
       ...(args.graph_nodes?.length ? { graph_nodes: args.graph_nodes } : {}),
       ...(args.runner_device ? { runner_device: args.runner_device } : {}),
+      ...(args.waiting_on_session !== undefined || args.run_status === "completed" || args.run_status === "failed"
+        ? { waiting_on_session: args.run_status === "completed" || args.run_status === "failed" ? undefined : (args.waiting_on_session ?? undefined) }
+        : {}),
       // A place at a capped station is the run's until it reports another station or ends.
       ...(run.station_place && (args.current_node_id !== run.station_place.node_id || args.run_status === "completed" || args.run_status === "failed") ? { station_place: undefined } : {}),
       updated_at: now,

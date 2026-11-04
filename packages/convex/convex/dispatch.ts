@@ -1,5 +1,6 @@
 import { internalMutation, mutation, syncAckPositions, syncAckReceipts } from "./functions";
 import { requestDeployCore } from "./deploys";
+import { requestTargetDeployCore } from "./deployTargets";
 import { noteWriteCause } from "./lifecycleEvents";
 import { heldKeysFor } from "./lib/accessKeys";
 import { claimTaskOwnership } from "./lib/taskOwner";
@@ -45,6 +46,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
 import { applyHideTransition } from "./cleanup";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { writeObjectShareLink } from "./publicShare";
+import { setWeeklyCardEnabledFor, setWeeklyCardOptionsFor } from "./weeklyCards";
 import { deleteSessionAsOwner } from "./sessionDelete";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
@@ -71,6 +73,8 @@ import { deleteRecordingRun } from "./callRecordings";
 import { isSessionOwner } from "./sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
 import { patchCommentWithRevision } from "./commentViewWrites";
+import { getComment } from "./commentStore";
+import type { CommentId } from "./lib/conversationCommentRows";
 import { canAccessConversation, canAccessProject, requireTeamMembership, patchConversationVisibility } from "./lib/access";
 import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
@@ -340,6 +344,18 @@ export async function applyPatches(
       }
       if (Object.keys(safe).length === 0) continue;
 
+      // A conversation comment lives in review_comments and goes by an id of
+      // either kind (commentStore); only its author edits it here.
+      if (table === "comments") {
+        const comment = await getComment(ctx, docKey);
+        if (!comment || String(comment.user_id) !== String(userId)) continue;
+        const conversation = await ctx.db.get(comment.conversation_id);
+        if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) continue;
+        if ("resolved_at" in safe) safe.resolved_by = safe.resolved_at ? userId : undefined;
+        await patchCommentWithRevision(ctx as any, comment, safe as any, conversation as any);
+        continue;
+      }
+
       if (config.kind === "collection") {
         const documentId = ctx.db.normalizeId(table, docKey);
         if (!documentId) continue;
@@ -421,12 +437,7 @@ export async function applyPatches(
         // the row the patch mutates.
         const wasDismissed = table === "conversations" && !!(doc as any).inbox_dismissed_at;
         const wasKilled = table === "conversations" && !!(doc as any).inbox_killed_at;
-        if (table === "comments") {
-          const conversation = await ctx.db.get(doc.conversation_id as Id<"conversations">);
-          if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) continue;
-          if ("resolved_at" in finalSafe) finalSafe.resolved_by = finalSafe.resolved_at ? userId : undefined;
-          await patchCommentWithRevision(ctx as any, doc as any, finalSafe as any, conversation as any);
-        } else if (table === "conversations" && "is_favorite" in finalSafe) {
+        if (table === "conversations" && "is_favorite" in finalSafe) {
           await patchConversationThroughFavoriteView(ctx as any, doc as any, finalSafe as any, "advance");
         } else {
           await ctx.db.patch(documentId, finalSafe);
@@ -1524,6 +1535,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await writeObjectShareLink(ctx, userId, kind, id, token ?? null);
   },
 
+  // The weekly card (weeklyCards.ts): what the card shows, and the opt-in.
+  setWeeklyCardOptions: async (ctx, userId, [cardId, opts]: [string, { show_projects?: boolean; show_tokens?: boolean }]) => {
+    await setWeeklyCardOptionsFor(ctx, userId, cardId, { show_projects: opts?.show_projects, show_tokens: opts?.show_tokens });
+  },
+  setWeeklyCardEnabled: async (ctx, userId, [enabled]: [boolean]) => {
+    await setWeeklyCardEnabledFor(ctx, userId, enabled === true);
+  },
+
   // A member's level for a whole team (settings, the share-in-full nudge).
   // Distinct from setTeamVisibility below, which is one conversation's override.
   setTeamMembershipVisibility: async (ctx, userId, [teamId, visibility, mode]: [string, string, "everything" | "going_forward" | undefined]) => {
@@ -1808,6 +1827,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!isServerId(projectId)) throw new ConvexError("The project is still being created");
     return await requestDeployCore(ctx, userId as Id<"users">, projectId, { clientKey });
   },
+  // "Deploy", "Redeploy" or "Roll back" on the Deploys page (deploys.md DP12): one target of a team, sent from the machine that publishes it.
+  deployTarget: async (ctx, userId, [clientKey, teamId, repository, target, action, of]: [string, string, string, string, "deploy" | "redeploy" | "rollback", string | null]) => {
+    if (!isServerId(teamId)) throw new ConvexError("The team is still being created");
+    return await requestTargetDeployCore(ctx, userId as Id<"users">, { team_id: teamId as Id<"teams">, repository, target, action, ...(of ? { of } : {}), client_key: clientKey });
+  },
   // "Stop the run" on a run far past its usual time: it ends as a person's cancel, and its task says so.
   stopLineRun: async (ctx, userId, [runId]: [string]) => {
     if (!isServerId(runId)) throw new ConvexError("The run is still being created");
@@ -1976,10 +2000,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // lands through the public function `cast sources|events|app` calls, which
   // owns the access check; nothing is re-derived here. A gesture on a stub
   // row (a source whose create is in flight) names no server row: dropped.
-  setOpsGroupStatus: async (ctx, userId, [id, status]: [string, string]) => {
+  setOpsGroupStatus: async (ctx, userId, [id, status, restore]: [string, string, { resolved_at: number | null; resolved_in: string | null; resolved_via?: "person" | "recovered" | "vendor" | null; resolved_by?: string | null }?]) => {
     const groupId = opsRowId(ctx, "event_groups", id);
     if (!groupId) return null;
-    await (ctx as any).runMutation(api.ingest.setGroupStatus, { group: id, status });
+    await (ctx as any).runMutation(api.ingest.setGroupStatus, { group: id, status, ...(restore ? { restore } : {}) });
     // A group mirrored from Sentry follows Sentry's status on the next poll,
     // so the gesture is also made there, as the person, on their grant: the
     // same route `cast events` takes (sources/sentry.ts setEventGroupStatus).
@@ -1988,9 +2012,29 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (sentryStatus) await (ctx as any).scheduler.runAfter(0, internal.sources.sentry.setIssueStatusFor, { user_id: userId as Id<"users">, group: id, status: sentryStatus });
     return null;
   },
+  // The fix session started from an issue's page, recorded on the group
+  // (ingest.setGroupFix). The web sends it once the session has its real id.
+  setOpsGroupFix: async (ctx, _userId, [id, conversationId]: [string, string]) => {
+    if (!opsRowId(ctx, "event_groups", id) || !opsRowId(ctx, "conversations", conversationId)) return null;
+    await (ctx as any).runMutation(api.ingest.setGroupFix, { group: id, conversation_id: conversationId });
+    return null;
+  },
+  // A group re-pointed at its real problem task, or unlinked from a misfiled
+  // one (ingest.setGroupTask). The task is named by the id the store holds.
+  setOpsGroupTask: async (ctx, _userId, [id, taskId]: [string, string | null]) => {
+    if (!opsRowId(ctx, "event_groups", id)) return null;
+    await (ctx as any).runMutation(api.ingest.setGroupTask, { group: id, task: taskId });
+    return null;
+  },
   setOpsSourceStatus: async (ctx, _userId, [id, status]: [string, "active" | "paused"]) => {
     if (!opsRowId(ctx, "event_sources", id)) return null;
     await (ctx as any).runMutation(api.ingest.updateSource, { source: id, status });
+    return null;
+  },
+  // The project a source belongs to; an empty ref detaches it (updateSource resolves it inside the source's workspace).
+  setOpsSourceProject: async (ctx, _userId, [id, projectId]: [string, string | null]) => {
+    if (!opsRowId(ctx, "event_sources", id)) return null;
+    await (ctx as any).runMutation(api.ingest.updateSource, { source: id, project: projectId ?? "" });
     return null;
   },
   // The bulk import of a vendor source's recordings (sources/replayBackfill.ts):
@@ -2011,6 +2055,68 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.metrics.loadHistory, { watch: id });
     return null;
   },
+  // Poll watches now rather than at their next check (metrics.readNow): Read now on a failing watch.
+  readOpsWatchesNow: async (ctx, _userId, [ids]: [string[]]) => {
+    const refs = (Array.isArray(ids) ? ids : []).filter((id) => typeof id === "string" && opsRowId(ctx, "metric_watches", id));
+    if (refs.length) await (ctx as any).runMutation(api.metrics.readNow, { watches: refs });
+    return null;
+  },
+  // A watch's line, direction, unit, interval, name or pause (metrics.updateWatch), and its removal.
+  updateOpsWatch: async (ctx, _userId, [id, patch]: [string, { name?: string; query?: string; threshold?: number | null; direction?: "above" | "below"; unit?: string | null; interval_ms?: number; status?: "active" | "paused"; eval_reads?: number | null; warn?: number | null; no_data_after?: number | null; muted_until?: number | null; on_alert?: "task" | "timeline" | null; notify?: { users?: string[]; roles?: string[]; channel?: string; fix?: boolean; renotify_ms?: number; recovery?: boolean } | null }]) => {
+    if (!opsRowId(ctx, "metric_watches", id)) return null;
+    const p = patch ?? {};
+    await (ctx as any).runMutation(api.metrics.updateWatch, {
+      watch: id,
+      ...(typeof p.name === "string" ? { name: p.name } : {}),
+      ...(typeof p.query === "string" ? { query: p.query } : {}),
+      ...(p.threshold === null || typeof p.threshold === "number" ? { threshold: p.threshold } : {}),
+      ...(p.direction === "above" || p.direction === "below" ? { direction: p.direction } : {}),
+      ...(p.unit === null || typeof p.unit === "string" ? { unit: p.unit } : {}),
+      ...(typeof p.interval_ms === "number" ? { interval_ms: p.interval_ms } : {}),
+      ...(p.status === "active" || p.status === "paused" ? { status: p.status } : {}),
+      // The monitor (contracts/metricMonitor.ts): null takes a setting off.
+      ...Object.fromEntries((["eval_reads", "warn", "no_data_after", "muted_until"] as const).filter((k) => p[k] === null || typeof p[k] === "number").map((k) => [k, p[k]])),
+      ...(p.on_alert === null || p.on_alert === "task" || p.on_alert === "timeline" ? { on_alert: p.on_alert } : {}),
+      // Who else the alert reaches (metricAlerts.ts); null clears it. Only the stored fields pass, without `by`, which is the caller.
+      ...(p.notify === null ? { notify: null } : p.notify && typeof p.notify === "object" ? {
+        notify: {
+          ...(Array.isArray(p.notify.users) ? { users: p.notify.users } : {}),
+          ...(Array.isArray(p.notify.roles) ? { roles: p.notify.roles } : {}),
+          ...(typeof p.notify.channel === "string" ? { channel: p.notify.channel } : {}),
+          ...(typeof p.notify.fix === "boolean" ? { fix: p.notify.fix } : {}),
+          ...(typeof p.notify.renotify_ms === "number" ? { renotify_ms: p.notify.renotify_ms } : {}),
+          ...(typeof p.notify.recovery === "boolean" ? { recovery: p.notify.recovery } : {}),
+        },
+      } : {}),
+    });
+    return null;
+  },
+  removeOpsWatch: async (ctx, _userId, [id]: [string]) => {
+    if (!opsRowId(ctx, "metric_watches", id)) return null;
+    await (ctx as any).runMutation(api.metrics.removeWatch, { watch: id });
+    return null;
+  },
+  // A new watch on a source, in the source's own workspace: the id is the server's to mint.
+  createOpsWatch: async (ctx, _userId, [input]: [{ source: string; name: string; query_kind: "hogql" | "insight" | "reader" | "volume"; query: string; threshold?: number; direction?: "above" | "below"; unit?: string; interval_ms?: number; eval_reads?: number; warn?: number; no_data_after?: number }]) => {
+    if (!opsRowId(ctx, "event_sources", input?.source)) return null;
+    const source = await ctx.db.get(input.source as Id<"event_sources">);
+    if (!source) return null;
+    const key = String(source.workspace ?? "");
+    const scope = key.startsWith("team:") ? { workspace: "team", team_id: key.slice(5) } : { workspace: "personal" };
+    const res = await (ctx as any).runMutation(api.metrics.createWatch, {
+      ...scope,
+      source: input.source,
+      name: input.name,
+      query_kind: input.query_kind,
+      query: input.query,
+      ...(typeof input.threshold === "number" ? { threshold: input.threshold } : {}),
+      ...(input.direction === "above" || input.direction === "below" ? { direction: input.direction } : {}),
+      ...(typeof input.unit === "string" && input.unit.trim() ? { unit: input.unit } : {}),
+      ...(typeof input.interval_ms === "number" ? { interval_ms: input.interval_ms } : {}),
+      ...Object.fromEntries((["eval_reads", "warn", "no_data_after"] as const).filter((k) => typeof input[k] === "number").map((k) => [k, input[k]])),
+    });
+    return { watch_id: res.watch._id, short_id: res.watch.short_id };
+  },
   removeOpsSource: async (ctx, _userId, [id]: [string]) => {
     if (!opsRowId(ctx, "event_sources", id)) return null;
     await (ctx as any).runMutation(api.ingest.removeSource, { source: id });
@@ -2019,6 +2125,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   grantOpsAction: async (ctx, _userId, [sourceId, action]: [string, string]) => {
     if (!opsRowId(ctx, "event_sources", sourceId)) return null;
     await (ctx as any).runMutation(api.sources.app.grant, { source: sourceId, action });
+    return null;
+  },
+  // An app watch paused or resumed, or polled now (sources/app.ts setWatchPaused, pollWatchNow).
+  setOpsAppWatchPaused: async (ctx, _userId, [sourceId, watch, paused]: [string, string, boolean]) => {
+    if (!opsRowId(ctx, "event_sources", sourceId) || typeof watch !== "string") return null;
+    await (ctx as any).runMutation(api.sources.app.setWatchPaused, { source: sourceId, watch, paused: !!paused });
+    return null;
+  },
+  pollOpsAppWatch: async (ctx, _userId, [sourceId, watch]: [string, string]) => {
+    if (!opsRowId(ctx, "event_sources", sourceId) || typeof watch !== "string") return null;
+    await (ctx as any).runMutation(api.sources.app.pollWatchNow, { source: sourceId, watch });
     return null;
   },
   revokeOpsAction: async (ctx, _userId, [sourceId, action]: [string, string]) => {
@@ -2040,10 +2157,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
     return { source_id: res.source._id, short_id: res.source.short_id, name: res.source.name, workspace: res.source.workspace, ingest_key: res.ingest_key ?? null };
   },
-  rotateOpsSourceKey: async (ctx, _userId, [id]: [string]) => {
+  rotateOpsSourceKey: async (ctx, _userId, [id, endOld]: [string, boolean?]) => {
     if (!opsRowId(ctx, "event_sources", id)) return null;
-    const res = await (ctx as any).runMutation(api.ingest.rotateKey, { source: id });
+    const res = await (ctx as any).runMutation(api.ingest.rotateKey, { source: id, ...(endOld === true ? { end_old: true } : {}) });
     return { ingest_key: res.ingest_key, key_prefix: res.source.key_prefix ?? null };
+  },
+  endOpsSourceOldKey: async (ctx, _userId, [id]: [string]) => {
+    if (!opsRowId(ctx, "event_sources", id)) return null;
+    await (ctx as any).runMutation(api.ingest.endOldKey, { source: id });
+    return null;
   },
 
   // Saved views. Creates carry a client_key so a retry returns the same row
@@ -2091,6 +2213,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   updateTeamTaskStatuses: async (ctx, _userId, [teamId, statuses]: [string, { id: string; name: string; category: string; color?: string }[]]) => {
     return await ctx.runMutation!((api as any).teams.updateTaskStatuses, { team_id: teamId as Id<"teams">, statuses });
+  },
+  setTeamDefaultFlow: async (ctx, _userId, [teamId, slug]: [string, string | null]) => {
+    return await ctx.runMutation!((api as any).teams.setDefaultFlow, { team_id: teamId as Id<"teams">, slug });
+  },
+  setTeamWorkspaceAgent: async (ctx, _userId, [teamId, roleId]: [string, string | null]) => {
+    return await ctx.runMutation!((api as any).anchors.setWorkspaceAgent, { team_id: teamId as Id<"teams">, role_id: roleId as Id<"org_roles"> | null });
   },
   setTeamMemberRole: async (ctx, _userId, [teamId, userId, role]: [string, string, "member" | "admin"]) => {
     return await ctx.runMutation!((api as any).teams.setMemberRole, { team_id: teamId as Id<"teams">, member_user_id: userId as Id<"users">, role });
@@ -2353,7 +2481,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       conversation_id: r.conversationId as Id<"conversations">,
       content: r.content,
       message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
-      parent_comment_id: r.parentCommentId ? (r.parentCommentId as Id<"comments">) : undefined,
+      parent_comment_id: r.parentCommentId ? (r.parentCommentId as CommentId) : undefined,
       file_path: r.filePath || undefined,
       line_number: typeof r.lineNumber === "number" ? r.lineNumber : undefined,
       anchor_lines: r.anchorLines,
@@ -2368,7 +2496,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       const [commentId, content] = args as [string, string];
       if (!commentId || commentId.startsWith("commentstub")) return;
       return ctx.runMutation!(api.comments.updateComment, {
-        comment_id: commentId as Id<"comments">,
+        comment_id: commentId as CommentId,
         content,
       });
     }
@@ -2397,7 +2525,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return ctx.runMutation!(api.comments.updateCommentV2, {
       command_id: receiptCommandId("editComment", result),
       conversation_id: r.conversationId as Id<"conversations">,
-      ...(r.commentId ? { comment_id: r.commentId as Id<"comments"> } : {}),
+      ...(r.commentId ? { comment_id: r.commentId as CommentId } : {}),
       ...(r.clientId ? { client_id: r.clientId } : {}),
       content: r.content,
     });
@@ -2421,13 +2549,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
           `legacy-comments-delete:${r.clientId || r.commentId}`,
         ),
         conversation_id: r.conversationId as Id<"conversations">,
-        ...(r.commentId ? { comment_id: r.commentId as Id<"comments"> } : {}),
+        ...(r.commentId ? { comment_id: r.commentId as CommentId } : {}),
         ...(r.clientId ? { client_id: r.clientId } : {}),
       });
     }
     if (!r.commentId || r.commentId.startsWith("commentstub")) return;
     return ctx.runMutation!(api.comments.deleteComment, {
-      comment_id: r.commentId as Id<"comments">,
+      comment_id: r.commentId as CommentId,
     });
   },
   // Thread resolution is idempotent (stamp/clear the same fields), so the

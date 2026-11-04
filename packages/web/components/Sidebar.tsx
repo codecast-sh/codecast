@@ -1,13 +1,9 @@
-import { HostedConnectionFoot } from "./conversation/HostedConnection";
-import { HostedWordmark } from "./HostedWordmark";
 import { CallsNavRow } from "./sidebar/CallsNav";
 import { useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../lib/teamFeatures";
-import { agentName, useRootAgent } from "../hooks/useSyncAnchors";
-import { AnchorAvatar } from "./anchor/AnchorIdentity";
 import { usePathname, useRouter } from "next/navigation";
 import { lazy, Suspense, useState, useMemo, useCallback, useRef, memo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { focusRailMode, railFocused, railFocusOffered } from "../lib/railFocus";
+import { railFocused, railFocusOffered } from "../lib/railFocus";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { AvatarImg } from "../lib/avatarCache";
@@ -18,9 +14,9 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { useInboxStore, isConvexId, showInboxHome } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
-import { useNeedsInputCount, useNewResultsCount } from "../hooks/useNeedsInputCount";
+import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useOwnedDecisionCount } from "../hooks/useDecisionRows";
 import { useChatRail, useChatMembers, supersededChannelId } from "../hooks/useChatSync";
 import { useThreadUnread } from "../hooks/useThreadsSync";
@@ -34,31 +30,24 @@ import { useConvexSync } from "../hooks/useConvexSync";
 import { useSyncProjects } from "../hooks/useSyncProjects";
 import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
 import { ModSidebarSections } from "./mods/ModSidebarSections";
-import { activeViewId, currentViewId, fitsHostedMode, VIEW_ID_KEY } from "../lib/savedViews";
+import { activeViewId, currentViewId, VIEW_ID_KEY } from "../lib/savedViews";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { toast } from "sonner";
 import { ContextMenu, CtxItem, useContextMenu } from "./ui/context-menu";
-import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, Pin, PinOff, BellOff, Lock, Monitor, Smartphone, PanelRight } from "lucide-react";
-import { useBarlessShell } from "../hooks/useBarlessShell";
-import { GlobalSearch } from "./GlobalSearch";
-import { TeamSwitcher } from "./TeamSwitcher";
-import { NotificationBell } from "./NotificationBell";
-import { UserMenu } from "./UserMenu";
-import { TopbarButton } from "./TopbarButton";
+import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, Pin, PinOff, BellOff, Lock, Monitor, Smartphone } from "lucide-react";
 import { NATIVE_APP_COPY, NATIVE_APP_LINKS, nativeAppOffer, trackNativeAppClick } from "../lib/nativeApps";
 import { useSyncTeams } from "../hooks/useSyncTeams";
 import { AppPopOutButton } from "./desktop/AppPopOutButton";
+import { OpsNavBadge } from "./ops/OpsNavBadge";
 import type { DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
-import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
-import { ShellUsageMeter } from "./plan/UsageMeter";
+import { RailHeading, SectionRow, NavCount, NeedsInputCount, type SectionRowSpec } from "./sidebar/navPrimitives";
 import { ChatNavRow, ChatDrillList } from "./sidebar/ChatNav";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { channelSignals } from "../lib/chatRowSignals";
 import { SidebarDrillStack } from "./sidebar/SidebarDrill";
 import { useSidebarDrill } from "../hooks/useSidebarDrill";
 import { FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView, orgRowsActive } from "./sidebar/SidebarNav";
-import { Surface, useHostedMode, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 
@@ -117,19 +106,7 @@ function getShortPath(projectPath: string): string {
 // the entire Sidebar (favorites, bookmarks, recents). Mirrors ActiveAgentsBadge
 // in DashboardLayout. Only mounted in the non-narrow rail, so no work when narrow.
 const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
-  const needsInputCount = useNeedsInputCount();
-  // Hosted mode shows one number here: finished results not yet read (the
-  // rail's New), in the new-results accent. What waits on the person is
-  // Approvals' number alone, so an open approval is never counted twice.
-  const hosted = useHostedMode();
-  const newResults = useNewResultsCount();
-  if (!hosted) return <NeedsInputCount n={needsInputCount} />;
-  if (newResults <= 0) return null;
-  return (
-    <span data-sv-new-results data-sv-count="" title={`${newResults} new result${newResults === 1 ? "" : "s"}`} className="text-[11px] tabular-nums text-sol-text-muted">
-      {newResults > 99 ? "99+" : newResults}
-    </span>
-  );
+  return <NeedsInputCount n={useNeedsInputCount()} />;
 });
 
 // The decision queue's row. Same isolation rule as the badge above: the count
@@ -148,10 +125,8 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   // The open decisions the viewer owns, as Mine lists them. A session parked
   // on a terminal question counts on the inbox's Needs Input instead.
   const pending = useOwnedDecisionCount();
-  const words = useModeWords();
-  const onlyWhenWaiting = useSurface("rail.questionsOnlyWhenWaiting");
-  if (pending === 0 && onlyWhenWaiting) return null;
-  return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} label={words.questionsPage} tip={words.questionsTip} />;
+  if (pending === 0) return null;
+  return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} />;
 });
 
 // The Threads inbox's row: every conversation you are in, across chat, session
@@ -198,6 +173,7 @@ function PinnedRail({
   const chatRail = useChatRail();
   const projects = useInboxStore((s) => s.projects);
   const savedViews = useInboxStore((s) => (s as any).savedViews);
+  const viewRows: any[] = Array.isArray(savedViews) ? savedViews : Object.values(savedViews ?? {});
   const chatChannels = useInboxStore((s) => s.chatChannels);
   // Identity-stable roster: the raw teamMembers array re-pushes every few
   // seconds on teammates' recent_session_* churn.
@@ -210,18 +186,8 @@ function PinnedRail({
   // Unpin), every other pin a menu with just Unpin.
   const channelMenu = useChannelMenu();
   const pinMenu = useContextMenu<SidebarPin>();
-  // Hosted mode works in the person's own workspace: a pinned saved view
-  // shows only while it is theirs (no team on it), so a team's views never
-  // lead the rail there.
-  const hosted = useHostedMode();
-  const viewRows: any[] = Array.isArray(savedViews) ? savedViews : Object.values(savedViews ?? {});
-  const personalView = (pin: SidebarPin) => {
-    const v = viewRows.find((r: any) => String(r?._id) === pin.id);
-    return !!v && !v.team_id;
-  };
   const visiblePins = (chatOn ? pins : pins.filter((p) => isThreadsPin(p) || p.kind !== "channel"))
-    .filter((p) => !scope || pinApp(p) === scope)
-    .filter((p) => !hosted || isThreadsPin(p) || p.kind === "project" || p.kind === "channel" || personalView(p));
+    .filter((p) => !scope || pinApp(p) === scope);
   if (visiblePins.length === 0) return null;
 
   // The icon already names the kind (a hash IS the channel marker), so the
@@ -351,27 +317,16 @@ const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ??
 export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, peek = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isSessions = pathname?.startsWith("/sessions");
   const orgRows = orgRowsActive(pathname);
-  const isRootAgent = pathname === "/anchor";
-  // The workspace's agent is its root role (org-staffing.md S22): the rail
-  // shows it by its name and face, and the entry opens its page.
-  const rootAgent = useRootAgent();
-  // Hosted mode's rows and words (lib/surfaces.ts).
-  const surfaceMode = useSurfaceMode();
-  const words = useModeWords();
   // A solo account's rail opens on its sessions and work (lib/railFocus.ts).
   const focusFacts = useInboxStore(useShallow((st) => ({
-    hosted: surfaceMode.hosted,
     createdAt: st.currentUser?._creationTime as number | undefined,
     teams: st.teams,
     everything: st.clientState.ui?.rail_everything,
   })));
   const railMoreOffered = railFocusOffered(focusFacts);
   const railIsFocused = railFocused(focusFacts);
-  const railMode = useMemo(() => (railIsFocused ? focusRailMode(surfaceMode) : surfaceMode), [railIsFocused, surfaceMode]);
-  const barless = useBarlessShell();
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
@@ -383,6 +338,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // "offer"), when its row stays, marked new, and opens its landing.
   const orgOn = useWorkspaceFeature("org");
   const orgOffer = useWorkspaceFeatureState("org") === "offer";
+  const flowsOn = useWorkspaceFeature("line");
   const flowsOffer = useWorkspaceFeatureState("line") === "offer";
   const changesOn = useTeamFeature("changes");
   const chatOn = useTeamFeature("chat");
@@ -477,11 +433,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const updateSavedView = useInboxStore((s) => s.updateSavedView);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   // Saved views nest under their page's nav row instead of a separate section.
-  // Hosted mode keeps only the views that still mean something there.
-  const taskViews = useMemo(
-    () => savedViews.filter((v: any) => v.page === "tasks" && (!surfaceMode.hosted || fitsHostedMode(v.prefs))),
-    [savedViews, surfaceMode.hosted],
-  );
+  const taskViews = useMemo(() => savedViews.filter((v: any) => v.page === "tasks"), [savedViews]);
   const docViews = useMemo(() => savedViews.filter((v: any) => v.page === "docs" || v.page === "plans"), [savedViews]);
   const decisionViews = useMemo(() => savedViews.filter((v: any) => v.page === "decisions"), [savedViews]);
   const isDecisions = pathname === "/decisions";
@@ -594,20 +546,17 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     ],
     onSelect: () => applyView(v),
   })), [applyView, deleteSavedView, updateSavedView, activeTeamId, pinned]);
-  // Saved views are a developer's list machinery (nav.savedViews): hosted
-  // mode's To-dos and Notes are single rows like Inbox and Approvals.
-  const savedViewsShown = surfaceMode.shows("nav.savedViews");
-  const taskViewItems = useMemo(() => (savedViewsShown ? viewItems(taskViews, activeTaskViewId) : []), [savedViewsShown, viewItems, taskViews, activeTaskViewId]);
-  const docViewItems = useMemo(() => (savedViewsShown ? viewItems(docViews, activeDocViewId) : []), [savedViewsShown, viewItems, docViews, activeDocViewId]);
+  const taskViewItems = useMemo(() => viewItems(taskViews, activeTaskViewId), [viewItems, taskViews, activeTaskViewId]);
+  const docViewItems = useMemo(() => viewItems(docViews, activeDocViewId), [viewItems, docViews, activeDocViewId]);
   const activeDecisionViewId = isDecisions ? currentViewId(decisionPrefs) ?? activeViewId(decisionViews.map((v: any) => ({ id: v._id, prefs: v.prefs })), decisionPrefs) : undefined;
-  const decisionViewItems = useMemo(() => (savedViewsShown && isDecisions ? viewItems(decisionViews, activeDecisionViewId) : []), [savedViewsShown, isDecisions, viewItems, decisionViews, activeDecisionViewId]);
+  const decisionViewItems = useMemo(() => (isDecisions ? viewItems(decisionViews, activeDecisionViewId) : []), [isDecisions, viewItems, decisionViews, activeDecisionViewId]);
 
-  // Chat and Tasks are doors in the wide developer rail: their lists are a
+  // Chat and Tasks are doors in the wide rail: their lists are a
   // level of the sidebar of their own (SidebarDrill). A section living in an
   // app window of its own stays a door to that window instead.
   const chatAway = usePoppedOut("chat");
   const workAway = usePoppedOut("work");
-  const drillOn = !isNarrow && !surfaceMode.hosted;
+  const drillOn = !isNarrow;
   const chatDrills = drillOn && chatOn && !chatAway && !peek;
   const tasksDrill = drillOn && !workAway && taskViewItems.length > 0;
   const titlebarStripRef = useTitlebarHead<HTMLDivElement>();
@@ -732,42 +681,14 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const sidebarContent = (
     <>
       <div className="flex-1 flex flex-col min-h-0">
-        {/* Hosted mode opens with its name, as Whisk's rail does. */}
-        {!isNarrow && surfaceMode.hosted && (
-          <div data-cc-rail-wordmark className="flex items-center px-4 pt-4 pb-3">
-            <HostedWordmark />
-          </div>
-        )}
-        {/* With no top bar (useBarlessShell), search sits under the
-            wordmark, as Whisk's does, and the workspace switcher under it
-            for someone on a team (it draws nothing otherwise). */}
-        {barless && !isNarrow && (
-          <div data-cc-rail-search className="flex flex-col gap-2 px-3 pb-3">
-            <GlobalSearch />
-            <TeamSwitcher />
-          </div>
-        )}
-        {/* Pins lead the developer rail; hosted mode's leads with the inbox and
-            keeps its pins after Work. */}
-        {!isNarrow && !surfaceMode.hosted && pinnedRail}
+        {/* Pins lead the rail. */}
+        {!isNarrow && pinnedRail}
         <SidebarNavView
-          mode={railMode}
+          flowsOn={flowsOn}
           railMore={railMoreOffered ? { focused: railIsFocused, onToggle: () => useInboxStore.getState().updateClientUI({ rail_everything: railIsFocused }) } : undefined}
           isNarrow={isNarrow}
           scope={scope}
           onMobileClose={onMobileClose}
-          inbox={
-            <InboxNavRow
-              active={isInbox}
-              isNarrow={isNarrow}
-              badge={<NeedsInputCountBadge />}
-              onClick={() => {
-                useInboxStore.getState().setShowFavorites(false);
-                if (isInbox) showInboxHome();
-                router.push("/inbox");
-              }}
-            />
-          }
           threads={
             <ThreadsNavRow
               isActive={pathname === "/threads"}
@@ -819,32 +740,23 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             sessions: !!isSessions,
             // A flow's steps are a workflow: every workflow page
             // (definitions, runs, dynamic) lives under Flows.
-            line: pathname === "/flows" || pathname?.startsWith("/flows/") || pathname === "/ops" || pathname?.startsWith("/ops/") || pathname === "/line" || pathname?.startsWith("/line/") || isWorkflows,
+            line: pathname === "/flows" || pathname?.startsWith("/flows/") || pathname === "/line" || pathname?.startsWith("/line/") || isWorkflows,
+            ops: pathname === "/ops" || pathname?.startsWith("/ops/"),
             triggers: isTriggers,
             ...orgRows,
             changes: pathname === "/changes",
-            rootAgent: isRootAgent,
+            deploys: pathname === "/deploys",
             windows: !!isWindows,
           }}
-          // Hosted mode opens a page's saved views only when pinned open, so
-          // the rail stays the pages themselves.
-          tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? (isTasks && !surfaceMode.hosted), onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? (isTasks && !surfaceMode.hosted)) })), onDrill: tasksDrill ? () => drill.open("tasks") : undefined }}
+          tasks={{ items: taskViewItems, expanded: viewSectionOverride.tasks ?? isTasks, onToggle: () => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) })), onDrill: tasksDrill ? () => drill.open("tasks") : undefined }}
           docs={{ items: docViewItems, expanded: viewSectionOverride.docs ?? (isDocs || isPlans), onToggle: () => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) })) }}
           orgOn={orgOn}
+          opsBadge={<OpsNavBadge />}
           offers={{ org: orgOffer, line: flowsOffer }}
           changesOn={changesOn}
-          agent={{
-            label: rootAgent ? agentName(rootAgent) : "Workspace agent",
-            title: rootAgent ? `${agentName(rootAgent)}, the workspace's agent` : "Set up the workspace's agent",
-            icon: <AnchorAvatar anchor={rootAgent} size={20} className="w-5 h-5 flex-shrink-0" bare />,
-          }}
         />
 
-        {!isNarrow && surfaceMode.hosted && <div className="mt-4">{pinnedRail}</div>}
-
-        <Surface name="mods.sidebar">
-          <ModSidebarSections isNarrow={isNarrow} />
-        </Surface>
+        <ModSidebarSections isNarrow={isNarrow} />
 
         {scope === "work" ? null : (<>
 
@@ -958,15 +870,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         {/* Saved layouts (store/workbench.ts): name the current arrangement,
             switch to it, update it in place. Lives down here with the other
             environment-level sections — it configures the frame, not the work. */}
-        {/* Both are developer machinery (a fleet's layouts, its repo folders),
-            gated on the mode rather than on the visual style. */}
-        {!railIsFocused && (
-          <Surface name="actions.fleet">
-            <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />
-          </Surface>
-        )}
+        {!railIsFocused && <WorkbenchSection isNarrow={isNarrow} onMobileClose={onMobileClose} />}
 
-        {!isNarrow && computedDirectories.length > 0 && surfaceMode.shows("nav.projects") && (
+        {!isNarrow && computedDirectories.length > 0 && (
           <div data-rail-group="workspaces" className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center justify-between">
               <span>Workspaces</span>
@@ -1033,22 +939,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       >
         {sidebarContent}
       </SidebarDrillStack>
-      {/* Hosted mode's quiet usage meter: the month so far, opening Plan.
-          With no top bar the bell, the account menu and the conversations
-          panel's toggle sit beside it (their menus open upward from here,
-          globals.css [data-cc-rail-foot]). */}
-      {barless ? (
-        <div data-cc-rail-foot className={`mt-2 flex items-center gap-0.5 ${isNarrow ? "flex-col" : "pr-2"}`}>
-          <div className="min-w-0 flex-1 [&>[data-cc-usage-meter]]:mt-0">{!isNarrow && <><HostedConnectionFoot /><ShellUsageMeter /></>}</div>
-          <NotificationBell />
-          <UserMenu />
-          <TopbarButton onClick={() => useInboxStore.getState().toggleSidePanel()} aria-label={words.conversationsPanel} title={words.conversationsPanel}>
-            <PanelRight />
-          </TopbarButton>
-        </div>
-      ) : !isNarrow && <ShellUsageMeter />}
-      {/* Hosted mode offers the apps from the account menu, not under the meter. */}
-      {offerNativeApp && nativeApp && !isNarrow && !surfaceMode.hosted && (
+      {offerNativeApp && nativeApp && !isNarrow && (
         <a
           href={NATIVE_APP_LINKS[nativeApp]}
           target={nativeApp === "ios" ? "_blank" : undefined}

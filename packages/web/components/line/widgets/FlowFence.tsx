@@ -8,11 +8,14 @@
 //
 // or `{"run":"<run id>"}` to show where a change is in its flow. The card of a
 // `cast flow run` in a transcript is the same widget on the run it started.
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState } from "react";
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { useNamedFlow, useRunFlow, type FlowLibraryState } from "../../../hooks/useFlowObject";
-import { type AppFlow } from "../../../lib/line/flowPool";
+import { takesSessionChange, type AppFlow } from "../../../lib/line/flowPool";
+import { journeyOf, runIsLive } from "../../../lib/ship/journey";
+import { JourneyView } from "../../ship/Journey";
+import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { flowRunState, readFlowFence } from "../../../lib/line/flowFence";
 import { CodeBlock } from "../../CodeBlock";
 import { lineWorkspaceHref } from "../../../lib/line/lineWorkspaceUrl";
@@ -73,12 +76,14 @@ export const FlowCard = memo(function FlowCard({ slug, title }: { slug: string; 
   );
 });
 
-/** One run of a flow: the graph it ran, where the change is, the path it took, and how it ended. */
+/** One run of a flow: the graph it ran, where the change is, the path it took, and how it ended. A session's change
+ *  reads as its journey to live (components/ship/Journey), with the graph a press away; any other run draws the graph. */
 export const FlowRunCard = memo(function FlowRunCard({ runId, title }: { runId: string; title?: string | null }) {
   const run = useWorkflowRun(runId);
   const { flow, library } = useRunFlow(run);
   if (run === undefined || (run && flow === undefined)) return <div className="lw-widget lw-flow lw-flow-cold" aria-busy data-flow-run={runId} />;
   if (!run || !flow) return <div className="lw-widget"><div className="lw-fence-fallback" data-flow-run-missing={runId}>A flow run you cannot open here.</div></div>;
+  if (flow.kind === "line" && takesSessionChange(flow)) return <ShipRunCard run={run} flow={flow} title={title} library={library} />;
   const state = flowRunState(run, flow);
   return (
     <div className="lw-widget lw-flow" data-flow-run={runId} data-flow-state={state.tone}>
@@ -94,3 +99,23 @@ export const FlowRunCard = memo(function FlowRunCard({ runId, title }: { runId: 
     </div>
   );
 });
+
+/** A session's change on its way to live: the stages, who acts now, and the person's part, with the full graph a press away. */
+function ShipRunCard({ run, flow, title, library }: { run: any; flow: AppFlow; title?: string | null; library: FlowLibraryState }) {
+  const [graph, setGraph] = useState(false);
+  const now = useCoarseNow(15_000);
+  const journey = useMemo(() => journeyOf(flow, run), [flow, run]);
+  const live = runIsLive(run);
+  return (
+    <div className="lw-widget lw-flow" data-flow-run={run._id} data-ship-run-card={journey.now.kind}>
+      <FlowHead flow={flow} title={title ?? run.task_title ?? null} library={library}>
+        {run.task_short_id ? <a className="lw-flow-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</a> : null}
+        <button type="button" className="lw-flow-save" onClick={() => setGraph((g) => !g)} aria-pressed={graph} data-flow-graph-toggle>{graph ? "Stages" : "Graph"}</button>
+      </FlowHead>
+      {graph ? <FlowDiagram flow={flow} run={run} /> : null}
+      <JourneyView journey={journey} run={run} now_ms={now} compact={graph} actions={
+        live ? <button type="button" className="sj-btn" data-quiet onClick={() => void useInboxStore.getState().stopLineRun(run._id)} data-flow-stop={run._id}>Stop</button> : null
+      } />
+    </div>
+  );
+}

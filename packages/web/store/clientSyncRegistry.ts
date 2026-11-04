@@ -325,6 +325,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { altKey: "client_key" },
     feeds: ["decisionStacks.listStacks"],
   },
+  // The person's weekly cards (convex weeklyCards.ts), newest weeks first. A
+  // snapshot: listMine is the complete set. localFirst: what a card shows and
+  // its share link flip on the draft (setWeeklyCardOptions, setObjectShareLink
+  // "card") and ride named dispatch side effects.
+  weeklyCards: {
+    persistence: { kind: "collection", key: "weeklyCards" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    feeds: ["weeklyCards.listMine"],
+  },
   // "Handled without you": decisions a role answered under a grant in the
   // last 14 days, with the role and grant for disagree / reopen. Snapshot.
   handledDecisions: {
@@ -641,6 +651,15 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { kind: "scalar" },
     feeds: ["threads.unreadCount"],
   },
+  // The switcher's badges (threads.unreadByWorkspace): unread counts for the
+  // workspaces NOT on screen, so a reply elsewhere peeks through. The whole
+  // small list each push.
+  threadUnreadByWorkspace: {
+    persistence: { kind: "meta", key: "threadUnreadByWorkspace" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "list" },
+    feeds: ["threads.unreadByWorkspace"],
+  },
   // A published page's Threads slice (threads.listMine payload.pages): title,
   // slug and the newest comments of each page discussion, keyed by artifact
   // id (the page kind's root_key). A delta overlay so one page of entries
@@ -796,7 +815,7 @@ export const CLIENT_SYNC_REGISTRY = {
     // A node's session is a join that moves no scalar on the row (a feed with
     // budget attaches it where another had none), so the nodes compare by content.
     sync: { isDelta: true, deepFields: ["node_statuses", "superseded"] },
-    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.listRuns"],
+    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.listRuns", "sessionFlowRuns.forConversation"],
   },
   // Signals (the-line-end-to-end.md LE3, LE13): the active workspace's last
   // two weeks, bodies left out, and every finding of a problem opened in the
@@ -866,6 +885,29 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, project_id",
     sync: { isDelta: true, altKey: "client_key", deepFields: ["carries", "after", "commits"] },
     feeds: ["lineWorkspace.deploys"],
+  },
+  // A team's deploy targets (deploys.md DP10 to DP12): one row per repository
+  // and target, its config and the commits on main waiting to go out there,
+  // grouped by the session that wrote them. Its deploys live in teamDeploys.
+  deployTargets: {
+    persistence: { kind: "collection", key: "deployTargets" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    indexes: "_id, workspace",
+    sync: { isDelta: true, deepFields: ["queue", "paths", "live_reader", "last_read"] },
+    feeds: ["deployTargets.view"],
+  },
+  // Every deploy of a team's targets the Deploys page shows: live, going out,
+  // history, each once, with the sessions whose commits it carried. A press of
+  // Deploy, Redeploy or Roll back paints a stub keyed by client_key, which the
+  // server row supersedes.
+  teamDeploys: {
+    persistence: { kind: "collection", key: "teamDeploys" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    indexes: "_id, workspace",
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps"] },
+    feeds: ["deployTargets.view"],
   },
   // The flows view's collections (live flows, session flows) live beside this file.
   ...FLOW_SYNC_COLLECTIONS,
@@ -962,7 +1004,7 @@ export const CLIENT_SYNC_REGISTRY = {
     workspaceScoped: true,
     indexes: "_id, source_id",
     sync: { isDelta: true },
-    feeds: ["ingest.listGroups", "ingest.getGroup"],
+    feeds: ["ingest.listGroups", "ingest.getGroup", "ingest.searchGroups"],
   },
   // A group's recent occurrences (stack, url, tags), fanned out of
   // ingest.getGroup for each group a person opens. Read by group_id; each
@@ -972,20 +1014,33 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     indexes: "_id, group_id",
     sync: { isDelta: true },
+    // The Timeline's occurrence rows page through the same samples (hooks/useSyncOps useSyncOpsStreamSamples).
+    feeds: ["ingest.listSamples"],
   },
   opsEvents: {
     persistence: { kind: "collection", key: "opsEvents" },
     hydration: { phase: "deferred" },
     workspaceScoped: true,
-    sync: {},
-    feeds: ["ingest.listEvents"],
+    // Windows of the stream (the newest page, one source's newest, older pages a reader scrolled to) land in one
+    // collection, each pruning only the span it vouches for (useSyncOps eventsWindow).
+    sync: { isDelta: true },
+    feeds: ["ingest.listEvents", "ingest.groupTransitions"],
   },
   opsReplays: {
     persistence: { kind: "collection", key: "opsReplays" },
     hydration: { phase: "deferred" },
     workspaceScoped: true,
     sync: { isDelta: true },
-    feeds: ["replays.list", "replays.get"],
+    feeds: ["replays.list", "replays.get", "replays.browse"],
+  },
+  // What a replay browse (replays.browse) counted beside the page it sent:
+  // the total that matches, whether the scan stopped short, and the people
+  // the matches fold into. Keyed by the workspace and the filter
+  // (hooks/useSyncOps replayBrowseKey); the rows themselves are opsReplays.
+  opsReplayTallies: {
+    persistence: { kind: "collection", key: "opsReplayTallies" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["people"] },
   },
   // One opened replay's text timeline and linked groups, keyed by the replay
   // _id: the part of replays.get the list never carries.
@@ -994,12 +1049,27 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
   },
+  // localFirst: a watch's line, side and pause are edited on its page
+  // (opsSlice updateOpsWatch) and hold until the server echoes them. Points,
+  // state and the history read are the poll's.
   opsWatches: {
     persistence: { kind: "collection", key: "opsWatches" },
     hydration: { phase: "deferred" },
+    localFirst: true,
+    unprotectedFields: ["history", "state"],
     workspaceScoped: true,
     sync: {},
     feeds: ["metrics.listWatches"],
+  },
+  // A watch's values over one window, folded server side to a chart's worth
+  // (metrics.series for the watch page, metrics.seriesMany for the overview's
+  // cards). Keyed by the watch, the window and the bucket count
+  // (components/ops/metricSeries.ts seriesKey); each answer replaces its row.
+  opsWatchSeries: {
+    persistence: { kind: "collection", key: "opsWatchSeries" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["points"] },
+    feeds: ["metrics.series", "metrics.seriesMany"],
   },
   // An app source's cached manifest, keyed by the source _id, and its call
   // audit. Both are per source, so delta. The row also carries the grants,
@@ -1011,6 +1081,16 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     sync: { isDelta: true, deepFields: ["grants", "watch_state", "source"] },
     feeds: ["sources.app.capabilities"],
+  },
+  // One GitHub Actions run of a CI check issue as GitHub tells it (convex
+  // ciRuns.ts): its jobs, failed steps, annotations and log tail, keyed by
+  // the row _id and read by repository and run_id. Fed per run the issue page
+  // shows; a run once read does not change.
+  opsCiRuns: {
+    persistence: { kind: "collection", key: "opsCiRuns" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["jobs", "annotations"] },
+    feeds: ["ciRuns.get"],
   },
   opsAppCalls: {
     persistence: { kind: "collection", key: "opsAppCalls" },
@@ -1725,10 +1805,7 @@ export const CLIENT_SYNC_REGISTRY = {
   sidePanelSessionId: {
     persistence: { kind: "meta", key: "sidePanelSessionId" },
   },
-  // The signed-in user record. Persisted so the separate palette window — which
-  // hydrates from IDB and runs no live query of its own — can read
-  // currentUser.available_skills and show project/personal skills in the compose
-  // popup's slash menu (otherwise it would have only built-in commands).
+  // The signed-in user record, without the skills catalog (userSkills).
   currentUser: {
     writtenBy: ["users"],
     persistence: { kind: "meta", key: "currentUser" },
@@ -1737,6 +1814,17 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { merge: "fill" },
     localFirst: true,
     sync: { kind: "singleton" },
+  },
+  // The skills catalog the slash menus read (users.getMySkills): the raw JSON,
+  // hundreds of KB for a heavy user, changing only when a daemon reports new
+  // skills. Its own key and query so a daemon stamp on the user row does not
+  // re-send it. Persisted so a window paints its slash menu from disk before
+  // the feeder answers (the palette window, the phone between launches).
+  userSkills: {
+    persistence: { kind: "meta", key: "userSkills" },
+    hydration: { merge: "fill" },
+    sync: { kind: "scalar" },
+    feeds: ["users.getMySkills"],
   },
 } as const satisfies Record<string, ClientSyncRegistryEntry>;
 
@@ -1986,6 +2074,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   chatRail: "shared",
   threadInbox: "shared",
   threadUnread: "shared",
+  threadUnreadByWorkspace: "shared",
   pageThreads: "shared",
   agentTasks: "shared",
   foreignTriggers: "shared",
@@ -1997,11 +2086,14 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   secretHistory: "shared",
   workflows: "shared",
   workflowRuns: "shared",
+  weeklyCards: "shared",
   signals: "shared",
   lineLabels: "shared",
   stationInputs: "shared",
   lineOccurrences: "shared",
   lineDeploys: "shared",
+  deployTargets: "shared",
+  teamDeploys: "shared",
   liveFlows: "shared",
   sessionFlows: "shared",
   flowMaps: "shared",
@@ -2018,9 +2110,12 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   opsEvents: "shared",
   opsReplays: "shared",
   opsReplayTimelines: "shared",
+  opsReplayTallies: "shared",
   opsWatches: "shared",
+  opsWatchSeries: "shared",
   opsApps: "shared",
   opsAppCalls: "shared",
+  opsCiRuns: "shared",
   artifacts: "shared",
   pageEmbeds: "shared",
   conversationPages: "shared",
@@ -2088,6 +2183,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   favorites: "shared",
   bookmarks: "shared",
   currentUser: "shared",
+  userSkills: "shared",
   // Local: this window's own story, never another window's business.
   pending: "local",
   drafts: "local",

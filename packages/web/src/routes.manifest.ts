@@ -77,7 +77,6 @@ export type RouteLayout =
   | "people"
   | "callPanel"
   | "settings"
-  | "welcome"
   | "redirect";
 
 // -- Lazy component refs — import targets copied verbatim from App.tsx / TabContent.tsx so
@@ -114,6 +113,7 @@ const BlogTurns = lazy(() => import("@/app/(marketing)/blog/the-tree-at-the-end-
 const BlogUndo = lazy(() => import("@/app/(marketing)/blog/undo-with-a-history/page"));
 const BlogClaudeSessions = lazy(() => import("@/app/(marketing)/blog/claude-code-sessions/page"));
 const BlogAgentsTogether = lazy(() => import("@/app/(marketing)/blog/claude-code-cursor-codex/page"));
+const BlogFromYourPhone = lazy(() => import("@/app/(marketing)/blog/claude-code-from-your-phone/page"));
 const BlogChartReply = lazy(() => import("@/app/(marketing)/blog/the-chart-in-the-reply/page"));
 const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
 const BlogTaskPage = lazy(() => import("@/app/(marketing)/blog/the-task-your-agent-reports-to/page"));
@@ -125,7 +125,6 @@ const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
 // The hosted assistant's front door, and the retired simple lane's addresses
-const Welcome = lazy(() => import("@/app/welcome/page"));
 const LaneRedirect = lazy(() => import("@/components/LaneRedirect"));
 
 // Auth
@@ -142,6 +141,7 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Changes = lazy(() => import("@/app/changes/page"));
+const Deploys = lazy(() => import("@/app/deploys/page"));
 const Prompts = lazy(() => import("@/app/prompts/page"));
 const Mods = lazy(() => import("@/app/mods/page"));
 const ModPane = lazy(() => import("@/app/m/page"));
@@ -177,6 +177,7 @@ const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"))
 const Docs = lazy(() => import("@/app/docs/page"));
 const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const AgentFeatures = lazy(() => import("@/app/agent-features/page"));
+const Week = lazy(() => import("@/app/week/page"));
 const Files = lazy(() => import("@/app/files/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
@@ -193,7 +194,6 @@ const Goal = lazy(() => import("@/app/goals/[id]/page"));
 const Projects = lazy(() => import("@/app/projects/page"));
 // Routines = our DOT-graph orchestration page at /routines (App import: @/app/workflows/page).
 // Workflows = Anthropic dynamic-workflow runs dashboard at /workflows (import: @/app/workflows/dashboard).
-// The entry redirects to /triggers in hosted mode, where Routines names it.
 const Routines = lazy(() => import("@/app/workflows/entry"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 // One run's page (the-line.md L10): the run panel, its gate as a decision card.
@@ -323,6 +323,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/undo-with-a-history", component: cast(BlogUndo), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/claude-code-sessions", component: cast(BlogClaudeSessions), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/claude-code-cursor-codex", component: cast(BlogAgentsTogether), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/claude-code-from-your-phone", component: cast(BlogFromYourPhone), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-chart-in-the-reply", component: cast(BlogChartReply), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-questions-your-agents-save-for-you", component: cast(BlogQuestions), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-task-your-agent-reports-to", component: cast(BlogTaskPage), layout: "marketing", guestOk: true, guestKind: "public" },
@@ -350,6 +351,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "feed", component: cast(Feed), layout: "dashboardShell", tab: "/feed" },
   // The daily edition owns its 1180px reading column (changes-page.md 4).
   { path: "changes", component: cast(Changes), layout: "dashboardShell", tab: "/changes", fullWidth: true },
+  // Every place the team's code goes live and what waits to go out there.
+  { path: "deploys", component: cast(Deploys), layout: "dashboardShell", tab: "/deploys", fullWidth: true },
   // One day of what each person typed into sessions, a column each.
   { path: "prompts", component: cast(Prompts), layout: "dashboardShell", tab: "/prompts", fullWidth: true },
   // Codecast mods: the list, and one mod's pane (components/mods).
@@ -404,6 +407,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "docs", component: cast(Docs), layout: "dashboardShell", tab: "/docs", fullWidth: true },
   { path: "capabilities", component: cast(Capabilities), layout: "dashboardShell", tab: "/capabilities", fullWidth: true },
   { path: "agent-features", component: cast(AgentFeatures), layout: "dashboardShell", tab: "/agent-features" },
+  // The weekly card (components/weeklyCard): staff only until it is reviewed.
+  { path: "week", component: cast(Week), layout: "dashboardShell", tab: "/week" },
   { path: "files", component: cast(Files), layout: "dashboardShell", tab: "/files", fullWidth: true },
   { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true }, // the team Vault; old /vault?f=… Files links redirect to /files
   { path: "pages", component: cast(Artifacts), layout: "dashboardShell", tab: "/pages" },
@@ -545,12 +550,9 @@ export const ROUTES: RouteEntry[] = [
   //    drawn on the sharer's own screen, over what the share captures. --
   { path: "share-cursors", component: cast(ShareCursors), layout: "palette" },
 
-  // -- The hosted assistant's front door (pl-840). Outside the tab shell:
-  //    lib/tabRoutes lists /welcome as a NON_TAB prefix. Someone new starts
-  //    here, so a signed-out visitor reads it. The simple lane folded into the
-  //    main app; /simple and below redirect to their main-app pages
-  //    (lib/laneRedirect.ts). --
-  { path: "welcome", component: cast(Welcome), layout: "welcome", guestOk: true, guestKind: "public" },
+  // -- Old addresses: /welcome and /simple and below redirect to their
+  //    main-app pages (lib/laneRedirect.ts). --
+  { path: "welcome", component: cast(LaneRedirect), layout: "redirect", guestOk: true, guestKind: "public" },
   { path: "simple/*", component: cast(LaneRedirect), layout: "redirect" },
   // The hosted page names as addresses (lib/laneRedirect.ts PAGE_ALIASES):
   // /approvals and /questions are /decisions, /plan and /mail are settings sections. Ahead of
