@@ -247,7 +247,8 @@ item; no path reads `team_id` for access.
   with `--json` on every verb. `ls` and `show` print the health state, `+2fa`,
   `ask-first` and how many earlier values are kept.
 - **Browser.** `cast browser open` injects a matching saved sign-in into the
-  agent's browser before navigating; `cast vault save-signin <site>` (and the
+  Chrome the session drives (the human's own through the extension, or the
+  agent browser) before navigating; `cast vault save-signin <site>` (and the
   web's Save sign-in) captures one.
 - **Agent guidance.** The `vault` snippet (`VAULT_SNIPPET` in
   `shared/contracts/snippets.ts`), a `## Vault` section in the agent's
@@ -275,14 +276,19 @@ A `signin` secret holds, for one site, the cookies of its host keys
   `cast vault request <name> --kind signin --site <host>`; the card offers both of the above.
 
 Out: `cast browser open <url>` matches the URL's host against `signin` secrets
-the session can read, and when the managed browser lacks that site's cookies
+the session can read, and when the browser it drives lacks that site's cookies
 it injects the saved ones (`Storage.setCookies`, localStorage before first
-paint) and logs a `signed-in` event. Google and YouTube stay excluded, as in
+paint) and logs a `signed-in` event. That is the human's own Chrome as often
+as the agent browser: a saved sign-in loads there too, replacing their own
+session for that site, and their newer cookies for it are written back. The
+extension bridge answers only a few browser-wide methods, so there the jar
+calls run in a background scratch tab's session (`bridgeBrowserConn` in
+`secrets/signinBrowser.ts`). The desktop pane gets none. Google and YouTube stay excluded, as in
 `keepsOwnLogin` (`OWN_LOGIN_HOSTS` in `shared/contracts/secrets.ts`, with
 `signinSite`, the one parser of a typed site: the web's Save sign-in and the
 CLI read the same list). Site policy (`policy.ts`) still applies.
 
-The agent browser is shared by every session on the machine, so an Ask first
+Either Chrome is shared by every session on the machine, so an Ask first
 sign-in one session was approved for sits in a jar the others could read. The
 machine's sign-in memory (`vault-signins.json`) records, for an Ask first row,
 its sites and each session whose read the backend approved (`askFirstMemory`,
@@ -391,8 +397,10 @@ naming a conversation the caller does not own, is refused, so a token cannot
 borrow another session's approval.
 
 `sessionDecisions.settleResolution` calls `settleSecretApproval`
-(`convex/lib/secretApprovals.ts`). A signed-in person's Approve marks the row
-approved for the rest of that conversation; Deny or dismiss marks it denied
+(`convex/lib/secretApprovals.ts`). The approver is the account that runs the
+session or one of its owners (a session a bot account runs is answered by the
+person who owns it); a teammate who only views it is refused. A signed-in
+person's Approve marks the row approved for the rest of that conversation; Deny or dismiss marks it denied
 and the next read asks again. The asking session withdrawing its question
 (`cast decide cancel`) drops the approval row and records `withdrawn`, since
 no person denied anything. Only the web and phone answer one (the `resolve`
@@ -425,8 +433,8 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
 
 - `passkeys` (`convex/passkeysSchema.ts`): one WebAuthn credential per row,
   the person's own with no workspace: public key, signature counter,
-  transports, the relying party it was made for, a name, added, last used,
-  and `probation_until` for one set up with no grant. The relying party is
+  transports, the relying party it was made for, a name, added and last
+  used. The relying party is
   the web host (`rpIdFor` in `passkeys.ts`). Ceremonies run only on
   `passkeyOrigins()` (`lib/siteUrl.ts`): the web's own origin, since the
   local dev origins serve code an agent can edit and could show any words
@@ -444,7 +452,7 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
   challenge id and a random secret whose SHA-256 the row keeps
   (`grant_hash`); `presenceFinish` verifies an assertion of one of that
   person's passkeys, refuses a signature count that did not rise (a copied
-  key) or a passkey in probation, and turns the row into a grant usable once
+  key), and turns the row into a grant usable once
   in the next two minutes. A cron purges past rows hourly.
 - A grant is spent by whoever began it. Every gated call takes the grant
   string (`grant` on `secrets.reveal`, `setAskFirst`, `sessionDecisions.resolve`,
@@ -477,17 +485,11 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
   for the owner signed in), and enrollment options name the account by id,
   never its email. The web runs the ceremony inline.
 - The first passkey needs no grant, since there is nothing to assert with,
-  so it may be an agent's, set up with the person's session token and a
-  software key. It waits a day before it confirms anything
-  (`PASSKEY_PROBATION_MS`), and until it has confirmed something, or while it
-  is the only one, it is removed with one press (`removableUnasked`), so a
-  rogue first key is never the only thing that can assert its own removal.
-  Every add and remove is emailed ("Touch ID was added",
-  `emails/templates.ts passkeyAdded`) and noticed (`passkey_changed`, on the
-  bell and pushed to the phone, under no mute switch), and a passkey in
-  probation shows on every web screen (`PasskeyProbationBanner`, not
-  dismissable) with Remove. The web refuses to start enrollment in an
-  agent-driven tab (`agentTabGuard`).
+  and confirms as soon as it is set up. Every add and remove is emailed
+  ("Touch ID was added", `emails/templates.ts passkeyAdded`) and noticed
+  (`passkey_changed`, on the bell and pushed to the phone, under no mute
+  switch). The web refuses to start enrollment in an agent-driven tab
+  (`agentTabGuard`).
 - Web (`lib/passkeyPresence.ts`): a gated press confirms first (`usePresence`,
   single flight per action and target), then calls; a `presence_required`
   refusal, returned or thrown by the dispatch, confirms once more and calls

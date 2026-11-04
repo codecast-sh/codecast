@@ -87,21 +87,27 @@ describe("signInHost", () => {
 describe("signInLandingNote", () => {
   const google = (h: string) => h.endsWith("google.com");
   test("says the login was never copied for a site the agent browser keeps for itself", () => {
-    const note = signInLandingNote("https://accounts.google.com/signin", google)!;
+    const note = signInLandingNote("https://accounts.google.com/signin", google, { real: false })!;
     expect(note).toContain("accounts.google.com");
     expect(note).toContain("keeps its own login");
     expect(note).toContain("cast browser login");
   });
   test("says the cookies were carried for any other site", () => {
-    expect(signInLandingNote("https://github.com/login", google)).toContain("were carried");
+    expect(signInLandingNote("https://github.com/login", google, { real: false })).toContain("were carried");
   });
   test("is silent off a sign-in page", () => {
-    expect(signInLandingNote("https://github.com/ashot", google)).toBeNull();
+    expect(signInLandingNote("https://github.com/ashot", google, { real: false })).toBeNull();
   });
   test("carries the real Chrome hint when the session is on the clone", () => {
-    const note = signInLandingNote("https://github.com/login", google, "your real Chrome holds this login: pair the extension")!;
+    const note = signInLandingNote("https://github.com/login", google, { real: false, realHint: "your real Chrome holds this login: pair the extension" })!;
     expect(note).toContain("Or your real Chrome holds this login");
-    expect(signInLandingNote("https://github.com/login", google, null)).not.toContain("Or ");
+    expect(signInLandingNote("https://github.com/login", google, { real: false, realHint: null })).not.toContain("Or ");
+  });
+  test("in the human's own Chrome, hands the sign-in to the human and never names a verb that refuses there", () => {
+    const note = signInLandingNote("https://console.anthropic.com/login", google, { real: true, realHint: "ignored" })!;
+    expect(note).toContain("console.anthropic.com");
+    expect(note).toContain("cast browser show");
+    for (const refused of ["cast browser login", "cast browser sync", "Or "]) expect(note).not.toContain(refused);
   });
 });
 

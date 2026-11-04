@@ -62,7 +62,7 @@ import { isPidAlive } from "../../workspace/chrome.js";
 import { browserHome } from "../profile.js";
 import { withSession, type CdpEndpoint } from "../cdp.js";
 import {
-  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, isWebAuthnMethod, randomNonce, secretMatches, tabIdOfTarget,
+  BRIDGE_DEFAULT_PORT, BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, CLOSE_EXTENSION_STANDBY, CLOSE_HANDSHAKE_TIMEOUT, CLOSE_SESSIONS_DROPPED, isNonce, isWebAuthnMethod, randomNonce, secretMatches, tabIdOfTarget,
   targetIdOfTab, WEBAUTHN_REFUSAL, type BridgeGroup, type BridgeReply, type BridgeTab,
 } from "./protocol.js";
 import { eventMessage, RawJson, readEventFrame, readReplyFrame, replyId, replyMessage, TrafficMeter, UNRELAYED_EVENTS } from "./frames.js";
@@ -81,6 +81,10 @@ export interface BridgeState {
   extensionConnected?: boolean;
   /** When the extension last proved itself: "paired" means this is set. */
   extensionSeenAt?: number;
+  /** The Chrome profile directory ("Default", "Profile 2") the extension was
+   *  last paired in. Pages for the extension and Chrome launches name it
+   *  (chromeProfiles.ts), so they never land in a profile without it. */
+  profile?: string;
   /** Which agent tabs each session may see (host.ts sessionTabs), with the
    *  URL each was last seen at, so a restarted host restores the partition
    *  before any engine reconnects and re-pins. */
@@ -627,6 +631,10 @@ export async function startBridgeHost(opts: {
   /** Keepalive cadence and the silence after which the extension socket is dropped; tests shorten both. */
   pingIntervalMs?: number;
   extensionSilenceMs?: number;
+  /** A second extension was turned away because the current one still answers (CLOSE_EXTENSION_STANDBY). */
+  onStandby?: (detail: string) => void;
+  /** How long the current extension has to answer a ping before a newcomer replaces it; tests shorten it. */
+  incumbentProbeMs?: number;
 }): Promise<RunningHost> {
   const { port, token, onExtension, onSessionTabs } = opts;
 
@@ -1230,6 +1238,19 @@ export async function startBridgeHost(opts: {
     return { release };
   };
 
+  /** Does the current extension say anything (a pong, or any traffic) within the probe window? */
+  const incumbentAnswers = async (incumbent: BridgeSocket): Promise<boolean> => {
+    const asked = Date.now();
+    sendJson(incumbent, { op: "ping" });
+    const deadline = asked + (opts.incumbentProbeMs ?? 2_000);
+    while (Date.now() < deadline) {
+      if (extHeardAt >= asked) return true;
+      if (ext !== incumbent || incumbent.readyState !== WebSocket.OPEN) return false;
+      await sleep(50);
+    }
+    return extHeardAt >= asked;
+  };
+
   /**
    * The extension face. The socket carries no token: the first message must
    * be a hello with a nonce and HMAC(token, "ext:" + nonce), answered with
@@ -1245,7 +1266,7 @@ export async function startBridgeHost(opts: {
       ws.close(CLOSE_HANDSHAKE_TIMEOUT, "no hello");
     }, HELLO_TIMEOUT_MS);
     ws.on("error", () => {});
-    ws.once("message", (raw) => {
+    ws.once("message", async (raw) => {
       clearTimeout(hello);
       // An unproven socket does not get the screenshot-sized budget.
       if ((raw as Buffer).length > PRE_AUTH_MAX_BYTES) {
@@ -1266,11 +1287,23 @@ export async function startBridgeHost(opts: {
       }
       // Proven: the screenshot-sized budget is this socket's from here on.
       preAuth.release();
-      // One extension at a time; a newer connection wins so a reloaded
-      // extension does not have to wait out a dead socket's timeout.
+      const boot = typeof msg.boot === "string" ? msg.boot : undefined;
+      // One extension at a time. A newer connection replaces a dead one, so
+      // a reloaded extension does not wait out a dead socket's timeout. But
+      // the extension paired in two Chrome profiles brings two live workers:
+      // replacing would hand the bridge back and forth every few seconds. A
+      // current worker that answers a ping keeps it; the newcomer stands by.
+      if (ext && ext !== ws && ext.readyState === WebSocket.OPEN && (boot === undefined || boot !== extMeta.boot)) {
+        if (await incumbentAnswers(ext)) {
+          const detail = `worker ${boot ?? "?"} (${typeof msg.userAgent === "string" ? msg.userAgent : "?"}) stands by: worker ${extMeta.boot ?? "?"} holds the bridge and answers`;
+          ws.close(CLOSE_EXTENSION_STANDBY, "another Chrome profile's extension holds the bridge");
+          opts.onStandby?.(detail);
+          return;
+        }
+        if (ws.readyState !== WebSocket.OPEN) return;
+      }
       if (ext && ext !== ws) ext.close(1000, "replaced by a newer extension connection");
       ext = ws;
-      const boot = typeof msg.boot === "string" ? msg.boot : undefined;
       const bootAt = typeof msg.bootAt === "number" ? msg.bootAt : undefined;
       const sameWorker = boot !== undefined && boot === extMeta.boot;
       extMeta = { version: msg.version, protocol: msg.protocol, userAgent: msg.userAgent, boot, bootAt };
@@ -1418,6 +1451,7 @@ export async function runBridgeHost(): Promise<void> {
       port: state.port,
       token: state.token,
       onExtension: record,
+      onStandby: (detail) => log(`second extension turned away: ${detail}`),
       sessionTabs: state.sessionTabs,
       onSessionTabs: (sessionTabs) => { updateBridgeHostState(owner, { sessionTabs }); },
       onTraffic: log,

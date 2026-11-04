@@ -17,7 +17,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { browserCookies, localCookiesForHost } from "../browser/credentials.js";
-import { CdpConnection, listTargetsVia, type CdpClient } from "../browser/cdp.js";
+import { CdpConnection, listTargetsVia, type CdpClient, type CdpEndpoint } from "../browser/cdp.js";
 import { readState } from "../browser/instance.js";
 import { listRealProfiles, chromeUserDataRoot } from "../browser/profile.js";
 import { pickLaptopProfile } from "../cloud/browserSync.js";
@@ -47,8 +47,8 @@ import {
 } from "./signin.js";
 
 type Storage = Record<string, Record<string, string>>;
-/** A browser socket; a test stands in for Chrome with its own. */
-export type BrowserConn = CdpClient;
+/** A browser socket; a test stands in for Chrome with its own. `dispose` closes what the socket opened (bridgeBrowserConn's scratch tab). */
+export type BrowserConn = CdpClient & { dispose?: () => Promise<void> };
 /** A signed-out read names the Chrome profile it read (`profile`, as Chrome's switcher shows it), so a person knows where to sign in. */
 export type Captured = { cookies: SigninCookie[]; local_storage?: Storage; account_hint?: string } | { error: string; signed_out?: true; profile?: string };
 
@@ -136,10 +136,22 @@ async function captureJar(conn: BrowserConn, sites: string[], saved: Storage = {
 
 // ── Capture ──────────────────────────────────────────────────────────────────
 
+/**
+ * What to do when the agent browser has no sign-in to save. On a laptop,
+ * agents drive the human's own Chrome and `cast browser login` refuses there,
+ * so saving the human's sign-in is the human's step; a cloud host's browser
+ * is its own and takes the laptop's login over `cast browser sync`.
+ */
+export function agentBrowserSignInStep(host: string, remote: boolean = isRemoteDevice()): string {
+  return remote
+    ? `run cast browser sync ${host} to carry the laptop's login onto this host, then run this again`
+    : `agents here drive the human's own Chrome, which already holds their login, so your own browsing needs no saved sign-in. Saving it to the vault is the human's step: ask them to press Save sign-in on the Vault page (or run cast vault save-signin ${host} --from-chrome in their own terminal)`;
+}
+
 /** The site's sign-in as the agent browser on this machine holds it. */
 export async function captureFromAgentBrowser(host: string): Promise<Captured> {
   const state = readState();
-  const signIn = `run cast browser login ${host} yourself (it brings the agent browser to the front for the human and waits while they sign in), then run this again`;
+  const signIn = agentBrowserSignInStep(host);
   if (!state?.port) return { error: `No agent browser is running here: ${signIn}` };
   let conn: CdpConnection;
   try {
@@ -208,14 +220,14 @@ async function vaultPost(ep: Endpoint, route: string, body: Record<string, unkno
 }
 
 export type SigninUseDeps = {
-  /** The managed browser's CDP port. */
-  port: number;
+  /** The browser's CDP endpoint: the agent browser's port, or the bridge into the human's Chrome. */
+  port: CdpEndpoint;
   endpoint?: () => Endpoint | null;
   /** The calling session, named in the audit trail. */
   conversation: () => string | null;
   log: (line: string) => void;
   now?: () => number;
-  connect?: (port: number) => Promise<BrowserConn>;
+  connect?: (port: CdpEndpoint) => Promise<BrowserConn>;
   /** Where this machine's sign-in memory lives (signin.ts); tests point it elsewhere. */
   stateFile?: string;
 };
@@ -336,19 +348,52 @@ export async function useVaultSignin(rawUrl: string, deps: SigninUseDeps): Promi
   } catch (err) {
     deps.log(`vault sign-in ${meta.name} not used: ${(err as Error).message.split("\n")[0]}`);
   } finally {
-    conn?.close();
+    if (conn?.dispose) await conn.dispose();
+    else conn?.close();
   }
 }
 
 /**
- * The open hook as cliEngine calls it: the managed browser's port from its
- * state, nothing when there is none. A sign-in Ask first holds stops the open
- * with the decision to wait on (exit NEEDS_APPROVAL_EXIT), so the agent never
- * works the site signed out believing it was signed in.
+ * The human's Chrome over the extension bridge, as a browser socket. The
+ * bridge answers only a handful of browser-wide methods (bridge/host.ts), so
+ * a browser-wide `Storage` call (the whole cookie jar, read or set) runs in
+ * the session of a background scratch tab, which reaches the same jar.
+ * Everything else passes through. The tab opens on the first such call and
+ * `dispose` closes it.
  */
-export async function signInOnOpen(url: string, conversation: () => string | null, log: (line: string) => void): Promise<void> {
-  const state = readState();
-  if (!state?.port) return;
-  const held = await useVaultSignin(url, { port: state.port, conversation, log });
+export async function bridgeBrowserConn(ep: CdpEndpoint, connect: (ep: CdpEndpoint) => Promise<CdpClient> = (e) => CdpConnection.fromPort(e, 5_000)): Promise<BrowserConn> {
+  const conn = await connect(ep);
+  let scratch: Promise<{ targetId: string; sessionId: string }> | null = null;
+  const scratchSession = () =>
+    (scratch ??= (async () => {
+      const { targetId } = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank", background: true }, undefined, 8_000);
+      const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true }, undefined, 8_000);
+      return { targetId, sessionId };
+    })());
+  return {
+    send: async <T = any>(method: string, params?: Record<string, unknown>, sessionId?: string, timeoutMs?: number): Promise<T> =>
+      conn.send<T>(method, params, sessionId ?? (method.startsWith("Storage.") ? (await scratchSession()).sessionId : undefined), timeoutMs),
+    on: (handler) => conn.on(handler),
+    waitFor: (predicate, timeoutMs) => conn.waitFor(predicate, timeoutMs),
+    close: () => conn.close(),
+    dispose: async () => {
+      if (scratch) await scratch.then(({ targetId }) => conn.send("Target.closeTarget", { targetId }, undefined, 5_000)).catch(() => {});
+      conn.close();
+    },
+  };
+}
+
+/**
+ * The open hook as cliEngine calls it, for whichever Chrome the session
+ * drives: the human's own through the extension bridge (`bridge`), else the
+ * agent browser by its port from its state, nothing when there is none. A
+ * sign-in Ask first holds stops the open with the decision to wait on (exit
+ * NEEDS_APPROVAL_EXIT), so the agent never works the site signed out
+ * believing it was signed in.
+ */
+export async function signInOnOpen(url: string, conversation: () => string | null, log: (line: string) => void, bridge?: CdpEndpoint): Promise<void> {
+  const port = bridge ?? readState()?.port;
+  if (!port) return;
+  const held = await useVaultSignin(url, { port, conversation, log, ...(bridge ? { connect: bridgeBrowserConn } : {}) });
   if (held) exitForApproval(held);
 }

@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { CdpEvent } from "../browser/cdp";
 import type { SecretMeta, SigninCookie, SigninPayload } from "@codecast/shared/contracts/secrets";
-import { useVaultSignin, type BrowserConn } from "./signinBrowser";
+import { bridgeBrowserConn, useVaultSignin, type BrowserConn } from "./signinBrowser";
 import { readSigninState, SIGNIN_REFRESH_EVERY_MS, unapprovedSignins } from "./signin";
 
 const NOW = 1_800_000_000_000;
@@ -329,5 +329,51 @@ describe("cast browser open with a saved sign-in", () => {
     await run(b, "https://github.com", NOW, lines);
     expect(lines).toEqual([]);
     expect(b.sets).toEqual([]);
+  });
+});
+
+describe("bridgeBrowserConn", () => {
+  // The extension bridge answers only a few browser-wide methods, so the jar
+  // calls a sign-in makes must run in a tab's session (2026-11-04: saved
+  // sign-ins never loaded into the human's Chrome).
+  test("runs browser-wide Storage calls in one scratch tab, passes the rest through, and closes the tab", async () => {
+    const sent: Array<[string, string | undefined]> = [];
+    let closed = false;
+    const inner = {
+      async send(method: string, _params?: any, sessionId?: string): Promise<any> {
+        sent.push([method, sessionId]);
+        if (method === "Target.createTarget") return { targetId: "T1" };
+        if (method === "Target.attachToTarget") return { sessionId: "S1" };
+        if (method === "Storage.getCookies") return { cookies: [] };
+        return {};
+      },
+      on: () => () => {},
+      waitFor: async () => ({ method: "", params: {} }) as CdpEvent,
+      close: () => { closed = true; },
+    };
+    const conn = await bridgeBrowserConn({ port: 1, token: "t" }, async () => inner);
+    await conn.send("Target.getTargets");
+    await conn.send("Storage.getCookies");
+    await conn.send("Storage.setCookies", { cookies: [] });
+    await conn.send("Runtime.evaluate", {}, "OTHER");
+    await conn.dispose!();
+    expect(sent).toEqual([
+      ["Target.getTargets", undefined],
+      ["Target.createTarget", undefined],
+      ["Target.attachToTarget", undefined],
+      ["Storage.getCookies", "S1"],
+      ["Storage.setCookies", "S1"],
+      ["Runtime.evaluate", "OTHER"],
+      ["Target.closeTarget", undefined],
+    ]);
+    expect(closed).toBe(true);
+  });
+
+  test("opens no tab when nothing reads the jar", async () => {
+    const sent: string[] = [];
+    const inner = { send: async (m: string) => (sent.push(m), {}), on: () => () => {}, waitFor: async () => ({}) as CdpEvent, close: () => {} };
+    const conn = await bridgeBrowserConn(1, async () => inner as any);
+    await conn.dispose!();
+    expect(sent).toEqual([]);
   });
 });

@@ -27,7 +27,7 @@ import {
   bridgeEndpoint, bridgeWsUrl, ensureBridgeHost, proveBridgeHost, readBridgeState, waitForExtension, type BridgeHostStarter,
   type BridgeHostStatus, type BridgeState, type ProvenBridge,
 } from "./host.js";
-import { discardPairingPage, launchRealChrome, realChromeRunning, wakeExtension } from "./realChrome.js";
+import { launchRealChrome, realChromeRunning, settlePairingPage, wakeExtension } from "./realChrome.js";
 import { realChromePid } from "../localChrome.js";
 import { BRIDGE_STORE_URL } from "./protocol.js";
 import { isRemoteDevice } from "../../remote/device.js";
@@ -385,11 +385,11 @@ export async function connectRealBridge(
   const outage = `${readBridgeState()?.extensionSeenAt ?? 0}:${(deps.chromePid ?? realChromePid)() ?? 0}`;
   if (await (deps.wakeExtension ?? wakeExtension)(outage)) note("waking the extension from its options page (a tab opens in Chrome and closes itself)…");
   else note("the extension was already woken for this outage; waiting on that…");
-  try {
-    status = await waitForExtension(bridge, w.wake);
-  } finally {
-    discardPairingPage();
-  }
+  status = await waitForExtension(bridge, w.wake).catch((err) => {
+    settlePairingPage(false);
+    throw err;
+  });
+  settlePairingPage(status.extensionConnected);
   return { bridge, status };
 }
 
