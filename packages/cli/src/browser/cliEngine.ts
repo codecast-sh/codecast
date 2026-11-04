@@ -35,8 +35,10 @@ import {
 } from "./engine.js";
 import { engineBrowserFor, isPaneMode, isRealMode, realModeHint, requireRealBridge, splitTargetFlags, walledOffFromExtension } from "./bridge/real.js";
 import { desktopPaneCtx, DesktopPaneUnavailable, PANE_TAB_NOTE } from "./desktopPane.js";
-import { grantTab } from "./bridge/host.js";
-import { readCdpJson, listTargets } from "./cdp.js";
+import { modelJudge, registerBrowserSubscriptions } from "./subscribe.js";
+import { currentSession } from "@platform/cli-kit/subscribe";
+import { bridgeEndpoint, grantTab } from "./bridge/host.js";
+import { readCdpJson, listTargets, type CdpEndpoint } from "./cdp.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import { closeSessionTab, describeReap, listEngineSessions, reapEngineOrphans, scanLiveOwners, withEndedSession } from "./engineReap.js";
 import { engineSnapshotJson, type EngineSnapshotPayload, matchRefs, nearMatches, ordinal, ordinalsFor, pickOrdinal, refLabel, splitOrdinalQuery } from "./snapshot.js";
@@ -538,10 +540,10 @@ function tabUrl(o: Ctx): string | null {
  * The gates an engine command passes before it runs, ours or `raw`: no CDP
  * WebAuthn method (an agent minting a passkey); every URL
  * it loads by itself (`open`, `read <url>`, `tab new <url>`, …) against the
- * site policy and the Vault page, so a refused page has no side door; and in
- * the agent browser, a cookie or storage read that would hand this session an
- * Ask first sign-in it holds no approval for. The human's Chrome and the
- * desktop pane never hold one (signInOnOpen runs only here).
+ * site policy and the Vault page, so a refused page has no side door; and a
+ * cookie or storage read that would hand this session an Ask first sign-in it
+ * holds no approval for, in either Chrome (signInOnOpen loads into both). The
+ * desktop pane never holds one.
  */
 function refuseEngineCommand(verb: string, args: string[], o: Ctx, owner: string | null): void {
   const passkey = webAuthnRefusal(verb, args);
@@ -550,7 +552,7 @@ function refuseEngineCommand(verb: string, args: string[], o: Ctx, owner: string
     const deny = refuseNavigation(url, owner, "open");
     if (deny) die(deny.message, deny.hint);
   }
-  const read = isRealSession(o.session) || isPaneSession(o.session) ? null : browserJarRead(verb, args);
+  const read = isPaneSession(o.session) ? null : browserJarRead(verb, args);
   const deny = read && vaultJarRefusal(read, read === "page" ? tabUrl(o) : null, detectSessionId?.() ?? null);
   if (deny) die(deny.message, deny.hint);
 }
@@ -616,8 +618,10 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
     // the clone the browser started from may be hours old (credentials.ts).
     if (url && !real && !pane) await carryLogins(url);
     // Then a sign-in the team saved in the Vault, where the browser still has
-    // none for the site; on a cloud host this is the one that applies.
-    if (url && !real && !pane) await useVaultSignin(url);
+    // none for the site, in whichever Chrome this session drives: the human's
+    // own through the bridge, or the agent browser (on a cloud host, the one
+    // that applies). The desktop pane is the human's view and gets none.
+    if (url && !pane) await useVaultSignin(url, real ? bridgeEndpoint(await requireRealBridge()) : undefined);
   } else {
     await ensurePinnedTab(session);
   }
@@ -759,10 +763,10 @@ export async function carryLogins(
  * newer cookies when the browser already uses it. Loaded only when `open`
  * runs, and never fails the open.
  */
-async function useVaultSignin(url: string): Promise<void> {
+async function useVaultSignin(url: string, bridge?: CdpEndpoint): Promise<void> {
   try {
     const { signInOnOpen } = await import("../secrets/signinBrowser.js");
-    await signInOnOpen(url, () => detectSessionId?.() ?? null, (line) => console.log(fmt.muted(`  ${line}`)));
+    await signInOnOpen(url, () => detectSessionId?.() ?? null, (line) => console.log(fmt.muted(`  ${line}`)), bridge);
   } catch {
     /* a courtesy, like carryLogins */
   }
@@ -793,7 +797,7 @@ function printFooter(o: Ctx, verb: string, owner: string | null): void {
     if (warn) console.log(`${fmt.warning("!")} ${warn}`);
     // A login form where the work was expected. Named, with the fix, so an
     // agent does not read it as an empty page or restart the browser over it.
-    const signIn = url ? (isRemoteDevice() ? cloudHostSignInHint(url) : signInLandingNote(url, keepsOwnLogin, realModeHint(owner))) : null;
+    const signIn = url ? (isRemoteDevice() ? cloudHostSignInHint(url) : signInLandingNote(url, keepsOwnLogin, { real: isRealSession(o.session), realHint: realModeHint(owner) })) : null;
     if (signIn) console.log(`${fmt.warning("!")} ${signIn}`);
   }
 }
@@ -1267,6 +1271,15 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   auditOwner = () => ownerKey(deps.detectCurrentSessionId);
   registerAuditCommand(br, auditOwner);
   registerBridgeCommands(br, { me: auditOwner });
+  registerBrowserSubscriptions(br, {
+    session: () => currentSession(),
+    currentTab: () => ctx(),
+    tabFor: async (tab) => (isRealSession(tab) ? await engineBrowserFor(tab, await requireRealBridge()) : { session: tab }),
+    judge: (session) => modelJudge(
+      async (spec) => (await import("../judgingCommand.js")).callModel(deps, session ? { conversation_id: session } : {}, spec, "browser subscription"),
+      async (spec) => (await import("../subscriptionCall.js")).subscriptionModelCall(spec, { timeoutMs: 40_000 }),
+    ),
+  });
 
   // Any verb that reaches the page can be the one that starts this session's
   // daemon, and a daemon attaching with no live bound tab creates one in the
@@ -1275,7 +1288,7 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   // and a clone-only verb asked for the real Chrome dies in ctxFor before a
   // tab is pinned in a browser it will then refuse.
   // `pane` offers a page to the reader over the backend and never opens a tab.
-  const NO_TAB_NEEDED = new Set(["open", "do", "status", "tab", "tabs", "start", "stop", "reap", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane"]);
+  const NO_TAB_NEEDED = new Set(["open", "do", "status", "tab", "tabs", "start", "stop", "reap", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane", "unsubscribe", "subscriptions", "subscription"]);
   br.hook("preAction", async (_thisCommand, actionCommand) => {
     const verb = actionCommand.name();
     if (NO_TAB_NEEDED.has(verb) || actionCommand.parent !== br || actionCommand.args.some((arg) => arg === "--help" || arg === "-h")) return;

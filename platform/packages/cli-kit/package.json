@@ -12,7 +12,8 @@
     "./colors": "./src/colors.ts",
     "./text": "./src/text.ts",
     "./render": "./src/render.ts",
-    "./format": "./src/format.ts"
+    "./format": "./src/format.ts",
+    "./subscribe": "./src/subscribe.ts"
   },
   "files": [
     "src",
