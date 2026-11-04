@@ -34,7 +34,7 @@ import { DEVICE_KINDS, knownDevices, onDevicesChanged, refreshDevices, trackOnDe
 import { switchRecorderMic } from "./recorder";
 import { huddleRoomOptions, micConstraints, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
 import { bindPrewarmAudio, bindPrewarmConvex, releasePrewarm, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
-import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages, seatAnswersRing } from "@codecast/shared/contracts";
 import {
   hasCallPanel,
   isCallPanelWindow,
@@ -223,9 +223,12 @@ function startLevelMeter() {
 // here for the life of the seat and re-sent with every re-take.
 let walkieJoinedSeat: string | null = null;
 
-async function controlJoin(roomKey: string, opts?: { walkieJoin?: boolean; private?: boolean }) {
+async function controlJoin(roomKey: string, opts?: { walkieJoin?: boolean; private?: boolean; intent?: JoinOpts["intent"] }) {
   if (!convex) throw new Error("calls not bound yet");
   if (opts?.walkieJoin) walkieJoinedSeat = roomKey;
+  // Taking the seat answers any ring into this room (calls.answerRingsInto),
+  // so the card, the toast and the sound stop now, not a round trip later.
+  if (seatAnswersRing(roomKey, { deliberate: opts?.intent === "deliberate", walkieJoin: opts?.walkieJoin })) stopRingsInto(roomKey);
   await convex.mutation(api.calls.joinRoom, {
     room_key: roomKey,
     muted: useInboxStore.getState().call.muted,
@@ -234,6 +237,7 @@ async function controlJoin(roomKey: string, opts?: { walkieJoin?: boolean; priva
     // and nothing takes that back but leaving.
     ...(opts?.walkieJoin || walkieJoinedSeat === roomKey ? { walkie_join: true } : {}),
     ...(opts?.private ? { private: true } : {}),
+    ...(opts?.intent === "deliberate" ? { deliberate: true } : {}),
   });
 }
 
@@ -1410,6 +1414,13 @@ function stopRinging(inviteId: string, ms?: number): void {
   const st = useInboxStore.getState();
   const cur = st.myCalls ?? { incoming: [], outgoing: [], membership: null };
   if (cur.incoming?.some((r: any) => String(r._id) === inviteId)) st.syncTable("myCalls", { ...cur });
+}
+
+/** Every ring into a room this window is taking a seat in is answered. */
+function stopRingsInto(roomKey: string): void {
+  for (const r of useInboxStore.getState().myCalls?.incoming ?? []) {
+    if (r.room_key === roomKey) stopRinging(String(r._id));
+  }
 }
 
 /** The ring was answered in another window (the desktop ring window hands

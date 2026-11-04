@@ -309,6 +309,17 @@ function withoutLeftRoom(input: FaceRowInput): FaceRowInput {
   };
 }
 
+/** A ring into the call the viewer is already in is answered: being seated
+ *  is the answer, whichever path seated them, and the server settles the
+ *  invite on the seat (calls.answerRingsInto). Until its push lands the ring
+ *  reads answered here, so the live card is never covered by "X is calling".
+ *  A burst the viewer is only listening to is not that call: a ring into it
+ *  still asks whether to make it one. */
+function withoutAnsweredRings(input: FaceRowInput, room: string | null, mode: string | null): FaceRowInput {
+  if (!room || mode !== "call" || !input.rings.incoming.some((r) => r.room_key === room)) return input;
+  return { ...input, rings: { ...input.rings, incoming: input.rings.incoming.filter((r) => r.room_key !== room) } };
+}
+
 function engagedRoomOf(input: FaceRowInput): string | null {
   const walkieRoom = input.walkie.liveRoom?.key ?? null;
   if (walkieRoom) return walkieRoom;
@@ -537,12 +548,13 @@ export function isCallCard(card: FaceCard): boolean {
  * last produced (or null), which is what lets a state hold through a seam.
  */
 export function deriveFaceRow(raw: FaceRowInput, prev: FaceRow | null): FaceRow {
-  const input = withoutLeftRoom(raw);
-  const viewer = input.viewer;
+  const left = withoutLeftRoom(raw);
+  const viewer = left.viewer;
   if (!viewer?.id) return EMPTY_ROW;
   const meId = viewer.id;
-  const room = engagedRoomOf(input);
-  const mode = roomModeOf(input, room);
+  const room = engagedRoomOf(left);
+  const mode = roomModeOf(left, room);
+  const input = withoutAnsweredRings(left, room, mode);
   const seats = seatsIn(input, room);
   const seatedIds = new Set(seats.map((s) => idOf(s.user_id)));
   const parsed = room ? parseRoomKey(room) : null;

@@ -268,3 +268,14 @@ export function agentFaceConversationId(identity: string): string | null {
 export function isAgentFaceIdentity(identity: string): boolean {
   return /^agent[:-]/.test(identity);
 }
+
+/**
+ * Whether taking a seat in this room answers a ring into it. A channel or
+ * session room is a call for every seat in it. A people room only for a seat
+ * the person chose (a deliberate join, or stepping into a burst): a burst
+ * seats its listener without asking, and a ring into that room is the
+ * question of whether to make it a call.
+ */
+export function seatAnswersRing(roomKey: string, join: { deliberate?: boolean; walkieJoin?: boolean }): boolean {
+  return parseRoomKey(roomKey)?.kind !== "dm" || !!join.deliberate || !!join.walkieJoin;
+}

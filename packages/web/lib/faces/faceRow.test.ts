@@ -581,6 +581,39 @@ describe("the card", () => {
     expect(ringing.me?.state).toBe("ringing-them");
   });
 
+  test("a ring into the call I am already in is answered: the live card, never 'is calling'", () => {
+    const team = "channel:c-team";
+    const row = deriveFaceRow(
+      input({
+        call: call(team),
+        occupancy: { [team]: [seat(ME), seat(ANN), seat(BOB)] },
+        rings: { incoming: [{ from_user: BOB, room_key: team, from_name: "Bob" }], outgoing: [] },
+      }),
+      null,
+    );
+    expect(row.card.kind).toBe("live");
+    expect(states(row)[BOB]).toBe("live-with-me");
+    expect(row.me?.state).toBe("in-call");
+    // Still connecting counts: the seat is being taken, so the ring is answered.
+    const joining = deriveFaceRow(
+      input({
+        call: call(team, { phase: "connecting" }),
+        rings: { incoming: [{ from_user: BOB, room_key: team, from_name: "Bob" }], outgoing: [] },
+      }),
+      null,
+    );
+    expect(joining.card).toMatchObject({ kind: "live", joining: true });
+    // Only listening to a burst is not the call: a ring into it still asks.
+    const listening = deriveFaceRow(
+      input({
+        walkie: walkie(burstRoom(DM_ANN, "listen"), { incoming: { fromUserId: ANN, roomKey: DM_ANN } }),
+        rings: { incoming: [{ from_user: ANN, room_key: DM_ANN, from_name: "Ann" }], outgoing: [] },
+      }),
+      null,
+    );
+    expect(listening.card.kind).toBe("ring-in");
+  });
+
   test("ringing from inside the room: the card is the ring out until somebody is seated, then live", () => {
     const alone = { call: call(DM_ANN), occupancy: { [DM_ANN]: [seat(ME)] } };
     const ring = (status: string) => ({ incoming: [], outgoing: [{ to_user: ANN, room_key: DM_ANN, to_name: "Ann", status }] });

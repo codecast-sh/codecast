@@ -144,6 +144,54 @@ describe("heartbeat sweeps the room it beats in", () => {
   });
 });
 
+describe("joinRoom answers the joiner's ring into the room", () => {
+  // A seat taken by any path (the channel's Join, a face, another device) left
+  // the invite ringing, so "Samvit is calling" sat over a call the person could
+  // already hear (2026-11-04).
+  async function join(roomKey: string, extra: Record<string, unknown> = {}) {
+    const now = Date.now();
+    const rows: any[] = [
+      { _id: "m1", user_id: "u1", team_id: "t1" },
+      { _id: "inv-here", to_user: "u1", status: "ringing", room_key: roomKey, created_at: now - 2_000 },
+      { _id: "inv-there", to_user: "u1", status: "ringing", room_key: "channel:other", created_at: now - 2_000 },
+    ];
+    const patches: Record<string, any> = {};
+    const ctx: any = {
+      auth: { getUserIdentity: async () => ({ subject: "u1|sess", tokenIdentifier: "x" }) },
+      scheduler: { runAfter: async () => {} },
+      db: {
+        query: (_t: string) => ({
+          withIndex: (_i: string, builder: any) => {
+            const eqs: Array<[string, any]> = [];
+            builder({ eq(f: string, v: any) { eqs.push([f, v]); return this; } });
+            const hit = rows.filter((r) => eqs.every(([f, v]) => String(r[f]) === String(v)));
+            return { collect: async () => hit, take: async (n: number) => hit.slice(0, n), unique: async () => hit[0] ?? null, first: async () => hit[0] ?? null };
+          },
+        }),
+        get: async (id: string) => (id === "u1" ? { _id: "u1", name: "U" } : id === "ch1" ? { _id: "ch1", team_id: "t1" } : id === "t1" ? { _id: "t1", name: "T", features: { calls: true, chat: true } } : rows.find((r) => r._id === id) ?? null),
+        delete: async () => {},
+        patch: async (id: string, p: any) => { patches[id] = { ...(patches[id] ?? {}), ...p }; },
+        insert: async () => "cm-new",
+      },
+    };
+    const { joinRoom } = await import("./calls");
+    const handler = (joinRoom as any)._handler ?? (joinRoom as any).handler;
+    await handler(ctx, { room_key: roomKey, muted: true, ...extra });
+    return patches;
+  }
+
+  test("a seat in a channel huddle accepts the ring into it, and only that one", async () => {
+    const patches = await join("channel:ch1");
+    expect(patches["inv-here"]).toMatchObject({ status: "accepted" });
+    expect(patches["inv-there"]).toBeUndefined();
+  });
+
+  test("a prewarm seat answers nothing", async () => {
+    const patches = await join("channel:ch1", { prewarm: true });
+    expect(patches["inv-here"]).toBeUndefined();
+  });
+});
+
 // THE EXPLICIT-JOIN STAMP. A burst seats everyone who hears it, so being in the
 // room says nothing about whether a conversation started — and the microphone
 // stopped answering that question when auto-listen went hot. `walkie_join` is

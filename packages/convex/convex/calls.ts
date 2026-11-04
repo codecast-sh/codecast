@@ -52,6 +52,7 @@ import {
   CALL_PUSH_TYPE_RING,
   normalizeTranscribeLanguages,
   channelHuddleMemberIds,
+  seatAnswersRing,
 } from "@codecast/shared/contracts";
 
 /** Seat languages the transcriber unions. Undefined means "this client did not say". */
@@ -364,6 +365,29 @@ async function holdPrewarmSeat(
   return { room_key: roomKey, prewarm: true };
 }
 
+/**
+ * TAKING A SEAT ANSWERS THE RING INTO THAT ROOM. Whatever path seated the
+ * person (the ring's Join, the channel's Join, a face, a link, another device),
+ * once they are in the room nobody is calling them into it, and an invite left
+ * ringing kept "X is calling" up over a call they could already hear. Which
+ * seats count is seatAnswersRing's rule, shared with the client.
+ */
+async function answerRingsInto(
+  ctx: { db: any },
+  userId: Id<"users">,
+  args: { room_key: string; deliberate?: boolean; walkie_join?: boolean },
+  now: number,
+): Promise<void> {
+  if (!seatAnswersRing(args.room_key, { deliberate: args.deliberate, walkieJoin: args.walkie_join })) return;
+  const ringing: Doc<"call_invites">[] = await ctx.db
+    .query("call_invites")
+    .withIndex("by_to_status", (q: any) => q.eq("to_user", userId).eq("status", "ringing"))
+    .collect();
+  for (const inv of ringing) {
+    if (inv.room_key === args.room_key) await ctx.db.patch(inv._id, { status: "accepted", responded_at: now });
+  }
+}
+
 export const joinRoom = mutation({
   args: {
     room_key: v.string(),
@@ -380,6 +404,9 @@ export const joinRoom = mutation({
     // Languages this device is set to. Optional and additive: an older client
     // never sends it and the transcriber falls back to the scribe's own list.
     languages: v.optional(v.array(v.string())),
+    // "A person chose to be here" (the client's deliberate intent), as opposed
+    // to a seat a burst put them in. Optional and additive; see answerRingsInto.
+    deliberate: v.optional(v.boolean()),
     // Start this huddle private (call_room_state.private). Counts only for
     // the seat that starts a new huddle, and never in a channel's room,
     // which is that channel's own space with its own wall.
@@ -433,6 +460,10 @@ export const joinRoom = mutation({
         await upsertRoomState(ctx, args.room_key, { team_id: auth.teamId, user_id: userId }, { locked: true, private: true }, now);
       }
     }
+
+    // After the grants of a previous huddle are expired, so this answer is
+    // the running huddle's.
+    await answerRingsInto(ctx, userId, args, now);
 
     // One huddle at a time: joining a room implicitly leaves every other —
     // simultaneous rooms would mean two live mic publishes and an incoherent

@@ -93,6 +93,7 @@ export * from "./sanitizeText";
 // Machine-delivered message detection: web/mobile previews and the convex
 // send classifier must agree on what a human-typed message is.
 export * from "./machineMessages";
+export * from "./slashCommand";
 export * from "./decisionAnswers";
 export * from "./mcpRegistry";
 export * from "./usageLimits";
