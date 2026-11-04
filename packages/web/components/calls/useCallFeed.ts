@@ -6,6 +6,7 @@ import {
   ACTIVE_AGENT_STATUSES,
   formatTranscriptChunk,
   huddleFeedBriefing,
+  HUDDLE_FEED_DISREGARD,
   isRecRoomKey,
   humanizeConvexError,
   transcriptChunkHeader,
@@ -124,9 +125,6 @@ export type TranscriptExcerpt = {
 // the session will wear, decided from the stub id), and `onReady` runs with
 // the real id before the message is sent, so a write the briefing promises
 // (that character) lands before the agent reads it.
-/** Told to a session spawned for a room when no words will reach it. */
-const DISREGARD_BRIEFING =
-  "The huddle feed could not be attached, so no transcript will arrive. Disregard the briefing above.";
 
 // The store gives up on a create after its own window (a 30 s race and a 15 s
 // poll) with SessionCreatePendingError, but the durable outbox still owns the
@@ -323,7 +321,7 @@ export function useAddLiveFeed(opts: {
           // (the create parked, then rekeyed): tell it no words are coming,
           // so no session is left waiting on a briefing.
           const landed = stub ? st.getConvexId(stub) : undefined;
-          if (landed) st.sendMessage(landed, DISREGARD_BRIEFING);
+          if (landed) st.sendMessage(landed, HUDDLE_FEED_DISREGARD);
           throw err;
         }
         route = { kind: "session", target: convexId };
@@ -374,7 +372,7 @@ export function useAddLiveFeed(opts: {
         // refusal must not leave that session waiting forever for words that
         // will never come.
         if (target.kind === "new-session") {
-          (useInboxStore.getState() as any).sendMessage(route.target, DISREGARD_BRIEFING);
+          (useInboxStore.getState() as any).sendMessage(route.target, HUDDLE_FEED_DISREGARD);
         }
         throw err;
       }

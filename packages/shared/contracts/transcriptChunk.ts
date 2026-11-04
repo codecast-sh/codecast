@@ -197,11 +197,17 @@ function shortHeader(lead: string, opts: ChunkHeaderOpts): string {
   return [lead, opts.held ? HELD_NOTE : null, LANE_LINE[opts.lane]].filter(Boolean).join(" ");
 }
 
+const HUDDLE_BRIEFING_LEAD = "You're being attached to a live team huddle (";
+
+/** Told to a session spawned for a room when no words will reach it. */
+export const HUDDLE_FEED_DISREGARD =
+  "The huddle feed could not be attached, so no transcript will arrive. Disregard the briefing above.";
+
 /** The first message a session spawned FOR a huddle reads: what it is
  *  attached to, what the room calls it, and how its words travel. */
 export function huddleFeedBriefing(opts: { name: string; label: string; call?: string | null }): string {
   return [
-    `You're being attached to a live team huddle (${opts.label}). In the room you are ${opts.name}: people say that name when they want you, and it is the name beside your replies in the huddle's chat.`,
+    `${HUDDLE_BRIEFING_LEAD}${opts.label}). In the room you are ${opts.name}: people say that name when they want you, and it is the name beside your replies in the huddle's chat.`,
     "Attributed transcript chunks arrive here as the room talks. The room is mid-conversation: answer questions raised, and bring what the code and the team's record say about what they are discussing.",
     HUDDLE_GUEST_NOTE,
     HUDDLE_WORK_NOTE,
@@ -249,6 +255,24 @@ export function huddleVoiceInstructions(opts: { name: string; title: string; rec
 // A line somebody typed in the huddle's chat, on its way to a fed session.
 export function huddleChatLineHeader(name: string): string {
   return `${name} wrote in the huddle's chat (the text lane beside the live words). Answer as you would answer a line typed to you; your reply lands back in that chat.`;
+}
+
+/** A huddle feed message the web sends in the person's name when they attach
+ *  an agent to a room: the briefing, or the line taking it back. They pressed
+ *  a button; they did not write it. */
+export function isHuddleFeedNotice(raw: string): boolean {
+  const t = raw.trimStart();
+  return t.startsWith(HUDDLE_BRIEFING_LEAD) || t.startsWith(HUDDLE_FEED_DISREGARD);
+}
+
+const EXCERPT_HEADER_RE = /(?:Excerpt from a|A) team huddle transcript(?: — "[^\n]*")? \(\d{4}-\d\d-\d\d \d\d:\d\d(?:, still live)?\)\. Speaker attribution is exact\./;
+
+/** A huddle excerpt handed to a session holds the person's note, if they
+ *  wrote one, above the transcript. The note, or "" when the message is an
+ *  excerpt without one; null when the message is not an excerpt. */
+export function huddleExcerptNote(raw: string): string | null {
+  const m = EXCERPT_HEADER_RE.exec(raw);
+  return m ? raw.slice(0, m.index).trim() : null;
 }
 
 // The lead-in line for a one-shot excerpt handed to an agent session. Kept

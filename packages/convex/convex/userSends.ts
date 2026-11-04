@@ -39,6 +39,8 @@ export type PromptRow = {
   words: number;
   text: string;
   clipped: boolean;
+  /** Set on a decision answer: the question, and whether an option was picked. */
+  decision?: { question: string; picked: boolean };
 };
 
 // The Prompts page: every message the team's people typed into sessions on
@@ -62,8 +64,13 @@ export const teamDay = query({
       .take(DAY_SEND_CAP);
 
     const conversations = new Map<string, Doc<"conversations"> | null>();
+    // Agent accounts send in their own name; the page is people's prompts.
+    const bots = new Map<string, boolean>();
     const rows: PromptRow[] = [];
     for (const send of sends) {
+      const sender = String(send.user_id);
+      if (!bots.has(sender)) bots.set(sender, !!(await ctx.db.get(send.user_id))?.is_bot);
+      if (bots.get(sender)) continue;
       const key = String(send.conversation_id);
       if (!conversations.has(key)) conversations.set(key, await ctx.db.get(send.conversation_id));
       const c = conversations.get(key);
@@ -82,6 +89,7 @@ export const teamDay = query({
         words: send.words,
         text: send.text,
         clipped: send.clipped,
+        ...(send.decision ? { decision: send.decision } : {}),
       });
     }
     return { date: args.date, rows };

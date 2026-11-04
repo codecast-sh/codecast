@@ -16,6 +16,13 @@
 export const AGENT_SETUP_TOOLS = ["browser", "computer"] as const;
 export type AgentSetupTool = (typeof AGENT_SETUP_TOOLS)[number];
 
+/** What the setup card's Continue button sends the blocked session once its
+ *  setup is done. A press, not something the person typed. */
+export const AGENT_SETUP_CONTINUE_MESSAGE: Record<AgentSetupTool, string> = {
+  browser: "The Chrome extension is connected now. Retry the browser command and continue.",
+  computer: "cast computer's Accessibility and Screen Recording permissions are granted now. Retry and continue.",
+};
+
 export function isAgentSetupTool(value: unknown): value is AgentSetupTool {
   return typeof value === "string" && (AGENT_SETUP_TOOLS as readonly string[]).includes(value);
 }

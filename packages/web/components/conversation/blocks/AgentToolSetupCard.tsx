@@ -9,7 +9,7 @@
 import { useRef, useState } from "react";
 import { Check, ExternalLink, Loader2, RotateCw } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { BROWSER_EXTENSION_STORE_URL, deviceDisplayName, type AgentSetupTool, type AgentToolSetupStatus } from "@codecast/shared/contracts";
+import { AGENT_SETUP_CONTINUE_MESSAGE, BROWSER_EXTENSION_STORE_URL, deviceDisplayName, type AgentSetupTool, type AgentToolSetupStatus } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useAgentToolSetup, type AgentSetupTarget } from "../../../lib/useAgentToolSetup";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -22,11 +22,6 @@ const TITLE: Record<AgentSetupTool, string> = {
 const READY_LINE: Record<AgentSetupTool, string> = {
   browser: "Chrome extension connected",
   computer: "Accessibility and Screen Recording granted",
-};
-
-const CONTINUE_MESSAGE: Record<AgentSetupTool, string> = {
-  browser: "The Chrome extension is connected now. Retry the browser command and continue.",
-  computer: "cast computer's Accessibility and Screen Recording permissions are granted now. Retry and continue.",
 };
 
 interface Step {
@@ -100,7 +95,7 @@ export function AgentToolSetupCard({ tool, conversationId }: { tool: AgentSetupT
             className="ml-1 px-2 py-0.5 rounded border border-sol-green/40 bg-sol-green/10 text-sol-green hover:bg-sol-green/20"
             onClick={() => {
               setContinued(true);
-              useInboxStore.getState().sendMessage(conversationId, CONTINUE_MESSAGE[tool]);
+              useInboxStore.getState().sendMessage(conversationId, AGENT_SETUP_CONTINUE_MESSAGE[tool]);
             }}
           >
             Tell the agent to continue

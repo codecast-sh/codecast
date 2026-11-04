@@ -1,8 +1,18 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
-import { isMachineDeliveredMessage, isTestArtifactPath, stripMentionContext } from "@codecast/shared/contracts";
+import {
+  AGENT_SETUP_CONTINUE_MESSAGE,
+  huddleExcerptNote,
+  isHuddleFeedNotice,
+  isMachineDeliveredMessage,
+  isTestArtifactPath,
+  parseDecisionAnswer,
+  parseUserMessage,
+  stripMentionContext,
+} from "@codecast/shared/contracts";
 import { isStickyEligible, stickyPromptContent } from "../../../web/lib/stickyPrompt";
 import { commandExpansionName } from "../../../web/lib/conversationProcessor";
+import { isFlowPressMessage } from "../../../web/lib/line/flowMessages";
 
 // Human-send detection + the per-day counters behind the "Typed" and "Words"
 // chart metrics. A send is a user-role message a person typed as their own
@@ -59,12 +69,39 @@ export function isUserMessageNoise(content: string): boolean {
 // A pasted block is in the message but was not typed.
 const PASTED_BLOCK_RE = /<pasted_content(?=[\s>])[^>]*>[\s\S]*?<\/pasted_content[^>]*>/g;
 
+// Text the web sends in a person's name when they press a button (attach an
+// agent to a huddle, run a change through a flow, continue after a setup
+// card). The press is theirs; the words are the product's.
+const SETUP_CONTINUE_LINES = new Set(Object.values(AGENT_SETUP_CONTINUE_MESSAGE));
+function isPressedMessage(content: string): boolean {
+  return isHuddleFeedNotice(content) || isFlowPressMessage(content) || SETUP_CONTINUE_LINES.has(content.trim());
+}
+
+// The part of a send its person wrote: the text of a decision answer, the
+// note above a huddle excerpt, the body of a message typed into someone
+// else's session (<user-message from=…>), otherwise the whole message.
+export function ownText(content: string): string {
+  const decision = parseDecisionAnswer(content);
+  if (decision?.id) return decision.answer;
+  const note = huddleExcerptNote(content);
+  if (note !== null) return note;
+  return parseUserMessage(content)?.body.trim() ?? content;
+}
+
+const wordCount = (s: string) => s.split(/\s+/).filter(Boolean).length;
+
 // The words a person typed in a user-role message, or null when the message
 // is not a send. A message that is only a paste is a send of zero words.
+// A tagged decision answer counts here by its text; whether the person typed
+// it or picked an option is on the decision row (decisionOf).
 export function typedWords(content: string | undefined): number | null {
-  if (!content || isUserMessageNoise(content) || !isStickyEligible(content)) return null;
+  if (!content || isUserMessageNoise(content) || isPressedMessage(content)) return null;
+  if (parseDecisionAnswer(content)?.id) return wordCount(ownText(content).replace(PASTED_BLOCK_RE, ""));
+  const note = huddleExcerptNote(content);
+  if (note !== null) return note ? wordCount(note.replace(PASTED_BLOCK_RE, "")) : null;
+  if (!isStickyEligible(content)) return null;
   const typed = stickyPromptContent(stripMentionContext(content.replace(PASTED_BLOCK_RE, "")));
-  return typed ? typed.split(/\s+/).filter(Boolean).length : 0;
+  return typed ? wordCount(typed) : 0;
 }
 
 const DAY = 24 * 3600000;
@@ -158,6 +195,19 @@ async function isCommandBody(ctx: { db: any }, conversationId: Id<"conversations
   return !!commandExpansionName(prev, { content: msg.content, timestamp });
 }
 
+// A decision answer, as the Prompts page shows it: the question it answered,
+// and whether the person picked one of the card's options (a tap, logged but
+// not counted as typing) or wrote the answer. The row keeps answer_text only
+// when the person wrote it.
+export type SendDecision = { question: string; picked: boolean };
+async function decisionOf(ctx: { db: any }, content: string | undefined): Promise<SendDecision | undefined> {
+  const parsed = parseDecisionAnswer(content);
+  if (!parsed?.id) return undefined;
+  const rowId = ctx.db.normalizeId("session_decisions", parsed.id);
+  const row = rowId ? await ctx.db.get(rowId) : null;
+  return { question: (parsed.question ?? row?.question ?? "").slice(0, SEND_TEXT_CAP), picked: !row?.answer_text };
+}
+
 export async function scheduleUserSend(
   ctx: { db: any; scheduler: any },
   conversation: Doc<"conversations">,
@@ -187,33 +237,42 @@ export async function recordSendFor(
   messageId?: Id<"messages">,
 ): Promise<boolean> {
   if (!byPerson && isProgramLaunched(conversation)) return false;
+  const message = messageId ? await ctx.db.get(messageId) : null;
+  const decision = await decisionOf(ctx, message?.content);
   const counted = { ...send, team_id: await resolveCounterTeam(ctx, conversation) };
-  await recordUserSend(ctx, counted, timestamp);
-  if (messageId) await logUserSend(ctx, counted, { conversation_id: conversation._id, message_id: messageId, timestamp });
-  return true;
+  if (decision?.picked) counted.words = 0;
+  else await recordUserSend(ctx, counted, timestamp);
+  if (message) await logUserSend(ctx, counted, { conversation_id: conversation._id, message_id: message._id, timestamp }, message, decision);
+  return !decision?.picked;
 }
 
 // A prompt longer than this is clipped in the log; the session holds the rest.
 export const SEND_TEXT_CAP = 8000;
 
-// The prompt as the Prompts page shows it: tags and mention context out,
-// pasted blocks kept, clipped to SEND_TEXT_CAP.
+// The prompt as the Prompts page shows it: what the person wrote (ownText),
+// tags and mention context out, pasted blocks kept, clipped to SEND_TEXT_CAP.
 export function sendText(content: string): { text: string; clipped: boolean } {
-  const full = stripMessageTags(stripMentionContext(content));
+  const full = stripMessageTags(stripMentionContext(ownText(content)));
   return { text: full.slice(0, SEND_TEXT_CAP), clipped: full.length > SEND_TEXT_CAP };
 }
 
 // One user_sends row per message: a message the insert path sees twice is
 // still one send on the Prompts page.
-async function logUserSend(ctx: { db: any }, send: Send, at: SendAt): Promise<void> {
+async function logUserSend(ctx: { db: any }, send: Send, at: SendAt, message: Doc<"messages">, decision: SendDecision | undefined): Promise<void> {
+  if (!message.content || message.is_encrypted) return;
   const existing = await ctx.db
     .query("user_sends")
     .withIndex("by_message", (q: any) => q.eq("message_id", at.message_id))
     .first();
   if (existing) return;
-  const message = await ctx.db.get(at.message_id);
-  if (!message?.content || message.is_encrypted) return;
-  await ctx.db.insert("user_sends", { user_id: send.user_id, team_id: send.team_id, words: send.words, ...at, ...sendText(message.content) });
+  await ctx.db.insert("user_sends", {
+    user_id: send.user_id,
+    team_id: send.team_id,
+    words: send.words,
+    ...at,
+    ...sendText(message.content),
+    ...(decision ? { decision } : {}),
+  });
 }
 
 export async function maybeRecordUserSend(

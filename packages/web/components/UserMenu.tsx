@@ -9,16 +9,17 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { isDesktopShell } from "../lib/desktop";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
-import { useSurfaceMode } from "../lib/surfaces";
+import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { useTheme } from "./ThemeProvider";
 import {
   Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, Rss, ListChecks,
   FileText, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
   BookOpen, ExternalLink, Radio, Newspaper, Home, MonitorSmartphone,
-  Blocks, Library, Sun, Moon, SquareTerminal, Gauge,
+  Blocks, Library, Sun, Moon, SquareTerminal, CalendarDays, MessageSquareText,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { objectHref, personRefOf } from "../lib/entityLinks";
+import { weeklyCardAllowed } from "@codecast/shared/contracts/weeklyCard";
 
 function MenuItem({
   icon: Icon,
@@ -156,23 +157,20 @@ export function UserMenu() {
 
   const go = (path: string) => { setOpen(false); router.push(path); };
   const profileHref = user ? objectHref("person", personRefOf(user)) : "/org";
-  // One rule with the palette and the rail: a page whose surface hosted mode
-  // hides is not offered here either, and the developer-only verbs (tours of
-  // the agent inbox, the changelog, admin tools) go with them.
-  const mode = useSurfaceMode();
-  const hosted = mode.hosted;
+  // Flows is offered only where the workspace has it, as in the rail and the palette.
+  const flowsOn = useWorkspaceFeature("line");
   const page = (icon: LucideIcon, label: string, path: string) =>
-    mode.showsPage(path) ? <MenuItem key={path} icon={icon} label={label} onClick={() => go(path)} /> : null;
-  // In hosted mode the rail already holds every page this group would repeat.
-  const pages = hosted ? [] : [
+    <MenuItem key={path} icon={icon} label={label} onClick={() => go(path)} />;
+  const pages = [
     <MenuItem key="profile" icon={CircleUser} label="Profile" onClick={() => go(profileHref)} />,
     page(Rss, "Feed", "/feed"),
     page(Radio, "Crosstalk", "/crosstalk"),
     page(ListChecks, "Tasks", "/tasks"),
     page(FileText, "Documents", "/docs"),
     page(SquareTerminal, "Sessions", "/sessions"),
+    page(MessageSquareText, "Prompts", "/prompts"),
     page(CalendarClock, "Workflows", "/routines"),
-    page(Waypoints, "Flows", "/flows"),
+    flowsOn && page(Waypoints, "Flows", "/flows"),
   ].filter(Boolean);
 
   const handleEnvSwitch = () => {
@@ -191,9 +189,8 @@ export function UserMenu() {
         active={open}
         aria-label="User menu"
       >
-        {/* Green marks the local dev server, a developer's cue; hosted mode
-            keeps the gear in ink. */}
-        <Settings className={isLocal && !hosted ? "text-sol-green" : undefined} />
+        {/* Green marks the local dev server. */}
+        <Settings className={isLocal ? "text-sol-green" : undefined} />
       </TopbarButton>
       </ShortcutTooltip>
       {urlBarOpen && <UrlBarModal onClose={() => setUrlBarOpen(false)} />}
@@ -205,7 +202,7 @@ export function UserMenu() {
           >
             <div className="flex items-center gap-2">
               <p className="text-sm font-medium text-sol-text">{displayName}</p>
-              {isAdmin && !hosted && (
+              {isAdmin && (
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-yellow/20 text-sol-yellow">admin</span>
               )}
             </div>
@@ -233,31 +230,29 @@ export function UserMenu() {
               label={theme === "dark" ? "Light mode" : "Dark mode"}
               onClick={() => { setOpen(false); toggleTheme(); }}
             />
-            {hosted && (
-              <MenuItem icon={Gauge} label="Plan and usage" onClick={() => { setOpen(false); useInboxStore.getState().openSettingsModal("plan"); }} />
-            )}
-            {!hosted && <MenuItem icon={Compass} label="Tours" onClick={() => { setOpen(false); useInboxStore.getState().setToursPanelOpen(true); }} />}
+            <MenuItem icon={Compass} label="Tours" onClick={() => { setOpen(false); useInboxStore.getState().setToursPanelOpen(true); }} />
+            {weeklyCardAllowed(user) && page(CalendarDays, "Your week", "/week")}
             {page(Blocks, "Agent features", "/agent-features")}
             {page(SlidersHorizontal, "Agent Config", "/config")}
             {page(Library, "Capabilities", "/capabilities")}
             <MenuItem
               icon={BookOpen}
-              label={hosted ? "Help" : "Documentation"}
+              label="Documentation"
               onClick={() => { setOpen(false); window.open("/documentation", "_blank", "noopener"); }}
               trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
             />
-            {!hosted && <MenuItem
+            <MenuItem
               icon={Newspaper}
               label="Changelog"
               onClick={() => { setOpen(false); window.open("/changelog", "_blank", "noopener"); }}
               trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
-            />}
-            {!hosted && <MenuItem
+            />
+            <MenuItem
               icon={Home}
               label="Home page"
               onClick={() => { setOpen(false); window.open("/", "_blank", "noopener"); }}
               trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
-            />}
+            />
             {/* Settings > Apps: the desktop and iOS apps, with the one that
                 fits this device first. Shown inside the desktop app too, where
                 the iOS app is still worth offering. */}
@@ -268,9 +263,9 @@ export function UserMenu() {
             />
           </div>
 
-          {pages.length > 0 && <div className="border-t border-sol-border py-1">{pages}</div>}
+          <div className="border-t border-sol-border py-1">{pages}</div>
 
-          {isAdmin && !hosted && (
+          {isAdmin && (
             <div className="border-t border-sol-border py-1">
               <MenuItem
                 icon={ArrowLeftRight}

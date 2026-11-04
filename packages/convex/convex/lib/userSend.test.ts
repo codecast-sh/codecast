@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { isUserMessageNoise, stripMessageTags, typedWords } from "./userSend";
+import { isUserMessageNoise, sendText, stripMessageTags, typedWords } from "./userSend";
+import { AGENT_SETUP_CONTINUE_MESSAGE, HUDDLE_FEED_DISREGARD, huddleFeedBriefing, transcriptChunkHeader } from "@codecast/shared/contracts";
+import { addToFlowsMessage, runThroughMessage } from "../../../web/lib/line/flowMessages";
 
 // The profile feed's Typed view and the Sends counter both run on this
 // classifier — anything machinery injects as a user-role turn must read as
@@ -71,5 +73,34 @@ describe("typedWords", () => {
   test("pasted blocks are sent but not typed", () => {
     expect(typedWords('look at this <pasted_content id="a1">one two three four five</pasted_content id="a1"> please')).toBe(4);
     expect(typedWords('<pasted_content id="a1">one two three</pasted_content id="a1">')).toBe(0);
+  });
+});
+
+// The web sends some messages in the person's name when they press a button.
+// The words are the product's, so they are not prompts.
+describe("pressed, not typed", () => {
+  test("huddle briefings, flow presses and setup continues are not sends", () => {
+    expect(typedWords(huddleFeedBriefing({ name: "Pearl", label: "this huddle" }))).toBeNull();
+    expect(typedWords(HUDDLE_FEED_DISREGARD)).toBeNull();
+    expect(typedWords(runThroughMessage({ slug: "change", label: "Change" }))).toBeNull();
+    expect(typedWords(addToFlowsMessage("audit", "wr-12"))).toBeNull();
+    for (const line of Object.values(AGENT_SETUP_CONTINUE_MESSAGE)) expect(typedWords(line)).toBeNull();
+  });
+
+  test("a huddle excerpt counts only the note the person wrote above it", () => {
+    const header = transcriptChunkHeader({ title: "Weekly", startedAt: Date.UTC(2026, 10, 3, 15, 0), live: true, partial: true });
+    const transcript = `${header}\n\n[15:00] Sam: we should ship it\n[15:01] Ana: agreed`;
+    expect(typedWords(`${transcript}\n\nRead this and help with what it implies.`)).toBeNull();
+    expect(typedWords(`what did Sam decide?\n\n${transcript}`)).toBe(4);
+    expect(sendText(`what did Sam decide?\n\n${transcript}`).text).toBe("what did Sam decide?");
+  });
+
+  test("a message typed into someone else's session shows without its wrapper", () => {
+    expect(sendText('<user-message from="Sam">\nship the fix\n</user-message>').text).toBe("ship the fix");
+  });
+
+  test("a tagged decision answer counts its own words; the untagged legacy line does not", () => {
+    expect(typedWords('Decision: no, wait for Sam\n<cast-decision id="k97x" question="Ship it?"/>')).toBe(4);
+    expect(typedWords("Decision: Ship now")).toBeNull();
   });
 });

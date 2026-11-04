@@ -10,3 +10,10 @@ export function runThroughMessage(flow: { slug: string; label: string }): string
 export function addToFlowsMessage(name: string, runId: string): string {
   return `Add the ${name} workflow you ran (${runId}) to the pool of flows: \`cast flow import ${runId}\`. It starts as your draft. Make it general (its name, step names, description and prompts say what it does for any change, not this one task), then \`cast flow publish\` it. Tell me what the flow does and when to use it.`;
 }
+
+/** Whether a message is one of these presses rather than something typed. */
+export function isFlowPressMessage(raw: string): boolean {
+  const t = raw.trimStart();
+  return (t.startsWith("Run your change through the ") && t.includes("`cast flow run ")) ||
+    (t.startsWith("Add the ") && t.includes("`cast flow import "));
+}

@@ -1,7 +1,7 @@
 // /prompts: one day of what each person typed into sessions, a column each,
 // oldest prompt at the top. The day lives in the query string (`d=`, the
 // viewer's local YYYY-MM-DD), so a link lands on the same day.
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { memo, useMemo, useRef, useState } from "react";
@@ -123,12 +123,16 @@ const PromptCard = memo(function PromptCard({ row }: { row: PromptRow }) {
   const text = useMemo(() => stripPastedContent(row.text).trim(), [row.text]);
   const overflows = useOverflows(ref, PROMPT_MAX_HEIGHT, [text]);
   const href = `/conversation/${row.conversation_id}#msg-${row.message_id}`;
+  const header = (
+    <Link href={href} className="group flex items-baseline gap-2 text-[11px]">
+      <span className="shrink-0 font-mono tabular-nums text-sol-text-dim">{timeOf(row.timestamp)}</span>
+      <span className="truncate text-sol-text-muted group-hover:text-sol-blue">{row.session_title}</span>
+    </Link>
+  );
+  if (row.decision) return <DecisionCard row={row} decision={row.decision} header={header} text={text} />;
   return (
     <article className="rounded-md border border-sol-border/30 bg-sol-card px-3 py-2">
-      <Link href={href} className="group flex items-baseline gap-2 text-[11px]">
-        <span className="shrink-0 font-mono tabular-nums text-sol-text-dim">{timeOf(row.timestamp)}</span>
-        <span className="truncate text-sol-text-muted group-hover:text-sol-blue">{row.session_title}</span>
-      </Link>
+      {header}
       <div
         ref={ref}
         className="prose prose-invert prose-sm mt-1 max-w-none break-words text-sm text-sol-text"
@@ -151,3 +155,35 @@ const PromptCard = memo(function PromptCard({ row }: { row: PromptRow }) {
     </article>
   );
 });
+
+// A decision answer: the question it answered, then the answer. A picked
+// option reads as a choice (a check and its label); a written answer reads
+// like any prompt.
+function DecisionCard({ row, decision, header, text }: { row: PromptRow; decision: NonNullable<PromptRow["decision"]>; header: React.ReactNode; text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <article className="rounded-md border border-sol-border/30 border-l-2 border-l-sol-violet/60 bg-sol-card px-3 py-2">
+      {header}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="mt-1 flex w-full items-start gap-1.5 text-left text-[12px] text-sol-text-muted hover:text-sol-text"
+      >
+        <span className="shrink-0 text-[10px] uppercase leading-[18px] tracking-wide text-sol-violet">decision</span>
+        <span className={`leading-[18px] ${open ? "" : "line-clamp-2"}`}>{decision.question || "the agent's question"}</span>
+      </button>
+      {decision.picked ? (
+        <div className="mt-1 flex items-start gap-1.5 text-sm font-medium text-sol-text">
+          <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sol-green" />
+          <span className="min-w-0 break-words">{text}</span>
+        </div>
+      ) : (
+        <div className="prose prose-invert prose-sm mt-1 max-w-none break-words text-sm text-sol-text">
+          <MessageMarkdown content={text} userText />
+        </div>
+      )}
+      {row.clipped && <Link href={`/conversation/${row.conversation_id}#msg-${row.message_id}`} className="mt-1 block text-[11px] text-sol-text-dim hover:text-sol-blue">Rest in the session</Link>}
+    </article>
+  );
+}

@@ -121,6 +121,35 @@ test("a counted send is logged once with its prompt text; an uncounted one is no
   expect(db._tables.user_sends[0]).toMatchObject({ user_id: "users_owner", team_id: "teams_team", message_id: "messages_typed", text: "fix the login bug", clipped: false });
 });
 
+// A decision card's answer reaches the session as "Decision: …" queued by
+// the person. Writing the answer is typing; picking an option is a tap.
+test("decision answers are logged with their question; only a written one counts as typing", async () => {
+  const conversation = { _id: "conversations_a", user_id: "users_owner", team_id: "teams_team" } as any;
+  const typed = 'Decision: are there no aventon bikes nearby?\n<cast-decision id="session_decisions_typed" question="Book the RadRunner?"/>';
+  const picked = 'Decision: Keep it running\n<cast-decision id="session_decisions_picked" question="Pause the eval check?"/>';
+  const db = makeFakeDb({
+    conversations: [conversation],
+    session_decisions: [
+      { _id: "session_decisions_typed", status: "answered", answer_text: "are there no aventon bikes nearby?" },
+      { _id: "session_decisions_picked", status: "answered", answer_index: 0 },
+    ],
+    messages: [
+      { _id: "messages_typed", conversation_id: "conversations_a", role: "user", timestamp: 1, content: typed },
+      { _id: "messages_picked", conversation_id: "conversations_a", role: "user", timestamp: 2, content: picked },
+    ],
+    user_send_daily: [],
+    user_sends: [],
+  });
+  expect(await maybeRecordUserSend({ db }, conversation, { _id: "messages_typed" as any, role: "user", content: typed, queued: "person" }, 1)).toBe(true);
+  expect(await maybeRecordUserSend({ db }, conversation, { _id: "messages_picked" as any, role: "user", content: picked, queued: "person" }, 2)).toBe(false);
+  expect(db._tables.user_sends).toHaveLength(2);
+  expect(db._tables.user_sends[0]).toMatchObject({ message_id: "messages_typed", text: "are there no aventon bikes nearby?", words: 6, decision: { question: "Book the RadRunner?", picked: false } });
+  expect(db._tables.user_sends[1]).toMatchObject({ message_id: "messages_picked", text: "Keep it running", words: 0, decision: { question: "Pause the eval check?", picked: true } });
+  // Only the written answer counts as typing.
+  expect(db._tables.user_send_daily).toHaveLength(1);
+  expect(db._tables.user_send_daily[0]).toMatchObject({ total: 1, words: 6 });
+});
+
 test("the team day shows the viewer's own sends and a teammate's only from team-visible sessions", async () => {
   const send = (id: string, user: string, conv: string, text: string) =>
     ({ _id: `user_sends_${id}`, user_id: user, team_id: "teams_t", conversation_id: conv, message_id: `messages_${id}`, timestamp: Date.parse("2026-10-29T15:00:00Z"), words: 1, text, clipped: false });
@@ -138,7 +167,9 @@ test("the team day shows the viewer's own sends and a teammate's only from team-
       send("a", "users_me", "conversations_mine", "my own prompt"),
       send("b", "users_mate", "conversations_shared", "shared prompt"),
       send("c", "users_mate", "conversations_private", "private prompt"),
+      send("d", "users_bot", "conversations_shared", "an agent account's send"),
     ],
+    users: [{ _id: "users_bot", name: "Senior Bot", is_bot: true }],
   });
   const { teamDay } = await import("./userSends");
   const authCtx = (user: string | null) => ({ db, auth: { getUserIdentity: async () => (user ? { subject: `${user}|session` } : null) } });
