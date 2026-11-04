@@ -4,7 +4,8 @@
  *
  * `scan` reads; `prune` archives and removes (scan.ts has the verdicts,
  * prune.ts the archive). The /deploy command reads `scan --json`, lands the
- * `ready` trees' files topic by topic, then runs `prune --yes`.
+ * `ready` trees' files topic by topic, then runs `prune --yes`. `hold` and
+ * `release` mark a tree that must stay on its branch (hold.ts).
  */
 
 import * as fs from "node:fs";
@@ -17,6 +18,7 @@ import { execFileAsync } from "../proc.js";
 import { formatAgeShort } from "../publishCommand.js";
 import { PRUNABLE, processCwds, scanRepo, type FileVerdict, type RepoScan, type RosterRow, type TreeReport, type TreeVerdict } from "./scan.js";
 import { archiveDir, pruneTree, treePatch, type PruneResult } from "./prune.js";
+import { clearHold, readHold, writeHold } from "./hold.js";
 
 interface ScanOpts { repo?: string[]; allRepos?: boolean; hosts?: boolean; json?: boolean; verbose?: boolean; fetch?: boolean; only?: string[] }
 
@@ -117,9 +119,9 @@ async function onHosts(args: string): Promise<HostScan[]> {
   }));
 }
 
-const ORDER: TreeVerdict[] = ["ready", "review", "run", "stale", "landed", "empty", "live", "primary"];
+const ORDER: TreeVerdict[] = ["ready", "review", "held", "run", "stale", "landed", "empty", "live", "primary"];
 const TONE: Record<TreeVerdict, (s: string) => string> = {
-  ready: fmt.success, review: fmt.warning, run: fmt.accent, stale: fmt.muted, landed: fmt.muted, empty: fmt.muted, live: fmt.accent, primary: fmt.label,
+  ready: fmt.success, review: fmt.warning, held: fmt.warning, run: fmt.accent, stale: fmt.muted, landed: fmt.muted, empty: fmt.muted, live: fmt.accent, primary: fmt.label,
 };
 
 function treeLine(t: TreeReport, now: number): string {
@@ -139,7 +141,7 @@ function printScan(scan: LandScan, verbose: boolean, prefix = ""): void {
     console.log(`${prefix}${fmt.highlight(r.repo)} ${fmt.muted(r.root)}  ${summary}`);
     for (const v of ORDER) {
       const trees = by.get(v) ?? [];
-      const show = verbose || v === "ready" || v === "review" || v === "primary" ? trees : [];
+      const show = verbose || v === "ready" || v === "review" || v === "held" || v === "primary" ? trees : [];
       for (const t of show) console.log(treeLine(t, now));
       if (trees.length > show.length) console.log(`  ${TONE[v](v.padEnd(10))} ${fmt.muted(`${trees.length} trees (--verbose lists them)`)}`);
     }
@@ -171,6 +173,15 @@ export function pruneTargets(scan: LandScan): { go: TreeReport[]; held: Array<{ 
   return { go, held };
 }
 
+/** The worktree a hold names (default: the one holding this directory). The main checkout is where landing goes, so it is never held. */
+async function heldTarget(tree: string | undefined): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", path.resolve(tree ?? "."), "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).catch(() => ({ stdout: "" }));
+  const dir = String(stdout).trim();
+  if (!dir) { console.error(`not a git worktree: ${path.resolve(tree ?? ".")}`); process.exit(1); }
+  if (await repoRootOf(dir) === dir) { console.error(`${dir} is the repo's main checkout, where landing goes; hold a worktree instead`); process.exit(1); }
+  return dir;
+}
+
 function addScanOptions(cmd: Command): Command {
   return cmd
     .option("--repo <path...>", "repos to scan (default: the one holding this directory)")
@@ -188,6 +199,8 @@ export function registerLandCommand(program: Command): void {
 Verdicts (a tree's own work = its base to its working tree, untracked files included):
   ready    finished recently, holds files only it changed: land them
   review   finished recently, holds changes main lacks to files main also changed
+  held     a session marked it held (cast land hold): it stays on its branch,
+           never landed or pruned, until cast land release
   run      a line run made it: the run ships its change after its decision, so
            it is never landed by hand (land diff refuses it)
   stale    finished and untouched for 7 days: archived and released, not landed
@@ -202,6 +215,8 @@ change's lines).
 
   cast land scan                     this repo's worktrees
   cast land scan --all-repos --hosts everything, laptop and cloud
+  cast land hold [tree] -r "<why>"   keep a tree on its branch: never landed
+  cast land release [tree]           let it land again
   cast land diff <tree> --only       the files only that tree changed, as a patch
   cast land prune --yes              archive and release stale, landed and empty trees
 
@@ -209,7 +224,7 @@ Pruned work stays recoverable: ${archiveDir()}/<date>-<repo>-<tree>.patch, and t
 branch as refs/codecast/land-archive/<branch>.`);
 
   addScanOptions(land.command("scan").description("Classify every worktree's own work against main"))
-    .option("-v, --verbose", "list every tree, not just ready and review")
+    .option("-v, --verbose", "list every tree, not just ready, review and held")
     .action(async (opts: ScanOpts) => {
       const scan = await scanLocal(opts);
       if (opts.hosts) scan.hosts = await onHosts(`scan --all-repos${opts.fetch === false ? " --no-fetch" : ""}`);
@@ -232,9 +247,30 @@ branch as refs/codecast/land-archive/<branch>.`);
       const scan = await scanRepo(await repoRootOf(dir), { roster: null, processCwds: [], fetch: false, only: [dir] });
       const report = scan.trees.find((t) => t.path === dir);
       if (!report) { console.error(`no worktree at ${dir}`); process.exit(1); }
-      if (report.verdict === "run") { console.error(`not landed by hand: ${dir} is ${report.reason}`); process.exit(1); }
+      if (report.verdict === "run" || report.verdict === "held") { console.error(`not landed by hand: ${dir} is ${report.reason}`); process.exit(1); }
       const only: FileVerdict[] | undefined = opts.only || opts.both ? [...(opts.only ? ["only" as const] : []), ...(opts.both ? ["both" as const] : [])] : undefined;
       process.stdout.write(await treePatch(report, only));
+    });
+
+  land
+    .command("hold [tree]")
+    .description("Mark a worktree held: cast land and /deploy report it and never land or prune it")
+    .requiredOption("-r, --reason <why>", "why it stays on its branch, shown wherever it is listed")
+    .action(async (tree: string | undefined, opts: { reason: string }) => {
+      const dir = await heldTarget(tree);
+      const by = process.env.CODECAST_SESSION_ID;
+      writeHold(dir, opts.reason, by);
+      console.log(`Held ${dir}: ${opts.reason.trim()}`);
+    });
+
+  land
+    .command("release [tree]")
+    .description("Lift a worktree's hold so it can land again")
+    .action(async (tree: string | undefined) => {
+      const dir = await heldTarget(tree);
+      const was = readHold(dir);
+      if (!clearHold(dir)) { console.log(`${dir} was not held`); return; }
+      console.log(`Released ${dir} (was held: ${was?.reason ?? "?"})`);
     });
 
   land
