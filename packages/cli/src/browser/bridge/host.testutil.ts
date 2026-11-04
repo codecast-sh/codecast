@@ -69,6 +69,9 @@ export class FakeExtension {
   seen: any[] = [];
   private nextTab = 100;
 
+  /** Answer the host's pings the way background.js does; off by default, which reads as a worker that stopped listening. */
+  answersPings = false;
+
   constructor(tabs: BridgeTab[], readonly token = TEST_TOKEN) {
     this.tabs = tabs;
   }
@@ -103,7 +106,10 @@ export class FakeExtension {
     }
     this.ws.on("message", (raw) => {
       const m = JSON.parse(String(raw));
-      if (m.op === "ping") return;
+      if (m.op === "ping") {
+        if (this.answersPings) this.ws.send(JSON.stringify({ op: "pong" }));
+        return;
+      }
       if (m.op === "pong") {
         this.seen.push(m);
         return;

@@ -237,9 +237,9 @@ async function connect(trigger = "boot") {
 
   const sock = new WebSocket(`ws://127.0.0.1:${cfg.port}/ext`);
   ws = sock;
-  // A token rejection stays on the badge until a host proves the token; the
-  // attempt itself is silent so the badge does not flicker every 5 s.
-  if (status.state !== "bad-token") setStatus("connecting", `127.0.0.1:${cfg.port}`);
+  // A token rejection or a standby stays on the badge until a host welcomes
+  // this worker; the attempt itself is silent so the badge does not flicker.
+  if (status.state !== "bad-token" && status.state !== "standby") setStatus("connecting", `127.0.0.1:${cfg.port}`);
   const nonce = randomHex(32);
   let proven = false;
   let proving = null;
@@ -330,6 +330,11 @@ async function connect(trigger = "boot") {
       /* keep it */
     } else if (e.code === 4401) {
       setStatus("bad-token", "the host rejected the token; run `cast browser extension setup` again, it hands this extension the current token");
+    } else if (e.code === 4409) {
+      // Paired in another Chrome profile too, and that one holds the bridge.
+      // No quick retries: the alarm asks every 30 s and takes over once the
+      // other profile's extension is gone.
+      setStatus("standby", "another Chrome profile's Codecast extension is connected; agents use that profile");
     } else {
       setStatus("disconnected", "the bridge host is not running; it starts with the next `cast browser` command in real mode");
       scheduleRetry();

@@ -29,6 +29,8 @@ function describeBridge(s, port) {
     case "connecting":
     case "disconnected":
       return { cls: "state-wait", title: "Waiting for cast", text: `Paired. The bridge host on port ${port} starts with the next cast browser command in real mode.` };
+    case "standby":
+      return { cls: "state-wait", title: "Standby", text: "Agents use another Chrome profile where Codecast is connected. This profile takes over if that one closes." };
     case "bad-token":
       return { cls: "state-bad", title: "Token rejected", text: "This pairing is stale. Run cast browser extension setup again; it hands this page the current token." };
     default:

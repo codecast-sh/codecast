@@ -14,7 +14,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { CdpConnection, CdpError, listTargets } from "../cdp.js";
 import { freePort } from "../instance.js";
 import { bridgeHostPlistXml, probeHost, proveBridgeHost, startBridgeHost, type RunningHost } from "./host.js";
-import { CLOSE_HANDSHAKE_TIMEOUT } from "./protocol.js";
+import { CLOSE_EXTENSION_STANDBY, CLOSE_HANDSHAKE_TIMEOUT } from "./protocol.js";
 import { dial, FakeExtension, TEST_TOKEN as TOKEN } from "./host.testutil.js";
 import { BRIDGE_PROTOCOL, BRIDGE_STORE_URL, bridgeProof, CLOSE_BAD_TOKEN, randomNonce, secretMatches, tabIdOfTarget, targetIdOfTab } from "./protocol.js";
 
@@ -300,6 +300,32 @@ describe("bridge host auth", () => {
     // it only needs the close, however long the host takes.
     expect(await closeCode(ws, 20_000)).toBe(CLOSE_HANDSHAKE_TIMEOUT);
   }, 25_000);
+
+  // 2026-10-30: the extension paired in two Chrome profiles. Each new hello
+  // replaced the live socket, the replaced worker retried within seconds,
+  // and the two profiles took the bridge from each other, failing every
+  // command in flight. A live extension now keeps it; the second stands by.
+  test("a second live extension stands by instead of taking the bridge", async () => {
+    const standby: string[] = [];
+    host = await startBridgeHost({ port: await freePort(), token: TOKEN, incumbentProbeMs: 500, onStandby: (d) => standby.push(d) });
+    const first = new FakeExtension([]);
+    first.answersPings = true;
+    await first.connect(host.port, { boot: "aaaa" });
+    const second = new FakeExtension([]);
+    await expect(second.connect(host.port, { boot: "bbbb" })).rejects.toThrow(`closed ${CLOSE_EXTENSION_STANDBY}`);
+    expect(first.ws.readyState).toBe(WebSocket.OPEN);
+    expect(host.extensionConnected()).toBe(true);
+    expect(standby[0]).toMatch(/worker bbbb .* stands by: worker aaaa holds the bridge/);
+  });
+
+  test("a second extension replaces one that no longer answers", async () => {
+    host = await startBridgeHost({ port: await freePort(), token: TOKEN, incumbentProbeMs: 300 });
+    const first = await new FakeExtension([]).connect(host.port, { boot: "aaaa" });
+    const closed = closeCode(first.ws, 3000);
+    await new FakeExtension([]).connect(host.port, { boot: "bbbb" });
+    expect(await closed).toBe(1000);
+    expect(host.extensionConnected()).toBe(true);
+  });
 
   test("a reconnect from the same worker is told apart from a new one", async () => {
     const seen: string[] = [];
