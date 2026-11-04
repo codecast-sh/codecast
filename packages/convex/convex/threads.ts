@@ -31,8 +31,9 @@ import {
   threadUnreadFor,
   type ThreadSummary,
 } from "./chat";
-import { commentsForAnchor, isInCommentThread } from "./comments";
-import { conversationCommentRowsFromTwins } from "./commentTwins";
+import { isInCommentThread } from "./comments";
+import { listConversationComments } from "./commentStore";
+import type { ConversationComment } from "./lib/conversationCommentRows";
 import { canAccessComment, codeThreadRows } from "./codeComments";
 import { canAccessConversation, canAccessTask } from "./lib/access";
 import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
@@ -92,7 +93,7 @@ export type ThreadInboxEntry = {
   last_reply?: ThreadLastReply | null;
 };
 
-export type CommentWithUser = Doc<"comments"> & {
+export type CommentWithUser = ConversationComment & {
   user: {
     _id?: Id<"users">;
     name?: string;
@@ -139,8 +140,8 @@ type PageCache = {
   channels: Map<string, Doc<"chat_channels"> | null>;
   roots: Map<string, Doc<"chat_messages"> | null>;
   conversations: Map<string, Doc<"conversations"> | null>;
-  commentThreads: Map<string, Doc<"comments">[]>;
-  conversationComments: Map<string, Doc<"comments">[]>;
+  commentThreads: Map<string, ConversationComment[]>;
+  conversationComments: Map<string, ConversationComment[]>;
   tasks: Map<string, Doc<"tasks"> | null>;
   taskMembership: Map<string, TaskThreadMembership>;
   taskComments: Map<string, Doc<"task_comments">[]>;
@@ -148,14 +149,10 @@ type PageCache = {
   artifactComments: Map<string, Doc<"artifact_comments">[]>;
   codeThreads: Map<string, Doc<"review_comments">[]>;
   users: Map<string, Doc<"users"> | null>;
-  /** Read conversation comments from their review_comments twins (the
-   *  person's `comments_from_review` flag) rather than from `comments`. */
-  commentsFromTwins: boolean;
 };
 
-function newPageCache(opts: { commentsFromTwins?: boolean } = {}): PageCache {
+function newPageCache(): PageCache {
   return {
-    commentsFromTwins: opts.commentsFromTwins === true,
     channels: new Map(),
     roots: new Map(),
     conversations: new Map(),
@@ -278,7 +275,7 @@ function commentConversationId(row: ThreadRead): Id<"conversations"> {
   return row.conversation_id ?? (parseCommentThreadRootKey(row.root_key).conversationId as Id<"conversations">);
 }
 
-async function commentThread(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<Doc<"comments">[]> {
+async function commentThread(ctx: ReadCtx, row: ThreadRead, cache: PageCache): Promise<ConversationComment[]> {
   return await memo(cache.commentThreads, row.root_key, async () => {
     const conversationId = commentConversationId(row);
     const anchor = {
@@ -286,18 +283,10 @@ async function commentThread(ctx: ReadCtx, row: ThreadRead, cache: PageCache): P
       file_path: row.file_path,
       line_number: row.line_number,
     };
-    // A message anchor has its own index. A file or global anchor needs the
-    // conversation's whole comment set — read it ONCE per conversation and
-    // filter per anchor, so N anchored threads cost one collect, not N.
-    // Twins have no message index, so every anchor reads the set.
-    if (anchor.message_id && !cache.commentsFromTwins) return await commentsForAnchor(ctx, conversationId, anchor);
+    // Read the conversation's comments ONCE and filter per anchor, so N
+    // anchored threads cost one collect, not N.
     const all = await memo(cache.conversationComments, String(conversationId), () =>
-      cache.commentsFromTwins
-        ? conversationCommentRowsFromTwins(ctx, conversationId)
-        : ctx.db
-          .query("comments")
-          .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
-          .collect());
+      listConversationComments(ctx, conversationId));
     return all
       .filter((c) => isInCommentThread(c, anchor))
       .sort((a, b) => a.created_at - b.created_at || String(a._id).localeCompare(String(b._id)));
@@ -306,11 +295,11 @@ async function commentThread(ctx: ReadCtx, row: ThreadRead, cache: PageCache): P
 
 /** An unfinished agent placeholder is not a reply yet: it neither counts nor
  *  previews. Once it lands (done, or error) it reads as another person's. */
-function isLandedComment(c: Doc<"comments">): boolean {
+function isLandedComment(c: ConversationComment): boolean {
   return c.agent_status !== "thinking" && c.agent_status !== "streaming";
 }
 
-function isOthersComment(c: Doc<"comments">, userId: Id<"users">): boolean {
+function isOthersComment(c: ConversationComment, userId: Id<"users">): boolean {
   // An agent row carries the asker's user_id; the answer is still news to
   // the asker, so it counts as someone else's reply.
   return c.author_kind === "agent" || String(c.user_id) !== String(userId);
@@ -656,6 +645,8 @@ export const listMine = query({
     team_id: v.optional(v.id("teams")),
     cursor: v.optional(v.string()),
     limit: v.optional(v.number()),
+    // Sent by web clients from Oct 24 to Nov 3 2026; every client now reads
+    // the same comments, so it changes nothing.
     comments_from_review: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -678,7 +669,7 @@ export const listMine = query({
     // cursor of their own), newest first like everything else.
     const carried = args.cursor ? [] : await personalPageRows(ctx, userId, args.team_id);
 
-    const cache = newPageCache({ commentsFromTwins: args.comments_from_review });
+    const cache = newPageCache();
     const entries: ThreadInboxEntry[] = [];
     for (const row of [...carried, ...page.page]) {
       const kind = THREAD_KINDS[row.kind];
@@ -729,31 +720,68 @@ export const unreadCount = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
+    // Sent by web clients from Oct 24 to Nov 3 2026; every client now reads
+    // the same comments, so it changes nothing.
     comments_from_review: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
     if (!userId) return 0;
-    const rows = [
-      ...(await personalPageRows(ctx, userId, args.team_id)),
-      ...(await scopeQuery(ctx, userId, args.team_id).take(THREAD_BADGE_SCAN)),
-    ];
-    const cache = newPageCache({ commentsFromTwins: args.comments_from_review });
-    let count = 0;
-    for (const row of rows) {
-      // A kind this deployment does not know yet (mid-rollout) is skipped,
-      // never a crash that blanks the badge.
-      const kind = THREAD_KINDS[row.kind];
-      if (!kind) continue;
-      if (row.last_activity_at <= row.last_read_at) continue;
-      if (!(await kind.access(ctx, userId, row, cache))) continue;
-      // Activity past the mark is the cheap test; the kind's own count is
-      // the honest one — a task row moved by an agent's notes under an
-      // older rule holds nothing the reader's level counts.
-      if ((await kind.unread(ctx, userId, row, cache)).unread === 0) continue;
-      count++;
+    return countUnread(ctx, userId, args.team_id);
+  },
+});
+
+/** How many of the viewer's threads in one workspace (a team, or personal when
+ *  `teamId` is undefined) have unseen activity. A bounded scan of the
+ *  newest-activity rows, so a deep unread tail shows a floor, never a lie. */
+async function countUnread(ctx: ReadCtx, userId: Id<"users">, teamId: Id<"teams"> | undefined): Promise<number> {
+  const rows = [
+    ...(await personalPageRows(ctx, userId, teamId)),
+    ...(await scopeQuery(ctx, userId, teamId).take(THREAD_BADGE_SCAN)),
+  ];
+  const cache = newPageCache();
+  let count = 0;
+  for (const row of rows) {
+    // A kind this deployment does not know yet (mid-rollout) is skipped,
+    // never a crash that blanks the badge.
+    const kind = THREAD_KINDS[row.kind];
+    if (!kind) continue;
+    if (row.last_activity_at <= row.last_read_at) continue;
+    if (!(await kind.access(ctx, userId, row, cache))) continue;
+    // Activity past the mark is the cheap test; the kind's own count is
+    // the honest one — a task row moved by an agent's notes under an
+    // older rule holds nothing the reader's level counts.
+    if ((await kind.unread(ctx, userId, row, cache)).unread === 0) continue;
+    count++;
+  }
+  return count;
+}
+
+// The workspace switcher's badges: the same count as unreadCount for every
+// OTHER workspace the viewer is in, so a reply in one team shows while another
+// is on screen. The active workspace is skipped: its count is unreadCount's,
+// and the store holds each fact once. Only workspaces with unread come back.
+export const unreadByWorkspace = query({
+  args: {
+    api_token: v.optional(v.string()),
+    // The workspace on screen: a team id, or "personal".
+    active: v.optional(v.union(v.id("teams"), v.literal("personal"))),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
+    if (!userId) return [];
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const workspaces: Array<Id<"teams"> | undefined> = [undefined, ...memberships.map((m) => m.team_id)];
+    const out: Array<{ team_id: string | null; count: number }> = [];
+    for (const teamId of workspaces) {
+      if ((teamId ?? "personal") === args.active) continue;
+      const count = await countUnread(ctx, userId, teamId);
+      if (count > 0) out.push({ team_id: teamId ? String(teamId) : null, count });
     }
-    return count;
+    return out;
   },
 });
 

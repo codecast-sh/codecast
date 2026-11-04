@@ -449,6 +449,10 @@ export type ChatSliceData = {
   /** The server's workspace-wide count of threads with unseen replies — the
    *  badge for a client that has never opened the Threads page. */
   threadUnread: number;
+  /** The same count for every OTHER workspace the viewer is in (threads.
+   *  unreadByWorkspace), only those with unread: the switcher's badges.
+   *  `team_id` null is personal. */
+  threadUnreadByWorkspace: Array<{ team_id: string | null; count: number }>;
   /** Published pages with their newest comments (threads.listMine payload),
    *  keyed by artifact id — the page kind's root_key. */
   pageThreads: Record<string, PageThreadRow>;
@@ -759,6 +763,7 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     chatThreadSummaries: {},
     threadInbox: {},
     threadUnread: 0,
+    threadUnreadByWorkspace: [],
     pageThreads: {},
 
     // ── Sending ─────────────────────────────────────────────────────────────

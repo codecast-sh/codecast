@@ -23,6 +23,7 @@ import {
 import { makeCollectionSig } from "../store/wakeSig";
 import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useSyncCollection } from "./useSyncCollection";
 import { isConvexId } from "../lib/entityLinks";
 import { commentsFromReviewOn } from "../lib/commentSource";
 import { ingestTaskDetail } from "./useSyncTasks";
@@ -207,6 +208,15 @@ export function useThreadUnreadSync(): void {
     data,
     useCallback((n: any) => syncTable("threadUnread", typeof n === "number" ? n : 0), [syncTable]),
   );
+}
+
+/** The switcher's cross-workspace badges: unread thread counts for every
+ *  workspace except the one on screen. App-wide beside the Threads badge. */
+export function useThreadUnreadByWorkspaceSync(): void {
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  // A just-created team's stub id is no workspace the server knows yet.
+  const args = !activeTeamId ? { active: "personal" } : isConvexId(String(activeTeamId)) ? { active: activeTeamId } : "skip";
+  useSyncCollection("threadUnreadByWorkspace", api.threads.unreadByWorkspace, args);
 }
 
 // ── Readers ─────────────────────────────────────────────────────────────────

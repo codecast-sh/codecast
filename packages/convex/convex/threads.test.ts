@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { commentRow, storedComments } from "./testComments";
 import { makeFakeDb } from "./testDb";
 import { sendMessage } from "./chat";
 import { addComment as addConversationComment, mirrorAgentReply } from "./comments";
@@ -11,7 +12,7 @@ import {
   taskThreadParticipants,
   touchThread,
 } from "./threadReads";
-import { dismiss, listMine, markAllRead, markRead, unreadCount } from "./threads";
+import { dismiss, listMine, markAllRead, markRead, unreadByWorkspace, unreadCount } from "./threads";
 
 const ALICE = "user-alice" as any;
 const BOB = "user-bob" as any;
@@ -199,7 +200,7 @@ describe("touch per kind", () => {
           comment_fork_prompt_at: 5,
         }),
       ],
-      comments: [{
+      review_comments: [commentRow({
         _id: "comment-agent",
         conversation_id: CONVERSATION,
         user_id: ALICE,
@@ -208,13 +209,13 @@ describe("touch per kind", () => {
         author_kind: "agent",
         agent_status: "thinking",
         fork_conversation_id: forkId,
-      }],
+      })],
       messages: [{ _id: "message-reply", conversation_id: forkId, role: "assistant", content: "The answer", timestamp: 10 }],
     });
     // The placeholder alone files nothing.
     expect((await inbox(ctx)).entries).toEqual([]);
     await call(mirrorAgentReply, ctx, { fork_conversation_id: forkId });
-    const comment = ctx.db._tables.comments[0];
+    const comment = storedComments(ctx.db)[0];
     expect(comment.agent_status).toBe("done");
     expect(comment.created_at).toBeGreaterThan(1);
     const view = await inbox(ctx);
@@ -637,11 +638,11 @@ describe("purge", () => {
 describe("migration and backfill", () => {
   test("the comment backfill seeds every thread READ for its authors and the owner", async () => {
     const ctx = await context(ALICE, {
-      comments: [
+      review_comments: [
         { _id: "c-1", conversation_id: CONVERSATION, user_id: BOB, content: "old", created_at: 100 },
         { _id: "c-2", conversation_id: CONVERSATION, user_id: CAROL, content: "older reply", created_at: 200, message_id: "messages_1" },
         { _id: "c-3", conversation_id: CONVERSATION, user_id: ALICE, content: "", created_at: 300, author_kind: "agent", agent_status: "thinking" },
-      ],
+      ].map(commentRow),
     });
     expect(await call(backfillThreadReads, ctx, { kind: "comment" })).toMatchObject({ scanned: 3, done: true });
     const keys = (userId: string) => rows(ctx).filter((r) => r.user_id === userId).map((r) => r.root_key).sort();
@@ -679,7 +680,7 @@ describe("migration and backfill", () => {
     const comments = Array.from({ length: 401 }, (_, i) => ({
       _id: `c-${i}`, conversation_id: CONVERSATION, user_id: BOB, content: "x", created_at: i + 1,
     }));
-    const ctx = await context(ALICE, { comments });
+    const ctx = await context(ALICE, { review_comments: comments.map(commentRow) });
     const result = await call(backfillThreadReads, ctx, { kind: "comment" });
     expect(result).toMatchObject({ scanned: 400, done: false });
     expect(ctx._scheduled[0].args).toMatchObject({ kind: "comment", cursor: "400" });
@@ -818,5 +819,19 @@ describe("page kind", () => {
     const withStorage = { ...ctx, storage: { async delete() {} } };
     expect(await call(deleteForWeb, withStorage, { slug: "weekly-report" })).toEqual({ ok: true });
     expect(rows(ctx).filter((r) => r.kind === "page")).toEqual([]);
+  });
+});
+
+describe("unreadByWorkspace", () => {
+  test("names the other workspaces with unread and leaves out the one on screen", async () => {
+    const ctx = await context(ALICE);
+    await call(webAddComment, as(ctx, BOB), { short_id: "ct-1", text: "which key?" });
+    const teamCount = await call(unreadCount, ctx, { team_id: TEAM });
+    expect(teamCount).toBeGreaterThan(0);
+    // From Personal, the team's unread peeks through with the badge's own count.
+    expect(await call(unreadByWorkspace, ctx, { active: "personal" })).toEqual([{ team_id: String(TEAM), count: teamCount }]);
+    // On the team itself, nothing: its count belongs to unreadCount.
+    expect(await call(unreadByWorkspace, ctx, { active: TEAM })).toEqual([]);
+    expect(await call(unreadByWorkspace, await context(null), { active: "personal" })).toEqual([]);
   });
 });
