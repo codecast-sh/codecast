@@ -39,9 +39,9 @@ test("with the flag on the Changes row sits right under Feed", () => {
   expect(html).toContain('href="/changes"');
   const feed = html.indexOf("feed-row");
   const changes = html.indexOf('href="/changes"');
-  const questions = html.indexOf("questions-row");
+  const ops = html.indexOf('href="/ops"');
   expect(feed).toBeLessThan(changes);
-  expect(changes).toBeLessThan(questions);
+  expect(changes).toBeLessThan(ops);
 });
 
 test("the row reads as active on /changes", () => {

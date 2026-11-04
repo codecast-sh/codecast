@@ -13,7 +13,7 @@ import Link from "next/link";
 import { ChevronsDown, ChevronsUp, Flag, FolderGit2, FolderKanban, Globe, KeyRound, Network, Radar, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper, Rocket } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, TasksNavIcon } from "./navIcons";
-import { TeamIcon } from "../TeamIcon";
+import { TeamIcon, TEAM_COLORS } from "../TeamIcon";
 import { paneDragProps, railRowClass } from "../../lib/railRow";
 import { focusHidesPage } from "../../lib/railFocus";
 
@@ -230,6 +230,8 @@ export function SidebarNavView({
   changesOn,
   flowsOn = true,
   railMore,
+  workspaceHeader,
+  workspaceColor,
 }: {
   isNarrow: boolean;
   scope?: "work";
@@ -259,12 +261,26 @@ export function SidebarNavView({
   /** A solo account's More/Fewer row (lib/railFocus.ts): `focused` while the
    *  team and fleet rows are folded away. Absent for everyone else. */
   railMore?: { focused: boolean; onToggle: () => void };
+  /** The workspace switcher, drawn as the header of the block of rows whose
+   *  content follows it. Absent (the marketing hero), the rows render unboxed. */
+  workspaceHeader?: ReactNode;
+  /** The active team's color name (TEAM_COLORS), tinting that block. */
+  workspaceColor?: string | null;
 }) {
   // A solo account's focused rail leaves the team and fleet rows to More (lib/railFocus.ts).
   const focused = !!railMore?.focused;
   const shown = (path: string) => !focused || !focusHidesPage(path);
   return (
     <>
+      {/* Rows that read every workspace you are in, whichever is active. */}
+      {scope === "work" ? null : (
+        <div className="text-sm" data-rail-group="everywhere">
+          {questions}
+        </div>
+      )}
+      {/* Everything inside this block shows the active workspace only: its
+          header is the switcher, so the layout says what a switch changes. */}
+      <WorkspaceBlock header={workspaceHeader} color={workspaceColor} isNarrow={isNarrow}>
       {scope === "work" ? null : (<>
       <div className="text-sm">
         {shown("/threads") && threads}
@@ -291,7 +307,16 @@ export function SidebarNavView({
             icon={<Rocket className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
           />
         )}
-        {questions}
+        {shown("/flows") && (flowsOn || offers?.line) && <NavSection
+          label="Flows"
+          href="/flows"
+          isActive={active.line}
+          isNarrow={isNarrow}
+          onMobileClose={onMobileClose}
+          title="Flows: every change through steps your team can see"
+          badge={offers?.line ? <NewMark /> : undefined}
+          icon={<Waypoints className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+        />}
         {/* Ops is its own area: the running product, beside the team's own streams, above chat and calls so the live huddles' heading never sits over it. */}
         <NavSection
           label="Ops"
@@ -312,7 +337,7 @@ export function SidebarNavView({
           group files into, then its tasks and the docs and files around them. */}
       {/* One hover group for the heading and its rows: pointing anywhere in
           Work reveals the heading's pop-out, since the window holds all of it. */}
-      <div data-rail-group="work" className="group/rail mt-4 first:mt-0">
+      <div data-rail-group="work" className="group/rail mt-2 first:mt-0">
       <RailHeading label="Work" isNarrow={isNarrow} action={workAction} />
       <div className="text-sm">
         {/* Goals and projects are work in their own right: they need no org.
@@ -381,19 +406,6 @@ export function SidebarNavView({
           onMobileClose={onMobileClose}
           icon={<FolderGit2 className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
-        {shown("/files") && <NavSection
-          label="Files"
-          href="/files"
-          isActive={active.files}
-          isNarrow={isNarrow}
-          onMobileClose={onMobileClose}
-          icon={
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-6 3h4" />
-            </svg>
-          }
-        />}
         <NavSection
           label="Vault"
           href="/vault"
@@ -412,6 +424,7 @@ export function SidebarNavView({
         />}
       </div>
       </div>
+      </WorkspaceBlock>
 
       {/* The Work window keeps the pinned rail and the Work group, the
           two things its pages are reached through; the rest is the main
@@ -421,16 +434,6 @@ export function SidebarNavView({
           standing things that set it running. */}
       <RailHeading label="Agents" isNarrow={isNarrow} />
       <div data-rail-group="agents" className="text-sm">
-        {((flowsOn && shown("/flows")) || offers?.line) && <NavSection
-          label="Flows"
-          href="/flows"
-          isActive={active.line}
-          isNarrow={isNarrow}
-          onMobileClose={onMobileClose}
-          title="Flows: every change through steps your team can see"
-          badge={offers?.line ? <NewMark /> : undefined}
-          icon={<Waypoints className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
-        />}
         <NavSection
           label="Triggers"
           href="/triggers"
@@ -451,6 +454,19 @@ export function SidebarNavView({
           </svg>
           }
         />
+        {shown("/files") && <NavSection
+          label="Files"
+          href="/files"
+          isActive={active.files}
+          isNarrow={isNarrow}
+          onMobileClose={onMobileClose}
+          icon={
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-6 3h4" />
+            </svg>
+          }
+        />}
       </div>
       </>)}
       {railMore && scope !== "work" && (
@@ -474,4 +490,24 @@ export function SidebarNavView({
 /** A feature row's mark while its team has not decided on it. */
 function NewMark() {
   return <span className="text-[10px] font-semibold tracking-wide px-1.5 h-[16px] inline-flex items-center rounded-md" style={{ color: "var(--sol-cyan)", background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)" }} data-feature-new>NEW</span>;
+}
+
+/** The block of rail rows that follow the active workspace, under the
+ *  switcher as its header and tinted with the team's color. */
+function WorkspaceBlock({ header, color, isNarrow, children }: { header?: ReactNode; color?: string | null; isNarrow: boolean; children: ReactNode }) {
+  if (!header) return <>{children}</>;
+  const tint = color && (TEAM_COLORS as readonly string[]).includes(color) ? `var(--sol-${color})` : "var(--sol-base01)";
+  return (
+    <div
+      data-rail-workspace
+      className={`${isNarrow ? "mx-1" : "mx-2"} mt-3 mb-1 overflow-hidden rounded-lg border pb-1`}
+      style={{
+        borderColor: `color-mix(in srgb, ${tint} 28%, transparent)`,
+        background: `color-mix(in srgb, ${tint} 5%, transparent)`,
+      }}
+    >
+      <div className="border-b" style={{ borderColor: `color-mix(in srgb, ${tint} 18%, transparent)` }}>{header}</div>
+      {children}
+    </div>
+  );
 }

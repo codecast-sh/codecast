@@ -1303,9 +1303,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             </ErrorBoundary>
           </>}
           workspace={<>
-            <ErrorBoundary name="TeamSwitcher" level="inline">
-              <TeamSwitcher />
-            </ErrorBoundary>
+            {/* The switcher heads the sidebar's workspace block; with the
+                sidebar away it comes back here so a switch stays one click. */}
+            {sidebarHidden && (
+              <ErrorBoundary name="TeamSwitcher" level="inline">
+                <TeamSwitcher />
+              </ErrorBoundary>
+            )}
             <ErrorBoundary name="TeamAvatarBar" level="inline">
               <Suspense fallback={null}><TeamAvatarBar /></Suspense>
             </ErrorBoundary>

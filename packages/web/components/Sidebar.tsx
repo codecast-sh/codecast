@@ -43,6 +43,8 @@ import type { DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { RailHeading, SectionRow, NavCount, NeedsInputCount, type SectionRowSpec } from "./sidebar/navPrimitives";
 import { ChatNavRow, ChatDrillList } from "./sidebar/ChatNav";
+import { TeamSwitcher } from "./TeamSwitcher";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { channelSignals } from "../lib/chatRowSignals";
 import { SidebarDrillStack } from "./sidebar/SidebarDrill";
@@ -754,6 +756,13 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           opsBadge={<OpsNavBadge />}
           offers={{ org: orgOffer, line: flowsOffer }}
           changesOn={changesOn}
+          // A person in no team has one workspace and nothing to switch: no block.
+          workspaceHeader={teams && teams.length > 0 ? (
+            <ErrorBoundary name="TeamSwitcher" level="inline">
+              <TeamSwitcher variant="rail" isNarrow={isNarrow} />
+            </ErrorBoundary>
+          ) : undefined}
+          workspaceColor={activeTeam?.icon_color}
         />
 
         <ModSidebarSections isNarrow={isNarrow} />

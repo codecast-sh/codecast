@@ -46,3 +46,32 @@ test("everyone else gets no More/Fewer row at all", () => {
   expect(html).not.toContain("data-rail-more");
   expect(html).toContain('href="/projects"');
 });
+
+// The switcher heads a block holding every row a switch changes (its content,
+// or whether the team has it on); the rows that ignore the switch sit outside.
+test("workspace block: team rows inside, every-workspace rows outside", () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <SidebarNavView
+        isNarrow={false}
+        threads={<span>threads-row</span>}
+        feed={<span>feed-row</span>}
+        questions={<span>questions-row</span>}
+        calls={<span>calls-row</span>}
+        active={ACTIVE}
+        tasks={shut}
+        docs={shut}
+        orgOn
+        workspaceHeader={<span>switcher</span>}
+        workspaceColor="blue"
+      />
+    </MemoryRouter>,
+  );
+  const start = html.indexOf("data-rail-workspace");
+  const end = html.indexOf('data-rail-group="agents"');
+  const inBlock = (m: string) => { const i = html.indexOf(m); return i > start && i < end; };
+  expect(start).toBeGreaterThan(-1);
+  expect(html.indexOf("switcher")).toBeGreaterThan(start);
+  for (const m of ["threads-row", "feed-row", "calls-row", 'href="/flows"', 'href="/ops"', 'href="/tasks"', 'href="/docs"', 'href="/projects"', 'href="/vault"']) expect(inBlock(m)).toBe(true);
+  for (const m of ["questions-row", 'href="/files"', 'href="/windows"', 'href="/triggers"']) expect(inBlock(m)).toBe(false);
+});
