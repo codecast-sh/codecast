@@ -12,7 +12,7 @@ import {
   tokenCarryingHookScripts,
 } from "./hookAdmission.js";
 import { HOOK_TOKEN_MARKER, hookBearerToken, hookTokenMatches, loadOrCreateHookToken, readHookToken } from "./hookIdentity.js";
-import { LaunchTokenLedger } from "./launchToken.js";
+import { handStartedAt, LaunchTokenLedger } from "./launchToken.js";
 
 const TOKEN = "c".repeat(64);
 
@@ -173,5 +173,60 @@ describe("legacy launch tokens", () => {
     const l = ledger();
     l.issue("cast-agent-1", SESSION);
     expect(l.admit({ sessionId: SESSION }).decision).toBe("accept");
+  });
+
+  // A session codecast once resumed into its own tmux, then resumed by hand in
+  // the person's own terminal (`claude --resume <id>` in herdr, Ghostty, …).
+  // That claude has no CODECAST_LAUNCH_TOKEN in its env, so every post it
+  // makes is tokenless, and its SessionStart claim in the session registry
+  // says so (`"launch_token":""`). It is not an old script: it is a session
+  // codecast no longer launched, and it must report status like one.
+  test("a session resumed by hand after codecast launched it is not fenced", () => {
+    let now = 1_793_000_000_000;
+    const l = new LaunchTokenLedger({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "cc-ledger-")), now: () => now });
+    l.issue("cc-resume-notes-0a1b2c3d", SESSION);
+    now += 3 * 24 * 60 * 60 * 1000;
+    const handStart = Math.floor(now / 1000);
+    const verdict = l.admit({ sessionId: SESSION, legacyScripts: false, handStartedAt: handStart * 1000 });
+    expect(verdict.decision).toBe("accept");
+    expect(verdict.reason).toBe("unmanaged");
+    expect(verdict.notable).toBe(false);
+  });
+
+  test("a hand start older than codecast's launch still leaves a tokenless post fenced", () => {
+    let now = 1_793_000_000_000;
+    const l = new LaunchTokenLedger({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "cc-ledger-")), now: () => now });
+    const handStart = now - 60_000;
+    l.issue("cc-resume-notes-0a1b2c3d", SESSION);
+    const verdict = l.admit({ sessionId: SESSION, legacyScripts: false, handStartedAt: handStart });
+    expect(verdict.decision).toBe("drop");
+    expect(verdict.reason).toBe("legacy");
+  });
+
+  test("a hand start never admits a superseded launch token", () => {
+    let now = 1_793_000_000_000;
+    const l = new LaunchTokenLedger({ dir: fs.mkdtempSync(path.join(os.tmpdir(), "cc-ledger-")), now: () => now });
+    const stale = l.issue("cc-resume-notes-0a1b2c3d", SESSION);
+    now += 1000;
+    l.issue("cc-resume-notes-0a1b2c3d-2", SESSION);
+    now += 60_000;
+    const verdict = l.admit({ sessionId: SESSION, token: stale, legacyScripts: false, handStartedAt: now });
+    expect(verdict.decision).toBe("drop");
+  });
+});
+
+describe("handStartedAt reads a tokenless SessionStart claim", () => {
+  test("a claim with an empty launch token is a hand start, in ms", () => {
+    expect(handStartedAt({ pid: 51234, tty: "ttys004", ts: 1790000000, term: "herdr", launch_token: "" })).toBe(1790000000 * 1000);
+  });
+
+  test("a claim from a codecast launch is not", () => {
+    expect(handStartedAt({ pid: 51234, tty: "ttys004", ts: 1790000000, term: "tmux", launch_token: "ab".repeat(16) })).toBeUndefined();
+  });
+
+  test("a claim from a hook too old to write the field proves nothing", () => {
+    expect(handStartedAt({ pid: 51234, tty: "ttys004", ts: 1790000000, term: "herdr" })).toBeUndefined();
+    expect(handStartedAt(null)).toBeUndefined();
+    expect(handStartedAt({ pid: 1, launch_token: "", ts: "soon" })).toBeUndefined();
   });
 });

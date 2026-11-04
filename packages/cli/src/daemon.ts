@@ -269,7 +269,7 @@ import { bearerFromStored, secretFromStored, storedFromBearer } from "./bearerTo
 import { knownValueNames, refreshKnownVault, startKnownValueRedaction, trackKnownValueCwd } from "./knownValueRedaction.js";
 import { VAULT_REFRESH_PATH, vaultRedactionSource } from "./secrets/redactionSource.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
-import { launchTokenLedger } from "./launchToken.js";
+import { handStartedAt, launchTokenLedger } from "./launchToken.js";
 import { waitForHandHost } from "./handHostGrace.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
@@ -2063,11 +2063,16 @@ function admitHookPost(sessionId: string, data: HookStatusData): boolean {
   // old to forward the pane's launch token is still installed here. The same
   // reading that decides whether a tokenless HTTP post is believed decides
   // this, so the two migrations end together (hookAdmission.ts).
+  // handStartedAt: a session resumed by hand outside codecast (herdr, Ghostty)
+  // has no token to forward either. Its SessionStart claim, written with an
+  // empty launch token, tells it apart from an old script. Read only for a
+  // tokenless post; the read is memoized (registryRegistrationFor).
   const verdict = launchTokenLedger().admit({
     sessionId,
     token: data.launch_token,
     newTurn: data.status === "thinking",
     legacyScripts: legacyHookGrace?.allowed() ?? true,
+    ...(data.launch_token ? {} : { handStartedAt: handStartedAt(registryRegistrationFor(sessionId)) }),
   });
   if (verdict.notable) {
     log(`[IDENTITY] hook post ${verdict.decision === "drop" ? "dropped" : "accepted"} for session ${shortId(sessionId)} status=${data.status} (${verdict.reason})`);

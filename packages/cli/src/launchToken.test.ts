@@ -228,6 +228,14 @@ describe("the daemon fences hook posts where both transports land", () => {
     expect(admitAt).toBeLessThan(useAt);
   });
 
+  test("a tokenless post is judged against the session's own SessionStart claim", () => {
+    const admitAt = src.indexOf("function admitHookPost(sessionId: string");
+    expect(admitAt).toBeGreaterThan(-1);
+    const end = src.indexOf("\n}\n", admitAt);
+    const body = src.slice(admitAt, end);
+    expect(body).toContain("handStartedAt: handStartedAt(registryRegistrationFor(sessionId))");
+  });
+
   test("a killed pane and a relocated one are both retired", () => {
     const killAt = src.indexOf("async function killTmuxSessionAndTree(");
     expect(src.indexOf("launchTokenLedger().retirePane(tmuxSession)", killAt)).toBeGreaterThan(killAt);
