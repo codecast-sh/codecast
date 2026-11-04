@@ -6,7 +6,7 @@ import { useAdoptTimezone } from '@codecast/web/hooks/useAdoptTimezone';
 import { useSessionCommandResults } from '@codecast/web/hooks/useSessionCommands';
 import { useSyncDevices } from '@codecast/web/hooks/useSyncDevices';
 import { useRecentProjectsFeed } from '@codecast/web/hooks/useRecentProjectsFeed';
-import { useSyncTriggers } from '@codecast/web/hooks/useSyncTriggers';
+import { setTriggerFeedArgs, useSyncTriggers } from '@codecast/web/hooks/useSyncTriggers';
 import { useSyncTeams } from '@codecast/web/hooks/useSyncTeams';
 import { useSyncTeamMembers } from '@codecast/web/hooks/useSyncTeamMembers';
 import { useChatChannelsSync } from '@codecast/web/hooks/useChatSync';
@@ -15,6 +15,7 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { activeTeamIdOf } from '@codecast/web/lib/activeTeam';
 import { useSyncWorkspaceData } from '@/hooks/useSyncWorkspaceData';
 import { useSyncSecrets } from '@codecast/web/hooks/useSyncSecrets';
+import { useFetchUserSkillsOnce } from '@codecast/web/hooks/useSyncUserSkills';
 import { emitSyncWake } from '@codecast/web/hooks/syncWake';
 import { flushPersistence, loadSplitRows, persistSplitRows } from '@codecast/web/store/idbCache';
 import { setSplitPersistence } from '@codecast/web/hooks/useSplitQuery';
@@ -24,6 +25,12 @@ import { bootMark } from '@/lib/bootProfile';
 // (hooks/useSplitQuery), so a cold start rebuilds the inbox from disk instead
 // of downloading and hashing the whole list again.
 setSplitPersistence({ load: loadSplitRows, save: persistSplitRows });
+
+// Every phone surface shows armed triggers (the inbox's schedule rows, the
+// routines list) and at most a recent finished one named in a hosted step.
+// A busy account's whole history is megabytes that would download again on
+// every reconnect.
+setTriggerFeedArgs({ recent_finished: 50 });
 
 // Hosts the inbox store's server-sync hooks OUTSIDE any screen. The live
 // listInboxSessions subscription re-renders whichever component holds it on
@@ -86,6 +93,9 @@ function StoreSyncBridgeInner() {
   useSyncWorkspaceData();
   // Vault metadata, so Settings counts open requests before the page opens.
   useSyncSecrets();
+  // The slash pills' skills catalog: read once per launch and kept on disk.
+  // It is large and rarely changes, so a reconnect never downloads it again.
+  useFetchUserSkillsOnce();
   useEffect(() => { bootMark("sync-armed"); }, []);
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
   useEffect(() => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { getCurrentUser, getCurrentUserV2 } from "./users";
+import { getCurrentUser, getCurrentUserV2, getMySkills } from "./users";
 import { getTeamMembersV2, getUserTeams, getUserTeamsV2 } from "./teams";
 import {
   listFavorites,
@@ -221,11 +221,13 @@ describe("small v2 complete-view envelopes", () => {
       "available_skills",
     ]) expect(field in result.user).toBe(false);
 
-    // V1 remains byte-for-byte broad and keeps the skills overlay.
+    // V1 remains broad, except the skills catalog, which travels on
+    // getMySkills so a daemon stamp on the row does not re-send it.
     const legacy = await (getCurrentUser as any)._handler(ctx, {});
     expect(legacy.daemon_last_seen).toBe(999);
     expect(legacy.github_access_token).toBe("must-not-persist");
-    expect(legacy.available_skills).toBe("authoritative-skills");
+    expect("available_skills" in legacy).toBe(false);
+    expect((await (getMySkills as any)._handler(ctx, {})).skills).toBe("authoritative-skills");
   });
 
   test("principal teams is complete-empty and deterministic without leaking invite data", async () => {

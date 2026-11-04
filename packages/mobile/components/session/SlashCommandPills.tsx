@@ -7,10 +7,11 @@ import { ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { themedStyles } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { useUserSkills } from '@codecast/web/hooks/useSyncUserSkills';
 import { applySlashSkill, matchSlashSkills, resolveSessionSkills, slashQueryAt } from '@codecast/web/lib/sessionSkills';
 
 export function SlashCommandPills({ conversationId, text, onPick }: { conversationId: string; text: string; onPick: (next: string) => void }) {
-  const availableSkills = useInboxStore((s) => (s.currentUser as any)?.available_skills as string | undefined);
+  const availableSkills = useUserSkills();
   const projectPath = useInboxStore((s) => s.sessions[conversationId]?.project_path);
   const agentType = useInboxStore((s) => s.sessions[conversationId]?.agent_type);
   const skills = useMemo(

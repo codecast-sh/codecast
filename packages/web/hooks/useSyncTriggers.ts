@@ -12,9 +12,18 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 
 const api = _api as any;
 
-/** Feeder: the viewer's complete trigger set (snapshot sync — see registry). */
+// What the trigger feeder asks for. Web takes the complete set; the phone
+// narrows it once at startup (setTriggerFeedArgs) to the armed triggers and a
+// short tail of finished ones, the only rows its surfaces show. Every caller
+// shares these args, so a platform still holds one subscription.
+let feedArgs: { recent_finished?: number } = {};
+export function setTriggerFeedArgs(args: { recent_finished?: number }): void {
+  feedArgs = args;
+}
+
+/** Feeder: the viewer's trigger set for this platform (snapshot sync — see registry). */
 export function useSyncTriggers(enabled = true) {
-  return useSyncCollection("agentTasks", api.agentTasks.webList, enabled ? {} : "skip");
+  return useSyncCollection("agentTasks", api.agentTasks.webList, enabled ? feedArgs : "skip");
 }
 
 // The fields trigger surfaces render; a change to anything else on the row

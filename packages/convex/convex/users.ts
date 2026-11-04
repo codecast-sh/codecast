@@ -62,25 +62,46 @@ import {
   unauthenticatedView,
 } from "./smallViewContracts";
 
-// Skills moved off the heartbeat-hot users doc into user_skills (see schema
-// note); overlay them back so clients keep reading currentUser.available_skills
-// unchanged. Falls back to the legacy on-doc field for users who haven't
-// written skills since the split.
-async function getUserWithSkills(ctx: QueryCtx, userId: Id<"users">) {
-  const user = await ctx.db.get(userId);
-  if (!user) return null;
+// The skills catalog (the slash menu's project and personal skills), merged
+// from user_skills with the legacy on-doc field as the fallback for users who
+// have not reported skills since the split. It is large (hundreds of KB for a
+// heavy user) and changes only when a daemon reports new skills, so it travels
+// on its own query, getMySkills: Convex re-sends only a result that changed,
+// and the user row's daemon stamps would otherwise re-send the whole catalog
+// to every client every few seconds.
+export async function readSkillsJson(ctx: QueryCtx, user: Doc<"users">): Promise<string | null> {
   const rows = await ctx.db
     .query("user_skills")
-    .withIndex("by_user", (q) => q.eq("user_id", userId))
+    .withIndex("by_user", (q) => q.eq("user_id", user._id))
     .collect();
   const legacy = rows.find((row) => row.project_path === undefined)?.skills_json ?? user.available_skills;
   const projects = rows.filter((row) => row.project_path !== undefined);
-  if (projects.length === 0) return legacy === undefined ? user : { ...user, available_skills: legacy };
+  if (projects.length === 0) return legacy ?? null;
   const parsed = legacy ? JSON.parse(legacy) : {};
   const skillsMap = Array.isArray(parsed) ? { global: parsed } : parsed;
   for (const row of projects) skillsMap[row.project_path!] = JSON.parse(row.skills_json);
-  return { ...user, available_skills: JSON.stringify(skillsMap) };
+  return JSON.stringify(skillsMap);
 }
+
+// The signed-in user row without the legacy skills blob (see readSkillsJson).
+async function getCurrentUserRow(ctx: QueryCtx, userId: Id<"users">) {
+  const user = await ctx.db.get(userId);
+  if (!user) return null;
+  const { available_skills: _skills, ...rest } = user;
+  return rest;
+}
+
+/** The viewer's skills catalog as JSON (see readSkillsJson); null when signed out. */
+export const getMySkills = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const user = await ctx.db.get(userId);
+    if (!user) return null;
+    return { skills: await readSkillsJson(ctx, user) };
+  },
+});
 
 export const getCurrentUser = query({
   args: {},
@@ -89,7 +110,7 @@ export const getCurrentUser = query({
     if (!userId) {
       return null;
     }
-    return await getUserWithSkills(ctx, userId);
+    return await getCurrentUserRow(ctx, userId);
   },
 });
 
@@ -130,7 +151,7 @@ export const getCurrentUserProbe = query({
     if (!userId) {
       return null;
     }
-    return await getUserWithSkills(ctx, userId);
+    return await getCurrentUserRow(ctx, userId);
   },
 });
 

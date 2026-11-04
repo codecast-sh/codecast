@@ -1904,20 +1904,42 @@ async function withResolvedRunConversations(
   });
 }
 
+const ARMED_TASK_STATUSES = ["scheduled", "running", "paused"] as const;
+const FINISHED_TASK_STATUSES = ["completed", "failed", "cancelled"] as const;
+
 export const webList = query({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    // The armed triggers and only this many of the most recently finished
+    // ones. The phone passes it: it shows armed triggers, and a busy account's
+    // finished history (thousands of rows with their prompts, 6.7 MB on one
+    // account) would otherwise download again on every reconnect.
+    recent_finished: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
-    const tasks = await ctx.db
-      .query("agent_tasks")
-      .withIndex("by_user_status", (q) => q.eq("user_id", userId))
-      .collect();
+    const tasks = args.recent_finished === undefined
+      ? await ctx.db
+          .query("agent_tasks")
+          .withIndex("by_user_status", (q) => q.eq("user_id", userId))
+          .collect()
+      : await armedAndRecentlyFinished(ctx, userId, args.recent_finished);
 
     return await withResolvedRunConversations(ctx, userId, tasks);
   },
 });
+
+export async function armedAndRecentlyFinished(ctx: { db: any }, userId: Id<"users">, finished: number): Promise<Doc<"agent_tasks">[]> {
+  const byStatus = (status: string) =>
+    ctx.db.query("agent_tasks").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status));
+  const armed = (await Promise.all(ARMED_TASK_STATUSES.map((s) => byStatus(s).collect()))).flat();
+  const limit = Math.max(0, Math.floor(finished));
+  if (limit === 0) return armed;
+  const recent = (await Promise.all(FINISHED_TASK_STATUSES.map((s) => byStatus(s).order("desc").take(limit)))).flat();
+  recent.sort((a: Doc<"agent_tasks">, b: Doc<"agent_tasks">) => b._creationTime - a._creationTime);
+  return [...armed, ...recent.slice(0, limit)];
+}
 
 // A trigger owned by someone else is still VIEWABLE when the viewer can view
 // the conversation it is anchored to (creator, home, or last run). Agents on a

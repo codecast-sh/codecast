@@ -40,6 +40,9 @@ let route = '';
 let token: string | null = null;
 let started = false;
 const inFlight = new Set<string>();
+// A push tapped before sign-in (a cold launch): its catch-up runs once the
+// token arrives.
+let awaitingToken: string | null = null;
 
 /** The last HTTPS catch-up that landed: when, for which conversation, how many
  *  rows. Read by the foreground trace. */
@@ -63,8 +66,12 @@ export function setCatchUpToken(next: string | null) {
   try {
     pushPrefetchNative?.setToken(next);
   } catch {}
-  // A cold launch from a push: the rows the extension read wait for sign-in.
-  if (signedIn) void mergePrefetched();
+  // A cold launch from a push: the rows the extension read, and the tapped
+  // conversation's HTTPS read, wait for sign-in.
+  if (!signedIn) return;
+  const pending = awaitingToken;
+  awaitingToken = null;
+  void mergePrefetched().then(() => (pending ? catchUpConversation(pending) : undefined));
 }
 
 // What the extension needs to read a pushed conversation: the backend and the
@@ -144,16 +151,25 @@ export function newestLocalTimestamp(convId: string): number {
 
 /**
  * Reads a conversation's rows newer than the store's newest over HTTPS and
- * merges them. A conversation with nothing loaded yet is left to the screen's
- * own cold open, which fetches the full first page.
+ * merges them. The rows this phone saved for the conversation are loaded from
+ * disk first: a cold launch, or a push about a conversation not opened since
+ * launch, holds nothing in memory yet, and reading from zero would skip the
+ * catch-up entirely. A conversation this phone never loaded is left to the
+ * screen's own cold open, which fetches the full first page.
  */
 export async function catchUpConversation(convId: string): Promise<void> {
-  if (!token || !isConvexId(convId) || inFlight.has(convId)) return;
-  const after = newestLocalTimestamp(convId);
-  if (!after) return;
+  if (!isConvexId(convId) || inFlight.has(convId)) return;
+  if (!token) {
+    awaitingToken = convId;
+    return;
+  }
   inFlight.add(convId);
   const started = Date.now();
   try {
+    if (!(await cacheLoaded())) return;
+    await ensureHydrated(convId);
+    const after = newestLocalTimestamp(convId);
+    if (!after || !token) return;
     const http = new ConvexHttpClient(CONVEX_URL);
     http.setAuth(token);
     const rows = await readForward(http, convId, after);

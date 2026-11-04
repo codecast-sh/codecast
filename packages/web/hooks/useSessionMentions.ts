@@ -2,21 +2,23 @@ import { useRef, useMemo, useCallback } from "react";
 import { extractFilePaths } from "../lib/conversationProcessor";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { useInboxStore } from "../store/inboxStore";
+import { useSyncUserSkills, useUserSkills } from "./useSyncUserSkills";
 import type { MentionItem } from "../components/editor/MentionList";
 import { buildMentionItems, sessionMentionTeamId } from "./useMentionQuery";
 import type { ConversationData } from "../components/conversation/types";
 
-export function useSessionMentions({ currentUser, conversation, managedSession }: {
-  currentUser: any;
+export function useSessionMentions({ conversation, managedSession }: {
   conversation: ConversationData | null | undefined;
   managedSession: { agent_status: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming" | "waiting" | "dormant" | "done" | "hibernated" | undefined; permission_mode: string | null | undefined; session_id: string; is_connected: boolean | undefined; tmux_session: string | null | undefined; team_id: string | null | undefined; } | null;
 }) {
+  useSyncUserSkills();
+  const availableSkills = useUserSkills();
   const sessionSkills = useMemo(() => resolveSessionSkills({
-    availableSkills: (currentUser as any)?.available_skills,
+    availableSkills,
     projectPath: conversation?.project_path,
     agentType: conversation?.agent_type,
     messages: conversation?.messages,
-  }), [currentUser, conversation?.project_path, conversation?.messages, conversation?.agent_type]);
+  }), [availableSkills, conversation?.project_path, conversation?.messages, conversation?.agent_type]);
 
   const sessionFilePaths = useMemo(() => {
     if (!conversation?.messages) return [];
