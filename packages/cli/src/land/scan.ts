@@ -23,7 +23,9 @@
  * left alone. A tree a line run made is never proposed for landing, however
  * quiet: the run ships its change itself once a person decides, and a hand
  * landing it first would ship a fix nobody approved (Union's ship of Oct 22
- * took 14 runs' repro tests into main this way).
+ * took 14 runs' repro tests into main this way). A tree a session marked held
+ * (hold.ts, `cast land hold`) is never landed or pruned either, whatever it
+ * holds: its work stays on its branch until the hold is released.
  *
  * All index work happens in a private copy of the worktree's index, so a scan
  * never changes what a session has staged.
@@ -33,6 +35,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileAsync, spawn } from "../proc.js";
+import { readHold } from "./hold.js";
 
 /** A tree touched this recently is treated as in use whatever the roster says. */
 export const ACTIVE_MS = 2 * 60 * 60_000;
@@ -59,7 +62,9 @@ export type TreeVerdict =
   /** Finished recently, and its changes collide with newer work on main. */
   | "review"
   /** A line run made it and it holds work main lacks, in use or not: the run ships that work after its decision, never a hand. */
-  | "run";
+  | "run"
+  /** A session marked it held (hold.ts): its work stays on its branch, never landed or pruned, until released. */
+  | "held";
 
 /** Verdicts whose tree `cast land prune` archives and removes. */
 export const PRUNABLE: ReadonlySet<TreeVerdict> = new Set(["empty", "landed", "stale"]);
@@ -305,6 +310,8 @@ export interface VerdictFacts {
   processInside: boolean;
   /** A line run made it: its run files sit under the checkout's run dirs by the tree's name (runDirs.ts lineRunsRoot). */
   run: boolean;
+  /** The reason a session gave when it marked the tree held, or null. */
+  held: string | null;
   lastActivity: number;
   counts: Record<FileVerdict, number>;
   now: number;
@@ -327,6 +334,7 @@ export function treeVerdict(f: VerdictFacts): { verdict: TreeVerdict; reason: st
   if (f.primary) return { verdict: "primary", reason: `the repo's main checkout${inUse ? `, in use: ${inUse}` : ""}` };
   const { same, absorbed, only, both } = f.counts;
   const open = `${only} files only it changed, ${both} where main lacks its change`;
+  if (f.held !== null) return { verdict: "held", reason: `held: ${f.held}; ${open}` };
   // A run's own work is the run's to ship, while a hand is in it as much as while it waits on a person.
   if (f.run && only + both > 0 && (inUse || quiet < STALE_MS)) return { verdict: "run", reason: `a line run's change, which the run ships after its decision; ${open}` };
   if (inUse) return { verdict: "live", reason: inUse };
@@ -369,6 +377,7 @@ export async function scanTree(entry: WorktreeEntry, ctx: ScanContext): Promise<
     liveOwner: !!ownerRow && ownerIsLive(ownerRow, ctx.now),
     processInside: ctx.processCwds.some((c) => c === entry.path || c.startsWith(`${entry.path}/`)),
     run: !entry.primary && ctx.runTrees.has(path.basename(entry.path)),
+    held: entry.primary ? null : readHold(entry.path)?.reason ?? null,
     lastActivity,
     counts: { same: 0, absorbed: 0, only: 0, both: 0 },
     now: ctx.now,

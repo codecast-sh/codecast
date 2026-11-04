@@ -4,15 +4,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  ACTIVE_MS, STALE_MS, absorbedInto, fileVerdict, ownerIsLive, ownerOf, parseRawDiff, parseWorktreeList, scanRepo, treeVerdict,
+  ACTIVE_MS, PRUNABLE, STALE_MS, absorbedInto, fileVerdict, ownerIsLive, ownerOf, parseRawDiff, parseWorktreeList, scanRepo, treeVerdict,
   type RepoScan, type VerdictFacts,
 } from "./scan.js";
 import { pruneTargets, type LandScan } from "./cli.js";
 import { ARCHIVE_REF_PREFIX, pruneTree, treePatch } from "./prune.js";
+import { clearHold, readHold, writeHold } from "./hold.js";
 
 const NOW = 1_800_000_000_000;
 const facts = (over: Partial<VerdictFacts>): VerdictFacts => ({
-  primary: false, locked: false, liveOwner: false, processInside: false, run: false,
+  primary: false, locked: false, liveOwner: false, processInside: false, run: false, held: null,
   lastActivity: NOW - 3 * 86_400_000, counts: { same: 0, absorbed: 0, only: 0, both: 0 }, now: NOW, ...over,
 });
 
@@ -48,6 +49,16 @@ describe("treeVerdict", () => {
     expect(treeVerdict(facts({ run: true })).verdict).toBe("empty");
     expect(treeVerdict(facts({ run: true, counts: { same: 2, absorbed: 0, only: 0, both: 0 } })).verdict).toBe("landed");
     expect(treeVerdict(facts({ run: true, lastActivity: NOW - STALE_MS - 1, counts: { same: 0, absorbed: 0, only: 2, both: 0 } })).verdict).toBe("stale");
+  });
+  test("a held tree is held whatever it holds, its reason in the report, and never prunable", () => {
+    const work = { same: 0, absorbed: 0, only: 2, both: 1 };
+    expect(treeVerdict(facts({ held: "deals stays on its branch", counts: work }))).toEqual({ verdict: "held", reason: "held: deals stays on its branch; 2 files only it changed, 1 where main lacks its change" });
+    expect(treeVerdict(facts({ held: "x", run: true, counts: work })).verdict).toBe("held");
+    expect(treeVerdict(facts({ held: "x", liveOwner: true, counts: work })).verdict).toBe("held");
+    expect(treeVerdict(facts({ held: "x", lastActivity: NOW - STALE_MS - 1, counts: work })).verdict).toBe("held");
+    expect(treeVerdict(facts({ held: "x" })).verdict).toBe("held");
+    expect(treeVerdict(facts({ held: "x", primary: true })).verdict).toBe("primary");
+    expect(PRUNABLE.has("held")).toBe(false);
   });
 });
 
@@ -168,6 +179,14 @@ describe("against a real repo", () => {
     // A tree a line run made: the run's files sit under the checkout's run dirs by the tree's name.
     const run = wt("line-ct-1", 1 * day); write(path.join(run, "fix.ts"), "f\n"); age(run, 1 * day);
     fs.mkdirSync(path.join(root, ".git", "cast-line", "line-ct-1"), { recursive: true });
+    // Held trees: one with work ready to land, one holding nothing, which prune must keep too.
+    const held = wt("held", 1 * day); write(path.join(held, "deals.ts"), "d\n"); age(held, 1 * day);
+    writeHold(held, "deals stays on its branch until Ship");
+    const heldEmpty = wt("held-empty", 3 * day); age(heldEmpty, 3 * day);
+    writeHold(heldEmpty, "parked");
+    // A hold marked and then released counts for nothing.
+    const released = wt("released", 1 * day); write(path.join(released, "rel.ts"), "r\n"); age(released, 1 * day);
+    writeHold(released, "briefly"); expect(clearHold(released)).toBe(true); expect(readHold(released)).toBeNull();
     // An empty tree nested inside the live one stays with it.
     const underLive = path.join(live, ".codecast", "worktrees", "under-live");
     shAt(3 * day, root, "worktree", "add", "-q", "-b", "under-live", underLive); age(underLive, 3 * day);
@@ -198,6 +217,16 @@ describe("against a real repo", () => {
     expect(tree("live").verdict).toBe("live");
     expect(tree("inner").verdict).toBe("ready");
     expect(tree("line-ct-1").verdict).toBe("run");
+    expect(tree("held").verdict).toBe("held");
+    expect(tree("held").reason).toStartWith("held: deals stays on its branch until Ship; 1 files only it changed");
+    expect(tree("held-empty").verdict).toBe("held");
+    expect(tree("released").verdict).toBe("ready");
+  });
+
+  test("the hold marker sits in the tree's git dir, never among its changes", () => {
+    expect(tree("held").files.map((f) => f.path)).toEqual(["deals.ts"]);
+    expect(sh(tree("held").path, "status", "--porcelain")).toBe("?? deals.ts");
+    expect(readHold(tree("held").path)?.reason).toBe("deals stays on its branch until Ship");
   });
 
   test("a scan never touches a worktree's own index", () => {
