@@ -5,7 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
-import { resolveCreationPrivacy } from "./privacy";
+import { inheritedChildPrivacy, resolveCreationPrivacy } from "./privacy";
 import { admitSubagent, startSpawnedSession, type QueuedStart } from "./subagentFleet";
 import { applyUnattended, checkoutInUseMessage, deviceDisplayName, fromConvexAgentType, normalizeSubagentCaps, resolveAgentLaunch, toConvexAgentType, type AgentDefinitionSpec, type CloudWorkspaceMode, type SubagentCaps } from "@codecast/shared/contracts";
 import { resolveDefinitionFor } from "./agentDefinitions";
@@ -155,7 +155,10 @@ export async function spawnSessionCore(
   const agentType = opts.agentType || "claude_code";
   const runnerUserId = await sessionLaunchRunner(ctx, userId, opts.targetDeviceId);
 
-  const privacy = await resolveCreationPrivacy(ctx, userId, opts.privacyPath || opts.gitRoot || opts.projectPath);
+  const parent = opts.subagentFields ? await ctx.db.get(opts.subagentFields.parent_conversation_id) : null;
+  const privacy =
+    inheritedChildPrivacy(parent, runnerUserId) ??
+    (await resolveCreationPrivacy(ctx, userId, opts.privacyPath || opts.gitRoot || opts.projectPath));
   if (opts.cloudPark?.workspace === "shared") {
     // The device has to be the ROW OWNER's own wake-on-use host, checked here
     // the way every other cloud creator checks it (conversations.createConversation,
