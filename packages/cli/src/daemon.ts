@@ -270,6 +270,7 @@ import { knownValueNames, refreshKnownVault, startKnownValueRedaction, trackKnow
 import { VAULT_REFRESH_PATH, vaultRedactionSource } from "./secrets/redactionSource.js";
 import { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS, ensureClaudeSettingsPersistence, launchTokenEnv, scrubAgentEnv } from "./agentEnv.js";
 import { launchTokenLedger } from "./launchToken.js";
+import { waitForHandHost } from "./handHostGrace.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
@@ -14370,6 +14371,20 @@ async function rejectsForeignProcess(sessionId: string, pid: number, via: string
   return true;
 }
 
+// The last SessionStart claim of a session whose process was found dead, kept
+// after Strategy 0 below deletes the file: the delivery path asks it which
+// terminal last ran the session before resuming one in tmux (handHostGrace.ts).
+// Bounded: one small record per session that died this daemon lifetime.
+const deadClaims = new Map<string, unknown>();
+function rememberDeadClaim(sessionId: string, claim: unknown): void {
+  deadClaims.delete(sessionId);
+  deadClaims.set(sessionId, claim);
+  if (deadClaims.size > 1000) {
+    const oldest = deadClaims.keys().next().value;
+    if (oldest !== undefined) deadClaims.delete(oldest);
+  }
+}
+
 async function findSessionProcessImpl(sessionId: string, agentType: AgentClientId = "claude"): Promise<ClaudeSessionInfo | null> {
   // Check process cache first
   const cached = await getCachedSessionProcess(sessionId);
@@ -14406,7 +14421,10 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
           return result;
           }
         } else {
-          // Process is dead, clean up stale registry
+          // Process is dead, clean up stale registry. The claim still says
+          // which terminal last ran the session; the delivery path reads it
+          // before resuming (handHostGrace.ts).
+          rememberDeadClaim(sessionId, reg);
           try { fs.unlinkSync(registryFile); } catch {}
         }
       }
@@ -26735,6 +26753,19 @@ async function deliverMessageIntoSession(
   // failure history — reconstituting as the new agent must still run.
   if (isSessionCircuitOpen(sessionId) && !sessionFileStaleForAgent(findSessionFile(sessionId)?.agentType, agentTypeHint)) {
     logDelivery(`Circuit breaker OPEN for session=${sessionId.slice(0, 8)}, skipping auto-resume (cooldown ${SESSION_CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s)`);
+    return false;
+  }
+
+  // A session last run by hand in the person's own terminal (herdr, Ghostty)
+  // that died with a reboot is brought back by that terminal. Resuming it here
+  // first gives it a tmux twin on the same transcript once the host
+  // reattaches, so for a short grace after boot the message stays pending
+  // (handHostGrace.ts).
+  const hostWait = detectedType === "codex"
+    ? { wait: false as const }
+    : waitForHandHost({ claim: deadClaims.get(sessionId) ?? registryRegistrationFor(sessionId), bootAtMs: MACHINE_BOOTED_AT, nowMs: Date.now() });
+  if (hostWait.wait) {
+    logDelivery(`[HAND-HOST] ${sessionId.slice(0, 8)} last ran in ${hostWait.term}; msg=${messageId.slice(0, 8)} waits up to ${Math.ceil(hostWait.remainingMs / 1000)}s more for it to come back before a tmux resume`);
     return false;
   }
 
