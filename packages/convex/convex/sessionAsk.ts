@@ -26,7 +26,7 @@ import type { AskResult } from "@codecast/shared/contracts";
 import { internal } from "./_generated/api";
 import { readableConversation, streamMessageRows, isNonEmptyMessage } from "./conversations";
 import { readFileChangeIndex } from "./fileChangeBodies";
-import { callModel, cheapModelCost, CHEAP_MODEL } from "./lib/anthropic";
+import { callModel, callModelMetered, cheapModelCost, CHEAP_MODEL } from "./lib/anthropic";
 import {
   ASK_MAX_QUESTION_CHARS,
   askAnswerRequest,
@@ -195,8 +195,12 @@ async function answerQuestion(ctx: ActionCtx, args: AskArgs): Promise<AskResult>
     if (line !== undefined) extraFiles.set(line, [...(extraFiles.get(line) ?? []), change.path]);
   }
   const { context, request } = askAnswerRequest({ question, title: head.conversation.title, read, termCount: terms.length, extraFiles });
-  const reply = await callModel({ ...request, label: "Ask answer", timeout_ms: ASK_ANSWER_MS });
-  if (!reply) throw new Error("The model did not answer; retry in a moment");
+  // The API's own reason rides the error: an overload is worth a retry, a
+  // refusal needs someone to fix the deployment, and the asker can only tell
+  // them apart from this message.
+  const answer = await callModelMetered({ ...request, label: "Ask answer", timeout_ms: ASK_ANSWER_MS });
+  const reply = answer.reply;
+  if (!reply) throw new Error(`The model did not answer (${answer.error ?? "no reason given"}); retry in a moment`);
   usage.input_tokens += reply.usage.input_tokens;
   usage.output_tokens += reply.usage.output_tokens;
 
