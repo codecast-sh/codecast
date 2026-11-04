@@ -257,7 +257,8 @@ export function resolveLineProfile(values: LineProfileValues, opts: { root?: str
     },
     caps: {
       cards: pick("caps.cards", values.caps?.cards, d.caps.cards),
-      ...(values.caps?.stations ? { stations: pick("caps.stations", values.caps.stations, {}) } : {}),
+      // One source per station, keyed as its row prints (caps.stations.<id>).
+      ...(values.caps?.stations ? { stations: Object.fromEntries(Object.entries(values.caps.stations).map(([id, n]) => [id, pick(`caps.stations.${id}`, n, n)])) } : {}),
     },
     merge: {
       auto: pick("merge.auto", values.merge?.auto, d.merge!.auto),
