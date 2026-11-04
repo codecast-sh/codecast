@@ -159,6 +159,12 @@ export function messagePageSyncKey(conversationId: string, messages: Message[]):
   ]);
 }
 
+// Below this many messages the navigator's bounded scan already reaches every
+// prompt, so the prompt-index backfill is not worth a mutation.
+const NAV_INDEX_MIN_MESSAGES = 500;
+// Conversations this window already asked to index (the server dedups too).
+const navIndexRequested = new Set<string>();
+
 export function useConversationMessages(
   requestedConversationId: string,
   targetMessageId?: string,
@@ -485,6 +491,21 @@ export function useConversationMessages(
   useConvexSync(userMessages, useCallback((msgs: any) => {
     useInboxStore.getState().setUserMessages(conversationId, msgs);
   }, [conversationId]));
+
+  // A long conversation written before the navigator's prompt index existed is
+  // served by a bounded scan that can miss most of its prompts. Opening it asks
+  // the server to flag its history once; getUserMessages switches to the index
+  // when that finishes. The server no-ops when it is already indexed or running.
+  const navIndexSize = useInboxStore((s) => {
+    const meta = s.conversations[conversationId] ?? s.sessions[conversationId];
+    return ((meta as { message_count?: number } | undefined)?.message_count ?? 0) >= NAV_INDEX_MIN_MESSAGES;
+  });
+  // eslint-disable-next-line no-restricted-syntax -- one fire-and-forget server kick per conversation
+  useEffect(() => {
+    if (!canQuery || !navIndexSize || navIndexRequested.has(conversationId)) return;
+    navIndexRequested.add(conversationId);
+    convex.mutation(api.conversations.backfillNavPrompts, { conversation_id: convId, ...shareArg }).catch(() => {});
+  }, [canQuery, navIndexSize, conversationId, convId, shareArg, convex]);
 
   // Safety net: server-vs-local watermark recovery.
   //
