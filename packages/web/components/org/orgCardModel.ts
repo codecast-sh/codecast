@@ -15,6 +15,10 @@ import { seatSentence, type OrgRoleSeat } from "@codecast/shared/contracts/orgPr
 
 export const CARD = {
   role: { w: 360, far: 84 },
+  /** The far card (orgZoom): the name in large type, then what it is doing in
+   *  16px on 21px lines, so a zoomed-out chart still says where each seat and
+   *  session stands. Mono at 16px is 9.6px a character. */
+  far: { pad: 22, nameLine: 27, nameChars: 18, nameMax: 2, titleLine: 24, summaryGap: 6, summaryLine: 21, summaryChars: 31, summaryMax: 2 },
   person: { w: 300 },
   session: { w: 340, far: 50, min: 50 },
   cluster: { w: 340 },
@@ -205,3 +209,25 @@ export function sessionCardRows(s: Pick<OrgSession, "title">, d: OrgSessionDetai
   return { header, titleLines, detail, detailLines, task, messages, h };
 }
 
+
+/** A far card's summary: how many lines it takes (none without text). */
+const farSummary = (text: string | null | undefined) => (text ? wrapLines(text, CARD.far.summaryChars, CARD.far.summaryMax) : 0);
+const farSummaryH = (lines: number) => (lines ? CARD.far.summaryGap + lines * CARD.far.summaryLine : 0);
+
+/** A role's far card: its name, then its standing agent's line. */
+export function roleFarRows(r: OrgRole): { nameLines: number; summaryLines: number; h: number } {
+  const nameLines = wrapLines(roleWords(r).subtitle, CARD.far.nameChars, CARD.far.nameMax);
+  const st = standingText(r);
+  const summaryLines = st ? farSummary(`${st.label} · ${st.text ?? ""}`) : 0;
+  return { nameLines, summaryLines, h: Math.max(CARD.role.far, CARD.far.pad + nameLines * CARD.far.nameLine + farSummaryH(summaryLines)) };
+}
+
+/** A session's far card: its title on one line, then where it stands. */
+export function sessionFarRows(s: Pick<OrgSession, "state">, d: OrgSessionDetail | undefined): { summaryLines: number; h: number } {
+  const summaryLines = farSummary(`${s.state} · ${d?.line ?? ""}`);
+  return { summaryLines: d?.line ? summaryLines : 0, h: CARD.far.pad + CARD.far.titleLine + farSummaryH(d?.line ? summaryLines : 0) };
+}
+
+/** A person's far card: their name, then one line of what waits on them and what runs. */
+export const personFarHeight = (name: string, hasCounts: boolean) =>
+  Math.max(84, CARD.far.pad + wrapLines(name, CARD.far.nameChars, CARD.far.nameMax) * CARD.far.nameLine + (hasCounts ? farSummaryH(1) : 0));

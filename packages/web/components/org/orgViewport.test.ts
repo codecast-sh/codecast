@@ -137,6 +137,18 @@ describe("panIntoView (a focus pans by the least that shows the card)", () => {
     expect(treeLeft * vp.zoom + vp.x).toBeLessThanOrEqual(FIT_PAD);
   });
 
+  it("middle (the chart's find) centres a card both ways when the tree leaves room, at a readable zoom", () => {
+    // A card in the middle of the outline: neither tree edge holds the pan back.
+    // A short pane, so the outline runs past it both ways, and the card at its median height.
+    const short = { w: 540, h: 300 };
+    const cards = [...everything].filter((n) => n.kind !== "owner").sort((a, b) => a.y - b.y);
+    const mid = cards[Math.floor(cards.length / 2)];
+    const vp = panIntoView(everything, mid.id, at, short, "middle")!;
+    expect(vp.zoom).toBeGreaterThanOrEqual(Math.min(at.zoom, MIN_READABLE_ZOOM));
+    const b = box(mid.id, vp);
+    expect((b.top + b.bottom) / 2).toBeCloseTo(short.h / 2, 0);
+  });
+
   it("a card below the fold pans down by the least, and keeps the outline's left edge", () => {
     const low = [...everything].filter((n) => n.kind !== "owner").sort((a, b) => b.y - a.y)[0];
     const vp = panIntoView(everything, low.id, at, free)!;

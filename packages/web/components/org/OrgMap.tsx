@@ -18,7 +18,7 @@ import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { useSyncOrgHealth } from "../../hooks/useSyncOrgHealth";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { cn } from "../../lib/utils";
-import { OrgGraph, type OrgGraphObject, type OrgGraphProps, type OrgLens } from "./OrgGraph";
+import { OrgGraph, type OrgGraphObject, type OrgGraphProps, type OrgLens, type OrgRing } from "./OrgGraph";
 import type { GoalProject } from "./goalsLayout";
 import { roleNodeId, type OrgFocusTarget, type OrgLayoutView } from "./orgLayout";
 import { GHOST } from "./orgMeta";
@@ -57,7 +57,7 @@ type OrgMapProps = {
   toolbar?: boolean;
   className?: string;
   /** The object whose sheet is open: ringed, and kept in the canvas the sheet leaves. */
-  ring?: OrgGraphObject | null;
+  ring?: OrgRing | null;
   /** How much of the canvas' right edge a sheet covers. */
   panelWidth?: number;
   /** A click on a card opens its object; the company card closes the sheets (null). False: nothing to open, the card is selected. */
@@ -75,7 +75,7 @@ type OrgMapProps = {
 };
 
 /** What the page hands the People filter to drive it (useOrgPeopleView, useOrgMoves). */
-export type OrgPeopleControls = Pick<OrgGraphProps, "view" | "loadingClusters" | "onToggleCollapse" | "onExpandCluster" | "onCollapseCluster" | "onReparentRequest" | "onDropSessions" | "onNodeContextMenu" | "canDrag" | "canDropPerson" | "resetKey" | "onToggleOpen"> & {
+export type OrgPeopleControls = Pick<OrgGraphProps, "view" | "loadingClusters" | "onToggleCollapse" | "onExpandCluster" | "onCollapseCluster" | "onReparentRequest" | "onDropSessions" | "onMoveMarked" | "find" | "onFindCount" | "onNodeContextMenu" | "canDrag" | "canDropPerson" | "resetKey" | "onToggleOpen"> & {
   /** Which project each session works on: with it, Everything is the people chart with the goals and projects joined in. */
   sessionProject?: Readonly<Record<string, string>>;
 };
@@ -185,6 +185,9 @@ export function OrgMap({ tree, goals, health: healthProp, proposal, filter, asPr
             onCollapseCluster={live?.onCollapseCluster ?? noop}
             onReparentRequest={live?.onReparentRequest ?? noop}
             onDropSessions={live?.onDropSessions}
+            onMoveMarked={live?.onMoveMarked}
+            find={live?.find}
+            onFindCount={live?.onFindCount}
             onNodeContextMenu={live?.onNodeContextMenu ?? noop}
             onOpenSession={onOpenSession}
             canDrag={live?.canDrag ?? never}

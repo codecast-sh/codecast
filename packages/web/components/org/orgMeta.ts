@@ -52,6 +52,13 @@ export function standingLineOf(s: OrgStandingState | null | undefined): { text: 
   return text ? { text, label: "pinned", color: "var(--sol-text-dim)" } : null;
 }
 
+/** Whether a role's standing agent waits on a person: its pinned status says so, else its work state. */
+export function standingWaits(s: OrgStandingState | null | undefined): boolean {
+  if (!s) return false;
+  const status = parseThreadStateStatus(s.state_status);
+  return status ? status === "blocked" : s.state === "needs_input";
+}
+
 /** The compact tenure chip a role node and a ghost seat draw (org-staffing.md
  *  S10). Null for a standing seat — standing is silent. A program reads
  *  "program · ends with pl-N" / a date / a project, the plan or project named

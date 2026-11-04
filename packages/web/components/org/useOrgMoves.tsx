@@ -1,7 +1,7 @@
 "use client";
 // Moving work on the chart: a session or a role dropped on a person or a role
-// reports there from now on. A drop asks first (MoveConfirm), a pick from the
-// node menu or the picker moves at once. Who may pick up what is decided here,
+// reports there from now on. A drop, a pick from the node menu or the picker
+// moves at once, and the toast carries an Undo. Who may pick up what is decided here,
 // so a card the server would refuse is never draggable and nothing snaps back
 // silently: an admin moves anything, a role's host moves the role, a session's
 // owner moves the session. A role never moves under itself or its own reports.
@@ -9,7 +9,8 @@
 // themself, anyone takes a person under themself, and a manager lets a report
 // go (to the top of the chart). Never under someone who reports to them.
 // The writes are the store's reparent actions: the card moves in the same tick
-// and the server's answer comes back as a toast.
+// and the server's answer comes back as a toast. MoveConfirm stays for the
+// session map, which asks before a move.
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { ArrowRightLeft, ArrowUpToLine, Search } from "lucide-react";
@@ -39,7 +40,7 @@ export type OrgMoves = {
   canDropPerson: (userId: string, managerId: string) => boolean;
   /** Which cards may be picked up at all. */
   canDrag: (n: OrgLayoutNode) => boolean;
-  /** A drop on the People chart: checked, then confirmed. */
+  /** A drop on the People chart: moves at once, with an Undo on the toast. */
   requestMove: (req: OrgReparentRequest) => void;
   /** A move the person already chose (the menu, the picker, a drop on the Everything chart). */
   move: (subject: MoveSubject, target: OrgParentRef | null, targetTitle: string) => void;
@@ -47,17 +48,18 @@ export type OrgMoves = {
   dropSessions: (conversationIds: readonly string[], target: OrgParentRef, targetTitle: string) => void;
   /** Every person and live role a subject could report to, minus where it would close a loop. */
   targetsFor: (subject: MoveSubject) => MoveTarget[];
-  openPicker: (subject: MoveSubject) => void;
+  /** The searchable list of every target, for one subject or a whole selection. */
+  openPicker: (subjects: MoveSubject | MoveSubject[]) => void;
   /** Bumped after a cancelled or settled drop, so the chart puts the card back in its slot. */
   resetKey: number;
-  /** The confirm and the picker; render them anywhere on the screen. */
+  /** The picker; render it anywhere on the screen. */
   ui: ReactNode;
 };
 
 export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "findSession" | "currentParentOf" | "movePagedSession">): OrgMoves {
   const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  const [pending, setPending] = useState<OrgReparentRequest | null>(null);
-  const [picker, setPicker] = useState<MoveSubject | null>(null);
+  const [picker, setPicker] = useState<MoveSubject[] | null>(null);
+  const openPicker = useCallback((x: MoveSubject | MoveSubject[]) => setPicker(Array.isArray(x) ? x : [x]), []);
   const [resetKey, setResetKey] = useState(0);
   const bump = useCallback(() => setResetKey((k) => k + 1), []);
 
@@ -80,32 +82,27 @@ export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "f
   const canDrag = useCallback((n: OrgLayoutNode) => (n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : n.kind === "person" ? !!teamId : false), [canMoveSession, canEditRole, teamId]);
 
   const { findSession, currentParentOf, movePagedSession } = people;
-  /** `quiet`: part of a group move, which says it once. */
-  const commit = useCallback((subject: MoveSubject, target: OrgParentRef | null, targetTitle: string, quiet = false) => {
-    const say = (line: string) => { if (!quiet) toast.success(line); };
+  /** Write one move. Resolves to the line the toast says, or null when it says nothing of its own. */
+  const commit = useCallback(async (subject: MoveSubject, target: OrgParentRef | null, targetTitle: string): Promise<string | null> => {
     const st = useInboxStore.getState();
     if (subject.kind === "person") {
-      if (!teamId || (target && target.kind !== "user")) return;
+      if (!teamId || (target && target.kind !== "user")) return null;
       st.reparentOrgPerson(teamId, subject.id, target?.user_id ?? null);
-      say(target ? `${subject.title} now reports to ${targetTitle}` : `${subject.title} now reports to nobody`);
-      return;
+      return target ? `${subject.title} now reports to ${targetTitle}.` : `${subject.title} now reports to nobody.`;
     }
-    if (!target) return;
+    if (!target) return null;
     if (subject.kind === "session") {
       // The row may live only in a loaded page (past the tree's top N) or only
       // in the inbox: the slice gets it so counts move, and the pages draw it once, under the target.
       const row = findSession(subject.id) ?? inboxOrgSession(subject.id, st.sessions[subject.id]);
       movePagedSession(subject.id, target, row);
-      void st.reparentOrgSession(subject.id, target, { row })
-        .then((r) => { if (r) say(reparentToastLine(r.short_id ?? "The session", targetTitle, "session", r.told)); })
-        .catch(() => {});
-    } else {
-      // One toast says both things (S11): the role, and how many hands were told.
-      const handle = tree?.roles.find((r) => r._id === subject.id)?.handle;
-      void st.reparentOrgRole(subject.id, target)
-        .then((r) => { if (r) say(reparentToastLine(handle ? `@${handle}` : subject.title, targetTitle, "role", r.told)); })
-        .catch(() => {});
+      const r = await st.reparentOrgSession(subject.id, target, { row });
+      return r ? reparentToastLine(r.short_id ?? row?.short_id ?? "The session", targetTitle, "session", r.told) : null;
     }
+    // One line says both things (S11): the role, and how many hands were told.
+    const handle = tree?.roles.find((r) => r._id === subject.id)?.handle;
+    const r = await st.reparentOrgRole(subject.id, target);
+    return r ? reparentToastLine(handle ? `@${handle}` : subject.title, targetTitle, "role", r.told) : null;
   }, [tree, teamId, findSession, movePagedSession]);
 
   /** Whether a subject may go under a target at all: allowed, not where it is, no loop. */
@@ -128,34 +125,37 @@ export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "f
     return !sameTarget(currentParentOf(subject), target);
   }, [tree, canEditRole, canMoveSession, canMovePerson, findSession, currentParentOf]);
 
+  const titleOf = useCallback((ref: OrgParentRef | null) => {
+    if (!ref) return "nobody";
+    if (ref.kind === "user") return tree?.people.find((p) => p.user_id === ref.user_id)?.name ?? "them";
+    return tree?.roles.find((r) => r._id === ref.role_id)?.name ?? "the role";
+  }, [tree]);
+
+  /** Every move on the chart: what may move goes at once, the card lands in the
+   *  same tick, and one toast says where with an Undo that puts each back where it was. */
+  const moveAll = useCallback((subjects: MoveSubject[], target: OrgParentRef | null, targetTitle: string, undoable = true) => {
+    const moving = subjects.filter((x) => allowed(x, target));
+    if (!moving.length) return 0;
+    const from = moving.map((x) => ({ subject: x, ref: currentParentOf(x) }));
+    const undo = undoable ? { label: "Undo", onClick: () => { for (const f of from) void commit(f.subject, f.ref, titleOf(f.ref)).catch(() => {}); toast.success(moving.length === 1 ? "Moved back." : `${moving.length} moved back.`); } } : undefined;
+    const lines = moving.map((x) => commit(x, target, targetTitle).catch(() => null));
+    if (moving.length === 1) void lines[0].then((line) => { if (line) toast.success(line, undo ? { action: undo } : undefined); });
+    else toast.success(`${moving.length} now report to ${targetTitle}.`, undo ? { action: undo } : undefined);
+    return moving.length;
+  }, [allowed, currentParentOf, commit, titleOf]);
+
   const requestMove = useCallback((req: OrgReparentRequest) => {
     // A multi-selection moves what may move; the rest stays where it is.
-    const [subject, ...also] = [req.subject, ...(req.also ?? [])].filter((x) => allowed(x, req.target));
-    if (!subject) { bump(); return; }
-    setPending({ ...req, subject, also });
-  }, [allowed, bump]);
-  const move = useCallback((subject: MoveSubject, target: OrgParentRef | null, targetTitle: string) => {
-    if (!allowed(subject, target)) return;
-    setPicker(null);
-    commit(subject, target, targetTitle);
-  }, [allowed, commit]);
-  /** Several subjects under one target, said once. */
-  const commitAll = useCallback((subjects: MoveSubject[], target: OrgParentRef, targetTitle: string) => {
-    if (subjects.length === 1) { commit(subjects[0], target, targetTitle); return; }
-    for (const x of subjects) commit(x, target, targetTitle, true);
-    toast.success(`${subjects.length} now report to ${targetTitle}.`);
-  }, [commit]);
-  const dropSessions = useCallback((ids: readonly string[], target: OrgParentRef, targetTitle: string) => {
-    const subjects = ids.map((id): MoveSubject => ({ kind: "session", id, title: "" })).filter((x) => allowed(x, target));
-    if (subjects.length) commitAll(subjects, target, targetTitle);
-  }, [allowed, commitAll]);
-  const confirm = useCallback(() => {
-    if (!pending) return;
-    commitAll([pending.subject, ...(pending.also ?? [])], pending.target, pending.targetTitle);
-    setPending(null);
+    moveAll([req.subject, ...(req.also ?? [])], req.target, req.targetTitle);
     bump();
-  }, [pending, commitAll, bump]);
-  const cancel = useCallback(() => { setPending(null); bump(); }, [bump]);
+  }, [moveAll, bump]);
+  const move = useCallback((subject: MoveSubject, target: OrgParentRef | null, targetTitle: string) => {
+    setPicker(null);
+    moveAll([subject], target, targetTitle);
+  }, [moveAll]);
+  const dropSessions = useCallback((ids: readonly string[], target: OrgParentRef, targetTitle: string) => {
+    moveAll(ids.map((id): MoveSubject => ({ kind: "session", id, title: "" })), target, targetTitle);
+  }, [moveAll]);
 
   const allTargets = useMemo<MoveTarget[]>(() => (tree ? [
     ...tree.people.map((p) => ({ ref: { kind: "user", user_id: p.user_id } as OrgParentRef, id: parentNodeId({ kind: "user", user_id: p.user_id }), title: p.name, sub: p.is_me ? "you" : p.role, kind: "person" as const, image: p.image })),
@@ -173,11 +173,19 @@ export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "f
 
   const ui = (
     <>
-      {pending && <MoveConfirm req={pending} onConfirm={confirm} onCancel={cancel} />}
-      {picker && <MovePicker subject={picker} current={currentParentOf(picker)} targets={targetsFor(picker)} onPick={(t) => move(picker, t.ref, t.title)} onClose={() => setPicker(null)} />}
+      {picker && (
+        <MovePicker
+          subjects={picker}
+          current={picker.length === 1 ? currentParentOf(picker[0]) : undefined}
+          // A group sees every target at least one of it may move to.
+          targets={picker.length === 1 ? targetsFor(picker[0]) : allTargets.filter((t) => picker.some((x) => allowed(x, t.ref)))}
+          onPick={(t) => { setPicker(null); moveAll(picker, t.ref, t.title); }}
+          onClose={() => setPicker(null)}
+        />
+      )}
     </>
   );
-  return { canEditRole, canMoveSession, canMovePerson, canDropPerson, canDrag, requestMove, move, dropSessions, targetsFor, openPicker: setPicker, resetKey, ui };
+  return { canEditRole, canMoveSession, canMovePerson, canDropPerson, canDrag, requestMove, move, dropSessions, targetsFor, openPicker, resetKey, ui };
 }
 
 /** An inbox row the chart does not hold yet, as the chart's session row, so the move paints under its target at once. */
@@ -225,7 +233,8 @@ export function MoveConfirm({ req, onConfirm, onCancel }: { req: OrgReparentRequ
 
 // ---------------------------------------------------------------- move picker
 
-function MovePicker({ subject, current, targets, onPick, onClose }: { subject: MoveSubject; current: OrgParentRef | null; targets: MoveTarget[]; onPick: (t: MoveTarget) => void; onClose: () => void }) {
+function MovePicker({ subjects, current, targets, onPick, onClose }: { subjects: MoveSubject[]; /** Where a single subject reports now; undefined for a group. */ current: OrgParentRef | null | undefined; targets: MoveTarget[]; onPick: (t: MoveTarget) => void; onClose: () => void }) {
+  const one = subjects.length === 1 ? subjects[0] : null;
   const [q, setQ] = useState("");
   const needle = q.toLowerCase();
   const list = targets.filter((t) => !q || t.title.toLowerCase().includes(needle) || t.sub.toLowerCase().includes(needle));
@@ -233,8 +242,8 @@ function MovePicker({ subject, current, targets, onPick, onClose }: { subject: M
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-[380px] p-0 gap-0 overflow-hidden" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
         <DialogHeader className="px-4 pt-4 pb-2">
-          <DialogTitle className="text-[15px]" style={{ fontFamily: "var(--font-serif)" }}>Move {subject.kind}</DialogTitle>
-          <DialogDescription className="text-[12px] truncate" style={{ color: "var(--sol-text-muted)" }}>{subject.title}</DialogDescription>
+          <DialogTitle className="text-[15px]" style={{ fontFamily: "var(--font-serif)" }}>{one ? `Move ${one.kind}` : `Move ${subjects.length}`}</DialogTitle>
+          <DialogDescription className="text-[12px] truncate" style={{ color: "var(--sol-text-muted)" }}>{one ? one.title : subjects.map((x) => x.title).filter(Boolean).join(", ")}</DialogDescription>
         </DialogHeader>
         <div className="px-3 pb-2">
           <div className="flex items-center gap-2 h-9 px-2.5 rounded-lg border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", background: "var(--sol-bg-alt)" }}>
@@ -245,7 +254,7 @@ function MovePicker({ subject, current, targets, onPick, onClose }: { subject: M
         <div className="max-h-[320px] overflow-y-auto px-2 pb-3">
           {list.length === 0 && <p className="px-2.5 py-3 text-[12px]" style={{ color: "var(--sol-text-dim)" }}>No match.</p>}
           {list.map((t) => {
-            const isCurrent = sameTarget(current, t.ref);
+            const isCurrent = current !== undefined && sameTarget(current, t.ref);
             return (
               <button key={t.id} type="button" disabled={isCurrent} onClick={() => onPick(t)} className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors hover:bg-sol-bg-highlight/70 disabled:opacity-50 disabled:cursor-default">
                 {t.kind === "person" ? <Avatar name={t.title} image={t.image} /> : t.kind === "top" ? <ArrowUpToLine className="w-4 h-4" style={{ color: "var(--sol-text-dim)" }} /> : <span className="w-5 h-5 rounded-md inline-flex items-center justify-center text-[9px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)", fontFamily: "var(--font-mono)" }}>@</span>}

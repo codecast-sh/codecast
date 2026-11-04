@@ -4,7 +4,7 @@
 import { isOrgQuietChange } from "@codecast/shared/contracts/orgProposal";
 import { describe, expect, it } from "bun:test";
 import { focusTargetNodeId, ghostNodeIdFor, ghostsFor, layoutOrgTree, personNodeId, quietChipLines, rectsOverlap, refResolves, resolveOrgParentRef, roleNodeId, sessionNodeId, ORG_SIZES, type OrgLayoutNode } from "./orgLayout";
-import { CARD, changeLines, roleCardRows } from "./orgCardModel";
+import { CARD, changeLines, roleCardRows, roleFarRows } from "./orgCardModel";
 import { ORG_FIXTURE } from "./orgFixture";
 import { ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
 import type { OrgChange, OrgProposalChange } from "./orgStaffingTypes";
@@ -373,8 +373,9 @@ describe("a role's standing line", () => {
     const rows = roleCardRows(withLine, { tenure: withLine.tenure?.kind === "program" });
     expect(node.h).toBe(rows.h);
     expect(rows.standing).toBe(6 + rows.standingLines * CARD.standingLine);
-    // Far is the compact card; every nearer level draws the full card at the same height.
-    expect(byId(lay([], undefined, "far").nodes).get(roleNodeId(withLine._id))!.h).toBe(ORG_SIZES.role.h);
+    // Far is the name and the standing line in large type; every nearer level draws the full card at the same height.
+    expect(byId(lay([], undefined, "far").nodes).get(roleNodeId(withLine._id))!.h).toBe(roleFarRows(withLine).h);
+    expect(roleFarRows(withLine).summaryLines).toBeGreaterThan(0);
     const closeNodes = lay([], undefined, "close").nodes;
     expect(byId(closeNodes).get(roleNodeId(withLine._id))!.h).toBe(node.h);
     // Without a standing line the card drops exactly that block; a change adds its line.

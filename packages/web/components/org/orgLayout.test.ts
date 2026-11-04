@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { layoutOrgTree, rectsOverlap, personNodeId, roleNodeId, sessionNodeId, clusterNodeId, ORG_SIZES, ORG_STACK_VISIBLE, type OrgLayoutNode } from "./orgLayout";
-import { CARD, charterText, roleCardRows, sessionCardRows, wrapLines } from "./orgCardModel";
+import { CARD, charterText, roleCardRows, roleFarRows, sessionCardRows, sessionFarRows, wrapLines } from "./orgCardModel";
 import { ORG_FIXTURE, ORG_FIXTURE_ALL_SESSIONS } from "./orgFixture";
 import { sortOrgSessions } from "./orgTypes";
 
@@ -151,7 +151,7 @@ describe("orgLayout", () => {
     if (cluster.kind === "cluster") expect(cluster.remaining).toBe(22 - 8);
   });
 
-  it("nearer than far a session card books its title, its state line and its task; far keeps the compact card; nothing overlaps", () => {
+  it("nearer than far a session card books its title, its state line and its task; far keeps its summary in large type; nothing overlaps", () => {
     const mine = ORG_FIXTURE.people.find((p) => p.is_me)!.sessions;
     const [a, b, c] = mine;
     const long = "Rewriting the sync applier so a follower window never re-pushes a whole collection on a heartbeat, and measuring it on the desktop build";
@@ -176,9 +176,14 @@ describe("orgLayout", () => {
       const stack = out.nodes.filter((n) => n.kind === "session" && n.parent.kind === "user" && n.parent.user_id === "fixture-user-me").sort((x, y) => x.y - y.y);
       for (let i = 1; i < stack.length; i++) expect(stack[i].y).toBe(stack[i - 1].y + stack[i - 1].h + ORG_SIZES.stackGap);
     }
+    // Far keeps where each session stands, in large type: a line books two rows, none books the title alone.
     const far = layoutOrgTree(ORG_FIXTURE, view, undefined, "far");
-    for (const n of far.nodes) if (n.kind === "session") { expect(n.h).toBe(ORG_SIZES.session.h); expect(n.detail).toBeUndefined(); }
-    for (const n of far.nodes) if (n.kind === "role") expect(n.h).toBe(ORG_SIZES.role.h);
+    const fm = byId(far.nodes);
+    expect(sessionFarRows(b, sessionDetails[b._id]).summaryLines).toBe(CARD.far.summaryMax);
+    expect(sessionFarRows(c, sessionDetails[c._id]).summaryLines).toBe(0);
+    for (const s of [a, b, c]) expect(fm.get(sessionNodeId(s._id))!.h).toBe(sessionFarRows(s, sessionDetails[s._id]).h);
+    for (const n of far.nodes) if (n.kind === "role") expect(n.h).toBe(roleFarRows(n.role).h);
+    for (let i = 0; i < far.nodes.length; i++) for (let j = i + 1; j < far.nodes.length; j++) expect(rectsOverlap(far.nodes[i], far.nodes[j])).toBe(false);
   });
 
   it("a card opened in place grows to what it lists, and Expand all opens every card without an overlap", () => {

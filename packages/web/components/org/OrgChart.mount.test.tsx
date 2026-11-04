@@ -1,9 +1,10 @@
 // /org mounted over the org fixture: the People | Everything | Goals switch and
 // what it saves, and the People chart driven the way a person drives it (fold a
-// card, open a "+N more" stack and page the server, drop a card and confirm).
+// card, open a "+N more" stack and page the server, drop a card and undo it).
 // React Flow is mocked (it draws nothing without a measured viewport): the
 // test reads what the page hands the canvas and calls the gestures it reports.
 // The store's writes are replaced by recorders, so nothing reaches a server.
+import { toast } from "sonner";
 import { test, expect, afterAll, mock } from "bun:test";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 
@@ -77,7 +78,7 @@ function seedStore(org_view?: string) {
       const s2 = useInboxStore.getState() as any;
       useInboxStore.setState({ clientState: { ...s2.clientState, ui: { ...s2.clientState.ui, ...partial } } } as any);
     },
-    reparentOrgSession: (...args: any[]) => { sessionMoves.push(args); return Promise.resolve(undefined); },
+    reparentOrgSession: (...args: any[]) => { sessionMoves.push(args); return Promise.resolve({ short_id: "jx1", told: { sessions: 0, roles: 0 } }); },
     reparentOrgRole: (...args: any[]) => { roleMoves.push(args); return Promise.resolve(undefined); },
   } as any);
 }
@@ -143,31 +144,36 @@ test("People: a card folds and unfolds, a \"+N more\" stack opens what the tree 
   await done();
 });
 
-test("People: a dropped session asks first, and Move hands the store the session, its new parent and its row; Cancel moves nothing and puts the card back", async () => {
+test("People: a dropped session moves at once, and the toast's Undo puts it back where it was; a drop where it already is moves nothing", async () => {
   tree = ORG_FIXTURE;
   seedStore("people");
   sessionMoves.length = 0;
+  const toasts: any[] = [];
+  const realSuccess = toast.success;
+  (toast as any).success = (...args: any[]) => { toasts.push(args); return 0; };
   const { done } = await mount();
   const s = ORG_FIXTURE.people[0].sessions[0];
   const to = { kind: "role", role_id: "fixture-role-growth" };
   const req = { subject: { kind: "session", id: s._id, title: s.title }, target: to, targetTitle: "Head of Growth", at: { x: 200, y: 200 } };
   const reset0 = last().resetKey;
   await act(async () => { last().onReparentRequest(req); });
-  expect(q("[data-move-confirm]")!.textContent).toContain("Head of Growth");
-  await act(async () => { q("[data-move-cancel]")!.click(); });
-  expect(q("[data-move-confirm]")).toBeNull();
-  expect(sessionMoves.length).toBe(0);
-  expect(last().resetKey).toBe(reset0 + 1);
-  await act(async () => { last().onReparentRequest(req); });
-  await act(async () => { q("[data-move-confirm] button[data-primary]")!.click(); });
   expect(sessionMoves.length).toBe(1);
   expect(sessionMoves[0][0]).toBe(s._id);
   expect(sessionMoves[0][1]).toEqual(to);
   expect(sessionMoves[0][2].row._id).toBe(s._id);
+  expect(last().resetKey).toBe(reset0 + 1);
   expect(q("[data-move-confirm]")).toBeNull();
-  // A drop where it already is asks nothing.
+  // The toast names the new parent and carries an Undo that moves the session back to its person.
+  const [line, opts] = toasts.at(-1);
+  expect(line).toContain("Head of Growth");
+  await act(async () => { opts.action.onClick(); });
+  expect(sessionMoves.length).toBe(2);
+  expect(sessionMoves[1][0]).toBe(s._id);
+  expect(sessionMoves[1][1]).toEqual({ kind: "user", user_id: ME });
+  // A drop where it already is moves nothing.
   await act(async () => { last().onReparentRequest({ ...req, target: { kind: "user", user_id: ME } }); });
-  expect(q("[data-move-confirm]")).toBeNull();
+  expect(sessionMoves.length).toBe(2);
+  (toast as any).success = realSuccess;
   await done();
 });
 
@@ -180,7 +186,6 @@ test("People: a role never moves under its own report, and a member moves only w
   const { done } = await mount();
   const reset0 = last().resetKey;
   await act(async () => { last().onReparentRequest({ subject: { kind: "role", id: "fixture-role-growth", title: "Head of Growth" }, target: { kind: "role", role_id: "fixture-role-seo" }, targetTitle: "SEO", at: { x: 0, y: 0 } }); });
-  expect(q("[data-move-confirm]")).toBeNull();
   expect(last().resetKey).toBe(reset0 + 1);
   expect(roleMoves.length).toBe(0);
   await done();
@@ -194,8 +199,9 @@ test("People: a role never moves under its own report, and a member moves only w
   expect(last().canDrag({ kind: "session", session: sams })).toBe(false);
   // Growth is hosted by the viewer, so it still moves.
   expect(last().canDrag({ kind: "role", role: tree.roles[0] })).toBe(true);
+  sessionMoves.length = 0;
   await act(async () => { last().onReparentRequest({ subject: { kind: "session", id: sams._id, title: sams.title }, target: { kind: "user", user_id: ME }, targetTitle: "Ashot", at: { x: 0, y: 0 } }); });
-  expect(q("[data-move-confirm]")).toBeNull();
+  expect(sessionMoves.length).toBe(0);
   await m.done();
 });
 

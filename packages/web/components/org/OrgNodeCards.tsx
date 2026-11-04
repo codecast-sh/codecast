@@ -23,7 +23,7 @@ import { StandingLine, StateWords } from "./stateWords";
 // The state words and the standing line live in their own light module, so a
 // company line or a hover card can say them without loading the map.
 export { StandingLine, StateWords };
-import { useZoomLevel } from "./orgZoom";
+import { useZoomLevel, zoomText } from "./orgZoom";
 import { GhostTag } from "./ghostChrome";
 import { CHIP_STATUS, ghostFrameStyle, stateWords } from "./orgMeta";
 import { RoleHoverCard, SessionMark } from "../identity";
@@ -32,7 +32,7 @@ import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
 import { isHeadOfPeopleRole, roleWords } from "./orgStaffingTypes";
 import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./orgLayout";
 import { ORG_SIZES, runningSessions } from "./orgLayout";
-import { CARD, roleCardRows, roleMetaLine, sessionCardRows, standingText, type OrgSessionDetail, type RoleOpenDetail } from "./orgCardModel";
+import { CARD, roleCardRows, roleFarRows, roleMetaLine, sessionCardRows, sessionFarRows, standingText, type OrgSessionDetail, type RoleOpenDetail } from "./orgCardModel";
 import { seatSentence } from "@codecast/shared/contracts/orgProposal";
 import { FLAG_LABEL } from "./staffingModel";
 import { RoleWeekBody } from "./orgFlowViz";
@@ -278,13 +278,32 @@ export function OverflowTally({ overflow, counts }: { overflow: number; counts: 
 }
 
 
-/** The far card (orgZoom): the name, large, and one dot in the seat's colour. */
-function FarBody({ name, color, hollow, dim }: { name: string; color: string; hollow?: boolean; dim?: boolean }) {
-  return (
-    <div className="flex h-full min-w-0 items-center gap-3" data-zoom-far>
-      <span className="block h-[14px] w-[14px] shrink-0 rounded-full" style={hollow ? { border: `2px solid ${color}` } : { background: color }} aria-hidden />
-      <span className="line-clamp-2 min-w-0 text-[24px] font-semibold leading-[27px] tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)", opacity: dim ? GHOST.opacity : 1 }}>{name}</span>
+/** The far card (orgZoom): the name, large, one dot in the seat's colour and,
+ *  when there is one, what it is doing in the far card's summary type. */
+function FarBody({ name, color, hollow, dim, summary, actions, children }: { name: string; color: string; hollow?: boolean; dim?: boolean; summary?: { label: string; color: string; text: string | null; lines: number }; /** The card's buttons (open, fold), at the end of the name row. */ actions?: ReactNode; children?: ReactNode }) {
+  const below = summary?.lines ? <FarSummary {...summary} /> : children;
+  const head = (
+    <div className={cn("flex min-w-0 items-center gap-[0.5em]", !below && "h-full")} style={{ fontSize: zoomText(15, 24) }} data-zoom-far>
+      <span className="block h-[0.55em] w-[0.55em] shrink-0 rounded-full" style={hollow ? { border: `2px solid ${color}` } : { background: color }} aria-hidden />
+      <span className="line-clamp-2 min-w-0 flex-1 font-semibold tracking-tight" style={{ lineHeight: CARD.far.nameLine / 24, fontFamily: "var(--font-serif)", color: "var(--sol-text)", opacity: dim ? GHOST.opacity : 1 }}>{name}</span>
+      {actions && <span className="flex shrink-0 items-center gap-1 self-start" style={{ fontSize: 12 }}>{actions}</span>}
     </div>
+  );
+  if (!below) return head;
+  return (
+    <>
+      {head}
+      {below}
+    </>
+  );
+}
+
+/** A far card's line under its name: the state word in its colour, then the words. */
+function FarSummary({ label, color, text, lines }: { label: string; color: string; text: string | null; lines: number }) {
+  return (
+    <p className="overflow-hidden" style={{ fontSize: zoomText(12, 16), marginTop: CARD.far.summaryGap, lineHeight: CARD.far.summaryLine / 16, color: "var(--sol-text-muted)", ...clamp(lines) }} data-far-summary>
+      <span style={{ color }}>{label}</span>{text ? <> · {text}</> : null}
+    </p>
   );
 }
 
@@ -328,7 +347,14 @@ export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<
     return (
       <Frame selected={data.selected} dropTarget={data.dropTarget} accent="var(--sol-cyan)" className="px-3 py-2.5" kind={p.is_me ? "me" : "person"}>
         <Ports />
-        <FarBody name={p.name} color={p.presence ? PRESENCE[p.presence] : PRESENCE.offline} />
+        <FarBody name={p.name} color={p.presence ? PRESENCE[p.presence] : PRESENCE.offline} actions={<CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} />}>
+          {/* What waits on them and what runs, in the far card's summary type (it fits the card's booked height). */}
+          {stateWords(p.counts, 2).length > 0 && (
+            <div style={{ fontSize: zoomText(12, 16), marginTop: CARD.far.summaryGap, lineHeight: CARD.far.summaryLine / 16 }} data-far-summary>
+              <StateWords counts={p.counts} className="text-[1em]" />
+            </div>
+          )}
+        </FarBody>
       </Frame>
     );
   }
@@ -432,12 +458,13 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
     background: "linear-gradient(180deg, color-mix(in srgb, var(--sol-violet) 7%, var(--sol-card)) 0%, var(--sol-card) 42%)",
     opacity: faded ? 0.75 : 1,
   };
-  if (level === "far") {
+  if (level === "far" && !data.opened) {
     return (
       <Frame selected={data.selected} dropTarget={data.dropTarget && !ghost} dragging={data.dragging} accent="var(--sol-violet)" className="px-3 py-2.5" kind={ghost && !ghost.solid ? "ghost" : isHeadOfPeople(r) ? "head" : "role"} style={frameStyle}>
         <Ports />
         {data.retire && <div aria-hidden className="absolute inset-0 rounded-xl pointer-events-none" style={{ background: GHOST.hatch }} />}
-        <FarBody name={roleWords(r).subtitle} color={ghost && !ghost.solid ? GHOST.color : plate} hollow={!r.standing} dim={dim} />
+        <FarBody name={roleWords(r).subtitle} color={ghost && !ghost.solid ? GHOST.color : plate} hollow={!r.standing} dim={dim} summary={farStanding(r)}
+          actions={!ghost && <><OpenToggle open={false} onClick={() => data.onToggleOpen?.(id)} /><CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} /></>} />
       </Frame>
     );
   }
@@ -662,6 +689,12 @@ export const HealthRoleCard = memo(function HealthRoleCard({ data }: NodeProps<N
   );
 });
 
+/** A role's far summary: its standing agent's line, sized the way the layout booked it. */
+function farStanding(r: OrgRole) {
+  const st = standingText(r);
+  return st ? { ...st, lines: roleFarRows(r).summaryLines } : undefined;
+}
+
 export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<SessionNodeData>>) {
   const s = data.session;
   const st = ORG_STATE_META[s.state] ?? ORG_STATE_META.idle;
@@ -672,13 +705,18 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
   const ghost = data.ghost;
   const dim = !!ghost && !ghost.solid;
   const level = useZoomLevel();
-  // Far (orgZoom): the title alone, large, on the state's stripe.
-  if (level === "far" && !ghost) {
+  // Far (orgZoom): the title large on the state's stripe, then where it stands.
+  if (level === "far" && !ghost && !data.opened) {
+    const far = sessionFarRows(s, data.detail);
     return (
-      <Frame selected={data.selected} dragging={data.dragging} accent={st.color} className="pl-3.5 pr-2.5 flex items-center overflow-hidden" style={{ borderRadius: 10 }} kind="session">
+      <Frame selected={data.selected} dragging={data.dragging} accent={st.color} className="pl-3.5 pr-2.5 py-2.5 overflow-hidden" style={{ borderRadius: 10 }} kind="session">
         <Ports />
         <span className="absolute left-0 top-0 bottom-0 w-[4px]" style={{ background: st.color, opacity: s.state === "idle" ? 0.4 : 1 }} aria-hidden />
-        <span className="truncate text-[17px] font-medium tracking-tight" style={{ color: "var(--sol-text)" }} data-zoom-far>{s.title}</span>
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="min-w-0 flex-1 truncate font-medium tracking-tight" style={{ fontSize: zoomText(13, 18), lineHeight: CARD.far.titleLine / 18, color: "var(--sol-text)" }} title={s.title} data-zoom-far>{s.title || "Untitled"}</div>
+          <OpenToggle open={false} onClick={() => data.onToggleOpen?.(`session:${s._id}`)} />
+        </div>
+        {far.summaryLines > 0 && <FarSummary label={st.label} color={st.color} text={data.detail!.line} lines={far.summaryLines} />}
       </Frame>
     );
   }

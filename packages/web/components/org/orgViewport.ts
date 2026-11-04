@@ -144,27 +144,31 @@ function holdToTree(d: number, treePos: number, treeSize: number, extent: number
  * card goes to the middle of the strip across, held to the tree, and the
  * zoom rises to MIN_READABLE_ZOOM (about the card) when it is below it.
  * Down the page it still moves by the least, so the root row stays put.
+ *
+ * `middle` is for a card the person went looking for (the chart's find):
+ * centred both ways, held to the tree, at a readable zoom.
  */
 export function panIntoView(
   nodes: readonly OrgViewportNode[],
   targetId: string,
   vp: Viewport,
   free: { w: number; h: number },
-  mode: "least" | "center" = "least",
+  mode: "least" | "center" | "middle" = "least",
 ): Viewport | null {
   const n = nodes.find((b) => b.id === targetId);
   const all = boundsOf(nodes);
   if (!n || !all) return null;
   let at = vp;
-  if (mode === "center" && vp.zoom < MIN_READABLE_ZOOM) {
+  if (mode !== "least" && vp.zoom < MIN_READABLE_ZOOM) {
     // Zoom about the card's centre, so the pans below start from where it is.
     const cx = n.x + n.w / 2, cy = n.y + n.h / 2, z = MIN_READABLE_ZOOM;
     at = { x: cx * vp.zoom + vp.x - cx * z, y: cy * vp.zoom + vp.y - cy * z, zoom: z };
   }
   const z = at.zoom;
-  const across = mode === "center" ? axisCenter : axisPan;
+  const across = mode === "least" ? axisPan : axisCenter;
+  const down = mode === "middle" ? axisCenter : axisPan;
   let dx = across(n.x * z + at.x, n.w * z, all.x * z + at.x, all.w * z, free.w);
-  const dy = axisPan(n.y * z + at.y, n.h * z, all.y * z + at.y, all.h * z, free.h);
+  const dy = down(n.y * z + at.y, n.h * z, all.y * z + at.y, all.h * z, free.h);
   // Already centred to the pixel: a re-run on a panel change does not nudge.
   if (Math.abs(dx) < 0.5) dx = 0;
   if (dx === 0 && dy === 0 && at === vp) return null;

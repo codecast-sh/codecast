@@ -12,8 +12,10 @@
 // draws its changes on the chart, a card hovered or clicked in the drawer
 // lights its node, and a marked node focuses its card. With nothing named the
 // drawer is the Head of People, or the offer to hire one.
-import { useCallback, useContext, useRef, useState } from "react";
-import { Maximize2, Minimize2, UserPlus } from "lucide-react";
+import { useCallback, useContext, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, LayoutGrid, Maximize2, Minimize2, Search, UserPlus } from "lucide-react";
+import { workspaceKeyOf } from "./orgPlacement";
+import { ORG_STATE_META } from "./orgMeta";
 import { useRouter, useSearchParams } from "next/navigation";
 import { objectHref } from "@codecast/shared/entities";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
@@ -38,11 +40,12 @@ import { useSyncProjects } from "../../hooks/useSyncProjects";
 import { ContextMenu, useContextMenu } from "../ui/context-menu";
 import { cn } from "../../lib/utils";
 import { OrgMap, type MapFilter } from "./OrgMap";
-import type { OrgGraphObject } from "./OrgGraph";
+import type { OrgGraphObject, OrgRing } from "./OrgGraph";
 import type { OrgLayoutNode } from "./orgLayout";
 import { useOrgPeopleView } from "./useOrgPeopleView";
 import { useOrgMoves } from "./useOrgMoves";
 import { OrgNodeMenu } from "./OrgNodeMenu";
+import { OrgButton } from "./OrgButton";
 
 /** The chart's three readings, in the switch's order. */
 export type OrgChartView = "people" | "everything" | "goals";
@@ -260,6 +263,15 @@ export function OrgChart() {
     return true;
   }, [router, goPanel]);
   const openSession = useCallback((conversationId: string) => goPanel({ kind: "session", id: conversationId }), [goPanel]);
+  // The card of what the drawer shows wears the ring and is brought to the
+  // middle of the free canvas at a readable zoom: a session, or the role whose
+  // seat it is (clicking a role opens its seat's session).
+  const sessionOpen = target.kind === "session" ? target.id : null;
+  const ring = useMemo<OrgRing | null>(() => {
+    if (!sessionOpen || !tree) return null;
+    const seat = tree.roles.find((r) => r.standing?.conversation_id === sessionOpen);
+    return seat ? { kind: "role", id: seat._id } : { kind: "session", id: sessionOpen };
+  }, [sessionOpen, tree]);
   const [measure, size] = useSize();
   const sizeW = useRef(0);
   sizeW.current = size.w;
@@ -275,6 +287,12 @@ export function OrgChart() {
   const setView = useCallback((v: OrgChartView) => useInboxStore.getState().updateClientUI({ org_view: v }), []);
 
   const people = useOrgPeopleView(tree);
+  // Find on the chart: the matches stay lit, Enter walks them.
+  const [findQ, setFindQ] = useState("");
+  const [findStep, setFindStep] = useState(0);
+  const [findWaiting, setFindWaiting] = useState(false);
+  const [findCount, setFindCount] = useState<{ n: number; at: number }>({ n: 0, at: 0 });
+  const onFindCount = useCallback((n: number, at: number) => setFindCount({ n, at }), []);
   const moves = useOrgMoves(tree, people);
   const menu = useContextMenu<OrgLayoutNode>();
   const onNodeContextMenu = useCallback((e: React.MouseEvent, n: OrgLayoutNode) => menu.open(e, n, { force: true }), [menu]);
@@ -286,7 +304,24 @@ export function OrgChart() {
         <h1 className="text-[15px] font-medium" style={{ color: "var(--sol-text)" }}>Org</h1>
         <ViewSwitch value={view} onChange={setView} />
         {view !== "goals" && <ExpandAllToggle on={people.expandAll} onChange={people.setExpandAll} />}
+        {view !== "goals" && <FindBox q={findQ} onQ={(q) => { setFindQ(q); setFindStep(0); }} onStep={(d) => setFindStep((x) => x + d)} count={findCount} showCount={!!findQ || findWaiting} />}
+        {view !== "goals" && (
+          <button
+            type="button"
+            aria-pressed={findWaiting}
+            onClick={() => { setFindWaiting((w) => !w); setFindStep(0); }}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] font-medium transition-colors"
+            style={findWaiting
+              ? { borderColor: ORG_STATE_META.needs_input.color, color: ORG_STATE_META.needs_input.color, background: `color-mix(in srgb, ${ORG_STATE_META.needs_input.color} 12%, transparent)` }
+              : { borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text-muted)" }}
+            data-org-waiting={findWaiting ? "on" : "off"}
+          >
+            <span className="h-[7px] w-[7px] rounded-full" style={{ background: ORG_STATE_META.needs_input.color }} aria-hidden />
+            Needs input
+          </button>
+        )}
         <div className="ml-auto flex items-center gap-2">
+          {view !== "goals" && tree && <TidyButton wsKey={workspaceKeyOf(tree)} />}
           <HireButton tree={tree} />
           {!panelOpen && <PanelToggle tree={tree} onOpen={() => goPanel({ kind: "home" })} />}
         </div>
@@ -305,6 +340,7 @@ export function OrgChart() {
           onOpenChange={openChange}
           onOpenObject={open}
           onOpenSession={openSession}
+          ring={ring}
           people={{
             view: people.view,
             loadingClusters: people.loadingClusters,
@@ -313,6 +349,9 @@ export function OrgChart() {
             onCollapseCluster: people.collapseCluster,
             onReparentRequest: moves.requestMove,
             onDropSessions: moves.dropSessions,
+            onMoveMarked: moves.openPicker,
+            find: { q: findQ, step: findStep, waiting: findWaiting },
+            onFindCount: onFindCount,
             onNodeContextMenu,
             canDrag: moves.canDrag,
             canDropPerson: moves.canDropPerson,
@@ -333,5 +372,53 @@ export function OrgChart() {
         {(n) => <OrgNodeMenu node={n} moves={moves} currentParentOf={people.currentParentOf} onToggleCollapse={people.toggleCollapse} onOpenSession={openSession} onOpenObject={open} />}
       </ContextMenu>
     </div>
+  );
+}
+
+/** Find a card on the chart: what is typed lights its matches; Enter goes to the next, Shift+Enter the previous, Esc clears. */
+function FindBox({ q, onQ, onStep, count, showCount }: { q: string; onQ: (q: string) => void; onStep: (delta: number) => void; count: { n: number; at: number }; showCount: boolean }) {
+  return (
+    <label className="flex h-8 w-[280px] items-center gap-2 rounded-lg border px-2.5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", background: "var(--sol-bg-alt)" }} data-org-find>
+      <Search className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
+      <input
+        value={q}
+        onChange={(e) => onQ(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); onStep(e.shiftKey ? -1 : 1); }
+          if (e.key === "Escape" && q) { e.stopPropagation(); onQ(""); }
+        }}
+        placeholder="Find on the chart"
+        className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none"
+        style={{ color: "var(--sol-text)" }}
+      />
+      {showCount && <span className="shrink-0 text-[11px] tabular-nums" style={{ color: count.n ? "var(--sol-text-dim)" : "var(--sol-red)" }} data-org-find-count>{count.n ? `${count.at + 1}/${count.n}` : "0"}</span>}
+      {showCount && count.n > 1 && (
+        <span className="-mr-1 flex shrink-0 items-center">
+          <button type="button" onClick={(e) => { e.preventDefault(); onStep(-1); }} className="rounded p-0.5 hover:bg-sol-bg-highlight" aria-label="Previous match" data-org-find-prev><ChevronUp className="h-3.5 w-3.5" style={{ color: "var(--sol-text-muted)" }} /></button>
+          <button type="button" onClick={(e) => { e.preventDefault(); onStep(1); }} className="rounded p-0.5 hover:bg-sol-bg-highlight" aria-label="Next match" data-org-find-next><ChevronDown className="h-3.5 w-3.5" style={{ color: "var(--sol-text-muted)" }} /></button>
+        </span>
+      )}
+    </label>
+  );
+}
+
+/** Shown once the person has placed cards: puts every one back in the tree. */
+function TidyButton({ wsKey }: { wsKey: string }) {
+  const moved = useInboxStore((st) => Object.keys(st.clientState.ui?.org_placed?.[wsKey] ?? {}).length);
+  if (!moved) return null;
+  return (
+    <OrgButton
+      size="sm"
+      onClick={() => {
+        const all = useInboxStore.getState().clientState.ui?.org_placed ?? {};
+        const { [wsKey]: _, ...rest } = all;
+        useInboxStore.getState().updateClientUI({ org_placed: rest });
+      }}
+      title={`Put the ${moved} moved card${moved === 1 ? "" : "s"} back in the tree`}
+      data-org-tidy={moved}
+    >
+      <LayoutGrid className="h-3.5 w-3.5" />
+      Tidy
+    </OrgButton>
   );
 }
