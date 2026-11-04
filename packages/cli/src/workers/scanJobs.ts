@@ -66,7 +66,7 @@ async function freshDirs(parent: string, since: number): Promise<string[]> {
 export async function recentScan(job: Extract<ScanJob,{name:'recent'}>): Promise<ScanRow[]> {
   const exists = async (p: string) => { try { await fs.promises.access(p); return true; } catch (error) { if (!scanPathMissing(error)) throw error; return false; } };
   const found = (p: string, agentType: string): ScanRow[] => [{type:'recent',path:p,agentType}];
-  if (!job.codexOnly) for (const dir of await freshDirs(path.join(job.home,'.claude','projects'),job.since)) {
+  if (!job.codexOnly) for (const root of job.claudeRoots ?? [path.join(job.home,'.claude','projects')]) for (const dir of await freshDirs(root,job.since)) {
     const p = path.join(dir,`${job.sessionId}.jsonl`); if (await exists(p)) return found(p,'claude');
   }
   const stack = [{dir:path.join(job.home,'.codex','sessions'),depth:0}];

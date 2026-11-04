@@ -21,6 +21,7 @@ import { USER_PROMPT_HOOK, USER_PROMPT_HOOK_FILE } from "./userPromptHook.js";
 import { CODECAST_STATUSLINE_HOOK, STATUSLINE_HOOK_FILE } from "./statuslineHook.js";
 import { SESSION_TRAILER_HOOK, SESSION_TRAILER_HOOK_FILE } from "./sessionTrailerHook.js";
 import { PERMISSION_HOOK_TIMEOUT_S } from "./permissionHookWait.js";
+import { claudeConfigDirs } from "./claudeConfigDirs.js";
 
 const SCRIPTS: Record<string, string> = {
   "codecast-status.sh": CODECAST_STATUS_HOOK,
@@ -68,8 +69,11 @@ function hooksDir(): string {
   return path.join(process.env.HOME || "", ".claude", "hooks");
 }
 
-function settingsPath(): string {
-  return path.join(process.env.HOME || "", ".claude", "settings.json");
+// Claude Code reads hooks from the settings.json of the config dir a session
+// runs under, so every config dir on the machine (claudeConfigDirs.ts) gets the
+// same entries, all pointing at the one copy of each script in ~/.claude/hooks.
+function settingsPaths(): string[] {
+  return claudeConfigDirs(process.env.HOME || "").map((dir) => path.join(dir, "settings.json"));
 }
 
 // Any config.json shape: the switch and the feature flags are read by key.
@@ -120,21 +124,23 @@ export function syncFeatureHooks(config: HookConfig): void {
 
 export function installHarnessHooks(config: HookConfig = {}, opts: { featuresOnly?: boolean } = {}): void {
   const dir = hooksDir();
-  const settings = settingsPath();
+  const settingsList = settingsPaths();
   for (const hook of HARNESS_HOOKS) {
     if (hook.installedElsewhere) continue;
     if (opts.featuresOnly && !hook.feature) continue;
     const file = path.join(dir, hook.file);
     if (!wanted(hook, config)) {
-      removeHook(hook, dir, settings);
+      removeHook(hook, dir, settingsList);
       continue;
     }
     writeHarnessFile(file, SCRIPTS[hook.file], "hooks", { mode: 0o755, executable: true });
-    if (hook.kind === "statusLine") {
-      installOwnedStatusLine(file, { settingsPath: settings });
-    } else if (hook.events.length > 0) {
-      for (const [timeout, events] of eventsByTimeout(hook.events)) {
-        installOwnedHook(events, file, { timeout, settingsPath: settings });
+    for (const settings of settingsList) {
+      if (hook.kind === "statusLine") {
+        installOwnedStatusLine(file, { settingsPath: settings });
+      } else if (hook.events.length > 0) {
+        for (const [timeout, events] of eventsByTimeout(hook.events)) {
+          installOwnedHook(events, file, { timeout, settingsPath: settings });
+        }
       }
     }
     CODEX_TWINS[hook.file]?.install();
@@ -142,32 +148,36 @@ export function installHarnessHooks(config: HookConfig = {}, opts: { featuresOnl
   if (opts.featuresOnly) return;
   // The prompt hook runs the other jobs itself; an older install registered
   // each of them on UserPromptSubmit too, which ran every job twice.
-  for (const hook of HARNESS_HOOKS) {
-    if (hook.file === USER_PROMPT_HOOK_FILE || hook.kind !== "hook") continue;
-    removeOwnedHook(path.join(dir, hook.file), { settingsPath: settings, events: ["UserPromptSubmit"] });
+  for (const settings of settingsList) {
+    for (const hook of HARNESS_HOOKS) {
+      if (hook.file === USER_PROMPT_HOOK_FILE || hook.kind !== "hook") continue;
+      removeOwnedHook(path.join(dir, hook.file), { settingsPath: settings, events: ["UserPromptSubmit"] });
+    }
   }
   const retired = path.join(dir, RETIRED_SHELL_CHANGES);
   writeHarnessFile(retired, "#!/bin/sh\nexit 0\n", "hooks", { mode: 0o755, executable: true });
-  removeOwnedHook(retired, { settingsPath: settings, events: RETIRED_SHELL_CHANGES_EVENTS });
+  for (const settings of settingsList) removeOwnedHook(retired, { settingsPath: settings, events: RETIRED_SHELL_CHANGES_EVENTS });
 }
 
 /** Take every codecast hook out of settings.json and delete the scripts.
  *  Hooks the user wrote are untouched. */
 export function removeHarnessHooks(): void {
   const dir = hooksDir();
-  const settings = settingsPath();
+  const settingsList = settingsPaths();
   for (const hook of HARNESS_HOOKS) {
-    if (!hook.installedElsewhere) removeHook(hook, dir, settings);
+    if (!hook.installedElsewhere) removeHook(hook, dir, settingsList);
   }
   const retired = path.join(dir, RETIRED_SHELL_CHANGES);
-  removeOwnedHook(retired, { settingsPath: settings });
+  for (const settings of settingsList) removeOwnedHook(retired, { settingsPath: settings });
   removeHarnessFile(retired, "hooks");
 }
 
-function removeHook(hook: HarnessHook, dir: string, settings: string): void {
+function removeHook(hook: HarnessHook, dir: string, settingsList: string[]): void {
   const file = path.join(dir, hook.file);
-  if (hook.kind === "statusLine") removeOwnedStatusLine({ settingsPath: settings });
-  else removeOwnedHook(file, { settingsPath: settings });
+  for (const settings of settingsList) {
+    if (hook.kind === "statusLine") removeOwnedStatusLine({ settingsPath: settings });
+    else removeOwnedHook(file, { settingsPath: settings });
+  }
   removeHarnessFile(file, "hooks");
   CODEX_TWINS[hook.file]?.remove();
 }

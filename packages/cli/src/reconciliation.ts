@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { walkFiles } from "./fsWalk.js";
+import { claudeProjectsDirs } from "./claudeConfigDirs.js";
 import { extractCwd, parseSessionFile } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { setPosition } from "./positionTracker.js";
@@ -133,8 +134,9 @@ export async function performReconciliation(
     errors: [],
   };
 
-  const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  if (!fs.existsSync(claudeProjectsDir)) {
+  // Every Claude config dir's projects tree (claudeConfigDirs.ts).
+  const claudeProjectsRoots = claudeProjectsDirs().filter((dir) => fs.existsSync(dir));
+  if (claudeProjectsRoots.length === 0) {
     return result;
   }
 
@@ -148,15 +150,17 @@ export async function performReconciliation(
   // out-of-scope transcript is correctly absent from the backend and must never
   // be "repaired" into a zombie ledger entry. Async walk: the tree holds tens of
   // thousands of files, and a sync scan pinned the loop for the whole read.
-  await walkFiles(
-    claudeProjectsDir,
-    { observeCwd: true, policy: { dirs: "claudeWatch", files: "reconciliation" }, dirFilter: watchDirFilter, fileFilter: (rel) => { const name = path.basename(rel); return name.endsWith(".jsonl") && !name.startsWith("agent-"); } },
-    (f) => {
-      if (now - f.stat.mtimeMs >= maxAgeMs) return;
-      if (!isTranscriptFileInSyncScope(f.path, config, f.cwd)) return;
-      recentFiles.push({ path: f.path, mtime: f.stat.mtimeMs });
-    },
-  );
+  for (const root of claudeProjectsRoots) {
+    await walkFiles(
+      root,
+      { observeCwd: true, policy: { dirs: "claudeWatch", files: "reconciliation" }, dirFilter: watchDirFilter, fileFilter: (rel) => { const name = path.basename(rel); return name.endsWith(".jsonl") && !name.startsWith("agent-"); } },
+      (f) => {
+        if (now - f.stat.mtimeMs >= maxAgeMs) return;
+        if (!isTranscriptFileInSyncScope(f.path, config, f.cwd)) return;
+        recentFiles.push({ path: f.path, mtime: f.stat.mtimeMs });
+      },
+    );
+  }
 
   // Sort by most recently modified
   recentFiles.sort((a, b) => b.mtime - a.mtime);

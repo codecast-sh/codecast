@@ -7,7 +7,7 @@ export type ScanJob =
   | { name: 'walk'; root: string; policy: ScanPolicy; maxDepth?: number; stats: boolean; excludeCodexAppServer?: boolean; observeCwd?: boolean; requireComplete?: boolean }
   | { name: 'inventory'; home: string; projectPath?: string }
   | { name: 'roots'; home: string; started: string[] }
-  | { name: 'recent'; home: string; sessionId: string; since: number; codexOnly: boolean; complete?: boolean }
+  | { name: 'recent'; home: string; sessionId: string; since: number; codexOnly: boolean; complete?: boolean; claudeRoots?: string[] }
   | { name: 'cursorDatabases'; paths: string[] }
   | { name: 'cursorWorkspaces'; root: string }
   | { name: 'cursorWorkspace'; home: string; root: string; sessionId: string }
@@ -29,7 +29,7 @@ export function validScanJob(v: unknown): v is ScanJob {
   if (v.name === 'cursorWorkspace') return keys(v,['name','home','root','sessionId']) && text(v.root) && typeof v.sessionId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(v.sessionId);
   if (v.name === 'inventory') return keys(v, ['name','home','projectPath']) && (v.projectPath === undefined || text(v.projectPath));
   if (v.name === 'roots') return keys(v, ['name','home','started']) && Array.isArray(v.started) && v.started.length <= 300 && v.started.every(text);
-  if (v.name === 'recent') return keys(v, ['name','home','sessionId','since','codexOnly','complete']) && typeof v.sessionId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(v.sessionId) && Number.isFinite(v.since) && typeof v.codexOnly === 'boolean' && (v.complete === undefined || typeof v.complete === 'boolean');
+  if (v.name === 'recent') return keys(v, ['name','home','sessionId','since','codexOnly','complete','claudeRoots']) && (v.claudeRoots === undefined || (Array.isArray(v.claudeRoots) && v.claudeRoots.length <= 64 && v.claudeRoots.every(text))) && typeof v.sessionId === 'string' && /^[A-Za-z0-9_-]{1,256}$/.test(v.sessionId) && Number.isFinite(v.since) && typeof v.codexOnly === 'boolean' && (v.complete === undefined || typeof v.complete === 'boolean');
   return v.name === 'manifests' && keys(v, ['name','home']);
 }
 export function validScanPayload(v: unknown): v is ScanPayload {

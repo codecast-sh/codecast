@@ -7,6 +7,7 @@ import { CODECAST_HOOK_SCRIPTS, STATUSLINE_HOOK_SCRIPT } from "./codecastOwned.j
 import { installHarnessHooks, removeHarnessHooks, syncHarnessHooks } from "./harnessHooksInstall.js";
 import { readHarnessChanges, withHarnessCause } from "./harness.js";
 import { PERMISSION_HOOK_TIMEOUT_S } from "./permissionHookWait.js";
+import { resetClaudeConfigDirsCache } from "./claudeConfigDirs.js";
 
 let home: string;
 let prevHome: string | undefined;
@@ -137,6 +138,41 @@ describe("a hook that belongs to an Agent Features entry", () => {
     expect(commandsFor(readSettings(), "SessionStart")).not.toContain(claudeHook);
     expect(commandsFor(JSON.parse(fs.readFileSync(codexHooks, "utf-8")), "SessionStart")).toEqual([]);
     expect(fs.existsSync(codexHook)).toBe(false);
+  });
+});
+
+// Claude Code reads hooks from the config dir a session runs under, so a
+// session started with CLAUDE_CONFIG_DIR=~/.claude-account-3 never ran a hook
+// that lived only in ~/.claude/settings.json.
+describe("other Claude config dirs", () => {
+  test("get the same entries, pointing at the one copy of each script, and lose them on removal", () => {
+    const other = path.join(home, ".claude-account-3");
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, ".claude.json"), "{}");
+    fs.writeFileSync(path.join(other, "settings.json"), JSON.stringify({ model: "opus", hooks: { Stop: [{ hooks: [{ type: "command", command: "/usr/local/bin/mine.sh" }] }] } }));
+    resetClaudeConfigDirsCache();
+    try {
+      installHarnessHooks({});
+      const theirs = JSON.parse(fs.readFileSync(path.join(other, "settings.json"), "utf-8"));
+      const ours = readSettings();
+      const events = Object.keys(ours.hooks);
+      expect(events.length).toBeGreaterThan(0);
+      for (const e of events) {
+        for (const c of commandsFor(ours, e)) expect(commandsFor(theirs, e)).toContain(c);
+      }
+      expect(commandsFor(theirs, "Stop")).toContain("/usr/local/bin/mine.sh");
+      expect(theirs.statusLine).toEqual(ours.statusLine);
+      expect(fs.existsSync(path.join(other, "hooks"))).toBe(false);
+      expect(theirs.model).toBe("opus");
+
+      removeHarnessHooks();
+      const after = JSON.parse(fs.readFileSync(path.join(other, "settings.json"), "utf-8"));
+      expect(commandsFor(after, "Stop")).toEqual(["/usr/local/bin/mine.sh"]);
+      expect(commandsFor(after, "SessionStart")).toEqual([]);
+      expect(after.model).toBe("opus");
+    } finally {
+      resetClaudeConfigDirsCache();
+    }
   });
 });
 

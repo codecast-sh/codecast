@@ -3,6 +3,7 @@ import { LOCAL_AGENT_CLIENTS } from "@codecast/shared/contracts";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { claudeProjectsDirs } from "./claudeConfigDirs.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { extractCwd } from "./parser.js";
 import { execSync } from "./proc.js";
@@ -665,21 +666,22 @@ export function discoverLiveProcesses(): LiveProcess[] {
     } catch {}
     if (!cwd) return null;
 
-    const claudeDir = path.join(os.homedir(), ".claude", "projects");
-    if (!fs.existsSync(claudeDir)) return null;
     let best: string | null = null;
     let bestMtime = 0;
-    for (const dir of fs.readdirSync(claudeDir, { withFileTypes: true })) {
-      if (!dir.isDirectory()) continue;
-      for (const f of fs.readdirSync(path.join(claudeDir, dir.name)).filter(f => f.endsWith(".jsonl"))) {
-        const fp = path.join(claudeDir, dir.name, f);
-        try {
-          const stat = fs.statSync(fp);
-          if (stat.mtimeMs <= bestMtime || Date.now() - stat.mtimeMs > 86_400_000) continue;
-          const head = fs.readFileSync(fp, "utf-8").slice(0, 5000);
-          const headCwd = extractCwd(head, { quiet: true });
-          if (headCwd && (headCwd === cwd || cwd!.startsWith(headCwd + "/"))) { bestMtime = stat.mtimeMs; best = path.basename(fp, ".jsonl"); }
-        } catch {}
+    for (const claudeDir of claudeProjectsDirs()) {
+      if (!fs.existsSync(claudeDir)) continue;
+      for (const dir of fs.readdirSync(claudeDir, { withFileTypes: true })) {
+        if (!dir.isDirectory()) continue;
+        for (const f of fs.readdirSync(path.join(claudeDir, dir.name)).filter(f => f.endsWith(".jsonl"))) {
+          const fp = path.join(claudeDir, dir.name, f);
+          try {
+            const stat = fs.statSync(fp);
+            if (stat.mtimeMs <= bestMtime || Date.now() - stat.mtimeMs > 86_400_000) continue;
+            const head = fs.readFileSync(fp, "utf-8").slice(0, 5000);
+            const headCwd = extractCwd(head, { quiet: true });
+            if (headCwd && (headCwd === cwd || cwd!.startsWith(headCwd + "/"))) { bestMtime = stat.mtimeMs; best = path.basename(fp, ".jsonl"); }
+          } catch {}
+        }
       }
     }
     return best;
