@@ -343,6 +343,32 @@ test("only the asking session's owner approves an Ask first read; a teammate vie
   expect((await read(t, ["stripe-live"])).secrets[0].payload).toEqual({ value: STRIPE });
 });
 
+test("a session run by a bot account is approved by its owner, the person the card waits on; a teammate is still refused", async () => {
+  const { t, as, ana, ben, acme } = await seed();
+  const BOT_TOKEN = "d".repeat(64);
+  await t.run(async (ctx: any) => {
+    const now = Date.now();
+    const bot = await ctx.db.insert("users", { name: "Line bot", is_bot: true } as any);
+    await ctx.db.insert("team_memberships", { user_id: bot, team_id: acme, role: "member", joined_at: now } as any);
+    await ctx.db.insert("api_tokens", { user_id: bot, token_hash: await hashToken(BOT_TOKEN), name: "cli", created_at: now, last_used_at: now } as any);
+    const conv = await ctx.db.insert("conversations", {
+      user_id: bot, owner_user_id: ana, team_id: acme, agent_type: "claude_code", session_id: "sess-bot-1", short_id: "jx7bot1", title: "Key vault migration",
+      started_at: now, updated_at: now, message_count: 3, is_private: false, status: "active", project_path: "/repo",
+    } as any);
+    await ctx.db.insert("session_owners", { conversation_id: conv, user_id: ana, added_by: ana, added_at: now, seen_at: now } as any);
+  });
+  await as(ana).action(api.secrets.create, { name: "zz-probe", kind: "key", payload: { value: STRIPE }, team_id: acme });
+  await as(ana).mutation(api.secrets.setAskFirst, { ref: "zz-probe", ask_first: true });
+  const botRead = () => t.action(api.secrets.cliRead, { api_token: BOT_TOKEN, refs: ["zz-probe"], conversation: "jx7bot1", purpose: "get" });
+  const held = await botRead();
+  expect(held.needs_approval.secret).toBe("zz-probe");
+
+  await expect(answer(t, as, ben, held.needs_approval.decision, 0)).rejects.toThrow(/Only the person whose session asked/);
+  await answer(t, as, ana, held.needs_approval.decision, 0);
+  expect(await t.run(async (ctx: any) => (await ctx.db.query("secret_approvals").first()).status)).toBe("approved");
+  expect((await botRead()).secrets[0].payload).toEqual({ value: STRIPE });
+});
+
 test("two partial login rotates at once keep both edits, and two fills at once fill once", async () => {
   const { t, as, ana, acme } = await seed();
   await as(ana).action(api.secrets.create, { name: "db", kind: "login", payload: { username: "admin", password: "first-pass-123" }, team_id: acme });

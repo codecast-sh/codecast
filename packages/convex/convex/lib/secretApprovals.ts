@@ -6,6 +6,7 @@
 import { APPROVE_FOR_SESSION } from "@codecast/shared/contracts/secrets";
 import type { Doc, Id } from "../_generated/dataModel";
 import { consumePresence, presenceRefusal } from "./presence";
+import { isSessionOwner } from "../sessionOwners";
 
 type Ctx = { db: any };
 
@@ -44,16 +45,18 @@ export async function recordSecretEvent(
 
 /**
  * Whether `userId` may grant an Ask first approval: only the person whose
- * session asked (the conversation's owner, the only one who reads under it),
- * and for a personal secret only when that is also the secret's owner. A
- * teammate who can view a team-shared session cannot open someone's secret
- * to it.
+ * session asked, meaning the account that runs it or one of its owners (the
+ * people its decisions wait on: a session a bot account runs is answered by
+ * its owner), and for a personal secret only when that is also the secret's
+ * owner. A teammate who can view a team-shared session cannot open someone's
+ * secret to it.
  */
 async function mayApprove(ctx: Ctx, approval: Doc<"secret_approvals">, userId: Id<"users"> | undefined): Promise<boolean> {
   if (!userId) return false;
+  if (approval.workspace.startsWith("user:") && approval.workspace !== `user:${userId}`) return false;
   const conversation = await ctx.db.get(approval.conversation_id);
-  if (!conversation || String(conversation.user_id) !== String(userId)) return false;
-  return !approval.workspace.startsWith("user:") || approval.workspace === `user:${userId}`;
+  if (!conversation) return false;
+  return String(conversation.user_id) === String(userId) || (await isSessionOwner(ctx, conversation._id, userId));
 }
 
 /** The pending Ask first approval a decision was filed for, or null: the decision is the Vault's, not its asker's to reshape. */
