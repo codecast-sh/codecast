@@ -72,6 +72,12 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
   metric_recovered: derived("metric_recovered"),
   deploy: derived("deploy"),
 
+  // ── Derived deploy events (docs/architecture/deploys.md DP13) ──
+  // Fired when a deploy (dp-N) of any target goes live or fails, whoever sent
+  // it; `source` names the target (backend, web, cli).
+  deploy_live: derived("deploy_live"),
+  deploy_failed: derived("deploy_failed"),
+
   // ── Derived call events ──
   // Fired once per call when its record is ready to read: the summary and
   // action items written, or for a call too short to summarize, its words
@@ -86,6 +92,9 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
  * shorthand, because `--on` arms a trigger on any session and only a role's
  * own trigger is ever fired with it.
  */
+export const DEPLOY_LIVE_EVENT = "deploy_live";
+export const DEPLOY_FAILED_EVENT = "deploy_failed";
+
 export const SESSION_NEEDS_INPUT_EVENT = "session_needs_input";
 
 /**
@@ -134,6 +143,8 @@ export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   metric_alert: "metric crossed its line",
   metric_recovered: "metric back inside its line",
   deploy: "deploy",
+  deploy_live: "a deploy went live",
+  deploy_failed: "a deploy failed",
   call_ended: "call ended",
   [SESSION_NEEDS_INPUT_EVENT]: "a session under the role needs input",
   [ORG_AREA_CHANGE_EVENT]: "an area of the company changed and it lasted",

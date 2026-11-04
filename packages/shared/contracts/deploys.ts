@@ -52,7 +52,7 @@ export type DeployCarry = {
   how: DeployCarriedHow;
 };
 
-export type DeployCommit = { sha: string; subject: string; author?: string };
+export type DeployCommit = { sha: string; subject: string; author?: string; conversation_id?: string };
 
 export type DeployStartedBy = { kind: "person" | "role" | "line" | "source" | "cli"; name: string; user_id?: string; role_id?: string };
 
@@ -150,6 +150,11 @@ export type DeployView = {
   commits: DeployCommit[];
   carries: Array<DeployCarry & { task_short_id: string | null; task_title: string | null; decision_short_id: string | null }>;
   note: string | null;
+  /** What a deploy of a target asked for (deploys.md DP13): main's head, an earlier sha again, or the rollback; null for a line's deploy or a marker. */
+  action?: "deploy" | "redeploy" | "rollback" | null;
+  rollback_of?: string | null;
+  /** Files under its sources that went out uncommitted with the sha. */
+  dirty?: number | null;
   created_at: number;
   live_at: number | null;
   finished_at: number | null;

@@ -10,6 +10,10 @@ crons.interval("check push receipts", { minutes: 30 }, (internal as any).pushRec
 
 // The session lifecycle trail keeps 60 days (conversationEvents.ts).
 crons.interval("prune conversation events", { hours: 6 }, (internal as any).conversationEvents.prune, {});
+// Weekly card (weeklyCards.ts): once a person's local Monday begins, last
+// week's card is built and a quiet bell row says it is ready. Reads only the
+// people who turned it on.
+crons.interval("weekly card sweep", { hours: 1 }, (internal as any).weeklyCards.mondaySweep, {});
 
 // Summarize hosted conversations' history past the replayed window
 // (assistant/longHistory.ts): bounded by its own deadline and spend caps.
@@ -420,10 +424,15 @@ crons.interval("start the line for scoped tasks", { minutes: 2 }, (internal as a
 // grant asks for a deploy of its project's waiting fixes, within the grant's
 // daily limit. Reads only roles with a live deploy grant.
 crons.interval("deploy waiting fixes as the line's role", { minutes: 10 }, (internal as any).deploys.autoDeploy, {});
+// Deploy targets (deploys.md DP11, DP13): read each json live reader (a release's latest.json), and send the targets that go out by themselves when CI on main is green.
+crons.interval("read deploy targets' live readers", { minutes: 5 }, (internal as any).deployTargets.pollLiveReaders, {});
+crons.interval("deploy targets that go out on green CI", { minutes: 10 }, (internal as any).deployTargets.autoDeployTargets, {});
 
 // Promotions a source's hourly cap held back (ingest.promoteDue): filed as the
 // window has room, so a burst of new groups reaches the line late, never not at all.
 crons.interval("file held-back promotions", { minutes: 10 }, (internal as any).ingest.promoteDue, {});
+// Exact issue counts per source and status (ingest.recountGroups): only sources that took something since their last count are read.
+crons.interval("recount ops issue statuses", { minutes: 30 }, (internal as any).ingest.recountGroups, {});
 
 // A trial project that dispatches (lineTrial.dispatch) starts its own runs:
 // the problems with the most live findings first, three at a time at most,

@@ -64,7 +64,34 @@ function formatOutcome(r: ShipOutcome): string {
   return out.join("\n");
 }
 
-export async function runCheckoutCommand(opts: CheckoutOptions): Promise<void> {
+/**
+ * The pass as codecast records it (deploys.md DP11): its commits with the session that wrote each, the groups it
+ * held back, each deploy step's result. The server records a deploy for every step that names a target.
+ */
+export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string, startedAt: number, deviceId?: string): Record<string, unknown> {
+  const sessions = new Map(plan.groups.map((g) => [g.id, g.session] as const));
+  return {
+    repository,
+    ...(deviceId ? { device_id: deviceId } : {}),
+    ok: r.ok,
+    stage: r.stage,
+    ...(r.reason ? { reason: r.reason } : {}),
+    ...(r.base ? { base: r.base } : {}),
+    ...(r.tip ? { tip: r.tip } : {}),
+    ...(r.pushed ? { pushed: r.pushed } : {}),
+    ...(r.pr ? { pr_url: r.pr } : {}),
+    commits: r.commits.map((c) => {
+      const s = sessions.get(c.group);
+      return { sha: c.sha, message: c.message, files: c.files, ...(s?.id ? { session_id: s.id } : {}), ...(s?.conversation_id ? { conversation_id: s.conversation_id } : {}) };
+    }),
+    held: r.held.map((h) => ({ group: h.group, paths: h.paths.length, ...(h.note ? { note: h.note } : {}) })),
+    deploys: r.deploys.map((d) => ({ name: d.name, stage: d.stage, ok: d.ok, ...(d.target ? { target: d.target } : {}), ...(d.dirty ? { dirty: d.dirty } : {}), ...(d.output ? { output: d.output.slice(-3000) } : {}) })),
+    started_at: startedAt,
+  };
+}
+
+export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: Record<string, unknown>) => Promise<any>): Promise<void> {
+  const startedAt = Date.now();
   const root = (await git(process.cwd(), ["rev-parse", "--show-toplevel"]));
   const gitDir = await git(root, ["rev-parse", "--absolute-git-dir"]);
   const file = typeof opts.plan === "string" ? path.resolve(opts.plan) : planPath(gitDir);
@@ -85,6 +112,20 @@ export async function runCheckoutCommand(opts: CheckoutOptions): Promise<void> {
   }
 
   const result = await runPlan(plan, { noCheck: opts.check === false, noPush: opts.push === false, noDeploy: opts.deploy === false, log });
+  // Recorded whatever the outcome, so a stopped ship is as visible as a shipped one; a record that fails warns and never fails the ship.
+  if (record && (result.commits.length || result.deploys.length || !result.ok)) {
+    try {
+      const { readLocalGitContext } = await import("../prCommand.js");
+      const repository = readLocalGitContext(root).repository;
+      const { deviceId } = await import("../remote/device.js");
+      if (repository) {
+        const recorded = await record(shipPassBody(plan, result, repository, startedAt, deviceId()));
+        for (const d of recorded?.deploys ?? []) if (d.deploy) log(`recorded ${d.name} as ${d.deploy}`);
+      }
+    } catch (err) {
+      log(`warning: the ship pass was not recorded in codecast: ${String((err as Error)?.message ?? err).slice(0, 300)}`);
+    }
+  }
   if (result.ok && result.pushed && file === planPath(gitDir)) fs.rmSync(file, { force: true });
   console.log(opts.json ? JSON.stringify(result, null, 2) : formatOutcome(result));
   if (!result.ok) process.exitCode = 1;

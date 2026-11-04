@@ -172,6 +172,14 @@ else
   git push origin main
 fi
 
+# The desktop target's deploy in codecast (docs/architecture/deploys.md DP11),
+# finishing the deploy codecast asked for when it ran this. Non-fatal. With
+# --no-git the caller commits, so it marks (scripts/deploy-all.sh).
+if [ "$NO_GIT" != "1" ]; then
+  cast ship mark --surface desktop --sha "$(git rev-parse HEAD)" --version "$NEW_VERSION" ${CAST_DEPLOY_ID:+--deploy "$CAST_DEPLOY_ID"} \
+    || echo "  desktop deploy not recorded in codecast (non-fatal)"
+fi
+
 echo ""
 echo "=== Desktop v$NEW_VERSION released ==="
 echo "  https://dl.codecast.sh/desktop/latest-mac.yml"

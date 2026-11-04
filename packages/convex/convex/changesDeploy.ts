@@ -84,6 +84,10 @@ export const markDeploy = mutation({
     sha: v.string(),
     version: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
+    // Files under the surface's sources that went out uncommitted with the sha.
+    dirty: v.optional(v.number()),
+    // The deploy (dp-N) this mark finishes: a deploy codecast asked for, whose path now says what went out.
+    deploy: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -102,7 +106,8 @@ export const markDeploy = mutation({
     // the same commit): one marker. A rollback to an earlier sha is a change
     // of what runs, so it gets a marker of its own.
     const previous = await latestDeploy(ctx, teamId, repository, surface);
-    if (previous?.sha === sha) {
+    // A deploy of the same commit with uncommitted files is a different deploy.
+    if (previous?.sha === sha && !args.deploy && !args.dirty) {
       return { ok: true as const, event_id: previous._id, team_id: teamId, repository, surface, sha, version: version ?? null };
     }
 
@@ -132,6 +137,8 @@ export const markDeploy = mutation({
       repository,
       source: "cast ship mark",
       event_id: eventId,
+      ...(args.dirty ? { dirty: args.dirty } : {}),
+      ...(args.deploy ? { deploy: args.deploy } : {}),
       started_by: { kind: "person", name: user?.name ?? user?.github_username ?? "someone", user_id: userId },
       at: now,
     });

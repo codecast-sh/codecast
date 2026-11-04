@@ -29,6 +29,8 @@ export type MarkOptions = {
   version?: string;
   repo?: string;
   team?: string;
+  dirty?: string;
+  deploy?: string;
   dryRun?: boolean;
   json?: boolean;
 };
@@ -41,12 +43,18 @@ async function readCheckout(cwd: string = process.cwd()): Promise<LocalCheckout>
 }
 
 /** The body `/cli/changes/mark-deploy` takes; flags win over the checkout. */
-export function markBody(options: MarkOptions, local: LocalCheckout): { repository: string; surface: string; sha: string; version?: string } {
+export function markBody(options: MarkOptions, local: LocalCheckout): { repository: string; surface: string; sha: string; version?: string; dirty?: number; deploy?: string } {
   const repository = options.repo ?? local.repository;
   if (!repository) throw new Error("No GitHub repository here: run inside a checkout with a GitHub origin, or pass --repo <owner/name>.");
   const sha = options.sha ?? local.head;
   if (!sha) throw new Error("No commit to mark: run inside a git checkout, or pass --sha <sha>.");
-  return { repository, surface: options.surface, sha, ...(options.version ? { version: options.version } : {}) };
+  const dirty = options.dirty ? parseInt(options.dirty, 10) : 0;
+  return {
+    repository, surface: options.surface, sha,
+    ...(options.version ? { version: options.version } : {}),
+    ...(dirty > 0 ? { dirty } : {}),
+    ...(options.deploy ? { deploy: options.deploy } : {}),
+  };
 }
 
 /** The plan as the popover says it: what, where, then each step. */
@@ -59,7 +67,7 @@ export function formatShipPlan(plan: ShipPlan): string {
   return out.join("\n");
 }
 
-export type RunOptions = { task?: string; session?: string; pr?: string | boolean; repo?: string; dryRun?: boolean; json?: boolean };
+export type RunOptions = { task?: string; session?: string; pr?: string | boolean; repo?: string; branch?: string; dryRun?: boolean; json?: boolean };
 
 export function registerShipCommand(program: Command, deps: PublishDeps & { checkout?: () => Promise<LocalCheckout> }): void {
   const ship = program.command("ship").description(commandGroup("ship").description);
@@ -70,6 +78,7 @@ export function registerShipCommand(program: Command, deps: PublishDeps & { chec
     .option("--session <id>", "The session whose diff ships")
     .option("--pr [ref]", "The pull request to ship (this checkout's branch when no ref); Ship on a PR merges once green")
     .option("--repo <owner/name>", "Repository to resolve --pr in")
+    .option("--branch <name>", "The branch that already holds the change as committed (a flow run's frozen change): it ships as it is")
     .option("--dry-run", "Print the plan without starting it")
     .option("--json", "Machine-readable output")
     .action(async (options: RunOptions) => {
@@ -86,6 +95,7 @@ export function registerShipCommand(program: Command, deps: PublishDeps & { chec
         session: options.session,
         pr_locator,
         requester_session: deps.detectCurrentSessionId() ?? undefined,
+        branch: options.branch,
         dry_run: options.dryRun || undefined,
       });
       if (result?.error) {
@@ -133,7 +143,7 @@ mid-turn, what it last said), hold what is half done, fix the messages, then
     .action(async (options: import("./land/shipCheckoutCli.js").CheckoutOptions) => {
       const { runCheckoutCommand } = await import("./land/shipCheckoutCli.js");
       try {
-        await runCheckoutCommand(options);
+        await runCheckoutCommand(options, (body) => apiPost(deps, "/cli/deploys/ship-pass", body, { exitOnError: false }));
       } catch (err) {
         console.error(String((err as Error)?.message ?? err));
         process.exit(1);
@@ -147,6 +157,8 @@ mid-turn, what it last said), hold what is half done, fix the messages, then
     .option("--version <version>", "The version it shipped as, when it has one")
     .option("--repo <owner/name>", "The repository (default: this checkout's GitHub origin)")
     .option("--team <name|id>", "The team, when more than one of yours works on the repository")
+    .option("--dirty <n>", "Files under the surface's sources that went out uncommitted with the sha")
+    .option("--deploy <dp-N>", "The deploy this finishes: one codecast asked for, whose path now says what went out")
     .option("--dry-run", "Print the marker without recording it")
     .option("--json", "Machine-readable output")
     .action(async (options: MarkOptions) => {

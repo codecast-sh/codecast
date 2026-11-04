@@ -312,7 +312,10 @@ export interface ShipOutcome {
   held: Array<{ group: string; paths: string[]; note?: string }>;
   level?: LevelResult;
   check?: { command: string; ok: boolean; ignored?: string[]; output?: string };
-  deploys: Array<{ name: string; stage: string; ok: boolean; output?: string }>;
+  /** Each deploy step's result; a step that names a target records a deploy of it (deploys.md DP11). */
+  deploys: Array<{ name: string; stage: string; ok: boolean; output?: string; target?: string; dirty?: number }>;
+  /** The upstream commit the pass replayed onto. */
+  base?: string;
   import_gaps?: string[];
   pr?: string;
 }
@@ -377,8 +380,15 @@ function globMatch(pattern: string, file: string): boolean {
   return re.test(file);
 }
 
+/** The steps a ship runs: those with a command, at a ship's stage, whose paths the shipped commits touch. */
 export function deploysFor(steps: ShipDeployStep[], shipped: string[]): ShipDeployStep[] {
-  return steps.filter((s) => !s.when.length || shipped.some((p) => s.when.some((g) => globMatch(g, p))));
+  return steps.filter((s) => s.stage !== "press" && s.run.trim() && (!s.when.length || shipped.some((p) => s.when.some((g) => globMatch(g, p)))));
+}
+
+/** Files left uncommitted in the checkout under a step's paths: they went out with the deploy too. */
+async function dirtyUnder(root: string, when: string[]): Promise<number> {
+  const listed = ((await gitTry(root, ["status", "--porcelain", "--untracked-files=no"])) ?? "").split("\n").filter(Boolean).map((l) => l.slice(3).split(" -> ").pop()!);
+  return listed.filter((p) => !when.length || when.some((g) => globMatch(g, p))).length;
 }
 
 const lockFile = (gitDir: string) => path.join(gitDir, "codecast", "ship.lock");
@@ -448,6 +458,7 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
     let tip = ours.tip;
     out.tip = tip;
     const upstreamSha = await git(root, ["rev-parse", upstream]);
+    out.base = upstreamSha;
     if (tip === upstreamSha) {
       log("nothing to ship: upstream already holds everything");
       if (spec.mode === "direct") out.level = await levelCheckout(root, tip, { rewritten: true });
@@ -520,8 +531,9 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
     for (const step of steps.filter((s) => s.stage === "before_push")) {
       out.stage = "deploy";
       log(`deploying ${step.name}: ${step.run}`);
+      const dirty = step.target ? await dirtyUnder(root, step.when) : 0;
       const r = await exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip });
-      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(r.code ? { output: r.output.slice(-6000) } : {}) });
+      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(dirty ? { dirty } : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
       if (r.code !== 0) return fail("deploy", `${step.name} failed before the push; nothing was pushed`);
     }
 
@@ -554,7 +566,7 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
       out.stage = "deploy";
       log(`deploying ${step.name}: ${step.run}`);
       const r = await exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip });
-      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(r.code ? { output: r.output.slice(-6000) } : {}) });
+      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
       if (r.code !== 0) return { ...out, ok: false, stage: "deploy", reason: `pushed, but ${step.name} failed` };
     }
     return { ...out, ok: true, stage: "done" };

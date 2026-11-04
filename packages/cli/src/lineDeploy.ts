@@ -12,6 +12,8 @@
 import { spawn, spawnSync } from "./proc.js";
 import { deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { resolveCastInvocation } from "./castInvocation.js";
+import { targetFromLineDeploy, targetFromShipEntry, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
+import type { ShipDeployStep } from "./workspace/types.js";
 
 export type DeployStageReply = {
   project: { _id: string; short_id: string | null; title: string | null };
@@ -353,4 +355,88 @@ function checksVerdict(gh: (a: string[]) => { code: number; out: string }, repo:
 function ghCli(args: string[]): { code: number; out: string } {
   const r = spawnSync("gh", args, { encoding: "utf-8", timeout: 60_000 });
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.status === 0 ? "" : r.stderr ?? ""}` };
+}
+
+// ── any deploy target (deploys.md DP10 to DP13) ──────────────────────────────
+
+/** This checkout's deploy targets: each [[ship.deploy]] entry that names one, then the line profile's [line.deploy]. */
+export function targetsOf(root: string, read: { ship: () => ShipDeployStep[]; line: () => { command?: string | null; target?: string | null } | null | undefined }): DeployTarget[] {
+  const out: DeployTarget[] = [];
+  for (const step of read.ship()) {
+    const t = targetFromShipEntry(step);
+    if (t) out.push(t);
+  }
+  const line = targetFromLineDeploy(read.line());
+  if (line && !out.some((t) => t.name === line.name)) out.push(line);
+  return out;
+}
+
+/** The checkout's targets, read from its files. */
+export async function checkoutTargets(root: string): Promise<DeployTarget[]> {
+  const { shipSpec } = await import("./land/shipCheckout.js");
+  const { loadLineProfile } = await import("./lineProfile.js");
+  return targetsOf(root, { ship: () => shipSpec(root).deploy, line: () => { try { return loadLineProfile(root).profile.deploy; } catch { return null; } } });
+}
+
+/**
+ * The step commands a deploy of a target runs (DP13): the send is its command (its rollback for a rollback), and a
+ * target codecast reads from elsewhere (GitHub, a release's latest.json) has a live step that waits until that
+ * reader records the deploy's sha.
+ */
+export function targetDeployProfile(t: DeployTarget, action: "deploy" | "redeploy" | "rollback"): Partial<LineDeployProfile> {
+  const command = action === "rollback" ? t.rollback ?? null : t.command ?? null;
+  return { command, target: t.name, trigger: "person", ...(t.live.kind !== "marker" ? { live: "cast line deploy await-live $deploy" } : {}) };
+}
+
+/**
+ * The step commands for a deploy: a target's when codecast asked for a deploy of one (the deploy names an action),
+ * else the line profile's [line.deploy]. The checkout's files are the authority for every command.
+ */
+export async function deployProfileFor(d: { target: string; action?: string | null }, root: string): Promise<{ profile: Partial<LineDeployProfile> | null; root: string; why?: string }> {
+  if (d.action) {
+    const t = (await checkoutTargets(root)).find((x) => x.name === d.target);
+    if (!t) return { profile: null, root, why: `No target ${d.target} in this checkout's .codecast/workspace.toml` };
+    return { profile: targetDeployProfile(t, d.action as "deploy" | "redeploy" | "rollback"), root };
+  }
+  const { loadLineProfile } = await import("./lineProfile.js");
+  const { profile, root: profileRoot } = loadLineProfile(root);
+  return { profile: profile.deploy ?? null, root: profileRoot ?? root, ...(profile.deploy?.command ? {} : { why: "No [line.deploy] command in this checkout's .codecast/line.toml" }) };
+}
+
+/** The live step of a target codecast reads from elsewhere: wait for the deploy to be recorded live (or failed). */
+export async function awaitLive(opts: { deploy: string; read: DeployRead; sleep?: (ms: number) => Promise<void>; pollMs?: number; maxPolls?: number; log?: (l: string) => void }): Promise<number> {
+  const log = opts.log ?? ((l) => console.log(l));
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  for (let i = 0; i < (opts.maxPolls ?? 180); i++) {
+    const d = await opts.read(opts.deploy);
+    if (d?.status === "live") { log(`${opts.deploy} is live${d.sha ? ` at ${String(d.sha).slice(0, 10)}` : ""}${d.version ? ` (${d.version})` : ""}`); return 0; }
+    if (d?.status === "failed" || d?.status === "cancelled") { log(`${opts.deploy} ${d.status}${d.note ? `: ${d.note}` : ""}`); return 1; }
+    await sleep(opts.pollMs ?? 20_000);
+  }
+  log(`${opts.deploy} was not recorded live in time`);
+  return 1;
+}
+
+/** The targets view in words, for `cast line deploy targets`. */
+export function formatTargets(view: { targets: any[] }): string {
+  if (!view.targets.length) return "No deploy targets published. Name a target on a [[ship.deploy]] entry in .codecast/workspace.toml, then: cast line deploy targets --publish";
+  const out: string[] = [];
+  const short = (s: string | null | undefined) => (s ? s.slice(0, 9) : "-");
+  for (const t of view.targets) {
+    const live = t.live ? `${t.live.short_id} ${short(t.live.sha)}${t.live.version ? ` ${t.live.version}` : ""}, ${new Date(t.live.live_at ?? t.live.created_at).toLocaleString()}` : "nothing recorded live";
+    out.push(`${t.name}  live: ${live}${t.open ? `  · ${t.open.short_id} ${t.open.status}` : ""}`);
+    const q = t.queue;
+    if (!q.known) out.push(`  waiting: unknown (the live sha is not on main as codecast knows it)`);
+    else if (!q.commits) out.push(`  nothing waiting${q.untouched ? ` (${q.untouched} commit${q.untouched === 1 ? "" : "s"} on main touch none of its paths)` : ""}`);
+    else {
+      out.push(`  ${q.commits} commit${q.commits === 1 ? "" : "s"} waiting, CI on main's head ${q.head_ci}`);
+      for (const g of q.groups) {
+        out.push(`    ${g.session ? `${g.session.short_id} ${g.session.title ?? ""}` : "(no session)"}  CI ${g.ci}`);
+        for (const c of g.commits.slice(0, 5)) out.push(`      ${short(c.sha)} ${c.ci.padEnd(7)} ${c.subject}${c.tasks.length ? `  ${c.tasks.map((x: any) => x.short_id).filter(Boolean).join(" ")}` : ""}`);
+        if (g.commits.length > 5) out.push(`      +${g.commits.length - 5} more`);
+      }
+      if (q.shown < q.commits) out.push(`    +${q.commits - q.shown} older`);
+    }
+  }
+  return out.join("\n");
 }

@@ -14,6 +14,7 @@
 //   cast line eval-result --reps <reps.json> --out <eval-result.json> [--json]
 //   cast line proof-check <line-proof.json> [--json]
 import fs from "node:fs";
+import { spawnSync } from "./proc.js";
 import path from "node:path";
 import type { Command } from "commander";
 import { buildEvalResult, evalResultLines, repsFileProblem, unscoredSurfaces } from "@platform/evals/analysis";
@@ -117,7 +118,45 @@ export async function publishLineProfile(deps: PublishDeps, resolved: ResolvedLi
     profile: publishFacts(resolved),
     device_id: deviceId(),
   });
+  // The repository's deploy targets ride every publish from the checkout that declares them (deploys.md DP10); a
+  // publish of them that fails never fails the profile's.
+  if (resolved.root) {
+    try {
+      const { checkoutTargets } = await import("./lineDeploy.js");
+      const targets = await checkoutTargets(resolved.root);
+      if (targets.length) await publishDeployTargets(deps, resolved.root, targets);
+    } catch {
+      // `cast line deploy targets --publish` says why.
+    }
+  }
   return { projects: result.projects ?? [], unprojected };
+}
+
+/** Publish a checkout's deploy targets for its repository, from this machine, which is where a deploy of one runs. */
+export async function publishDeployTargets(deps: PublishDeps, root: string, targets: import("@codecast/shared/contracts/deployTargets").DeployTarget[], teamId?: string): Promise<{ team_id: string; repository: string; targets: Array<{ name: string; changed: boolean }>; commits?: any }> {
+  const { readLocalGitContext } = await import("./prCommand.js");
+  const { deviceId } = await import("./remote/device.js");
+  const repository = readLocalGitContext(root).repository;
+  if (!repository) throw new LineProfileError(`${root} has no GitHub origin, so its targets name no repository`);
+  const r = await apiPost(deps, "/cli/deploys/targets/publish", { repository, targets, device_id: deviceId(), root, ...(teamId ? { team_id: teamId } : {}) });
+  // A repository GitHub does not report (a local remote) gets main's order from its checkout; the server skips one it hears from GitHub.
+  const main = mainCommitsOf(root);
+  if (main) r.commits = await apiPost(deps, "/cli/deploys/main-commits", { team_id: r.team_id, repository, branch: main.branch, commits: main.commits }, { exitOnError: false }).catch(() => null);
+  return r;
+}
+
+/** The default branch's last commits on origin, oldest first, with their files: what a checkout reports of main. */
+export function mainCommitsOf(root: string, n = 200): { branch: string; commits: Array<{ sha: string; message: string; author_name: string; author_email: string; at: number; files: string[] }> } | null {
+  const head = spawnSync("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd: root, encoding: "utf-8" });
+  const branch = head.status === 0 ? String(head.stdout).trim().replace(/^origin\//, "") : "main";
+  const log = spawnSync("git", ["log", "--first-parent", `-${n}`, "--name-only", "--format=%x1e%H%x1f%an%x1f%ae%x1f%ct%x1f%B%x1d", `origin/${branch}`], { cwd: root, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  if (log.status !== 0) return null;
+  const commits = String(log.stdout).split("\x1e").filter((x) => x.trim()).map((rec) => {
+    const [head, files = ""] = rec.split("\x1d");
+    const [sha, author_name, author_email, ct, ...msg] = head.split("\x1f");
+    return { sha: sha.trim(), message: msg.join("\x1f").trim(), author_name, author_email, at: Number(ct) * 1000, files: files.split("\n").map((f) => f.trim()).filter(Boolean).slice(0, 300) };
+  });
+  return { branch, commits: commits.reverse() };
 }
 
 /**

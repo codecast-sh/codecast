@@ -182,6 +182,8 @@ else
     echo "   Pushing to production branch..."
     eas update --branch production --message "$COMMIT_MSG" --non-interactive
     echo "   ✓ OTA pushed to production"
+    # The mobile target's deploy (deploys.md DP11); a mark that fails never fails the release.
+    cast ship mark --surface mobile --sha "$(git rev-parse HEAD)" || echo "   ! mobile deploy not recorded in codecast"
   fi
   cd ../..
   echo "$LAST_MOBILE_UPDATE" > "$LAST_MOBILE_OTA_MARKER"
@@ -200,6 +202,7 @@ if $FORCE_DESKTOP || ! git diff --quiet "$DESKTOP_BASE" HEAD -- packages/electro
   git add packages/electron/package.json packages/web/server/index.ts
   git commit -m "chore(electron): release desktop $DESKTOP_VERSION"
   git push origin main
+  cast ship mark --surface desktop --sha "$(git rev-parse HEAD)" --version "$DESKTOP_VERSION" || echo "   ! desktop deploy not recorded in codecast"
   # The first CLI whose daemon installs the app beside the app's own quit
   # helper without sharing its staging folder. Any CLI from here on is safe,
   # so the gate waits on this one, not on the release just cut.

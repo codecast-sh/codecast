@@ -83,10 +83,44 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
     .command("deploy")
     .description("The flow's deploy stage: the shipped fixes no live deploy has carried yet; --go sends them together through [line.deploy] command and records the deploy (dp-N)")
     .option("--project <ref>", "The project (default: the repo profile's [line] project)")
+    .option("--target <name>", "A deploy target of this checkout (cast line deploy targets): deploy it at main's head")
+    .option("--redeploy <dp-N>", "With --target: send that earlier deploy's sha again (a command that takes $sha)")
+    .option("--rollback [dp-N]", "With --target: run the target's rollback, back to the live deploy before the current one (or the one named)")
     .option("--go", "Ask for the deploy and run the deploy path here")
+    .option("--queue", "With --target: ask for it and let the machine that published the target run it, as the Deploy button does")
     .option("--json", "Machine-readable output")
     .action(async (options: any) => {
       const { formatStage, runDeployGraph } = await import("./lineDeploy.js");
+      if (options.target && options.queue) {
+        const { readLocalGitContext } = await import("./prCommand.js");
+        const repository = readLocalGitContext(process.env.CODECAST_CWD || process.cwd()).repository;
+        const action = options.rollback !== undefined ? "rollback" : options.redeploy ? "redeploy" : "deploy";
+        const of = typeof options.rollback === "string" ? options.rollback : options.redeploy || undefined;
+        const asked = await apiPost(deps, "/cli/deploys/target/request", { repository, target: options.target, action, ...(of ? { of } : {}) });
+        console.log(options.json ? JSON.stringify(asked, null, 2) : `${asked.short_id}: asked; the machine that published ${asked.target} runs it (cast line deploy show ${asked.short_id})`);
+        return;
+      }
+      if (options.target) {
+        const { readLocalGitContext } = await import("./prCommand.js");
+        const root = process.env.CODECAST_CWD || process.cwd();
+        const repository = readLocalGitContext(root).repository;
+        if (!repository) { console.error("No GitHub repository here: run inside the checkout whose target this is"); process.exit(1); }
+        const action = options.rollback !== undefined ? "rollback" : options.redeploy ? "redeploy" : "deploy";
+        const of = typeof options.rollback === "string" ? options.rollback : options.redeploy || undefined;
+        if (!options.go) {
+          const { formatTargets } = await import("./lineDeploy.js");
+          const view = await apiPost(deps, "/cli/deploys/targets", { repository, target: String(options.target).toLowerCase() }, { read: true });
+          console.log(options.json ? JSON.stringify(view, null, 2) : `${formatTargets(view)}\n\nSend it: cast line deploy --target ${options.target}${action === "deploy" ? "" : action === "redeploy" ? ` --redeploy ${of}` : ` --rollback${of ? ` ${of}` : ""}`} --go`);
+          return;
+        }
+        const asked = await apiPost(deps, "/cli/deploys/target/request", { repository, target: options.target, action, ...(of ? { of } : {}), here: true });
+        console.log(`${asked.short_id}: ${action} ${asked.target}${asked.sha ? ` at ${String(asked.sha).slice(0, 10)}` : ""}${asked.commits ? `, ${asked.commits} commit${asked.commits === 1 ? "" : "s"}` : ""}`);
+        const code = runDeployGraph(asked.short_id, root);
+        const after = await apiPost(deps, "/cli/deploys/get", { ref: asked.short_id }, { read: true });
+        console.log(`${asked.short_id}: ${after?.status ?? "unknown"}${after?.sha ? ` at ${String(after.sha).slice(0, 10)}` : ""}`);
+        if (after?.status !== "live") process.exit(code || 1);
+        return;
+      }
       const { lineProjectFor, scopeFor } = await import("./lineScope.js");
       const { loadLineProfile } = await import("./lineProfile.js");
       const root = process.env.CODECAST_CWD || process.cwd();
@@ -111,11 +145,44 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       if (after?.status !== "live") process.exit(code || 1);
     });
   deploy
+    .command("targets")
+    .description("This repository's deploy targets: what runs on each (its live deploy), what is going out, and the commits on main waiting for it, by session, with CI")
+    .option("--target <name>", "One target")
+    .option("--publish", "Publish this checkout's declared targets ([[ship.deploy]] entries that name a target) first")
+    .option("--team <id>", "With --publish: the team, for a repository no GitHub installation or published checkout ties to one")
+    .option("--json", "Machine-readable output")
+    .action(async (_opts: any, cmd: any) => {
+      // `deploy` itself takes --target and --json, so they land on it: read both levels.
+      const options = cmd.optsWithGlobals();
+      const { formatTargets, checkoutTargets } = await import("./lineDeploy.js");
+      const { readLocalGitContext } = await import("./prCommand.js");
+      const root = process.env.CODECAST_CWD || process.cwd();
+      const repository = readLocalGitContext(root).repository;
+      if (!repository) { console.error("No GitHub repository here: run inside a checkout with a GitHub origin"); process.exit(1); }
+      if (options.publish) {
+        const { publishDeployTargets } = await import("./lineProfileCommand.js");
+        const r = await publishDeployTargets(deps, root, await checkoutTargets(root), options.team);
+        if (!options.json) console.log(`Published ${r.targets.length} target${r.targets.length === 1 ? "" : "s"} of ${r.repository}: ${r.targets.map((t: any) => t.name).join(", ")}`);
+        await apiPost(deps, "/cli/deploys/targets/poll", { team_id: r.team_id }, { exitOnError: false }).catch(() => null);
+      }
+      const view = await apiPost(deps, "/cli/deploys/targets", { repository, ...(options.team ? { team_id: options.team } : {}), ...(options.target ? { target: String(options.target).toLowerCase() } : {}) }, { read: true });
+      console.log(options.json ? JSON.stringify(view, null, 2) : formatTargets(view));
+    });
+  deploy
+    .command("await-live")
+    .description("Wait until a deploy (dp-N) is recorded live by its target's reader (GitHub, a release's latest.json): the live step of a target codecast reads from elsewhere")
+    .argument("<deploy>", "The deploy (dp-N)")
+    .action(async (ref: string) => {
+      const { awaitLive } = await import("./lineDeploy.js");
+      process.exit(await awaitLive({ deploy: ref, read: (d) => apiPost(deps, "/cli/deploys/get", { ref: d }, { read: true }) }));
+    });
+  deploy
     .command("show")
     .description("One deploy (dp-N): what went out, who started it, what it carried and what happened after")
     .argument("<deploy>", "The deploy (dp-N)")
     .option("--json", "Machine-readable output")
-    .action(async (ref: string, options: any) => {
+    .action(async (ref: string, _opts: any, cmd: any) => {
+      const options = cmd.optsWithGlobals();
       const { formatDeploy } = await import("./lineDeploy.js");
       const d = await apiPost(deps, "/cli/deploys/get", { ref }, { read: true });
       if (!d) { console.error(`No deploy ${ref} you can read`); process.exit(1); }
@@ -126,20 +193,21 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
     .description("Run a deploy that was asked for (dp-N) through its steps, each a station of the line-deploy graph, in this checkout; the daemon's line_deploy runs this")
     .argument("<deploy>", "The deploy (dp-N)")
     .action(async (ref: string) => {
-      const { loadLineProfile } = await import("./lineProfile.js");
-      const { runDeployGraph } = await import("./lineDeploy.js");
+      const { runDeployGraph, deployProfileFor } = await import("./lineDeploy.js");
       const root = process.env.CODECAST_CWD || process.cwd();
-      const { profile, root: profileRoot } = loadLineProfile(root);
       const post = (path: string, body: Record<string, unknown>) => apiPost(deps, path, body);
-      if (!profile.deploy?.command) {
-        await post("/cli/line/deploy/report", { deploy: ref, status: "failed", note: "No [line.deploy] command in the checkout that publishes this line" });
-        console.error("No [line.deploy] command in this checkout's .codecast/line.toml");
-        process.exit(1);
-      }
       const d = await apiPost(deps, "/cli/deploys/get", { ref }, { read: true });
       if (!d) { console.error(`No deploy ${ref}`); process.exit(1); }
+      // A target's deploy (it names an action) runs the target's commands; a line's, the profile's [line.deploy].
+      const { profile, root: profileRoot, why } = await deployProfileFor(d, root);
+      if (!profile?.command) {
+        const note = why ?? `No ${d.action === "rollback" ? "rollback" : "command"} for ${d.target} in the checkout that publishes it`;
+        await post("/cli/line/deploy/report", { deploy: ref, status: "failed", note });
+        console.error(note);
+        process.exit(1);
+      }
       if (d.status !== "requested") { console.log(`${ref} is ${d.status}; nothing to run`); return; }
-      const code = runDeployGraph(ref, profileRoot ?? root);
+      const code = runDeployGraph(ref, profileRoot);
       const after = await apiPost(deps, "/cli/deploys/get", { ref }, { read: true });
       console.log(`${ref}: ${after?.status ?? "unknown"}`);
       if (after?.status !== "live") process.exit(code || 1);
@@ -151,15 +219,16 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
     .argument("<deploy>", "The deploy (dp-N)")
     .option("--run <id>", "The line-deploy run carrying it")
     .action(async (step: string, ref: string, options: any) => {
-      const { runDeployStep } = await import("./lineDeploy.js");
+      const { runDeployStep, deployProfileFor } = await import("./lineDeploy.js");
       const { LINE_DEPLOY_STEPS } = await import("@codecast/shared/contracts/lineDeploy");
-      const { loadLineProfile } = await import("./lineProfile.js");
       if (!(LINE_DEPLOY_STEPS as readonly string[]).includes(step)) { console.error(`A deploy's steps are ${LINE_DEPLOY_STEPS.join(", ")}`); process.exit(2); }
       const root = process.env.CODECAST_CWD || process.cwd();
-      const { profile, root: profileRoot } = loadLineProfile(root);
+      const read = (d: string) => apiPost(deps, "/cli/deploys/get", { ref: d }, { read: true });
+      const d = await read(ref);
+      const { profile, root: profileRoot } = d ? await deployProfileFor(d, root) : { profile: null, root };
       const r = await runDeployStep({
-        step: step as any, deploy: ref, root: profileRoot ?? root, profile: profile.deploy, runId: options.run || undefined,
-        read: (d) => apiPost(deps, "/cli/deploys/get", { ref: d }, { read: true }),
+        step: step as any, deploy: ref, root: profileRoot, profile, runId: options.run || undefined,
+        read,
         post: (path, body) => apiPost(deps, path, body),
       });
       // The command's own output is the station's output already; only the exit is said again.

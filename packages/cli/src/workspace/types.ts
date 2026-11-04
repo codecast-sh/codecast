@@ -164,9 +164,26 @@ export interface ShipDeployStep {
   name: string;
   /** Globs over repo paths; the step runs when any shipped path matches. Empty means always. */
   when: string[];
+  /** The command; empty for a target that deploys itself on push (runs = "push"). */
   run: string;
-  /** "before_push" runs ahead of the push (a backend the pushed client will call); "after_push" after it. */
-  stage: "before_push" | "after_push";
+  /**
+   * "before_push" runs ahead of the push (a backend the pushed client will call); "after_push" after it;
+   * "press" never at a ship: a target sent only from codecast or its release script.
+   */
+  stage: "before_push" | "after_push" | "press";
+  /**
+   * The deploy target this step sends (contracts/deployTargets, deploys.md DP10). A step that names one is one of
+   * the repository's targets; a step that names none is a gate (the typing guard).
+   */
+  target?: string;
+  /** How codecast reads what runs on the target: marker (default), github-status:<context>, json:<url>#<field>. */
+  live?: string;
+  /** The command that puts the previous version back. */
+  rollback?: string;
+  /** press (a person's Deploy, the default) or auto (goes out by itself when CI on main is green). */
+  policy?: "press" | "auto";
+  /** here (this checkout runs the command, the default with run) or push (the target deploys itself when main moves). */
+  runs?: "here" | "push";
 }
 
 export interface WorkspaceManifest {

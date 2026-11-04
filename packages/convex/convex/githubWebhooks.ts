@@ -26,6 +26,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { recordPRMergedActivity, resolveActorUserIdForTeam } from "./pull_requests";
 import { recordExternalEvent } from "./externalEvents";
 import { recordCiRun, type CiRun } from "./ingest";
+import { checkSuiteCi, deploymentStatusEventOf, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargets";
 import { markCommitDirty } from "./lib/changesDirty";
 import { claimDrain, releaseDrain, renewDrain } from "./lib/drainMarker";
 import { checkLabel, repositoryOwner } from "@codecast/shared/contracts";
@@ -85,6 +86,7 @@ const HANDLED_EVENT_TYPES = new Set([
   "issue_comment",
   "pull_request_review_thread",
   "workflow_run",
+  "deployment_status",
 ]);
 
 // GitHub reports a conclusion on every finished check; only these mean the
@@ -123,6 +125,8 @@ export function defaultBranchCiRun(payload: any): Omit<CiRun, "team_id"> | null 
   const workflow: string | undefined = payload?.workflow?.name ?? run.name ?? run.path;
   if (!workflow) return null;
   const started = Date.parse(run.run_started_at ?? run.created_at ?? "");
+  const finished = Date.parse(run.updated_at ?? "");
+  const duration = Number.isFinite(started) && Number.isFinite(finished) && finished >= started ? finished - started : undefined;
   return {
     repository,
     workflow,
@@ -133,6 +137,7 @@ export function defaultBranchCiRun(payload: any): Omit<CiRun, "team_id"> | null 
     sha: run.head_sha ?? undefined,
     branch: defaultBranch,
     run_id: run.id != null ? String(run.id) : undefined,
+    ...(duration !== undefined ? { duration_ms: duration } : {}),
   };
 }
 
@@ -330,6 +335,8 @@ export const storeWebhookEvent = internalMutation({
       void ctx.scheduler.runAfter(0, internal.githubWebhooks.processReviewCommentEvent, { event_id: eventId });
     } else if (args.event_type === "status") {
       void ctx.scheduler.runAfter(0, internal.githubWebhooks.processStatusEvent, { event_id: eventId });
+    } else if (args.event_type === "deployment_status") {
+      void ctx.scheduler.runAfter(0, internal.githubWebhooks.processDeploymentStatusEvent, { event_id: eventId });
     } else if (args.event_type === "pull_request_review_thread") {
       void ctx.scheduler.runAfter(0, internal.githubWebhooks.processReviewThreadEvent, { event_id: eventId });
     }
@@ -1271,7 +1278,10 @@ async function applyWorkflowRun(ctx: any, payload: any) {
   // CI on the default branch has no pull request to fold into: it files as
   // a check on the team's github-ci source instead (external-data.md X7).
   const ci = defaultBranchCiRun(payload);
-  const team = ci ? await resolveTeamForRepository(ctx, repository) : null;
+  // Every run on the default branch, going or done, is that commit's CI (deploys.md DP12).
+  const commitCi = workflowRunCi(payload);
+  const team = ci || commitCi ? await resolveTeamForRepository(ctx, repository) : null;
+  if (commitCi && team) await recordCommitCi(ctx, commitCi, team);
   const filed = ci && team ? await recordCiRun(ctx, { ...ci, team_id: team }) : undefined;
   return { success: true, suite_id: suiteId, event: row.event, ...(filed ? { ci: filed } : {}) };
 }
@@ -1284,6 +1294,9 @@ async function applyWorkflowRun(ctx: any, payload: any) {
 async function applyCheckSuite(ctx: any, payload: any, settled?: Set<Id<"pull_requests">>) {
   const suite = payload.check_suite;
   const repository: string | undefined = normalizeRepository(payload.repository?.full_name);
+  // Another app's suite on the default branch is that commit's CI, going or done (deploys.md DP12).
+  const commitCi = checkSuiteCi(payload);
+  if (commitCi) await recordCommitCi(ctx, commitCi);
   if (!suite || !repository || suite.status !== "completed") return { success: true, skipped: true };
 
   const prs = await prsForSha(ctx, repository, suite.pull_requests, suite.head_sha);
@@ -1466,7 +1479,22 @@ export const processStatusEvent = internalMutation({
     for (const pr of prs) {
       await applyChecksToPR(ctx, pr, [{ entry, actor: actorFrom(payload) }]);
     }
-    return { success: true, prs: prs.length };
+    // A status on main's commit can be a deploy (Railway posts one per deploy): the targets that read it record it.
+    const deploy = statusEventOf(payload);
+    const deploys = deploy ? await recordGithubDeployStatus(ctx, deploy) : [];
+    return { success: true, prs: prs.length, deploys };
+  },
+});
+
+/** A GitHub deployment's status on the default branch, as a deploy of the targets whose reader names its environment. */
+export const processDeploymentStatusEvent = internalMutation({
+  args: { event_id: v.id("github_webhook_events") },
+  handler: async (ctx, args) => {
+    const event = await ctx.db.get(args.event_id);
+    if (!event) return { success: false };
+    await ctx.db.patch(args.event_id, { processed: true });
+    const deploy = deploymentStatusEventOf(JSON.parse(event.payload));
+    return { success: true, deploys: deploy ? await recordGithubDeployStatus(ctx, deploy) : [] };
   },
 });
 
@@ -1589,6 +1617,7 @@ export const processPushEvent = internalMutation({
 
     let created = 0;
     let firstConversation: Id<"conversations"> | undefined;
+    const onMain: Id<"commits">[] = [];
     for (const commit of commits) {
       const sha: string = commit.id;
       const message: string = commit.message ?? "";
@@ -1651,6 +1680,7 @@ export const processPushEvent = internalMutation({
         created++;
       }
       await markCommitDirty(ctx, commitId);
+      if (branch === payload.repository?.default_branch) onMain.push(commitId);
       // Landed on the default branch: the tasks it names are merged there, whoever merged them (lib/taskLanded).
       if (branch === payload.repository?.default_branch && links.task_ids.length) {
         await recordLanded(ctx, links.task_ids, { sha, at: event.created_at ?? Date.now(), repository, branch });
@@ -1676,6 +1706,9 @@ export const processPushEvent = internalMutation({
         dedupe_key: `commit:${sha}`,
       });
     }
+
+    // Main's order, for each target's waiting queue (deploys.md DP12).
+    if (onMain.length) await stampMainOrder(ctx, onMain, event.created_at ?? Date.now());
 
     await recordExternalEvent(ctx, {
       source: "github",

@@ -9,6 +9,7 @@
 
 import * as fs from "node:fs";
 import { envNameProblem, secretNameProblem } from "@codecast/shared/contracts/secretRules";
+import { DeployTargetError, targetFromShipEntry } from "@codecast/shared/contracts/deployTargets";
 import type {
   BrowserSpec,
   HostSpec,
@@ -155,6 +156,8 @@ function validateSync(raw: unknown, file?: string): SyncSpec | undefined {
   return { always: validateStringArray(raw["always"], "sync.always", file), never: validateStringArray(raw["never"], "sync.never", file) };
 }
 
+const SHIP_DEPLOY_KEYS = ["name", "when", "run", "stage", "target", "live", "rollback", "policy", "runs"];
+
 function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) throw new ManifestError("'ship' must be a table", file, "ship");
@@ -175,16 +178,36 @@ function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
     const at = `ship.deploy[${i}]`;
     if (!isPlainObject(step)) throw new ManifestError(`'${at}' must be a table`, file, at);
     for (const key of Object.keys(step)) {
-      if (!["name", "when", "run", "stage"].includes(key)) throw new ManifestError(`unknown key in [[ship.deploy]]: '${key}'`, file, `${at}.${key}`);
+      if (!SHIP_DEPLOY_KEYS.includes(key)) throw new ManifestError(`unknown key in [[ship.deploy]]: '${key}'`, file, `${at}.${key}`);
     }
-    const run = step["run"];
-    if (typeof run !== "string" || !run.trim()) throw new ManifestError(`'${at}.run' must be a non-empty string`, file, `${at}.run`);
-    const stage = step["stage"] ?? "after_push";
-    if (stage !== "before_push" && stage !== "after_push") throw new ManifestError(`'${at}.stage' must be "before_push" or "after_push"`, file, `${at}.stage`);
-    const name = step["name"] ?? run.split(/\s+/)[0];
+    for (const key of ["target", "live", "rollback", "policy", "runs"] as const) {
+      if (step[key] !== undefined && typeof step[key] !== "string") throw new ManifestError(`'${at}.${key}' must be a string`, file, `${at}.${key}`);
+    }
+    const target = step["target"] as string | undefined;
+    const run = step["run"] ?? "";
+    // A target that deploys itself on push has no command; every other step needs one.
+    if (typeof run !== "string" || (!run.trim() && !(target && step["runs"] === "push"))) throw new ManifestError(`'${at}.run' must be a non-empty string`, file, `${at}.run`);
+    const stage = step["stage"] ?? (run.trim() ? "after_push" : "press");
+    if (stage !== "before_push" && stage !== "after_push" && stage !== "press") throw new ManifestError(`'${at}.stage' must be "before_push", "after_push" or "press"`, file, `${at}.stage`);
+    const name = step["name"] ?? target ?? run.split(/\s+/)[0];
     if (typeof name !== "string") throw new ManifestError(`'${at}.name' must be a string`, file, `${at}.name`);
     const when = typeof step["when"] === "string" ? [step["when"]] : validateStringArray(step["when"], `${at}.when`, file);
-    return { name, when, run, stage };
+    const out: ShipDeployStep = {
+      name, when, run, stage,
+      ...(target ? { target } : {}),
+      ...(step["live"] !== undefined ? { live: step["live"] as string } : {}),
+      ...(step["rollback"] !== undefined ? { rollback: step["rollback"] as string } : {}),
+      ...(step["policy"] !== undefined ? { policy: step["policy"] as "press" | "auto" } : {}),
+      ...(step["runs"] !== undefined ? { runs: step["runs"] as "here" | "push" } : {}),
+    };
+    // A target is read the way the server and the Deploys page read it; a bad one is refused here, by its line.
+    try {
+      targetFromShipEntry(out);
+    } catch (err) {
+      if (err instanceof DeployTargetError) throw new ManifestError(`${at}: ${err.message}`, file, at);
+      throw err;
+    }
+    return out;
   });
   return { mode, check, tests: (raw["tests"] as boolean | undefined) ?? true, level: (raw["level"] as boolean | undefined) ?? false, deploy };
 }

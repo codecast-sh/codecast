@@ -31,6 +31,9 @@ import { deployAllowance, deployGrantOf, type DeployAllowance } from "./lib/depl
 import { countersFor } from "./lib/orgCaps";
 import { tellRole } from "./pendingMessages";
 import { liveRoleByHandle } from "./lib/orgAccess";
+import { scheduleTriggerMatch } from "./lib/triggerMatch";
+import { fillDeployRange } from "./deployTargets";
+import { DEPLOY_FAILED_EVENT, DEPLOY_LIVE_EVENT } from "@codecast/shared/contracts";
 import {
   DEPLOY_SHORT_ID_PREFIX,
   DEPLOY_SHORT_ID_RE,
@@ -243,6 +246,9 @@ async function shapeView(ctx: any, d: Doc<"deploys">): Promise<DeployView> {
     commits: d.commits ?? [],
     carries,
     note: d.note ?? null,
+    action: d.action ?? null,
+    rollback_of: d.rollback_of ?? null,
+    dirty: d.dirty ?? null,
     created_at: d.created_at,
     live_at: d.live_at ?? null,
     finished_at: d.finished_at ?? null,
@@ -253,7 +259,7 @@ async function shapeView(ctx: any, d: Doc<"deploys">): Promise<DeployView> {
 const STEP_STATIONS = new Set([...Object.keys(LINE_DEPLOY_STEP_LABELS), "returned"]);
 
 /** A deploy's steps as its run's stations stand (DP8), read from the run, in run order. */
-async function deployStepsOf(ctx: any, runId: Id<"workflow_runs">): Promise<NonNullable<DeployView["steps"]>> {
+export async function deployStepsOf(ctx: any, runId: Id<"workflow_runs">): Promise<NonNullable<DeployView["steps"]>> {
   const run = await ctx.db.get(runId);
   return (run?.node_statuses ?? [])
     .filter((n: any) => STEP_STATIONS.has(n.node_id))
@@ -325,6 +331,14 @@ export type DeployMarker = {
   previous_sha?: string;
   commits?: Array<{ sha: string; subject: string; author?: string }>;
   started_by?: Doc<"deploys">["started_by"];
+  /** What the marker says happened: live (the default), still running, or failed. */
+  status?: "live" | "running" | "failed";
+  note?: string;
+  /** Uncommitted files under the target's sources that went out with the sha. */
+  dirty?: number;
+  ship_pass_id?: Id<"ship_passes">;
+  /** The deploy the marker finishes (dp-N), when the deploy path knows it: its sha is what actually went out. */
+  deploy?: string;
   at: number;
 };
 
@@ -343,23 +357,48 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   const target = normalizeDeployTarget(m.target);
   if (!target || !deployIsLive({ environment: target })) return null;
   const now = Date.now();
+  const status = m.status ?? "live";
   const repository = m.repository ? normalizeRepository(m.repository) : undefined;
   const recent = await workspaceDeploys(ctx, m.workspace, 100);
+  const named = m.deploy ? recent.find((d) => d.short_id === m.deploy!.toLowerCase()) ?? (await deployByRef(ctx, m.deploy)) : null;
+  const ownNamed = named && named.workspace === m.workspace && named.target === target ? named : null;
 
-  const same = recent.find((d) =>
+  const same = ownNamed ?? recent.find((d) =>
     d.target === target && (d.status === "live" || OPEN.has(d.status))
+    && (!d.repository || !repository || d.repository === repository)
     && ((m.sha && sameSha(d.sha, m.sha)) || (!m.sha && m.version && d.version === m.version)),
   );
   const open = same ?? recent.find((d) =>
     d.target === target && OPEN.has(d.status) && now - d.created_at < OPEN_DEPLOY_MAX_AGE_MS
-    && (!d.repository || !repository || d.repository === repository),
+    && (!d.repository || !repository || d.repository === repository)
+    // A deploy asked for at an earlier sha (a redeploy, a rollback) is finished only by its own sha.
+    && (!d.action || d.action === "deploy" || !d.sha || (m.sha && sameSha(d.sha, m.sha))),
   );
+
+  // The same failure reported again (a redelivery, a backfill) enriches the failed deploy it already recorded.
+  const failedBefore = !open && status === "failed" && m.sha
+    ? recent.find((d) => d.target === target && d.status === "failed" && sameSha(d.sha, m.sha) && (!d.repository || !repository || d.repository === repository))
+    : null;
+  if (failedBefore) {
+    const patch: Partial<Doc<"deploys">> = {};
+    if (m.note && !failedBefore.note) patch.note = m.note.slice(-NOTE_MAX);
+    if (m.url && !failedBefore.url) patch.url = m.url;
+    if (Object.keys(patch).length) await ctx.db.patch(failedBefore._id, { ...patch, updated_at: now });
+    return failedBefore.short_id;
+  }
 
   if (open) {
     const patch: Partial<Doc<"deploys">> = { updated_at: now };
     if (m.event_id && !open.event_ids.some((e) => String(e) === String(m.event_id))) patch.event_ids = [...open.event_ids, m.event_id];
-    if (OPEN.has(open.status)) { patch.status = "live"; patch.live_at = m.at; patch.finished_at = now; }
-    if (m.sha && !open.sha) patch.sha = m.sha;
+    if (OPEN.has(open.status)) {
+      if (status === "running") patch.status = "running";
+      else { patch.status = status; patch.finished_at = now; if (status === "live") patch.live_at = m.at; }
+    }
+    // The deploy path that names its deploy says what actually went out; otherwise the first sha stands.
+    if (m.sha && (!open.sha || (ownNamed && !sameSha(open.sha, m.sha) && (open.action ?? "deploy") === "deploy"))) patch.sha = m.sha;
+    if (m.note && !open.note) patch.note = m.note.slice(-NOTE_MAX);
+    if (m.dirty && !open.dirty) patch.dirty = m.dirty;
+    if (m.ship_pass_id && !open.ship_pass_id) patch.ship_pass_id = m.ship_pass_id;
     if (m.version && !open.version) patch.version = m.version;
     if (repository && !open.repository) patch.repository = repository;
     if (m.url && !open.url) patch.url = m.url;
@@ -368,6 +407,7 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     if (m.source_id && !open.source_id) patch.source_id = m.source_id;
     await ctx.db.patch(open._id, patch);
     await stampEvent(ctx, m.event_id, open.short_id);
+    if (patch.status && patch.status !== open.status) await onDeployStatus(ctx, open._id);
     return open.short_id;
   }
 
@@ -378,7 +418,7 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     ...(m.team_id ? { team_id: m.team_id } : {}),
     ...(m.project_id ? { project_id: m.project_id } : {}),
     target,
-    status: "live" as const,
+    status,
     trigger: "outside" as const,
     ...(m.started_by ? { started_by: m.started_by } : {}),
     source: m.source,
@@ -390,17 +430,23 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     ...(m.version ? { version: m.version } : {}),
     ...(m.url ? { url: m.url } : {}),
     ...(m.commits?.length ? { commits: m.commits.slice(0, COMMITS_MAX) } : {}),
+    ...(m.note ? { note: m.note.slice(-NOTE_MAX) } : {}),
+    ...(m.dirty ? { dirty: m.dirty } : {}),
+    ...(m.ship_pass_id ? { ship_pass_id: m.ship_pass_id } : {}),
     carries: [],
     created_at: m.at,
-    live_at: m.at,
-    finished_at: m.at,
+    ...(status === "live" ? { live_at: m.at } : {}),
+    ...(status !== "running" ? { finished_at: m.at } : {}),
     updated_at: now,
   };
   const id = await ctx.db.insert("deploys", base);
   const row = (await ctx.db.get(id))!;
-  const carries = await carriesForMarker(ctx, row, now);
-  if (carries.length) await ctx.db.patch(id, { carries });
+  if (status === "live") {
+    const carries = await carriesForMarker(ctx, row, now);
+    if (carries.length) await ctx.db.patch(id, { carries });
+  }
   await stampEvent(ctx, m.event_id, shortId);
+  await onDeployStatus(ctx, id);
   return shortId;
 }
 
@@ -419,6 +465,27 @@ export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: numbe
     ...(c.pr_url ? { pr_url: c.pr_url } : {}),
     how: c.how,
   }));
+}
+
+/**
+ * A deploy that just went live or failed: a live one fills its range on main
+ * (deployTargets.fillDeployRange), and either fires its trigger event
+ * (deploy_live, deploy_failed) for the team's triggers.
+ */
+async function onDeployStatus(ctx: any, id: Id<"deploys">): Promise<void> {
+  const d: Doc<"deploys"> | null = await ctx.db.get(id);
+  if (!d || (d.status !== "live" && d.status !== "failed")) return;
+  if (d.status === "live") await fillDeployRange(ctx, id);
+  const sha = d.sha ? ` at ${d.sha.slice(0, 7)}` : d.version ? ` ${d.version}` : "";
+  const title = d.status === "live" ? `${d.short_id} live on ${d.target}${sha}` : `${d.short_id} to ${d.target}${sha} failed`;
+  await scheduleTriggerMatch(ctx, {
+    event_type: d.status === "live" ? DEPLOY_LIVE_EVENT : DEPLOY_FAILED_EVENT,
+    ...(d.team_id ? { team_id: d.team_id } : {}),
+    workspace: d.workspace,
+    ...(d.repository ? { repository: d.repository } : {}),
+    source: d.target,
+    event_ref: { title, ...(d.url ? { url: d.url } : {}) },
+  });
 }
 
 async function stampEvent(ctx: any, eventId: Id<"external_events"> | undefined, shortId: string): Promise<void> {
@@ -666,7 +733,9 @@ export const report = mutation({
     previous_sha: v.optional(v.string()),
     url: v.optional(v.string()),
     note: v.optional(v.string()),
-    commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()) }))),
+    commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()), conversation_id: v.optional(v.id("conversations")) }))),
+    // Files under the target's sources that went out uncommitted.
+    dirty: v.optional(v.number()),
     // The line-deploy run carrying it (DP8), named once when the run begins.
     run_id: v.optional(v.string()),
     // The watch station's live report: the carried fixes are watched for this many days from now (DP8).
@@ -683,6 +752,7 @@ export const report = mutation({
     if (args.previous_sha && !d.previous_sha) patch.previous_sha = args.previous_sha.toLowerCase();
     if (args.commits?.length && !d.commits?.length) patch.commits = args.commits.slice(0, COMMITS_MAX);
     if (args.note) patch.note = args.note.slice(-NOTE_MAX);
+    if (args.dirty && !d.dirty) patch.dirty = args.dirty;
     const runId = args.run_id ? ctx.db.normalizeId("workflow_runs", args.run_id) : null;
     if (runId && !d.run_id) patch.run_id = runId;
     // A marker may have finished it already; a report never moves a deploy backwards.
@@ -695,6 +765,7 @@ export const report = mutation({
       }
     }
     await ctx.db.patch(d._id, patch);
+    if (patch.status && patch.status !== d.status) await onDeployStatus(ctx, d._id);
     if (args.status === "live" && args.watch_days && (patch.status ?? d.status) === "live") {
       const live = patch.live_at ?? d.live_at ?? now;
       await watchFromLive(ctx, d, live, live + args.watch_days * DAY);

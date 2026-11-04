@@ -1,12 +1,13 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createServerAnalytics } from "@platform/analytics/server";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { createRequire } from "module";
 import { botMetaMiddleware, prerenderedRouteCount } from "./bot-meta";
 import { registerShareRoutes, getShellHtml, shareSsrReady } from "./share";
+import { registerWeekCardImage } from "./weekCardImage";
 import { registerHashedAssets, registerMissingArtifactGuard, registerStableEntryPoints } from "./staticAssets";
 import { createResponsePolicy } from "./responsePolicy";
 
@@ -112,28 +113,29 @@ app.get("/download/:binary", (c) => {
   return c.redirect(url, 302);
 });
 
-app.get("/install", async (c) => {
-  try {
-    const script = await readFile(join(DIST_DIR, "install.sh"), "utf-8");
-    phCapture("install_script_downloaded", { script: "sh" });
-    c.header("Content-Type", "text/plain; charset=utf-8");
-    c.header("Cache-Control", "public, max-age=3600");
-    return c.text(script);
-  } catch {
-    return c.text("Install script not found", 404);
-  }
-});
+// Per-channel install links: `curl -fsSL codecast.sh/i/<source> | sh` serves the
+// same script as /install and records which channel handed the link out. A
+// terminal install never loads the site, so a UTM tag cannot carry the source.
+const INSTALL_SOURCE = /^[a-z0-9-]{1,32}$/;
 
-app.get("/install.ps1", async (c) => {
+async function serveInstallScript(c: Context, file: "install.sh" | "install.ps1", source?: string) {
   try {
-    const script = await readFile(join(DIST_DIR, "install.ps1"), "utf-8");
-    phCapture("install_script_downloaded", { script: "ps1" });
+    const script = await readFile(join(DIST_DIR, file), "utf-8");
+    phCapture("install_script_downloaded", { script: file === "install.sh" ? "sh" : "ps1", ...(source ? { source } : {}) });
     c.header("Content-Type", "text/plain; charset=utf-8");
     c.header("Cache-Control", "public, max-age=3600");
     return c.text(script);
   } catch {
     return c.text("Install script not found", 404);
   }
+}
+
+app.get("/install", (c) => serveInstallScript(c, "install.sh"));
+app.get("/install.ps1", (c) => serveInstallScript(c, "install.ps1"));
+app.get("/i/:source", (c) => {
+  const source = c.req.param("source").toLowerCase();
+  if (!INSTALL_SOURCE.test(source)) return c.text("Unknown install link", 404);
+  return serveInstallScript(c, "install.sh", source);
 });
 
 // Apple rejects an AASA served as octet-stream (serveStatic's fallback for the
@@ -167,7 +169,16 @@ app.get("/a/:slug", (c) => {
   return c.redirect(`${ARTIFACT_EDGE}/${slug}${search}`, 302);
 });
 
+// A published weekly card's unfurl image (before the bot middleware: unfurlers fetch it with a bot UA).
+registerWeekCardImage(app);
+
 app.use("*", botMetaMiddleware);
+
+// A person opening a published weekly card (social unfurlers were answered above).
+app.get("/share/card/:token", (c, next) => {
+  phCapture("weekly_card_viewed", {});
+  return next();
+});
 
 // Human share-link visitors: payload-inlined shell, modulepreload hints, and
 // the /share/<token> → /conversation/<id> redirect. Registered after the bot

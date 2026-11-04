@@ -238,3 +238,123 @@ deploy, its sha, the run's url, the fixes it carried, and what the step
 said. The carried fixes stay shipped and wait for the next deploy; the
 problem runs on the line like any other.
 
+
+## DP10. A repository's deploy targets
+
+Everything above is a line's deploy of fixes. A repository also has targets
+of its own, each a place its code goes live on its own clock. Codecast's are
+the backend (Convex), web (Railway), the CLI release, the mobile OTA and the
+desktop app. They are declared once, in the checkout:
+
+- A `[[ship.deploy]]` entry of `.codecast/workspace.toml` that names a
+  `target` is one. `run` is the command that sends it (from the checkout's
+  root; `$sha`, `$deploy`, `$actor` expand), `when` the paths whose change it
+  ships, `runs` where that happens (`here`, the publishing checkout, the
+  default; `push`, the target deploys itself when main moves and has no
+  command), `live` how codecast reads what runs there (below), `rollback` the
+  command that puts the previous version back, and `policy` who starts it
+  (`press`, a person's Deploy, the default; `auto`, it goes out by itself when
+  CI on main's head is green). `stage` keeps its meaning for `cast ship
+  checkout` (`before_push`, `after_push`), and `press` means a ship never runs
+  it: only a deploy from codecast or a release script sends it. An entry with
+  no `target` stays a gate (the typing guard).
+- A line profile's `[line.deploy]` (Union) is one more target, read the same
+  way (`contracts/deployTargets targetFromLineDeploy`).
+
+`live` readers: `marker` (the deploy path records each deploy: deploy.sh, a
+ship pass, a codecast run's watch station, a release script's `cast ship
+mark`), `github-status:<context>` (a commit status or deployment on the
+default branch; Railway posts `codecast - web`), and `json:<url>#<sha
+field>[,<version field>]` (a document naming the commit it was built from,
+like the CLI release's latest.json `sourceCommit`).
+
+The targets are published per repository to `deploy_targets` (workspace key
+of the repository's team) by every line profile publish and by `cast line
+deploy targets --publish`, with the machine and checkout that published
+them: where a deploy of a `here` target runs. A target the checkout stops
+declaring is retired, not deleted. Every reader (the CLI, the server, the
+Deploys page) parses through `contracts/deployTargets`.
+
+A CLI older than the one that reads these keys refuses the manifest
+(`unknown key in [[ship.deploy]]`), so a repository's targets land only once
+its machines run a CLI that knows them.
+
+## DP11. Every way a target goes live leaves a dp-N
+
+- **A ship.** `cast ship checkout` posts its pass to `ship_passes`
+  (`deployTargets.recordShipPass`): the commits with the session behind each,
+  the groups held back, each deploy step's result. Every step that names a
+  target records its deploy after the push with the sha the ship pushed (the
+  tip it built, with a note, when nothing was pushed), and a failed step
+  records a failed deploy. Uncommitted files under the step's paths when it
+  ran are counted on the deploy (`dirty`), since they went out too.
+  deploy.sh leaves the mark to the ship when it runs under one (`CAST_SHIP`).
+- **deploy.sh by hand** marks HEAD and its uncommitted file count
+  (`cast ship mark --dirty`). Run by a codecast deploy (`CAST_DEPLOY_ID`), it
+  names the deploy (`--deploy dp-N`), and the mark finishes that deploy with
+  the sha that actually went out.
+- **A target that deploys on push.** GitHub's `status` webhook on a commit of
+  the default branch, and `deployment_status`, with a context or environment
+  a target's `github-status` reader names: pending records a running deploy,
+  success makes it live, failure or error fails it
+  (`deployTargets.recordGithubDeployStatus`).
+- **A release document.** `deployTargets.pollLiveReaders` (every five
+  minutes) reads each `json` reader and records a deploy when it names a new
+  commit or version: the CLI release goes live when latest.json says so.
+- **Release scripts.** scripts/deploy-all.sh marks `mobile` after `eas
+  update` and `desktop` after its release; release.sh marks `desktop` itself
+  when it commits the version.
+
+A deploy that goes live fills its range on main (`fillDeployRange`): its
+previous sha (the target's live deploy before it) and the commits between
+that touch the target's paths, each with its session.
+
+## DP12. CI on main and what waits on each target
+
+`commit_ci` holds CI on a repository's default branch per commit: one row per
+commit and workflow (every workflow run, queued, running or done) and per
+other app's check suite (Actions' own suites are its workflow runs; an app
+that reports by commit status leaves its suite queued forever and is not
+counted). A commit's state is `commitCiState`: failed over running over
+passed, a cancelled run saying nothing, a workflow's newest run speaking.
+
+`commits.main_at` orders the default branch: each push stamps its commits a
+millisecond apart from the push's time, and the backfill orders older ones
+from GitHub's history. A target's waiting queue is the commits after its live
+deploy's sha that touch its paths, each with its session (the
+`Codecast-Session` trailer), its tasks and its CI, grouped by session
+(`groupQueueBySession`). When the live sha is not on main as codecast knows
+it, the queue is unknown rather than empty.
+
+`deployTargets.view` (team, or repository) returns every target with its
+live deploy, the deploy going out with its steps, its recent deploys (each
+naming the sessions whose commits it carried), and the queue: the newest 50
+commits whole and the total, main's head and its CI.
+
+## DP13. Deploying any target from codecast
+
+`deployTargets.request` (team or repository, target, `action`) asks for a
+deploy: `deploy` sends main's head, `redeploy` sends an earlier deploy's sha
+again (only a command that takes `$sha`; a command that deploys the tree it
+runs in cannot), `rollback` runs the target's rollback back to the live
+deploy before the current one, or the one named. It refuses a `push` target,
+a second deploy while one is going out, and a target no machine publishes.
+The row is `requested`, carries the commits it will send, and queues
+`line_deploy` on the publishing machine; `cast line deploy run dp-N` there
+runs the line-deploy graph with the target's commands
+(`lineDeploy.deployProfileFor`): the send is its command or rollback, and a
+target read from elsewhere gets a live step (`cast line deploy await-live`)
+that waits for its reader to record the sha. From a terminal: `cast line
+deploy --target <name> [--redeploy dp-N | --rollback [dp-N]] --go`.
+
+A deploy that goes live fires `deploy_live`, one that fails `deploy_failed`
+(trigger events, `source` the target), whoever sent it.
+
+## DP14. Backfill
+
+`deployTargets:backfill '{"repository":"owner/name","commits":150}'` reads
+the default branch back from GitHub through the App: its last commits in
+order with their files and sessions (main_at), the workflow runs and other
+apps' suites on them (commit_ci), and the commit statuses its github-status
+targets name (their deploys). A json reader records its target's live sha on
+its first read.
