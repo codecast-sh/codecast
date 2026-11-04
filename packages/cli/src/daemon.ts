@@ -8103,8 +8103,7 @@ async function executeRemoteCommand(
                     ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd));
                   }
                   if (reconFilePath) setPosition(reconFilePath, fs.statSync(reconFilePath).size);
-                  remapConversationSession(sessionId, newSessionId, conversationId);
-                  void pushSessionIdBinding(conversationId, newSessionId, cwd);
+                  rebindConversationSession(sessionId, newSessionId, conversationId, cwd);
                   const resumed = await autoResumeSession(
                     newSessionId, "", readTitleCache(), cwd, conversationId, targetAgent, resumeOptions,
                   );
@@ -8502,9 +8501,7 @@ async function executeRemoteCommand(
 
                 const reconResumed = await autoResumeSession(newSessionId, "", readTitleCache(), cwd, conversationId, resumeAgentType, resumeOptions);
                 if (reconResumed) {
-                  const cache = readConversationCache();
-                  cache[newSessionId] = conversationId;
-                  saveConversationCache(cache);
+                  rebindConversationSession(sessionId, newSessionId, conversationId, cwd);
                   if (syncServiceRef) {
                     syncServiceRef.markSessionActive(conversationId).catch(logConvexFailure);
                     syncServiceRef.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
@@ -11665,6 +11662,15 @@ async function processSessionFilePass(
       continuationDepth + 1,
     ));
     return;
+  }
+
+  // The transcript taking new messages is the live session, so the first
+  // batch this daemon run syncs for it asserts the server binding once. That
+  // heals a conversation a rebuild left pointing at a dead uuid, which no
+  // later step would ever notice (message sync is keyed by conversation id).
+  if (conversationId && !sessionBindingAsserted.has(sessionId)) {
+    sessionBindingAsserted.add(sessionId);
+    void pushSessionIdBinding(conversationId, sessionId);
   }
 
   if (!conversationId) {
@@ -23710,6 +23716,24 @@ function remapConversationSession(
   resumeFatalReasons.delete(oldSessionId);
 }
 
+// A session that came back under a new uuid (a rebuilt transcript, a
+// non-UUID copy, a fresh materialization) is the same conversation: map the
+// new id locally AND repoint conversations.session_id at it. Doing only the
+// local half keeps message sync healthy while every session-bound `cast`
+// write from the agent fails "Session not found" (Agent Quality lead, Nov 3
+// 2026), so every rebuild site goes through this one call.
+function rebindConversationSession(
+  oldSessionId: string,
+  newSessionId: string,
+  conversationId: string,
+  projectPath?: string,
+  conversationCache?: ConversationCache,
+): void {
+  remapConversationSession(oldSessionId, newSessionId, conversationId, conversationCache);
+  void pushSessionIdBinding(conversationId, newSessionId, projectPath);
+}
+
+const sessionBindingAsserted = new Set<string>();
 const planHandoffChildren = new Map<string, string>();
 const planHandoffChecked = new Set<string>();
 const planModeSynced = new Set<string>();
@@ -24755,10 +24779,7 @@ export async function buildClaudeResumeCommand(a: {
       if (rewrite.newJsonlPath) resumeJsonlPath = rewrite.newJsonlPath;
       // Remap all caches so subsequent lookups use the new UUID
       if (conversationId) {
-        remapConversationSession(sessionId, rewrite.resumeId, conversationId);
-        if (syncServiceRef) {
-          void pushSessionIdBinding(conversationId, rewrite.resumeId);
-        }
+        rebindConversationSession(sessionId, rewrite.resumeId, conversationId);
       }
       // A fork-artifact source must go immediately: the remap above just
       // unmapped it, and the sync watcher processes new files within
@@ -25001,10 +25022,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       }
       logDelivery(`Reconstituted ${sessionId.slice(0, 8)} (${data.messages.length} msgs)`);
       if (conversationId && reconId !== sessionId) {
-        remapConversationSession(sessionId, reconId, conversationId);
-        if (syncServiceRef) {
-          void pushSessionIdBinding(conversationId, reconId);
-        }
+        rebindConversationSession(sessionId, reconId, conversationId);
       } else if (conversationId) {
         // Ensure cache has the mapping even when sessionId is preserved
         const cache = readConversationCache();
@@ -25548,13 +25566,10 @@ async function repairAndResumeSession(
         if (targetSessionId !== sessionId) {
           const { filePath: repairFilePath } = writeClaudeCodeSession(jsonl, targetSessionId, projectPath);
           setPosition(repairFilePath, fs.statSync(repairFilePath).size);
-          remapConversationSession(sessionId, targetSessionId, convId);
+          rebindConversationSession(sessionId, targetSessionId, convId);
           if (titleCache[sessionId] && !titleCache[targetSessionId]) {
             titleCache[targetSessionId] = titleCache[sessionId];
             saveTitleCache(titleCache);
-          }
-          if (syncServiceRef) {
-            void pushSessionIdBinding(convId, targetSessionId);
           }
           log(`Materialized fresh Claude session ${targetSessionId.slice(0, 8)} from stale ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
 

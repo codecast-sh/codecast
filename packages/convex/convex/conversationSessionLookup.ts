@@ -169,7 +169,12 @@ export const resolveConversationRefRanked = async (
     // Not a full Convex id — fall through to the short-id index.
   }
 
-  const candidates = await shortIdCandidatesNewestFirst(ctx, trimmed);
+  // A session's own uuid (what `cast state` sends from inside it) is a ref
+  // too, ranked with the short-id matches.
+  const candidates = [
+    ...(await shortIdCandidatesNewestFirst(ctx, trimmed)),
+    ...(await sessionIdCandidatesNewestFirst(ctx, trimmed)),
+  ];
   if (candidates.length <= 1) return candidates[0] ?? null;
 
   const own = candidates.find((c) => hasMatchingUser(c, authUserId));

@@ -301,6 +301,17 @@ describe("resolveConversationRefRanked", () => {
     expect(result).toEqual(mine);
   });
 
+  test("resolves a session's own uuid, so `cast state` reads from inside the session", async () => {
+    const mine = { _id: "jx73kh0MINE", user_id: "user-1", session_id: "c280d57c-uuid" };
+    const result = await resolveConversationRefRanked(
+      createLookupCtx({ conversationsBySessionId: { "c280d57c-uuid": [mine] } }),
+      "c280d57c-uuid",
+      "user-1",
+      never
+    );
+    expect(result).toEqual(mine);
+  });
+
   test("falls back to the newest candidate the caller can access", async () => {
     const older = { _id: "a", user_id: "user-2", short_id: "jx7aaaa" };
     const newer = { _id: "b", user_id: "user-3", short_id: "jx7aaaa" };
